@@ -127,47 +127,46 @@ fn propfind_retries_when_body_drops_after_headers() {
     assert_eq!(&*backend.propfind("/", "0").unwrap(), "<multistatus/>");
     server.join().unwrap();
     assert_eq!(requests.load(Ordering::SeqCst), 2);
-}
-
-#[test]
-fn propfind_body_blackhole_stops_after_one_bounded_retry() {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = listener.local_addr().unwrap();
-    let requests = Arc::new(AtomicUsize::new(0));
-    let server_requests = requests.clone();
-    let (release_tx, release_rx) = mpsc::channel();
-    let server = thread::spawn(move || {
-        let mut held = Vec::new();
-        for _ in 0..2 {
-            let (mut stream, _) = listener.accept().unwrap();
-            stream
-                .set_read_timeout(Some(Duration::from_secs(3)))
+    // Case "body blackhole": a PROPFIND whose body never arrives stops after one bounded retry.
+    {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let requests = Arc::new(AtomicUsize::new(0));
+        let server_requests = requests.clone();
+        let (release_tx, release_rx) = mpsc::channel();
+        let server = thread::spawn(move || {
+            let mut held = Vec::new();
+            for _ in 0..2 {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(3)))
+                    .unwrap();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                assert!(read_request(&mut reader).starts_with("PROPFIND "));
+                server_requests.fetch_add(1, Ordering::SeqCst);
+                write!(
+                    stream,
+                    "HTTP/1.1 207 Multi-Status\r\nContent-Length: 64\r\nConnection: keep-alive\r\n\r\n"
+                )
                 .unwrap();
-            let mut reader = BufReader::new(stream.try_clone().unwrap());
-            assert!(read_request(&mut reader).starts_with("PROPFIND "));
-            server_requests.fetch_add(1, Ordering::SeqCst);
-            write!(
-                stream,
-                "HTTP/1.1 207 Multi-Status\r\nContent-Length: 64\r\nConnection: keep-alive\r\n\r\n"
-            )
-            .unwrap();
-            stream.flush().unwrap();
-            held.push(stream);
-        }
-        release_rx.recv().unwrap();
-        drop(held);
-    });
+                stream.flush().unwrap();
+                held.push(stream);
+            }
+            release_rx.recv().unwrap();
+            drop(held);
+        });
 
-    let backend = backend_for_timeout(format!("http://{address}"), Duration::from_millis(150));
-    let started = std::time::Instant::now();
-    let error = backend.propfind("/", "0").unwrap_err();
-    let elapsed = started.elapsed();
-    release_tx.send(()).unwrap();
-    server.join().unwrap();
+        let backend = backend_for_timeout(format!("http://{address}"), Duration::from_millis(150));
+        let started = std::time::Instant::now();
+        let error = backend.propfind("/", "0").unwrap_err();
+        let elapsed = started.elapsed();
+        release_tx.send(()).unwrap();
+        server.join().unwrap();
 
-    assert_eq!(error.kind(), io::ErrorKind::TimedOut);
-    assert!(elapsed < Duration::from_secs(2), "elapsed: {elapsed:?}");
-    assert_eq!(requests.load(Ordering::SeqCst), 2);
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut, "body blackhole");
+        assert!(elapsed < Duration::from_secs(2), "elapsed: {elapsed:?}");
+        assert_eq!(requests.load(Ordering::SeqCst), 2, "body blackhole");
+    }
 }
 
 #[test]
@@ -210,59 +209,58 @@ fn propfind_reconnects_after_ambiguous_stale_pool_close() {
     assert_eq!(&*backend.propfind("/", "0").unwrap(), "<multistatus/>");
     server.join().unwrap();
     assert_eq!(requests.load(Ordering::SeqCst), 3);
-}
+    // Case "GET after a stale pool": a GET whose body never arrives is reconnected before the body is exposed.
+    {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let requests = Arc::new(AtomicUsize::new(0));
+        let server_requests = requests.clone();
+        let server = thread::spawn(move || {
+            let (mut first, _) = listener.accept().unwrap();
+            first
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            let mut first_reader = BufReader::new(first.try_clone().unwrap());
+            assert!(read_request(&mut first_reader).starts_with("GET "));
+            server_requests.fetch_add(1, Ordering::SeqCst);
+            respond_ok(&mut first, b"prime");
 
-#[test]
-fn get_reconnects_before_exposing_body_after_stale_pool_close() {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = listener.local_addr().unwrap();
-    let requests = Arc::new(AtomicUsize::new(0));
-    let server_requests = requests.clone();
-    let server = thread::spawn(move || {
-        let (mut first, _) = listener.accept().unwrap();
-        first
-            .set_read_timeout(Some(Duration::from_secs(3)))
+            // The request reached the server, but no response body reached the
+            // caller. GET can therefore be established once more on a fresh
+            // connection without duplicating a mutation or delivered bytes.
+            assert!(read_request(&mut first_reader).starts_with("GET "));
+            server_requests.fetch_add(1, Ordering::SeqCst);
+            let _ = first.shutdown(Shutdown::Both);
+
+            let (mut replacement, _) = listener.accept().unwrap();
+            replacement
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            let mut replacement_reader = BufReader::new(replacement.try_clone().unwrap());
+            assert!(read_request(&mut replacement_reader).starts_with("GET "));
+            server_requests.fetch_add(1, Ordering::SeqCst);
+            respond_ok(&mut replacement, b"payload");
+        });
+
+        let backend = backend_for(format!("http://{address}"));
+        let mut prime = String::new();
+        backend
+            .open_read("/file")
+            .unwrap()
+            .read_to_string(&mut prime)
             .unwrap();
-        let mut first_reader = BufReader::new(first.try_clone().unwrap());
-        assert!(read_request(&mut first_reader).starts_with("GET "));
-        server_requests.fetch_add(1, Ordering::SeqCst);
-        respond_ok(&mut first, b"prime");
+        assert_eq!(prime, "prime", "GET after a stale pool");
 
-        // The request reached the server, but no response body reached the
-        // caller. GET can therefore be established once more on a fresh
-        // connection without duplicating a mutation or delivered bytes.
-        assert!(read_request(&mut first_reader).starts_with("GET "));
-        server_requests.fetch_add(1, Ordering::SeqCst);
-        let _ = first.shutdown(Shutdown::Both);
-
-        let (mut replacement, _) = listener.accept().unwrap();
-        replacement
-            .set_read_timeout(Some(Duration::from_secs(3)))
+        let mut payload = String::new();
+        backend
+            .open_read("/file")
+            .unwrap()
+            .read_to_string(&mut payload)
             .unwrap();
-        let mut replacement_reader = BufReader::new(replacement.try_clone().unwrap());
-        assert!(read_request(&mut replacement_reader).starts_with("GET "));
-        server_requests.fetch_add(1, Ordering::SeqCst);
-        respond_ok(&mut replacement, b"payload");
-    });
-
-    let backend = backend_for(format!("http://{address}"));
-    let mut prime = String::new();
-    backend
-        .open_read("/file")
-        .unwrap()
-        .read_to_string(&mut prime)
-        .unwrap();
-    assert_eq!(prime, "prime");
-
-    let mut payload = String::new();
-    backend
-        .open_read("/file")
-        .unwrap()
-        .read_to_string(&mut payload)
-        .unwrap();
-    assert_eq!(payload, "payload");
-    server.join().unwrap();
-    assert_eq!(requests.load(Ordering::SeqCst), 3);
+        assert_eq!(payload, "payload", "GET after a stale pool");
+        server.join().unwrap();
+        assert_eq!(requests.load(Ordering::SeqCst), 3, "GET after a stale pool");
+    }
 }
 
 #[test]
@@ -327,40 +325,43 @@ fn mutation_redirect_is_not_followed_or_reported_as_success() {
     assert!(error.to_string().contains("HTTP status 302"));
     inspect_tx.send(()).unwrap();
     server.join().unwrap();
-}
-
-#[test]
-fn put_redirect_is_terminal_and_never_followed() {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = listener.local_addr().unwrap();
-    let (inspect_tx, inspect_rx) = mpsc::channel();
-    let server = thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
-        stream
-            .set_read_timeout(Some(Duration::from_secs(3)))
+    // Case "PUT redirect": a PUT answered with 302 is terminal, never followed, and never a success.
+    {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let (inspect_tx, inspect_rx) = mpsc::channel();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            assert!(read_request(&mut reader).starts_with("PUT "));
+            write!(
+                stream,
+                "HTTP/1.1 302 Found\r\nLocation: /canonical\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            )
             .unwrap();
-        let mut reader = BufReader::new(stream.try_clone().unwrap());
-        assert!(read_request(&mut reader).starts_with("PUT "));
-        write!(
-            stream,
-            "HTTP/1.1 302 Found\r\nLocation: /canonical\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-        )
-        .unwrap();
-        stream.flush().unwrap();
-        inspect_rx.recv().unwrap();
-        listener.set_nonblocking(true).unwrap();
-        assert_eq!(
-            listener.accept().unwrap_err().kind(),
-            io::ErrorKind::WouldBlock
-        );
-    });
-    let backend = backend_for(format!("http://{address}"));
-    let mut writer = backend.open_write("/redirected").unwrap();
-    writer.write_all(b"payload").unwrap();
+            stream.flush().unwrap();
+            inspect_rx.recv().unwrap();
+            listener.set_nonblocking(true).unwrap();
+            assert_eq!(
+                listener.accept().unwrap_err().kind(),
+                io::ErrorKind::WouldBlock,
+                "PUT redirect is not followed"
+            );
+        });
+        let backend = backend_for(format!("http://{address}"));
+        let mut writer = backend.open_write("/redirected").unwrap();
+        writer.write_all(b"payload").unwrap();
 
-    let error = writer.flush().unwrap_err();
-    assert!(error.to_string().contains("HTTP status 302"));
-    assert!(writer.flush().is_err());
-    inspect_tx.send(()).unwrap();
-    server.join().unwrap();
+        let error = writer.flush().unwrap_err();
+        assert!(
+            error.to_string().contains("HTTP status 302"),
+            "PUT redirect"
+        );
+        assert!(writer.flush().is_err(), "PUT redirect stays terminal");
+        inspect_tx.send(()).unwrap();
+        server.join().unwrap();
+    }
 }

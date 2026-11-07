@@ -267,6 +267,16 @@ mod tests {
 
     #[test]
     fn destination_ancestors_accept_canonical_windows_absolute_paths() {
+        let cases: [fn(); 2] = [
+            destination_ancestors_accept_canonical_windows_absolute_paths_case,
+            destination_ancestors_keep_rejecting_ambiguous_backslashes,
+        ];
+        for case in cases {
+            case();
+        }
+    }
+
+    fn destination_ancestors_accept_canonical_windows_absolute_paths_case() {
         assert_eq!(
             backend_ancestors("C:/Users/Alice/transfer").unwrap(),
             [
@@ -282,7 +292,6 @@ mod tests {
         );
     }
 
-    #[test]
     fn destination_ancestors_keep_rejecting_ambiguous_backslashes() {
         assert!(backend_ancestors(r"C:relative\file").is_err());
         assert!(backend_ancestors(r"C:\absolute\file").is_err());
@@ -332,6 +341,16 @@ mod tests {
 
     #[test]
     fn disconnect_preserves_existing_destination_and_removes_stage() {
+        let cases: [fn(); 2] = [
+            disconnect_preserves_existing_destination_and_removes_stage_case,
+            cancellation_preserves_existing_destination_and_removes_stage,
+        ];
+        for case in cases {
+            case();
+        }
+    }
+
+    fn disconnect_preserves_existing_destination_and_removes_stage_case() {
         let root = test_root("bulk_disconnect");
         std::fs::create_dir_all(&root).unwrap();
         let destination = root.join("file.txt");
@@ -363,7 +382,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
-    #[test]
     fn cancellation_preserves_existing_destination_and_removes_stage() {
         let root = test_root("bulk_cancel");
         std::fs::create_dir_all(&root).unwrap();

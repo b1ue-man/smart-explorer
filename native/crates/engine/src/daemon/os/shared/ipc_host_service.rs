@@ -342,19 +342,17 @@ mod tests {
     }
 
     #[test]
-    fn android_background_task_reload_gate_keeps_desktop_cadence() {
-        assert_eq!(
-            decide_reload(secs(3), None, false, false),
-            ReloadDecision::Wait
-        );
-        assert_eq!(
-            decide_reload(secs(5), Some(secs(1)), false, false),
-            ReloadDecision::Reload
-        );
+    fn android_background_task_reload_gate_embedded_needs_change_or_safety_net() {
+        let cases: [fn(); 2] = [
+            android_background_task_reload_gate_embedded_needs_change_or_safety_net_case,
+            android_background_task_reload_gate_keeps_desktop_cadence,
+        ];
+        for case in cases {
+            case();
+        }
     }
 
-    #[test]
-    fn android_background_task_reload_gate_embedded_needs_change_or_safety_net() {
+    fn android_background_task_reload_gate_embedded_needs_change_or_safety_net_case() {
         assert_eq!(
             decide_reload(secs(4), None, true, true),
             ReloadDecision::Wait
@@ -378,6 +376,17 @@ mod tests {
         );
         assert_eq!(
             decide_reload(secs(6), Some(secs(1)), true, true),
+            ReloadDecision::Reload
+        );
+    }
+
+    fn android_background_task_reload_gate_keeps_desktop_cadence() {
+        assert_eq!(
+            decide_reload(secs(3), None, false, false),
+            ReloadDecision::Wait
+        );
+        assert_eq!(
+            decide_reload(secs(5), Some(secs(1)), false, false),
             ReloadDecision::Reload
         );
     }
@@ -453,13 +462,22 @@ mod tests {
 
     #[test]
     fn explicit_stop_barrier_blocks_periodic_auto_connect_reload() {
+        let cases: [fn(); 2] = [
+            explicit_stop_barrier_blocks_periodic_auto_connect_reload_case,
+            lan_cleanup_task_lan_only_operation_needs_no_server,
+        ];
+        for case in cases {
+            case();
+        }
+    }
+
+    fn explicit_stop_barrier_blocks_periodic_auto_connect_reload_case() {
         assert!(share_service_requested(false, "127.0.0.1:9", true, false));
         assert!(!share_service_requested(true, "127.0.0.1:9", true, false));
         assert!(!share_service_requested(false, "", true, false));
         assert!(!share_service_requested(false, "127.0.0.1:9", false, false));
     }
 
-    #[test]
     fn lan_cleanup_task_lan_only_operation_needs_no_server() {
         assert!(share_service_requested(false, "", true, true));
         assert!(!share_service_requested(true, "", true, true));

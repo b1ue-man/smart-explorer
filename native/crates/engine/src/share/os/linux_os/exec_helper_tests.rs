@@ -117,7 +117,7 @@ fn session(supervisor: &UnixStream) -> HelperSession {
 }
 
 #[test]
-#[ignore = "needs the account service: linux-root job (perm-linux-helper)"]
+#[ignore = "needs the account service: linux-root job (perm-linux-helper); Suite rechte-desktop-tresore-task"]
 fn perm_task_linux_helper_setup_and_remote_account() {
     let task = helper_task();
     let report = set_up(&task);
@@ -151,7 +151,7 @@ fn perm_task_linux_helper_setup_and_remote_account() {
 }
 
 #[test]
-#[ignore = "needs the account service: linux-root job (perm-linux-helper)"]
+#[ignore = "needs the account service: linux-root job (perm-linux-helper); Suite rechte-desktop-tresore-task"]
 fn perm_task_linux_helper_refuses_unlisted_account() {
     let task = helper_task();
     set_up(&task);
@@ -179,7 +179,7 @@ fn perm_task_linux_helper_refuses_unlisted_account() {
 }
 
 #[test]
-#[ignore = "needs the account service: linux-root job (perm-linux-helper)"]
+#[ignore = "needs the account service: linux-root job (perm-linux-helper); Suite rechte-desktop-tresore-task"]
 fn perm_task_linux_helper_refuses_foreign_uid() {
     let task = helper_task();
     set_up(&task);
@@ -210,7 +210,7 @@ fn perm_task_linux_helper_refuses_foreign_uid() {
 }
 
 #[test]
-#[ignore = "needs the account service: linux-root job (perm-linux-helper)"]
+#[ignore = "needs the account service: linux-root job (perm-linux-helper); Suite rechte-desktop-tresore-task"]
 fn perm_task_linux_helper_connection_close_stops_units() {
     let task = helper_task();
     set_up(&task);
@@ -230,7 +230,7 @@ fn perm_task_linux_helper_connection_close_stops_units() {
 }
 
 #[test]
-#[ignore = "needs the account service: linux-root job (perm-linux-helper)"]
+#[ignore = "needs the account service: linux-root job (perm-linux-helper); Suite rechte-desktop-tresore-task"]
 fn perm_task_linux_helper_hardened_unit_starts() {
     let task = helper_task();
     set_up(&task);
@@ -274,7 +274,7 @@ fn perm_task_linux_helper_hardened_unit_starts() {
 }
 
 #[test]
-#[ignore = "needs the account service: linux-root job (perm-linux-helper)"]
+#[ignore = "needs the account service: linux-root job (perm-linux-helper); Suite rechte-desktop-tresore-task"]
 fn perm_task_linux_helper_outdated_reported() {
     let task = helper_task();
     set_up(&task);
@@ -311,7 +311,7 @@ fn perm_task_linux_helper_outdated_reported() {
 }
 
 #[test]
-#[ignore = "needs the account service: linux-root job (perm-linux-helper)"]
+#[ignore = "needs the account service: linux-root job (perm-linux-helper); Suite rechte-desktop-tresore-task"]
 fn perm_task_linux_helper_remove_cleans_units() {
     let task = helper_task();
     set_up(&task);
@@ -410,7 +410,7 @@ fn linux_helper_setup_modes_round_trip_and_sudo_command() {
 /// R15c: one user starts more account sessions at once than the former 8
 /// per connection; each runs until its connection ends.
 #[test]
-#[ignore = "needs the account service: linux-root job (perm-linux-helper)"]
+#[ignore = "needs the account service: linux-root job (perm-linux-helper); Suite rechte-desktop-tresore-task"]
 fn perm_task_linux_helper_many_sessions_at_once() {
     let task = helper_task();
     set_up(&task);

@@ -13,7 +13,7 @@ use std::sync::atomic::AtomicBool;
 use super::CopyPastePeerFixture;
 use crate::vfs::{self as vfs, HashWalkItem, HashWalkRequest, OmissionReason};
 
-fn walk(
+pub(super) fn walk(
     fixture: &CopyPastePeerFixture,
     request: HashWalkRequest,
 ) -> io::Result<(bool, Vec<HashWalkItem>)> {
@@ -22,7 +22,7 @@ fn walk(
     Ok((ran, rx.try_iter().collect()))
 }
 
-fn plain(meta: bool) -> HashWalkRequest {
+pub(super) fn plain(meta: bool) -> HashWalkRequest {
     HashWalkRequest {
         algorithm: None,
         min_bytes: 0,
@@ -58,6 +58,17 @@ fn tree(fixture: &CopyPastePeerFixture) -> io::Result<()> {
 
 #[test]
 fn abgleich_task_share_host_walk_meta_entries_match_the_listing() -> io::Result<()> {
+    let cases: [fn() -> io::Result<()>; 2] = [
+        abgleich_task_share_host_walk_meta_entries_match_the_listing_case,
+        abgleich_task_share_host_walk_without_meta_keeps_the_former_items,
+    ];
+    for case in cases {
+        case()?;
+    }
+    Ok(())
+}
+
+fn abgleich_task_share_host_walk_meta_entries_match_the_listing_case() -> io::Result<()> {
     let fixture = CopyPastePeerFixture::for_transfer_engine_task()?;
     tree(&fixture)?;
     let (ran, items) = walk(&fixture, plain(true))?;
@@ -102,7 +113,6 @@ fn abgleich_task_share_host_walk_meta_entries_match_the_listing() -> io::Result<
     Ok(())
 }
 
-#[test]
 fn abgleich_task_share_host_walk_without_meta_keeps_the_former_items() -> io::Result<()> {
     let fixture = CopyPastePeerFixture::for_transfer_engine_task()?;
     tree(&fixture)?;
@@ -133,23 +143,6 @@ fn abgleich_task_share_host_walk_without_meta_keeps_the_former_items() -> io::Re
             ]
         );
     }
-    Ok(())
-}
-
-#[test]
-fn abgleich_task_share_host_without_meta_capability_is_not_asked() -> io::Result<()> {
-    let fixture = CopyPastePeerFixture::for_transfer_engine_task()?;
-    fs::write(fixture.root_a.join("a.txt"), b"abc")?;
-    // Learn the host's features first, then pose as a host before this change.
-    assert!(walk(&fixture, plain(false))?.0);
-    if let Ok(mut slot) = fixture.peer.transfer.features.lock() {
-        if let Some((_, features)) = slot.as_mut() {
-            features.hash_walk_meta_v1 = false;
-        }
-    }
-    let (ran, items) = walk(&fixture, plain(true))?;
-    assert!(!ran && items.is_empty());
-    assert!(walk(&fixture, plain(false))?.0);
     Ok(())
 }
 

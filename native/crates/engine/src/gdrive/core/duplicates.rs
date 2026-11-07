@@ -162,16 +162,8 @@ mod tests {
     }
 
     #[test]
-    fn lan_cleanup_task_unique_names_are_untouched() {
-        let entries = vec![meta("a", "1", 1, true), meta("b", "2", 2, false)];
-        let out = disambiguate(entries);
-        let names: Vec<&str> = out.iter().map(|entry| entry.name.as_str()).collect();
-        assert_eq!(names, ["a", "b"]);
-        assert_eq!(out[0].id.as_deref(), Some("1"));
-    }
-
-    #[test]
     fn lan_cleanup_task_duplicate_folders_keep_newest_plain_and_mark_the_rest() {
+        // Case "duplicate folders": the newest sibling keeps the plain name, the others get a marker.
         let entries = vec![
             meta("X", "olderid00001", 10, true),
             meta("X", "newerid00002", 20, true),
@@ -179,19 +171,36 @@ mod tests {
         ];
         let out = disambiguate(entries);
         let names: Vec<&str> = out.iter().map(|entry| entry.name.as_str()).collect();
-        assert_eq!(names, ["X", "X [drive-id olderid0]", "y"]);
-        assert_eq!(out[0].id.as_deref(), Some("newerid00002"));
+        assert_eq!(
+            names,
+            ["X", "X [drive-id olderid0]", "y"],
+            "duplicate folders"
+        );
+        assert_eq!(
+            out[0].id.as_deref(),
+            Some("newerid00002"),
+            "duplicate folders"
+        );
         let (plain, prefix) = parse_marker(&out[1].name).unwrap();
-        assert_eq!(plain, "X");
-        assert_eq!(prefix, "olderid0");
-    }
+        assert_eq!(plain, "X", "duplicate folders");
+        assert_eq!(prefix, "olderid0", "duplicate folders");
 
-    #[test]
-    fn lan_cleanup_task_equal_timestamps_break_ties_by_id() {
-        let entries = vec![meta("f", "b", 1, false), meta("f", "a", 1, false)];
-        let out = disambiguate(entries);
-        assert_eq!(out[0].id.as_deref(), Some("a"));
-        assert_eq!(out[1].name, "f [drive-id b]");
+        // Case "unique names": names that occur once stay untouched.
+        let out = disambiguate(vec![meta("a", "1", 1, true), meta("b", "2", 2, false)]);
+        let names: Vec<&str> = out.iter().map(|entry| entry.name.as_str()).collect();
+        assert_eq!(names, ["a", "b"], "unique names");
+        assert_eq!(out[0].id.as_deref(), Some("1"), "unique names");
+
+        // Case "equal timestamps": the smaller ID takes the plain name.
+        let out = disambiguate(vec![meta("f", "b", 1, false), meta("f", "a", 1, false)]);
+        assert_eq!(out[0].id.as_deref(), Some("a"), "equal timestamps");
+        assert_eq!(out[1].name, "f [drive-id b]", "equal timestamps");
+
+        // Case "entry without ID": it cannot be addressed exactly and keeps its raw name.
+        let mut second = meta("f", "", 1, false);
+        second.id = None;
+        let out = disambiguate(vec![meta("f", "a", 2, false), second]);
+        assert_eq!(out[1].name, "f", "entry without ID");
     }
 
     #[test]
@@ -207,14 +216,6 @@ mod tests {
             names,
             ["f", "f [drive-id abcdefgh2]", "f %5Bdrive-id abcdefgh]"]
         );
-    }
-
-    #[test]
-    fn lan_cleanup_task_entries_without_id_keep_their_raw_name() {
-        let mut second = meta("f", "", 1, false);
-        second.id = None;
-        let out = disambiguate(vec![meta("f", "a", 2, false), second]);
-        assert_eq!(out[1].name, "f");
     }
 
     #[test]

@@ -339,85 +339,108 @@ mod tests {
     }
 
     #[test]
-    fn hello_parses() {
-        let hello: In = serde_json::from_str(
-            r#"{"t":"hello","protocol_version":3,"device_id":"a","device_name":"Laptop","listen_port":0,"lan":["192.168.1.5"],"public_key":"pk","fingerprint":"fp"}"#,
-        )
-        .unwrap();
-        let In::Hello {
-            protocol_version,
-            device_id,
-            listen_port,
-            ..
-        } = hello
-        else {
-            panic!("not hello");
-        };
-        assert_eq!(protocol_version, 3);
-        assert_eq!(device_id, "a");
-        assert_eq!(listen_port, 0);
-    }
-
-    #[test]
-    fn android_background_task_idle_keepalive_wire_matches_contract() {
-        let idle: In =
-            serde_json::from_str(r#"{"t":"set_idle","idle":true,"keepalive_secs":90}"#).unwrap();
-        assert!(matches!(
-            idle,
-            In::SetIdle {
-                idle: true,
-                keepalive_secs: Some(90)
-            }
-        ));
-        let awake: In = serde_json::from_str(r#"{"t":"set_idle","idle":false}"#).unwrap();
-        assert!(matches!(
-            awake,
-            In::SetIdle {
-                idle: false,
-                keepalive_secs: None
-            }
-        ));
-        let ack: In = serde_json::from_str(r#"{"t":"keepalive_ack"}"#).unwrap();
-        assert!(matches!(ack, In::KeepaliveAck));
-        assert_eq!(
-            serde_json::to_string(&Out::IdleAck {
-                idle: true,
-                keepalive_secs: 180
-            })
-            .unwrap(),
-            r#"{"t":"idle_ack","idle":true,"keepalive_secs":180}"#
-        );
-        assert_eq!(
-            serde_json::to_string(&Out::Keepalive).unwrap(),
-            r#"{"t":"keepalive"}"#
-        );
-    }
-
-    #[test]
     fn review_task_key_login_and_access_fields_are_optional_on_the_wire() {
-        let auth: In = serde_json::from_str(r#"{"t":"hello_auth","signature":"ab"}"#).unwrap();
-        assert!(matches!(auth, In::HelloAuth { signature } if signature == "ab"));
-        let legacy: In = serde_json::from_str(r#"{"t":"watch_direct","lookup_id":"l"}"#).unwrap();
-        assert!(matches!(
-            legacy,
-            In::WatchDirect {
-                access_proof: None,
-                ..
-            }
-        ));
-        let proven: In =
-            serde_json::from_str(r#"{"t":"watch_direct","lookup_id":"l","access_proof":"cd"}"#)
-                .unwrap();
-        assert!(matches!(
-            proven,
-            In::WatchDirect { access_proof: Some(proof), .. } if proof == "cd"
-        ));
-        assert_eq!(
-            serde_json::to_string(&Out::HelloChallenge {
-                nonce: "00ff".into()
-            })
-            .unwrap(),
-            r#"{"t":"hello_challenge","nonce":"00ff"}"#
-        );
+        // Rows of incoming lines: each line parses to the variant and fields its
+        // row names. Rows of outgoing values: each value serializes to its line.
+        let incoming: [(&str, &str, fn(&In) -> bool); 7] = [
+            (
+                "set_idle with keepalive",
+                r#"{"t":"set_idle","idle":true,"keepalive_secs":90}"#,
+                |value: &In| {
+                    matches!(
+                        value,
+                        In::SetIdle {
+                            idle: true,
+                            keepalive_secs: Some(90)
+                        }
+                    )
+                },
+            ),
+            (
+                "set_idle awake",
+                r#"{"t":"set_idle","idle":false}"#,
+                |value: &In| {
+                    matches!(
+                        value,
+                        In::SetIdle {
+                            idle: false,
+                            keepalive_secs: None
+                        }
+                    )
+                },
+            ),
+            ("keepalive ack", r#"{"t":"keepalive_ack"}"#, |value: &In| {
+                matches!(value, In::KeepaliveAck)
+            }),
+            (
+                "hello with all fields",
+                r#"{"t":"hello","protocol_version":3,"device_id":"a","device_name":"Laptop","listen_port":0,"lan":["192.168.1.5"],"public_key":"pk","fingerprint":"fp"}"#,
+                |value: &In| {
+                    matches!(
+                        value,
+                        In::Hello {
+                            protocol_version: 3,
+                            device_id,
+                            listen_port: 0,
+                            ..
+                        } if device_id == "a"
+                    )
+                },
+            ),
+            (
+                "hello_auth signature",
+                r#"{"t":"hello_auth","signature":"ab"}"#,
+                |value: &In| matches!(value, In::HelloAuth { signature } if signature == "ab"),
+            ),
+            (
+                "watch_direct without proof",
+                r#"{"t":"watch_direct","lookup_id":"l"}"#,
+                |value: &In| {
+                    matches!(
+                        value,
+                        In::WatchDirect {
+                            access_proof: None,
+                            ..
+                        }
+                    )
+                },
+            ),
+            (
+                "watch_direct with proof",
+                r#"{"t":"watch_direct","lookup_id":"l","access_proof":"cd"}"#,
+                |value: &In| {
+                    matches!(
+                        value,
+                        In::WatchDirect { access_proof: Some(proof), .. } if proof == "cd"
+                    )
+                },
+            ),
+        ];
+        for (case, line, matches_row) in incoming {
+            let value: In = serde_json::from_str(line).unwrap();
+            assert!(matches_row(&value), "{case}");
+        }
+
+        let outgoing: [(&str, Out, &str); 3] = [
+            (
+                "idle ack",
+                Out::IdleAck {
+                    idle: true,
+                    keepalive_secs: 180,
+                },
+                r#"{"t":"idle_ack","idle":true,"keepalive_secs":180}"#,
+            ),
+            ("keepalive", Out::Keepalive, r#"{"t":"keepalive"}"#),
+            (
+                "hello challenge",
+                Out::HelloChallenge {
+                    nonce: "00ff".into(),
+                },
+                r#"{"t":"hello_challenge","nonce":"00ff"}"#,
+            ),
+        ];
+        for (case, value, line) in outgoing {
+            assert_eq!(serde_json::to_string(&value).unwrap(), line, "{case}");
+        }
     }
 }

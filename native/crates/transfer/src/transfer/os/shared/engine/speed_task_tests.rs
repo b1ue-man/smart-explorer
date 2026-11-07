@@ -87,13 +87,13 @@ fn bench(case: &str, recoverable: bool) {
 }
 
 #[test]
-#[ignore = "benchmark: run with --release --ignored --nocapture"]
+#[ignore = "benchmark: run with --release --ignored --nocapture; Suite rechte-desktop-tresore-task"]
 fn speed_task_local_gui_recoverable_5000_small_files() {
     bench("local_gui_recoverable", true);
 }
 
 #[test]
-#[ignore = "benchmark: run with --release --ignored --nocapture"]
+#[ignore = "benchmark: run with --release --ignored --nocapture; Suite rechte-desktop-tresore-task"]
 fn speed_task_local_cli_unrecoverable_5000_small_files() {
     bench("local_cli_unrecoverable", false);
 }

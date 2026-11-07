@@ -249,7 +249,7 @@ fn einrichtung_task_origin_check_admits_only_the_bound_process() {
 /// automatic mapping's `SameAccount` rule.
 #[cfg(target_os = "linux")]
 #[test]
-#[ignore = "remote suite: needs passwordless sudo to run a client as nobody"]
+#[ignore = "remote suite: needs passwordless sudo to run a client as nobody; Suite speed-setup-task"]
 fn einrichtung_task_other_account_is_refused() {
     let check = SocketOwnerCheck::new().unwrap();
     let listener = TcpListener::bind((task_address(), 0)).unwrap();
@@ -267,7 +267,7 @@ fn einrichtung_task_other_account_is_refused() {
 /// connection matters, the RDP handshake itself fails.
 #[cfg(any(windows, target_os = "linux"))]
 #[test]
-#[ignore = "remote suite: needs the native RDP client (mstsc; xfreerdp3 with DISPLAY)"]
+#[ignore = "remote suite: needs the native RDP client (mstsc; xfreerdp3 with DISPLAY); Suite speed-setup-task"]
 fn einrichtung_task_rdp_client_connects_from_its_own_process() {
     let listener = TcpListener::bind((task_address(), 0)).unwrap();
     let local = listener.local_addr().unwrap();

@@ -5,7 +5,7 @@ use super::copy_paste_task_fixture::CopyPastePeerFixture;
 use super::wire::{Ctrl, FsErrorKind, FsResponse};
 
 #[test]
-#[ignore = "requires isolated remote copy/paste task runner"]
+#[ignore = "requires isolated remote copy/paste task runner; Suite copy-paste-task"]
 fn copy_paste_task_share_cross_export_nested_unicode_and_empty() -> io::Result<()> {
     assert!(CopyPastePeerFixture::enabled(), "requires isolated remote task runner");
     let fixture = CopyPastePeerFixture::new()?;
@@ -41,7 +41,7 @@ fn copy_paste_task_share_cross_export_nested_unicode_and_empty() -> io::Result<(
 }
 
 #[test]
-#[ignore = "requires isolated remote copy/paste task runner"]
+#[ignore = "requires isolated remote copy/paste task runner; Suite copy-paste-task"]
 fn copy_paste_task_share_rename_conflict_and_export_authority() -> io::Result<()> {
     assert!(CopyPastePeerFixture::enabled(), "requires isolated remote task runner");
     let fixture = CopyPastePeerFixture::new()?;
@@ -71,7 +71,7 @@ fn copy_paste_task_share_rename_conflict_and_export_authority() -> io::Result<()
 }
 
 #[test]
-#[ignore = "requires isolated remote copy/paste task runner"]
+#[ignore = "requires isolated remote copy/paste task runner; Suite copy-paste-task"]
 fn copy_paste_task_share_operation_whitespace_is_exact() -> io::Result<()> {
     assert!(CopyPastePeerFixture::enabled(), "requires isolated remote task runner");
     assert_eq!(super::fs_paths::split_clean("/A/ report \t")?, vec!["A", " report \t"]);
@@ -85,7 +85,7 @@ fn copy_paste_task_share_operation_whitespace_is_exact() -> io::Result<()> {
 }
 
 #[test]
-#[ignore = "requires isolated remote copy/paste task runner"]
+#[ignore = "requires isolated remote copy/paste task runner; Suite copy-paste-task"]
 fn copy_paste_task_share_typed_errors_keep_legacy_compatibility() -> io::Result<()> {
     assert!(CopyPastePeerFixture::enabled(), "requires isolated remote task runner");
     for kind in [io::ErrorKind::AlreadyExists, io::ErrorKind::Unsupported,

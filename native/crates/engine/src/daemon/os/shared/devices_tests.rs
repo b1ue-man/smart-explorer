@@ -86,6 +86,16 @@ fn tree_snapshot(status: MountStatus) -> MountSnapshot {
 
 #[test]
 fn drive_task_devices_status_json_shape() {
+    let cases: [fn(); 2] = [
+        drive_task_devices_status_json_shape_case,
+        devices_task_status_states_and_paths,
+    ];
+    for case in cases {
+        case();
+    }
+}
+
+fn drive_task_devices_status_json_shape_case() {
     let rows = vec![
         direct("a", "Laptop", true),
         member("r1", "Team", "d1", "Raum"),
@@ -145,7 +155,6 @@ fn drive_task_devices_status_json_shape() {
     assert_eq!(again, status);
 }
 
-#[test]
 fn devices_task_status_states_and_paths() {
     let rows = vec![
         direct("a", "Laptop", false),

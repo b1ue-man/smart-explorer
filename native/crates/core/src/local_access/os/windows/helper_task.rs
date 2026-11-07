@@ -36,7 +36,7 @@ fn read_helper_process_fixture() {
 }
 
 #[test]
-#[ignore = "real Windows process, backup privilege and ACL fixture: remote runner only"]
+#[ignore = "real Windows process, backup privilege and ACL fixture: remote runner only; Suite analytics-access-task, crates-task"]
 fn search_recursive_access_task_authenticated_helper_reuses_read_handles_in_parent() {
     assert_eq!(
         std::env::var("SMART_EXPLORER_ANALYTICS_TASK").as_deref(),

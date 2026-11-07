@@ -217,7 +217,7 @@ impl Harness {
 }
 
 #[test]
-#[ignore = "run only through the isolated remote GUI task entrypoint"]
+#[ignore = "run only through the isolated remote GUI task entrypoint; Suite crates-task"]
 fn gui_design_task_workspace_layout_selection_filters_and_split() {
     for dark in [false, true] {
         let mode = if dark { "dark" } else { "light" };
@@ -343,7 +343,7 @@ fn gui_design_task_workspace_layout_selection_filters_and_split() {
 }
 
 #[test]
-#[ignore = "run only through the isolated remote GUI task entrypoint"]
+#[ignore = "run only through the isolated remote GUI task entrypoint; Suite crates-task"]
 fn gui_design_task_settings_persistence_shortcut_guard_and_dialogs() {
     for dark in [false, true] {
         let mode = if dark { "dark" } else { "light" };
@@ -398,7 +398,7 @@ fn gui_design_task_settings_persistence_shortcut_guard_and_dialogs() {
 }
 
 #[test]
-#[ignore = "run only through the isolated remote GUI task entrypoint"]
+#[ignore = "run only through the isolated remote GUI task entrypoint; Suite crates-task"]
 fn gui_design_task_start_page_and_chart_visuals() {
     for dark in [false, true] {
         let mode = if dark { "dark" } else { "light" };
@@ -437,7 +437,7 @@ fn gui_design_task_start_page_and_chart_visuals() {
 }
 
 #[test]
-#[ignore = "run only through the isolated remote GUI task entrypoint"]
+#[ignore = "run only through the isolated remote GUI task entrypoint; Suite crates-task"]
 fn gui_design_task_drive_failure_reaches_readable_report_and_complete_clipboard() {
     use crate::gdrive::gui_task_http::{step, Fixture, Reply};
     use crate::scanner::ScanMessage;

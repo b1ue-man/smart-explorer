@@ -227,7 +227,7 @@ fn capture_until(source: &mut X11Source, mut done: impl FnMut(&BgraImage) -> boo
 }
 
 #[test]
-#[ignore = "needs an X server (Xvfb) on DISPLAY (SE_SCREEN_TASK_X11=1)"]
+#[ignore = "needs an X server (Xvfb) on DISPLAY (SE_SCREEN_TASK_X11=1); Suite rechte-desktop-tresore-task"]
 fn screen_task_x11_snapshot_matches() {
     x11_stage();
     let (conn, root, _) = connect();
@@ -287,7 +287,7 @@ fn screen_task_x11_snapshot_matches() {
 }
 
 #[test]
-#[ignore = "needs Xvfb with openbox or without a window manager (SE_SCREEN_TASK_X11=1, SE_SCREEN_TASK_X11_WM=ewmh|none)"]
+#[ignore = "needs Xvfb with openbox or without a window manager (SE_SCREEN_TASK_X11=1, SE_SCREEN_TASK_X11_WM=ewmh|none); Suite rechte-desktop-tresore-task"]
 fn screen_task_x11_window_list_ewmh_and_querytree() {
     x11_stage();
     let manager = std::env::var("SE_SCREEN_TASK_X11_WM").expect("SE_SCREEN_TASK_X11_WM");
@@ -322,7 +322,7 @@ fn screen_task_x11_window_list_ewmh_and_querytree() {
 }
 
 #[test]
-#[ignore = "needs an X server (Xvfb) on DISPLAY (SE_SCREEN_TASK_X11=1)"]
+#[ignore = "needs an X server (Xvfb) on DISPLAY (SE_SCREEN_TASK_X11=1); Suite rechte-desktop-tresore-task"]
 fn screen_task_x11_bench_real_capture() {
     x11_stage();
     let (conn, root, _) = connect();

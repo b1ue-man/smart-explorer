@@ -192,6 +192,17 @@ fn targets() -> [PeerOpenTarget; 2] {
 
 #[test]
 fn sync_reliability_task_old_jobs_ipc_literal_child_is_finite_without_worker_rpc() {
+    let cases: [fn(); 3] = [
+        sync_reliability_task_old_jobs_ipc_literal_child_is_finite_without_worker_rpc_case,
+        sync_reliability_task_old_jobs_ipc_archive_policy_is_finite_without_worker_rpc,
+        sync_reliability_task_old_jobs_ipc_previous_identity_is_finite_and_unproven,
+    ];
+    for case in cases {
+        case();
+    }
+}
+
+fn sync_reliability_task_old_jobs_ipc_literal_child_is_finite_without_worker_rpc_case() {
     for target in targets() {
         let fixture = OfflineAgent::new(target);
         let agent = fixture.handle();
@@ -219,24 +230,6 @@ fn sync_reliability_task_old_jobs_ipc_literal_child_is_finite_without_worker_rpc
     }
 }
 
-#[test]
-fn sync_reliability_task_old_jobs_ipc_previous_identity_is_finite_and_unproven() {
-    for target in targets() {
-        let fixture = OfflineAgent::new(target);
-        let agent = fixture.handle();
-        let cached = CachingBackend::new(agent.clone());
-        for backend in [&*agent, &cached as &dyn Backend] {
-            let identity = backend.state_identity();
-            for _ in 0..32 {
-                assert!(vfs::previous_state_identities(backend).unwrap().is_empty());
-            }
-            assert_eq!(backend.state_identity(), identity);
-        }
-        fixture.assert_metadata_only();
-    }
-}
-
-#[test]
 fn sync_reliability_task_old_jobs_ipc_archive_policy_is_finite_without_worker_rpc() {
     for target in targets() {
         let fixture = OfflineAgent::new(target);
@@ -249,6 +242,22 @@ fn sync_reliability_task_old_jobs_ipc_archive_policy_is_finite_without_worker_rp
                     vfs::version_archive_policy(backend),
                     vfs::VersionArchivePolicy::AppPrivate
                 );
+            }
+            assert_eq!(backend.state_identity(), identity);
+        }
+        fixture.assert_metadata_only();
+    }
+}
+
+fn sync_reliability_task_old_jobs_ipc_previous_identity_is_finite_and_unproven() {
+    for target in targets() {
+        let fixture = OfflineAgent::new(target);
+        let agent = fixture.handle();
+        let cached = CachingBackend::new(agent.clone());
+        for backend in [&*agent, &cached as &dyn Backend] {
+            let identity = backend.state_identity();
+            for _ in 0..32 {
+                assert!(vfs::previous_state_identities(backend).unwrap().is_empty());
             }
             assert_eq!(backend.state_identity(), identity);
         }

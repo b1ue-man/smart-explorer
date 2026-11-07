@@ -190,6 +190,7 @@ fn pair(left: &Provider, right: &Provider, index: usize) {
 }
 
 #[test]
+#[ignore = "needs the real protocol servers named by SE_SYNC_PROVIDER_MANIFEST; Suite sync-reliability-task"]
 fn sync_reliability_task_provider_matrix() {
     let mut providers = fixture::providers();
     let required: &[&str] = if cfg!(windows) {

@@ -9,7 +9,7 @@ use crate::screen::os::host_worker_client::{WorkerBackend, WorkerProgram};
 use crate::screen::os::openh264_codec::tests::{openh264_registry, store_with_openh264};
 
 #[test]
-#[ignore = "needs SE_SCREEN_TASK_OPENH264 (the suite downloads the pinned file)"]
+#[ignore = "needs SE_SCREEN_TASK_OPENH264 (the suite downloads the pinned file); Suite rechte-desktop-tresore-task"]
 fn screen_task_pair_bench_h264() {
     let _lock = crate::screen::os::openh264_codec::TEST_LOCK
         .lock()
@@ -54,7 +54,7 @@ fn screen_task_pair_bench_h264() {
 // The crash hook exists in development builds only (`debug_assertions`).
 #[cfg(debug_assertions)]
 #[test]
-#[ignore = "needs the development se (SE_SCREEN_TASK_WORKER)"]
+#[ignore = "needs the development se (SE_SCREEN_TASK_WORKER); Suite rechte-desktop-tresore-task"]
 fn screen_task_worker_crash_keeps_daemon() {
     let program = crate::screen::os::host_worker_client::tests::worker_program();
     let pair = ScreenPair::new(Allow, Off);

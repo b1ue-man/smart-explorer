@@ -176,17 +176,19 @@ fn android_task_webdav_promote_replaces_with_one_move_overwrite_true() {
     assert!(moves[0].1.ends_with("/dest"), "{requests:?}");
     assert_eq!(moves[0].2, "T");
     assert!(requests.iter().all(|request| request.method != "DELETE"));
-}
-
-#[test]
-fn android_task_webdav_promote_creates_a_new_name_without_overwrite() {
-    let server = Server::start(&["/stage"]);
-    let backend = server.backend();
-    backend.promote_staged("/stage", "/new").unwrap();
-    let requests = server.finish();
-    let moves = moves(&requests);
-    assert_eq!(moves.len(), 1, "{requests:?}");
-    assert!(moves[0].1.ends_with("/new"), "{requests:?}");
-    assert_eq!(moves[0].2, "F");
-    assert!(requests.iter().all(|request| request.method != "DELETE"));
+    // Case "new name": a promotion to a new name is one MOVE without overwrite.
+    {
+        let server = Server::start(&["/stage"]);
+        let backend = server.backend();
+        backend.promote_staged("/stage", "/new").unwrap();
+        let requests = server.finish();
+        let created = self::moves(&requests);
+        assert_eq!(created.len(), 1, "{requests:?}");
+        assert!(created[0].1.ends_with("/new"), "{requests:?}");
+        assert_eq!(created[0].2, "F", "{requests:?}");
+        assert!(
+            requests.iter().all(|request| request.method != "DELETE"),
+            "new name"
+        );
+    }
 }

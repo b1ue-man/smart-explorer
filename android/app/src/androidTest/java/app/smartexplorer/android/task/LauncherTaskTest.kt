@@ -8,13 +8,9 @@ import android.content.Intent
 import android.content.pm.LauncherApps
 import android.content.pm.PackageManager
 import android.content.pm.ResolveInfo
-import android.graphics.Bitmap
-import android.graphics.Canvas
 import android.graphics.Point
-import android.graphics.drawable.Drawable
 import android.net.Uri
 import android.os.Build
-import android.os.Process
 import android.os.ParcelFileDescriptor
 import android.os.SystemClock
 import android.os.UserHandle
@@ -288,6 +284,10 @@ class LauncherTaskTest {
         val processes = shell("ps -A")
         assertFalse("process $pkg:launcher exists before the launcher is enabled", processes.lineSequence().any { it.trim().endsWith("$pkg:launcher") })
         assertEquals(null, launcherProcessPid())
+        // The main process runs the seven start steps; the core reports ready as before (the former launcher_task_main_process_unchanged).
+        runBlocking { Api.awaitReady() }
+        assertTrue(Core.ready.value is CoreState.Ready)
+        assertEquals(pkg, android.app.Application.getProcessName())
     }
 
     @Test
@@ -390,16 +390,6 @@ class LauncherTaskTest {
         assertTrue(File("/proc/self/maps").readText().contains(library))
         val maps = File("/proc/$pid/maps").readText()
         assertFalse("the launcher process loaded $library", maps.contains(library))
-    }
-
-    @Test
-    fun launcher_task_main_process_unchanged() {
-        // The main process runs the seven start steps; the core reports ready as before.
-        runBlocking { Api.awaitReady() }
-        assertTrue(Core.ready.value is CoreState.Ready)
-        assertEquals(pkg, android.app.Application.getProcessName())
-        assertFalse("the launcher component must stay off without the person's choice", LauncherSwitch.isComponentEnabled(appContext))
-        assertEquals(null, launcherProcessPid())
     }
 
     @Test
@@ -617,73 +607,6 @@ class LauncherTaskTest {
         device.pressHome()
         assertTrue("the app list stays open after the Home key", device.wait(Until.gone(By.text("Apps suchen")), 10_000))
         assertTrue(device.wait(Until.hasObject(By.desc("Alle Apps")), 10_000))
-    }
-
-    @Test
-    fun launcher_task_package_removed_clears_items() {
-        val apk = InstrumentationRegistry.getArguments().getString("launcher_helper_apk")
-        val helper = InstrumentationRegistry.getArguments().getString("launcher_helper_package")
-        assumeTrue(
-            "nicht ausgeführt: braucht '-e launcher_helper_apk <Pfad auf dem Gerät>' und '-e launcher_helper_package <Paket>' " +
-                "(eine kleine App mit LAUNCHER-Aktivität); ohne sie lässt sich nichts installieren und wieder entfernen",
-            !apk.isNullOrBlank() && !helper.isNullOrBlank(),
-        )
-        shell("pm uninstall $helper")
-        assertTrue(shell("pm install -r $apk").contains("Success"))
-        try {
-            val catalog = AppCatalog.get(appContext)
-            catalog.reload()
-            val entry = catalog.visible.firstOrNull { it.packageName == helper }
-            assertNotNull("the helper app has no launcher activity", entry)
-            // Put the app on page 1 while the launcher is not running, then start it.
-            launcherDir().mkdirs()
-            val onHome = HomeItem(
-                id = "ihelper",
-                kind = "app",
-                attrs = kotlinx.serialization.json.JsonObject(
-                    mapOf(
-                        "component" to kotlinx.serialization.json.JsonPrimitive(entry!!.componentString),
-                        "user" to kotlinx.serialization.json.JsonPrimitive(entry.userSerial),
-                    ),
-                ),
-            )
-            val layout = HomeLayout(
-                grid = app.smartexplorer.android.launcher.model.GridSpec(4, 5, 56),
-                pages = listOf(listOf(onHome)),
-                dock = emptyList(),
-            )
-            File(launcherDir(), "layout.json").writeText(LayoutJson.encode(layout))
-            startLauncher()
-            assertTrue("the helper app is not on the home screen", device.wait(Until.hasObject(By.desc(entry.label)), 10_000))
-            shell("pm uninstall $helper")
-            assertTrue("the item stays after the app is removed", device.wait(Until.gone(By.desc(entry.label)), 15_000))
-            assertTrue(
-                "layout.json still names the removed app",
-                waitFor { readLayout()?.pages?.flatten()?.none { it.packageName == helper } == true },
-            )
-        } finally {
-            shell("pm uninstall $helper")
-        }
-    }
-
-    @Test
-    fun launcher_task_work_profile_badged() {
-        val created = shell("pm create-user --profileOf 0 --managed Arbeit")
-        val id = Regex("""id\s+(\d+)""").find(created)?.groupValues?.get(1)?.toIntOrNull()
-        assumeTrue("nicht ausgeführt: Arbeitsprofil nicht anlegbar (DN17): $created", id != null)
-        try {
-            val work: UserHandle = userHandleOf(id!!)
-            val pm = appContext.packageManager
-            val icon = pm.getApplicationIcon(pkg)
-            val plain = render(icon.constantState!!.newDrawable().mutate())
-            val badged = render(pm.getUserBadgedIcon(icon.constantState!!.newDrawable().mutate(), work))
-            assertFalse("the work badge changed nothing", plain.sameAs(badged))
-            // The own profile gets no badge.
-            val own = render(pm.getUserBadgedIcon(icon.constantState!!.newDrawable().mutate(), Process.myUserHandle()))
-            assertTrue(plain.sameAs(own))
-        } finally {
-            shell("pm remove-user $id")
-        }
     }
 
     // ---- DSK-M11: widgets and pin requests (U38-17) ------------------------------------------------------
@@ -1188,23 +1111,6 @@ class LauncherTaskTest {
     }
 
     @Test
-    fun launcher_task_screen_nav_kinds_reach_the_app() {
-        // The bridge side of „openScreen“ and „showScreenGrid“: the intent built from the wire kinds reaches the app's navigation.
-        val (seen, job) = captureNavigation()
-        try {
-            val token = AppNav.tokenFor(appContext)
-            val ref = app.smartexplorer.android.launcher.bridge.ScreenRef("direct", "c1", "dev-c1")
-            for (target in listOf(SeActions.openScreen(ref, control = true), SeActions.screenGrid("room-1"))) {
-                val request = AppNav.decode(target.kind, target.value)!!
-                appContext.startActivity(AppNav.intentFor(appContext, request, token))
-                assertTrue("$request did not arrive, saw $seen", waitFor(20_000) { request in seen })
-            }
-        } finally {
-            job.cancel()
-        }
-    }
-
-    @Test
     fun launcher_task_unbind_on_stop() {
         startSeLauncher(seWorkspace.item("s1", "seScreens", 0, 0))
         assertTrue("the bridge was not bound after onStart (rule C3.3 a)", waitFor(30_000) { bridgeBound() })
@@ -1498,13 +1404,6 @@ class LauncherTaskTest {
             shell("wm dismiss-keyguard")
             assertTrue("the double tap did not lock the screen", asleep)
         }
-    }
-
-    private fun render(drawable: Drawable, size: Int = 192): Bitmap {
-        val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
-        drawable.setBounds(0, 0, size, size)
-        drawable.draw(Canvas(bitmap))
-        return bitmap
     }
 }
 

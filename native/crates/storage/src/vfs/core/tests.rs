@@ -147,325 +147,347 @@ fn copy_file_default_impl_streams() {
 
 #[test]
 fn caching_backend_serves_and_invalidates() {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    // Counts how many times the inner backend is actually hit.
-    struct Counter(AtomicUsize);
-    impl Backend for Counter {
-        fn scheme(&self) -> Scheme {
-            Scheme::Sftp
-        }
-        fn root_display(&self) -> String {
-            "/".into()
-        }
-        fn list_dir(&self, _p: &str) -> VfsResult<Vec<VfsMeta>> {
-            self.0.fetch_add(1, Ordering::SeqCst);
-            Ok(Vec::new())
-        }
-        fn stat(&self, _p: &str) -> VfsResult<VfsMeta> {
-            Err(io::Error::from(io::ErrorKind::NotFound))
-        }
-        fn open_read(&self, _p: &str) -> VfsResult<Box<dyn Read + Send>> {
-            Err(io::Error::from(io::ErrorKind::Unsupported))
-        }
-        fn open_write(&self, _p: &str) -> VfsResult<Box<dyn Write + Send>> {
-            Err(io::Error::from(io::ErrorKind::Unsupported))
-        }
-        fn rename(&self, _s: &str, _d: &str) -> VfsResult<()> {
-            Ok(())
-        }
-        fn remove_file(&self, _p: &str) -> VfsResult<()> {
-            Ok(())
-        }
-        fn remove_dir(&self, _p: &str) -> VfsResult<()> {
-            Ok(())
-        }
-        fn mkdir_all(&self, _p: &str) -> VfsResult<()> {
-            Ok(())
-        }
+    let cases: [(&str, fn()); 2] = [
+        ("caching_backend_serves_and_invalidates", || {
+            use std::sync::atomic::{AtomicUsize, Ordering};
+            // Counts how many times the inner backend is actually hit.
+            struct Counter(AtomicUsize);
+            impl Backend for Counter {
+                fn scheme(&self) -> Scheme {
+                    Scheme::Sftp
+                }
+                fn root_display(&self) -> String {
+                    "/".into()
+                }
+                fn list_dir(&self, _p: &str) -> VfsResult<Vec<VfsMeta>> {
+                    self.0.fetch_add(1, Ordering::SeqCst);
+                    Ok(Vec::new())
+                }
+                fn stat(&self, _p: &str) -> VfsResult<VfsMeta> {
+                    Err(io::Error::from(io::ErrorKind::NotFound))
+                }
+                fn open_read(&self, _p: &str) -> VfsResult<Box<dyn Read + Send>> {
+                    Err(io::Error::from(io::ErrorKind::Unsupported))
+                }
+                fn open_write(&self, _p: &str) -> VfsResult<Box<dyn Write + Send>> {
+                    Err(io::Error::from(io::ErrorKind::Unsupported))
+                }
+                fn rename(&self, _s: &str, _d: &str) -> VfsResult<()> {
+                    Ok(())
+                }
+                fn remove_file(&self, _p: &str) -> VfsResult<()> {
+                    Ok(())
+                }
+                fn remove_dir(&self, _p: &str) -> VfsResult<()> {
+                    Ok(())
+                }
+                fn mkdir_all(&self, _p: &str) -> VfsResult<()> {
+                    Ok(())
+                }
+            }
+            // Keep a typed handle so we can read the inner hit-counter directly
+            // (the trait object hides it).
+            let typed = Arc::new(Counter(AtomicUsize::new(0)));
+            let cb2 = CachingBackend::new(typed.clone() as BackendHandle);
+            cb2.list_dir("/x").unwrap();
+            cb2.list_dir("/x").unwrap();
+            cb2.list_dir("/x/").unwrap(); // trailing slash -> same cache key
+            assert_eq!(
+                typed.0.load(Ordering::SeqCst),
+                1,
+                "repeat listings served from cache"
+            );
+            cb2.invalidate_cache();
+            cb2.list_dir("/x").unwrap();
+            assert_eq!(typed.0.load(Ordering::SeqCst), 2, "refresh re-listed");
+            cb2.remove_dir("/x/sub").unwrap(); // invalidates parent "/x"
+            cb2.list_dir("/x").unwrap();
+            assert_eq!(
+                typed.0.load(Ordering::SeqCst),
+                3,
+                "mutation invalidated the dir"
+            );
+        }),
+        (
+            "caching_backend_rename_invalidates_cached_descendants",
+            || {
+                use std::sync::atomic::{AtomicUsize, Ordering};
+
+                struct Counter(AtomicUsize);
+                impl Backend for Counter {
+                    fn scheme(&self) -> Scheme {
+                        Scheme::Sftp
+                    }
+                    fn root_display(&self) -> String {
+                        "/".into()
+                    }
+                    fn list_dir(&self, _path: &str) -> VfsResult<Vec<VfsMeta>> {
+                        self.0.fetch_add(1, Ordering::SeqCst);
+                        Ok(Vec::new())
+                    }
+                    fn stat(&self, _path: &str) -> VfsResult<VfsMeta> {
+                        Err(io::ErrorKind::NotFound.into())
+                    }
+                    fn open_read(&self, _path: &str) -> VfsResult<Box<dyn Read + Send>> {
+                        Err(io::ErrorKind::Unsupported.into())
+                    }
+                    fn open_write(&self, _path: &str) -> VfsResult<Box<dyn Write + Send>> {
+                        Err(io::ErrorKind::Unsupported.into())
+                    }
+                    fn rename(&self, _source: &str, _destination: &str) -> VfsResult<()> {
+                        Ok(())
+                    }
+                    fn remove_file(&self, _path: &str) -> VfsResult<()> {
+                        Ok(())
+                    }
+                    fn remove_dir(&self, _path: &str) -> VfsResult<()> {
+                        Ok(())
+                    }
+                    fn mkdir_all(&self, _path: &str) -> VfsResult<()> {
+                        Ok(())
+                    }
+                }
+
+                let inner = Arc::new(Counter(AtomicUsize::new(0)));
+                let cached = CachingBackend::new(inner.clone() as BackendHandle);
+                cached.list_dir("/old/sub").unwrap();
+                cached.list_dir("/old/sub").unwrap();
+                assert_eq!(inner.0.load(Ordering::SeqCst), 1);
+                cached.rename("/old", "/new").unwrap();
+                cached.list_dir("/old/sub").unwrap();
+                assert_eq!(inner.0.load(Ordering::SeqCst), 2);
+            },
+        ),
+    ];
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
     }
-    // Keep a typed handle so we can read the inner hit-counter directly
-    // (the trait object hides it).
-    let typed = Arc::new(Counter(AtomicUsize::new(0)));
-    let cb2 = CachingBackend::new(typed.clone() as BackendHandle);
-    cb2.list_dir("/x").unwrap();
-    cb2.list_dir("/x").unwrap();
-    cb2.list_dir("/x/").unwrap(); // trailing slash -> same cache key
-    assert_eq!(
-        typed.0.load(Ordering::SeqCst),
-        1,
-        "repeat listings served from cache"
-    );
-    cb2.invalidate_cache();
-    cb2.list_dir("/x").unwrap();
-    assert_eq!(typed.0.load(Ordering::SeqCst), 2, "refresh re-listed");
-    cb2.remove_dir("/x/sub").unwrap(); // invalidates parent "/x"
-    cb2.list_dir("/x").unwrap();
-    assert_eq!(
-        typed.0.load(Ordering::SeqCst),
-        3,
-        "mutation invalidated the dir"
-    );
 }
 
 #[test]
 fn caching_backend_stat_reuses_fresh_parent_listing() {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    struct Counter {
-        stat_hits: AtomicUsize,
+    let cases: [(&str, fn()); 3] = [
+        ("caching_backend_stat_reuses_fresh_parent_listing", || {
+            use std::sync::atomic::{AtomicUsize, Ordering};
+            struct Counter {
+                stat_hits: AtomicUsize,
+            }
+            impl Backend for Counter {
+                fn scheme(&self) -> Scheme {
+                    Scheme::GDrive
+                }
+                fn root_display(&self) -> String {
+                    "/".into()
+                }
+                fn list_dir(&self, p: &str) -> VfsResult<Vec<VfsMeta>> {
+                    assert_eq!(p, "/x");
+                    Ok(vec![VfsMeta {
+                        name: "a.txt".into(),
+                        size: 7,
+                        id: Some("id-a".into()),
+                        ..Default::default()
+                    }])
+                }
+                fn stat(&self, _p: &str) -> VfsResult<VfsMeta> {
+                    self.stat_hits.fetch_add(1, Ordering::SeqCst);
+                    Ok(VfsMeta {
+                        name: "from-stat".into(),
+                        ..Default::default()
+                    })
+                }
+                fn open_read(&self, _p: &str) -> VfsResult<Box<dyn Read + Send>> {
+                    Err(io::Error::from(io::ErrorKind::Unsupported))
+                }
+                fn open_write(&self, _p: &str) -> VfsResult<Box<dyn Write + Send>> {
+                    Err(io::Error::from(io::ErrorKind::Unsupported))
+                }
+                fn rename(&self, _s: &str, _d: &str) -> VfsResult<()> {
+                    Ok(())
+                }
+                fn remove_file(&self, _p: &str) -> VfsResult<()> {
+                    Ok(())
+                }
+                fn remove_dir(&self, _p: &str) -> VfsResult<()> {
+                    Ok(())
+                }
+                fn mkdir_all(&self, _p: &str) -> VfsResult<()> {
+                    Ok(())
+                }
+            }
+
+            let inner = Arc::new(Counter {
+                stat_hits: AtomicUsize::new(0),
+            });
+            let cached = CachingBackend::new(inner.clone() as BackendHandle);
+            cached.list_dir("/x").unwrap();
+            let meta = cached.stat("/x/a.txt").unwrap();
+            assert_eq!(meta.name, "a.txt");
+            assert_eq!(meta.size, 7);
+            assert_eq!(meta.id.as_deref(), Some("id-a"));
+            assert_eq!(inner.stat_hits.load(Ordering::SeqCst), 0);
+        }),
+        (
+            "caching_backend_stat_cache_invalidates_after_mutation",
+            || {
+                use std::sync::atomic::{AtomicUsize, Ordering};
+                struct Counter {
+                    list_hits: AtomicUsize,
+                    stat_hits: AtomicUsize,
+                }
+                impl Backend for Counter {
+                    fn scheme(&self) -> Scheme {
+                        Scheme::Sftp
+                    }
+                    fn root_display(&self) -> String {
+                        "/".into()
+                    }
+                    fn list_dir(&self, _p: &str) -> VfsResult<Vec<VfsMeta>> {
+                        self.list_hits.fetch_add(1, Ordering::SeqCst);
+                        Ok(vec![VfsMeta {
+                            name: "a.txt".into(),
+                            ..Default::default()
+                        }])
+                    }
+                    fn stat(&self, _p: &str) -> VfsResult<VfsMeta> {
+                        self.stat_hits.fetch_add(1, Ordering::SeqCst);
+                        Ok(VfsMeta {
+                            name: "from-stat".into(),
+                            ..Default::default()
+                        })
+                    }
+                    fn open_read(&self, _p: &str) -> VfsResult<Box<dyn Read + Send>> {
+                        Err(io::Error::from(io::ErrorKind::Unsupported))
+                    }
+                    fn open_write(&self, _p: &str) -> VfsResult<Box<dyn Write + Send>> {
+                        Err(io::Error::from(io::ErrorKind::Unsupported))
+                    }
+                    fn rename(&self, _s: &str, _d: &str) -> VfsResult<()> {
+                        Ok(())
+                    }
+                    fn remove_file(&self, _p: &str) -> VfsResult<()> {
+                        Ok(())
+                    }
+                    fn remove_dir(&self, _p: &str) -> VfsResult<()> {
+                        Ok(())
+                    }
+                    fn mkdir_all(&self, _p: &str) -> VfsResult<()> {
+                        Ok(())
+                    }
+                }
+
+                let inner = Arc::new(Counter {
+                    list_hits: AtomicUsize::new(0),
+                    stat_hits: AtomicUsize::new(0),
+                });
+                let cached = CachingBackend::new(inner.clone() as BackendHandle);
+                cached.list_dir("/x").unwrap();
+                assert_eq!(cached.stat("/x/a.txt").unwrap().name, "a.txt");
+                cached.remove_file("/x/a.txt").unwrap();
+                assert_eq!(cached.stat("/x/a.txt").unwrap().name, "from-stat");
+                assert_eq!(inner.list_hits.load(Ordering::SeqCst), 1);
+                assert_eq!(inner.stat_hits.load(Ordering::SeqCst), 1);
+            },
+        ),
+        (
+            "caching_backend_stat_falls_back_for_duplicate_names",
+            || {
+                use std::sync::atomic::{AtomicUsize, Ordering};
+                struct Counter {
+                    stat_hits: AtomicUsize,
+                }
+                impl Backend for Counter {
+                    fn scheme(&self) -> Scheme {
+                        Scheme::GDrive
+                    }
+                    fn root_display(&self) -> String {
+                        "/".into()
+                    }
+                    fn list_dir(&self, _p: &str) -> VfsResult<Vec<VfsMeta>> {
+                        Ok(vec![
+                            VfsMeta {
+                                name: "dup.txt".into(),
+                                id: Some("id-a".into()),
+                                ..Default::default()
+                            },
+                            VfsMeta {
+                                name: "dup.txt".into(),
+                                id: Some("id-b".into()),
+                                ..Default::default()
+                            },
+                        ])
+                    }
+                    fn stat(&self, _p: &str) -> VfsResult<VfsMeta> {
+                        self.stat_hits.fetch_add(1, Ordering::SeqCst);
+                        Ok(VfsMeta {
+                            name: "from-stat".into(),
+                            ..Default::default()
+                        })
+                    }
+                    fn open_read(&self, _p: &str) -> VfsResult<Box<dyn Read + Send>> {
+                        Err(io::Error::from(io::ErrorKind::Unsupported))
+                    }
+                    fn open_write(&self, _p: &str) -> VfsResult<Box<dyn Write + Send>> {
+                        Err(io::Error::from(io::ErrorKind::Unsupported))
+                    }
+                    fn rename(&self, _s: &str, _d: &str) -> VfsResult<()> {
+                        Ok(())
+                    }
+                    fn remove_file(&self, _p: &str) -> VfsResult<()> {
+                        Ok(())
+                    }
+                    fn remove_dir(&self, _p: &str) -> VfsResult<()> {
+                        Ok(())
+                    }
+                    fn mkdir_all(&self, _p: &str) -> VfsResult<()> {
+                        Ok(())
+                    }
+                }
+
+                let inner = Arc::new(Counter {
+                    stat_hits: AtomicUsize::new(0),
+                });
+                let cached = CachingBackend::new(inner.clone() as BackendHandle);
+                cached.list_dir("/x").unwrap();
+                let meta = cached.stat("/x/dup.txt").unwrap();
+                assert_eq!(meta.name, "from-stat");
+                assert_eq!(inner.stat_hits.load(Ordering::SeqCst), 1);
+            },
+        ),
+    ];
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
     }
-    impl Backend for Counter {
-        fn scheme(&self) -> Scheme {
-            Scheme::GDrive
-        }
-        fn root_display(&self) -> String {
-            "/".into()
-        }
-        fn list_dir(&self, p: &str) -> VfsResult<Vec<VfsMeta>> {
-            assert_eq!(p, "/x");
-            Ok(vec![VfsMeta {
-                name: "a.txt".into(),
-                size: 7,
-                id: Some("id-a".into()),
-                ..Default::default()
-            }])
-        }
-        fn stat(&self, _p: &str) -> VfsResult<VfsMeta> {
-            self.stat_hits.fetch_add(1, Ordering::SeqCst);
-            Ok(VfsMeta {
-                name: "from-stat".into(),
-                ..Default::default()
-            })
-        }
-        fn open_read(&self, _p: &str) -> VfsResult<Box<dyn Read + Send>> {
-            Err(io::Error::from(io::ErrorKind::Unsupported))
-        }
-        fn open_write(&self, _p: &str) -> VfsResult<Box<dyn Write + Send>> {
-            Err(io::Error::from(io::ErrorKind::Unsupported))
-        }
-        fn rename(&self, _s: &str, _d: &str) -> VfsResult<()> {
-            Ok(())
-        }
-        fn remove_file(&self, _p: &str) -> VfsResult<()> {
-            Ok(())
-        }
-        fn remove_dir(&self, _p: &str) -> VfsResult<()> {
-            Ok(())
-        }
-        fn mkdir_all(&self, _p: &str) -> VfsResult<()> {
-            Ok(())
-        }
-    }
-
-    let inner = Arc::new(Counter {
-        stat_hits: AtomicUsize::new(0),
-    });
-    let cached = CachingBackend::new(inner.clone() as BackendHandle);
-    cached.list_dir("/x").unwrap();
-    let meta = cached.stat("/x/a.txt").unwrap();
-    assert_eq!(meta.name, "a.txt");
-    assert_eq!(meta.size, 7);
-    assert_eq!(meta.id.as_deref(), Some("id-a"));
-    assert_eq!(inner.stat_hits.load(Ordering::SeqCst), 0);
-}
-
-#[test]
-fn caching_backend_stat_falls_back_for_duplicate_names() {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    struct Counter {
-        stat_hits: AtomicUsize,
-    }
-    impl Backend for Counter {
-        fn scheme(&self) -> Scheme {
-            Scheme::GDrive
-        }
-        fn root_display(&self) -> String {
-            "/".into()
-        }
-        fn list_dir(&self, _p: &str) -> VfsResult<Vec<VfsMeta>> {
-            Ok(vec![
-                VfsMeta {
-                    name: "dup.txt".into(),
-                    id: Some("id-a".into()),
-                    ..Default::default()
-                },
-                VfsMeta {
-                    name: "dup.txt".into(),
-                    id: Some("id-b".into()),
-                    ..Default::default()
-                },
-            ])
-        }
-        fn stat(&self, _p: &str) -> VfsResult<VfsMeta> {
-            self.stat_hits.fetch_add(1, Ordering::SeqCst);
-            Ok(VfsMeta {
-                name: "from-stat".into(),
-                ..Default::default()
-            })
-        }
-        fn open_read(&self, _p: &str) -> VfsResult<Box<dyn Read + Send>> {
-            Err(io::Error::from(io::ErrorKind::Unsupported))
-        }
-        fn open_write(&self, _p: &str) -> VfsResult<Box<dyn Write + Send>> {
-            Err(io::Error::from(io::ErrorKind::Unsupported))
-        }
-        fn rename(&self, _s: &str, _d: &str) -> VfsResult<()> {
-            Ok(())
-        }
-        fn remove_file(&self, _p: &str) -> VfsResult<()> {
-            Ok(())
-        }
-        fn remove_dir(&self, _p: &str) -> VfsResult<()> {
-            Ok(())
-        }
-        fn mkdir_all(&self, _p: &str) -> VfsResult<()> {
-            Ok(())
-        }
-    }
-
-    let inner = Arc::new(Counter {
-        stat_hits: AtomicUsize::new(0),
-    });
-    let cached = CachingBackend::new(inner.clone() as BackendHandle);
-    cached.list_dir("/x").unwrap();
-    let meta = cached.stat("/x/dup.txt").unwrap();
-    assert_eq!(meta.name, "from-stat");
-    assert_eq!(inner.stat_hits.load(Ordering::SeqCst), 1);
-}
-
-#[test]
-fn caching_backend_stat_cache_invalidates_after_mutation() {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    struct Counter {
-        list_hits: AtomicUsize,
-        stat_hits: AtomicUsize,
-    }
-    impl Backend for Counter {
-        fn scheme(&self) -> Scheme {
-            Scheme::Sftp
-        }
-        fn root_display(&self) -> String {
-            "/".into()
-        }
-        fn list_dir(&self, _p: &str) -> VfsResult<Vec<VfsMeta>> {
-            self.list_hits.fetch_add(1, Ordering::SeqCst);
-            Ok(vec![VfsMeta {
-                name: "a.txt".into(),
-                ..Default::default()
-            }])
-        }
-        fn stat(&self, _p: &str) -> VfsResult<VfsMeta> {
-            self.stat_hits.fetch_add(1, Ordering::SeqCst);
-            Ok(VfsMeta {
-                name: "from-stat".into(),
-                ..Default::default()
-            })
-        }
-        fn open_read(&self, _p: &str) -> VfsResult<Box<dyn Read + Send>> {
-            Err(io::Error::from(io::ErrorKind::Unsupported))
-        }
-        fn open_write(&self, _p: &str) -> VfsResult<Box<dyn Write + Send>> {
-            Err(io::Error::from(io::ErrorKind::Unsupported))
-        }
-        fn rename(&self, _s: &str, _d: &str) -> VfsResult<()> {
-            Ok(())
-        }
-        fn remove_file(&self, _p: &str) -> VfsResult<()> {
-            Ok(())
-        }
-        fn remove_dir(&self, _p: &str) -> VfsResult<()> {
-            Ok(())
-        }
-        fn mkdir_all(&self, _p: &str) -> VfsResult<()> {
-            Ok(())
-        }
-    }
-
-    let inner = Arc::new(Counter {
-        list_hits: AtomicUsize::new(0),
-        stat_hits: AtomicUsize::new(0),
-    });
-    let cached = CachingBackend::new(inner.clone() as BackendHandle);
-    cached.list_dir("/x").unwrap();
-    assert_eq!(cached.stat("/x/a.txt").unwrap().name, "a.txt");
-    cached.remove_file("/x/a.txt").unwrap();
-    assert_eq!(cached.stat("/x/a.txt").unwrap().name, "from-stat");
-    assert_eq!(inner.list_hits.load(Ordering::SeqCst), 1);
-    assert_eq!(inner.stat_hits.load(Ordering::SeqCst), 1);
-}
-
-#[test]
-fn caching_backend_rename_invalidates_cached_descendants() {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    struct Counter(AtomicUsize);
-    impl Backend for Counter {
-        fn scheme(&self) -> Scheme {
-            Scheme::Sftp
-        }
-        fn root_display(&self) -> String {
-            "/".into()
-        }
-        fn list_dir(&self, _path: &str) -> VfsResult<Vec<VfsMeta>> {
-            self.0.fetch_add(1, Ordering::SeqCst);
-            Ok(Vec::new())
-        }
-        fn stat(&self, _path: &str) -> VfsResult<VfsMeta> {
-            Err(io::ErrorKind::NotFound.into())
-        }
-        fn open_read(&self, _path: &str) -> VfsResult<Box<dyn Read + Send>> {
-            Err(io::ErrorKind::Unsupported.into())
-        }
-        fn open_write(&self, _path: &str) -> VfsResult<Box<dyn Write + Send>> {
-            Err(io::ErrorKind::Unsupported.into())
-        }
-        fn rename(&self, _source: &str, _destination: &str) -> VfsResult<()> {
-            Ok(())
-        }
-        fn remove_file(&self, _path: &str) -> VfsResult<()> {
-            Ok(())
-        }
-        fn remove_dir(&self, _path: &str) -> VfsResult<()> {
-            Ok(())
-        }
-        fn mkdir_all(&self, _path: &str) -> VfsResult<()> {
-            Ok(())
-        }
-    }
-
-    let inner = Arc::new(Counter(AtomicUsize::new(0)));
-    let cached = CachingBackend::new(inner.clone() as BackendHandle);
-    cached.list_dir("/old/sub").unwrap();
-    cached.list_dir("/old/sub").unwrap();
-    assert_eq!(inner.0.load(Ordering::SeqCst), 1);
-    cached.rename("/old", "/new").unwrap();
-    cached.list_dir("/old/sub").unwrap();
-    assert_eq!(inner.0.load(Ordering::SeqCst), 2);
 }
 
 #[test]
 fn dispatch_and_remote_detection() {
-    assert_eq!(backend_for("/tmp").unwrap().scheme(), Scheme::Local);
-    assert_eq!(backend_for(r"C:\Users").unwrap().scheme(), Scheme::Local);
-    assert_eq!(
-        backend_for(r"\\server\share").unwrap().scheme(),
-        Scheme::Local
-    );
-    assert!(backend_for("sftp://h/p").is_err());
-    assert!(backend_for("ftp://h/p").is_err());
-    assert!(backend_for("ftps://h/p").is_err());
+    let cases: [(&str, fn()); 2] = [
+        ("dispatch_and_remote_detection", || {
+            assert_eq!(backend_for("/tmp").unwrap().scheme(), Scheme::Local);
+            assert_eq!(backend_for(r"C:\Users").unwrap().scheme(), Scheme::Local);
+            assert_eq!(
+                backend_for(r"\\server\share").unwrap().scheme(),
+                Scheme::Local
+            );
+            assert!(backend_for("sftp://h/p").is_err());
+            assert!(backend_for("ftp://h/p").is_err());
+            assert!(backend_for("ftps://h/p").is_err());
 
-    assert!(!is_remote_root(r"C:\Users"));
-    assert!(!is_remote_root(r"\\server\share"));
-    assert!(is_remote_root("sftp://h/p"));
-    assert!(is_remote_root("FTP://H/P"));
-}
-
-#[test]
-fn android_task_smb_roots_dispatch_to_the_smb_backend() {
-    assert!(is_remote_root("smb://nas/daten"));
-    assert!(is_remote_root(" SMB://NAS/daten"));
-    // Without a password in the URL nothing connects; saved connections
-    // open through `connect` with their stored secret.
-    let error = backend_for("smb://anna@nas.invalid/daten").err().unwrap();
-    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+            assert!(!is_remote_root(r"C:\Users"));
+            assert!(!is_remote_root(r"\\server\share"));
+            assert!(is_remote_root("sftp://h/p"));
+            assert!(is_remote_root("FTP://H/P"));
+        }),
+        ("android_task_smb_roots_dispatch_to_the_smb_backend", || {
+            assert!(is_remote_root("smb://nas/daten"));
+            assert!(is_remote_root(" SMB://NAS/daten"));
+            // Without a password in the URL nothing connects; saved connections
+            // open through `connect` with their stored secret.
+            let error = backend_for("smb://anna@nas.invalid/daten").err().unwrap();
+            assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        }),
+    ];
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
+    }
 }

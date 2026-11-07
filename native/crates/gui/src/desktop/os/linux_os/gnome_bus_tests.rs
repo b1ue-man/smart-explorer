@@ -162,7 +162,7 @@ fn service(loaded: &Arc<Mutex<Vec<(String, f64)>>>) -> zbus::Result<zbus::blocki
 }
 
 #[test]
-#[ignore = "braucht den privaten Sitzungsbus der Suite (SE_DESKTOP_TASK_SESSION_BUS=1)"]
+#[ignore = "braucht den privaten Sitzungsbus (SE_DESKTOP_TASK_SESSION_BUS=1); Suite rechte-desktop-tresore-task"]
 fn gnome_dbus_calls_against_a_test_service() {
     assert_eq!(
         std::env::var("SE_DESKTOP_TASK_SESSION_BUS").as_deref(),

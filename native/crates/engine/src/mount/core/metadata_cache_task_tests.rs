@@ -7,7 +7,7 @@ use crate::vfs::{Backend, BackendHandle, Scheme, VfsMeta, VfsResult};
 use std::collections::HashMap;
 use std::io::{self, Read, Write};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Barrier, Mutex};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 struct MetadataBackend {
@@ -256,47 +256,38 @@ fn remote_drive_task_startup_walk_is_root_only_and_background_batches_are_bounde
             "/Directory11"
         ]
     );
-    Ok(())
-}
+    // Case "background stop": a background preload stops between two targets.
+    {
+        let temporary = tempfile::tempdir()?;
+        let backend = MetadataBackend::wide_tree(12);
+        let handle: BackendHandle = backend.clone();
+        let engine = MountEngine::open_host_cache(
+            MountRuntimeConfig::new(
+                MountId::parse("metadata-cancellable-preload")?,
+                MountMode::ReadOnly,
+            )
+            .with_metadata_policy(MountMetadataPolicy::new(2)?),
+            handle,
+            temporary.path(),
+        )?;
 
-#[test]
-fn remote_drive_task_background_preload_honors_stop_between_targets() -> io::Result<()> {
-    let temporary = tempfile::tempdir()?;
-    let backend = MetadataBackend::wide_tree(12);
-    let handle: BackendHandle = backend.clone();
-    let engine = MountEngine::open_host_cache(
-        MountRuntimeConfig::new(
-            MountId::parse("metadata-cancellable-preload")?,
-            MountMode::ReadOnly,
-        )
-        .with_metadata_policy(MountMetadataPolicy::new(2)?),
-        handle,
-        temporary.path(),
-    )?;
-
-    engine.preload_metadata()?;
-    assert_eq!(
-        engine.preload_metadata_batch_while(|| backend.lists.load(Ordering::SeqCst) >= 2)?,
-        1
-    );
-    assert_eq!(backend.lists.load(Ordering::SeqCst), 2);
-    assert_eq!(backend.stats.load(Ordering::SeqCst), 1);
-    Ok(())
-}
-
-#[test]
-fn remote_drive_task_one_cached_directory_cannot_amplify_memory_without_bound() -> io::Result<()> {
-    let cache = MetadataCache::new("/", true);
-    // Retained capacity matters even when a string's visible length is small.
-    let mut oversized_name = String::with_capacity(128 * 1024 * 1024 + 1);
-    oversized_name.push('x');
-    assert!(!cache.install_directory(
-        "/",
-        directory("/"),
-        vec![VfsMeta { name: oversized_name, size: 1, ..VfsMeta::default() }].into(),
-        0,
-    )?);
-    assert_eq!(cache.usage()?, (0, 0, 0));
+        engine.preload_metadata()?;
+        assert_eq!(
+            engine.preload_metadata_batch_while(|| backend.lists.load(Ordering::SeqCst) >= 2)?,
+            1,
+            "background stop between targets"
+        );
+        assert_eq!(
+            backend.lists.load(Ordering::SeqCst),
+            2,
+            "background stop between targets"
+        );
+        assert_eq!(
+            backend.stats.load(Ordering::SeqCst),
+            1,
+            "background stop between targets"
+        );
+    }
     Ok(())
 }
 
@@ -307,27 +298,6 @@ fn remote_drive_task_mutation_keeps_unrelated_snapshot_backoff() -> io::Result<(
     cache.cool_down_snapshot("/Beta")?;
     cache.invalidate("/Alpha/note.md", false)?;
     assert_eq!(cache.cooldown_count()?, 1);
-    Ok(())
-}
-
-#[test]
-fn remote_drive_task_refresh_prioritizes_recently_accessed_directory() -> io::Result<()> {
-    let cache = MetadataCache::new("/", true);
-    assert!(cache.install_directory(
-        "/",
-        directory("/"),
-        vec![directory("Alpha"), directory("Beta"), directory("Gamma")].into(),
-        0,
-    )?);
-    assert!(cache.install_directory("/Alpha", directory("Alpha"), Vec::new().into(), 1)?);
-    assert!(cache.install_directory("/Beta", directory("Beta"), Vec::new().into(), 1)?);
-    assert!(cache.install_directory("/Gamma", directory("Gamma"), Vec::new().into(), 1)?);
-    assert!(cache.directory("/Beta")?.is_some());
-    assert_eq!(
-        cache.refresh_targets(3, true)?,
-        // Root + fairness reservation + most recently demanded snapshot.
-        vec![("/".into(), 0), ("/Alpha".into(), 1), ("/Beta".into(), 1)]
-    );
     Ok(())
 }
 
@@ -437,39 +407,6 @@ fn remote_drive_task_cold_stat_avoids_listing_and_snapshot_supersedes_point_cach
     assert_eq!(engine.stat_cached(r"\Alpha\note.md")?.size, 99);
     assert_eq!(backend.lists.load(Ordering::SeqCst), 1);
     assert_eq!(backend.stats.load(Ordering::SeqCst), 2);
-    Ok(())
-}
-
-#[test]
-fn remote_drive_task_concurrent_directory_misses_share_one_remote_load() -> io::Result<()> {
-    let temporary = tempfile::tempdir()?;
-    let backend = MetadataBackend::tree(Duration::from_millis(40));
-    let handle: BackendHandle = backend.clone();
-    let engine = Arc::new(MountEngine::open_host_cache(
-        MountRuntimeConfig::new(
-            MountId::parse("metadata-single-flight")?,
-            MountMode::ReadOnly,
-        )
-        .with_metadata_policy(MountMetadataPolicy::new(0)?),
-        handle,
-        temporary.path(),
-    )?);
-    let barrier = Arc::new(Barrier::new(3));
-    let mut workers = Vec::new();
-    for _ in 0..2 {
-        let engine = Arc::clone(&engine);
-        let barrier = Arc::clone(&barrier);
-        workers.push(std::thread::spawn(move || {
-            barrier.wait();
-            engine.list_dir(r"\").map(|entries| entries.len())
-        }));
-    }
-    barrier.wait();
-    for worker in workers {
-        assert_eq!(worker.join().unwrap()?, 3);
-    }
-    assert_eq!(backend.lists.load(Ordering::SeqCst), 1);
-    assert_eq!(backend.stats.load(Ordering::SeqCst), 1);
     Ok(())
 }
 

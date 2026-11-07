@@ -32,23 +32,17 @@ fn key(byte: u8) -> iroh::SecretKey {
 }
 
 #[test]
-fn review_task_future_request_is_received_without_waiting_for_local_clock() {
-    let request = request(NOW + 90);
-    request.verify_at(&SECRET, NOW).unwrap();
-    let mut profiles = ShareProfiles::default();
-    profiles
-        .record_incoming_direct_request("lookup", request.clone(), NOW)
-        .unwrap();
-    assert_eq!(
-        profiles.direct_requests[0].record.delivery.changed_at,
-        NOW + 90
-    );
-    assert_eq!(profiles.direct_requests[0].record.request, request);
-    profiles.validate_direct_ledger().unwrap();
+fn review_task_decision_delivery_accepts_clock_skew_in_both_directions() {
+    let cases: [fn(); 2] = [
+        review_task_decision_delivery_accepts_clock_skew_in_both_directions_case,
+        review_task_future_request_is_received_without_waiting_for_local_clock,
+    ];
+    for case in cases {
+        case();
+    }
 }
 
-#[test]
-fn review_task_decision_delivery_accepts_clock_skew_in_both_directions() {
+fn review_task_decision_delivery_accepts_clock_skew_in_both_directions_case() {
     for (created_at, decided_at) in [(NOW + 90, NOW), (NOW, NOW + 90)] {
         let request = request(created_at);
         let decision = SignedDirectDecision::sign_with_nonce(
@@ -85,4 +79,19 @@ fn review_task_decision_delivery_accepts_clock_skew_in_both_directions() {
         assert_eq!(entry.decision.as_ref(), Some(&decision));
         profiles.validate_direct_ledger().unwrap();
     }
+}
+
+fn review_task_future_request_is_received_without_waiting_for_local_clock() {
+    let request = request(NOW + 90);
+    request.verify_at(&SECRET, NOW).unwrap();
+    let mut profiles = ShareProfiles::default();
+    profiles
+        .record_incoming_direct_request("lookup", request.clone(), NOW)
+        .unwrap();
+    assert_eq!(
+        profiles.direct_requests[0].record.delivery.changed_at,
+        NOW + 90
+    );
+    assert_eq!(profiles.direct_requests[0].record.request, request);
+    profiles.validate_direct_ledger().unwrap();
 }

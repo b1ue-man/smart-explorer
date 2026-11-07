@@ -35,6 +35,16 @@ fn abgleich_task_clear_is_complete_only_when_no_reached_process_failed() {
 
 #[test]
 fn abgleich_task_clear_summary_names_the_account_for_every_outcome() {
+    let cases: [fn(); 2] = [
+        abgleich_task_clear_summary_names_the_account_for_every_outcome_case,
+        abgleich_task_clear_json_names_each_step_and_its_reason,
+    ];
+    for case in cases {
+        case();
+    }
+}
+
+fn abgleich_task_clear_summary_names_the_account_for_every_outcome_case() {
     // Nothing in the sentence speaks for a service of another account: with
     // no service of this account running it says exactly that.
     assert_eq!(
@@ -61,7 +71,6 @@ fn abgleich_task_clear_summary_names_the_account_for_every_outcome() {
     }
 }
 
-#[test]
 fn abgleich_task_clear_json_names_each_step_and_its_reason() {
     let value = report(ClearStep::Cleared, ClearStep::Failed("x".into())).json();
     assert_eq!(value["cleared"], json!(false));

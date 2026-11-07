@@ -238,44 +238,46 @@ fn vault_task_check_orphan_attached_under_lost_found() {
     assert!(!names(&check(&fx).items)
         .iter()
         .any(|name| name == "OrphanContentDir"));
-}
-
-#[test]
-fn vault_task_check_stage_leftover_removed() {
-    let fx = vault();
-    let stage = format!(
-        "{}/{}.c9r.se-compare-0123456789abcdef",
-        map(&fx).by_clear["/"],
-        "A".repeat(48)
-    );
-    std::fs::write(path_of(&fx, &stage), b"halb").expect("stage");
-    let result = check(&fx);
-    let entry = result
-        .items
-        .iter()
-        .find(|item| item.finding.as_deref() == Some("StageLeftover"))
-        .expect("the stage");
-    assert_eq!(entry.actions, [ItemAction::RemoveStage]);
-    // A removal is asked about first.
-    let asked = fx
-        .resolve_check(&entry.id, "remove-stage", false)
-        .expect_err("asked");
-    assert!(asked.to_string().contains("Kopie des Chiffrats"), "{asked}");
-    assert!(path_of(&fx, &stage).exists());
-    fx.resolve_check(&entry.id, "remove-stage", true)
-        .expect("removed");
-    assert!(!path_of(&fx, &stage).exists());
-    // A copy of the cipher file waits in the removal folder.
-    let kept = super::compare_files::removed_root().join(&fx.site_a.id);
-    let copies: Vec<String> = walk(&kept);
-    assert!(
-        copies.iter().any(|name| name.ends_with("0123456789abcdef")),
-        "{copies:?}"
-    );
-    let _ = std::fs::remove_dir_all(&kept);
-    assert!(stored(&fx.root_a)
-        .keys()
-        .all(|rel| !rel.contains(".se-compare-")));
+    // Case "stage leftover": a leftover stage of a compare is offered for removal and its copy is kept.
+    {
+        let fx = vault();
+        let stage = format!(
+            "{}/{}.c9r.se-compare-0123456789abcdef",
+            map(&fx).by_clear["/"],
+            "A".repeat(48)
+        );
+        std::fs::write(path_of(&fx, &stage), b"halb").expect("stage");
+        let result = check(&fx);
+        let entry = result
+            .items
+            .iter()
+            .find(|item| item.finding.as_deref() == Some("StageLeftover"))
+            .expect("the stage");
+        assert_eq!(entry.actions, [ItemAction::RemoveStage], "stage leftover");
+        // A removal is asked about first.
+        let asked = fx
+            .resolve_check(&entry.id, "remove-stage", false)
+            .expect_err("asked");
+        assert!(asked.to_string().contains("Kopie des Chiffrats"), "{asked}");
+        assert!(path_of(&fx, &stage).exists(), "stage leftover");
+        fx.resolve_check(&entry.id, "remove-stage", true)
+            .expect("removed");
+        assert!(!path_of(&fx, &stage).exists(), "stage leftover");
+        // A copy of the cipher file waits in the removal folder.
+        let kept = super::compare_files::removed_root().join(&fx.site_a.id);
+        let copies: Vec<String> = walk(&kept);
+        assert!(
+            copies.iter().any(|name| name.ends_with("0123456789abcdef")),
+            "{copies:?}"
+        );
+        let _ = std::fs::remove_dir_all(&kept);
+        assert!(
+            stored(&fx.root_a)
+                .keys()
+                .all(|rel| !rel.contains(".se-compare-")),
+            "stage leftover"
+        );
+    }
 }
 
 fn walk(dir: &Path) -> Vec<String> {

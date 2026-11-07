@@ -96,7 +96,7 @@ impl Backend for FixtureBackend {
 fn path(path: &std::path::Path) -> String { path.to_str().unwrap().replace('\\', "/") }
 
 #[test]
-#[ignore = "requires isolated remote copy/paste task runner"]
+#[ignore = "requires isolated remote copy/paste task runner; Suite copy-paste-task"]
 fn copy_paste_task_vfs_serial_reader_finishes_before_destination_access() {
     enabled();
     let directory = tempfile::tempdir().unwrap();
@@ -118,7 +118,7 @@ fn copy_paste_task_vfs_serial_reader_finishes_before_destination_access() {
 }
 
 #[test]
-#[ignore = "requires isolated remote copy/paste task runner"]
+#[ignore = "requires isolated remote copy/paste task runner; Suite copy-paste-task"]
 fn copy_paste_task_vfs_cache_forwards_private_copy_and_read_contracts() {
     enabled();
     let directory = tempfile::tempdir().unwrap();

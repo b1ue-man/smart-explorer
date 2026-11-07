@@ -196,7 +196,7 @@ fn assert_owned_create(requests: &[Request], put_count: usize) {
 }
 
 #[test]
-#[ignore = "requires isolated remote copy/paste task runner"]
+#[ignore = "requires isolated remote copy/paste task runner; Suite copy-paste-task"]
 fn copy_paste_task_provider_drive_create_ignores_stale_path_and_pending_ids() {
     require_task();
     let mut steps = upload_steps();
@@ -222,7 +222,7 @@ fn copy_paste_task_provider_drive_create_ignores_stale_path_and_pending_ids() {
 }
 
 #[test]
-#[ignore = "requires isolated remote copy/paste task runner"]
+#[ignore = "requires isolated remote copy/paste task runner; Suite copy-paste-task"]
 fn copy_paste_task_provider_drive_occupied_or_duplicate_stage_never_mutates() {
     require_task();
     for objects in [vec![object("foreign")], vec![object("foreign"), object("another")]] {
@@ -239,7 +239,7 @@ fn copy_paste_task_provider_drive_occupied_or_duplicate_stage_never_mutates() {
 }
 
 #[test]
-#[ignore = "requires isolated remote copy/paste task runner"]
+#[ignore = "requires isolated remote copy/paste task runner; Suite copy-paste-task"]
 fn copy_paste_task_provider_drive_concurrent_name_collision_never_adopts_or_replays() {
     require_task();
     for objects in [vec![object("foreign")], vec![object("owned-id"), object("foreign")]] {
@@ -261,7 +261,7 @@ fn copy_paste_task_provider_drive_concurrent_name_collision_never_adopts_or_repl
 }
 
 #[test]
-#[ignore = "requires isolated remote copy/paste task runner"]
+#[ignore = "requires isolated remote copy/paste task runner; Suite copy-paste-task"]
 fn copy_paste_task_provider_drive_409_reconciles_only_owned_identity() {
     require_task();
     for correct_identity in [true, false] {
@@ -288,7 +288,7 @@ fn copy_paste_task_provider_drive_409_reconciles_only_owned_identity() {
 }
 
 #[test]
-#[ignore = "requires isolated remote copy/paste task runner"]
+#[ignore = "requires isolated remote copy/paste task runner; Suite copy-paste-task"]
 fn copy_paste_task_provider_drive_lost_upload_ack_reconciles_own_content() {
     require_task();
     let mut steps = preflight();
@@ -313,7 +313,7 @@ fn copy_paste_task_provider_drive_lost_upload_ack_reconciles_own_content() {
 }
 
 #[test]
-#[ignore = "requires isolated remote copy/paste task runner"]
+#[ignore = "requires isolated remote copy/paste task runner; Suite copy-paste-task"]
 fn copy_paste_task_provider_drive_wrong_metadata_keeps_pending_read_only() {
     require_task();
     for (field, wrong) in [

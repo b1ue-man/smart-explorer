@@ -3,6 +3,7 @@ use super::super::super::types::{DirectAccessState, DirectGrantState};
 use super::*;
 
 #[test]
+#[ignore = "needs the runner's private LAN interface (SE_REVIEW_LAN_IP, SE_REVIEW_LAN_IFINDEX, SE_REVIEW_LAN_IFNAME); Suite review-task"]
 fn review_task_s09_transport_path_revisions_reject_returned_path_evidence() {
     let mut fixture = Fixture::start(30);
     let rt = fixture.a.rt.clone();
@@ -42,6 +43,7 @@ fn review_task_s09_transport_path_revisions_reject_returned_path_evidence() {
 }
 
 #[test]
+#[ignore = "needs the runner's private LAN interface (SE_REVIEW_LAN_IP, SE_REVIEW_LAN_IFINDEX, SE_REVIEW_LAN_IFNAME); Suite review-task"]
 fn review_task_s09_transport_close_withdraw_disable_discard_cached_facts() {
     for mode in 0..4 {
         let mut fixture = Fixture::start(40 + mode * 2);
@@ -93,6 +95,7 @@ fn review_task_s09_transport_close_withdraw_disable_discard_cached_facts() {
 }
 
 #[test]
+#[ignore = "needs the runner's private LAN interface (SE_REVIEW_LAN_IP, SE_REVIEW_LAN_IFINDEX, SE_REVIEW_LAN_IFNAME); Suite review-task"]
 fn review_task_s09_transport_expired_or_unknown_facts_fail_closed() {
     for mode in 0..4 {
         let mut fixture = Fixture::start(60 + mode * 2);

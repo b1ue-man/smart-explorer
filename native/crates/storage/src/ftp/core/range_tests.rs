@@ -289,13 +289,36 @@ fn speed_task_ftp_range_reader_aborts_after_len_and_resyncs() {
 
 #[test]
 fn speed_task_ftp_range_without_rest_returns_none() {
-    let server = Server::start(false, false);
-    let backend = server.backend();
-    warm(&backend);
-    let logins = server.logins();
-    assert!(backend.supports_range_reads("/f"));
-    assert!(read_range(&backend, 1_000, 100).unwrap().is_none());
-    assert_eq!(server.logins(), logins);
+    let cases: [(&str, fn()); 2] = [
+        ("speed_task_ftp_range_without_rest_returns_none", || {
+            let server = Server::start(false, false);
+            let backend = server.backend();
+            warm(&backend);
+            let logins = server.logins();
+            assert!(backend.supports_range_reads("/f"));
+            assert!(read_range(&backend, 1_000, 100).unwrap().is_none());
+            assert_eq!(server.logins(), logins);
+        }),
+        (
+            "speed_task_ftp_range_421_ends_ranges_without_new_logins",
+            || {
+                let server = Server::start(true, false);
+                let backend = server.backend();
+                warm(&backend);
+                assert!(backend.supports_range_reads("/f"));
+                let logins = server.logins();
+                server.rules.refuse.store(true, Ordering::SeqCst);
+                // The refusal is not an error of the file: it goes as one stream.
+                assert!(read_range(&backend, 1_000, 100).unwrap().is_none());
+                // Ranges stay off, and nothing logged in again to try.
+                assert!(!backend.supports_range_reads("/f"));
+                assert_eq!(server.logins(), logins, "no loop of new logins");
+            },
+        ),
+    ];
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
+    }
 }
 
 #[test]
@@ -353,21 +376,6 @@ fn speed_task_ftp_range_logs_in_for_a_fresh_job_and_assembles_byte_exact() {
         now
     ));
     assert!(ranges_possible(Some(now), None, now));
-}
-
-#[test]
-fn speed_task_ftp_range_421_ends_ranges_without_new_logins() {
-    let server = Server::start(true, false);
-    let backend = server.backend();
-    warm(&backend);
-    assert!(backend.supports_range_reads("/f"));
-    let logins = server.logins();
-    server.rules.refuse.store(true, Ordering::SeqCst);
-    // The refusal is not an error of the file: it goes as one stream.
-    assert!(read_range(&backend, 1_000, 100).unwrap().is_none());
-    // Ranges stay off, and nothing logged in again to try.
-    assert!(!backend.supports_range_reads("/f"));
-    assert_eq!(server.logins(), logins, "no loop of new logins");
 }
 
 #[test]

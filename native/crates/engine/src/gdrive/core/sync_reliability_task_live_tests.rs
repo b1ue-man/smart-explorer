@@ -57,6 +57,7 @@ fn bytes(backend: &GDriveBackend, path: &str) -> Vec<u8> {
 }
 
 #[test]
+#[ignore = "needs a live Google account (SE_DRIVE_TEST_CLIENT_ID, SE_DRIVE_TEST_REFRESH_TOKEN); Suite sync-reliability-task"]
 fn sync_reliability_task_live_drive_notebook_ids_refresh_restart_backups_and_noop() {
     let config = crate::cloud::ClientConfig {
         client_id: required("SE_DRIVE_TEST_CLIENT_ID"),

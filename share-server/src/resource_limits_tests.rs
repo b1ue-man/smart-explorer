@@ -255,52 +255,37 @@ fn websocket_queue_saturation_drops_excess_without_disconnect() {
 
 #[test]
 fn tcp_hello_has_an_absolute_pre_registration_deadline() {
-    let (listener, address) = loopback_listener();
-    let state = Arc::new(Mutex::new(State::default()));
-    let server_state = state.clone();
-    let server = std::thread::spawn(move || {
-        let (stream, _) = listener.accept().unwrap();
-        handle_with_timeout(stream, server_state, Duration::from_millis(150))
-    });
-
-    let client = TcpStream::connect(address).unwrap();
-    let dripper = std::thread::spawn(move || drip_slowloris(client, b"{", b' '));
-    let started = Instant::now();
-    let error = server.join().unwrap().unwrap_err();
-    let elapsed = started.elapsed();
-    assert_eq!(error.kind(), ErrorKind::TimedOut, "{error}");
-    assert!(elapsed >= Duration::from_millis(100));
-    assert!(elapsed < Duration::from_secs(1));
-    dripper.join().unwrap();
-    assert!(lock_state(&state).clients.is_empty());
-}
-
-#[test]
-fn websocket_upgrade_has_an_absolute_pre_registration_deadline() {
-    let (listener, address) = loopback_listener();
-    let state = Arc::new(Mutex::new(State::default()));
-    let server_state = state.clone();
-    let server = std::thread::spawn(move || {
-        let (stream, _) = listener.accept().unwrap();
-        handle_with_timeout(stream, server_state, Duration::from_millis(150))
-    });
-
-    let client = TcpStream::connect(address).unwrap();
-    let dripper = std::thread::spawn(move || {
-        drip_slowloris(
-            client,
+    // Rows: a TCP hello and a WebSocket upgrade, each drip-fed one byte at a
+    // time. Both hit the absolute deadline: a timeout between 100 ms and 1 s,
+    // and no registered client afterwards.
+    let cases: [(&str, &[u8], u8); 2] = [
+        ("tcp hello", b"{", b' '),
+        (
+            "websocket upgrade",
             b"GET / HTTP/1.1\r\nHost: localhost\r\nX-Slow:",
             b'a',
-        )
-    });
-    let started = Instant::now();
-    let error = server.join().unwrap().unwrap_err();
-    let elapsed = started.elapsed();
-    assert_eq!(error.kind(), ErrorKind::TimedOut, "{error}");
-    assert!(elapsed >= Duration::from_millis(100));
-    assert!(elapsed < Duration::from_secs(1));
-    dripper.join().unwrap();
-    assert!(lock_state(&state).clients.is_empty());
+        ),
+    ];
+    for (case, prefix, fill) in cases {
+        let (listener, address) = loopback_listener();
+        let state = Arc::new(Mutex::new(State::default()));
+        let server_state = state.clone();
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            handle_with_timeout(stream, server_state, Duration::from_millis(150))
+        });
+
+        let client = TcpStream::connect(address).unwrap();
+        let dripper = std::thread::spawn(move || drip_slowloris(client, prefix, fill));
+        let started = Instant::now();
+        let error = server.join().unwrap().unwrap_err();
+        let elapsed = started.elapsed();
+        assert_eq!(error.kind(), ErrorKind::TimedOut, "{case}: {error}");
+        assert!(elapsed >= Duration::from_millis(100), "{case}");
+        assert!(elapsed < Duration::from_secs(1), "{case}");
+        dripper.join().unwrap();
+        assert!(lock_state(&state).clients.is_empty(), "{case}");
+    }
 }
 
 #[test]

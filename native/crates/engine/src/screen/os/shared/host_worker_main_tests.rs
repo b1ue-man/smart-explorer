@@ -153,6 +153,16 @@ fn open(worker: &mut Worker) {
 
 #[test]
 fn screen_task_worker_maps_permission_denied_to_no_display() {
+    let cases: [fn(); 2] = [
+        screen_task_worker_maps_permission_denied_to_no_display_case,
+        screen_task_worker_keeps_other_capture_errors_as_capture_failed,
+    ];
+    for case in cases {
+        case();
+    }
+}
+
+fn screen_task_worker_maps_permission_denied_to_no_display_case() {
     let mut worker = worker(io::ErrorKind::PermissionDenied);
     open(&mut worker);
     let size = FrameSize::new(320, 180);
@@ -165,7 +175,6 @@ fn screen_task_worker_maps_permission_denied_to_no_display() {
     assert_eq!(code_of(raw), ScreenErrorCode::NoDisplay);
 }
 
-#[test]
 fn screen_task_worker_keeps_other_capture_errors_as_capture_failed() {
     let mut worker = worker(io::ErrorKind::BrokenPipe);
     open(&mut worker);

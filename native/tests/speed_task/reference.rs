@@ -109,25 +109,25 @@ fn ref_iperf(name: &'static str, profile: &'static str) {
 }
 
 #[test]
-#[ignore = "needs the stage's iperf3 servers and shaped loopback"]
+#[ignore = "needs the stage's iperf3 servers and shaped loopback; Suite rechte-desktop-tresore-task"]
 fn speed_task_ref_iperf_lan() {
     ref_iperf("speed_task_ref_iperf_lan", "lan");
 }
 
 #[test]
-#[ignore = "needs the stage's iperf3 servers and shaped loopback"]
+#[ignore = "needs the stage's iperf3 servers and shaped loopback; Suite rechte-desktop-tresore-task"]
 fn speed_task_ref_iperf_wan() {
     ref_iperf("speed_task_ref_iperf_wan", "wan");
 }
 
 #[test]
-#[ignore = "needs the stage's iperf3 servers and shaped loopback"]
+#[ignore = "needs the stage's iperf3 servers and shaped loopback; Suite rechte-desktop-tresore-task"]
 fn speed_task_ref_iperf_fat() {
     ref_iperf("speed_task_ref_iperf_fat", "fat");
 }
 
 #[test]
-#[ignore = "needs the stage's iperf3 servers and shaped loopback"]
+#[ignore = "needs the stage's iperf3 servers and shaped loopback; Suite rechte-desktop-tresore-task"]
 fn speed_task_ref_iperf_loss() {
     ref_iperf("speed_task_ref_iperf_loss", "loss");
 }
@@ -265,7 +265,7 @@ fn drive_dirs() -> Result<Vec<PathBuf>, String> {
 }
 
 #[test]
-#[ignore = "needs fio and the stage's drive folders"]
+#[ignore = "needs fio and the stage's drive folders; Suite rechte-desktop-tresore-task"]
 fn speed_task_ref_fio_volumes() {
     let name = "speed_task_ref_fio_volumes";
     guarded(name, || {
@@ -295,7 +295,7 @@ fn speed_task_ref_fio_volumes() {
 }
 
 #[test]
-#[ignore = "needs fio and the stage's drive folders"]
+#[ignore = "needs fio and the stage's drive folders; Suite rechte-desktop-tresore-task"]
 fn speed_task_ref_fio_small_files() {
     let name = "speed_task_ref_fio_small_files";
     guarded(name, || {
@@ -349,7 +349,7 @@ fn version_arguments(tool: &str) -> Vec<String> {
 }
 
 #[test]
-#[ignore = "needs the reference tools of the stage"]
+#[ignore = "needs the reference tools of the stage; Suite rechte-desktop-tresore-task"]
 fn speed_task_ref_tools_present() {
     let name = "speed_task_ref_tools_present";
     guarded(name, || {

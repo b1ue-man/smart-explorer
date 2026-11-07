@@ -396,16 +396,27 @@ mod tests {
     }
 
     #[test]
-    fn replacement_accepts_its_requested_generation() {
+    fn replacement_rejects_the_retiring_generation_but_accepts_another_successor() {
+        let cases: [fn(); 3] = [
+            replacement_rejects_the_retiring_generation_but_accepts_another_successor_case,
+            fresh_concurrent_launch_accepts_the_winning_generation,
+            replacement_accepts_its_requested_generation,
+        ];
+        for case in cases {
+            case();
+        }
+    }
+
+    fn replacement_rejects_the_retiring_generation_but_accepts_another_successor_case() {
         let replacement = ReplacementLaunch {
             expected_generation: "11111111111111111111111111111111".into(),
             retiring_generation: Some("00000000000000000000000000000000".into()),
         };
 
-        assert!(replacement.accepts("11111111111111111111111111111111"));
+        assert!(!replacement.accepts("00000000000000000000000000000000"));
+        assert!(replacement.accepts("22222222222222222222222222222222"));
     }
 
-    #[test]
     fn fresh_concurrent_launch_accepts_the_winning_generation() {
         let replacement = ReplacementLaunch {
             expected_generation: "11111111111111111111111111111111".into(),
@@ -415,14 +426,12 @@ mod tests {
         assert!(replacement.accepts("22222222222222222222222222222222"));
     }
 
-    #[test]
-    fn replacement_rejects_the_retiring_generation_but_accepts_another_successor() {
+    fn replacement_accepts_its_requested_generation() {
         let replacement = ReplacementLaunch {
             expected_generation: "11111111111111111111111111111111".into(),
             retiring_generation: Some("00000000000000000000000000000000".into()),
         };
 
-        assert!(!replacement.accepts("00000000000000000000000000000000"));
-        assert!(replacement.accepts("22222222222222222222222222222222"));
+        assert!(replacement.accepts("11111111111111111111111111111111"));
     }
 }

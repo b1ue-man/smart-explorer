@@ -163,14 +163,14 @@ fn vault_tools_in(lifecycle: Lifecycle) {
 }
 
 #[test]
-#[ignore = "braucht die gebaute se in SMART_EXPLORER_VAULT_SE_BIN (Stufe vault-mcp, env=SMART_EXPLORER_VAULT_SE_BIN={se})"]
+#[ignore = "braucht die gebaute se in SMART_EXPLORER_VAULT_SE_BIN (Stufe vault-mcp, env=SMART_EXPLORER_VAULT_SE_BIN={se}); Suite rechte-desktop-tresore-task"]
 fn vault_task_mcp_both_lifecycles() {
     vault_tools_in(Lifecycle::Classic);
     vault_tools_in(Lifecycle::Stateless);
 }
 
 #[test]
-#[ignore = "braucht die gebaute se in SMART_EXPLORER_VAULT_SE_BIN (Stufe vault-mcp, env=SMART_EXPLORER_VAULT_SE_BIN={se})"]
+#[ignore = "braucht die gebaute se in SMART_EXPLORER_VAULT_SE_BIN (Stufe vault-mcp, env=SMART_EXPLORER_VAULT_SE_BIN={se}); Suite rechte-desktop-tresore-task"]
 fn vault_task_mcp_status_without_paths() {
     let env = TaskEnv::isolated();
     // Two vaults at places with telling names, a file and a folder with

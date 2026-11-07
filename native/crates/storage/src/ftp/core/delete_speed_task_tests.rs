@@ -49,65 +49,76 @@ fn delete_speed_task_ftp_dele_runs_in_order_and_stops_after_a_failure() {
 
 #[test]
 fn delete_speed_task_ftp_types_listing_keeps_links_as_leaves() {
-    let mlsd = entries(
-        lines(&[
-            "type=cdir; .",
-            "type=pdir; ..",
-            "type=dir; sub",
-            "type=file;size=3; a.txt",
-            "type=OS.unix=symlink; link",
-            "type=OS.unix=slink:/elsewhere; slink",
-            "type=link; plain-link",
-        ]),
-        true,
-    )
-    .unwrap();
-    let kinds: Vec<(&str, bool, bool)> = mlsd
-        .iter()
-        .map(|entry| (entry.name.as_str(), entry.is_dir, entry.is_symlink))
-        .collect();
-    assert_eq!(
-        kinds,
-        [
-            ("sub", true, false),
-            ("a.txt", false, false),
-            ("link", false, true),
-            ("slink", false, true),
-            ("plain-link", false, true),
-        ]
-    );
+    let cases: [(&str, fn()); 2] = [
+        (
+            "delete_speed_task_ftp_types_listing_keeps_links_as_leaves",
+            || {
+                let mlsd = entries(
+                    lines(&[
+                        "type=cdir; .",
+                        "type=pdir; ..",
+                        "type=dir; sub",
+                        "type=file;size=3; a.txt",
+                        "type=OS.unix=symlink; link",
+                        "type=OS.unix=slink:/elsewhere; slink",
+                        "type=link; plain-link",
+                    ]),
+                    true,
+                )
+                .unwrap();
+                let kinds: Vec<(&str, bool, bool)> = mlsd
+                    .iter()
+                    .map(|entry| (entry.name.as_str(), entry.is_dir, entry.is_symlink))
+                    .collect();
+                assert_eq!(
+                    kinds,
+                    [
+                        ("sub", true, false),
+                        ("a.txt", false, false),
+                        ("link", false, true),
+                        ("slink", false, true),
+                        ("plain-link", false, true),
+                    ]
+                );
 
-    let list = entries(
-        lines(&[
-            "total 3",
-            "drwxr-xr-x 1 0 0 0 Jan 1 2020 .",
-            "drwxr-xr-x 1 0 0 0 Jan 1 2020 sub",
-            "-rw-r--r-- 1 0 0 3 Jan 1 2020 a.txt",
-            "lrwxrwxrwx 1 0 0 3 Jan 1 2020 link -> sub",
-        ]),
-        false,
-    )
-    .unwrap();
-    let kinds: Vec<(&str, bool, bool)> = list
-        .iter()
-        .map(|entry| (entry.name.as_str(), entry.is_dir, entry.is_symlink))
-        .collect();
-    assert_eq!(
-        kinds,
-        [
-            ("sub", true, false),
-            ("a.txt", false, false),
-            ("link", false, true),
-        ]
-    );
-}
-
-#[test]
-fn delete_speed_task_ftp_types_listing_fails_on_unknown_entries() {
-    // A FIFO row matches no LIST format.
-    assert!(entries(lines(&["prw-r--r-- 1 0 0 0 Jan 1 2020 fifo"]), false).is_err());
-    let repeated = ["type=file;size=1; a", "type=file;size=1; a"];
-    assert!(entries(lines(&repeated), true).is_err());
-    assert!(entries(lines(&["type=file;size=1; back\\slash"]), true).is_err());
-    assert!(entries(lines(&["no-facts-row"]), true).is_err());
+                let list = entries(
+                    lines(&[
+                        "total 3",
+                        "drwxr-xr-x 1 0 0 0 Jan 1 2020 .",
+                        "drwxr-xr-x 1 0 0 0 Jan 1 2020 sub",
+                        "-rw-r--r-- 1 0 0 3 Jan 1 2020 a.txt",
+                        "lrwxrwxrwx 1 0 0 3 Jan 1 2020 link -> sub",
+                    ]),
+                    false,
+                )
+                .unwrap();
+                let kinds: Vec<(&str, bool, bool)> = list
+                    .iter()
+                    .map(|entry| (entry.name.as_str(), entry.is_dir, entry.is_symlink))
+                    .collect();
+                assert_eq!(
+                    kinds,
+                    [
+                        ("sub", true, false),
+                        ("a.txt", false, false),
+                        ("link", false, true),
+                    ]
+                );
+            },
+        ),
+        (
+            "delete_speed_task_ftp_types_listing_fails_on_unknown_entries",
+            || {
+                // A FIFO row matches no LIST format.
+                assert!(entries(lines(&["prw-r--r-- 1 0 0 0 Jan 1 2020 fifo"]), false).is_err());
+                let repeated = ["type=file;size=1; a", "type=file;size=1; a"];
+                assert!(entries(lines(&repeated), true).is_err());
+                assert!(entries(lines(&["type=file;size=1; back\\slash"]), true).is_err());
+                assert!(entries(lines(&["no-facts-row"]), true).is_err());
+            },
+        ),
+    ];
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
+    }
 }

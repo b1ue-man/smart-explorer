@@ -111,78 +111,92 @@ fn drive_task_fuse_runtime_report_missing_fusermount() {
         write(distribution.path(), "etc/os-release", release);
         assert_eq!(package_command(distribution.path()), command, "{release}");
     }
-}
+    // Case "sandbox and WSL markers": each marker names its sandbox, WSL is found by kernel, interop or environment.
+    {
+        let none = environment(&[]);
+        let plain = tempfile::tempdir().unwrap();
+        write(
+            plain.path(),
+            "proc/version",
+            "Linux version 6.17.0-1 (buildd@ubuntu)\n",
+        );
+        let marked = super::report(&probe(plain.path(), &none));
+        assert_eq!(marked.sandbox, Sandbox::None, "sandbox markers");
+        assert!(!marked.wsl, "sandbox markers");
 
-#[test]
-fn drive_task_runtime_detects_sandbox_markers() {
-    let none = environment(&[]);
-    let plain = tempfile::tempdir().unwrap();
-    write(
-        plain.path(),
-        "proc/version",
-        "Linux version 6.17.0-1 (buildd@ubuntu)\n",
-    );
-    let report = report(&probe(plain.path(), &none));
-    assert_eq!(report.sandbox, Sandbox::None);
-    assert!(!report.wsl);
+        let flatpak = tempfile::tempdir().unwrap();
+        write(
+            flatpak.path(),
+            ".flatpak-info",
+            "[Application]\nname=org.example\n",
+        );
+        let report = super::report(&probe(flatpak.path(), &none));
+        assert_eq!(report.sandbox, Sandbox::Flatpak, "flatpak");
+        assert!(
+            report
+                .problems
+                .iter()
+                .any(|problem| problem.starts_with("Flatpak-Sandkasten")),
+            "flatpak"
+        );
 
-    let flatpak = tempfile::tempdir().unwrap();
-    write(
-        flatpak.path(),
-        ".flatpak-info",
-        "[Application]\nname=org.example\n",
-    );
-    let report = super::report(&probe(flatpak.path(), &none));
-    assert_eq!(report.sandbox, Sandbox::Flatpak);
-    assert!(report
-        .problems
-        .iter()
-        .any(|problem| problem.starts_with("Flatpak-Sandkasten")));
+        let snap_env = environment(&[("SNAP", "/snap/smart-explorer/1")]);
+        let report = super::report(&probe(plain.path(), &snap_env));
+        assert_eq!(report.sandbox, Sandbox::Snap, "snap");
+        assert!(
+            report
+                .problems
+                .iter()
+                .any(|problem| problem.starts_with("Snap-Sandkasten")),
+            "snap"
+        );
 
-    let snap_env = environment(&[("SNAP", "/snap/smart-explorer/1")]);
-    let report = super::report(&probe(plain.path(), &snap_env));
-    assert_eq!(report.sandbox, Sandbox::Snap);
-    assert!(report
-        .problems
-        .iter()
-        .any(|problem| problem.starts_with("Snap-Sandkasten")));
+        let docker = tempfile::tempdir().unwrap();
+        write(docker.path(), ".dockerenv", "");
+        assert_eq!(
+            super::report(&probe(docker.path(), &none)).sandbox,
+            Sandbox::Container,
+            "docker container"
+        );
+        let podman = tempfile::tempdir().unwrap();
+        write(podman.path(), "run/.containerenv", "");
+        assert_eq!(
+            super::report(&probe(podman.path(), &none)).sandbox,
+            Sandbox::Container,
+            "podman container"
+        );
+        let container_env = environment(&[("container", "lxc")]);
+        assert_eq!(
+            super::report(&probe(plain.path(), &container_env)).sandbox,
+            Sandbox::Container,
+            "container environment"
+        );
 
-    let docker = tempfile::tempdir().unwrap();
-    write(docker.path(), ".dockerenv", "");
-    assert_eq!(
-        super::report(&probe(docker.path(), &none)).sandbox,
-        Sandbox::Container
-    );
-    let podman = tempfile::tempdir().unwrap();
-    write(podman.path(), "run/.containerenv", "");
-    assert_eq!(
-        super::report(&probe(podman.path(), &none)).sandbox,
-        Sandbox::Container
-    );
-    let container_env = environment(&[("container", "lxc")]);
-    assert_eq!(
-        super::report(&probe(plain.path(), &container_env)).sandbox,
-        Sandbox::Container
-    );
-
-    // WSL through the kernel version, the interop file or the environment.
-    let wsl = tempfile::tempdir().unwrap();
-    write(
-        wsl.path(),
-        "proc/version",
-        "Linux version 6.6.36.6-microsoft-standard-WSL2\n",
-    );
-    assert!(super::report(&probe(wsl.path(), &none)).wsl);
-    let interop = tempfile::tempdir().unwrap();
-    write(
-        interop.path(),
-        "proc/sys/fs/binfmt_misc/WSLInterop",
-        "enabled\n",
-    );
-    assert!(super::report(&probe(interop.path(), &none)).wsl);
-    let wsl_env = environment(&[("WSL_DISTRO_NAME", "Ubuntu")]);
-    assert!(super::report(&probe(plain.path(), &wsl_env)).wsl);
-    let json = serde_json::to_value(super::report(&probe(flatpak.path(), &none))).unwrap();
-    assert_eq!(json["sandbox"], "flatpak");
-    assert_eq!(json["wsl"], false);
+        // WSL through the kernel version, the interop file or the environment.
+        let wsl = tempfile::tempdir().unwrap();
+        write(
+            wsl.path(),
+            "proc/version",
+            "Linux version 6.6.36.6-microsoft-standard-WSL2\n",
+        );
+        assert!(super::report(&probe(wsl.path(), &none)).wsl, "WSL kernel");
+        let interop = tempfile::tempdir().unwrap();
+        write(
+            interop.path(),
+            "proc/sys/fs/binfmt_misc/WSLInterop",
+            "enabled\n",
+        );
+        assert!(
+            super::report(&probe(interop.path(), &none)).wsl,
+            "WSL interop"
+        );
+        let wsl_env = environment(&[("WSL_DISTRO_NAME", "Ubuntu")]);
+        assert!(
+            super::report(&probe(plain.path(), &wsl_env)).wsl,
+            "WSL environment"
+        );
+        let json = serde_json::to_value(super::report(&probe(flatpak.path(), &none))).unwrap();
+        assert_eq!(json["sandbox"], "flatpak", "json sandbox");
+        assert_eq!(json["wsl"], false, "json wsl");
+    }
 }

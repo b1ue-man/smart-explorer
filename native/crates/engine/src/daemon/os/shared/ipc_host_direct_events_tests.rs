@@ -48,27 +48,6 @@ fn permanent_bad_request_does_not_block_independent_valid_request() {
 }
 
 #[test]
-fn stale_generation_is_discarded_without_running_persistence() {
-    let expected = identity("old-lookup", 7);
-    let current = identity("new-lookup", 8);
-    let called = Cell::new(false);
-    let batch = persist_with_loaded_identity(
-        &current,
-        vec![pending(&expected, attempt(&request_id(3), 1))],
-        |_, _| {
-            called.set(true);
-            Ok(ShareProfiles::default())
-        },
-    );
-
-    assert!(!called.get());
-    assert!(batch.committed.is_none());
-    assert!(batch.retry.is_empty());
-    assert_eq!(batch.errors.len(), 1);
-    assert!(batch.errors[0].contains("dauerhaft verworfen"));
-}
-
-#[test]
 fn repeated_transient_event_is_retained_only_once() {
     let identity = identity("lookup", 7);
     let event = attempt(&request_id(4), 1);
@@ -94,6 +73,16 @@ fn repeated_transient_event_is_retained_only_once() {
 
 #[test]
 fn stale_group_is_discarded_while_current_generation_group_progresses() {
+    let cases: [fn(); 2] = [
+        stale_group_is_discarded_while_current_generation_group_progresses_case,
+        stale_generation_is_discarded_without_running_persistence,
+    ];
+    for case in cases {
+        case();
+    }
+}
+
+fn stale_group_is_discarded_while_current_generation_group_progresses_case() {
     let stale = identity("old-lookup", 7);
     let current = identity("new-lookup", 8);
     let stale_id = request_id(5);
@@ -118,6 +107,26 @@ fn stale_group_is_discarded_while_current_generation_group_progresses() {
     assert!(batch.retry.is_empty());
     assert_eq!(batch.errors.len(), 1);
     assert!(batch.errors[0].contains("veralteten lokalen Identitaet"));
+}
+
+fn stale_generation_is_discarded_without_running_persistence() {
+    let expected = identity("old-lookup", 7);
+    let current = identity("new-lookup", 8);
+    let called = Cell::new(false);
+    let batch = persist_with_loaded_identity(
+        &current,
+        vec![pending(&expected, attempt(&request_id(3), 1))],
+        |_, _| {
+            called.set(true);
+            Ok(ShareProfiles::default())
+        },
+    );
+
+    assert!(!called.get());
+    assert!(batch.committed.is_none());
+    assert!(batch.retry.is_empty());
+    assert_eq!(batch.errors.len(), 1);
+    assert!(batch.errors[0].contains("dauerhaft verworfen"));
 }
 
 fn request_id(index: u64) -> DirectRequestId {

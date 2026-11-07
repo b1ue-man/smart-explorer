@@ -81,44 +81,6 @@ fn foreign_xbel() -> String {
 }
 
 #[test]
-fn drive_task_gtk_bookmark_only_outside_glib_rule() {
-    let fixture = fixture();
-    let inside = fixture.home.join("SmartExplorer").join("Geräte");
-    let hidden = fixture.home.join(".local").join("x");
-    let outside = fixture.root.path().join("run/smart-explorer/Tresore/A");
-    for folder in [&inside, &hidden, &outside] {
-        fs::create_dir_all(folder.parent().expect("parent")).expect("parent folder");
-    }
-    // A drive below the home folder without a dot: GLib shows it itself.
-    add_in(&fixture.targets, &entry("one", &inside, "Geräte")).expect("add inside");
-    assert!(
-        !fixture.targets.gtk.exists(),
-        "no GTK bookmark for a drive GLib shows by itself"
-    );
-    assert!(text(&fixture.targets.kde).contains(&uri_of(&inside)));
-    // Outside the rule: hidden folder and runtime folder.
-    add_in(&fixture.targets, &entry("two", &hidden, "Versteckt")).expect("add hidden");
-    add_in(&fixture.targets, &entry("three", &outside, "A")).expect("add outside");
-    let expected = format!("{} Versteckt\n{} A\n", uri_of(&hidden), uri_of(&outside));
-    assert_eq!(text(&fixture.targets.gtk), expected);
-    // Adding again changes nothing.
-    add_in(&fixture.targets, &entry("three", &outside, "A")).expect("add twice");
-    assert_eq!(text(&fixture.targets.gtk), expected);
-    assert_eq!(
-        text(&fixture.targets.kde).matches("<bookmark href").count(),
-        3,
-        "KDE lists every drive once"
-    );
-    // The file manager does not see a temporary file left behind.
-    let leftovers = fs::read_dir(fixture.targets.gtk.parent().expect("gtk folder"))
-        .expect("gtk folder")
-        .filter_map(Result::ok)
-        .filter(|item| item.file_name().to_string_lossy().ends_with(".tmp"))
-        .count();
-    assert_eq!(leftovers, 0);
-}
-
-#[test]
 fn drive_task_gtk_bookmark_removed_exactly() {
     let fixture = fixture();
     let folder = Path::new("/srv/a");
@@ -182,32 +144,41 @@ fn drive_task_kde_places_preserves_foreign_entries() {
     fs::write(&fixture.targets.kde, "<xbel><bookmark>").expect("broken file");
     assert!(add_in(&fixture.targets, &entry("abc123", folder, "X")).is_err());
     assert_eq!(text(&fixture.targets.kde), "<xbel><bookmark>");
-}
-
-#[test]
-fn drive_task_kde_places_removed_exactly() {
-    let fixture = fixture();
-    fs::create_dir_all(fixture.targets.kde.parent().expect("data folder")).expect("folder");
-    fs::write(&fixture.targets.kde, foreign_xbel()).expect("kde file");
-    let first = Path::new("/srv/one");
-    let second = Path::new("/srv/two");
-    add_in(&fixture.targets, &entry("one", first, "Eins")).expect("add one");
-    add_in(&fixture.targets, &entry("two", second, "Zwei")).expect("add two");
-    let both = text(&fixture.targets.kde);
-    remove_in(&fixture.targets, first).expect("remove one");
-    let remaining = text(&fixture.targets.kde);
-    assert!(!remaining.contains("file:///srv/one") && !remaining.contains("Eins"));
-    assert!(remaining.contains("file:///srv/two") && remaining.contains("<id>two</id>"));
-    assert!(remaining.contains("file:///srv/a") && remaining.contains("Home &amp; Co"));
-    assert!(both.len() > remaining.len());
-    // A folder nobody registered changes nothing.
-    let inode = fs::metadata(&fixture.targets.kde).expect("metadata").ino();
-    remove_in(&fixture.targets, Path::new("/srv/a")).expect("foreign href");
-    assert_eq!(text(&fixture.targets.kde), remaining);
-    assert_eq!(
-        fs::metadata(&fixture.targets.kde).expect("metadata").ino(),
-        inode
-    );
+    // Case "removed exactly": removing one drive keeps the other entries and the file identity.
+    {
+        let fixture = self::fixture();
+        fs::create_dir_all(fixture.targets.kde.parent().expect("data folder")).expect("folder");
+        fs::write(&fixture.targets.kde, foreign_xbel()).expect("kde file");
+        let first = Path::new("/srv/one");
+        let second = Path::new("/srv/two");
+        add_in(&fixture.targets, &entry("one", first, "Eins")).expect("add one");
+        add_in(&fixture.targets, &entry("two", second, "Zwei")).expect("add two");
+        let both = text(&fixture.targets.kde);
+        remove_in(&fixture.targets, first).expect("remove one");
+        let remaining = text(&fixture.targets.kde);
+        assert!(
+            !remaining.contains("file:///srv/one") && !remaining.contains("Eins"),
+            "removed exactly"
+        );
+        assert!(
+            remaining.contains("file:///srv/two") && remaining.contains("<id>two</id>"),
+            "removed exactly keeps the other drive"
+        );
+        assert!(
+            remaining.contains("file:///srv/a") && remaining.contains("Home &amp; Co"),
+            "removed exactly keeps the foreign entry"
+        );
+        assert!(both.len() > remaining.len(), "removed exactly");
+        // A folder nobody registered changes nothing.
+        let inode = fs::metadata(&fixture.targets.kde).expect("metadata").ino();
+        remove_in(&fixture.targets, Path::new("/srv/a")).expect("foreign href");
+        assert_eq!(text(&fixture.targets.kde), remaining, "unregistered folder");
+        assert_eq!(
+            fs::metadata(&fixture.targets.kde).expect("metadata").ino(),
+            inode,
+            "unregistered folder keeps the file"
+        );
+    }
 }
 
 #[test]
@@ -267,6 +238,43 @@ fn drive_task_glib_display_rule_path() {
             folder.display(),
             base.display()
         );
+    }
+    // Case "GTK bookmark outside the GLib rule": only folders GLib does not show get a GTK bookmark.
+    {
+        let fixture = self::fixture();
+        let inside = fixture.home.join("SmartExplorer").join("Geräte");
+        let hidden = fixture.home.join(".local").join("x");
+        let outside = fixture.root.path().join("run/smart-explorer/Tresore/A");
+        for folder in [&inside, &hidden, &outside] {
+            fs::create_dir_all(folder.parent().expect("parent")).expect("parent folder");
+        }
+        // A drive below the home folder without a dot: GLib shows it itself.
+        add_in(&fixture.targets, &entry("one", &inside, "Geräte")).expect("add inside");
+        assert!(
+            !fixture.targets.gtk.exists(),
+            "no GTK bookmark for a drive GLib shows by itself"
+        );
+        assert!(text(&fixture.targets.kde).contains(&uri_of(&inside)));
+        // Outside the rule: hidden folder and runtime folder.
+        add_in(&fixture.targets, &entry("two", &hidden, "Versteckt")).expect("add hidden");
+        add_in(&fixture.targets, &entry("three", &outside, "A")).expect("add outside");
+        let expected = format!("{} Versteckt\n{} A\n", uri_of(&hidden), uri_of(&outside));
+        assert_eq!(text(&fixture.targets.gtk), expected, "GTK outside the rule");
+        // Adding again changes nothing.
+        add_in(&fixture.targets, &entry("three", &outside, "A")).expect("add twice");
+        assert_eq!(text(&fixture.targets.gtk), expected, "GTK adding twice");
+        assert_eq!(
+            text(&fixture.targets.kde).matches("<bookmark href").count(),
+            3,
+            "KDE lists every drive once"
+        );
+        // The file manager does not see a temporary file left behind.
+        let leftovers = fs::read_dir(fixture.targets.gtk.parent().expect("gtk folder"))
+            .expect("gtk folder")
+            .filter_map(Result::ok)
+            .filter(|item| item.file_name().to_string_lossy().ends_with(".tmp"))
+            .count();
+        assert_eq!(leftovers, 0, "no temporary file left behind");
     }
 }
 

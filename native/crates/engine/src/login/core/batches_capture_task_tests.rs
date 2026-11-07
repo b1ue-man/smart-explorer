@@ -181,6 +181,16 @@ fn batches_task_login_capture_reader_rejects_wrong_cookie_and_pixel_probe() {
 }
 #[test]
 fn batches_task_login_capture_eof_exit_and_last_pixel_are_distinct_ends() {
+    let cases: [fn(); 2] = [
+        batches_task_login_capture_eof_exit_and_last_pixel_are_distinct_ends_case,
+        batches_task_login_capture_exit_still_waits_for_reader_and_close_refuses_grants,
+    ];
+    for case in cases {
+        case();
+    }
+}
+
+fn batches_task_login_capture_eof_exit_and_last_pixel_are_distinct_ends_case() {
     let (pool, admission) = admission();
     let parent = ParentCapture::from_test_admission(admission);
     parent
@@ -205,7 +215,7 @@ fn batches_task_login_capture_eof_exit_and_last_pixel_are_distinct_ends() {
         MAX_WORKING_BYTES
     );
 }
-#[test]
+
 fn batches_task_login_capture_exit_still_waits_for_reader_and_close_refuses_grants() {
     let (_pool, admission) = admission();
     let parent = ParentCapture::from_test_admission(admission);

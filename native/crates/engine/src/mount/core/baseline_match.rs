@@ -62,17 +62,6 @@ mod tests {
     }
 
     #[test]
-    fn mount_save_task_facts_known_on_one_side_only_are_not_a_change() {
-        let stat = present(Some("id-1"), 10, 1_700_000_000_123, Some("abc"));
-        let listing = present(None, 10, 1_700_000_000_123, None);
-        assert!(stat.same_remote_state(&listing));
-        assert!(listing.same_remote_state(&stat));
-        let truncated = present(Some("id-1"), 10, 1_700_000_000_000, Some("abc"));
-        assert!(stat.same_remote_state(&truncated));
-        assert!(Baseline::Missing.same_remote_state(&Baseline::Missing));
-    }
-
-    #[test]
     fn mount_save_task_every_known_difference_is_a_change() {
         let base = present(Some("id-1"), 10, 1_700_000_000_123, Some("abc"));
         assert!(!base.same_remote_state(&present(
@@ -102,5 +91,16 @@ mod tests {
         assert!(!base.same_remote_state(&present(None, 10, 1_700_000_000_500, None)));
         assert!(!base.same_remote_state(&Baseline::Missing));
         assert!(!Baseline::Missing.same_remote_state(&base));
+        // Case "known on one side only": a fact that only one side knows is no change.
+        let stat = present(Some("id-1"), 10, 1_700_000_000_123, Some("abc"));
+        let listing = present(None, 10, 1_700_000_000_123, None);
+        assert!(stat.same_remote_state(&listing), "one side only");
+        assert!(listing.same_remote_state(&stat), "one side only");
+        let truncated = present(Some("id-1"), 10, 1_700_000_000_000, Some("abc"));
+        assert!(stat.same_remote_state(&truncated), "one side only: mtime");
+        assert!(
+            Baseline::Missing.same_remote_state(&Baseline::Missing),
+            "missing on both sides"
+        );
     }
 }

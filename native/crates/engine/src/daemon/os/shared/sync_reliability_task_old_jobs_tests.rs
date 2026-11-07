@@ -190,6 +190,7 @@ fn sync_reliability_task_old_jobs_drive_restart_keeps_options_owner_and_converge
 }
 
 #[test]
+#[ignore = "needs the real protocol servers named by SE_SYNC_PROVIDER_MANIFEST; Suite sync-reliability-task"]
 fn sync_reliability_task_old_jobs_crossremote_runs_normal_saved_connection_and_drive() {
     use crate::connect::sync_reliability_task_provider_fixture as provider_fixture;
     let required = if cfg!(windows) { "direct" } else { "sftp" };

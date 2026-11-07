@@ -251,6 +251,16 @@ mod tests {
 
     #[test]
     fn drive_task_drive_restore_no_jobs_without_sync_autostart() {
+        let cases: [fn(); 2] = [
+            drive_task_drive_restore_no_jobs_without_sync_autostart_case,
+            drive_task_drive_restore_no_jobs_when_sync_entry_disabled_by_system,
+        ];
+        for case in cases {
+            case();
+        }
+    }
+
+    fn drive_task_drive_restore_no_jobs_without_sync_autostart_case() {
         // The login entry of the drives starts the worker, background sync
         // has no autostart: restricted, so no Share host and no sync run.
         let restricted = restricted_at_start(RunStartReason::DriveRestore, false, false);
@@ -320,6 +330,27 @@ mod tests {
         ]));
     }
 
+    fn drive_task_drive_restore_no_jobs_when_sync_entry_disabled_by_system() {
+        // The sync entry exists, but the desktop switched it off: the login
+        // entry of the drives must not plan sync runs nor start Share.
+        let restricted = restricted_at_start(RunStartReason::DriveRestore, true, true);
+        assert!(restricted);
+        assert!(!sync_allowed(restricted, true));
+        // After the app or `--sync-daemon` (switched on again) promote it,
+        // runs are planned as by every worker with the entry present.
+        assert!(sync_allowed(false, true));
+        // With the sync entry on, the worker would start at login anyway:
+        // the drive-restore start is not restricted.
+        let unrestricted = restricted_at_start(RunStartReason::DriveRestore, true, false);
+        assert!(!unrestricted);
+        assert!(sync_allowed(unrestricted, true));
+        // v0.5.182: a normal start plans runs whenever the entry exists,
+        // even when the desktop switched it off.
+        let normal = restricted_at_start(RunStartReason::Normal, true, true);
+        assert!(!normal);
+        assert!(sync_allowed(normal, true));
+    }
+
     #[test]
     fn rechte_task_relations_of_others_start_share_without_sync() {
         use crate::share::{DirectGrant, DirectGrantState, ShareProfiles};
@@ -344,28 +375,6 @@ mod tests {
         assert!(relations_wanted(&profiles));
         // Sync runs still need the promotion of a restricted worker.
         assert!(!sync_allowed(true, false));
-    }
-
-    #[test]
-    fn drive_task_drive_restore_no_jobs_when_sync_entry_disabled_by_system() {
-        // The sync entry exists, but the desktop switched it off: the login
-        // entry of the drives must not plan sync runs nor start Share.
-        let restricted = restricted_at_start(RunStartReason::DriveRestore, true, true);
-        assert!(restricted);
-        assert!(!sync_allowed(restricted, true));
-        // After the app or `--sync-daemon` (switched on again) promote it,
-        // runs are planned as by every worker with the entry present.
-        assert!(sync_allowed(false, true));
-        // With the sync entry on, the worker would start at login anyway:
-        // the drive-restore start is not restricted.
-        let unrestricted = restricted_at_start(RunStartReason::DriveRestore, true, false);
-        assert!(!unrestricted);
-        assert!(sync_allowed(unrestricted, true));
-        // v0.5.182: a normal start plans runs whenever the entry exists,
-        // even when the desktop switched it off.
-        let normal = restricted_at_start(RunStartReason::Normal, true, true);
-        assert!(!normal);
-        assert!(sync_allowed(normal, true));
     }
 
     #[test]

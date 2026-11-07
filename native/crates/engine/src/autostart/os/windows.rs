@@ -377,36 +377,44 @@ mod tests {
         let gui = dir.join("smart_explorer.exe");
         std::fs::write(&gui, b"").unwrap();
 
-        assert_eq!(super::logon_exe_for(&dir.join("se.exe")), Some(gui));
+        for (case, exe, expected) in [
+            (
+                "console se next to a GUI sibling",
+                dir.join("se.exe"),
+                Some(gui),
+            ),
+            (
+                "standalone console se",
+                std::path::PathBuf::from(r"C:\Tools\se.exe"),
+                None,
+            ),
+        ] {
+            assert_eq!(super::logon_exe_for(&exe), expected, "{case}");
+        }
 
         std::fs::remove_dir_all(dir).ok();
     }
 
     #[test]
-    fn standalone_console_se_is_not_a_logon_target() {
-        assert_eq!(
-            super::logon_exe_for(std::path::Path::new(r"C:\Tools\se.exe")),
-            None
-        );
-    }
-
-    #[test]
-    fn run_entry_quotes_the_gui_executable() {
-        assert_eq!(
-            super::run_command_for(std::path::Path::new(
-                r"C:\Program Files\Smart Explorer\smart_explorer.exe"
-            )),
-            r#""C:\Program Files\Smart Explorer\smart_explorer.exe" --sync-daemon"#
-        );
-    }
-
-    #[test]
     fn drive_run_entry_starts_the_restore_with_the_gui_executable() {
-        assert_eq!(
-            super::drive_run_command_for(std::path::Path::new(
-                r"C:\Program Files\Smart Explorer\Smart Explorer.exe"
-            )),
-            r#""C:\Program Files\Smart Explorer\Smart Explorer.exe" --sync-daemon --drive-restore"#
-        );
+        let cases = [
+            (
+                "run entry quotes the GUI executable",
+                super::run_command_for(std::path::Path::new(
+                    r"C:\Program Files\Smart Explorer\smart_explorer.exe",
+                )),
+                r#""C:\Program Files\Smart Explorer\smart_explorer.exe" --sync-daemon"#,
+            ),
+            (
+                "drive restore starts with the GUI executable",
+                super::drive_run_command_for(std::path::Path::new(
+                    r"C:\Program Files\Smart Explorer\Smart Explorer.exe",
+                )),
+                r#""C:\Program Files\Smart Explorer\Smart Explorer.exe" --sync-daemon --drive-restore"#,
+            ),
+        ];
+        for (case, command, expected) in cases {
+            assert_eq!(command, expected, "{case}");
+        }
     }
 }

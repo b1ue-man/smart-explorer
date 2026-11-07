@@ -133,41 +133,54 @@ impl Drop for Server {
 
 #[test]
 fn sync_reliability_task_provider_ftp_list_and_stat_exact_signature() {
-    let server = Server::start(true);
-    let backend = backend_from_url(&format!("ftp://user:password@{}/", server.address)).unwrap();
-    let listing = backend.list_dir_tolerant("/").unwrap();
-    assert!(listing.omitted.is_empty());
-    let listed = &listing.entries[0];
-    let fresh = backend.stat(&format!("/{NAME}")).unwrap();
-    assert_eq!(listed.name, NAME);
-    assert_eq!(listed.size, 22);
-    assert_eq!(
-        listed.mtime_ms,
-        super::metadata::parse_time("20261005053353").unwrap()
-    );
-    assert_eq!((listed.size, listed.mtime_ms), (fresh.size, fresh.mtime_ms));
-    assert_eq!(
-        backend.target_limits("/").mtime_precision,
-        MtimePrecision::Seconds
-    );
-    assert_eq!(
-        backend.stat("/missing").unwrap_err().kind(),
-        std::io::ErrorKind::NotFound
-    );
-}
-
-#[test]
-fn sync_reliability_task_provider_ftp_denied_mdtm_keeps_parent_listing_signature() {
-    let server = Server::start(false);
-    let backend = backend_from_url(&format!("ftp://user:password@{}/", server.address)).unwrap();
-    let listing = backend.list_dir_tolerant("/").unwrap();
-    assert!(listing.omitted.is_empty());
-    let listed = &listing.entries[0];
-    let fresh = backend.stat(&format!("/{NAME}")).unwrap();
-    assert_eq!(listed.name, NAME);
-    assert_eq!((listed.size, listed.mtime_ms), (fresh.size, fresh.mtime_ms));
-    assert_eq!(
-        backend.target_limits("/").mtime_precision,
-        MtimePrecision::Days
-    );
+    let cases: [(&str, fn()); 2] = [
+        (
+            "sync_reliability_task_provider_ftp_list_and_stat_exact_signature",
+            || {
+                let server = Server::start(true);
+                let backend =
+                    backend_from_url(&format!("ftp://user:password@{}/", server.address)).unwrap();
+                let listing = backend.list_dir_tolerant("/").unwrap();
+                assert!(listing.omitted.is_empty());
+                let listed = &listing.entries[0];
+                let fresh = backend.stat(&format!("/{NAME}")).unwrap();
+                assert_eq!(listed.name, NAME);
+                assert_eq!(listed.size, 22);
+                assert_eq!(
+                    listed.mtime_ms,
+                    super::metadata::parse_time("20261005053353").unwrap()
+                );
+                assert_eq!((listed.size, listed.mtime_ms), (fresh.size, fresh.mtime_ms));
+                assert_eq!(
+                    backend.target_limits("/").mtime_precision,
+                    MtimePrecision::Seconds
+                );
+                assert_eq!(
+                    backend.stat("/missing").unwrap_err().kind(),
+                    std::io::ErrorKind::NotFound
+                );
+            },
+        ),
+        (
+            "sync_reliability_task_provider_ftp_denied_mdtm_keeps_parent_listing_signature",
+            || {
+                let server = Server::start(false);
+                let backend =
+                    backend_from_url(&format!("ftp://user:password@{}/", server.address)).unwrap();
+                let listing = backend.list_dir_tolerant("/").unwrap();
+                assert!(listing.omitted.is_empty());
+                let listed = &listing.entries[0];
+                let fresh = backend.stat(&format!("/{NAME}")).unwrap();
+                assert_eq!(listed.name, NAME);
+                assert_eq!((listed.size, listed.mtime_ms), (fresh.size, fresh.mtime_ms));
+                assert_eq!(
+                    backend.target_limits("/").mtime_precision,
+                    MtimePrecision::Days
+                );
+            },
+        ),
+    ];
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
+    }
 }

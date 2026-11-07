@@ -111,7 +111,7 @@ fn speed_task_vault_damaged_chunk_inside_a_batch_releases_nothing_of_it() {
 /// and decrypted through `DecryptingReader` in memory; 1 × 2 GiB encrypted
 /// into a sink (its ciphertext is not kept).
 #[test]
-#[ignore = "benchmark: cargo test speed_task_vault -- --ignored --nocapture"]
+#[ignore = "benchmark: cargo test speed_task_vault -- --ignored --nocapture; Suite rechte-desktop-tresore-task"]
 fn speed_task_vault_stream_throughput() {
     for combo in COMBOS {
         let cryptor = cryptor(combo);

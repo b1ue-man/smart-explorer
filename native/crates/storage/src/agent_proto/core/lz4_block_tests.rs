@@ -25,59 +25,62 @@ fn speed_task_lz4_block_roundtrip() {
 
 #[test]
 fn speed_task_lz4_rejects_raw_len_above_256_kib() {
-    let mut block = pack_lz4(&text(MAX_RAW)).expect("packs");
-    block[1..5].copy_from_slice(&(MAX_RAW as u32 + 1).to_le_bytes());
-    assert_eq!(
-        unpack(&block).expect_err("too long").kind(),
-        ErrorKind::InvalidData
-    );
-    assert_eq!(
-        raw_len(&block).expect_err("too long").kind(),
-        ErrorKind::InvalidData
-    );
-    block[1..5].copy_from_slice(&u32::MAX.to_le_bytes());
-    assert_eq!(
-        unpack(&block).expect_err("huge").kind(),
-        ErrorKind::InvalidData
-    );
-    block[1..5].copy_from_slice(&0u32.to_le_bytes());
-    assert!(unpack(&block).is_err(), "a zero length is no block");
-    assert_eq!(
-        unpack(&pack_raw(&vec![0; MAX_RAW + 1]))
-            .expect_err("raw too long")
-            .kind(),
-        ErrorKind::InvalidData
-    );
-}
-
-#[test]
-fn speed_task_lz4_rejects_length_mismatch() {
-    let raw = text(100_000);
-    let block = pack_lz4(&raw).expect("packs");
-    for announced in [raw.len() - 1, raw.len() + 1, raw.len() + 5000, 1] {
-        let mut wrong = block.clone();
-        wrong[1..5].copy_from_slice(&(announced as u32).to_le_bytes());
-        assert_eq!(
-            unpack(&wrong).expect_err("different length").kind(),
-            ErrorKind::InvalidData,
-            "announced {announced} for {}",
-            raw.len()
-        );
+    let cases: [(&str, fn()); 3] = [
+        ("speed_task_lz4_rejects_raw_len_above_256_kib", || {
+            let mut block = pack_lz4(&text(MAX_RAW)).expect("packs");
+            block[1..5].copy_from_slice(&(MAX_RAW as u32 + 1).to_le_bytes());
+            assert_eq!(
+                unpack(&block).expect_err("too long").kind(),
+                ErrorKind::InvalidData
+            );
+            assert_eq!(
+                raw_len(&block).expect_err("too long").kind(),
+                ErrorKind::InvalidData
+            );
+            block[1..5].copy_from_slice(&u32::MAX.to_le_bytes());
+            assert_eq!(
+                unpack(&block).expect_err("huge").kind(),
+                ErrorKind::InvalidData
+            );
+            block[1..5].copy_from_slice(&0u32.to_le_bytes());
+            assert!(unpack(&block).is_err(), "a zero length is no block");
+            assert_eq!(
+                unpack(&pack_raw(&vec![0; MAX_RAW + 1]))
+                    .expect_err("raw too long")
+                    .kind(),
+                ErrorKind::InvalidData
+            );
+        }),
+        ("speed_task_lz4_rejects_length_mismatch", || {
+            let raw = text(100_000);
+            let block = pack_lz4(&raw).expect("packs");
+            for announced in [raw.len() - 1, raw.len() + 1, raw.len() + 5000, 1] {
+                let mut wrong = block.clone();
+                wrong[1..5].copy_from_slice(&(announced as u32).to_le_bytes());
+                assert_eq!(
+                    unpack(&wrong).expect_err("different length").kind(),
+                    ErrorKind::InvalidData,
+                    "announced {announced} for {}",
+                    raw.len()
+                );
+            }
+        }),
+        ("speed_task_lz4_rejects_truncated_blocks", || {
+            let block = pack_lz4(&text(MAX_RAW)).expect("packs");
+            for cut in [0, 1, 3, 4, 5, 6, block.len() / 2, block.len() - 1] {
+                assert_eq!(
+                    unpack(&block[..cut]).expect_err("cut off").kind(),
+                    ErrorKind::InvalidData,
+                    "cut at {cut} of {}",
+                    block.len()
+                );
+            }
+            assert!(unpack(&[7, 1, 2, 3]).is_err(), "an unknown kind");
+        }),
+    ];
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
     }
-}
-
-#[test]
-fn speed_task_lz4_rejects_truncated_blocks() {
-    let block = pack_lz4(&text(MAX_RAW)).expect("packs");
-    for cut in [0, 1, 3, 4, 5, 6, block.len() / 2, block.len() - 1] {
-        assert_eq!(
-            unpack(&block[..cut]).expect_err("cut off").kind(),
-            ErrorKind::InvalidData,
-            "cut at {cut} of {}",
-            block.len()
-        );
-    }
-    assert!(unpack(&[7, 1, 2, 3]).is_err(), "an unknown kind");
 }
 
 #[test]

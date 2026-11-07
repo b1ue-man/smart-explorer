@@ -99,7 +99,7 @@ fn password_file(dir: &std::path::Path, name: &str, password: &str) -> String {
 }
 
 #[test]
-#[ignore = "braucht Java 25 und den Interop-Harness (Stufe vault-interop, fixture interop)"]
+#[ignore = "braucht Java 25 und den Interop-Harness (Stufe vault-interop, fixture interop); Suite rechte-desktop-tresore-task"]
 fn vault_task_create_then_cryptofs_reads() {
     let harness = Harness::from_env();
     let dir = tempfile::tempdir().expect("temporary folder");
@@ -143,7 +143,7 @@ fn vault_task_create_then_cryptofs_reads() {
 }
 
 #[test]
-#[ignore = "braucht Java 25 und den Interop-Harness (Stufe vault-interop, fixture interop)"]
+#[ignore = "braucht Java 25 und den Interop-Harness (Stufe vault-interop, fixture interop); Suite rechte-desktop-tresore-task"]
 fn vault_task_password_change_then_cryptofs_unlocks_new() {
     let harness = Harness::from_env();
     let dir = tempfile::tempdir().expect("temporary folder");

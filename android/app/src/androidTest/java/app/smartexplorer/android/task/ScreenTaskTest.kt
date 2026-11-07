@@ -13,6 +13,7 @@ import android.os.Build
 import android.os.SystemClock
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
 import androidx.activity.result.ActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
@@ -453,55 +454,58 @@ class ScreenTaskTest {
     @Test
     fun screen_task_android_text_set() {
         accessibilityOn()
-        var text by mutableStateOf("")
-        val focus = FocusRequester()
-        compose.setContent {
-            Column {
-                TextField(value = text, onValueChange = { text = it }, modifier = Modifier.fillMaxWidth().height(64.dp).focusRequester(focus))
+        // Row 1: ACTION_SET_TEXT fills the focused field.
+        run {
+            var text by mutableStateOf("")
+            val focus = FocusRequester()
+            compose.setContent {
+                Column {
+                    TextField(value = text, onValueChange = { text = it }, modifier = Modifier.fillMaxWidth().height(64.dp).focusRequester(focus))
+                }
             }
+            compose.runOnIdle { focus.requestFocus() }
+            compose.waitForIdle()
+            val events = Json.parseToJsonElement("""[{"type":"text","text":"hallo"}]""") as JsonArray
+            val mapper = GestureMapper({ 1 }, { 1 })
+            val done = CountDownLatch(1)
+            var set = false
+            AccessLink.perform(mapper.map(events).single()) {
+                set = it
+                done.countDown()
+            }
+            assertTrue(done.await(5, TimeUnit.SECONDS))
+            assertTrue("ACTION_SET_TEXT abgelehnt", set)
+            compose.waitUntil(5_000) { text == "hallo" }
         }
-        compose.runOnIdle { focus.requestFocus() }
-        compose.waitForIdle()
-        val events = Json.parseToJsonElement("""[{"type":"text","text":"hallo"}]""") as JsonArray
-        val mapper = GestureMapper({ 1 }, { 1 })
-        val done = CountDownLatch(1)
-        var set = false
-        AccessLink.perform(mapper.map(events).single()) {
-            set = it
-            done.countDown()
+        // Row 2 (the former screen_task_android_text_enter): "\n" presses the IME Enter key (ACTION_IME_ENTER) on a single-line field.
+        run {
+            var text by mutableStateOf("")
+            var entered by mutableStateOf(false)
+            val focus = FocusRequester()
+            compose.runOnUiThread {
+                compose.activity.setContent {
+                    TextField(
+                        value = text, onValueChange = { text = it },
+                        modifier = Modifier.fillMaxWidth().height(64.dp).focusRequester(focus),
+                        singleLine = true,
+                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = androidx.compose.ui.text.input.ImeAction.Done),
+                        keyboardActions = androidx.compose.foundation.text.KeyboardActions(onDone = { entered = true }),
+                    )
+                }
+            }
+            compose.runOnIdle { focus.requestFocus() }
+            compose.waitForIdle()
+            val events = Json.parseToJsonElement("""[{"type":"text","text":"\n"}]""") as JsonArray
+            val done = CountDownLatch(1)
+            var pressed = false
+            AccessLink.perform(GestureMapper({ 1 }, { 1 }).map(events).single()) {
+                pressed = it
+                done.countDown()
+            }
+            assertTrue(done.await(5, TimeUnit.SECONDS))
+            assertTrue("ACTION_IME_ENTER abgelehnt", pressed)
+            compose.waitUntil(5_000) { entered }
         }
-        assertTrue(done.await(5, TimeUnit.SECONDS))
-        assertTrue("ACTION_SET_TEXT abgelehnt", set)
-        compose.waitUntil(5_000) { text == "hallo" }
-    }
-
-    @Test
-    fun screen_task_android_text_enter() {
-        accessibilityOn()
-        var text by mutableStateOf("")
-        var entered by mutableStateOf(false)
-        val focus = FocusRequester()
-        compose.setContent {
-            TextField(
-                value = text, onValueChange = { text = it },
-                modifier = Modifier.fillMaxWidth().height(64.dp).focusRequester(focus),
-                singleLine = true,
-                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = androidx.compose.ui.text.input.ImeAction.Done),
-                keyboardActions = androidx.compose.foundation.text.KeyboardActions(onDone = { entered = true }),
-            )
-        }
-        compose.runOnIdle { focus.requestFocus() }
-        compose.waitForIdle()
-        val events = Json.parseToJsonElement("""[{"type":"text","text":"\n"}]""") as JsonArray
-        val done = CountDownLatch(1)
-        var pressed = false
-        AccessLink.perform(GestureMapper({ 1 }, { 1 }).map(events).single()) {
-            pressed = it
-            done.countDown()
-        }
-        assertTrue(done.await(5, TimeUnit.SECONDS))
-        assertTrue("ACTION_IME_ENTER abgelehnt", pressed)
-        compose.waitUntil(5_000) { entered }
     }
 
     @Test

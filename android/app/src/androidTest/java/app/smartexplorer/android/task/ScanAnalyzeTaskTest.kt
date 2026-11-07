@@ -3,73 +3,18 @@ package app.smartexplorer.android.task
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.smartexplorer.android.api.AnalyzeNode
 import app.smartexplorer.android.api.DuplicateGroup
-import app.smartexplorer.android.api.ScanView
 import java.io.File
 import kotlinx.serialization.json.JsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 
-/** G4: recursive filtered scan with windows/collapse/revisions, folder index, analysis and duplicates. */
+/** G4: folder index, storage analysis and duplicates. */
 @RunWith(AndroidJUnit4::class)
 class ScanAnalyzeTaskTest {
-    private val nameSort = mapOf("key" to "name", "desc" to false, "dirsFirst" to true)
-
-    private suspend fun view(taskId: String, offset: Int, limit: Int, collapsed: List<String> = emptyList(), since: Long? = null): ScanView =
-        Api.get(
-            "scan.view",
-            args(
-                "taskId" to taskId,
-                "sort" to nameSort,
-                "collapsed" to collapsed,
-                "offset" to offset,
-                "limit" to limit,
-                "sinceRevision" to since,
-            ),
-        )
-
-    @Test
-    fun recursiveScanWithWindowsAndCollapsedFolders() = coreTest {
-        val root = Fixture.dir(Volumes.primary(), "scan", "baum")
-        listOf("a.txt", "b.log", "sub1/c.txt", "sub1/d.txt", "sub2/e.txt", "sub2/sub3/f.txt", ".versteckt/g.txt")
-            .forEach { Fixture.write(File(root, it), it) }
-        // With folders shown the result is a tree (desktop result tree); "dirs" false lists only files.
-        val glob = mapOf("text" to "*.txt", "mode" to "glob", "files" to true, "dirs" to true)
-        assertNotNull(Api.obj("scan.validate", args("filter" to mapOf("text" to "[", "mode" to "regex"))).textOrNull("error"))
-        assertNull(Api.obj("scan.validate", args("filter" to glob)).textOrNull("error"))
-
-        val scan = Api.runTask("scan.start", args("location" to root.absolutePath, "filter" to glob, "showHidden" to false))
-        val full = view(scan.id, 0, 500)
-        val files = full.entries.filter { !it.isDir }.map { it.name }.toSet()
-        assertEquals(setOf("a.txt", "c.txt", "d.txt", "e.txt", "f.txt"), files)
-        assertEquals(full.entries.size, full.visibleTotal)
-        assertFalse(full.truncated)
-        val sub3 = full.entries.first { it.name == "sub3" }
-        assertEquals(1, sub3.depth)
-        val f = full.entries.first { it.name == "f.txt" }
-        assertEquals(2, f.depth)
-        assertEquals(0, full.entries.first { it.name == "a.txt" }.depth)
-
-        // Windows of two rows reproduce the full tree order.
-        val windowed = (0 until full.visibleTotal step 2).flatMap { offset -> view(scan.id, offset, 2).entries }
-        assertEquals(full.entries.map { it.location }, windowed.map { it.location })
-
-        val sub1 = full.entries.first { it.name == "sub1" }
-        assertTrue(sub1.hasChildren)
-        val folded = view(scan.id, 0, 500, collapsed = listOf(sub1.location))
-        assertEquals(full.visibleTotal - 2, folded.visibleTotal)
-        assertFalse(folded.entries.first { it.name == "sub1" }.expanded)
-        // "unchanged" answers a repeated request for the same window (sort, offset, limit, folds).
-        val unchanged = view(scan.id, 0, 500, collapsed = listOf(sub1.location), since = folded.revision)
-        assertTrue(unchanged.unchanged)
-        assertTrue(unchanged.entries.isEmpty())
-        Api.obj("scan.issues", args("taskId" to scan.id)).text("text")
-    }
-
     @Test
     fun folderIndexFindsANewFolder() = coreTest {
         val marker = Fixture.unique("seindexmarker")

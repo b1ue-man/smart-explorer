@@ -195,35 +195,35 @@ fn download_large_file(case: &str, backend: BackendHandle, root: &str) {
 }
 
 #[test]
-#[ignore = "needs the task suite's SFTP container and shaped loopback"]
+#[ignore = "needs the task suite's SFTP container and shaped loopback; Suite transfer-engine-task"]
 fn transfer_engine_task_throughput_sftp_small_files_upload() {
     let (backend, root) = sftp();
     upload_small_files("sftp-small-upload", backend, &root);
 }
 
 #[test]
-#[ignore = "needs the task suite's SFTP container and shaped loopback"]
+#[ignore = "needs the task suite's SFTP container and shaped loopback; Suite transfer-engine-task"]
 fn transfer_engine_task_throughput_sftp_large_file_upload() {
     let (backend, root) = sftp();
     upload_large_file("sftp-large-upload", backend, &root);
 }
 
 #[test]
-#[ignore = "needs the task suite's SFTP container and shaped loopback"]
+#[ignore = "needs the task suite's SFTP container and shaped loopback; Suite transfer-engine-task"]
 fn transfer_engine_task_throughput_sftp_large_file_download() {
     let (backend, root) = sftp();
     download_large_file("sftp-large-download", backend, &root);
 }
 
 #[test]
-#[ignore = "needs the task suite's FTP container and shaped loopback"]
+#[ignore = "needs the task suite's FTP container and shaped loopback; Suite transfer-engine-task"]
 fn transfer_engine_task_throughput_ftp_small_files_upload() {
     let (backend, root) = ftp();
     upload_small_files("ftp-small-upload", backend, &root);
 }
 
 #[test]
-#[ignore = "needs the task suite's FTP container and shaped loopback"]
+#[ignore = "needs the task suite's FTP container and shaped loopback; Suite transfer-engine-task"]
 fn transfer_engine_task_throughput_ftp_large_file_download() {
     let (backend, root) = ftp();
     download_large_file("ftp-large-download", backend, &root);

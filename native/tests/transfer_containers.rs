@@ -122,35 +122,35 @@ fn across(case: &str, from: BackendHandle, from_root: &str, to: BackendHandle, t
 }
 
 #[test]
-#[ignore = "needs the task suite's SFTP container"]
+#[ignore = "needs the task suite's SFTP container; Suite transfer-engine-task"]
 fn transfer_engine_task_container_sftp_tree_roundtrip() {
     let (backend, root) = sftp();
     roundtrip("sftp-roundtrip", backend, &root);
 }
 
 #[test]
-#[ignore = "needs the task suite's FTP container"]
+#[ignore = "needs the task suite's FTP container; Suite transfer-engine-task"]
 fn transfer_engine_task_container_ftp_tree_roundtrip() {
     let (backend, root) = ftp();
     roundtrip("ftp-roundtrip", backend, &root);
 }
 
 #[test]
-#[ignore = "needs the task suite's SFTP container"]
+#[ignore = "needs the task suite's SFTP container; Suite transfer-engine-task"]
 fn transfer_engine_task_container_sftp_second_paste_keeps_both() {
     let (backend, root) = sftp();
     second_paste_keeps_both("sftp-twice", backend, &root);
 }
 
 #[test]
-#[ignore = "needs the task suite's FTP container"]
+#[ignore = "needs the task suite's FTP container; Suite transfer-engine-task"]
 fn transfer_engine_task_container_ftp_second_paste_keeps_both() {
     let (backend, root) = ftp();
     second_paste_keeps_both("ftp-twice", backend, &root);
 }
 
 #[test]
-#[ignore = "needs the task suite's SFTP and FTP containers"]
+#[ignore = "needs the task suite's SFTP and FTP containers; Suite transfer-engine-task"]
 fn transfer_engine_task_container_sftp_to_ftp_streams_the_tree() {
     let (from, from_root) = sftp();
     let (to, to_root) = ftp();
@@ -158,7 +158,7 @@ fn transfer_engine_task_container_sftp_to_ftp_streams_the_tree() {
 }
 
 #[test]
-#[ignore = "needs the task suite's SFTP container"]
+#[ignore = "needs the task suite's SFTP container; Suite transfer-engine-task"]
 fn transfer_engine_task_container_sftp_copy_within_one_server() {
     let (from, root) = sftp();
     // A second connection to the same account: one namespace, so the

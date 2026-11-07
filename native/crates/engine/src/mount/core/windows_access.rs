@@ -61,22 +61,26 @@ mod tests {
         let granted = maximum_allowed_read_grant(MAXIMUM_ALLOWED);
         assert_eq!(granted & MAXIMUM_ALLOWED, 0);
         assert_eq!(
-            granted & (FILE_WRITE_DATA | FILE_APPEND_DATA | FILE_WRITE_EA | FILE_WRITE_ATTRIBUTES | DELETE),
+            granted
+                & (FILE_WRITE_DATA
+                    | FILE_APPEND_DATA
+                    | FILE_WRITE_EA
+                    | FILE_WRITE_ATTRIBUTES
+                    | DELETE),
             0
         );
         assert_ne!(granted & FILE_READ_DATA, 0);
         assert_ne!(granted & FILE_READ_ATTRIBUTES, 0);
         assert_ne!(granted & SYNCHRONIZE, 0);
-    }
-
-    #[test]
-    fn remote_drive_task_maximum_allowed_full_grant_adds_write_and_delete() {
-        let granted = maximum_allowed_full_grant(MAXIMUM_ALLOWED | SYNCHRONIZE);
-        assert_eq!(granted & MAXIMUM_ALLOWED, 0);
-        assert_ne!(granted & FILE_READ_DATA, 0);
-        assert_ne!(granted & FILE_WRITE_DATA, 0);
-        assert_ne!(granted & FILE_APPEND_DATA, 0);
-        assert_ne!(granted & DELETE, 0);
+        // Case "full grant": MAXIMUM_ALLOWED with the full grant adds write and delete rights.
+        {
+            let granted = maximum_allowed_full_grant(MAXIMUM_ALLOWED | SYNCHRONIZE);
+            assert_eq!(granted & MAXIMUM_ALLOWED, 0, "full grant");
+            assert_ne!(granted & FILE_READ_DATA, 0, "full grant");
+            assert_ne!(granted & FILE_WRITE_DATA, 0, "full grant");
+            assert_ne!(granted & FILE_APPEND_DATA, 0, "full grant");
+            assert_ne!(granted & DELETE, 0, "full grant");
+        }
     }
 
     #[test]

@@ -93,12 +93,9 @@ fn roundtrip(combo: CipherCombo) {
 
 #[test]
 fn vault_task_backend_read_write_roundtrip_gcm() {
-    roundtrip(CipherCombo::SivGcm);
-}
-
-#[test]
-fn vault_task_backend_read_write_roundtrip_ctrmac() {
-    roundtrip(CipherCombo::SivCtrMac);
+    for combo in [CipherCombo::SivGcm, CipherCombo::SivCtrMac] {
+        roundtrip(combo);
+    }
 }
 
 #[test]

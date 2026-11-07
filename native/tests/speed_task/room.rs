@@ -162,7 +162,7 @@ pub fn run_room() -> Result<(), String> {
 }
 
 #[test]
-#[ignore = "needs the stage's Share room"]
+#[ignore = "needs the stage's Share room; Suite rechte-desktop-tresore-task"]
 fn speed_task_share_room_parallel_downloads_no_eagain() {
     guarded(
         "speed_task_share_room_parallel_downloads_no_eagain",

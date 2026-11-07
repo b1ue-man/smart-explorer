@@ -55,6 +55,16 @@ fn transfer_engine_task_batch_status_follows_one_commit() {
 
 #[test]
 fn transfer_engine_task_batch_status_bounds_each_principal() {
+    let cases: [fn(); 2] = [
+        transfer_engine_task_batch_status_bounds_each_principal_case,
+        transfer_engine_task_batch_status_bounds_all_records,
+    ];
+    for case in cases {
+        case();
+    }
+}
+
+fn transfer_engine_task_batch_status_bounds_each_principal_case() {
     let now = Instant::now();
     let mut table = Table::default();
     let owned: Vec<BatchKey> = (0..MAX_RECORDS_PER_PRINCIPAL)
@@ -76,6 +86,25 @@ fn transfer_engine_task_batch_status_bounds_each_principal() {
         table.per_principal.get(&principal("busy")),
         Some(&MAX_RECORDS_PER_PRINCIPAL)
     );
+}
+
+fn transfer_engine_task_batch_status_bounds_all_records() {
+    let now = Instant::now();
+    let mut table = Table::default();
+    let mut keys = Vec::new();
+    for index in 0..MAX_RECORDS {
+        let key = key(&format!("device-{}", index % 8));
+        table.begin(&key, now).unwrap();
+        keys.push(key);
+    }
+    let refused = table.begin(&key("device-late"), now).unwrap_err();
+    assert!(is_busy(&refused), "batches in progress are never evicted");
+    table.finish(&keys[3], FsBatchStatus::Aborted, now);
+    table
+        .begin(&key("device-late"), now)
+        .expect("the oldest finished record makes room");
+    assert!(table.query(&keys[3], now).is_none());
+    assert_eq!(table.records.len(), MAX_RECORDS);
 }
 
 /// The measured failure (Share Direct up, medium, 2026-10-28): finished
@@ -121,27 +150,17 @@ fn speed_task_batch_status_unconfirmed_outcomes_never_refuse_a_new_batch() {
 }
 
 #[test]
-fn transfer_engine_task_batch_status_bounds_all_records() {
-    let now = Instant::now();
-    let mut table = Table::default();
-    let mut keys = Vec::new();
-    for index in 0..MAX_RECORDS {
-        let key = key(&format!("device-{}", index % 8));
-        table.begin(&key, now).unwrap();
-        keys.push(key);
+fn transfer_engine_task_batch_status_counts_every_record() {
+    let cases: [fn(); 2] = [
+        transfer_engine_task_batch_status_counts_every_record_case,
+        transfer_engine_task_batch_status_evicts_oldest_outcome_text,
+    ];
+    for case in cases {
+        case();
     }
-    let refused = table.begin(&key("device-late"), now).unwrap_err();
-    assert!(is_busy(&refused), "batches in progress are never evicted");
-    table.finish(&keys[3], FsBatchStatus::Aborted, now);
-    table
-        .begin(&key("device-late"), now)
-        .expect("the oldest finished record makes room");
-    assert!(table.query(&keys[3], now).is_none());
-    assert_eq!(table.records.len(), MAX_RECORDS);
 }
 
-#[test]
-fn transfer_engine_task_batch_status_counts_every_record() {
+fn transfer_engine_task_batch_status_counts_every_record_case() {
     let now = Instant::now();
     let mut table = Table::default();
     let aborted = key("counted");
@@ -167,6 +186,24 @@ fn transfer_engine_task_batch_status_counts_every_record() {
     assert!(table.pending.is_empty() && table.finished.is_empty());
 }
 
+fn transfer_engine_task_batch_status_evicts_oldest_outcome_text() {
+    let now = Instant::now();
+    let later = now + Duration::from_secs(1);
+    let mut table = Table::default();
+    let older = key("text");
+    let newer = key("text");
+    table.begin(&older, now).unwrap();
+    table.begin(&newer, now).unwrap();
+    table.finish(&older, done(MAX_STORED_BYTES / 2), now);
+    table.finish(&newer, done(MAX_STORED_BYTES / 2), later);
+    assert!(
+        table.query(&older, later).is_none(),
+        "the oldest outcome text goes first"
+    );
+    assert!(table.query(&newer, later).is_some());
+    assert!(table.bytes <= MAX_STORED_BYTES);
+}
+
 #[test]
 fn transfer_engine_task_batch_status_expires_in_order() {
     let start = Instant::now();
@@ -188,23 +225,4 @@ fn transfer_engine_task_batch_status_expires_in_order() {
     assert!(table.query(&running, after_pending).is_none());
     assert_eq!(table.bytes, 0);
     assert!(table.records.is_empty() && table.per_principal.is_empty());
-}
-
-#[test]
-fn transfer_engine_task_batch_status_evicts_oldest_outcome_text() {
-    let now = Instant::now();
-    let later = now + Duration::from_secs(1);
-    let mut table = Table::default();
-    let older = key("text");
-    let newer = key("text");
-    table.begin(&older, now).unwrap();
-    table.begin(&newer, now).unwrap();
-    table.finish(&older, done(MAX_STORED_BYTES / 2), now);
-    table.finish(&newer, done(MAX_STORED_BYTES / 2), later);
-    assert!(
-        table.query(&older, later).is_none(),
-        "the oldest outcome text goes first"
-    );
-    assert!(table.query(&newer, later).is_some());
-    assert!(table.bytes <= MAX_STORED_BYTES);
 }

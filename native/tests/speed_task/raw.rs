@@ -219,7 +219,7 @@ macro_rules! raw_cases {
     ($($name:ident => ($way:literal, $direction:literal)),* $(,)?) => {
         $(
             #[test]
-            #[ignore = "needs the stage's server on the unshaped loopback"]
+            #[ignore = "needs the stage's server on the unshaped loopback; Suite rechte-desktop-tresore-task"]
             fn $name() {
                 let case = Case::new(stringify!($name), $way, $direction, "raw");
                 guarded(case.name, || run_raw(case));
@@ -238,14 +238,14 @@ raw_cases! {
 }
 
 #[test]
-#[ignore = "needs the stage's SFTP servers on the unshaped loopback"]
+#[ignore = "needs the stage's SFTP servers on the unshaped loopback; Suite rechte-desktop-tresore-task"]
 fn speed_task_sftp_cipher_aes_gcm() {
     let case = Case::new("speed_task_sftp_cipher_aes_gcm", "sftp", "up", "raw");
     guarded(case.name, || run_cipher(case));
 }
 
 #[test]
-#[ignore = "needs the stage's SFTP servers on the unshaped loopback"]
+#[ignore = "needs the stage's SFTP servers on the unshaped loopback; Suite rechte-desktop-tresore-task"]
 fn speed_task_sftp_cipher_chacha() {
     let case = Case::new("speed_task_sftp_cipher_chacha", "sftp", "up", "raw");
     guarded(case.name, || run_cipher(case));

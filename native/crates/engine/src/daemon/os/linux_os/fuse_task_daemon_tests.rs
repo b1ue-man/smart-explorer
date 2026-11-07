@@ -38,7 +38,7 @@ fn require_isolated_home() {
 }
 
 #[test]
-#[ignore = "FUSE task stage linux-root: drive-fuse with the home fixture (SMART_EXPLORER_FUSE_TASK=1)"]
+#[ignore = "FUSE task stage linux-root: drive-fuse with the home fixture (SMART_EXPLORER_FUSE_TASK=1); Suite rechte-desktop-tresore-task"]
 fn drive_task_smb_mount_still_refused() -> io::Result<()> {
     require_task_stage();
     require_isolated_home();
@@ -370,7 +370,7 @@ fn end_child(child: &mut Child) {
 }
 
 #[test]
-#[ignore = "FUSE task stage linux-root: drive-fuse with se, sftp and home (SMART_EXPLORER_FUSE_TASK=1)"]
+#[ignore = "FUSE task stage linux-root: drive-fuse with se, sftp and home (SMART_EXPLORER_FUSE_TASK=1); Suite rechte-desktop-tresore-task"]
 fn drive_task_auto_remount_after_daemon_restart_fuse() -> io::Result<()> {
     require_task_stage();
     require_isolated_home();

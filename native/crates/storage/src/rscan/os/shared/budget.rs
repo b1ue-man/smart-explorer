@@ -83,33 +83,41 @@ mod tests {
 
     #[test]
     fn budget_rejects_each_boundary_without_allocating_a_large_tree() {
-        let mut entries = ScanBudget::with_limits(2, 100, 4);
-        assert!(entries.claim(1, 1).is_ok());
-        assert!(entries.claim(1, 1).is_ok());
-        assert_eq!(
-            entries.claim(1, 1),
-            Err(LimitExceeded {
-                limit: "entry count"
-            })
-        );
+        let cases: [(&str, fn()); 2] = [
+            (
+                "budget_rejects_each_boundary_without_allocating_a_large_tree",
+                || {
+                    let mut entries = ScanBudget::with_limits(2, 100, 4);
+                    assert!(entries.claim(1, 1).is_ok());
+                    assert!(entries.claim(1, 1).is_ok());
+                    assert_eq!(
+                        entries.claim(1, 1),
+                        Err(LimitExceeded {
+                            limit: "entry count"
+                        })
+                    );
 
-        let mut text = ScanBudget::with_limits(10, 5, 4);
-        assert!(text.claim(5, 1).is_ok());
-        assert_eq!(
-            text.claim(1, 1),
-            Err(LimitExceeded {
-                limit: "retained path/name text"
-            })
-        );
+                    let mut text = ScanBudget::with_limits(10, 5, 4);
+                    assert!(text.claim(5, 1).is_ok());
+                    assert_eq!(
+                        text.claim(1, 1),
+                        Err(LimitExceeded {
+                            limit: "retained path/name text"
+                        })
+                    );
 
-        let mut depth = ScanBudget::with_limits(10, 100, 2);
-        assert_eq!(depth.claim(1, 3), Err(LimitExceeded { limit: "depth" }));
-    }
-
-    #[test]
-    fn failed_text_claim_does_not_consume_an_entry_slot() {
-        let mut budget = ScanBudget::with_limits(1, 1, 1);
-        assert!(budget.claim(2, 1).is_err());
-        assert!(budget.claim(1, 1).is_ok());
+                    let mut depth = ScanBudget::with_limits(10, 100, 2);
+                    assert_eq!(depth.claim(1, 3), Err(LimitExceeded { limit: "depth" }));
+                },
+            ),
+            ("failed_text_claim_does_not_consume_an_entry_slot", || {
+                let mut budget = ScanBudget::with_limits(1, 1, 1);
+                assert!(budget.claim(2, 1).is_err());
+                assert!(budget.claim(1, 1).is_ok());
+            }),
+        ];
+        for (case, check) in cases {
+            std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
+        }
     }
 }

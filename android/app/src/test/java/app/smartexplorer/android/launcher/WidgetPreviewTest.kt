@@ -18,19 +18,13 @@ class WidgetPreviewTest {
         // API 31 without a layout, and API 30 whatever the layout field says: the image.
         assertEquals(PreviewKind.Image, previewKind(31, false, 0))
         assertEquals(PreviewKind.Image, previewKind(30, false, 5))
-    }
-
-    @Test
-    fun theCategoryDoesNothingBeforeApi35() {
+        // The category does nothing before API 35 (the former theCategoryDoesNothingBeforeApi35).
         assertEquals(PreviewKind.Layout, previewKind(34, true, 5))
         assertEquals(PreviewKind.Image, previewKind(34, true, 0))
         assertEquals(PreviewKind.Image, previewKind(30, true, 0))
         assertEquals(PreviewKind.Image, previewKind(30, true, 5))
-    }
-
-    @Test
-    fun aGeneratorThatAnswersNothingFallsBackBySameOrderWithoutTheCategory() {
-        // What `load` does after `getWidgetPreview` returned null (U38-10): the same function with the category off.
+        // What `load` does after `getWidgetPreview` returned null (U38-10): the same function with the category off
+        // (the former aGeneratorThatAnswersNothingFallsBackBySameOrderWithoutTheCategory).
         assertEquals(PreviewKind.Layout, previewKind(36, false, 7))
         assertEquals(PreviewKind.Image, previewKind(36, false, 0))
     }

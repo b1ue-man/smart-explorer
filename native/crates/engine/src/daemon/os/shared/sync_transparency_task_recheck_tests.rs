@@ -24,26 +24,18 @@ fn auth_failed(at: i64) -> JobState {
 }
 
 #[test]
-fn sync_transparency_task_changed_credentials_allow_one_retry() {
-    let notebook = job("notebook", "gdrive:///Notebook");
-    let jobs = vec![notebook.clone()];
-    let states = BTreeMap::from([("notebook".to_string(), auth_failed(100))]);
-    let found = evidence(&notebook, &states["notebook"], &jobs, &states, Some(200));
-    assert_eq!(found.as_ref().map(|(at, _)| *at), Some(200));
-    // Older than the failed attempt: no evidence.
-    assert!(evidence(&notebook, &states["notebook"], &jobs, &states, Some(50)).is_none());
-    // The same evidence is not used twice.
-    let mut used = auth_failed(100);
-    used.recheck = Some(Recheck {
-        evidence: 200,
-        reason: String::new(),
-        pending: false,
-    });
-    assert!(evidence(&notebook, &used, &jobs, &states, Some(200)).is_none());
+fn sync_transparency_task_later_success_on_the_same_drive_account_is_evidence() {
+    let cases: [fn(); 3] = [
+        sync_transparency_task_later_success_on_the_same_drive_account_is_evidence_case,
+        sync_transparency_task_changed_credentials_allow_one_retry,
+        sync_transparency_task_only_login_failures_wait_for_evidence,
+    ];
+    for case in cases {
+        case();
+    }
 }
 
-#[test]
-fn sync_transparency_task_later_success_on_the_same_drive_account_is_evidence() {
+fn sync_transparency_task_later_success_on_the_same_drive_account_is_evidence_case() {
     let notebook = job("notebook", "gdrive:///Notebook");
     let vault = job("vault", "GDRIVE:///Vaults/Private");
     let nas = job("nas", "sftp://nas/backup");
@@ -87,7 +79,24 @@ fn sync_transparency_task_later_success_on_the_same_drive_account_is_evidence() 
     assert!(evidence(&sftp, &sftp_states["sftp"], &both, &sftp_states, None).is_none());
 }
 
-#[test]
+fn sync_transparency_task_changed_credentials_allow_one_retry() {
+    let notebook = job("notebook", "gdrive:///Notebook");
+    let jobs = vec![notebook.clone()];
+    let states = BTreeMap::from([("notebook".to_string(), auth_failed(100))]);
+    let found = evidence(&notebook, &states["notebook"], &jobs, &states, Some(200));
+    assert_eq!(found.as_ref().map(|(at, _)| *at), Some(200));
+    // Older than the failed attempt: no evidence.
+    assert!(evidence(&notebook, &states["notebook"], &jobs, &states, Some(50)).is_none());
+    // The same evidence is not used twice.
+    let mut used = auth_failed(100);
+    used.recheck = Some(Recheck {
+        evidence: 200,
+        reason: String::new(),
+        pending: false,
+    });
+    assert!(evidence(&notebook, &used, &jobs, &states, Some(200)).is_none());
+}
+
 fn sync_transparency_task_only_login_failures_wait_for_evidence() {
     let notebook = job("notebook", "gdrive:///Notebook");
     let mut state = auth_failed(100);

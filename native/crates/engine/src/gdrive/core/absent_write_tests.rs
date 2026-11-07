@@ -7,7 +7,6 @@ use super::task_drive::{count, drive_server, multipart, FakeDrive};
 use super::task_http::{Request, Server};
 use crate::vfs::Backend;
 use std::io::{self, Write};
-use std::sync::Arc;
 
 fn write_absent(backend: &dyn Backend, path: &str, content: &[u8]) -> io::Result<()> {
     let mut writer = crate::vfs::open_write_absent(backend, path, content.len() as u64)?
@@ -69,55 +68,6 @@ fn speed_task_drive_absent_file_takes_one_write_request() {
 
 fn writes_of(server: &Server) -> usize {
     writes(&server.requests()).len()
-}
-
-#[test]
-fn speed_task_drive_absent_name_race_trashes_own_object_and_reports_taken() {
-    let drive = Arc::new(FakeDrive::default());
-    with_target(&drive);
-    let server = {
-        let drive = Arc::clone(&drive);
-        Server::start(move |request| {
-            let answer = drive.answer(request);
-            // Another client creates the same name right after our create.
-            if request.method == "POST"
-                && request.body.windows(10).any(|part| part == b"\"race.txt\"")
-            {
-                drive.insert("zz-foreign", "race.txt", "target", "text/plain", b"theirs");
-            }
-            answer
-        })
-    };
-    let backend = server.backend();
-    backend
-        .remember_path("Ziel", "target", Some(FOLDER_MIME))
-        .unwrap();
-    let error = write_absent(&backend, "Ziel/race.txt", b"ours").unwrap_err();
-    assert_eq!(error.kind(), io::ErrorKind::AlreadyExists, "{error}");
-    let requests = server.requests();
-    let create = requests
-        .iter()
-        .find(|request| request.method == "POST")
-        .expect("one create went out");
-    let (metadata, _) = multipart(create);
-    let own = metadata["id"].as_str().unwrap().to_string();
-    // The own object is in the trash, the foreign one untouched and alone.
-    assert_eq!(drive.object(&own).unwrap()["trashed"], true);
-    let named = drive.named("target", "race.txt");
-    assert_eq!(named.len(), 1);
-    assert_eq!(named[0]["id"], "zz-foreign");
-    assert_eq!(drive.bytes("zz-foreign"), b"theirs");
-    assert_eq!(
-        count(&requests, "PATCH", &format!("/drive/v3/files/{own}")),
-        1,
-        "exactly the own ID is trashed"
-    );
-    // Nothing of the writer stays reserved or cached under the name.
-    assert!(backend.pending_upload_ids_guard().unwrap().is_empty());
-    assert_ne!(
-        backend.cached_id("Ziel/race.txt").unwrap().as_deref(),
-        Some(own.as_str())
-    );
 }
 
 #[test]

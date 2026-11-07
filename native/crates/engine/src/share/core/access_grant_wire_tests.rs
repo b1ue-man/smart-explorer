@@ -68,6 +68,18 @@ fn change(capabilities: &[(Capability, CapabilityDecision)]) -> AccessGrantChang
 
 #[test]
 fn perm_task_port_full_shell_0_5_180() {
+    let cases: [fn(); 4] = [
+        perm_task_port_full_shell_0_5_180_case,
+        perm_task_port_disabled_keeps_settings,
+        perm_task_port_program_list_0_5_182,
+        perm_task_port_run_as_root_worker,
+    ];
+    for case in cases {
+        case();
+    }
+}
+
+fn perm_task_port_full_shell_0_5_180_case() {
     // Exactly the five fields 0.5.180 wrote.
     let stored = r#"{"enabled":true,"policy_revision":6,"changed_at":1700000000,"source_request_id":null,"source_decision_revision":2}"#;
     let grant = read(stored);
@@ -87,40 +99,6 @@ fn perm_task_port_full_shell_0_5_180() {
     assert_eq!(head.policy_revision, 6);
 }
 
-#[test]
-fn perm_task_port_program_list_0_5_182() {
-    let stored = r#"{"enabled":false,"policy_revision":4,"changed_at":9,"source_request_id":null,"source_decision_revision":null,"run_as":{"kind":"standard"},"programs":["/usr/bin/uptime"],"restricted_enabled":true}"#;
-    let grant = read(stored);
-    assert!(grant.enabled);
-    assert_eq!(grant.programs, ["/usr/bin/uptime"]);
-    assert_eq!(grant.access_grant().account, AccountProfile::Own);
-    // Commands of the listed program only; no terminal.
-    assert_eq!(decisions(&grant), [ALLOW, OFF, OFF, OFF, OFF, OFF, OFF]);
-    assert_eq!(written(&grant), stored);
-}
-
-#[test]
-fn perm_task_port_run_as_root_worker() {
-    let stored = r#"{"enabled":false,"policy_revision":9,"changed_at":3,"source_request_id":null,"source_decision_revision":null,"run_as":{"kind":"account","name":"deploy"},"restricted_enabled":true}"#;
-    let grant = read(stored);
-    let access = grant.access_grant();
-    assert_eq!(
-        access.account,
-        AccountProfile::Account {
-            name: "deploy".into()
-        }
-    );
-    assert_eq!(decisions(&grant), [ALLOW, ALLOW, OFF, OFF, OFF, OFF, OFF]);
-    assert_eq!(
-        grant.run_as,
-        ExecRunAs::Account {
-            name: "deploy".into()
-        }
-    );
-    assert_eq!(written(&grant), stored);
-}
-
-#[test]
 fn perm_task_port_disabled_keeps_settings() {
     let stored = r#"{"enabled":false,"policy_revision":5,"changed_at":8,"source_request_id":null,"source_decision_revision":null,"run_as":{"kind":"account","name":"deploy"},"programs":["uptime"]}"#;
     let mut grant = read(stored);
@@ -144,6 +122,37 @@ fn perm_task_port_disabled_keeps_settings() {
             name: "deploy".into()
         }
     );
+}
+
+fn perm_task_port_program_list_0_5_182() {
+    let stored = r#"{"enabled":false,"policy_revision":4,"changed_at":9,"source_request_id":null,"source_decision_revision":null,"run_as":{"kind":"standard"},"programs":["/usr/bin/uptime"],"restricted_enabled":true}"#;
+    let grant = read(stored);
+    assert!(grant.enabled);
+    assert_eq!(grant.programs, ["/usr/bin/uptime"]);
+    assert_eq!(grant.access_grant().account, AccountProfile::Own);
+    // Commands of the listed program only; no terminal.
+    assert_eq!(decisions(&grant), [ALLOW, OFF, OFF, OFF, OFF, OFF, OFF]);
+    assert_eq!(written(&grant), stored);
+}
+
+fn perm_task_port_run_as_root_worker() {
+    let stored = r#"{"enabled":false,"policy_revision":9,"changed_at":3,"source_request_id":null,"source_decision_revision":null,"run_as":{"kind":"account","name":"deploy"},"restricted_enabled":true}"#;
+    let grant = read(stored);
+    let access = grant.access_grant();
+    assert_eq!(
+        access.account,
+        AccountProfile::Account {
+            name: "deploy".into()
+        }
+    );
+    assert_eq!(decisions(&grant), [ALLOW, ALLOW, OFF, OFF, OFF, OFF, OFF]);
+    assert_eq!(
+        grant.run_as,
+        ExecRunAs::Account {
+            name: "deploy".into()
+        }
+    );
+    assert_eq!(written(&grant), stored);
 }
 
 #[test]

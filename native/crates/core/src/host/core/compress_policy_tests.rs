@@ -21,9 +21,9 @@ fn compressible() -> PolicyInput {
 
 #[test]
 fn speed_task_lz4_policy_compresses_when_core_rate_exceeds_link_by_thirty_percent() {
-    let mut policy = Policy::new();
-    assert!(policy.should_compress(compressible()));
-
+    // Rows: the compressible stream, the 1.3 × wire-rate line, and one input
+    // changed from the compressible stream (writer blocked, ratio, free core).
+    // A fresh policy decides each row.
     // 1.3 × the wire rate is the line: 12_999_999 is below it, 13_000_000 on it.
     let wire = 10_000_000;
     let at = |core_bps| PolicyInput {
@@ -31,64 +31,79 @@ fn speed_task_lz4_policy_compresses_when_core_rate_exceeds_link_by_thirty_percen
         core_bps,
         ..compressible()
     };
-    assert!(!Policy::new().should_compress(at(12_999_999)));
-    assert!(Policy::new().should_compress(at(13_000_000)));
-    assert!(Policy::new().should_compress(at(13_000_001)));
-}
-
-#[test]
-fn speed_task_lz4_policy_skips_when_the_writer_is_not_blocked() {
-    let idle = PolicyInput {
-        writer_blocked_share: 0.5,
-        ..compressible()
-    };
-    assert!(
-        !Policy::new().should_compress(idle),
-        "exactly half is not a majority: the wire does not limit"
-    );
-    let free_flowing = PolicyInput {
-        writer_blocked_share: 0.0,
-        ..compressible()
-    };
-    assert!(!Policy::new().should_compress(free_flowing));
-    let waiting = PolicyInput {
-        writer_blocked_share: 0.51,
-        ..compressible()
-    };
-    assert!(Policy::new().should_compress(waiting));
-}
-
-#[test]
-fn speed_task_lz4_policy_skips_when_ratio_is_above_085() {
-    let barely = PolicyInput {
-        ratio: 0.85,
-        ..compressible()
-    };
-    assert!(Policy::new().should_compress(barely), "0.85 is allowed");
-    let random = PolicyInput {
-        ratio: 0.851,
-        ..compressible()
-    };
-    assert!(!Policy::new().should_compress(random));
-    let incompressible = PolicyInput {
-        ratio: 1.0,
-        ..compressible()
-    };
-    assert!(!Policy::new().should_compress(incompressible));
-}
-
-#[test]
-fn speed_task_lz4_policy_needs_a_free_core() {
-    let busy = PolicyInput {
-        free_cores: 0.99,
-        ..compressible()
-    };
-    assert!(!Policy::new().should_compress(busy));
-    let one = PolicyInput {
-        free_cores: 1.0,
-        ..compressible()
-    };
-    assert!(Policy::new().should_compress(one));
+    let cases: [(&str, PolicyInput, bool); 12] = [
+        ("compressible stream", compressible(), true),
+        ("core below 1.3 x wire", at(12_999_999), false),
+        ("core on 1.3 x wire", at(13_000_000), true),
+        ("core above 1.3 x wire", at(13_000_001), true),
+        (
+            "writer exactly half blocked: not a majority, the wire does not limit",
+            PolicyInput {
+                writer_blocked_share: 0.5,
+                ..compressible()
+            },
+            false,
+        ),
+        (
+            "writer not blocked",
+            PolicyInput {
+                writer_blocked_share: 0.0,
+                ..compressible()
+            },
+            false,
+        ),
+        (
+            "writer blocked above half",
+            PolicyInput {
+                writer_blocked_share: 0.51,
+                ..compressible()
+            },
+            true,
+        ),
+        (
+            "ratio 0.85 is allowed",
+            PolicyInput {
+                ratio: 0.85,
+                ..compressible()
+            },
+            true,
+        ),
+        (
+            "ratio 0.851 above the limit",
+            PolicyInput {
+                ratio: 0.851,
+                ..compressible()
+            },
+            false,
+        ),
+        (
+            "ratio 1.0 incompressible",
+            PolicyInput {
+                ratio: 1.0,
+                ..compressible()
+            },
+            false,
+        ),
+        (
+            "free core 0.99 is busy",
+            PolicyInput {
+                free_cores: 0.99,
+                ..compressible()
+            },
+            false,
+        ),
+        (
+            "free core 1.0",
+            PolicyInput {
+                free_cores: 1.0,
+                ..compressible()
+            },
+            true,
+        ),
+    ];
+    for (case, input, expected) in cases {
+        assert_eq!(Policy::new().should_compress(input), expected, "{case}");
+    }
 }
 
 #[test]

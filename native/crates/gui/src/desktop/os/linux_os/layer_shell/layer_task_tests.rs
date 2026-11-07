@@ -67,7 +67,7 @@ fn expect_color(sway: &Sway, surface: &mut SurfaceProcess, output: &str) {
 }
 
 #[test]
-#[ignore = "needs sway, grim and a GPU adapter (suite stage linux-wayland: layer)"]
+#[ignore = "needs sway, grim and a GPU adapter (suite stage linux-wayland: layer); Suite rechte-desktop-tresore-task"]
 fn desktop_task_layer_shell_bottom_surface() {
     require_task();
     let sway = Sway::start();
@@ -114,7 +114,7 @@ fn desktop_task_layer_shell_bottom_surface() {
 }
 
 #[test]
-#[ignore = "needs sway, grim and a GPU adapter (suite stage linux-wayland: layer)"]
+#[ignore = "needs sway, grim and a GPU adapter (suite stage linux-wayland: layer); Suite rechte-desktop-tresore-task"]
 fn desktop_task_layer_shell_two_outputs() {
     require_task();
     let sway = Sway::start();
@@ -133,7 +133,7 @@ fn desktop_task_layer_shell_two_outputs() {
 }
 
 #[test]
-#[ignore = "needs sway, wtype and a GPU adapter (suite stage linux-wayland: layer)"]
+#[ignore = "needs sway, wtype and a GPU adapter (suite stage linux-wayland: layer); Suite rechte-desktop-tresore-task"]
 fn desktop_task_layer_keyboard_on_demand() {
     require_task();
     let wtype = tool("wtype");
@@ -158,7 +158,7 @@ fn desktop_task_layer_keyboard_on_demand() {
 }
 
 #[test]
-#[ignore = "needs sway, wl-clipboard, wtype and a GPU adapter (suite stage linux-wayland: layer)"]
+#[ignore = "needs sway, wl-clipboard, wtype and a GPU adapter (suite stage linux-wayland: layer); Suite rechte-desktop-tresore-task"]
 fn desktop_task_layer_clipboard_roundtrip_files() {
     require_task();
     let (wl_copy, wl_paste, wtype) = (tool("wl-copy"), tool("wl-paste"), tool("wtype"));
@@ -302,7 +302,7 @@ fn desktop_task_layer_clipboard_roundtrip_files() {
 }
 
 #[test]
-#[ignore = "needs sway (suite stage linux-wayland: layer)"]
+#[ignore = "needs sway (suite stage linux-wayland: layer); Suite rechte-desktop-tresore-task"]
 fn desktop_task_layer_no_gpu_exits_one() {
     require_task();
     let sway = Sway::start();
@@ -323,7 +323,7 @@ fn desktop_task_layer_no_gpu_exits_one() {
 }
 
 #[test]
-#[ignore = "needs readelf and the GUI binary (suite stage linux-wayland: layer)"]
+#[ignore = "needs readelf and the GUI binary (suite stage linux-wayland: layer); Suite rechte-desktop-tresore-task"]
 fn desktop_task_layer_no_buildtime_wayland_link() {
     require_task();
     let readelf = tool("readelf");
@@ -413,7 +413,7 @@ const ALLOWED_NEW: [&str; 7] = [
 ];
 
 #[test]
-#[ignore = "needs KWin in the session (suite stage desktop-linux-kwin, assumption A14)"]
+#[ignore = "needs KWin in the session (suite stage desktop-linux-kwin, assumption A14); Suite rechte-desktop-tresore-task"]
 fn desktop_task_kwin_layer_namespace_desktop() {
     if std::env::var("SE_DESKTOP_TASK_KWIN").as_deref() != Ok("1") {
         not_run("SE_DESKTOP_TASK_KWIN=1 fehlt (KWin-Umgebung der S4-Stufe)");

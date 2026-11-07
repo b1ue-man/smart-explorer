@@ -401,29 +401,31 @@ mod tests {
 
     #[test]
     fn update_rejects_malformed_metadata_instead_of_overwriting_it() {
-        let directory = tempfile::tempdir().unwrap();
-        let p = directory.path().join("connections.txt");
-        std::fs::write(&p, "not-a-valid-connection").unwrap();
-        let error = load_connections_for_update(&p).unwrap_err();
-        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
-        assert_eq!(
-            std::fs::read_to_string(&p).unwrap(),
-            "not-a-valid-connection"
-        );
-        std::fs::remove_file(&p).ok();
-    }
+        // Rows: the strict reader of an update, and touch, which reads through
+        // that same reader. Each rejects the malformed file with InvalidData
+        // and leaves its bytes unchanged.
+        let valid = serialize(&sample_pw());
+        let cases: [(&str, String, fn(&Path, &str) -> std::io::Result<()>); 2] = [
+            (
+                "update",
+                "not-a-valid-connection".to_string(),
+                |path: &Path, _: &str| load_connections_for_update(path).map(|_| ()),
+            ),
+            (
+                "touch",
+                format!("{valid}\nnot-a-valid-connection"),
+                touch_connection_in,
+            ),
+        ];
+        for (case, content, operation) in cases {
+            let directory = tempfile::tempdir().unwrap();
+            let p = directory.path().join("connections.txt");
+            std::fs::write(&p, &content).unwrap();
 
-    #[test]
-    fn touch_rejects_malformed_metadata_without_erasing_it() {
-        let directory = tempfile::tempdir().unwrap();
-        let p = directory.path().join("connections.txt");
-        let original = format!("{}\nnot-a-valid-connection", serialize(&sample_pw()));
-        std::fs::write(&p, &original).unwrap();
+            let error = operation(&p, &sample_pw().account()).unwrap_err();
 
-        let error = touch_connection_in(&p, &sample_pw().account()).unwrap_err();
-
-        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
-        assert_eq!(std::fs::read_to_string(&p).unwrap(), original);
-        std::fs::remove_file(&p).ok();
+            assert_eq!(error.kind(), std::io::ErrorKind::InvalidData, "{case}");
+            assert_eq!(std::fs::read_to_string(&p).unwrap(), content, "{case}");
+        }
     }
 }

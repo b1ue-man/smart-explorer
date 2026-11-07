@@ -346,37 +346,91 @@ mod tests {
 
     #[test]
     fn parse_rejects_invalid_sha256_args() {
-        let mut raw = base_args();
-        let index = raw.iter().position(|arg| arg == "--staged-sha256").unwrap() + 1;
-        raw[index] = "nope".into();
-
-        assert!(ApplyArgs::parse(&raw).is_err());
-    }
-
-    #[test]
-    fn parse_rejects_missing_mandatory_hash() {
-        let mut raw = base_args();
-        let index = raw.iter().position(|arg| arg == "--helper-sha256").unwrap();
-        raw.drain(index..=index + 1);
-        assert!(ApplyArgs::parse(&raw).is_err());
+        // Rows: a malformed staged hash and a missing mandatory hash of the
+        // current protocol, and a missing staged hash of the legacy protocol.
+        let mut malformed = base_args();
+        let index = malformed
+            .iter()
+            .position(|arg| arg == "--staged-sha256")
+            .unwrap()
+            + 1;
+        malformed[index] = "nope".into();
+        let mut missing = base_args();
+        let index = missing
+            .iter()
+            .position(|arg| arg == "--helper-sha256")
+            .unwrap();
+        missing.drain(index..=index + 1);
+        let mut legacy = legacy_args();
+        let index = legacy
+            .iter()
+            .position(|arg| arg == "--staged-sha256")
+            .unwrap();
+        legacy.drain(index..=index + 1);
+        let cases: [(&str, Vec<String>, fn(&[String]) -> bool); 3] = [
+            ("malformed staged hash", malformed, |raw: &[String]| {
+                ApplyArgs::parse(raw).is_err()
+            }),
+            ("missing mandatory hash", missing, |raw: &[String]| {
+                ApplyArgs::parse(raw).is_err()
+            }),
+            (
+                "missing staged hash of the legacy protocol",
+                legacy,
+                |raw: &[String]| ApplyRequest::parse(raw).is_err(),
+            ),
+        ];
+        for (case, raw, refused) in cases {
+            assert!(refused(&raw), "{case}");
+        }
     }
 
     #[test]
     fn current_protocol_rejects_unknown_or_duplicate_arguments() {
-        let mut unknown = base_args();
-        unknown.extend(["--surprise".into(), "value".into()]);
-        assert!(ApplyRequest::parse(&unknown).is_err());
-
-        let mut duplicate = base_args();
-        duplicate.extend(["--version".into(), "9.9.9".into()]);
-        assert!(ApplyRequest::parse(&duplicate).is_err());
+        // Rows: an unknown and a duplicated argument, each in the current and
+        // in the legacy protocol. The request parser refuses every row.
+        let mut current_unknown = base_args();
+        current_unknown.extend(["--surprise".into(), "value".into()]);
+        let mut current_duplicate = base_args();
+        current_duplicate.extend(["--version".into(), "9.9.9".into()]);
+        let mut legacy_unknown = legacy_args();
+        legacy_unknown.extend(["--surprise".into(), "value".into()]);
+        let mut legacy_duplicate = legacy_args();
+        legacy_duplicate.extend(["--version".into(), "0.5.122".into()]);
+        let cases = [
+            ("current unknown argument", current_unknown),
+            ("current duplicate argument", current_duplicate),
+            ("legacy unknown argument", legacy_unknown),
+            ("legacy duplicate argument", legacy_duplicate),
+        ];
+        for (case, raw) in cases {
+            assert!(ApplyRequest::parse(&raw).is_err(), "{case}");
+        }
     }
 
     #[test]
     fn current_protocol_rejects_elevated_gui_handoff() {
-        let mut raw = base_args();
-        raw.push("--elevated".into());
-        assert!(ApplyArgs::parse(&raw).is_err());
+        // Rows: an elevated handoff in the current protocol, and in the legacy
+        // protocol with its helper hash, is refused.
+        let mut current = base_args();
+        current.push("--elevated".into());
+        let mut legacy = legacy_args();
+        legacy.extend([
+            "--helper-sha256".into(),
+            "c".repeat(64),
+            "--elevated".into(),
+        ]);
+        let cases: [(&str, Vec<String>, fn(&[String]) -> bool); 2] = [
+            ("current protocol", current, |raw: &[String]| {
+                ApplyArgs::parse(raw).is_err()
+            }),
+            ("legacy protocol", legacy, |raw: &[String]| {
+                ApplyRequest::parse(raw).is_err()
+            }),
+        ];
+        for (case, raw, refused) in cases {
+            assert!(refused(&raw), "{case}");
+        }
     }
 
     fn legacy_args() -> Vec<String> {
@@ -411,28 +465,9 @@ mod tests {
     }
 
     #[test]
-    fn legacy_protocol_requires_staged_hash() {
-        let mut raw = legacy_args();
-        let index = raw.iter().position(|arg| arg == "--staged-sha256").unwrap();
-        raw.drain(index..=index + 1);
-        assert!(ApplyRequest::parse(&raw).is_err());
-    }
-
-    #[test]
     fn partial_current_protocol_never_downgrades_to_legacy() {
         let mut raw = legacy_args();
         raw.extend(["--helper-target".into(), "helper.exe".into()]);
-        assert!(ApplyRequest::parse(&raw).is_err());
-    }
-
-    #[test]
-    fn legacy_protocol_rejects_any_elevation_handoff() {
-        let mut raw = legacy_args();
-        raw.extend([
-            "--helper-sha256".into(),
-            "c".repeat(64),
-            "--elevated".into(),
-        ]);
         assert!(ApplyRequest::parse(&raw).is_err());
     }
 
@@ -447,16 +482,5 @@ mod tests {
             panic!("flag-like value changed protocol classification")
         };
         assert_eq!(args.version, "--manifest");
-    }
-
-    #[test]
-    fn legacy_protocol_rejects_unknown_or_duplicate_arguments() {
-        let mut unknown = legacy_args();
-        unknown.extend(["--surprise".into(), "value".into()]);
-        assert!(ApplyRequest::parse(&unknown).is_err());
-
-        let mut duplicate = legacy_args();
-        duplicate.extend(["--version".into(), "0.5.122".into()]);
-        assert!(ApplyRequest::parse(&duplicate).is_err());
     }
 }

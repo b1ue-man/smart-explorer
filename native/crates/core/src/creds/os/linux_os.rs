@@ -64,41 +64,64 @@ mod tests {
 
     #[test]
     fn luecken_task_status_text_names_the_protector_and_every_count() {
-        let text = describe(StoreStatus {
-            protector: Some("systemd-creds-user".into()),
-            plaintext_records: 2,
-            stage_files: 1,
-            unreadable_records: 3,
-            locked: None,
-        })
-        .unwrap();
-        assert!(text.starts_with(
-            "protector=systemd-creds-user plaintext_records=2 stage_files=1 unreadable_records=3"
-        ));
-        assert!(!text.contains("disk encryption"));
-    }
+        // Text rows: the text starts with `prefix`, contains every `present`
+        // fragment and no `absent` fragment. The app-key-file row explains
+        // what the key file protects.
+        let texts: [(&str, StoreStatus, &str, &[&str], &[&str]); 2] = [
+            (
+                "systemd-creds-user",
+                StoreStatus {
+                    protector: Some("systemd-creds-user".into()),
+                    plaintext_records: 2,
+                    stage_files: 1,
+                    unreadable_records: 3,
+                    locked: None,
+                },
+                "protector=systemd-creds-user plaintext_records=2 stage_files=1 unreadable_records=3",
+                &[],
+                &["disk encryption"],
+            ),
+            (
+                "app-key-file",
+                StoreStatus {
+                    protector: Some("app-key-file".into()),
+                    ..StoreStatus::default()
+                },
+                "protector=app-key-file",
+                &["plaintext_records=0", "disk encryption"],
+                &[],
+            ),
+        ];
+        for (case, status, prefix, present, absent) in texts {
+            let text = describe(status).unwrap();
+            assert!(text.starts_with(prefix), "{case}: {text}");
+            for fragment in present {
+                assert!(text.contains(fragment), "{case}: {text}");
+            }
+            for fragment in absent {
+                assert!(!text.contains(fragment), "{case}: {text}");
+            }
+        }
 
-    #[test]
-    fn luecken_task_status_text_explains_what_app_key_file_protects() {
-        let text = describe(StoreStatus {
-            protector: Some("app-key-file".into()),
-            ..StoreStatus::default()
-        })
-        .unwrap();
-        assert!(text.contains("plaintext_records=0"));
-        assert!(text.contains("disk encryption"));
-    }
-
-    #[test]
-    fn luecken_task_status_of_a_locked_store_is_an_error_with_its_reason() {
-        let error = describe(StoreStatus {
-            protector: Some("systemd-creds-user".into()),
-            locked: Some("systemd-creds antwortet nicht".into()),
-            ..StoreStatus::default()
-        })
-        .unwrap_err();
-        assert!(error.contains("locked"));
-        assert!(error.contains("systemd-creds antwortet nicht"));
-        assert!(error.contains("plaintext_records=0"));
+        // A locked store is an error that names the reason and keeps the counts.
+        let locked = [(
+            "locked",
+            StoreStatus {
+                protector: Some("systemd-creds-user".into()),
+                locked: Some("systemd-creds antwortet nicht".into()),
+                ..StoreStatus::default()
+            },
+            &[
+                "locked",
+                "systemd-creds antwortet nicht",
+                "plaintext_records=0",
+            ],
+        )];
+        for (case, status, fragments) in locked {
+            let error = describe(status).unwrap_err();
+            for fragment in fragments {
+                assert!(error.contains(fragment), "{case}: {error}");
+            }
+        }
     }
 }

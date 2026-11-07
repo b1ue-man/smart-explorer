@@ -257,36 +257,46 @@ mod tests {
     }
 
     #[test]
-    fn substring_filter_matches_plain_numbers() {
-        let filter = text_filter("123");
-
-        assert!(filter.matches(&entry("invoice-123.pdf"), ""));
-        assert!(!filter.matches(&entry("invoice-456.pdf"), ""));
-    }
-
-    #[test]
     fn substring_filter_uses_commas_as_and_terms() {
-        let filter = text_filter("invoice, 2024, final");
+        let cases: [(&str, fn()); 5] = [
+            ("substring_filter_uses_commas_as_and_terms", || {
+                let filter = text_filter("invoice, 2024, final");
 
-        assert!(filter.matches(&entry("final invoice 2024.pdf"), ""));
-        assert!(!filter.matches(&entry("invoice 2024 draft.pdf"), ""));
-    }
+                assert!(filter.matches(&entry("final invoice 2024.pdf"), ""));
+                assert!(!filter.matches(&entry("invoice 2024 draft.pdf"), ""));
+            }),
+            ("regex_filter_keeps_commas_literal", || {
+                let mut filter = FilterDef::new();
+                filter.text_mode = TextMode::Regex;
+                filter.text = "a,b".to_string();
+                let filter = CompiledFilter::compile(&filter);
 
-    #[test]
-    fn substring_filter_uses_semicolons_as_or_groups() {
-        let filter = text_filter("invoice, final; receipt");
+                assert!(filter.matches(&entry("a,b.txt"), ""));
+                assert!(!filter.matches(&entry("ab.txt"), ""));
+            }),
+            ("substring_filter_is_lenient_about_spaces", || {
+                let filter = text_filter("  final   invoice  ,  2024  ");
 
-        assert!(filter.matches(&entry("final invoice.pdf"), ""));
-        assert!(filter.matches(&entry("receipt.txt"), ""));
-        assert!(!filter.matches(&entry("invoice draft.pdf"), ""));
-    }
+                assert!(filter.matches(&entry("my final invoice 2024.pdf"), ""));
+                assert!(filter.matches(&entry("my final   invoice 2024.pdf"), ""));
+            }),
+            ("substring_filter_matches_plain_numbers", || {
+                let filter = text_filter("123");
 
-    #[test]
-    fn substring_filter_is_lenient_about_spaces() {
-        let filter = text_filter("  final   invoice  ,  2024  ");
+                assert!(filter.matches(&entry("invoice-123.pdf"), ""));
+                assert!(!filter.matches(&entry("invoice-456.pdf"), ""));
+            }),
+            ("substring_filter_uses_semicolons_as_or_groups", || {
+                let filter = text_filter("invoice, final; receipt");
 
-        assert!(filter.matches(&entry("my final invoice 2024.pdf"), ""));
-        assert!(filter.matches(&entry("my final   invoice 2024.pdf"), ""));
+                assert!(filter.matches(&entry("final invoice.pdf"), ""));
+                assert!(filter.matches(&entry("receipt.txt"), ""));
+                assert!(!filter.matches(&entry("invoice draft.pdf"), ""));
+            }),
+        ];
+        for (case, check) in cases {
+            std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
+        }
     }
 
     #[test]
@@ -305,16 +315,5 @@ mod tests {
         let mut directory = entry("aux");
         directory.is_dir = true;
         assert!(filter.matches(&directory, ""));
-    }
-
-    #[test]
-    fn regex_filter_keeps_commas_literal() {
-        let mut filter = FilterDef::new();
-        filter.text_mode = TextMode::Regex;
-        filter.text = "a,b".to_string();
-        let filter = CompiledFilter::compile(&filter);
-
-        assert!(filter.matches(&entry("a,b.txt"), ""));
-        assert!(!filter.matches(&entry("ab.txt"), ""));
     }
 }

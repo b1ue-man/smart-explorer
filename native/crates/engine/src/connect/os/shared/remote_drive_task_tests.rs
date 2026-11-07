@@ -8,17 +8,24 @@ fn remote_drive_task_strict_sftp_mount_requires_enabled_agent() {
     assert!(validate_sftp_agent_requirement(false, strict).is_err());
     assert!(validate_sftp_agent_requirement(true, strict).is_ok());
     assert!(!strict.permits_deploy_failure());
-}
 
-#[test]
-fn remote_drive_task_browsing_and_trusted_mount_keep_transport_fallback() {
-    let browse = AgentFallback::Allow;
-    let trusted = AgentFallback::for_mount(Protocol::Sftp, MountRootSecurity::Trusted);
-    let non_sftp = AgentFallback::for_mount(Protocol::Webdav, MountRootSecurity::Enforced);
-
-    for policy in [browse, trusted, non_sftp] {
-        assert_eq!(policy, AgentFallback::Allow);
-        assert!(validate_sftp_agent_requirement(false, policy).is_ok());
-        assert!(policy.permits_deploy_failure());
+    // Cases that keep the transport fallback: browsing and a trusted SFTP mount, and non-SFTP mounts.
+    for (case, policy) in [
+        ("browsing", AgentFallback::Allow),
+        (
+            "trusted SFTP mount",
+            AgentFallback::for_mount(Protocol::Sftp, MountRootSecurity::Trusted),
+        ),
+        (
+            "non-SFTP mount",
+            AgentFallback::for_mount(Protocol::Webdav, MountRootSecurity::Enforced),
+        ),
+    ] {
+        assert_eq!(policy, AgentFallback::Allow, "{case}");
+        assert!(
+            validate_sftp_agent_requirement(false, policy).is_ok(),
+            "{case}"
+        );
+        assert!(policy.permits_deploy_failure(), "{case}");
     }
 }

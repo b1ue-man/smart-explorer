@@ -306,58 +306,93 @@ mod tests {
 
     #[test]
     fn invalid_manifest_never_creates_the_destination_root() {
-        for (label, frames) in [
+        let cases: [(&str, fn()); 2] = [
             (
-                "duplicate",
-                vec![
-                    Frame::TreeEntry {
-                        rel: "same".into(),
-                        is_dir: false,
-                        size: 0,
-                        mtime_ms: 0,
-                    },
-                    Frame::TreeEntry {
-                        rel: "same".into(),
-                        is_dir: false,
-                        size: 0,
-                        mtime_ms: 0,
-                    },
-                ],
+                "invalid_manifest_never_creates_the_destination_root",
+                || {
+                    for (label, frames) in [
+                        (
+                            "duplicate",
+                            vec![
+                                Frame::TreeEntry {
+                                    rel: "same".into(),
+                                    is_dir: false,
+                                    size: 0,
+                                    mtime_ms: 0,
+                                },
+                                Frame::TreeEntry {
+                                    rel: "same".into(),
+                                    is_dir: false,
+                                    size: 0,
+                                    mtime_ms: 0,
+                                },
+                            ],
+                        ),
+                        (
+                            "conflict",
+                            vec![
+                                Frame::TreeEntry {
+                                    rel: "parent".into(),
+                                    is_dir: false,
+                                    size: 0,
+                                    mtime_ms: 0,
+                                },
+                                Frame::TreeEntry {
+                                    rel: "parent/child".into(),
+                                    is_dir: true,
+                                    size: 0,
+                                    mtime_ms: 0,
+                                },
+                            ],
+                        ),
+                        (
+                            "backslash",
+                            vec![Frame::TreeEntry {
+                                rel: r"literal\name".into(),
+                                is_dir: false,
+                                size: 0,
+                                mtime_ms: 0,
+                            }],
+                        ),
+                    ] {
+                        let root = test_root(label);
+                        let _ = std::fs::remove_dir_all(&root);
+                        assert_eq!(
+                            run(&root, frames).unwrap_err().kind(),
+                            std::io::ErrorKind::InvalidData
+                        );
+                        assert!(!root.exists());
+                    }
+                },
             ),
             (
-                "conflict",
-                vec![
-                    Frame::TreeEntry {
-                        rel: "parent".into(),
-                        is_dir: false,
-                        size: 0,
-                        mtime_ms: 0,
-                    },
-                    Frame::TreeEntry {
-                        rel: "parent/child".into(),
-                        is_dir: true,
-                        size: 0,
-                        mtime_ms: 0,
-                    },
-                ],
+                "manifest_budget_and_depth_are_bounded_without_large_allocations",
+                || {
+                    let mut validator = TreeManifestValidator {
+                        entries: MAX_TREE_ENTRIES,
+                        ..Default::default()
+                    };
+                    assert!(validator
+                        .record(&ValidatedRelativePath::parse("next").unwrap(), false)
+                        .is_err());
+
+                    let mut validator = TreeManifestValidator {
+                        text_bytes: MAX_TREE_TEXT_BYTES,
+                        ..Default::default()
+                    };
+                    assert!(validator
+                        .record(&ValidatedRelativePath::parse("next").unwrap(), false)
+                        .is_err());
+
+                    let deep = std::iter::repeat_n("a", 513).collect::<Vec<_>>().join("/");
+                    assert!(TreeManifestValidator::default()
+                        .record(&ValidatedRelativePath::parse(&deep).unwrap(), true)
+                        .is_err());
+                },
             ),
-            (
-                "backslash",
-                vec![Frame::TreeEntry {
-                    rel: r"literal\name".into(),
-                    is_dir: false,
-                    size: 0,
-                    mtime_ms: 0,
-                }],
-            ),
-        ] {
-            let root = test_root(label);
-            let _ = std::fs::remove_dir_all(&root);
-            assert_eq!(
-                run(&root, frames).unwrap_err().kind(),
-                std::io::ErrorKind::InvalidData
-            );
-            assert!(!root.exists());
+        ];
+        for (case, check) in cases {
+            std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
         }
     }
 
@@ -392,81 +427,67 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
-    #[test]
-    fn manifest_budget_and_depth_are_bounded_without_large_allocations() {
-        let mut validator = TreeManifestValidator {
-            entries: MAX_TREE_ENTRIES,
-            ..Default::default()
-        };
-        assert!(validator
-            .record(&ValidatedRelativePath::parse("next").unwrap(), false)
-            .is_err());
-
-        let mut validator = TreeManifestValidator {
-            text_bytes: MAX_TREE_TEXT_BYTES,
-            ..Default::default()
-        };
-        assert!(validator
-            .record(&ValidatedRelativePath::parse("next").unwrap(), false)
-            .is_err());
-
-        let deep = std::iter::repeat_n("a", 513).collect::<Vec<_>>().join("/");
-        assert!(TreeManifestValidator::default()
-            .record(&ValidatedRelativePath::parse(&deep).unwrap(), true)
-            .is_err());
-    }
-
     #[cfg(unix)]
     #[test]
     fn link_like_destination_root_and_ancestor_are_rejected() {
-        use std::os::unix::fs::symlink;
+        let cases: [(&str, fn()); 2] = [
+            (
+                "link_like_destination_root_and_ancestor_are_rejected",
+                || {
+                    use std::os::unix::fs::symlink;
 
-        let base = test_root("links");
-        let victim = base.join("victim");
-        let root_link = base.join("root-link");
-        std::fs::create_dir_all(&victim).unwrap();
-        std::fs::write(victim.join("sentinel"), b"keep").unwrap();
-        symlink(&victim, &root_link).unwrap();
-        assert!(run(&root_link, vec![Frame::End]).is_err());
+                    let base = test_root("links");
+                    let victim = base.join("victim");
+                    let root_link = base.join("root-link");
+                    std::fs::create_dir_all(&victim).unwrap();
+                    std::fs::write(victim.join("sentinel"), b"keep").unwrap();
+                    symlink(&victim, &root_link).unwrap();
+                    assert!(run(&root_link, vec![Frame::End]).is_err());
 
-        let ancestor_link = base.join("ancestor-link");
-        symlink(&victim, &ancestor_link).unwrap();
-        assert!(run(&ancestor_link.join("new-root"), vec![Frame::End]).is_err());
-        assert_eq!(std::fs::read(victim.join("sentinel")).unwrap(), b"keep");
-        assert!(!victim.join("new-root").exists());
-        let _ = std::fs::remove_dir_all(base);
-    }
+                    let ancestor_link = base.join("ancestor-link");
+                    symlink(&victim, &ancestor_link).unwrap();
+                    assert!(run(&ancestor_link.join("new-root"), vec![Frame::End]).is_err());
+                    assert_eq!(std::fs::read(victim.join("sentinel")).unwrap(), b"keep");
+                    assert!(!victim.join("new-root").exists());
+                    let _ = std::fs::remove_dir_all(base);
+                },
+            ),
+            (
+                "later_link_like_destination_fails_before_any_file_is_published",
+                || {
+                    use std::os::unix::fs::symlink;
 
-    #[cfg(unix)]
-    #[test]
-    fn later_link_like_destination_fails_before_any_file_is_published() {
-        use std::os::unix::fs::symlink;
-
-        let base = test_root("late_link");
-        let root = base.join("root");
-        let victim = base.join("victim");
-        std::fs::create_dir_all(&root).unwrap();
-        std::fs::create_dir_all(&victim).unwrap();
-        symlink(&victim, root.join("link")).unwrap();
-        let frames = vec![
-            Frame::TreeEntry {
-                rel: "safe.txt".into(),
-                is_dir: false,
-                size: 3,
-                mtime_ms: 0,
-            },
-            Frame::Data(b"new".to_vec()),
-            Frame::TreeEntry {
-                rel: "link/escape.txt".into(),
-                is_dir: false,
-                size: 0,
-                mtime_ms: 0,
-            },
-            Frame::End,
+                    let base = test_root("late_link");
+                    let root = base.join("root");
+                    let victim = base.join("victim");
+                    std::fs::create_dir_all(&root).unwrap();
+                    std::fs::create_dir_all(&victim).unwrap();
+                    symlink(&victim, root.join("link")).unwrap();
+                    let frames = vec![
+                        Frame::TreeEntry {
+                            rel: "safe.txt".into(),
+                            is_dir: false,
+                            size: 3,
+                            mtime_ms: 0,
+                        },
+                        Frame::Data(b"new".to_vec()),
+                        Frame::TreeEntry {
+                            rel: "link/escape.txt".into(),
+                            is_dir: false,
+                            size: 0,
+                            mtime_ms: 0,
+                        },
+                        Frame::End,
+                    ];
+                    assert!(run(&root, frames).is_err());
+                    assert!(!root.join("safe.txt").exists());
+                    assert!(!victim.join("escape.txt").exists());
+                    let _ = std::fs::remove_dir_all(base);
+                },
+            ),
         ];
-        assert!(run(&root, frames).is_err());
-        assert!(!root.join("safe.txt").exists());
-        assert!(!victim.join("escape.txt").exists());
-        let _ = std::fs::remove_dir_all(base);
+        for (case, check) in cases {
+            std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
+        }
     }
 }

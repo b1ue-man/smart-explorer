@@ -124,6 +124,16 @@ mod tests {
         );
         // A new password is stored instead of the old one.
         assert!(!plan(Some(&old), &new, true).carry_secret);
+        // Case "new entry": without a previous connection nothing else changes.
+        assert_eq!(
+            plan(None, &new, false),
+            EditPlan {
+                moved_from: None,
+                carry_secret: false,
+                drop_unfitting_secret: false,
+            },
+            "new entry"
+        );
     }
 
     #[test]
@@ -153,18 +163,5 @@ mod tests {
         let agent = connection("nas.lan", AuthKind::SshAgent);
         let edit = plan(Some(&old), &agent, false);
         assert!(!edit.carry_secret && edit.drop_unfitting_secret);
-    }
-
-    #[test]
-    fn luecken_task_connection_edit_of_a_new_entry_changes_nothing_else() {
-        let new = connection("nas", AuthKind::Password);
-        assert_eq!(
-            plan(None, &new, false),
-            EditPlan {
-                moved_from: None,
-                carry_secret: false,
-                drop_unfitting_secret: false,
-            }
-        );
     }
 }

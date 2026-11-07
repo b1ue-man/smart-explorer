@@ -151,34 +151,44 @@ fn root_target() -> DeleteTarget {
 }
 
 #[test]
-fn cancellation_during_planning_does_not_mutate() {
-    let backend = TreeBackend::new(None);
-    let cancel = AtomicBool::new(false);
-    let report = remove_entry_controlled(&backend, &root_target(), &cancel, |progress| {
-        if progress.phase == RecursiveDeletePhase::Planning && progress.planned >= 2 {
-            cancel.store(true, Ordering::Release);
-        }
-    })
-    .unwrap();
-    assert_eq!(report.status, RecursiveDeleteStatus::Canceled);
-    assert_eq!(report.removed, 0);
-    assert!(backend.removed.lock().unwrap().is_empty());
-}
-
-#[test]
 fn cancellation_during_apply_reports_confirmed_mutations() {
-    let backend = TreeBackend::new(None);
-    let cancel = AtomicBool::new(false);
-    let report = remove_entry_controlled(&backend, &root_target(), &cancel, |progress| {
-        if progress.phase == RecursiveDeletePhase::Applying && progress.removed == 1 {
-            cancel.store(true, Ordering::Release);
-        }
-    })
-    .unwrap();
-    assert_eq!(report.status, RecursiveDeleteStatus::Canceled);
-    assert_eq!(report.planned, 3);
-    assert_eq!(report.removed, 1);
-    assert_eq!(&*backend.removed.lock().unwrap(), &["/root/a"]);
+    let cases: [(&str, fn()); 2] = [
+        (
+            "cancellation_during_apply_reports_confirmed_mutations",
+            || {
+                let backend = TreeBackend::new(None);
+                let cancel = AtomicBool::new(false);
+                let report =
+                    remove_entry_controlled(&backend, &root_target(), &cancel, |progress| {
+                        if progress.phase == RecursiveDeletePhase::Applying && progress.removed == 1
+                        {
+                            cancel.store(true, Ordering::Release);
+                        }
+                    })
+                    .unwrap();
+                assert_eq!(report.status, RecursiveDeleteStatus::Canceled);
+                assert_eq!(report.planned, 3);
+                assert_eq!(report.removed, 1);
+                assert_eq!(&*backend.removed.lock().unwrap(), &["/root/a"]);
+            },
+        ),
+        ("cancellation_during_planning_does_not_mutate", || {
+            let backend = TreeBackend::new(None);
+            let cancel = AtomicBool::new(false);
+            let report = remove_entry_controlled(&backend, &root_target(), &cancel, |progress| {
+                if progress.phase == RecursiveDeletePhase::Planning && progress.planned >= 2 {
+                    cancel.store(true, Ordering::Release);
+                }
+            })
+            .unwrap();
+            assert_eq!(report.status, RecursiveDeleteStatus::Canceled);
+            assert_eq!(report.removed, 0);
+            assert!(backend.removed.lock().unwrap().is_empty());
+        }),
+    ];
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
+    }
 }
 
 #[test]

@@ -161,38 +161,52 @@ fn folder(path: &str) -> DeleteTarget {
 
 #[test]
 fn delete_speed_task_folder_goes_to_the_backend_tree_delete_in_one_call() {
-    let backend = MemoryTree::new(true);
-    let cancel = AtomicBool::new(false);
-    let mut seen = Vec::new();
-    let report = remove_entry_controlled(&backend, &folder("/root"), &cancel, |progress| {
-        seen.push(progress.removed)
-    })
-    .unwrap();
-    assert_eq!(report.status, RecursiveDeleteStatus::Complete);
-    assert_eq!((report.planned, report.removed), (7, 7));
-    assert_eq!(&*backend.calls.tree.lock().unwrap(), &["/root"]);
-    assert_eq!(backend.calls.stat.load(Ordering::Relaxed), 0);
-    assert!(backend.calls.list.lock().unwrap().is_empty());
-    assert!(backend.removed().is_empty());
-    assert_eq!(seen, vec![7]);
-}
-
-#[test]
-fn delete_speed_task_without_tree_delete_keeps_the_walk() {
-    let backend = MemoryTree::new(false);
-    let cancel = AtomicBool::new(false);
-    let report = remove_entry_controlled(&backend, &folder("/root/sub"), &cancel, |_| {}).unwrap();
-    assert_eq!(report.status, RecursiveDeleteStatus::Complete);
-    assert!(backend.calls.tree.lock().unwrap().is_empty());
-    assert_eq!(
-        backend.removed(),
-        [
-            "/root/sub/b.txt",
-            "/root/sub/deep/c.txt",
-            "/root/sub/deep",
-            "/root/sub"
-        ]
-    );
+    let cases: [(&str, fn()); 2] = [
+        (
+            "delete_speed_task_folder_goes_to_the_backend_tree_delete_in_one_call",
+            || {
+                let backend = MemoryTree::new(true);
+                let cancel = AtomicBool::new(false);
+                let mut seen = Vec::new();
+                let report =
+                    remove_entry_controlled(&backend, &folder("/root"), &cancel, |progress| {
+                        seen.push(progress.removed)
+                    })
+                    .unwrap();
+                assert_eq!(report.status, RecursiveDeleteStatus::Complete);
+                assert_eq!((report.planned, report.removed), (7, 7));
+                assert_eq!(&*backend.calls.tree.lock().unwrap(), &["/root"]);
+                assert_eq!(backend.calls.stat.load(Ordering::Relaxed), 0);
+                assert!(backend.calls.list.lock().unwrap().is_empty());
+                assert!(backend.removed().is_empty());
+                assert_eq!(seen, vec![7]);
+            },
+        ),
+        (
+            "delete_speed_task_without_tree_delete_keeps_the_walk",
+            || {
+                let backend = MemoryTree::new(false);
+                let cancel = AtomicBool::new(false);
+                let report =
+                    remove_entry_controlled(&backend, &folder("/root/sub"), &cancel, |_| {})
+                        .unwrap();
+                assert_eq!(report.status, RecursiveDeleteStatus::Complete);
+                assert!(backend.calls.tree.lock().unwrap().is_empty());
+                assert_eq!(
+                    backend.removed(),
+                    [
+                        "/root/sub/b.txt",
+                        "/root/sub/deep/c.txt",
+                        "/root/sub/deep",
+                        "/root/sub"
+                    ]
+                );
+            },
+        ),
+    ];
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
+    }
 }
 
 #[test]
@@ -255,44 +269,57 @@ fn delete_speed_task_listed_tree_counts_a_partial_portion_and_stops() {
 
 #[test]
 fn delete_speed_task_listed_tree_refuses_a_link_root_and_honours_cancel() {
-    let backend = MemoryTree::new(false);
-    let cancel = AtomicBool::new(false);
-    let refused = remove_tree_listed(&backend, "/root/link", &cancel, &mut |_| {}, |_| {
-        panic!("a link root must not be entered")
-    })
-    .unwrap_err();
-    assert_eq!(refused.error.kind(), io::ErrorKind::InvalidInput);
-    assert_eq!(refused.removed, 0);
+    let cases: [(&str, fn()); 2] = [
+        (
+            "delete_speed_task_listed_tree_refuses_a_link_root_and_honours_cancel",
+            || {
+                let backend = MemoryTree::new(false);
+                let cancel = AtomicBool::new(false);
+                let refused =
+                    remove_tree_listed(&backend, "/root/link", &cancel, &mut |_| {}, |_| {
+                        panic!("a link root must not be entered")
+                    })
+                    .unwrap_err();
+                assert_eq!(refused.error.kind(), io::ErrorKind::InvalidInput);
+                assert_eq!(refused.removed, 0);
 
-    cancel.store(true, Ordering::Release);
-    let canceled = remove_tree_listed(&backend, "/root", &cancel, &mut |_| {}, |_| {
-        panic!("a canceled run must not remove anything")
-    })
-    .unwrap();
-    assert_eq!(canceled.status, RecursiveDeleteStatus::Canceled);
-    assert_eq!(canceled.removed, 0);
-    assert!(backend.removed().is_empty());
-}
-
-#[test]
-fn delete_speed_task_listed_tree_ends_canceled_when_a_slow_remover_stops() {
-    let backend = MemoryTree::new(false);
-    let cancel = AtomicBool::new(false);
-    let report = remove_tree_listed(&backend, "/root", &cancel, &mut |_| {}, |leaves| {
-        leaves
-            .iter()
-            .map(|leaf| {
-                if cancel.load(Ordering::Acquire) {
-                    return Err(io::ErrorKind::Interrupted.into());
-                }
-                // The user cancels while the first leaf is being removed.
                 cancel.store(true, Ordering::Release);
-                backend.remove_file(&leaf.path)
-            })
-            .collect()
-    })
-    .unwrap();
-    assert_eq!(report.status, RecursiveDeleteStatus::Canceled);
-    assert_eq!(report.removed, 1);
-    assert_eq!(backend.removed(), ["/root/sub/deep/c.txt"]);
+                let canceled = remove_tree_listed(&backend, "/root", &cancel, &mut |_| {}, |_| {
+                    panic!("a canceled run must not remove anything")
+                })
+                .unwrap();
+                assert_eq!(canceled.status, RecursiveDeleteStatus::Canceled);
+                assert_eq!(canceled.removed, 0);
+                assert!(backend.removed().is_empty());
+            },
+        ),
+        (
+            "delete_speed_task_listed_tree_ends_canceled_when_a_slow_remover_stops",
+            || {
+                let backend = MemoryTree::new(false);
+                let cancel = AtomicBool::new(false);
+                let report =
+                    remove_tree_listed(&backend, "/root", &cancel, &mut |_| {}, |leaves| {
+                        leaves
+                            .iter()
+                            .map(|leaf| {
+                                if cancel.load(Ordering::Acquire) {
+                                    return Err(io::ErrorKind::Interrupted.into());
+                                }
+                                // The user cancels while the first leaf is being removed.
+                                cancel.store(true, Ordering::Release);
+                                backend.remove_file(&leaf.path)
+                            })
+                            .collect()
+                    })
+                    .unwrap();
+                assert_eq!(report.status, RecursiveDeleteStatus::Canceled);
+                assert_eq!(report.removed, 1);
+                assert_eq!(backend.removed(), ["/root/sub/deep/c.txt"]);
+            },
+        ),
+    ];
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
+    }
 }

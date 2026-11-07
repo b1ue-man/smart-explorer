@@ -162,20 +162,22 @@ mod tests {
         let other = connection("nas", "/srv/fotos");
         let names = jobs_left_behind(JOBS.into_iter(), &[saved, other], &old, &new);
         assert!(names.is_empty(), "{names:?}");
-    }
-
-    #[test]
-    fn luecken_task_connection_move_of_the_root_only_keeps_the_sync_setups() {
-        let previous = connection("nas", "/srv");
-        let saved = connection("nas", "/backup");
-        let old = RemovedEndpointScope::for_saved_connection(&previous);
-        let new = RemovedEndpointScope::for_saved_connection(&saved);
+        // Case "root only": moving only the start path keeps the sync setups.
+        let root_previous = connection("nas", "/srv");
+        let root_saved = connection("nas", "/backup");
+        let root_old = RemovedEndpointScope::for_saved_connection(&root_previous);
+        let root_new = RemovedEndpointScope::for_saved_connection(&root_saved);
         // Sync endpoints carry the address without the start path.
-        assert_eq!(old.prefixes, new.prefixes);
-        let names = jobs_left_behind(JOBS.into_iter(), std::slice::from_ref(&saved), &old, &new);
-        assert!(names.is_empty(), "{names:?}");
+        assert_eq!(root_old.prefixes, root_new.prefixes, "root only");
+        let names = jobs_left_behind(
+            JOBS.into_iter(),
+            std::slice::from_ref(&root_saved),
+            &root_old,
+            &root_new,
+        );
+        assert!(names.is_empty(), "root only: {names:?}");
         // Drives are bound to the whole account, start path included.
-        assert_ne!(old.mounts, new.mounts);
+        assert_ne!(root_old.mounts, root_new.mounts, "root only: mounts");
     }
 
     #[test]

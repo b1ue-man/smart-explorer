@@ -10,6 +10,16 @@ use fixtures::*;
 
 #[test]
 fn batches_family_x11_combo_popup_keeps_identity_after_owner_focus_ack() {
+    let cases: [fn(); 2] = [
+        batches_family_x11_combo_popup_keeps_identity_after_owner_focus_ack_case,
+        batches_family_x11_nested_menus_use_recursive_owner_focus,
+    ];
+    for case in cases {
+        case();
+    }
+}
+
+fn batches_family_x11_combo_popup_keeps_identity_after_owner_focus_ack_case() {
     for input_focus in [H, M, 77] {
         for events in [
             click(),
@@ -79,7 +89,6 @@ fn batches_family_x11_combo_popup_keeps_identity_after_owner_focus_ack() {
     }
 }
 
-#[test]
 fn batches_family_x11_nested_menus_use_recursive_owner_focus() {
     for actual in [H, M, S, 77] {
         let (mut host, facts, rights, mut viewer) = fixture(

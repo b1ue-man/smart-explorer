@@ -48,46 +48,57 @@ fn items(collected: &LocalKeyed) -> Items {
 
 #[test]
 fn abgleich_task_walk_lists_the_cache_folder_as_a_protected_omission() {
-    let _turn = hash_cache::test_turn();
-    let data = tempfile::tempdir().unwrap();
-    let cache = home(data.path());
-    hash_cache::configure(Some(cache));
-    let (entries, omissions) = items(&walked(data.path()));
-    let folder = "home/.cache/se-agent";
-    assert!(
-        entries.contains(&(folder.to_string(), true)),
-        "the folder is a row, as its parent's listing shows it: {entries:?}"
-    );
-    assert!(
-        omissions.contains(&(folder.to_string(), omission::UNREADABLE)),
-        "and an omission of the same path: {omissions:?}"
-    );
-    assert!(
-        entries
-            .iter()
-            .all(|(rel, _)| !rel.starts_with("home/.cache/se-agent/")),
-        "nothing inside it was walked: {entries:?}"
-    );
-    assert!(entries.contains(&("home/notes.txt".to_string(), false)));
-    hash_cache::configure(None);
-}
-
-#[test]
-fn abgleich_task_walk_walks_a_folder_of_the_same_name_that_is_not_the_cache_folder() {
-    let _turn = hash_cache::test_turn();
-    let data = tempfile::tempdir().unwrap();
-    let cache = home(data.path());
-    write(&data.path().join("other/.cache/se-agent/keep.txt"), b"abc");
-    hash_cache::configure(Some(cache));
-    let (entries, omissions) = items(&walked(data.path()));
-    assert!(entries.contains(&("other/.cache/se-agent/keep.txt".to_string(), false)));
-    assert!(
-        omissions
-            .iter()
-            .all(|(rel, _)| rel != "other/.cache/se-agent"),
-        "{omissions:?}"
-    );
-    hash_cache::configure(None);
+    let cases: [(&str, fn()); 2] = [
+        (
+            "abgleich_task_walk_lists_the_cache_folder_as_a_protected_omission",
+            || {
+                let _turn = hash_cache::test_turn();
+                let data = tempfile::tempdir().unwrap();
+                let cache = home(data.path());
+                hash_cache::configure(Some(cache));
+                let (entries, omissions) = items(&walked(data.path()));
+                let folder = "home/.cache/se-agent";
+                assert!(
+                    entries.contains(&(folder.to_string(), true)),
+                    "the folder is a row, as its parent's listing shows it: {entries:?}"
+                );
+                assert!(
+                    omissions.contains(&(folder.to_string(), omission::UNREADABLE)),
+                    "and an omission of the same path: {omissions:?}"
+                );
+                assert!(
+                    entries
+                        .iter()
+                        .all(|(rel, _)| !rel.starts_with("home/.cache/se-agent/")),
+                    "nothing inside it was walked: {entries:?}"
+                );
+                assert!(entries.contains(&("home/notes.txt".to_string(), false)));
+                hash_cache::configure(None);
+            },
+        ),
+        (
+            "abgleich_task_walk_walks_a_folder_of_the_same_name_that_is_not_the_cache_folder",
+            || {
+                let _turn = hash_cache::test_turn();
+                let data = tempfile::tempdir().unwrap();
+                let cache = home(data.path());
+                write(&data.path().join("other/.cache/se-agent/keep.txt"), b"abc");
+                hash_cache::configure(Some(cache));
+                let (entries, omissions) = items(&walked(data.path()));
+                assert!(entries.contains(&("other/.cache/se-agent/keep.txt".to_string(), false)));
+                assert!(
+                    omissions
+                        .iter()
+                        .all(|(rel, _)| rel != "other/.cache/se-agent"),
+                    "{omissions:?}"
+                );
+                hash_cache::configure(None);
+            },
+        ),
+    ];
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
+    }
 }
 
 #[test]

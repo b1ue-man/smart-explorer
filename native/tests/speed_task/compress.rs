@@ -171,7 +171,7 @@ macro_rules! lz4_cases {
     ($($name:ident => ($way:literal, $text:literal)),* $(,)?) => {
         $(
             #[test]
-            #[ignore = "needs the stage's host pair and the slow link"]
+            #[ignore = "needs the stage's host pair and the slow link; Suite rechte-desktop-tresore-task"]
             fn $name() {
                 let case = Case::new(stringify!($name), $way, "down", "slow");
                 guarded(case.name, || run_lz4(case, $text));
@@ -187,7 +187,7 @@ lz4_cases! {
 }
 
 #[test]
-#[ignore = "needs the stage's host pair and the lossy link"]
+#[ignore = "needs the stage's host pair and the lossy link; Suite rechte-desktop-tresore-task"]
 fn speed_task_share_cc_bbr3_vs_cubic_loss() {
     let case = Case::new(
         "speed_task_share_cc_bbr3_vs_cubic_loss",
@@ -199,7 +199,7 @@ fn speed_task_share_cc_bbr3_vs_cubic_loss() {
 }
 
 #[test]
-#[ignore = "needs the stage's host pair and the wan link"]
+#[ignore = "needs the stage's host pair and the wan link; Suite rechte-desktop-tresore-task"]
 fn speed_task_share_cc_bbr3_vs_cubic_wan() {
     let case = Case::new(
         "speed_task_share_cc_bbr3_vs_cubic_wan",

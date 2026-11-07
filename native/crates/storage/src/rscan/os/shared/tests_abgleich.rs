@@ -50,61 +50,83 @@ fn abgleich_task_whole_tree_rows_equal_the_folder_walk_rows() {
 
 #[test]
 fn abgleich_task_unsupported_whole_tree_falls_back_to_the_folder_walk() {
-    let backend = TreeBackend::new(parity_listings(), Walk::Unsupported, 2);
-    let scanned = scan(backend.clone(), "/r", None, None);
-    assert_eq!(
-        count(&backend.walk_requests),
-        0,
-        "no whole-tree request when the capability is missing"
-    );
-    assert!(count(&backend.lists) > 0);
-    assert_eq!(scanned.rows.len(), 9);
-    assert!(scanned.errors.is_empty());
-}
-
-#[test]
-fn abgleich_task_whole_tree_failure_before_any_row_falls_back() {
-    let backend = TreeBackend::new(parity_listings(), Walk::FailBefore, 2);
-    let scanned = scan(backend.clone(), "/r", None, None);
-    assert!(count(&backend.lists) > 0);
-    assert_eq!(scanned.rows.len(), 9);
-    assert!(scanned.errors.is_empty());
-}
-
-/// A side that sends an entry without the requested metadata before any row
-/// makes the view fall back to the folder walk, and the scan is not stopped.
-#[test]
-fn abgleich_task_entry_without_metadata_falls_back_without_stopping_the_scan() {
-    let mut items = parity_items();
-    items[0] = HashWalkItem::Entry(HashWalkEntry {
-        rel: "a.txt".to_string(),
-        is_dir: false,
-        size: 3,
-        mtime_ms: 1_003,
-        digest: None,
-        meta: None,
-    });
-    let backend = TreeBackend::new(parity_listings(), Walk::Items(items), 2);
-    let scanned = scan(backend.clone(), "/r", None, None);
-    assert_eq!(
-        count(&backend.walk_requests),
-        1,
-        "the whole-tree request was made"
-    );
-    assert!(
-        count(&backend.lists) > 0,
-        "the folder walk lists after the fallback"
-    );
-    assert_eq!(
-        scanned.rows.len(),
-        9,
-        "root plus eight rows, as in the folder walk"
-    );
-    assert!(
-        scanned.errors.is_empty(),
-        "no stop error: {:?}",
-        scanned.errors
-    );
+    let cases: [(&str, fn()); 4] = [
+        (
+            "abgleich_task_unsupported_whole_tree_falls_back_to_the_folder_walk",
+            || {
+                let backend = TreeBackend::new(parity_listings(), Walk::Unsupported, 2);
+                let scanned = scan(backend.clone(), "/r", None, None);
+                assert_eq!(
+                    count(&backend.walk_requests),
+                    0,
+                    "no whole-tree request when the capability is missing"
+                );
+                assert!(count(&backend.lists) > 0);
+                assert_eq!(scanned.rows.len(), 9);
+                assert!(scanned.errors.is_empty());
+            },
+        ),
+        (
+            "abgleich_task_entry_without_metadata_falls_back_without_stopping_the_scan",
+            || {
+                let mut items = parity_items();
+                items[0] = HashWalkItem::Entry(HashWalkEntry {
+                    rel: "a.txt".to_string(),
+                    is_dir: false,
+                    size: 3,
+                    mtime_ms: 1_003,
+                    digest: None,
+                    meta: None,
+                });
+                let backend = TreeBackend::new(parity_listings(), Walk::Items(items), 2);
+                let scanned = scan(backend.clone(), "/r", None, None);
+                assert_eq!(
+                    count(&backend.walk_requests),
+                    1,
+                    "the whole-tree request was made"
+                );
+                assert!(
+                    count(&backend.lists) > 0,
+                    "the folder walk lists after the fallback"
+                );
+                assert_eq!(
+                    scanned.rows.len(),
+                    9,
+                    "root plus eight rows, as in the folder walk"
+                );
+                assert!(
+                    scanned.errors.is_empty(),
+                    "no stop error: {:?}",
+                    scanned.errors
+                );
+            },
+        ),
+        ("abgleich_task_filtered_view_keeps_the_folder_walk", || {
+            let backend = TreeBackend::new(parity_listings(), Walk::Items(parity_items()), 2);
+            let retention: RetentionHandle = Arc::new(TxtOnly);
+            let scanned = scan(backend.clone(), "/r", None, Some(retention));
+            assert_eq!(
+                count(&backend.walk_requests),
+                0,
+                "no whole-tree request with a filter"
+            );
+            assert!(count(&backend.lists) > 0);
+            assert!(scanned.rows.iter().any(|row| row.name.as_ref() == "a.txt"));
+        }),
+        (
+            "abgleich_task_whole_tree_failure_before_any_row_falls_back",
+            || {
+                let backend = TreeBackend::new(parity_listings(), Walk::FailBefore, 2);
+                let scanned = scan(backend.clone(), "/r", None, None);
+                assert!(count(&backend.lists) > 0);
+                assert_eq!(scanned.rows.len(), 9);
+                assert!(scanned.errors.is_empty());
+            },
+        ),
+    ];
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
+    }
 }
 
 #[test]
@@ -214,20 +236,6 @@ impl ScanRetention for TxtOnly {
     fn descend(&self, _directory: &FileEntry) -> bool {
         true
     }
-}
-
-#[test]
-fn abgleich_task_filtered_view_keeps_the_folder_walk() {
-    let backend = TreeBackend::new(parity_listings(), Walk::Items(parity_items()), 2);
-    let retention: RetentionHandle = Arc::new(TxtOnly);
-    let scanned = scan(backend.clone(), "/r", None, Some(retention));
-    assert_eq!(
-        count(&backend.walk_requests),
-        0,
-        "no whole-tree request with a filter"
-    );
-    assert!(count(&backend.lists) > 0);
-    assert!(scanned.rows.iter().any(|row| row.name.as_ref() == "a.txt"));
 }
 
 #[test]

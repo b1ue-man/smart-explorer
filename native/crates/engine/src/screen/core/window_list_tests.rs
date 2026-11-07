@@ -31,6 +31,16 @@ fn window(index: usize) -> WindowEntry {
 /// the frame holds them.
 #[test]
 fn screen_task_window_list_keeps_more_than_4096_entries() {
+    let cases: [fn(); 2] = [
+        screen_task_window_list_keeps_more_than_4096_entries_case,
+        screen_task_window_list_frame_bytes_bound_the_list,
+    ];
+    for case in cases {
+        case();
+    }
+}
+
+fn screen_task_window_list_keeps_more_than_4096_entries_case() {
     let list = WindowList {
         windows: (0..3000).map(window).collect(),
         apps: (0..3000).map(app).collect(),
@@ -52,7 +62,6 @@ fn screen_task_window_list_keeps_more_than_4096_entries() {
 
 /// A list larger than the frame is bounded by the frame's bytes, not by a
 /// count; a foreign peer's oversized payload stays refused by the frame.
-#[test]
 fn screen_task_window_list_frame_bytes_bound_the_list() {
     let huge = WindowList {
         windows: Vec::new(),

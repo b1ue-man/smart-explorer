@@ -56,33 +56,37 @@ fn batches_p13_manifest_requires_exact_hash_path_and_closed_schema() {
             "{field}"
         );
     }
-}
 
-#[test]
-fn batches_p13_manifest_allowlists_reject_duplicates_and_unlisted_starter() {
-    let valid = manifest();
-    let mut changed = valid.clone();
-    changed
+    // Allowlist cases (the former allowlist test): duplicates and an unlisted starter.
+    let mut duplicate_launcher = valid.clone();
+    duplicate_launcher
         .allowed_launcher_hashes
-        .push(changed.launcher_sha256.clone());
-    assert_eq!(
-        changed.validate("se").unwrap_err(),
-        "runtime_manifest_duplicate_or_invalid_launcher"
-    );
-    changed = valid.clone();
-    changed.allowed_launcher_hashes = vec!["e".repeat(64)];
-    assert_eq!(
-        changed.validate("se").unwrap_err(),
-        "runtime_manifest_current_launcher_not_allowed"
-    );
-    changed = valid;
-    changed
+        .push(duplicate_launcher.launcher_sha256.clone());
+    let mut unlisted_starter = valid.clone();
+    unlisted_starter.allowed_launcher_hashes = vec!["e".repeat(64)];
+    let mut duplicate_contract = valid.clone();
+    duplicate_contract
         .supported_runtimes
-        .push(contract(&changed.runtime_sha256));
-    assert_eq!(
-        changed.validate("se").unwrap_err(),
-        "runtime_manifest_duplicate_or_unimplemented_contract"
-    );
+        .push(contract(&duplicate_contract.runtime_sha256));
+    for (case, changed, expected) in [
+        (
+            "duplicate launcher hash",
+            duplicate_launcher,
+            "runtime_manifest_duplicate_or_invalid_launcher",
+        ),
+        (
+            "unlisted starter",
+            unlisted_starter,
+            "runtime_manifest_current_launcher_not_allowed",
+        ),
+        (
+            "duplicate contract",
+            duplicate_contract,
+            "runtime_manifest_duplicate_or_unimplemented_contract",
+        ),
+    ] {
+        assert_eq!(changed.validate("se").unwrap_err(), expected, "{case}");
+    }
 }
 
 #[test]

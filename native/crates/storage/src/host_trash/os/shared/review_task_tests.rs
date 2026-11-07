@@ -86,74 +86,88 @@ fn hop<T>(f: &Fixture, stage: &str, result: io::Result<T>) -> io::Result<T> {
 
 #[test]
 fn review_task_host_trash_intent_precedes_capture_and_survives_restart() -> io::Result<()> {
-    let f = fixture()?;
-    let store = store(&f)?;
-    hop(&f, "intent-persisted", store.persist(&f.record))?;
-    assert_eq!(state(&store, &f.record.id)?, EntryState::OriginalPresent);
-    let slot = DirectoryHandle::checked_quarantine_slot(OsStr::new(&f.record.held))?;
-    let captured = hop(
-        &f,
-        "first-held-capture",
-        f.parent
-            .quarantine_regular_child_in(OsStr::new("copy"), &f.file, &slot),
-    )?;
-    assert_eq!(captured.retained_location().file_name(), Some(slot.name()));
-    drop(captured);
-    drop(store);
-    let reopened = hop(
-        &f,
-        "intent-reopened",
-        Store::at(&f.temp.path().join("records")),
-    )?;
-    assert_eq!(state(&reopened, &f.record.id)?, EntryState::Held);
-    hop(&f, "before-restart-restore", Ok(()))?;
-    assert_eq!(
-        restore::restore_in(&reopened, &reopened.load(&f.record.id)?)?,
-        RestoreOutcome::Restored
-    );
-    hop(&f, "after-restart-restore", Ok(()))?;
-    assert_eq!(std::fs::read(f.root.join("copy"))?, b"same");
-    Ok(())
-}
-
-#[test]
-fn review_task_host_trash_restore_restart_hop_has_durable_mapping() -> io::Result<()> {
-    let f = fixture()?;
-    let store = store(&f)?;
-    hop(&f, "before-capture", Ok(()))?;
-    assert_eq!(
-        platform::capture(&store, &f.record, &f.parent, &f.file)?,
-        RecycleOutcome::Recycled
-    );
-    let held = hop(
-        &f,
-        "first-held-open",
-        f.parent.open_regular_child(OsStr::new(&f.record.held)),
-    )?;
-    let next = DirectoryHandle::checked_quarantine_slot(OsStr::new(&f.record.restore_held))?;
-    let captured = hop(
-        &f,
-        "durable-second-slot-hop",
-        f.parent
-            .quarantine_regular_child_in(OsStr::new(&f.record.held), &held, &next),
-    )?;
-    drop(captured);
-    drop(held);
-    drop(store);
-    let reopened = hop(
-        &f,
-        "second-slot-intent-reopened",
-        Store::at(&f.temp.path().join("records")),
-    )?;
-    assert_eq!(state(&reopened, &f.record.id)?, EntryState::RestorePending);
-    hop(&f, "before-second-slot-restore", Ok(()))?;
-    assert_eq!(
-        restore::restore_in(&reopened, &reopened.load(&f.record.id)?)?,
-        RestoreOutcome::Restored
-    );
-    hop(&f, "after-second-slot-restore", Ok(()))?;
-    assert_eq!(std::fs::read(f.root.join("copy"))?, b"same");
-    Ok(())
+    let cases: [(&str, fn() -> std::io::Result<()>); 2] = [
+        (
+            "review_task_host_trash_intent_precedes_capture_and_survives_restart",
+            || -> std::io::Result<()> {
+                let f = fixture()?;
+                let store = store(&f)?;
+                hop(&f, "intent-persisted", store.persist(&f.record))?;
+                assert_eq!(state(&store, &f.record.id)?, EntryState::OriginalPresent);
+                let slot = DirectoryHandle::checked_quarantine_slot(OsStr::new(&f.record.held))?;
+                let captured = hop(
+                    &f,
+                    "first-held-capture",
+                    f.parent
+                        .quarantine_regular_child_in(OsStr::new("copy"), &f.file, &slot),
+                )?;
+                assert_eq!(captured.retained_location().file_name(), Some(slot.name()));
+                drop(captured);
+                drop(store);
+                let reopened = hop(
+                    &f,
+                    "intent-reopened",
+                    Store::at(&f.temp.path().join("records")),
+                )?;
+                assert_eq!(state(&reopened, &f.record.id)?, EntryState::Held);
+                hop(&f, "before-restart-restore", Ok(()))?;
+                assert_eq!(
+                    restore::restore_in(&reopened, &reopened.load(&f.record.id)?)?,
+                    RestoreOutcome::Restored
+                );
+                hop(&f, "after-restart-restore", Ok(()))?;
+                assert_eq!(std::fs::read(f.root.join("copy"))?, b"same");
+                Ok(())
+            },
+        ),
+        (
+            "review_task_host_trash_restore_restart_hop_has_durable_mapping",
+            || -> std::io::Result<()> {
+                let f = fixture()?;
+                let store = store(&f)?;
+                hop(&f, "before-capture", Ok(()))?;
+                assert_eq!(
+                    platform::capture(&store, &f.record, &f.parent, &f.file)?,
+                    RecycleOutcome::Recycled
+                );
+                let held = hop(
+                    &f,
+                    "first-held-open",
+                    f.parent.open_regular_child(OsStr::new(&f.record.held)),
+                )?;
+                let next =
+                    DirectoryHandle::checked_quarantine_slot(OsStr::new(&f.record.restore_held))?;
+                let captured = hop(
+                    &f,
+                    "durable-second-slot-hop",
+                    f.parent
+                        .quarantine_regular_child_in(OsStr::new(&f.record.held), &held, &next),
+                )?;
+                drop(captured);
+                drop(held);
+                drop(store);
+                let reopened = hop(
+                    &f,
+                    "second-slot-intent-reopened",
+                    Store::at(&f.temp.path().join("records")),
+                )?;
+                assert_eq!(state(&reopened, &f.record.id)?, EntryState::RestorePending);
+                hop(&f, "before-second-slot-restore", Ok(()))?;
+                assert_eq!(
+                    restore::restore_in(&reopened, &reopened.load(&f.record.id)?)?,
+                    RestoreOutcome::Restored
+                );
+                hop(&f, "after-second-slot-restore", Ok(()))?;
+                assert_eq!(std::fs::read(f.root.join("copy"))?, b"same");
+                Ok(())
+            },
+        ),
+    ];
+    for (case, check) in cases {
+        std::panic::catch_unwind(check)
+            .unwrap_or_else(|_| panic!("{case}"))
+            .unwrap_or_else(|error| panic!("{case}: {error}"));
+    }
 }
 
 #[test]
@@ -273,58 +287,71 @@ fn review_task_host_trash_link_source_and_invalid_slots_are_refused() -> io::Res
 #[test]
 fn review_task_host_trash_private_records_and_partial_intents_keep_other_entries() -> io::Result<()>
 {
-    let f = fixture()?;
-    let store = store(&f)?;
-    platform::capture(&store, &f.record, &f.parent, &f.file)?;
-    let broken = "00000000000000000000000000000001";
-    let mut file = store
-        .area
-        .directory
-        .create_file_new(OsStr::new(&format!("{broken}.json")))?;
-    file.write_all(b"{")?;
-    file.sync_all()?;
-    drop(file);
-    assert_eq!(state(&store, broken)?, EntryState::Problem);
-    assert_eq!(state(&store, &f.record.id)?, EntryState::Held);
-    let alias = f.temp.path().join("record-alias");
-    std::fs::hard_link(
-        store.area.path.join(format!("{}.json", f.record.id)),
-        &alias,
-    )?;
-    assert!(
-        store.load(&f.record.id).is_err(),
-        "hardlinked recovery metadata must not be read"
-    );
-    Ok(())
-}
-
-#[test]
-fn review_task_host_trash_catalog_pages_without_dropping_intents() -> io::Result<()> {
-    let f = fixture()?;
-    let store = store(&f)?;
-    for id in 1..=130 {
-        let name = format!("{id:032x}.json");
-        let mut file = store.area.directory.create_file_new(OsStr::new(&name))?;
-        file.write_all(b"{")?;
+    let cases: [(&str, fn() -> std::io::Result<()>); 2] = [
+        (
+            "review_task_host_trash_private_records_and_partial_intents_keep_other_entries",
+            || -> std::io::Result<()> {
+                let f = fixture()?;
+                let store = store(&f)?;
+                platform::capture(&store, &f.record, &f.parent, &f.file)?;
+                let broken = "00000000000000000000000000000001";
+                let mut file = store
+                    .area
+                    .directory
+                    .create_file_new(OsStr::new(&format!("{broken}.json")))?;
+                file.write_all(b"{")?;
+                file.sync_all()?;
+                drop(file);
+                assert_eq!(state(&store, broken)?, EntryState::Problem);
+                assert_eq!(state(&store, &f.record.id)?, EntryState::Held);
+                let alias = f.temp.path().join("record-alias");
+                std::fs::hard_link(
+                    store.area.path.join(format!("{}.json", f.record.id)),
+                    &alias,
+                )?;
+                assert!(
+                    store.load(&f.record.id).is_err(),
+                    "hardlinked recovery metadata must not be read"
+                );
+                Ok(())
+            },
+        ),
+        (
+            "review_task_host_trash_catalog_pages_without_dropping_intents",
+            || -> std::io::Result<()> {
+                let f = fixture()?;
+                let store = store(&f)?;
+                for id in 1..=130 {
+                    let name = format!("{id:032x}.json");
+                    let mut file = store.area.directory.create_file_new(OsStr::new(&name))?;
+                    file.write_all(b"{")?;
+                }
+                let first = catalog::list_in(&store, None)?;
+                let second = catalog::list_in(&store, first.next.as_deref())?;
+                let third = catalog::list_in(&store, second.next.as_deref())?;
+                assert_eq!(first.entries.len(), 64);
+                assert_eq!(second.entries.len(), 64);
+                assert_eq!(third.entries.len(), 2);
+                assert!(third.next.is_none());
+                let mut ids = first
+                    .entries
+                    .into_iter()
+                    .chain(second.entries)
+                    .chain(third.entries)
+                    .map(|entry| entry.id)
+                    .collect::<Vec<_>>();
+                ids.sort();
+                ids.dedup();
+                assert_eq!(ids.len(), 130);
+                Ok(())
+            },
+        ),
+    ];
+    for (case, check) in cases {
+        std::panic::catch_unwind(check)
+            .unwrap_or_else(|_| panic!("{case}"))
+            .unwrap_or_else(|error| panic!("{case}: {error}"));
     }
-    let first = catalog::list_in(&store, None)?;
-    let second = catalog::list_in(&store, first.next.as_deref())?;
-    let third = catalog::list_in(&store, second.next.as_deref())?;
-    assert_eq!(first.entries.len(), 64);
-    assert_eq!(second.entries.len(), 64);
-    assert_eq!(third.entries.len(), 2);
-    assert!(third.next.is_none());
-    let mut ids = first
-        .entries
-        .into_iter()
-        .chain(second.entries)
-        .chain(third.entries)
-        .map(|entry| entry.id)
-        .collect::<Vec<_>>();
-    ids.sort();
-    ids.dedup();
-    assert_eq!(ids.len(), 130);
-    Ok(())
 }
 
 #[test]

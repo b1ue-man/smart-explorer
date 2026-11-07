@@ -3,58 +3,6 @@ use crate::vfs::{Backend, Scheme, VfsMeta, VfsResult};
 use std::io::{self, Cursor, Read, Write};
 
 #[test]
-fn windows_remote_task_local_scan_keeps_partial_results_and_live_counts() {
-    let root = tempfile::tempdir().unwrap();
-    std::fs::create_dir(root.path().join("denied")).unwrap();
-    std::fs::write(root.path().join("readable"), b"1234567").unwrap();
-    let progress = Progress::default();
-    let guard = |path: &std::path::Path| {
-        if path.ends_with("denied") {
-            Err(io::ErrorKind::PermissionDenied.into())
-        } else {
-            Ok(())
-        }
-    };
-    let outcome = scan_with_guard(root.path(), &progress, Some(&guard));
-    assert_eq!(outcome.status, ScanStatus::Partial);
-    assert_eq!(outcome.permission_denied, 1);
-    assert_eq!(outcome.tree.unwrap().size, 7);
-    assert_eq!(progress.files.load(Ordering::Relaxed), 1);
-
-    let progress = Progress::default();
-    let diagnostics = Diagnostics::default();
-    let budget = AnalyticsBudget::default();
-    let traversal = Traversal {
-        progress: &progress,
-        diagnostics: &diagnostics,
-        budget: &budget,
-        parallel: false,
-        guard: None,
-    };
-    let entries = (0..1024).map(|index| {
-        if index == 512 {
-            assert!(
-                progress.files.load(Ordering::Relaxed) > 0,
-                "wide directory stayed at zero until EOF"
-            );
-            assert_eq!(
-                progress.files.load(Ordering::Relaxed),
-                progress.bytes.load(Ordering::Relaxed)
-            );
-        }
-        Ok(LocalEntry {
-            name: format!("{index}").into(),
-            kind: EntryKind::File,
-            size: 1,
-            ..Default::default()
-        })
-    });
-    let tree = scan_entries(&traversal, root.path(), "root".into(), Ok(entries), 0, true);
-    assert_eq!(tree.size, 1024);
-    assert_eq!(progress.files.load(Ordering::Relaxed), 1024);
-}
-
-#[test]
 fn analytics_access_task_sizes_and_counts() {
     let fixture = tempfile::tempdir().unwrap();
     let base = fixture.path();
@@ -91,50 +39,175 @@ fn analytics_access_task_missing_local_root_is_failed_not_empty_success() {
 
 #[test]
 fn analytics_access_task_first_entry_error_preserves_readable_sibling() {
-    let fixture = tempfile::tempdir().unwrap();
-    let progress = Progress::default();
-    let diagnostics = Diagnostics::default();
-    let budget = AnalyticsBudget::default();
-    let traversal = Traversal {
-        progress: &progress,
-        diagnostics: &diagnostics,
-        budget: &budget,
-        parallel: false,
-        guard: None,
-    };
-    let entries = vec![
-        Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            "first child denied",
-        )),
-        Ok(LocalEntry {
-            name: "readable.bin".into(),
-            kind: EntryKind::File,
-            size: 7,
-            unreachable: false,
-            ..Default::default()
-        }),
+    let cases: [(&str, fn()); 3] = [
+        (
+            "analytics_access_task_first_entry_error_preserves_readable_sibling",
+            || {
+                let fixture = tempfile::tempdir().unwrap();
+                let progress = Progress::default();
+                let diagnostics = Diagnostics::default();
+                let budget = AnalyticsBudget::default();
+                let traversal = Traversal {
+                    progress: &progress,
+                    diagnostics: &diagnostics,
+                    budget: &budget,
+                    parallel: false,
+                    guard: None,
+                };
+                let entries = vec![
+                    Err(io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        "first child denied",
+                    )),
+                    Ok(LocalEntry {
+                        name: "readable.bin".into(),
+                        kind: EntryKind::File,
+                        size: 7,
+                        unreachable: false,
+                        ..Default::default()
+                    }),
+                ];
+                let tree = scan_entries(
+                    &traversal,
+                    fixture.path(),
+                    "root".into(),
+                    Ok(entries.into_iter()),
+                    0,
+                    true,
+                );
+                let outcome = diagnostics.finish(tree, false);
+                assert_eq!(outcome.status, ScanStatus::Partial);
+                assert_eq!(outcome.permission_denied, 1);
+                assert_eq!(outcome.issues.len(), 1);
+                assert!(outcome.issues[0].detail.contains("first child denied"));
+                let tree = outcome
+                    .tree
+                    .expect("one child error must not discard readable siblings");
+                assert_eq!(tree.size, 7);
+                assert_eq!(&*tree.children[0].name, "readable.bin");
+                assert_eq!(progress.files.load(Ordering::Relaxed), 1);
+                assert_eq!(progress.bytes.load(Ordering::Relaxed), 7);
+            },
+        ),
+        (
+            "analytics_access_task_unrepresentable_and_erroring_entries_never_end_the_directory",
+            || {
+                let fixture = tempfile::tempdir().unwrap();
+                let progress = Progress::default();
+                let diagnostics = Diagnostics::default();
+                let budget = AnalyticsBudget::default();
+                let traversal = Traversal {
+                    progress: &progress,
+                    diagnostics: &diagnostics,
+                    budget: &budget,
+                    parallel: false,
+                    guard: None,
+                };
+                let entries = vec![
+                    Ok(LocalEntry {
+                        name: "weird\u{fffd}dir".into(),
+                        kind: EntryKind::Directory,
+                        size: 0,
+                        unreachable: true,
+                        ..Default::default()
+                    }),
+                    Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "Ungueltiger Eintrag",
+                    )),
+                    Ok(LocalEntry {
+                        name: "nul\u{fffd}".into(),
+                        kind: EntryKind::File,
+                        size: 5,
+                        unreachable: true,
+                        ..Default::default()
+                    }),
+                    Ok(LocalEntry {
+                        name: "after.bin".into(),
+                        kind: EntryKind::File,
+                        size: 9,
+                        unreachable: false,
+                        ..Default::default()
+                    }),
+                ];
+                let tree = scan_entries(
+                    &traversal,
+                    fixture.path(),
+                    "root".into(),
+                    Ok(entries.into_iter()),
+                    0,
+                    true,
+                );
+                let outcome = diagnostics.finish(tree, false);
+                assert_eq!(outcome.status, ScanStatus::Partial);
+                assert_eq!(outcome.issues.len(), 2, "{:?}", outcome.issues);
+                let tree = outcome.tree.expect("root stays readable");
+                assert_eq!(tree.size, 14, "unrepresentable files are still counted");
+                assert_eq!(progress.files.load(Ordering::Relaxed), 2);
+                assert!(tree
+                    .children
+                    .iter()
+                    .any(|child| &*child.name == "after.bin"));
+            },
+        ),
+        (
+            "windows_remote_task_local_scan_keeps_partial_results_and_live_counts",
+            || {
+                let root = tempfile::tempdir().unwrap();
+                std::fs::create_dir(root.path().join("denied")).unwrap();
+                std::fs::write(root.path().join("readable"), b"1234567").unwrap();
+                let progress = Progress::default();
+                let guard = |path: &std::path::Path| {
+                    if path.ends_with("denied") {
+                        Err(io::ErrorKind::PermissionDenied.into())
+                    } else {
+                        Ok(())
+                    }
+                };
+                let outcome = scan_with_guard(root.path(), &progress, Some(&guard));
+                assert_eq!(outcome.status, ScanStatus::Partial);
+                assert_eq!(outcome.permission_denied, 1);
+                assert_eq!(outcome.tree.unwrap().size, 7);
+                assert_eq!(progress.files.load(Ordering::Relaxed), 1);
+
+                let progress = Progress::default();
+                let diagnostics = Diagnostics::default();
+                let budget = AnalyticsBudget::default();
+                let traversal = Traversal {
+                    progress: &progress,
+                    diagnostics: &diagnostics,
+                    budget: &budget,
+                    parallel: false,
+                    guard: None,
+                };
+                let entries = (0..1024).map(|index| {
+                    if index == 512 {
+                        assert!(
+                            progress.files.load(Ordering::Relaxed) > 0,
+                            "wide directory stayed at zero until EOF"
+                        );
+                        assert_eq!(
+                            progress.files.load(Ordering::Relaxed),
+                            progress.bytes.load(Ordering::Relaxed)
+                        );
+                    }
+                    Ok(LocalEntry {
+                        name: format!("{index}").into(),
+                        kind: EntryKind::File,
+                        size: 1,
+                        ..Default::default()
+                    })
+                });
+                let tree =
+                    scan_entries(&traversal, root.path(), "root".into(), Ok(entries), 0, true);
+                assert_eq!(tree.size, 1024);
+                assert_eq!(progress.files.load(Ordering::Relaxed), 1024);
+            },
+        ),
     ];
-    let tree = scan_entries(
-        &traversal,
-        fixture.path(),
-        "root".into(),
-        Ok(entries.into_iter()),
-        0,
-        true,
-    );
-    let outcome = diagnostics.finish(tree, false);
-    assert_eq!(outcome.status, ScanStatus::Partial);
-    assert_eq!(outcome.permission_denied, 1);
-    assert_eq!(outcome.issues.len(), 1);
-    assert!(outcome.issues[0].detail.contains("first child denied"));
-    let tree = outcome
-        .tree
-        .expect("one child error must not discard readable siblings");
-    assert_eq!(tree.size, 7);
-    assert_eq!(&*tree.children[0].name, "readable.bin");
-    assert_eq!(progress.files.load(Ordering::Relaxed), 1);
-    assert_eq!(progress.bytes.load(Ordering::Relaxed), 7);
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
+    }
 }
 
 #[test]
@@ -176,66 +249,6 @@ fn analytics_access_task_huge_directory_keeps_exact_totals_with_folded_files() {
         .iter()
         .filter(|child| !child.name.starts_with("…"))
         .all(|child| child.size >= 1));
-}
-
-#[test]
-fn analytics_access_task_unrepresentable_and_erroring_entries_never_end_the_directory() {
-    let fixture = tempfile::tempdir().unwrap();
-    let progress = Progress::default();
-    let diagnostics = Diagnostics::default();
-    let budget = AnalyticsBudget::default();
-    let traversal = Traversal {
-        progress: &progress,
-        diagnostics: &diagnostics,
-        budget: &budget,
-        parallel: false,
-        guard: None,
-    };
-    let entries = vec![
-        Ok(LocalEntry {
-            name: "weird\u{fffd}dir".into(),
-            kind: EntryKind::Directory,
-            size: 0,
-            unreachable: true,
-            ..Default::default()
-        }),
-        Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "Ungueltiger Eintrag",
-        )),
-        Ok(LocalEntry {
-            name: "nul\u{fffd}".into(),
-            kind: EntryKind::File,
-            size: 5,
-            unreachable: true,
-            ..Default::default()
-        }),
-        Ok(LocalEntry {
-            name: "after.bin".into(),
-            kind: EntryKind::File,
-            size: 9,
-            unreachable: false,
-            ..Default::default()
-        }),
-    ];
-    let tree = scan_entries(
-        &traversal,
-        fixture.path(),
-        "root".into(),
-        Ok(entries.into_iter()),
-        0,
-        true,
-    );
-    let outcome = diagnostics.finish(tree, false);
-    assert_eq!(outcome.status, ScanStatus::Partial);
-    assert_eq!(outcome.issues.len(), 2, "{:?}", outcome.issues);
-    let tree = outcome.tree.expect("root stays readable");
-    assert_eq!(tree.size, 14, "unrepresentable files are still counted");
-    assert_eq!(progress.files.load(Ordering::Relaxed), 2);
-    assert!(tree
-        .children
-        .iter()
-        .any(|child| &*child.name == "after.bin"));
 }
 
 #[test]

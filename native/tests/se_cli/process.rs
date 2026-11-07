@@ -99,15 +99,18 @@ fn sync_daemon_text_in_a_normal_argument_is_not_hijacked() {
 
 #[cfg(target_os = "linux")]
 #[test]
+#[ignore = "needs a Linux host with a systemd manager and cgroup v2 (and the system bus for a non-root user); Suite crates-task"]
 fn real_systemd_cgroup_exec_provider_contains_and_drains_processes() {
     let systemd_host = std::path::Path::new("/run/systemd/system").is_dir()
         && std::path::Path::new("/sys/fs/cgroup/cgroup.controllers").is_file()
         && (unsafe { libc::geteuid() } != 0
             || std::path::Path::new("/run/dbus/system_bus_socket").exists());
-    if !systemd_host {
-        eprintln!("explicitly unavailable: test host has no systemd+cgroup-v2 manager");
-        return;
-    }
+    // Ignored by default: a suite starts it on purpose, so a missing manager fails instead of
+    // passing without having checked anything.
+    assert!(
+        systemd_host,
+        "nicht ausgeführt: test host has no systemd+cgroup-v2 manager"
+    );
     let sandbox = Sandbox::new("exec-platform-systemd");
     let bounded = run_bounded(
         sandbox.command().arg("--share-exec-platform-self-test"),

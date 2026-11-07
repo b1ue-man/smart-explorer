@@ -3,6 +3,16 @@ use super::*;
 
 #[test]
 fn batches_task_b6_presentation_requires_sent_current_gop() {
+    let cases: [fn(); 2] = [
+        batches_task_b6_presentation_requires_sent_current_gop_case,
+        batches_task_b6_presentation_invalidation_requires_new_reference,
+    ];
+    for case in cases {
+        case();
+    }
+}
+
+fn batches_task_b6_presentation_requires_sent_current_gop_case() {
     let mut reference = ReferencePresentation::new();
     assert!(!reference.presented(7, 1));
     reference.sent(7, 1, false);
@@ -21,7 +31,6 @@ fn batches_task_b6_presentation_requires_sent_current_gop() {
     assert!(reference.presented(8, 2));
 }
 
-#[test]
 fn batches_task_b6_presentation_invalidation_requires_new_reference() {
     let mut reference = ReferencePresentation::new();
     reference.sent(7, 10, true);

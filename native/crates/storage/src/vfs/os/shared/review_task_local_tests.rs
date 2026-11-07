@@ -163,46 +163,59 @@ mod unix {
 
     #[test]
     fn review_task_tolerant_listing_names_unlistable_entries() {
-        let (_directory, root) = fixture();
-        std::fs::write(format!("{root}/ok.txt"), b"1").unwrap();
-        let raw = std::ffi::OsStr::from_bytes(b"caf\xe9.txt");
-        std::fs::write(std::path::Path::new(&root).join(raw), b"2").unwrap();
-        let backend = LocalBackend::new(&root);
-        assert!(
-            backend.list_dir(&root).is_err(),
-            "the strict listing is unchanged"
-        );
-        let listing = list_dir_tolerant(&backend, &root).unwrap();
-        let names: Vec<_> = listing
-            .entries
-            .iter()
-            .map(|entry| entry.name.as_str())
-            .collect();
-        assert_eq!(names, ["ok.txt"]);
-        assert_eq!(listing.omitted.len(), 1);
-        assert_eq!(listing.omitted[0].reason, OmissionReason::Unrepresentable);
-        assert_eq!(listing.omitted[0].rel, "caf\u{FFFD}.txt");
-    }
-
-    #[test]
-    fn review_task_tolerant_listing_keeps_going_past_unreadable_entries() {
-        use std::os::unix::fs::PermissionsExt;
-        // SAFETY: plain getter without arguments.
-        if unsafe { libc::geteuid() } == 0 {
-            return; // root reads everything; the denial cannot be staged
+        let cases: [(&str, fn()); 2] = [
+            (
+                "review_task_tolerant_listing_names_unlistable_entries",
+                || {
+                    let (_directory, root) = fixture();
+                    std::fs::write(format!("{root}/ok.txt"), b"1").unwrap();
+                    let raw = std::ffi::OsStr::from_bytes(b"caf\xe9.txt");
+                    std::fs::write(std::path::Path::new(&root).join(raw), b"2").unwrap();
+                    let backend = LocalBackend::new(&root);
+                    assert!(
+                        backend.list_dir(&root).is_err(),
+                        "the strict listing is unchanged"
+                    );
+                    let listing = list_dir_tolerant(&backend, &root).unwrap();
+                    let names: Vec<_> = listing
+                        .entries
+                        .iter()
+                        .map(|entry| entry.name.as_str())
+                        .collect();
+                    assert_eq!(names, ["ok.txt"]);
+                    assert_eq!(listing.omitted.len(), 1);
+                    assert_eq!(listing.omitted[0].reason, OmissionReason::Unrepresentable);
+                    assert_eq!(listing.omitted[0].rel, "caf\u{FFFD}.txt");
+                },
+            ),
+            (
+                "review_task_tolerant_listing_keeps_going_past_unreadable_entries",
+                || {
+                    use std::os::unix::fs::PermissionsExt;
+                    // SAFETY: plain getter without arguments.
+                    if unsafe { libc::geteuid() } == 0 {
+                        return; // root reads everything; the denial cannot be staged
+                    }
+                    let (_directory, root) = fixture();
+                    let locked = format!("{root}/locked");
+                    std::fs::create_dir(&locked).unwrap();
+                    std::fs::write(format!("{locked}/inside.txt"), b"1").unwrap();
+                    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o644))
+                        .unwrap();
+                    let listing = list_dir_tolerant(&LocalBackend::new(&root), &locked);
+                    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755))
+                        .unwrap();
+                    let listing = listing.unwrap();
+                    assert!(listing.entries.is_empty());
+                    assert_eq!(listing.omitted.len(), 1);
+                    assert_eq!(listing.omitted[0].rel, "inside.txt");
+                    assert_eq!(listing.omitted[0].reason, OmissionReason::Unreadable);
+                },
+            ),
+        ];
+        for (case, check) in cases {
+            std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
         }
-        let (_directory, root) = fixture();
-        let locked = format!("{root}/locked");
-        std::fs::create_dir(&locked).unwrap();
-        std::fs::write(format!("{locked}/inside.txt"), b"1").unwrap();
-        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o644)).unwrap();
-        let listing = list_dir_tolerant(&LocalBackend::new(&root), &locked);
-        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let listing = listing.unwrap();
-        assert!(listing.entries.is_empty());
-        assert_eq!(listing.omitted.len(), 1);
-        assert_eq!(listing.omitted[0].rel, "inside.txt");
-        assert_eq!(listing.omitted[0].reason, OmissionReason::Unreadable);
     }
 
     #[test]
@@ -283,7 +296,7 @@ mod unix {
 
     /// Suite stage: a writable directory on NFS, sshfs or ntfs-3g.
     #[test]
-    #[ignore = "needs an NFS/FUSE mount named by SE_REVIEW_NOREPLACE_DIR"]
+    #[ignore = "needs an NFS/FUSE mount named by SE_REVIEW_NOREPLACE_DIR (native/review-task-runtime.sh); Suite review-task"]
     fn review_task_publishing_never_replaces_on_network_and_fuse_mounts() {
         let directory = suite_directory("SE_REVIEW_NOREPLACE_DIR");
         let backend = LocalBackend::new(&directory);
@@ -309,7 +322,7 @@ mod unix {
 
     /// Suite stage: FAT32 and exFAT loop images mounted for this user.
     #[test]
-    #[ignore = "needs FAT32/exFAT mounts named by SE_REVIEW_FAT_DIR and SE_REVIEW_EXFAT_DIR"]
+    #[ignore = "needs FAT32 and exFAT mounts named by SE_REVIEW_FAT_DIR and SE_REVIEW_EXFAT_DIR (native/review-task-runtime.sh); Suite review-task"]
     fn review_task_fat_and_exfat_targets_report_their_limits() {
         for (variable, precision, max_file_size) in [
             (

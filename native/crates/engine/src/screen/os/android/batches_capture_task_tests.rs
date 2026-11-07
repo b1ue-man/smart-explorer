@@ -86,6 +86,16 @@ fn still(value: u8) -> Vec<u8> {
 }
 #[test]
 fn batches_capture_task_android_pending_metadata_cannot_allocate() {
+    let cases: [fn(); 2] = [
+        batches_capture_task_android_pending_metadata_cannot_allocate_case,
+        batches_capture_task_android_synthetic_without_display_keeps_defined_default,
+    ];
+    for case in cases {
+        case();
+    }
+}
+
+fn batches_capture_task_android_pending_metadata_cannot_allocate_case() {
     let _lock = channels::TEST_LOCK
         .lock()
         .unwrap_or_else(PoisonError::into_inner);
@@ -127,7 +137,7 @@ fn batches_capture_task_android_pending_metadata_cannot_allocate() {
         "capture_grant_required"
     );
 }
-#[test]
+
 fn batches_capture_task_android_synthetic_without_display_keeps_defined_default() {
     let _lock = channels::TEST_LOCK
         .lock()

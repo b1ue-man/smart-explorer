@@ -59,7 +59,7 @@ fn free_point(monitor: &MonitorInfo, hwnd: windows_sys::Win32::Foundation::HWND)
 }
 
 #[test]
-#[ignore = "run only through the isolated remote desktop task entrypoint"]
+#[ignore = "run only through the isolated remote desktop task entrypoint; Suite rechte-desktop-tresore-task"]
 fn desktop_task_windows_surface_bottom_toolwindow() {
     let mut env = WinTaskEnv::new();
     let monitor = primary();
@@ -73,7 +73,7 @@ fn desktop_task_windows_surface_bottom_toolwindow() {
 }
 
 #[test]
-#[ignore = "run only through the isolated remote desktop task entrypoint"]
+#[ignore = "run only through the isolated remote desktop task entrypoint; Suite rechte-desktop-tresore-task"]
 fn desktop_task_windows_surface_stays_bottom_after_click() {
     let mut env = WinTaskEnv::new();
     let monitor = primary();
@@ -101,7 +101,7 @@ fn desktop_task_windows_surface_stays_bottom_after_click() {
 }
 
 #[test]
-#[ignore = "run only through the isolated remote desktop task entrypoint"]
+#[ignore = "run only through the isolated remote desktop task entrypoint; Suite rechte-desktop-tresore-task"]
 fn desktop_task_windows_style_enforced_after_change() {
     let mut env = WinTaskEnv::new();
     let monitor = primary();
@@ -118,7 +118,7 @@ fn desktop_task_windows_style_enforced_after_change() {
 }
 
 #[test]
-#[ignore = "run only through the isolated remote desktop task entrypoint"]
+#[ignore = "run only through the isolated remote desktop task entrypoint; Suite rechte-desktop-tresore-task"]
 fn desktop_task_windows_show_desktop_keeps_surface() {
     assert!(
         progman_present(),
@@ -159,7 +159,7 @@ fn custom_destinations() -> BTreeMap<String, (u64, Option<SystemTime>)> {
 }
 
 #[test]
-#[ignore = "run only through the isolated remote desktop task entrypoint"]
+#[ignore = "run only through the isolated remote desktop task entrypoint; Suite rechte-desktop-tresore-task"]
 fn desktop_task_windows_jump_list_removed_from_gui_image() {
     let mut env = WinTaskEnv::new();
     let before = custom_destinations();
@@ -204,7 +204,7 @@ fn desktop_task_windows_jump_list_removed_from_gui_image() {
 }
 
 #[test]
-#[ignore = "run only through the isolated remote desktop task entrypoint"]
+#[ignore = "run only through the isolated remote desktop task entrypoint; Suite rechte-desktop-tresore-task"]
 fn desktop_task_windows_update_restarts_surface() {
     let mut env = WinTaskEnv::new();
     env.enable(&[Part::Surface]);

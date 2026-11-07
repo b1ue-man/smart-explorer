@@ -254,6 +254,16 @@ fn screen_metadata_runtime_task_rooted_backend_keeps_inner_none() {
 
 #[test]
 fn screen_metadata_runtime_task_worker_answers_file_digest_and_keeps_folder_walks() {
+    let cases: [fn(); 2] = [
+        screen_metadata_runtime_task_worker_answers_file_digest_and_keeps_folder_walks_case,
+        screen_metadata_runtime_task_worker_serves_one_file_digest_from_local_backend,
+    ];
+    for case in cases {
+        case();
+    }
+}
+
+fn screen_metadata_runtime_task_worker_answers_file_digest_and_keeps_folder_walks_case() {
     let base = temp_dir("raw");
     std::fs::write(base.join("abc.txt"), b"abc").unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -309,7 +319,6 @@ fn screen_metadata_runtime_task_worker_answers_file_digest_and_keeps_folder_walk
     let _ = std::fs::remove_dir_all(base);
 }
 
-#[test]
 fn screen_metadata_runtime_task_worker_serves_one_file_digest_from_local_backend() {
     let base = temp_dir("client");
     let file = base.join("abc.txt");

@@ -72,44 +72,53 @@ pub(super) fn remember_plain_at(key: String, at: Instant) {
 mod tests {
     #[test]
     fn local_speed_task_probe_cache_keeps_only_fresh_plain_answers() {
-        let key = format!("probe-cache-test-{}", std::process::id());
-        assert!(!super::known_plain(&key));
-        super::remember_plain(key.clone());
-        assert!(super::known_plain(&key));
-        let stale = std::time::Instant::now()
-            .checked_sub(super::FRESH)
-            .expect("the clock runs longer than the freshness span");
-        super::entries().insert(key.clone(), stale);
-        assert!(!super::known_plain(&key));
-        assert!(!super::entries().contains_key(&key));
-    }
-
-    /// An answer taken from another keeps that one's time: it lapses with it,
-    /// never replaces a later answer and is not kept once that time lapsed.
-    #[test]
-    fn abgleich_task_probe_cache_derived_answers_keep_the_time_they_came_from() {
-        let key = format!("probe-cache-derived-{}", std::process::id());
-        let earlier = std::time::Instant::now()
-            .checked_sub(super::FRESH / 2)
-            .expect("the clock runs longer than half the freshness span");
-        super::remember_plain_at(key.clone(), earlier);
-        assert_eq!(super::plain_since(&key), Some(earlier));
-        let later = std::time::Instant::now();
-        super::remember_plain_at(key.clone(), later);
-        assert_eq!(super::plain_since(&key), Some(later));
-        super::remember_plain_at(key.clone(), earlier);
-        assert_eq!(
-            super::plain_since(&key),
-            Some(later),
-            "an earlier answer does not replace a later one"
-        );
-        let lapsed_key = format!("probe-cache-lapsed-{}", std::process::id());
-        let lapsed = std::time::Instant::now()
-            .checked_sub(super::FRESH)
-            .expect("the clock runs longer than the freshness span");
-        super::remember_plain_at(lapsed_key.clone(), lapsed);
-        assert_eq!(super::plain_since(&lapsed_key), None);
-        assert!(!super::entries().contains_key(&lapsed_key));
-        super::entries().remove(&key);
+        let cases: [(&str, fn()); 2] = [
+            (
+                "local_speed_task_probe_cache_keeps_only_fresh_plain_answers",
+                || {
+                    let key = format!("probe-cache-test-{}", std::process::id());
+                    assert!(!super::known_plain(&key));
+                    super::remember_plain(key.clone());
+                    assert!(super::known_plain(&key));
+                    let stale = std::time::Instant::now()
+                        .checked_sub(super::FRESH)
+                        .expect("the clock runs longer than the freshness span");
+                    super::entries().insert(key.clone(), stale);
+                    assert!(!super::known_plain(&key));
+                    assert!(!super::entries().contains_key(&key));
+                },
+            ),
+            (
+                "abgleich_task_probe_cache_derived_answers_keep_the_time_they_came_from",
+                || {
+                    let key = format!("probe-cache-derived-{}", std::process::id());
+                    let earlier = std::time::Instant::now()
+                        .checked_sub(super::FRESH / 2)
+                        .expect("the clock runs longer than half the freshness span");
+                    super::remember_plain_at(key.clone(), earlier);
+                    assert_eq!(super::plain_since(&key), Some(earlier));
+                    let later = std::time::Instant::now();
+                    super::remember_plain_at(key.clone(), later);
+                    assert_eq!(super::plain_since(&key), Some(later));
+                    super::remember_plain_at(key.clone(), earlier);
+                    assert_eq!(
+                        super::plain_since(&key),
+                        Some(later),
+                        "an earlier answer does not replace a later one"
+                    );
+                    let lapsed_key = format!("probe-cache-lapsed-{}", std::process::id());
+                    let lapsed = std::time::Instant::now()
+                        .checked_sub(super::FRESH)
+                        .expect("the clock runs longer than the freshness span");
+                    super::remember_plain_at(lapsed_key.clone(), lapsed);
+                    assert_eq!(super::plain_since(&lapsed_key), None);
+                    assert!(!super::entries().contains_key(&lapsed_key));
+                    super::entries().remove(&key);
+                },
+            ),
+        ];
+        for (case, check) in cases {
+            std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
+        }
     }
 }

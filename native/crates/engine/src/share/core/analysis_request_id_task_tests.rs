@@ -48,21 +48,18 @@ fn assert_one_pair(report: &crate::analytics::DuplicateReport) {
 }
 
 #[test]
-fn analysis_id_task_remote_analysis_and_duplicates_reach_the_host() -> io::Result<()> {
-    let fixture = fixture_with_duplicates()?;
-    let outcome =
-        crate::share::peer_storage_analysis::scan(&fixture.peer, "/A", &Progress::default())?
-            .expect("the host analyses its own export");
-    assert_complete(&outcome);
-    let report =
-        crate::share::peer_duplicates::find(&fixture.peer, "/A", 1, &ReclaimProgress::default())?
-            .expect("the host searches its own duplicates");
-    assert_one_pair(&report);
+fn analysis_id_task_host_accepts_ids_of_released_clients() -> io::Result<()> {
+    let cases: [fn() -> io::Result<()>; 2] = [
+        analysis_id_task_host_accepts_ids_of_released_clients_case,
+        analysis_id_task_remote_analysis_and_duplicates_reach_the_host,
+    ];
+    for case in cases {
+        case()?;
+    }
     Ok(())
 }
 
-#[test]
-fn analysis_id_task_host_accepts_ids_of_released_clients() -> io::Result<()> {
+fn analysis_id_task_host_accepts_ids_of_released_clients_case() -> io::Result<()> {
     let fixture = fixture_with_duplicates()?;
     let released = || crate::share::core::random_token(16).map_err(io::Error::other);
     let progress = Progress::default();
@@ -103,5 +100,18 @@ fn analysis_id_task_host_accepts_ids_of_released_clients() -> io::Result<()> {
         ),
         Ok(_) => panic!("a path-like id must be refused"),
     }
+    Ok(())
+}
+
+fn analysis_id_task_remote_analysis_and_duplicates_reach_the_host() -> io::Result<()> {
+    let fixture = fixture_with_duplicates()?;
+    let outcome =
+        crate::share::peer_storage_analysis::scan(&fixture.peer, "/A", &Progress::default())?
+            .expect("the host analyses its own export");
+    assert_complete(&outcome);
+    let report =
+        crate::share::peer_duplicates::find(&fixture.peer, "/A", 1, &ReclaimProgress::default())?
+            .expect("the host searches its own duplicates");
+    assert_one_pair(&report);
     Ok(())
 }

@@ -22,60 +22,68 @@ fn roundtrip(frame: Frame) -> Frame {
 
 #[test]
 fn abgleich_task_walk_filter_follows_the_client_rules() {
-    // `**/*.tmp` and `cache/` as globset writes them.
-    let filter = WalkFilterSpec {
-        skip_hidden: true,
-        min_size: 2,
-        max_size: 100,
-        after_mtime_ms: 10,
-        before_mtime_ms: 1_000,
-        ..spec(&["(?-u)^(?:/?|.*/)[^/]*\\.tmp$", "(?-u)^cache/$"])
+    let cases: [(&str, fn()); 2] = [
+        ("abgleich_task_walk_filter_follows_the_client_rules", || {
+            // `**/*.tmp` and `cache/` as globset writes them.
+            let filter = WalkFilterSpec {
+                skip_hidden: true,
+                min_size: 2,
+                max_size: 100,
+                after_mtime_ms: 10,
+                before_mtime_ms: 1_000,
+                ..spec(&["(?-u)^(?:/?|.*/)[^/]*\\.tmp$", "(?-u)^cache/$"])
+            }
+            .compile()
+            .unwrap();
+            assert!(filter.leaves_out_file("x/a.tmp", false, 5, 100));
+            assert!(!filter.leaves_out_file("x/a.txt", false, 5, 100));
+            assert!(filter.leaves_out_file("x/a.txt", true, 5, 100), "hidden");
+            assert!(
+                filter.leaves_out_file("x/a.txt", false, 1, 100),
+                "too small"
+            );
+            assert!(
+                filter.leaves_out_file("x/a.txt", false, 101, 100),
+                "too large"
+            );
+            assert!(filter.leaves_out_file("x/a.txt", false, 5, 9), "too old");
+            assert!(
+                filter.leaves_out_file("x/a.txt", false, 5, 1_001),
+                "too new"
+            );
+            // A folder matches with its trailing slash as well, a file never does.
+            assert!(filter.leaves_out_dir("cache", false));
+            assert!(!filter.leaves_out_file("cache", false, 5, 100));
+            assert!(filter.leaves_out_dir("d", true), "hidden folder");
+            assert!(!filter.leaves_out_dir("d", false));
+            // Bounds never leave a folder out.
+            let bounds = WalkFilterSpec {
+                min_size: 1 << 40,
+                ..WalkFilterSpec::default()
+            }
+            .compile()
+            .unwrap();
+            assert!(!bounds.leaves_out_dir("big", false));
+        }),
+        (
+            "abgleich_task_walk_filter_matches_a_backslash_as_globset_on_the_client",
+            || {
+                let mut filter = spec(&["(?-u)^a/b$"]);
+                assert!(!filter
+                    .compile()
+                    .unwrap()
+                    .leaves_out_file("a\\b", false, 0, 0));
+                filter.backslash_separates = true;
+                assert!(filter
+                    .compile()
+                    .unwrap()
+                    .leaves_out_file("a\\b", false, 0, 0));
+            },
+        ),
+    ];
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
     }
-    .compile()
-    .unwrap();
-    assert!(filter.leaves_out_file("x/a.tmp", false, 5, 100));
-    assert!(!filter.leaves_out_file("x/a.txt", false, 5, 100));
-    assert!(filter.leaves_out_file("x/a.txt", true, 5, 100), "hidden");
-    assert!(
-        filter.leaves_out_file("x/a.txt", false, 1, 100),
-        "too small"
-    );
-    assert!(
-        filter.leaves_out_file("x/a.txt", false, 101, 100),
-        "too large"
-    );
-    assert!(filter.leaves_out_file("x/a.txt", false, 5, 9), "too old");
-    assert!(
-        filter.leaves_out_file("x/a.txt", false, 5, 1_001),
-        "too new"
-    );
-    // A folder matches with its trailing slash as well, a file never does.
-    assert!(filter.leaves_out_dir("cache", false));
-    assert!(!filter.leaves_out_file("cache", false, 5, 100));
-    assert!(filter.leaves_out_dir("d", true), "hidden folder");
-    assert!(!filter.leaves_out_dir("d", false));
-    // Bounds never leave a folder out.
-    let bounds = WalkFilterSpec {
-        min_size: 1 << 40,
-        ..WalkFilterSpec::default()
-    }
-    .compile()
-    .unwrap();
-    assert!(!bounds.leaves_out_dir("big", false));
-}
-
-#[test]
-fn abgleich_task_walk_filter_matches_a_backslash_as_globset_on_the_client() {
-    let mut filter = spec(&["(?-u)^a/b$"]);
-    assert!(!filter
-        .compile()
-        .unwrap()
-        .leaves_out_file("a\\b", false, 0, 0));
-    filter.backslash_separates = true;
-    assert!(filter
-        .compile()
-        .unwrap()
-        .leaves_out_file("a\\b", false, 0, 0));
 }
 
 #[test]
@@ -99,76 +107,87 @@ fn abgleich_task_walk_filter_takes_only_patterns_it_evaluates() {
 
 #[test]
 fn abgleich_task_walk_scope_travels_in_the_walk_requests() {
-    let scope = WalkScope {
-        fresh: true,
-        filter: Some(WalkFilterSpec {
-            skip_hidden: true,
-            backslash_separates: true,
-            min_size: 1,
-            max_size: u64::MAX,
-            after_mtime_ms: -5,
-            before_mtime_ms: i64::MAX,
-            ..spec(&["(?-u)^a$", "(?-u)(?i)^\\xc3\\xa4/.*$"])
-        }),
-    };
-    let fresh_only = WalkScope {
-        fresh: true,
-        filter: None,
-    };
-    for scope in [scope, fresh_only, WalkScope::default()] {
-        for frame in [
-            Frame::WalkHashed3 {
-                root: "/srv".into(),
-                algorithm: 1,
-                min_bytes: 0,
-                meta: true,
-                scope: scope.clone(),
+    let cases: [(&str, fn()); 2] = [
+        (
+            "abgleich_task_walk_scope_travels_in_the_walk_requests",
+            || {
+                let scope = WalkScope {
+                    fresh: true,
+                    filter: Some(WalkFilterSpec {
+                        skip_hidden: true,
+                        backslash_separates: true,
+                        min_size: 1,
+                        max_size: u64::MAX,
+                        after_mtime_ms: -5,
+                        before_mtime_ms: i64::MAX,
+                        ..spec(&["(?-u)^a$", "(?-u)(?i)^\\xc3\\xa4/.*$"])
+                    }),
+                };
+                let fresh_only = WalkScope {
+                    fresh: true,
+                    filter: None,
+                };
+                for scope in [scope, fresh_only, WalkScope::default()] {
+                    for frame in [
+                        Frame::WalkHashed3 {
+                            root: "/srv".into(),
+                            algorithm: 1,
+                            min_bytes: 0,
+                            meta: true,
+                            scope: scope.clone(),
+                        },
+                        Frame::WalkKeyed {
+                            root: "/srv".into(),
+                            algorithm: 1,
+                            min_bytes: 0,
+                            known: vec![7; 16],
+                            keys_only: true,
+                            scope: scope.clone(),
+                        },
+                        Frame::ListRuns {
+                            root: "/srv".into(),
+                            algorithm: 0,
+                            folders: vec!["a".into()],
+                            scope: scope.clone(),
+                        },
+                    ] {
+                        assert_eq!(roundtrip(frame.clone()), frame);
+                    }
+                }
             },
-            Frame::WalkKeyed {
-                root: "/srv".into(),
-                algorithm: 1,
-                min_bytes: 0,
-                known: vec![7; 16],
-                keys_only: true,
-                scope: scope.clone(),
+        ),
+        (
+            "abgleich_task_run_listing_without_scope_keeps_its_frame",
+            || {
+                let plain = Frame::ListRuns {
+                    root: "/".into(),
+                    algorithm: 0,
+                    folders: vec!["a".into()],
+                    scope: WalkScope::default(),
+                };
+                let bytes = plain.encode(1).unwrap();
+                // Request id, tag, root, algorithm, count, one folder: nothing after it.
+                assert_eq!(bytes.len(), 8 + 1 + (4 + 1) + 1 + 4 + (4 + 1));
+                // An unknown option bit is refused.
+                let mut fresh = Frame::ListRuns {
+                    root: "/".into(),
+                    algorithm: 0,
+                    folders: vec!["a".into()],
+                    scope: WalkScope {
+                        fresh: true,
+                        filter: None,
+                    },
+                }
+                .encode(1)
+                .unwrap();
+                *fresh.last_mut().unwrap() = 16;
+                assert!(Frame::decode(&fresh).is_err());
             },
-            Frame::ListRuns {
-                root: "/srv".into(),
-                algorithm: 0,
-                folders: vec!["a".into()],
-                scope: scope.clone(),
-            },
-        ] {
-            assert_eq!(roundtrip(frame.clone()), frame);
-        }
+        ),
+    ];
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
     }
-}
-
-#[test]
-fn abgleich_task_run_listing_without_scope_keeps_its_frame() {
-    let plain = Frame::ListRuns {
-        root: "/".into(),
-        algorithm: 0,
-        folders: vec!["a".into()],
-        scope: WalkScope::default(),
-    };
-    let bytes = plain.encode(1).unwrap();
-    // Request id, tag, root, algorithm, count, one folder: nothing after it.
-    assert_eq!(bytes.len(), 8 + 1 + (4 + 1) + 1 + 4 + (4 + 1));
-    // An unknown option bit is refused.
-    let mut fresh = Frame::ListRuns {
-        root: "/".into(),
-        algorithm: 0,
-        folders: vec!["a".into()],
-        scope: WalkScope {
-            fresh: true,
-            filter: None,
-        },
-    }
-    .encode(1)
-    .unwrap();
-    *fresh.last_mut().unwrap() = 16;
-    assert!(Frame::decode(&fresh).is_err());
 }
 
 #[test]

@@ -54,91 +54,104 @@ fn drain(rx: &Receiver<ScanMessage>) -> (HashSet<String>, Vec<FileEntry>, u64) {
 }
 
 #[test]
-fn recursive_filter_task_unfiltered_scan_still_emits_every_entry() {
-    let root = retention_tree("all");
-    let (tx, rx) = unbounded();
-    let handle = start_scan(root.clone(), ScanOpts::everything(None), tx);
-    let (names, entries, scanned) = drain(&rx);
-    for expected in [
-        "a.txt", "sub", "b.dat", "deep", "keep.txt", "other", "x.dat",
-    ] {
-        assert!(names.contains(expected), "missing {expected}: {names:?}");
-    }
-    assert_eq!(scanned, 7);
-    assert_eq!(entries.len(), 8, "root entry plus seven children");
-    assert!(!handle.truncated.load(std::sync::atomic::Ordering::Relaxed));
-    std::fs::remove_dir_all(&root).ok();
-}
-
-#[test]
 fn recursive_filter_task_filtered_scan_emits_matches_with_their_ancestors_only() {
-    let root = retention_tree("filtered");
-    let (tx, rx) = unbounded();
-    let retention: RetentionHandle = Arc::new(TxtOnly { skip_dir: None });
-    let opts = ScanOpts {
-        follow_symlinks: false,
-        max_depth: None,
-        retention: Some(retention),
-    };
-    start_scan(root.clone(), opts, tx);
-    let (names, entries, scanned) = drain(&rx);
-    let root_name = root.file_name().unwrap().to_string_lossy().to_string();
-    for expected in [root_name.as_str(), "a.txt", "sub", "deep", "keep.txt"] {
-        assert!(names.contains(expected), "missing {expected}: {names:?}");
+    let cases: [(&str, fn()); 4] = [
+        (
+            "recursive_filter_task_filtered_scan_emits_matches_with_their_ancestors_only",
+            || {
+                let root = retention_tree("filtered");
+                let (tx, rx) = unbounded();
+                let retention: RetentionHandle = Arc::new(TxtOnly { skip_dir: None });
+                let opts = ScanOpts {
+                    follow_symlinks: false,
+                    max_depth: None,
+                    retention: Some(retention),
+                };
+                start_scan(root.clone(), opts, tx);
+                let (names, entries, scanned) = drain(&rx);
+                let root_name = root.file_name().unwrap().to_string_lossy().to_string();
+                for expected in [root_name.as_str(), "a.txt", "sub", "deep", "keep.txt"] {
+                    assert!(names.contains(expected), "missing {expected}: {names:?}");
+                }
+                for pruned in ["b.dat", "other", "x.dat"] {
+                    assert!(!names.contains(pruned), "retained {pruned}: {names:?}");
+                }
+                assert_eq!(entries.len(), 5, "each ancestor is emitted exactly once");
+                assert_eq!(scanned, 7, "progress still counts every visited entry");
+                let keep = entries
+                    .iter()
+                    .find(|entry| entry.name.as_ref() == "keep.txt")
+                    .unwrap();
+                let deep = entries
+                    .iter()
+                    .find(|entry| entry.name.as_ref() == "deep")
+                    .unwrap();
+                assert_eq!(keep.parent, deep.path, "the tree can place the match");
+                assert!(deep.is_dir && deep.depth == 2 && keep.depth == 3);
+                std::fs::remove_dir_all(&root).ok();
+            },
+        ),
+        (
+            "recursive_filter_task_depth_limit_still_bounds_a_filtered_scan",
+            || {
+                let root = retention_tree("depth");
+                let (tx, rx) = unbounded();
+                let retention: RetentionHandle = Arc::new(TxtOnly { skip_dir: None });
+                let opts = ScanOpts {
+                    follow_symlinks: false,
+                    max_depth: Some(2),
+                    retention: Some(retention),
+                };
+                start_scan(root.clone(), opts, tx);
+                let (names, _, scanned) = drain(&rx);
+                assert!(names.contains("a.txt"));
+                assert!(!names.contains("keep.txt"), "depth 3 is beyond the limit");
+                assert_eq!(scanned, 6, "deep/ is listed at depth 2 but not entered");
+                std::fs::remove_dir_all(&root).ok();
+            },
+        ),
+        (
+            "recursive_filter_task_filtered_scan_prunes_subtrees_it_may_not_descend",
+            || {
+                let root = retention_tree("pruned");
+                let (tx, rx) = unbounded();
+                let retention: RetentionHandle = Arc::new(TxtOnly {
+                    skip_dir: Some("sub"),
+                });
+                let opts = ScanOpts {
+                    follow_symlinks: false,
+                    max_depth: None,
+                    retention: Some(retention),
+                };
+                start_scan(root.clone(), opts, tx);
+                let (names, entries, scanned) = drain(&rx);
+                assert!(names.contains("a.txt"));
+                assert!(!names.contains("sub") && !names.contains("keep.txt"));
+                assert_eq!(entries.len(), 2, "root and a.txt");
+                assert_eq!(scanned, 4, "root children plus other/x.dat only");
+                std::fs::remove_dir_all(&root).ok();
+            },
+        ),
+        (
+            "recursive_filter_task_unfiltered_scan_still_emits_every_entry",
+            || {
+                let root = retention_tree("all");
+                let (tx, rx) = unbounded();
+                let handle = start_scan(root.clone(), ScanOpts::everything(None), tx);
+                let (names, entries, scanned) = drain(&rx);
+                for expected in [
+                    "a.txt", "sub", "b.dat", "deep", "keep.txt", "other", "x.dat",
+                ] {
+                    assert!(names.contains(expected), "missing {expected}: {names:?}");
+                }
+                assert_eq!(scanned, 7);
+                assert_eq!(entries.len(), 8, "root entry plus seven children");
+                assert!(!handle.truncated.load(std::sync::atomic::Ordering::Relaxed));
+                std::fs::remove_dir_all(&root).ok();
+            },
+        ),
+    ];
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
     }
-    for pruned in ["b.dat", "other", "x.dat"] {
-        assert!(!names.contains(pruned), "retained {pruned}: {names:?}");
-    }
-    assert_eq!(entries.len(), 5, "each ancestor is emitted exactly once");
-    assert_eq!(scanned, 7, "progress still counts every visited entry");
-    let keep = entries
-        .iter()
-        .find(|entry| entry.name.as_ref() == "keep.txt")
-        .unwrap();
-    let deep = entries
-        .iter()
-        .find(|entry| entry.name.as_ref() == "deep")
-        .unwrap();
-    assert_eq!(keep.parent, deep.path, "the tree can place the match");
-    assert!(deep.is_dir && deep.depth == 2 && keep.depth == 3);
-    std::fs::remove_dir_all(&root).ok();
-}
-
-#[test]
-fn recursive_filter_task_filtered_scan_prunes_subtrees_it_may_not_descend() {
-    let root = retention_tree("pruned");
-    let (tx, rx) = unbounded();
-    let retention: RetentionHandle = Arc::new(TxtOnly {
-        skip_dir: Some("sub"),
-    });
-    let opts = ScanOpts {
-        follow_symlinks: false,
-        max_depth: None,
-        retention: Some(retention),
-    };
-    start_scan(root.clone(), opts, tx);
-    let (names, entries, scanned) = drain(&rx);
-    assert!(names.contains("a.txt"));
-    assert!(!names.contains("sub") && !names.contains("keep.txt"));
-    assert_eq!(entries.len(), 2, "root and a.txt");
-    assert_eq!(scanned, 4, "root children plus other/x.dat only");
-    std::fs::remove_dir_all(&root).ok();
-}
-
-#[test]
-fn recursive_filter_task_depth_limit_still_bounds_a_filtered_scan() {
-    let root = retention_tree("depth");
-    let (tx, rx) = unbounded();
-    let retention: RetentionHandle = Arc::new(TxtOnly { skip_dir: None });
-    let opts = ScanOpts {
-        follow_symlinks: false,
-        max_depth: Some(2),
-        retention: Some(retention),
-    };
-    start_scan(root.clone(), opts, tx);
-    let (names, _, scanned) = drain(&rx);
-    assert!(names.contains("a.txt"));
-    assert!(!names.contains("keep.txt"), "depth 3 is beyond the limit");
-    assert_eq!(scanned, 6, "deep/ is listed at depth 2 but not entered");
-    std::fs::remove_dir_all(&root).ok();
 }

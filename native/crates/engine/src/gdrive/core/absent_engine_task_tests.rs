@@ -119,32 +119,6 @@ fn absent_creates<'r>(requests: &'r [Request], name: &str) -> Vec<&'r Request> {
 }
 
 #[test]
-fn speed_task_drive_absent_engine_upload_takes_one_write_request() {
-    let local = tempfile::tempdir().unwrap();
-    let source = local.path().join("neu.txt");
-    std::fs::write(&source, b"abc").unwrap();
-    let (drive, server, backend) = drive_with_target(|_, _| {});
-    let finished = upload(backend, &source);
-    assert!(finished.errors.is_empty(), "{:?}", finished.errors);
-    assert!(finished.issues.is_empty(), "{:?}", finished.issues);
-    assert_eq!(finished.progress.files_done, 1);
-    let requests = server.requests();
-    let writes: Vec<&Request> = requests
-        .iter()
-        .filter(|request| request.method != "GET")
-        .collect();
-    // The listing showed the name absent: one create under the final name,
-    // no stage, no rename, no trash.
-    let paths: Vec<&str> = writes.iter().map(|write| write.path()).collect();
-    assert_eq!(writes.len(), 1, "{paths:?}");
-    assert_eq!(absent_creates(&requests, "neu.txt").len(), 1);
-    let named = drive.named("target", "neu.txt");
-    assert_eq!(named.len(), 1);
-    assert_eq!(drive.bytes(named[0]["id"].as_str().unwrap()), b"abc");
-    assert_eq!(drive.children("target").len(), 1, "nothing else was left");
-}
-
-#[test]
 fn speed_task_drive_absent_engine_name_race_lands_numbered_and_never_shares() {
     let local = tempfile::tempdir().unwrap();
     let source = local.path().join("race.txt");

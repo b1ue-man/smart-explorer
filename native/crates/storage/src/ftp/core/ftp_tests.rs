@@ -77,47 +77,46 @@ fn serve_suspect_connection(mut stream: TcpStream, generation: usize, mutations:
 
 #[test]
 fn url_plain_with_creds() {
-    let u = parse_ftp_url("ftp://bob:pw@host:2121/pub/data").unwrap();
-    assert!(!u.secure);
-    assert_eq!(u.user, "bob");
-    assert_eq!(u.password, "pw");
-    assert_eq!(u.host, "host");
-    assert_eq!(u.port, 2121);
-    assert_eq!(u.root, "/pub/data");
-}
-
-#[test]
-fn url_decodes_encoded_userinfo_exactly() {
-    let u = parse_ftp_url("ftp://domain%40alice:p%3Aa%20ss%25%40word@host:21/").unwrap();
-    assert_eq!(u.user, "domain@alice");
-    assert_eq!(u.password, "p:a ss%@word");
-    assert!(parse_ftp_url("ftp://user:%GG@host/").is_err());
-    assert!(parse_ftp_url("ftp://user:%A@host/").is_err());
-}
-
-#[test]
-fn url_ftps_default_port() {
-    let u = parse_ftp_url("ftps://alice@example.com/").unwrap();
-    assert!(u.secure);
-    assert_eq!(u.user, "alice");
-    assert_eq!(u.port, 21);
-    assert_eq!(u.root, "/");
-}
-
-#[test]
-fn url_anonymous() {
-    let u = parse_ftp_url("ftp://ftp.example.com/pub").unwrap();
-    assert_eq!(u.user, "anonymous");
-    assert!(!u.password.is_empty());
-    assert_eq!(u.host, "ftp.example.com");
-    assert_eq!(u.port, 21);
-    assert_eq!(u.root, "/pub");
-}
-
-#[test]
-fn url_errors() {
-    assert!(parse_ftp_url("sftp://u@host").is_err());
-    assert!(parse_ftp_url("ftp://u@host:bad/").is_err());
+    let cases: [(&str, fn()); 5] = [
+        ("url_plain_with_creds", || {
+            let u = parse_ftp_url("ftp://bob:pw@host:2121/pub/data").unwrap();
+            assert!(!u.secure);
+            assert_eq!(u.user, "bob");
+            assert_eq!(u.password, "pw");
+            assert_eq!(u.host, "host");
+            assert_eq!(u.port, 2121);
+            assert_eq!(u.root, "/pub/data");
+        }),
+        ("url_anonymous", || {
+            let u = parse_ftp_url("ftp://ftp.example.com/pub").unwrap();
+            assert_eq!(u.user, "anonymous");
+            assert!(!u.password.is_empty());
+            assert_eq!(u.host, "ftp.example.com");
+            assert_eq!(u.port, 21);
+            assert_eq!(u.root, "/pub");
+        }),
+        ("url_decodes_encoded_userinfo_exactly", || {
+            let u = parse_ftp_url("ftp://domain%40alice:p%3Aa%20ss%25%40word@host:21/").unwrap();
+            assert_eq!(u.user, "domain@alice");
+            assert_eq!(u.password, "p:a ss%@word");
+            assert!(parse_ftp_url("ftp://user:%GG@host/").is_err());
+            assert!(parse_ftp_url("ftp://user:%A@host/").is_err());
+        }),
+        ("url_errors", || {
+            assert!(parse_ftp_url("sftp://u@host").is_err());
+            assert!(parse_ftp_url("ftp://u@host:bad/").is_err());
+        }),
+        ("url_ftps_default_port", || {
+            let u = parse_ftp_url("ftps://alice@example.com/").unwrap();
+            assert!(u.secure);
+            assert_eq!(u.user, "alice");
+            assert_eq!(u.port, 21);
+            assert_eq!(u.root, "/");
+        }),
+    ];
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
+    }
 }
 
 #[test]

@@ -242,18 +242,7 @@ mod tests {
 
     #[test]
     fn lan_cleanup_task_direct_scope_matches_only_its_own_paths() {
-        let scope = RemovedEndpointScope::for_direct_contact("abc");
-        assert!(scope.matches_key("share://direct/abc"));
-        assert!(scope.matches_key("share://direct/abc/"));
-        assert!(scope.matches_key("share://direct/abc/Docs/Sub"));
-        assert!(!scope.matches_key("share://direct/abcd/Docs"));
-        assert!(!scope.matches_key("share://room/abc/Docs"));
-        assert!(!scope.matches_key("/home/user/abc"));
-    }
-
-    #[test]
-    fn lan_cleanup_task_saved_url_connection_scope_uses_the_endpoint_prefix() {
-        let connection = SavedConnection {
+        let sftp = SavedConnection {
             protocol: Protocol::Sftp,
             host: "example.com".into(),
             port: 2222,
@@ -263,15 +252,7 @@ mod tests {
             label: "prod".into(),
             use_agent: false,
         };
-        let scope = RemovedEndpointScope::for_saved_connection(&connection);
-        assert_eq!(scope.prefixes, ["sftp://alice@example.com:2222"]);
-        assert!(scope.matches_key("sftp://alice@example.com:2222/srv/data"));
-        assert!(!scope.matches_key("sftp://alice@example.com:22/srv"));
-    }
-
-    #[test]
-    fn lan_cleanup_task_unc_connection_scope_uses_the_forward_slashed_root() {
-        let connection = SavedConnection {
+        let unc = SavedConnection {
             protocol: Protocol::Share,
             host: String::new(),
             port: 0,
@@ -281,10 +262,52 @@ mod tests {
             label: "NAS".into(),
             use_agent: false,
         };
-        let scope = RemovedEndpointScope::for_saved_connection(&connection);
-        assert_eq!(scope.prefixes, ["//server/share"]);
-        assert!(scope.matches_key("//server/share/photos"));
-        assert!(!scope.matches_key("//server/share2"));
+        let cases = [
+            (
+                "direct contact",
+                RemovedEndpointScope::for_direct_contact("abc"),
+                vec![
+                    "share://direct/abc",
+                    "share://direct/abc/",
+                    "share://direct/abc/Docs/Sub",
+                ],
+                vec![
+                    "share://direct/abcd/Docs",
+                    "share://room/abc/Docs",
+                    "/home/user/abc",
+                ],
+            ),
+            (
+                "saved URL",
+                RemovedEndpointScope::for_saved_connection(&sftp),
+                vec!["sftp://alice@example.com:2222/srv/data"],
+                vec!["sftp://alice@example.com:22/srv"],
+            ),
+            (
+                "UNC root",
+                RemovedEndpointScope::for_saved_connection(&unc),
+                vec!["//server/share/photos"],
+                vec!["//server/share2"],
+            ),
+        ];
+        for (case, scope, matching, other) in &cases {
+            for key in matching {
+                assert!(scope.matches_key(key), "{case}: {key}");
+            }
+            for key in other {
+                assert!(!scope.matches_key(key), "{case}: {key}");
+            }
+        }
+        assert_eq!(
+            RemovedEndpointScope::for_saved_connection(&sftp).prefixes,
+            ["sftp://alice@example.com:2222"],
+            "saved URL prefix"
+        );
+        assert_eq!(
+            RemovedEndpointScope::for_saved_connection(&unc).prefixes,
+            ["//server/share"],
+            "UNC root prefix"
+        );
     }
 
     #[test]

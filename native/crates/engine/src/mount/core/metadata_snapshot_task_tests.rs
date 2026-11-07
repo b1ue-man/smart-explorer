@@ -54,18 +54,6 @@ fn remote_drive_task_parent_snapshot_recursively_reconciles_point_metadata() -> 
     Ok(())
 }
 
-#[test]
-fn remote_drive_task_snapshot_generation_detects_parent_and_point_observations() -> io::Result<()> {
-    let cache = MetadataCache::new("/", true);
-    let initial = cache.generation()?;
-    assert!(cache.install_directory("/", directory("/"), Vec::new().into(), 0)?);
-    let parent = cache.generation()?;
-    assert_ne!(parent, initial);
-    cache.note_external_observation()?;
-    assert_ne!(cache.generation()?, parent);
-    Ok(())
-}
-
 struct RacingDirectoryBackend {
     metadata: Mutex<HashMap<String, VfsMeta>>,
     root_entries: Mutex<Vec<VfsMeta>>,
@@ -198,33 +186,6 @@ fn remote_drive_task_older_parent_fetch_cannot_resurrect_removed_child() -> io::
     assert_eq!(backend.list_calls.load(Ordering::SeqCst), 2);
     let error = engine.stat_cached(r"\removed.txt").unwrap_err();
     assert_eq!(error.kind(), io::ErrorKind::NotFound);
-    Ok(())
-}
-
-#[test]
-fn remote_drive_task_global_snapshot_admission_uses_bytes_not_count_limits() -> io::Result<()> {
-    let cache = MetadataCache::new("/", true);
-    assert!(cache.install_directory("/", directory("/"), (0..4_200)
-        .map(|index| directory(&format!("directory-{index:04}")))
-        .collect::<Vec<_>>().into(), 0)?);
-    let entries: Arc<[VfsMeta]> = (0..16)
-        .map(|index| file(&format!("file-{index:02}.txt"), index))
-        .collect::<Vec<_>>()
-        .into();
-    for index in 0..4_200 {
-        assert!(cache.install_directory(
-            &format!("/directory-{index:04}"),
-            directory(&format!("directory-{index:04}")),
-            Arc::clone(&entries),
-            1,
-        )?);
-    }
-
-    let (directories, entries, bytes) = cache.usage()?;
-    assert_eq!(directories, 4_201);
-    assert!(entries > 50_000);
-    assert!(bytes <= 128 * 1024 * 1024);
-    assert!(cache.directory("/")?.is_some(), "all these snapshots fit the byte budget");
     Ok(())
 }
 

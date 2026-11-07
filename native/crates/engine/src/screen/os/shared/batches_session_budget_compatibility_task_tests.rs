@@ -247,10 +247,19 @@ mod android_capture_restart;
 
 #[test]
 fn batches_task_b6_session_budget_android_resume_reuses_capacity_after_actual_owner_end() {
+    let cases: [fn(); 2] = [
+        batches_task_b6_session_budget_android_resume_reuses_capacity_after_actual_owner_end_case,
+        batches_task_b6_session_budget_android_resume_keeps_live_owner_and_retries_same_generation,
+    ];
+    for case in cases {
+        case();
+    }
+}
+
+fn batches_task_b6_session_budget_android_resume_reuses_capacity_after_actual_owner_end_case() {
     android_capture_restart::batches_task_b6_session_budget_android_resume_reuses_capacity_after_actual_owner_end();
 }
 
-#[test]
 fn batches_task_b6_session_budget_android_resume_keeps_live_owner_and_retries_same_generation() {
     android_capture_restart::batches_task_b6_session_budget_android_resume_keeps_live_owner_and_retries_same_generation();
 }

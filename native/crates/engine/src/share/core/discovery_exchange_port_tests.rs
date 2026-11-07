@@ -1,3 +1,4 @@
+use super::validate_pin_length;
 use super::DiscoveryExchangePortImpl;
 use crate::share::direct_protocol::DirectPeerIdentity;
 use crate::share::direct_reciprocal::{DirectReciprocalPeer, DirectRelationMaterial};
@@ -109,6 +110,16 @@ fn installed(outcome: Option<DiscoveryRelationOutcome>) {
 
 #[test]
 fn review_task_persisted_pairing_stays_reportable_after_malformed_commit() {
+    let cases: [fn(); 2] = [
+        review_task_persisted_pairing_stays_reportable_after_malformed_commit_case,
+        review_task_premature_completion_preserves_the_installed_pairing_outcome,
+    ];
+    for case in cases {
+        case();
+    }
+}
+
+fn review_task_persisted_pairing_stays_reportable_after_malformed_commit_case() {
     let (mut publisher, mut connector, commit) = persisted_pair();
     let publisher_commit = packet(
         publisher
@@ -132,7 +143,6 @@ fn review_task_persisted_pairing_stays_reportable_after_malformed_commit() {
     installed(publisher.take_persisted_outcome("exchange"));
 }
 
-#[test]
 fn review_task_premature_completion_preserves_the_installed_pairing_outcome() {
     let (mut publisher, mut connector, _) = persisted_pair();
     assert!(publisher
@@ -147,6 +157,16 @@ fn review_task_premature_completion_preserves_the_installed_pairing_outcome() {
 
 #[test]
 fn review_task_empty_pin_is_rejected_by_publishing_and_connecting_ports() {
+    let cases: [fn(); 2] = [
+        review_task_empty_pin_is_rejected_by_publishing_and_connecting_ports_case,
+        review_task_empty_pin_is_rejected_at_the_crypto_port_boundary,
+    ];
+    for case in cases {
+        case();
+    }
+}
+
+fn review_task_empty_pin_is_rejected_by_publishing_and_connecting_ports_case() {
     let mut publisher = port(91, "publisher");
     let mut connector = port(92, "connector");
     assert!(matches!(
@@ -157,4 +177,10 @@ fn review_task_empty_pin_is_rejected_by_publishing_and_connecting_ports() {
         connector.start_connector("exchange", &advertisement(), b"", false),
         Err(DiscoveryPortError::InvalidRequest(_))
     ));
+}
+
+fn review_task_empty_pin_is_rejected_at_the_crypto_port_boundary() {
+    assert!(validate_pin_length(b"").is_err());
+    // Weak nonempty PINs are a separate, explicit caller choice.
+    assert!(validate_pin_length(b"1").is_ok());
 }

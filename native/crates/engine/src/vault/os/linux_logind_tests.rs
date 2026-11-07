@@ -116,7 +116,7 @@ fn released(stream: &mut UnixStream) -> bool {
 }
 
 #[test]
-#[ignore = "braucht den privaten Systembus der Stufe vault-linux (fixture bus)"]
+#[ignore = "braucht den privaten Systembus der Stufe vault-linux (fixture bus); Suite rechte-desktop-tresore-task"]
 fn vault_task_linux_logind_sleep_and_locked_hint_lock() {
     assert_eq!(
         std::env::var("SE_TASK_PRIVATE_SYSTEM_BUS").as_deref(),

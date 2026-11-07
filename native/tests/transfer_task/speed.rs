@@ -171,7 +171,7 @@ macro_rules! remote_benchmarks {
     ($backend:literal, $connect:expr, $($test:ident => $case:expr),+ $(,)?) => {
         $(
             #[test]
-            #[ignore = "benchmark: needs the task suite's servers"]
+            #[ignore = "benchmark: needs the task suite's servers; Suite speed-setup-task"]
             fn $test() {
                 let Some((backend, root)) = $connect else {
                     return;
@@ -234,7 +234,7 @@ remote_benchmarks!(
 /// block: the extra connections logged in with the main connection's host
 /// key (a refused key would show "gesperrt").
 #[test]
-#[ignore = "benchmark: needs the task suite's servers"]
+#[ignore = "benchmark: needs the task suite's servers; Suite speed-setup-task"]
 fn speed_task_remote_sftp_large_extra_connections() {
     let (backend, root) = sftp_stored();
     let source = local_case(&LARGE, "sftp_extra");
@@ -289,7 +289,7 @@ fn assert_extra_connections(backend: &dyn smart_explorer::vfs::Backend) {
 /// yet) runs in ranges over connections logged in for them; the downloaded
 /// file must equal the source byte for byte.
 #[test]
-#[ignore = "benchmark: needs the task suite's servers"]
+#[ignore = "benchmark: needs the task suite's servers; Suite speed-setup-task"]
 fn speed_task_remote_ftp_large_download_ranges_fresh_job() {
     let (seed, root) = ftp();
     let source = local_case(&LARGE, "ftp_ranges");

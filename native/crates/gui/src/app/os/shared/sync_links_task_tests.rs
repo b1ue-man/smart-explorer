@@ -6,7 +6,7 @@ use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 
 #[test]
-#[ignore = "requires the isolated remote sync-path task profile"]
+#[ignore = "requires the isolated remote sync-path task profile; Suite crates-task"]
 fn sync_links_task_saved_job_and_gui_retain_partial_result_notice() {
     let mut app = App::new_for_copy_task();
     let (a, b) = (Location::new(Scheme::Local), Location::new(Scheme::Local));
@@ -36,7 +36,7 @@ fn sync_links_task_saved_job_and_gui_retain_partial_result_notice() {
 }
 
 #[test]
-#[ignore = "requires the isolated remote sync-path task profile"]
+#[ignore = "requires the isolated remote sync-path task profile; Suite crates-task"]
 fn sync_links_task_cross_remote_contract_protects_counterpart_subtree() {
     let (a, b) = (Location::new(Scheme::Sftp), Location::new(Scheme::Webdav));
     let outside = tempfile::tempdir().unwrap();

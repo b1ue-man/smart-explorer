@@ -120,6 +120,36 @@ fn drive_task_dialect_windows_table_unchanged() {
         serde_json::to_string(&PathDialect::Posix).unwrap(),
         "\"posix\""
     );
+    // Case "POSIX byte limit": POSIX counts bytes, Windows counts UTF-16 units.
+    {
+        assert_eq!(POSIX_NAME_MAX_BYTES, 255, "POSIX byte limit");
+        // (name, POSIX valid, Windows valid): bytes against UTF-16 units.
+        let table = [
+            ("a".repeat(255), true, true),
+            ("a".repeat(256), false, false),
+            ("ä".repeat(127), true, true),
+            ("ä".repeat(128), false, true),
+            ("€".repeat(85), true, true),
+            ("€".repeat(86), false, true),
+            ("😀".repeat(63), true, true),
+            ("😀".repeat(64), false, true),
+            ("😀".repeat(128), false, false),
+        ];
+        for (name, posix, windows) in table {
+            assert_eq!(
+                PathDialect::Posix.validate_component(&name).is_ok(),
+                posix,
+                "POSIX limit for {} bytes",
+                name.len()
+            );
+            assert_eq!(
+                PathDialect::Windows.validate_component(&name).is_ok(),
+                windows,
+                "Windows limit for {} UTF-16 units",
+                name.encode_utf16().count()
+            );
+        }
+    }
 }
 
 #[test]
@@ -170,37 +200,6 @@ fn drive_task_dialect_posix_rejects_nul_slash_backslash_dotdot() {
         assert!(
             projector.project(callback).is_err(),
             "POSIX accepted {callback:?}"
-        );
-    }
-}
-
-#[test]
-fn drive_task_dialect_posix_name_max_bytes() {
-    assert_eq!(POSIX_NAME_MAX_BYTES, 255);
-    // (name, POSIX valid, Windows valid): bytes against UTF-16 units.
-    let table = [
-        ("a".repeat(255), true, true),
-        ("a".repeat(256), false, false),
-        ("ä".repeat(127), true, true),
-        ("ä".repeat(128), false, true),
-        ("€".repeat(85), true, true),
-        ("€".repeat(86), false, true),
-        ("😀".repeat(63), true, true),
-        ("😀".repeat(64), false, true),
-        ("😀".repeat(128), false, false),
-    ];
-    for (name, posix, windows) in table {
-        assert_eq!(
-            PathDialect::Posix.validate_component(&name).is_ok(),
-            posix,
-            "POSIX limit for {} bytes",
-            name.len()
-        );
-        assert_eq!(
-            PathDialect::Windows.validate_component(&name).is_ok(),
-            windows,
-            "Windows limit for {} UTF-16 units",
-            name.encode_utf16().count()
         );
     }
 }

@@ -49,6 +49,16 @@ fn request() -> StartRequest {
 /// policy or an unadvertised service is refused.
 #[test]
 fn batches_rdp_requires_explicit_session_local_access_and_certificate_policy() {
+    let cases: [fn(); 2] = [
+        batches_rdp_requires_explicit_session_local_access_and_certificate_policy_case,
+        batches_rdp_missing_listener_tls_certificate_or_known_session_fails_closed,
+    ];
+    for case in cases {
+        case();
+    }
+}
+
+fn batches_rdp_requires_explicit_session_local_access_and_certificate_policy_case() {
     let probe =
         AuthenticatedProbe::from_authenticated_peer("host-node".into(), report(service())).unwrap();
     assert!(request().validate(&probe).is_ok());
@@ -66,7 +76,6 @@ fn batches_rdp_requires_explicit_session_local_access_and_certificate_policy() {
     assert!(native.validate(&probe).is_ok());
 }
 
-#[test]
 fn batches_rdp_missing_listener_tls_certificate_or_known_session_fails_closed() {
     for case in 0..6 {
         let mut service = service();

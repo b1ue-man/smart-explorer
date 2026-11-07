@@ -47,6 +47,16 @@ fn funded() -> (Arc<SessionAdmission>, Arc<CaptureBroker>, u64) {
 
 #[test]
 fn batches_task_capture_worker_eof_does_not_release_credit_before_process_exit() {
+    let cases: [fn(); 2] = [
+        batches_task_capture_worker_eof_does_not_release_credit_before_process_exit_case,
+        batches_task_capture_worker_confirmed_exit_keeps_buffered_parent_reply_authority,
+    ];
+    for case in cases {
+        case();
+    }
+}
+
+fn batches_task_capture_worker_eof_does_not_release_credit_before_process_exit_case() {
     let (admission, broker, id) = funded();
     let extra = admission.additional_bytes().unwrap();
     assert!(extra > 0);
@@ -58,7 +68,6 @@ fn batches_task_capture_worker_eof_does_not_release_credit_before_process_exit()
     assert!(broker.grant(id).is_err());
 }
 
-#[test]
 fn batches_task_capture_worker_confirmed_exit_keeps_buffered_parent_reply_authority() {
     let (_admission, broker, id) = funded();
     broker.process_exited();

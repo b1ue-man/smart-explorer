@@ -162,6 +162,16 @@ fn deleted_outgoing_accept_still_applies_a_newer_signed_remote_revocation() {
 
 #[test]
 fn saturated_unexpired_tombstones_fail_before_removing_the_request() {
+    let cases: [fn(); 2] = [
+        saturated_unexpired_tombstones_fail_before_removing_the_request_case,
+        expired_tombstones_are_pruned_before_capacity_is_reused,
+    ];
+    for case in cases {
+        case();
+    }
+}
+
+fn saturated_unexpired_tombstones_fail_before_removing_the_request_case() {
     let request = request();
     let mut profiles = outgoing_profiles(&request);
     for index in 0..MAX_DIRECT_REQUEST_TOMBSTONES {
@@ -181,7 +191,6 @@ fn saturated_unexpired_tombstones_fail_before_removing_the_request() {
     );
 }
 
-#[test]
 fn expired_tombstones_are_pruned_before_capacity_is_reused() {
     let request = request();
     let mut profiles = outgoing_profiles(&request);
@@ -203,6 +212,16 @@ fn expired_tombstones_are_pruned_before_capacity_is_reused() {
 
 #[test]
 fn deletion_has_no_half_persisted_snapshot() {
+    let cases: [fn(); 2] = [
+        deletion_has_no_half_persisted_snapshot_case,
+        failed_durable_commit_keeps_visible_entry_and_tombstone_absent,
+    ];
+    for case in cases {
+        case();
+    }
+}
+
+fn deletion_has_no_half_persisted_snapshot_case() {
     let request = request();
     let before = outgoing_profiles(&request);
     let mut candidate = before.clone();
@@ -219,7 +238,6 @@ fn deletion_has_no_half_persisted_snapshot() {
         .is_some());
 }
 
-#[test]
 fn failed_durable_commit_keeps_visible_entry_and_tombstone_absent() {
     let request = request();
     let mut live = outgoing_profiles(&request);

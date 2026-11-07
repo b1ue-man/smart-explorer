@@ -216,14 +216,12 @@ mod tests {
             Some("text/plain")
         );
         std::fs::remove_dir_all(path.parent().unwrap()).ok();
-    }
 
-    #[test]
-    fn corrupt_cache_is_ignored_by_public_loader_shape() {
-        let path = tmp_file("corrupt");
-        std::fs::write(&path, "{not json").unwrap();
-        assert!(load_from_path(&path).is_err());
-        std::fs::remove_dir_all(path.parent().unwrap()).ok();
+        // Case "corrupt cache": unreadable JSON is refused, never loaded.
+        let corrupt = tmp_file("corrupt");
+        std::fs::write(&corrupt, "{not json").unwrap();
+        assert!(load_from_path(&corrupt).is_err(), "corrupt cache");
+        std::fs::remove_dir_all(corrupt.parent().unwrap()).ok();
     }
 
     #[test]

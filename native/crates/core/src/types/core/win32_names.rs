@@ -149,32 +149,14 @@ mod tests {
                 "{name:?} is a device stem"
             );
         }
-    }
 
-    #[test]
-    fn recursive_filter_task_trailing_and_invalid_characters_are_detected() {
-        assert_eq!(
-            win32_name_issue("report."),
-            Some(Win32NameIssue::TrailingDotOrSpace)
-        );
-        assert_eq!(
-            win32_name_issue("report "),
-            Some(Win32NameIssue::TrailingDotOrSpace)
-        );
-        for name in [
+        // Exact issues: trailing dots and spaces, invalid characters, and
+        // ordinary names that must pass unflagged. Each row names its case.
+        let trailing: &[&str] = &["report.", "report "];
+        let invalid: &[&str] = &[
             "a<b", "a>b", "a:b", "a\"b", "a|b", "a?b", "a*b", "a\\b", "a/b", "a\tb",
-        ] {
-            assert_eq!(
-                win32_name_issue(name),
-                Some(Win32NameIssue::InvalidCharacter),
-                "{name:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn recursive_filter_task_ordinary_names_pass() {
-        for name in [
+        ];
+        let ordinary: &[&str] = &[
             "null",
             "com",
             "com10",
@@ -191,8 +173,24 @@ mod tests {
             ".",
             "..",
             "",
-        ] {
-            assert_eq!(win32_name_issue(name), None, "{name:?} was flagged");
+        ];
+        let rows: [(&str, &[&str], Option<Win32NameIssue>); 3] = [
+            (
+                "trailing dot or space",
+                trailing,
+                Some(Win32NameIssue::TrailingDotOrSpace),
+            ),
+            (
+                "invalid character",
+                invalid,
+                Some(Win32NameIssue::InvalidCharacter),
+            ),
+            ("ordinary name", ordinary, None),
+        ];
+        for (case, names, expected) in rows {
+            for name in names {
+                assert_eq!(win32_name_issue(name), expected, "{case}: {name:?}");
+            }
         }
         assert!(!is_win32_device_name("com10"));
         assert!(!is_win32_device_name("nul_x"));

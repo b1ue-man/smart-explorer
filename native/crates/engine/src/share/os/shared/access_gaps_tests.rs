@@ -43,6 +43,16 @@ fn grant(device: &str, state: DirectGrantState) -> DirectGrant {
 
 #[test]
 fn rechte_task_one_way_contact_and_suspended_grant_are_gaps() {
+    let cases: [fn(); 2] = [
+        rechte_task_one_way_contact_and_suspended_grant_are_gaps_case,
+        rechte_task_pending_contact_is_no_gap,
+    ];
+    for case in cases {
+        case();
+    }
+}
+
+fn rechte_task_one_way_contact_and_suspended_grant_are_gaps_case() {
     let mut profiles = ShareProfiles::default();
     // a: reached by this device, never shared back (one-sided pairing, U1).
     profiles.direct_contacts.push(contact("a"));
@@ -77,7 +87,6 @@ fn rechte_task_one_way_contact_and_suspended_grant_are_gaps() {
     assert_eq!(AccessGapKind::RightsPending.code(), "rights_pending");
 }
 
-#[test]
 fn rechte_task_pending_contact_is_no_gap() {
     let mut profiles = ShareProfiles::default();
     let mut waiting = contact("w");

@@ -86,6 +86,16 @@ impl Backend for FaultBackend {
 
 #[test]
 fn every_planning_fault_happens_before_any_removal() {
+    let cases: [fn(); 2] = [
+        every_planning_fault_happens_before_any_removal_case,
+        cancellation_happens_before_any_removal,
+    ];
+    for case in cases {
+        case();
+    }
+}
+
+fn every_planning_fault_happens_before_any_removal_case() {
     for fault in [
         Fault::UnsafeName,
         Fault::DuplicateName,
@@ -101,7 +111,6 @@ fn every_planning_fault_happens_before_any_removal() {
     }
 }
 
-#[test]
 fn cancellation_happens_before_any_removal() {
     let removals = Arc::new(Mutex::new(Vec::new()));
     let backend: BackendHandle = Arc::new(FaultBackend {

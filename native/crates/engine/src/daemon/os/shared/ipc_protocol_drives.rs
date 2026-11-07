@@ -98,11 +98,7 @@ impl DriveIpcRequest {
 }
 
 /// Serves one `IpcRequest::Drive` (arm in `ipc_host_ext.rs`).
-pub fn serve(
-    host: &ShareHost,
-    stream: &mut TcpStream,
-    req: DriveIpcRequest,
-) -> io::Result<()> {
+pub fn serve(host: &ShareHost, stream: &mut TcpStream, req: DriveIpcRequest) -> io::Result<()> {
     let response = match req {
         DriveIpcRequest::RecoverySaveRemove { id, destination } => {
             recovery_answer(host.mounts.save_remove(&id, &destination))
@@ -219,10 +215,23 @@ pub fn request_restore_if_running() {
 #[cfg(test)]
 mod tests {
     use super::DriveIpcRequest;
+    use crate::daemon::ipc_protocol::IpcRequest;
     use crate::mount::MountId;
+    use serde_json::json;
 
     #[test]
     fn drive_requests_keep_their_wire_form() {
+        let cases: [fn(); 3] = [
+            drive_requests_keep_their_wire_form_case,
+            peek_requests_follow_the_drive_wire_form,
+            devices_wire_requests_keep_their_form,
+        ];
+        for case in cases {
+            case();
+        }
+    }
+
+    fn drive_requests_keep_their_wire_form_case() {
         let options = DriveIpcRequest::SetOptions {
             id: MountId::parse("drive-1").unwrap(),
             auto_remount: true,
@@ -251,7 +260,24 @@ mod tests {
         assert!(!DriveIpcRequest::Restore.promotes_daemon());
     }
 
-    #[test]
+    fn peek_requests_follow_the_drive_wire_form() {
+        let request = IpcRequest::Drive {
+            token: "geheim".into(),
+            req: DriveIpcRequest::SetOptions {
+                id: MountId::parse("drive-1").unwrap(),
+                auto_remount: true,
+            },
+        };
+        assert_eq!(
+            serde_json::to_value(&request).unwrap(),
+            json!({
+                "t": "drive",
+                "token": "geheim",
+                "req": {"op": "set_options", "id": "drive-1", "auto_remount": true}
+            })
+        );
+    }
+
     fn devices_wire_requests_keep_their_form() {
         let lines = [
             (DriveIpcRequest::DevicesStatus, r#"{"op":"devices_status"}"#),

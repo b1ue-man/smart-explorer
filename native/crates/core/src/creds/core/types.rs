@@ -183,42 +183,45 @@ mod tests {
 
     #[test]
     fn serialize_parse_roundtrip_password() {
-        let c = sample_pw();
-        let line = serialize(&c);
-        let back = parse(&line).unwrap();
-        assert_eq!(back.protocol, Protocol::Sftp);
-        assert_eq!(back.host, "example.com");
-        assert_eq!(back.port, 2222);
-        assert_eq!(back.user, "alice");
-        assert_eq!(back.auth, AuthKind::Password);
-        assert_eq!(back.root, "/home/alice");
-        assert_eq!(back.label, "Work box");
-    }
-
-    #[test]
-    fn serialize_parse_roundtrip_key() {
-        let mut c = sample_pw();
-        c.auth = AuthKind::Key {
-            path: "C:/keys/id_ed25519".into(),
-        };
-        c.protocol = Protocol::Ftps;
-        let back = parse(&serialize(&c)).unwrap();
-        assert_eq!(back.protocol, Protocol::Ftps);
-        assert_eq!(
-            back.auth,
-            AuthKind::Key {
-                path: "C:/keys/id_ed25519".into()
-            }
-        );
-    }
-
-    #[test]
-    fn luecken_task_ssh_agent_auth_round_trips_and_needs_no_key_path() {
-        let mut c = sample_pw();
-        c.auth = AuthKind::SshAgent;
-        let line = serialize(&c);
-        assert!(line.contains("\tssh-agent\t\t"));
-        assert_eq!(parse(&line).unwrap().auth, AuthKind::SshAgent);
+        // One row per login kind. Each row is written, checked for its wire
+        // fragment, read back and compared field by field.
+        let cases: [(&str, Protocol, AuthKind, &str); 3] = [
+            (
+                "password",
+                Protocol::Sftp,
+                AuthKind::Password,
+                "\tpassword\t\t",
+            ),
+            (
+                "key",
+                Protocol::Ftps,
+                AuthKind::Key {
+                    path: "C:/keys/id_ed25519".into(),
+                },
+                "\tkey\tC:/keys/id_ed25519\t",
+            ),
+            (
+                "ssh-agent",
+                Protocol::Sftp,
+                AuthKind::SshAgent,
+                "\tssh-agent\t\t",
+            ),
+        ];
+        for (case, protocol, auth, wire) in cases {
+            let mut c = sample_pw();
+            c.protocol = protocol;
+            c.auth = auth.clone();
+            let line = serialize(&c);
+            assert!(line.contains(wire), "{case}: {line}");
+            let back = parse(&line).unwrap();
+            assert_eq!(back.protocol, protocol, "{case}");
+            assert_eq!(back.host, "example.com", "{case}");
+            assert_eq!(back.port, 2222, "{case}");
+            assert_eq!(back.user, "alice", "{case}");
+            assert_eq!(back.auth, auth, "{case}");
+            assert_eq!(back.root, "/home/alice", "{case}");
+            assert_eq!(back.label, "Work box", "{case}");
+        }
     }
 
     #[test]

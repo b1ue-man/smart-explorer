@@ -183,7 +183,7 @@ macro_rules! limiter_cases {
     ($($name:ident => $profile:literal),* $(,)?) => {
         $(
             #[test]
-            #[ignore = "needs the bottleneck the stage builds around the test program"]
+            #[ignore = "needs the bottleneck the stage builds around the test program; Suite rechte-desktop-tresore-task"]
             fn $name() {
                 guarded(stringify!($name), || run_limiter(stringify!($name), $profile));
             }

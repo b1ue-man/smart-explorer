@@ -39,6 +39,33 @@ fn mount_point_folder_names_and_default_places() {
     assert!(is_tmpfs_magic(0x0102_1994_i64));
     assert!(is_tmpfs_magic(0x0102_1994_u64));
     assert!(!is_tmpfs_magic(0xEF53_i64));
+    // Case "name search has no limit": the first free number is found beyond 1500 taken names.
+    {
+        let root = Path::new("/home/u/SmartExplorer");
+        let taken = |path: &Path| {
+            let name = path.file_name().unwrap().to_string_lossy();
+            name == "prod"
+                || name
+                    .strip_prefix("prod (")
+                    .and_then(|rest| rest.strip_suffix(')'))
+                    .and_then(|number| number.parse::<u32>().ok())
+                    .is_some_and(|number| number <= 1500)
+        };
+        assert_eq!(
+            default_location(root, "prod", taken).unwrap(),
+            root.join("prod (1501)"),
+            "name search has no limit"
+        );
+        let base = tempfile::tempdir().unwrap();
+        let file = base.path().join("not-a-folder");
+        fs::write(&file, b"x").unwrap();
+        let error = default_location(&file, "prod", |_| true).unwrap_err();
+        assert_ne!(
+            error.kind(),
+            std::io::ErrorKind::NotFound,
+            "a file in place of the folder is reported"
+        );
+    }
 }
 
 #[test]
@@ -121,29 +148,4 @@ broken line without separator
         fs::read(connections.path().join("53").join("abort")).unwrap(),
         b"1"
     );
-}
-
-/// R15c: past the former 999 suffixes the search goes on to a free name;
-/// only a real error (a root that is a file) ends it.
-#[test]
-fn drive_task_mount_point_name_search_has_no_limit() {
-    let root = Path::new("/home/u/SmartExplorer");
-    let taken = |path: &Path| {
-        let name = path.file_name().unwrap().to_string_lossy();
-        name == "prod"
-            || name
-                .strip_prefix("prod (")
-                .and_then(|rest| rest.strip_suffix(')'))
-                .and_then(|number| number.parse::<u32>().ok())
-                .is_some_and(|number| number <= 1500)
-    };
-    assert_eq!(
-        default_location(root, "prod", taken).unwrap(),
-        root.join("prod (1501)")
-    );
-    let base = tempfile::tempdir().unwrap();
-    let file = base.path().join("not-a-folder");
-    fs::write(&file, b"x").unwrap();
-    let error = default_location(&file, "prod", |_| true).unwrap_err();
-    assert_ne!(error.kind(), std::io::ErrorKind::NotFound);
 }

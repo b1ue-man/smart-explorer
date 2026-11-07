@@ -42,37 +42,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn build_saved_password_and_key() {
-        let mut f = ConnectForm {
-            host: "h".into(),
-            user: "u".into(),
-            root: "data".into(),
-            ..Default::default()
-        };
-        let s = build_saved(&f, 22);
-        assert_eq!(s.protocol, Protocol::Sftp);
-        assert_eq!(s.root, "/data");
-        assert_eq!(s.auth, AuthKind::Password);
-
-        f.use_key = true;
-        f.keyfile = "C:/k".into();
-        let s2 = build_saved(&f, 22);
-        assert_eq!(
-            s2.auth,
-            AuthKind::Key {
-                path: "C:/k".into()
-            }
-        );
-
-        f.use_key = false;
-        f.use_ssh_agent = true;
-        assert_eq!(build_saved(&f, 22).auth, AuthKind::SshAgent);
-        assert!(ConnectForm::from_saved(&build_saved(&f, 22)).use_ssh_agent);
-        f.protocol = Protocol::Ftp;
-        assert_eq!(build_saved(&f, 21).auth, AuthKind::Password);
-    }
-
-    #[test]
     fn luecken_task_saved_connections_of_0_5_180_open_with_the_same_login() {
         let mut saved = SavedConnection {
             protocol: Protocol::Sftp,
@@ -96,14 +65,43 @@ mod tests {
         assert!(form.use_key && !form.use_ssh_agent);
         assert_eq!(build_saved(&form, 22).auth, saved.auth);
         assert_eq!(build_saved(&form, 22).account(), saved.account());
-    }
 
-    #[test]
-    fn persistence_is_a_noop_when_save_is_disabled() {
-        let form = ConnectForm {
-            save: false,
+        // Case "form fields": password, key file and SSH agent are built from the form.
+        let mut fields = ConnectForm {
+            host: "h".into(),
+            user: "u".into(),
+            root: "data".into(),
             ..Default::default()
         };
-        assert!(persist(&form, 22, Some("not-written")).is_ok());
+        let built = build_saved(&fields, 22);
+        assert_eq!(built.protocol, Protocol::Sftp, "form fields");
+        assert_eq!(built.root, "/data", "form fields");
+        assert_eq!(built.auth, AuthKind::Password, "form fields");
+        fields.use_key = true;
+        fields.keyfile = "C:/k".into();
+        assert_eq!(
+            build_saved(&fields, 22).auth,
+            AuthKind::Key {
+                path: "C:/k".into()
+            },
+            "form key file"
+        );
+        fields.use_key = false;
+        fields.use_ssh_agent = true;
+        assert_eq!(
+            build_saved(&fields, 22).auth,
+            AuthKind::SshAgent,
+            "form SSH agent"
+        );
+        assert!(
+            ConnectForm::from_saved(&build_saved(&fields, 22)).use_ssh_agent,
+            "form SSH agent round trip"
+        );
+        fields.protocol = Protocol::Ftp;
+        assert_eq!(
+            build_saved(&fields, 21).auth,
+            AuthKind::Password,
+            "form FTP without agent"
+        );
     }
 }

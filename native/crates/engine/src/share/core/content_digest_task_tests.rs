@@ -57,6 +57,17 @@ fn screen_metadata_runtime_task_share_file_walk_returns_one_item() -> io::Result
 
 #[test]
 fn screen_metadata_runtime_task_share_content_digest_comes_from_the_host() -> io::Result<()> {
+    let cases: [fn() -> io::Result<()>; 2] = [
+        screen_metadata_runtime_task_share_content_digest_comes_from_the_host_case,
+        abgleich_task_share_content_md5_comes_from_the_host,
+    ];
+    for case in cases {
+        case()?;
+    }
+    Ok(())
+}
+
+fn screen_metadata_runtime_task_share_content_digest_comes_from_the_host_case() -> io::Result<()> {
     let fixture = CopyPastePeerFixture::for_transfer_engine_task()?;
     fs::create_dir(fixture.root_a.join("sub"))?;
     fs::write(fixture.root_a.join("sub").join("abc.txt"), b"abc")?;
@@ -93,6 +104,25 @@ fn screen_metadata_runtime_task_share_content_digest_comes_from_the_host() -> io
     Ok(())
 }
 
+/// `hash_file_md5_v1`: the sync's MD5 of one file comes from the host, so a
+/// single-file check of the checksum mode reads nothing over the connection.
+fn abgleich_task_share_content_md5_comes_from_the_host() -> io::Result<()> {
+    const ABC_MD5: &str = "900150983cd24fb0d6963f7d28e17f72";
+    let fixture = CopyPastePeerFixture::for_transfer_engine_task()?;
+    fs::create_dir(fixture.root_a.join("m"))?;
+    fs::write(fixture.root_a.join("m").join("abc.txt"), b"abc")?;
+    let peer = &*fixture.peer;
+    assert_eq!(
+        crate::vfs::content_md5(peer, "/A/m/abc.txt", &idle())?.as_deref(),
+        Some(ABC_MD5)
+    );
+    assert!(
+        crate::vfs::content_md5(peer, "/A/m", &idle()).is_err(),
+        "a folder"
+    );
+    Ok(())
+}
+
 #[test]
 fn screen_metadata_runtime_task_share_file_walk_wire_stays_compatible() {
     let folder_walk = FsHashWalk {
@@ -111,24 +141,4 @@ fn screen_metadata_runtime_task_share_file_walk_wire_stays_compatible() {
     assert!(FsHostFeatures::host().names().contains(&"hash_file_v1"));
     let old_host: FsHostFeatures = serde_json::from_str(r#"{"hash_walk_v1":true}"#).unwrap();
     assert!(!old_host.hash_file_v1, "an older host is never asked");
-}
-
-/// `hash_file_md5_v1`: the sync's MD5 of one file comes from the host, so a
-/// single-file check of the checksum mode reads nothing over the connection.
-#[test]
-fn abgleich_task_share_content_md5_comes_from_the_host() -> io::Result<()> {
-    const ABC_MD5: &str = "900150983cd24fb0d6963f7d28e17f72";
-    let fixture = CopyPastePeerFixture::for_transfer_engine_task()?;
-    fs::create_dir(fixture.root_a.join("m"))?;
-    fs::write(fixture.root_a.join("m").join("abc.txt"), b"abc")?;
-    let peer = &*fixture.peer;
-    assert_eq!(
-        crate::vfs::content_md5(peer, "/A/m/abc.txt", &idle())?.as_deref(),
-        Some(ABC_MD5)
-    );
-    assert!(
-        crate::vfs::content_md5(peer, "/A/m", &idle()).is_err(),
-        "a folder"
-    );
-    Ok(())
 }

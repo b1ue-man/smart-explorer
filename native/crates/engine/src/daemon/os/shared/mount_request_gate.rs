@@ -286,6 +286,7 @@ mod bulk_task_tests;
 
 #[cfg(test)]
 mod task_tests {
+    use super::bulk_task_tests::waiting;
     use super::*;
     use std::sync::mpsc;
     use std::time::{Duration, Instant};
@@ -411,6 +412,17 @@ mod task_tests {
     /// hold every transfer slot; a listing still enters at once.
     #[test]
     fn speed_task_drive_gate_keeps_a_slot_for_metadata_behind_streams() -> io::Result<()> {
+        let cases: [fn() -> io::Result<()>; 2] = [
+            speed_task_drive_gate_keeps_a_slot_for_metadata_behind_streams_case,
+            mount_vault_task_metadata_takes_the_slot_transfers_cannot,
+        ];
+        for case in cases {
+            case()?;
+        }
+        Ok(())
+    }
+
+    fn speed_task_drive_gate_keeps_a_slot_for_metadata_behind_streams_case() -> io::Result<()> {
         let gate = MountRequestGate::new(4);
         let streams = (0..3)
             .map(|_| gate.enter())
@@ -427,6 +439,31 @@ mod task_tests {
         // A single-slot backend has nothing to keep back.
         let single = MountRequestGate::new(1);
         drop(single.enter()?);
+        Ok(())
+    }
+
+    /// With several slots, waiting metadata takes the slot transfers leave free
+    /// even when the burst bound says a transfer is next.
+    fn mount_vault_task_metadata_takes_the_slot_transfers_cannot() -> std::io::Result<()> {
+        let mut state = GateState::default();
+        let transfers: Vec<_> = (0..3).map(|_| waiting()).collect();
+        for waiter in &transfers {
+            state.transfers.entries.push_back(waiter.clone());
+            state.transfer_waiters += 1;
+        }
+        state.dispatch(3);
+        assert_eq!(state.active, 2, "transfers keep one slot free");
+        assert_eq!(transfers[2].status(), WAITING);
+        let metadata = waiting();
+        state.metadata.entries.push_back(metadata.clone());
+        state.metadata_waiters = 1;
+        state.metadata_burst = MAX_METADATA_PRIORITY_BURST;
+        state.dispatch(3);
+        assert_eq!(metadata.status(), GRANTED);
+        assert_eq!(transfers[2].status(), WAITING);
+        state.release(RequestClass::Transfer);
+        state.dispatch(3);
+        assert_eq!(transfers[2].status(), GRANTED);
         Ok(())
     }
 }

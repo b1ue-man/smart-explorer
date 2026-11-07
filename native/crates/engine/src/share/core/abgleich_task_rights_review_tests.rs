@@ -71,69 +71,6 @@ fn legacy_device_with_all(profiles: &mut ShareProfiles) {
     assert!(rights_of(profiles, "peer").grants_anything());
 }
 
-#[test]
-fn abgleich_task_readmitted_legacy_device_waits_without_its_old_rights() {
-    let mut profiles = profiles_with_exports();
-    legacy_device_with_all(&mut profiles);
-    // Revoked: the grant is ignored.
-    crate::share::legacy_direct_request_decision::set_exact_grant(
-        &mut profiles,
-        &peer(),
-        false,
-        NOW + 1,
-    )
-    .unwrap();
-    assert_eq!(
-        profiles.grant_for("peer").unwrap().state,
-        DirectGrantState::Ignored
-    );
-    // A new request of the same device is accepted.
-    crate::share::legacy_direct_request_decision::set_exact_grant(
-        &mut profiles,
-        &peer(),
-        true,
-        NOW + 2,
-    )
-    .unwrap();
-    let grant = profiles.grant_for("peer").unwrap();
-    assert_eq!(grant.state, DirectGrantState::Accepted);
-    assert_eq!(rights_of(&profiles, "peer"), ConnectionRights::none());
-    assert!(session(&profiles, "peer").exports.roots.is_empty());
-    assert!(!session(&profiles, "peer").may_write);
-    let pending = profiles
-        .pending_rights_of(&target_of(&profiles, "peer"))
-        .expect("waits for confirmation");
-    assert_eq!(pending.origin, RightsOrigin::Readmitted);
-}
-
-#[test]
-fn abgleich_task_readmitted_legacy_device_takes_the_code_rights() {
-    let mut profiles = profiles_with_exports();
-    legacy_device_with_all(&mut profiles);
-    crate::share::legacy_direct_request_decision::set_exact_grant(
-        &mut profiles,
-        &peer(),
-        false,
-        NOW + 1,
-    )
-    .unwrap();
-    profiles
-        .set_code_rights(Some(RightsPreset::ReadOnly.rights()))
-        .unwrap();
-    crate::share::legacy_direct_request_decision::set_exact_grant(
-        &mut profiles,
-        &peer(),
-        true,
-        NOW + 2,
-    )
-    .unwrap();
-    assert_eq!(
-        rights_of(&profiles, "peer"),
-        RightsPreset::ReadOnly.rights()
-    );
-    assert!(profiles.pending_rights.is_empty());
-}
-
 /// A second request of the fixture's requester (another request id).
 fn second_request() -> SignedDirectRequest {
     let target_public = iroh::SecretKey::from_bytes(&[2; 32]).public().to_string();
@@ -161,6 +98,17 @@ fn second_request() -> SignedDirectRequest {
 
 #[test]
 fn abgleich_task_readmitted_ledger_device_waits_without_its_old_rights() {
+    let cases: [fn(); 3] = [
+        abgleich_task_readmitted_ledger_device_waits_without_its_old_rights_case,
+        abgleich_task_readmitted_legacy_device_takes_the_code_rights,
+        abgleich_task_readmitted_legacy_device_waits_without_its_old_rights,
+    ];
+    for case in cases {
+        case();
+    }
+}
+
+fn abgleich_task_readmitted_ledger_device_waits_without_its_old_rights_case() {
     let first = ledger::request(None);
     let mut profiles = profiles_with_exports();
     profiles
@@ -208,6 +156,67 @@ fn abgleich_task_readmitted_ledger_device_waits_without_its_old_rights() {
             .map(|pending| pending.origin),
         Some(RightsOrigin::Readmitted)
     );
+}
+
+fn abgleich_task_readmitted_legacy_device_takes_the_code_rights() {
+    let mut profiles = profiles_with_exports();
+    legacy_device_with_all(&mut profiles);
+    crate::share::legacy_direct_request_decision::set_exact_grant(
+        &mut profiles,
+        &peer(),
+        false,
+        NOW + 1,
+    )
+    .unwrap();
+    profiles
+        .set_code_rights(Some(RightsPreset::ReadOnly.rights()))
+        .unwrap();
+    crate::share::legacy_direct_request_decision::set_exact_grant(
+        &mut profiles,
+        &peer(),
+        true,
+        NOW + 2,
+    )
+    .unwrap();
+    assert_eq!(
+        rights_of(&profiles, "peer"),
+        RightsPreset::ReadOnly.rights()
+    );
+    assert!(profiles.pending_rights.is_empty());
+}
+
+fn abgleich_task_readmitted_legacy_device_waits_without_its_old_rights() {
+    let mut profiles = profiles_with_exports();
+    legacy_device_with_all(&mut profiles);
+    // Revoked: the grant is ignored.
+    crate::share::legacy_direct_request_decision::set_exact_grant(
+        &mut profiles,
+        &peer(),
+        false,
+        NOW + 1,
+    )
+    .unwrap();
+    assert_eq!(
+        profiles.grant_for("peer").unwrap().state,
+        DirectGrantState::Ignored
+    );
+    // A new request of the same device is accepted.
+    crate::share::legacy_direct_request_decision::set_exact_grant(
+        &mut profiles,
+        &peer(),
+        true,
+        NOW + 2,
+    )
+    .unwrap();
+    let grant = profiles.grant_for("peer").unwrap();
+    assert_eq!(grant.state, DirectGrantState::Accepted);
+    assert_eq!(rights_of(&profiles, "peer"), ConnectionRights::none());
+    assert!(session(&profiles, "peer").exports.roots.is_empty());
+    assert!(!session(&profiles, "peer").may_write);
+    let pending = profiles
+        .pending_rights_of(&target_of(&profiles, "peer"))
+        .expect("waits for confirmation");
+    assert_eq!(pending.origin, RightsOrigin::Readmitted);
 }
 
 fn auth_state(profiles: &ShareProfiles) -> crate::share::types::ShareAuthState {

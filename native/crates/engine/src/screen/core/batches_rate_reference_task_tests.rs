@@ -297,7 +297,7 @@ async fn screen(map: &iroh::RelayMap, profile: Profile) -> Measurement {
 /// No broad `batches_task_` marker: the common runner must select this exact
 /// ignored fixture once, through review-task-network.sh, on Linux only.
 #[test]
-#[ignore = "requires the single remote suite's owned Linux network namespace"]
+#[ignore = "requires the single remote suite's owned Linux network namespace; Suite review-task"]
 fn p27_network_reference_acceptance() {
     assert!(
         std::env::var_os("SE_P27_NAMESPACE").is_some(),

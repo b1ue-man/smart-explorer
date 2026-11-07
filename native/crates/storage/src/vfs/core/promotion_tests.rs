@@ -8,86 +8,99 @@ fn root(name: &str) -> std::path::PathBuf {
 
 #[test]
 fn promotion_replaces_only_after_staged_file_exists() {
-    let root = root("replace");
-    let _ = std::fs::remove_dir_all(&root);
-    std::fs::create_dir_all(&root).unwrap();
-    let destination = root.join("file");
-    let staged = root.join("file.stage");
-    std::fs::write(&destination, b"old").unwrap();
-    std::fs::write(&staged, b"new").unwrap();
-    let backend = LocalBackend::new("/");
-    promote_staged_replace(
-        &backend,
-        staged.to_str().unwrap(),
-        destination.to_str().unwrap(),
-    )
-    .unwrap();
-    assert_eq!(std::fs::read(&destination).unwrap(), b"new");
-    assert!(!staged.exists());
-    let _ = std::fs::remove_dir_all(&root);
-}
-
-#[test]
-fn failed_promotion_restores_old_destination() {
-    let root = root("rollback");
-    let _ = std::fs::remove_dir_all(&root);
-    std::fs::create_dir_all(&root).unwrap();
-    let destination = root.join("file");
-    let missing_staged = root.join("missing.stage");
-    std::fs::write(&destination, b"old").unwrap();
-    let backend = LocalBackend::new("/");
-    assert!(promote_staged_replace(
-        &backend,
-        missing_staged.to_str().unwrap(),
-        destination.to_str().unwrap(),
-    )
-    .is_err());
-    assert_eq!(std::fs::read(&destination).unwrap(), b"old");
-    let _ = std::fs::remove_dir_all(&root);
+    let cases: [(&str, fn()); 2] = [
+        ("promotion_replaces_only_after_staged_file_exists", || {
+            let root = root("replace");
+            let _ = std::fs::remove_dir_all(&root);
+            std::fs::create_dir_all(&root).unwrap();
+            let destination = root.join("file");
+            let staged = root.join("file.stage");
+            std::fs::write(&destination, b"old").unwrap();
+            std::fs::write(&staged, b"new").unwrap();
+            let backend = LocalBackend::new("/");
+            promote_staged_replace(
+                &backend,
+                staged.to_str().unwrap(),
+                destination.to_str().unwrap(),
+            )
+            .unwrap();
+            assert_eq!(std::fs::read(&destination).unwrap(), b"new");
+            assert!(!staged.exists());
+            let _ = std::fs::remove_dir_all(&root);
+        }),
+        ("failed_promotion_restores_old_destination", || {
+            let root = root("rollback");
+            let _ = std::fs::remove_dir_all(&root);
+            std::fs::create_dir_all(&root).unwrap();
+            let destination = root.join("file");
+            let missing_staged = root.join("missing.stage");
+            std::fs::write(&destination, b"old").unwrap();
+            let backend = LocalBackend::new("/");
+            assert!(promote_staged_replace(
+                &backend,
+                missing_staged.to_str().unwrap(),
+                destination.to_str().unwrap(),
+            )
+            .is_err());
+            assert_eq!(std::fs::read(&destination).unwrap(), b"old");
+            let _ = std::fs::remove_dir_all(&root);
+        }),
+    ];
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
+    }
 }
 
 #[test]
 fn local_no_replace_preserves_existing_destination() {
-    let root = root("noreplace");
-    let _ = std::fs::remove_dir_all(&root);
-    std::fs::create_dir_all(&root).unwrap();
-    let source = root.join("source");
-    let destination = root.join("destination");
-    std::fs::write(&source, b"source").unwrap();
-    std::fs::write(&destination, b"destination").unwrap();
-    let backend = LocalBackend::new("/");
-    assert!(backend
-        .rename_no_replace(source.to_str().unwrap(), destination.to_str().unwrap())
-        .is_err());
-    assert_eq!(std::fs::read(&source).unwrap(), b"source");
-    assert_eq!(std::fs::read(&destination).unwrap(), b"destination");
-    let _ = std::fs::remove_dir_all(&root);
-}
+    let cases: [(&str, fn()); 2] = [
+        ("local_no_replace_preserves_existing_destination", || {
+            let root = root("noreplace");
+            let _ = std::fs::remove_dir_all(&root);
+            std::fs::create_dir_all(&root).unwrap();
+            let source = root.join("source");
+            let destination = root.join("destination");
+            std::fs::write(&source, b"source").unwrap();
+            std::fs::write(&destination, b"destination").unwrap();
+            let backend = LocalBackend::new("/");
+            assert!(backend
+                .rename_no_replace(source.to_str().unwrap(), destination.to_str().unwrap())
+                .is_err());
+            assert_eq!(std::fs::read(&source).unwrap(), b"source");
+            assert_eq!(std::fs::read(&destination).unwrap(), b"destination");
+            let _ = std::fs::remove_dir_all(&root);
+        }),
+        (
+            "create_promotion_preserves_a_destination_that_appeared_after_preflight",
+            || {
+                let root = root("create_racer");
+                let _ = std::fs::remove_dir_all(&root);
+                std::fs::create_dir_all(&root).unwrap();
+                let staged = root.join("stage");
+                let destination = root.join("destination");
+                std::fs::write(&staged, b"new").unwrap();
+                // This represents a second writer creating the name after the caller's
+                // absence check but before commit.
+                std::fs::write(&destination, b"racer").unwrap();
 
-#[test]
-fn create_promotion_preserves_a_destination_that_appeared_after_preflight() {
-    let root = root("create_racer");
-    let _ = std::fs::remove_dir_all(&root);
-    std::fs::create_dir_all(&root).unwrap();
-    let staged = root.join("stage");
-    let destination = root.join("destination");
-    std::fs::write(&staged, b"new").unwrap();
-    // This represents a second writer creating the name after the caller's
-    // absence check but before commit.
-    std::fs::write(&destination, b"racer").unwrap();
+                let backend = LocalBackend::new("/");
+                let error = promote_staged_create(
+                    &backend,
+                    staged.to_str().unwrap(),
+                    destination.to_str().unwrap(),
+                )
+                .unwrap_err();
 
-    let backend = LocalBackend::new("/");
-    let error = promote_staged_create(
-        &backend,
-        staged.to_str().unwrap(),
-        destination.to_str().unwrap(),
-    )
-    .unwrap_err();
-
-    assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
-    assert_eq!(std::fs::read(&destination).unwrap(), b"racer");
-    assert_eq!(std::fs::read(&staged).unwrap(), b"new");
-    let _ = std::fs::remove_dir_all(&root);
+                assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+                assert_eq!(std::fs::read(&destination).unwrap(), b"racer");
+                assert_eq!(std::fs::read(&staged).unwrap(), b"new");
+                let _ = std::fs::remove_dir_all(&root);
+            },
+        ),
+    ];
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
+    }
 }
 
 #[test]

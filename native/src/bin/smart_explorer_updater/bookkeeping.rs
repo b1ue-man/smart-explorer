@@ -442,6 +442,9 @@ mod tests {
 
     #[test]
     fn launch_complete_record_binds_version_and_hash() {
+        // Rows: a record with a zero challenge, and one the app wrote with its
+        // own challenge, are proof for the version and hash they bind. A query
+        // for another version or hash, and a malformed record, are not.
         let dir = tempfile::tempdir().unwrap();
         let last = dir.path().join("last.txt");
         let target = dir.path().join("app");
@@ -449,42 +452,32 @@ mod tests {
         let target_key = crate::instance::target_key(&target);
         let marker = launch_complete_path(&last, &target_key).unwrap();
         let sha256 = "a".repeat(64);
+        let other_sha256 = "b".repeat(64);
+        let mut zero = launch_complete_payload(&target_key, "0.5.121", &sha256).unwrap();
+        zero.extend_from_slice(format!("{}\n", "0".repeat(32)).as_bytes());
+        let mut app = launch_complete_payload(&target_key, "0.5.121", &sha256).unwrap();
+        app.extend_from_slice(format!("{}\n", "b".repeat(32)).as_bytes());
 
-        write_launch_complete(&marker, &target_key, "0.5.121", &sha256).unwrap();
-
-        assert!(launch_complete_matches(&marker, &target_key, "0.5.121", &sha256).unwrap());
-        assert!(!launch_complete_matches(&marker, &target_key, "0.5.120", &sha256).unwrap());
-        assert!(
-            !launch_complete_matches(&marker, &target_key, "0.5.121", &"b".repeat(64)).unwrap()
-        );
-    }
-
-    #[test]
-    fn malformed_launch_complete_record_is_not_proof() {
-        let dir = tempfile::tempdir().unwrap();
-        let marker = dir.path().join("marker");
-        let target = dir.path().join("app");
-        std::fs::write(&target, b"app").unwrap();
-        std::fs::write(&marker, b"bad record\n").unwrap();
-        let target_key = crate::instance::target_key(&target);
-
-        assert!(
-            !launch_complete_matches(&marker, &target_key, "0.5.121", &"a".repeat(64)).unwrap()
-        );
-    }
-
-    #[test]
-    fn app_written_challenged_receipt_is_completion_proof() {
-        let dir = tempfile::tempdir().unwrap();
-        let marker = dir.path().join("marker");
-        let target = dir.path().join("app");
-        std::fs::write(&target, b"app").unwrap();
-        let target_key = crate::instance::target_key(&target);
-        let sha256 = "a".repeat(64);
-        let mut record = launch_complete_payload(&target_key, "0.5.121", &sha256).unwrap();
-        record.extend_from_slice(format!("{}\n", "b".repeat(32)).as_bytes());
-        std::fs::write(&marker, record).unwrap();
-
-        assert!(launch_complete_matches(&marker, &target_key, "0.5.121", &sha256).unwrap());
+        let cases: [(&str, Vec<u8>, &str, &String, bool); 5] = [
+            ("zero challenge", zero.clone(), "0.5.121", &sha256, true),
+            ("app-written challenge", app, "0.5.121", &sha256, true),
+            ("other version", zero.clone(), "0.5.120", &sha256, false),
+            ("other hash", zero, "0.5.121", &other_sha256, false),
+            (
+                "malformed record",
+                b"bad record\n".to_vec(),
+                "0.5.121",
+                &sha256,
+                false,
+            ),
+        ];
+        for (case, record, version, installed_sha256, expected) in cases {
+            std::fs::write(&marker, &record).unwrap();
+            assert_eq!(
+                launch_complete_matches(&marker, &target_key, version, installed_sha256).unwrap(),
+                expected,
+                "{case}"
+            );
+        }
     }
 }

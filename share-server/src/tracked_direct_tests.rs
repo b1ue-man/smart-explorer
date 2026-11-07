@@ -113,72 +113,115 @@ fn offline_request_gets_correlated_relay_ack_without_peer_receipt_claim() {
 
 #[test]
 fn oversized_tracked_envelopes_are_rejected_without_forward_or_ack() {
-    let (state, requester_rx, target_rx) = routed_state("requester", "target", Some("lookup"));
-    let requester = state.lock().unwrap().clients[&1].writer.clone();
-    let mut request = signed_request();
-    request.request_id = "r".repeat(2 * 1024 * 1024);
-    tracked_direct::route_request(1, &requester, request, None, &state);
-    assert_error(requester_rx.recv().unwrap());
-    assert!(target_rx.try_recv().is_err());
-
-    let (state, requester_rx, target_rx) = routed_state("requester", "target", None);
-    let target = state.lock().unwrap().clients[&2].writer.clone();
-    let mut receipt = signed_request_receipt();
-    receipt.request_digest = "d".repeat(257);
-    tracked_direct::route_request_receipt(2, &target, receipt, &state);
-    assert_error(target_rx.recv().unwrap());
-    assert!(requester_rx.try_recv().is_err());
-
-    let (state, requester_rx, target_rx) = routed_state("requester", "target", None);
-    let target = state.lock().unwrap().clients[&2].writer.clone();
-    let mut decision = signed_decision();
-    decision.message = Some("m".repeat(4097));
-    tracked_direct::route_decision(2, &target, decision, &state);
-    assert_error(target_rx.recv().unwrap());
-    assert!(requester_rx.try_recv().is_err());
-
-    let (state, requester_rx, target_rx) = routed_state("requester", "target", None);
-    let requester = state.lock().unwrap().clients[&1].writer.clone();
-    let mut receipt = signed_decision_receipt();
-    receipt.identity_signature = "s".repeat(1025);
-    tracked_direct::route_decision_receipt(1, &requester, receipt, &state);
-    assert_error(requester_rx.recv().unwrap());
-    assert!(target_rx.try_recv().is_err());
-}
-
-#[test]
-fn oversized_legacy_fields_are_rejected_without_forwarding() {
-    let (state, requester_rx, target_rx) = routed_state("requester", "target", Some("lookup"));
-    let requester = state.lock().unwrap().clients[&1].writer.clone();
-    tracked_direct::request_legacy(&requester, &"l".repeat(257), presence("requester"), &state);
-    assert_error(requester_rx.recv().unwrap());
-    assert!(target_rx.try_recv().is_err());
-
-    let target = state.lock().unwrap().clients[&2].writer.clone();
-    tracked_direct::decision_legacy(
-        &target,
-        "lookup",
-        "requester",
-        true,
-        Some(presence("target")),
-        Some("m".repeat(4097)),
-        &state,
-    );
-    assert_error(target_rx.recv().unwrap());
-    assert!(requester_rx.try_recv().is_err());
+    // Rows: an oversized tracked envelope or legacy field, sent by the
+    // requester (device 1) or the target (device 2). The sender gets the error
+    // and the other device receives nothing. Each row has its own routed state.
+    let cases: [(
+        &str,
+        Option<&str>,
+        u64,
+        fn(&Arc<Mutex<State>>, &super::Writer),
+    ); 6] = [
+        (
+            "tracked request",
+            Some("lookup"),
+            1,
+            |state: &Arc<Mutex<State>>, writer: &super::Writer| {
+                let mut request = signed_request();
+                request.request_id = "r".repeat(2 * 1024 * 1024);
+                tracked_direct::route_request(1, writer, request, None, state);
+            },
+        ),
+        (
+            "tracked request receipt",
+            None,
+            2,
+            |state: &Arc<Mutex<State>>, writer: &super::Writer| {
+                let mut receipt = signed_request_receipt();
+                receipt.request_digest = "d".repeat(257);
+                tracked_direct::route_request_receipt(2, writer, receipt, state);
+            },
+        ),
+        (
+            "tracked decision",
+            None,
+            2,
+            |state: &Arc<Mutex<State>>, writer: &super::Writer| {
+                let mut decision = signed_decision();
+                decision.message = Some("m".repeat(4097));
+                tracked_direct::route_decision(2, writer, decision, state);
+            },
+        ),
+        (
+            "tracked decision receipt",
+            None,
+            1,
+            |state: &Arc<Mutex<State>>, writer: &super::Writer| {
+                let mut receipt = signed_decision_receipt();
+                receipt.identity_signature = "s".repeat(1025);
+                tracked_direct::route_decision_receipt(1, writer, receipt, state);
+            },
+        ),
+        (
+            "legacy request lookup",
+            Some("lookup"),
+            1,
+            |state: &Arc<Mutex<State>>, writer: &super::Writer| {
+                tracked_direct::request_legacy(
+                    writer,
+                    &"l".repeat(257),
+                    presence("requester"),
+                    state,
+                );
+            },
+        ),
+        (
+            "legacy decision message",
+            Some("lookup"),
+            2,
+            |state: &Arc<Mutex<State>>, writer: &super::Writer| {
+                tracked_direct::decision_legacy(
+                    writer,
+                    "lookup",
+                    "requester",
+                    true,
+                    Some(presence("target")),
+                    Some("m".repeat(4097)),
+                    state,
+                );
+            },
+        ),
+    ];
+    for (case, lookup, sender_id, send) in cases {
+        let (state, requester_rx, target_rx) = routed_state("requester", "target", lookup);
+        let sender = state.lock().unwrap().clients[&sender_id].writer.clone();
+        send(&state, &sender);
+        let (sender_rx, other_rx) = if sender_id == 1 {
+            (&requester_rx, &target_rx)
+        } else {
+            (&target_rx, &requester_rx)
+        };
+        assert_error(sender_rx.recv().unwrap());
+        assert!(other_rx.try_recv().is_err(), "{case}");
+    }
 }
 
 #[test]
 fn capable_tcp_hello_negotiates_only_tracked_direct_v1() {
-    let response = tcp_hello(Some(&[CAPABILITY, "unsupported"]));
-    assert_eq!(response["t"], "hello_ok");
-    assert_eq!(response["capabilities"], serde_json::json!([CAPABILITY]));
-}
-
-#[test]
-fn legacy_tcp_hello_response_remains_byte_compatible() {
-    let response = tcp_hello(None);
-    assert_eq!(response, serde_json::json!({"t": "hello_ok"}));
+    // Rows: a hello that offers the tracked-direct capability next to an unknown
+    // one negotiates only that capability; a hello without capabilities gets the
+    // response of earlier versions, unchanged. Each row compares the whole reply.
+    let cases = [
+        (
+            "capable hello",
+            Some(&[CAPABILITY, "unsupported"][..]),
+            serde_json::json!({"t": "hello_ok", "capabilities": [CAPABILITY]}),
+        ),
+        ("legacy hello", None, serde_json::json!({"t": "hello_ok"})),
+    ];
+    for (case, capabilities, expected) in cases {
+        assert_eq!(tcp_hello(capabilities), expected, "{case}");
+    }
 }
 
 #[test]

@@ -85,19 +85,18 @@ class BatchesDeviceNavigationTaskTest {
     }
 
     @Test
-    fun batches_android_apps_request_from_existing_appearance_opens_once() {
-        root()
-        selectArea("Darstellung")
-        deliver(NavRequest.OpenApps("share://direct/device-navigation-fixture"))
-        assertAppsOnce()
-    }
-
-    @Test
     fun batches_android_apps_request_leaves_log_and_about_details() {
-        for (page in listOf("Fehlerprotokoll", "Über")) {
+        // Each row starts on another page and receives its request. The appearance row is the former
+        // batches_android_apps_request_from_existing_appearance_opens_once, with a direct device request.
+        val rows = listOf(
+            "Fehlerprotokoll" to "share://room/device-navigation-room/device-navigation-fixture",
+            "Über" to "share://room/device-navigation-room/device-navigation-fixture",
+            "Darstellung" to "share://direct/device-navigation-fixture",
+        )
+        for ((page, share) in rows) {
             root()
-            detail(page)
-            deliver(NavRequest.OpenApps("share://room/device-navigation-room/device-navigation-fixture"))
+            if (page == "Darstellung") selectArea(page) else detail(page)
+            deliver(NavRequest.OpenApps(share))
             assertAppsOnce()
         }
     }

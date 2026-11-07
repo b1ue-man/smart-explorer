@@ -195,7 +195,7 @@ fn assert_refused(name: &str, reason: &str) {
 }
 
 #[test]
-#[ignore = "runs in the linux-2204 job of rechte-desktop-tresore-task"]
+#[ignore = "runs in the linux-2204 job of rechte-desktop-tresore-task; Suite rechte-desktop-tresore-task"]
 fn perm_task_exec_linux_ubuntu2204_starts() {
     assert_eq!(
         std::env::var("SMART_EXPLORER_PERM_2204_TASK").as_deref(),
@@ -226,7 +226,7 @@ fn perm_task_exec_linux_ubuntu2204_starts() {
 }
 
 #[test]
-#[ignore = "needs root: linux-root job of rechte-desktop-tresore-task"]
+#[ignore = "needs root: linux-root job of rechte-desktop-tresore-task; Suite rechte-desktop-tresore-task"]
 fn perm_task_remote_account_ls_runs_linux_root() {
     root_task();
     let account = remote_account();
@@ -242,7 +242,7 @@ fn perm_task_remote_account_ls_runs_linux_root() {
 }
 
 #[test]
-#[ignore = "needs root: linux-root job of rechte-desktop-tresore-task"]
+#[ignore = "needs root: linux-root job of rechte-desktop-tresore-task; Suite rechte-desktop-tresore-task"]
 fn perm_task_linux_root_pam_session() {
     root_task();
     let account = remote_account();
@@ -260,7 +260,7 @@ fn perm_task_linux_root_pam_session() {
 }
 
 #[test]
-#[ignore = "needs root: linux-root job of rechte-desktop-tresore-task"]
+#[ignore = "needs root: linux-root job of rechte-desktop-tresore-task; Suite rechte-desktop-tresore-task"]
 fn perm_task_linux_root_expired_account_refused() {
     root_task();
     let _account = TemporaryAccount::create("perm-task-expired", "usermod", &["--expiredate", "1"]);
@@ -268,7 +268,7 @@ fn perm_task_linux_root_expired_account_refused() {
 }
 
 #[test]
-#[ignore = "needs root: linux-root job of rechte-desktop-tresore-task"]
+#[ignore = "needs root: linux-root job of rechte-desktop-tresore-task; Suite rechte-desktop-tresore-task"]
 fn perm_task_linux_password_change_required_refused() {
     root_task();
     let _account = TemporaryAccount::create("perm-task-change", "chage", &["--lastday", "0"]);
@@ -276,7 +276,7 @@ fn perm_task_linux_password_change_required_refused() {
 }
 
 #[test]
-#[ignore = "needs root: linux-root job of rechte-desktop-tresore-task"]
+#[ignore = "needs root: linux-root job of rechte-desktop-tresore-task; Suite rechte-desktop-tresore-task"]
 fn perm_task_linux_terminal_as_account() {
     root_task();
     let account = remote_account();
@@ -293,7 +293,7 @@ fn perm_task_linux_terminal_as_account() {
 }
 
 #[test]
-#[ignore = "needs root: linux-root job of rechte-desktop-tresore-task"]
+#[ignore = "needs root: linux-root job of rechte-desktop-tresore-task; Suite rechte-desktop-tresore-task"]
 fn perm_task_linux_account_unit_contains_children() {
     root_task();
     let account = remote_account();
@@ -321,7 +321,7 @@ fn perm_task_linux_account_unit_contains_children() {
 }
 
 #[test]
-#[ignore = "needs root: linux-root job of rechte-desktop-tresore-task"]
+#[ignore = "needs root: linux-root job of rechte-desktop-tresore-task; Suite rechte-desktop-tresore-task"]
 fn perm_task_linux_cancel_contains_account_unit() {
     root_task();
     let account = remote_account();
@@ -356,7 +356,7 @@ fn perm_task_linux_cancel_contains_account_unit() {
 }
 
 #[test]
-#[ignore = "needs root: linux-root job of rechte-desktop-tresore-task"]
+#[ignore = "needs root: linux-root job of rechte-desktop-tresore-task; Suite rechte-desktop-tresore-task"]
 fn perm_task_remote_account_cannot_read_ipc_token_linux() {
     root_task();
     let account = remote_account();

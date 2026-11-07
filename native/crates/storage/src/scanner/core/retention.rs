@@ -131,29 +131,40 @@ mod tests {
 
     #[test]
     fn recursive_filter_task_lineage_stops_when_the_sink_refuses() {
-        let outer = Lineage::pending(directory("/root/a"), None);
-        let inner = Lineage::pending(directory("/root/a/b"), Some(outer.clone()));
-        let mut seen = 0;
-        assert!(!Lineage::emit_pending(&Some(inner), |_| {
-            seen += 1;
-            false
-        }));
-        assert_eq!(seen, 1);
-        assert!(!*outer.emitted.lock().unwrap());
-    }
-
-    #[test]
-    fn search_recursive_access_task_lineage_retries_an_unemitted_outer_ancestor() {
-        let outer = Lineage::pending(directory("/r/a"), None);
-        let inner = Lineage::pending(directory("/r/a/b"), Some(outer));
-        assert!(!Lineage::emit_pending(&Some(inner.clone()), |entry| entry
-            .path
-            .ends_with("/b")));
-        let mut retried = Vec::new();
-        assert!(Lineage::emit_pending(&Some(inner), |entry| {
-            retried.push(entry.path.to_string());
-            true
-        }));
-        assert_eq!(retried, ["/r/a"]);
+        let cases: [(&str, fn()); 2] = [
+            (
+                "recursive_filter_task_lineage_stops_when_the_sink_refuses",
+                || {
+                    let outer = Lineage::pending(directory("/root/a"), None);
+                    let inner = Lineage::pending(directory("/root/a/b"), Some(outer.clone()));
+                    let mut seen = 0;
+                    assert!(!Lineage::emit_pending(&Some(inner), |_| {
+                        seen += 1;
+                        false
+                    }));
+                    assert_eq!(seen, 1);
+                    assert!(!*outer.emitted.lock().unwrap());
+                },
+            ),
+            (
+                "search_recursive_access_task_lineage_retries_an_unemitted_outer_ancestor",
+                || {
+                    let outer = Lineage::pending(directory("/r/a"), None);
+                    let inner = Lineage::pending(directory("/r/a/b"), Some(outer));
+                    assert!(!Lineage::emit_pending(&Some(inner.clone()), |entry| entry
+                        .path
+                        .ends_with("/b")));
+                    let mut retried = Vec::new();
+                    assert!(Lineage::emit_pending(&Some(inner), |entry| {
+                        retried.push(entry.path.to_string());
+                        true
+                    }));
+                    assert_eq!(retried, ["/r/a"]);
+                },
+            ),
+        ];
+        for (case, check) in cases {
+            std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
+        }
     }
 }

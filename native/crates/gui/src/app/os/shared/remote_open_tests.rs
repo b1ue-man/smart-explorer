@@ -56,7 +56,7 @@ fn remote_drive_task_missing_temp_is_retained_for_atomic_editor_save_recovery() 
 }
 
 #[test]
-#[ignore = "requires the isolated remote Direct opening task runner"]
+#[ignore = "requires the isolated remote Direct opening task runner; Suite crates-task"]
 fn direct_open_task_pending_download_is_neither_edit_nor_recovery() {
     let (mut app, temp) = app_with_pending("slow.jpg");
     poll(&mut app);
@@ -82,7 +82,7 @@ fn direct_open_task_pending_download_is_neither_edit_nor_recovery() {
 }
 
 #[test]
-#[ignore = "requires the isolated remote Direct opening task runner"]
+#[ignore = "requires the isolated remote Direct opening task runner; Suite crates-task"]
 fn direct_open_task_parallel_download_and_atomic_save_do_not_block_new_open() {
     let (mut app, first) = app_with_pending("first.pdf");
     std::fs::write(&first, b"first").unwrap();
@@ -105,7 +105,7 @@ fn direct_open_task_parallel_download_and_atomic_save_do_not_block_new_open() {
 }
 
 #[test]
-#[ignore = "requires the isolated remote Direct opening task runner"]
+#[ignore = "requires the isolated remote Direct opening task runner; Suite crates-task"]
 fn direct_open_task_new_missing_payload_and_failed_manifest_never_become_editing() {
     let (mut app, temp) = app_with_pending("absent.jpg");
     assert!(app.prepare_downloaded_edit(&temp, 1).is_err());
@@ -122,7 +122,7 @@ fn direct_open_task_new_missing_payload_and_failed_manifest_never_become_editing
 }
 
 #[test]
-#[ignore = "requires the isolated remote Direct opening task runner"]
+#[ignore = "requires the isolated remote Direct opening task runner; Suite crates-task"]
 fn direct_open_task_recovery_rejects_escaped_and_nonregular_editor_paths() {
     let (mut app, temp) = app_with_pending("unsafe.jpg");
     std::fs::create_dir(&temp).unwrap();
@@ -141,7 +141,7 @@ fn direct_open_task_recovery_rejects_escaped_and_nonregular_editor_paths() {
 }
 
 #[test]
-#[ignore = "requires the isolated remote Direct opening task runner"]
+#[ignore = "requires the isolated remote Direct opening task runner; Suite crates-task"]
 fn direct_open_task_failed_and_disconnected_workers_remove_only_their_downloads() {
     let (mut app, good) = app_with_pending("already-open.pdf");
     std::fs::write(&good, b"user data").unwrap();
@@ -166,7 +166,7 @@ fn direct_open_task_failed_and_disconnected_workers_remove_only_their_downloads(
 }
 
 #[test]
-#[ignore = "requires the isolated remote Direct opening task runner"]
+#[ignore = "requires the isolated remote Direct opening task runner; Suite crates-task"]
 fn direct_open_task_atomic_save_waits_for_stability_then_saves_back() {
     let remote = tempfile::tempdir().unwrap();
     let remote_file = remote.path().join("original.txt");
@@ -196,7 +196,7 @@ fn direct_open_task_atomic_save_waits_for_stability_then_saves_back() {
 }
 
 #[test]
-#[ignore = "requires the isolated remote Direct opening task runner"]
+#[ignore = "requires the isolated remote Direct opening task runner; Suite crates-task"]
 fn direct_open_task_manifest_failure_suppresses_upload_and_preserves_edit() {
     let (mut app, temp) = app_with_pending("must-stay-local.txt");
     std::fs::write(&temp, b"unsaved").unwrap();
@@ -216,7 +216,7 @@ fn direct_open_task_manifest_failure_suppresses_upload_and_preserves_edit() {
 }
 
 #[test]
-#[ignore = "requires the isolated remote Direct opening task runner"]
+#[ignore = "requires the isolated remote Direct opening task runner; Suite crates-task"]
 fn direct_open_task_save_conflict_and_failed_revision_check_preserve_remote() {
     let remote = tempfile::tempdir().unwrap();
     let remote_file = remote.path().join("remote.txt");

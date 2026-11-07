@@ -184,16 +184,13 @@ class BatchesPresentationTaskTest {
     }
 
     @Test
-    fun batches_android_audio_pause_seek_and_resume_survive_system_layout_change() {
-        val audio = wav()
-        try { playerRotation(audio, true) } finally { audio.delete() }
-    }
-
-    @Test
     fun batches_android_video_pause_seek_and_resume_survive_system_layout_change() {
         val path = InstrumentationRegistry.getArguments().getString("batchesVideoPath")
             ?: throw AssertionError("Task runner must generate and push an MP4 >= 8s and set batchesVideoPath")
         playerRotation(File(path), false)
+        // The audio row (the former batches_android_audio_pause_seek_and_resume_survive_system_layout_change): the same flow on a generated WAV.
+        val audio = wav()
+        try { playerRotation(audio, true) } finally { audio.delete() }
     }
 
     @Test

@@ -139,6 +139,16 @@ fn screen_task_ipc_still_client_lists_windows_and_ends_the_session() {
 
 #[test]
 fn screen_task_ipc_still_client_names_refusals_by_code() {
+    let cases: [fn(); 2] = [
+        screen_task_ipc_still_client_names_refusals_by_code_case,
+        screen_task_ipc_still_client_reports_a_paused_source,
+    ];
+    for case in cases {
+        case();
+    }
+}
+
+fn screen_task_ipc_still_client_names_refusals_by_code_case() {
     let end = |code: &str| {
         Some(StreamEvent::End(RelayEnd {
             code: code.into(),
@@ -159,6 +169,16 @@ fn screen_task_ipc_still_client_names_refusals_by_code() {
     assert_eq!(result.unwrap_err(), "capture_failed: kaputt");
     let (result, _, _) = windows(vec![accepted(Vec::new()), end("viewer_closed")], None);
     assert_eq!(result.unwrap_err(), "viewer_closed");
+}
+
+fn screen_task_ipc_still_client_reports_a_paused_source() {
+    let error = ScreenWireError::new(ScreenErrorCode::CaptureFailed, Some("paused".into()));
+    let events = vec![
+        accepted(Vec::new()),
+        Some(StreamEvent::Host(HostFrame::Error(error))),
+    ];
+    let (result, _) = snapshot(events, None);
+    assert_eq!(result.err().unwrap(), "capture_failed: paused");
 }
 
 #[test]
@@ -267,15 +287,4 @@ fn screen_task_ipc_still_client_assembles_the_snapshot_stream() {
     events.extend(records(&image, StreamKind::Snapshot, 3));
     let (result, _) = snapshot(events, Some(SourceId::Window("55".into())));
     assert_eq!(result.unwrap().source, "window:55");
-}
-
-#[test]
-fn screen_task_ipc_still_client_reports_a_paused_source() {
-    let error = ScreenWireError::new(ScreenErrorCode::CaptureFailed, Some("paused".into()));
-    let events = vec![
-        accepted(Vec::new()),
-        Some(StreamEvent::Host(HostFrame::Error(error))),
-    ];
-    let (result, _) = snapshot(events, None);
-    assert_eq!(result.err().unwrap(), "capture_failed: paused");
 }

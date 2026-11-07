@@ -15,7 +15,7 @@ import org.junit.runner.RunWith
  * protected trash omission, downloads, remote edits with conflict and forced overwrite over the
  * Remote-Agent, atomic replace on plain SFTP (posix-rename), host-key confirmation and reset (an
  * unknown SSH host key is reported and pinned only after its fingerprint was compared), FTP basics (upload,
- * download, replace), SMB (Samba: upload, download, atomic replace, copy, delete), WebDAV validation (live WebDAV needs a publicly trusted HTTPS certificate,
+ * download, replace), SMB (Samba: upload, download, atomic replace, copy, delete; plain SFTP replace and copy as well), WebDAV validation (live WebDAV needs a publicly trusted HTTPS certificate,
  * explicit exception) and the cleanup cascade of `conn.delete`.
  */
 @RunWith(AndroidJUnit4::class)
@@ -110,28 +110,6 @@ class RemoteTaskTest {
         assertFalse(File(first.text("localPath")).exists())
     }
 
-    /** Plain SFTP replaces an existing file atomically (posix-rename@openssh.com); a copy still works. */
-    @Test
-    fun plainSftpEditsReplaceAtomicallyAndUploadACopy() = coreTest {
-        val connection = Servers.sftp()
-        val remote = Servers.freshDir(connection, "edits-sftp")
-        val local = Fixture.dir(Volumes.primary(), "remote", "edits-sftp")
-        Api.copy(listOf(Fixture.write(File(local, "notiz.txt"), "Version 0").absolutePath), remote)
-        val location = Api.child(remote, "notiz.txt").location
-
-        val edit = Api.runTask("fs.fetch", args("location" to location)).resultObj()
-        File(edit.text("localPath")).writeText("Version 1")
-        Api.runTask("fs.uploadEdit", args("editId" to edit.text("editId"), "mode" to "overwrite"))
-        assertEquals(setOf("notiz.txt"), Api.names(remote))
-        val replaced = Api.runTask("fs.fetch", args("location" to location)).resultObj()
-        assertEquals("Version 1", File(replaced.text("localPath")).readText())
-
-        File(edit.text("localPath")).writeText("Version 2")
-        Api.runTask("fs.uploadEdit", args("editId" to edit.text("editId"), "mode" to "copy"))
-        assertEquals(setOf("notiz.txt", "notiz (2).txt"), Api.names(remote))
-        for (item in listOf(edit, replaced)) Api.call("fs.discardEdit", args("editId" to item.text("editId")))
-    }
-
     @Test
     fun ftpBasics() = coreTest {
         assertTrue(Api.obj("conn.test", args("input" to Servers.ftpInput())).text("message").isNotBlank())
@@ -188,18 +166,25 @@ class RemoteTaskTest {
         Api.copy(listOf(file.absolutePath), remote)
         assertEquals(setOf("smb.bin", "smb (2).bin"), Api.names(remote))
 
-        // Replacing is one rename with ReplaceIfExists on the server; a copy upload still works.
-        Api.copy(listOf(Fixture.write(File(local, "notiz.txt"), "Version 0").absolutePath), remote)
-        val location = Api.child(remote, "notiz.txt").location
-        val edit = Api.runTask("fs.fetch", args("location" to location)).resultObj()
-        File(edit.text("localPath")).writeText("Version 1")
-        Api.runTask("fs.uploadEdit", args("editId" to edit.text("editId"), "mode" to "overwrite"))
-        val check = Api.runTask("fs.fetch", args("location" to location)).resultObj()
-        assertEquals("Version 1", File(check.text("localPath")).readText())
-        File(edit.text("localPath")).writeText("Version 2")
-        Api.runTask("fs.uploadEdit", args("editId" to edit.text("editId"), "mode" to "copy"))
-        assertEquals(setOf("smb.bin", "smb (2).bin", "notiz.txt", "notiz (2).txt"), Api.names(remote))
-        for (item in listOf(edit, check)) Api.call("fs.discardEdit", args("editId" to item.text("editId")))
+        // Replacing is one rename with ReplaceIfExists on the server; a copy upload still works. Plain SFTP does the same
+        // with posix-rename (the former plainSftpEditsReplaceAtomicallyAndUploadACopy): one row per backend. The SMB row keeps
+        // its share; the SFTP row has a folder of its own, so its names are exact. Each row checks the names it had before.
+        for (label in listOf("smb", "sftp")) {
+            val folder = if (label == "smb") remote else Servers.freshDir(Servers.sftp(), "edits-sftp")
+            val before = Api.names(folder)
+            Api.copy(listOf(Fixture.write(File(local, "notiz.txt"), "Version 0").absolutePath), folder)
+            val location = Api.child(folder, "notiz.txt").location
+            val edit = Api.runTask("fs.fetch", args("location" to location)).resultObj()
+            File(edit.text("localPath")).writeText("Version 1")
+            Api.runTask("fs.uploadEdit", args("editId" to edit.text("editId"), "mode" to "overwrite"))
+            assertEquals("$label: Ersetzen legt keine Kopie an", before + "notiz.txt", Api.names(folder))
+            val check = Api.runTask("fs.fetch", args("location" to location)).resultObj()
+            assertEquals("$label: Version nach dem Ersetzen", "Version 1", File(check.text("localPath")).readText())
+            File(edit.text("localPath")).writeText("Version 2")
+            Api.runTask("fs.uploadEdit", args("editId" to edit.text("editId"), "mode" to "copy"))
+            assertEquals("$label: Kopie ohne Ersatz", before + setOf("notiz.txt", "notiz (2).txt"), Api.names(folder))
+            for (item in listOf(edit, check)) Api.call("fs.discardEdit", args("editId" to item.text("editId")))
+        }
 
         // Downloads of a file the server side placed in the share.
         val fixture = TaskArgs.get("seSmbFixture")

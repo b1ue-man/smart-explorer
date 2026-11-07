@@ -117,50 +117,61 @@ fn key_of(out: &Recorded, rel: &str) -> String {
 
 #[test]
 fn abgleich_task_key_tree_sends_every_folder_with_its_key_without_known_keys() {
-    let tree = KeyTree::new("", HashSet::new());
-    let mut out = Recorded::default();
-    walk(&tree, &mut out).unwrap();
-    assert!(tree.complete());
-    let runs: Vec<&String> = out.out.iter().filter(|l| l.starts_with("run")).collect();
-    assert_eq!(runs, ["run : f,a,b", "run a: a/g", "run b: "]);
-    let end_root = out.out.iter().position(|l| l.starts_with("end  ")).unwrap();
-    assert_eq!(end_root, out.out.len() - 1, "the root's key comes last");
-    // Equal content, equal key: an empty folder and a fresh tree alike.
-    let again = KeyTree::new("", HashSet::new());
-    let mut second = Recorded::default();
-    walk(&again, &mut second).unwrap();
-    assert_eq!(key_of(&out, ""), key_of(&second, ""));
-}
-
-#[test]
-fn abgleich_task_key_tree_answers_a_known_subtree_with_one_mark() {
-    // First walk: learn the keys.
-    let first = KeyTree::new("", HashSet::new());
-    let mut learned = Recorded::default();
-    walk(&first, &mut learned).unwrap();
-    let mut keys = HashMap::new();
-    let mut capture = Capture(&mut keys);
-    let probe = KeyTree::new("", HashSet::new());
-    walk(&probe, &mut capture).unwrap();
-    // Everything known: only the root's mark goes out.
-    let all: HashSet<KnownKey> = keys.values().map(known_prefix).collect();
-    let tree = KeyTree::new("", all);
-    let mut out = Recorded::default();
-    walk(&tree, &mut out).unwrap();
-    assert!(tree.complete());
-    assert_eq!(out.out.len(), 1, "{:?}", out.out);
-    assert!(out.out[0].starts_with("same  "), "{:?}", out.out);
-    // Only `a` known: the root goes out with `b`, `a` is one mark after the
-    // root's run.
-    let only_a: HashSet<KnownKey> = [known_prefix(&keys["a"])].into();
-    let tree = KeyTree::new("", only_a);
-    let mut out = Recorded::default();
-    walk(&tree, &mut out).unwrap();
-    let position = |prefix: &str| out.out.iter().position(|l| l.starts_with(prefix));
-    assert!(position("run a").is_none(), "{:?}", out.out);
-    assert!(position("run : ").unwrap() < position("same a ").unwrap());
-    assert!(position("run b").is_some() && position("end b ").is_some());
-    assert_eq!(position("end  ").unwrap(), out.out.len() - 1);
+    let cases: [(&str, fn()); 2] = [
+        (
+            "abgleich_task_key_tree_sends_every_folder_with_its_key_without_known_keys",
+            || {
+                let tree = KeyTree::new("", HashSet::new());
+                let mut out = Recorded::default();
+                walk(&tree, &mut out).unwrap();
+                assert!(tree.complete());
+                let runs: Vec<&String> = out.out.iter().filter(|l| l.starts_with("run")).collect();
+                assert_eq!(runs, ["run : f,a,b", "run a: a/g", "run b: "]);
+                let end_root = out.out.iter().position(|l| l.starts_with("end  ")).unwrap();
+                assert_eq!(end_root, out.out.len() - 1, "the root's key comes last");
+                // Equal content, equal key: an empty folder and a fresh tree alike.
+                let again = KeyTree::new("", HashSet::new());
+                let mut second = Recorded::default();
+                walk(&again, &mut second).unwrap();
+                assert_eq!(key_of(&out, ""), key_of(&second, ""));
+            },
+        ),
+        (
+            "abgleich_task_key_tree_answers_a_known_subtree_with_one_mark",
+            || {
+                // First walk: learn the keys.
+                let first = KeyTree::new("", HashSet::new());
+                let mut learned = Recorded::default();
+                walk(&first, &mut learned).unwrap();
+                let mut keys = HashMap::new();
+                let mut capture = Capture(&mut keys);
+                let probe = KeyTree::new("", HashSet::new());
+                walk(&probe, &mut capture).unwrap();
+                // Everything known: only the root's mark goes out.
+                let all: HashSet<KnownKey> = keys.values().map(known_prefix).collect();
+                let tree = KeyTree::new("", all);
+                let mut out = Recorded::default();
+                walk(&tree, &mut out).unwrap();
+                assert!(tree.complete());
+                assert_eq!(out.out.len(), 1, "{:?}", out.out);
+                assert!(out.out[0].starts_with("same  "), "{:?}", out.out);
+                // Only `a` known: the root goes out with `b`, `a` is one mark after the
+                // root's run.
+                let only_a: HashSet<KnownKey> = [known_prefix(&keys["a"])].into();
+                let tree = KeyTree::new("", only_a);
+                let mut out = Recorded::default();
+                walk(&tree, &mut out).unwrap();
+                let position = |prefix: &str| out.out.iter().position(|l| l.starts_with(prefix));
+                assert!(position("run a").is_none(), "{:?}", out.out);
+                assert!(position("run : ").unwrap() < position("same a ").unwrap());
+                assert!(position("run b").is_some() && position("end b ").is_some());
+                assert_eq!(position("end  ").unwrap(), out.out.len() - 1);
+            },
+        ),
+    ];
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
+    }
 }
 
 struct Capture<'k>(&'k mut HashMap<String, FolderKey>);
@@ -240,51 +251,59 @@ fn folder(rel: &str, files: &[(&str, u64, i64)], dirs: &[&str]) -> RunKeys<Strin
 
 #[test]
 fn abgleich_task_keys_only_tree_counts_each_subtree_for_the_caller() {
-    let tree = KeyTree::with_mode("", HashSet::new(), Mode::KeysOnly);
-    let mut out = Tallies(HashMap::new());
-    tree.finish_run(folder("", &[("f", 5, 1)], &["a", "b"]), &mut out)
-        .unwrap();
-    tree.finish_run(folder("a", &[("g", 7, 2), ("h", 1, 0)], &["c"]), &mut out)
-        .unwrap();
-    tree.finish_run(folder("a/c", &[("i", 100, 3)], &[]), &mut out)
-        .unwrap();
-    let mut b = folder("b", &[], &[]);
-    let part = entry_part("l", EntryKind::Link, 0, 0, None, false);
-    b.entry(shape("l", EntryKind::Link, 0, 0), part, "l".into(), 1);
-    b.entry(
-        shape("x\\y", EntryKind::File, 3, 4),
-        file("x\\y", 3, 4),
-        "x".into(),
-        1,
-    );
-    b.failure(2, "!".into(), 1);
-    tree.finish_run(b, &mut out).unwrap();
-    assert!(tree.complete());
-    let tally = |rel: &str| out.0[rel].expect("tally");
-    let c = tally("a/c");
-    assert_eq!((c.files, c.bytes, c.height, c.clean()), (1, 100, 0, true));
-    let a = tally("a");
-    assert_eq!((a.files, a.bytes, a.untimed, a.height), (3, 108, 1, 1));
-    assert!(
-        !a.clean(),
-        "a file of unknown time is not settled by its key"
-    );
-    let b = tally("b");
-    // A link, a name with a backslash and the folder's own failure.
-    assert_eq!((b.files, b.bytes, b.omitted), (1, 3, 3));
-    let root = tally("");
-    assert_eq!(
-        (root.files, root.bytes, root.omitted, root.untimed),
-        (5, 116, 3, 1)
-    );
-    assert_eq!(root.height, 2);
-}
-
-#[test]
-fn abgleich_task_other_walk_modes_send_no_tally() {
-    let tree = KeyTree::new("", HashSet::new());
-    let mut out = Tallies(HashMap::new());
-    tree.finish_run(folder("", &[("f", 5, 1)], &[]), &mut out)
-        .unwrap();
-    assert_eq!(out.0[""], None);
+    let cases: [(&str, fn()); 2] = [
+        (
+            "abgleich_task_keys_only_tree_counts_each_subtree_for_the_caller",
+            || {
+                let tree = KeyTree::with_mode("", HashSet::new(), Mode::KeysOnly);
+                let mut out = Tallies(HashMap::new());
+                tree.finish_run(folder("", &[("f", 5, 1)], &["a", "b"]), &mut out)
+                    .unwrap();
+                tree.finish_run(folder("a", &[("g", 7, 2), ("h", 1, 0)], &["c"]), &mut out)
+                    .unwrap();
+                tree.finish_run(folder("a/c", &[("i", 100, 3)], &[]), &mut out)
+                    .unwrap();
+                let mut b = folder("b", &[], &[]);
+                let part = entry_part("l", EntryKind::Link, 0, 0, None, false);
+                b.entry(shape("l", EntryKind::Link, 0, 0), part, "l".into(), 1);
+                b.entry(
+                    shape("x\\y", EntryKind::File, 3, 4),
+                    file("x\\y", 3, 4),
+                    "x".into(),
+                    1,
+                );
+                b.failure(2, "!".into(), 1);
+                tree.finish_run(b, &mut out).unwrap();
+                assert!(tree.complete());
+                let tally = |rel: &str| out.0[rel].expect("tally");
+                let c = tally("a/c");
+                assert_eq!((c.files, c.bytes, c.height, c.clean()), (1, 100, 0, true));
+                let a = tally("a");
+                assert_eq!((a.files, a.bytes, a.untimed, a.height), (3, 108, 1, 1));
+                assert!(
+                    !a.clean(),
+                    "a file of unknown time is not settled by its key"
+                );
+                let b = tally("b");
+                // A link, a name with a backslash and the folder's own failure.
+                assert_eq!((b.files, b.bytes, b.omitted), (1, 3, 3));
+                let root = tally("");
+                assert_eq!(
+                    (root.files, root.bytes, root.omitted, root.untimed),
+                    (5, 116, 3, 1)
+                );
+                assert_eq!(root.height, 2);
+            },
+        ),
+        ("abgleich_task_other_walk_modes_send_no_tally", || {
+            let tree = KeyTree::new("", HashSet::new());
+            let mut out = Tallies(HashMap::new());
+            tree.finish_run(folder("", &[("f", 5, 1)], &[]), &mut out)
+                .unwrap();
+            assert_eq!(out.0[""], None);
+        }),
+    ];
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
+    }
 }

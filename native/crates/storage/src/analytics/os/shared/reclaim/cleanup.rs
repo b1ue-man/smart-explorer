@@ -123,44 +123,51 @@ mod tests {
 
     #[test]
     fn node_modules_needs_lockfile_for_quick_select() {
-        let base = std::env::temp_dir().join(format!("se_cleanup_node_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&base);
-        std::fs::create_dir_all(base.join("node_modules")).unwrap();
-        assert_eq!(
-            dir_cleanup_reason(&base.join("node_modules"), &base)
-                .unwrap()
-                .confidence,
-            ReclaimConfidence::RiskyReview
-        );
-        std::fs::write(base.join("package.json"), "{}").unwrap();
-        std::fs::write(base.join("package-lock.json"), "{}").unwrap();
-        assert_eq!(
-            dir_cleanup_reason(&base.join("node_modules"), &base)
-                .unwrap()
-                .confidence,
-            ReclaimConfidence::ReviewSafe
-        );
-        let _ = std::fs::remove_dir_all(&base);
-    }
-
-    #[test]
-    fn cargo_target_is_quick_select_only_in_cargo_project() {
-        let base = std::env::temp_dir().join(format!("se_cleanup_target_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&base);
-        std::fs::create_dir_all(base.join("target")).unwrap();
-        assert_eq!(
-            dir_cleanup_reason(&base.join("target"), &base)
-                .unwrap()
-                .confidence,
-            ReclaimConfidence::RiskyReview
-        );
-        std::fs::write(base.join("Cargo.toml"), "[package]\nname='x'\n").unwrap();
-        assert_eq!(
-            dir_cleanup_reason(&base.join("target"), &base)
-                .unwrap()
-                .confidence,
-            ReclaimConfidence::ReviewSafe
-        );
-        let _ = std::fs::remove_dir_all(&base);
+        let cases: [(&str, fn()); 2] = [
+            ("node_modules_needs_lockfile_for_quick_select", || {
+                let base =
+                    std::env::temp_dir().join(format!("se_cleanup_node_{}", std::process::id()));
+                let _ = std::fs::remove_dir_all(&base);
+                std::fs::create_dir_all(base.join("node_modules")).unwrap();
+                assert_eq!(
+                    dir_cleanup_reason(&base.join("node_modules"), &base)
+                        .unwrap()
+                        .confidence,
+                    ReclaimConfidence::RiskyReview
+                );
+                std::fs::write(base.join("package.json"), "{}").unwrap();
+                std::fs::write(base.join("package-lock.json"), "{}").unwrap();
+                assert_eq!(
+                    dir_cleanup_reason(&base.join("node_modules"), &base)
+                        .unwrap()
+                        .confidence,
+                    ReclaimConfidence::ReviewSafe
+                );
+                let _ = std::fs::remove_dir_all(&base);
+            }),
+            ("cargo_target_is_quick_select_only_in_cargo_project", || {
+                let base =
+                    std::env::temp_dir().join(format!("se_cleanup_target_{}", std::process::id()));
+                let _ = std::fs::remove_dir_all(&base);
+                std::fs::create_dir_all(base.join("target")).unwrap();
+                assert_eq!(
+                    dir_cleanup_reason(&base.join("target"), &base)
+                        .unwrap()
+                        .confidence,
+                    ReclaimConfidence::RiskyReview
+                );
+                std::fs::write(base.join("Cargo.toml"), "[package]\nname='x'\n").unwrap();
+                assert_eq!(
+                    dir_cleanup_reason(&base.join("target"), &base)
+                        .unwrap()
+                        .confidence,
+                    ReclaimConfidence::ReviewSafe
+                );
+                let _ = std::fs::remove_dir_all(&base);
+            }),
+        ];
+        for (case, check) in cases {
+            std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
+        }
     }
 }

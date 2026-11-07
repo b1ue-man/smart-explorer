@@ -113,6 +113,16 @@ mod tests {
 
     #[test]
     fn luecken_task_three_failed_authentications_refuse_for_fifteen_seconds() {
+        let cases: [fn(); 2] = [
+            luecken_task_three_failed_authentications_refuse_for_fifteen_seconds_case,
+            luecken_task_penalties_are_capped_and_decay,
+        ];
+        for case in cases {
+            case();
+        }
+    }
+
+    fn luecken_task_three_failed_authentications_refuse_for_fifteen_seconds_case() {
         let penalties = AuthPenalties::default();
         let start = Instant::now();
         penalties.record("peer", PenaltyKind::AuthFailure, start);
@@ -136,15 +146,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn luecken_task_file_sessions_of_paired_devices_are_never_turned_away() {
-        assert!(!refusal_applies(false, true));
-        assert!(refusal_applies(false, false));
-        assert!(refusal_applies(true, true));
-        assert!(refusal_applies(true, false));
-    }
-
-    #[test]
     fn luecken_task_penalties_are_capped_and_decay() {
         let penalties = AuthPenalties::default();
         let start = Instant::now();
@@ -156,6 +157,14 @@ mod tests {
         assert_eq!(penalties.refusal("peer", later), None);
         penalties.record("peer", PenaltyKind::NoAuthentication, later);
         assert_eq!(penalties.refusal("peer", later), None);
+    }
+
+    #[test]
+    fn luecken_task_file_sessions_of_paired_devices_are_never_turned_away() {
+        assert!(!refusal_applies(false, true));
+        assert!(refusal_applies(false, false));
+        assert!(refusal_applies(true, true));
+        assert!(refusal_applies(true, false));
     }
 
     #[test]

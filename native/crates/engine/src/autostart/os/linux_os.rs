@@ -290,6 +290,8 @@ mod tests {
 
     #[test]
     fn control_character_executable_path_is_rejected() {
+        use std::os::unix::ffi::OsStringExt;
+
         let dir = std::env::temp_dir().join(format!(
             "smart_explorer_autostart_control_{}_{}",
             std::process::id(),
@@ -299,34 +301,21 @@ mod tests {
                 .as_nanos()
         ));
         let entry = dir.join("daemon.desktop");
-
-        let error =
-            super::write_entry(&entry, std::path::Path::new("/tmp/se\nExec=oops")).unwrap_err();
-        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
-        assert!(!entry.exists());
-
-        std::fs::remove_dir_all(dir).ok();
-    }
-
-    #[test]
-    fn non_utf8_executable_path_is_rejected() {
-        use std::os::unix::ffi::OsStringExt;
-
-        let dir = std::env::temp_dir().join(format!(
-            "smart_explorer_autostart_non_utf8_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        let entry = dir.join("daemon.desktop");
-        let executable =
-            std::path::PathBuf::from(std::ffi::OsString::from_vec(b"/tmp/se-\x80".to_vec()));
-
-        let error = super::write_entry(&entry, &executable).unwrap_err();
-        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
-        assert!(!entry.exists());
+        let rejected = [
+            (
+                "control character",
+                std::path::PathBuf::from("/tmp/se\nExec=oops"),
+            ),
+            (
+                "non UTF-8",
+                std::path::PathBuf::from(std::ffi::OsString::from_vec(b"/tmp/se-\x80".to_vec())),
+            ),
+        ];
+        for (case, executable) in rejected {
+            let error = super::write_entry(&entry, &executable).unwrap_err();
+            assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput, "{case}");
+            assert!(!entry.exists(), "{case}");
+        }
 
         std::fs::remove_dir_all(dir).ok();
     }
@@ -407,36 +396,29 @@ mod tests {
                 .as_nanos()
         ));
         std::fs::create_dir_all(&dir).unwrap();
-        let entry = dir.join("daemon.desktop");
         let se = dir.join("se");
-        std::fs::write(&entry, "Exec=/stale/smart_explorer --sync-daemon\n").unwrap();
 
+        // Case "enabled entry": a stale entry is rewritten to the current executable.
+        let entry = dir.join("daemon.desktop");
+        std::fs::write(&entry, "Exec=/stale/smart_explorer --sync-daemon\n").unwrap();
         super::refresh_enabled_entry(&entry, &se).unwrap();
         let refreshed = std::fs::read_to_string(&entry).unwrap();
-        assert!(refreshed.contains(&format!(
-            "Exec={} --sync-daemon",
-            super::quote_exec_arg(&se.to_string_lossy())
-        )));
-        assert!(!refreshed.contains("/stale/smart_explorer"));
+        assert!(
+            refreshed.contains(&format!(
+                "Exec={} --sync-daemon",
+                super::quote_exec_arg(&se.to_string_lossy())
+            )),
+            "enabled entry is refreshed to the current executable"
+        );
+        assert!(
+            !refreshed.contains("/stale/smart_explorer"),
+            "enabled entry drops the stale executable"
+        );
 
-        std::fs::remove_dir_all(dir).ok();
-    }
-
-    #[test]
-    fn disabled_entry_is_not_created_during_spawn_refresh() {
-        let dir = std::env::temp_dir().join(format!(
-            "smart_explorer_autostart_disabled_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        let entry = dir.join("daemon.desktop");
-        let se = dir.join("se");
-
-        super::refresh_enabled_entry(&entry, &se).unwrap();
-        assert!(!entry.exists());
+        // Case "disabled entry": without an entry the refresh must not create one.
+        let disabled = dir.join("disabled.desktop");
+        super::refresh_enabled_entry(&disabled, &se).unwrap();
+        assert!(!disabled.exists(), "disabled entry is not created");
 
         std::fs::remove_dir_all(dir).ok();
     }

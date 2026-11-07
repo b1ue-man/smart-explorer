@@ -164,6 +164,16 @@ fn worker_job_task_cancel_reaches_the_running_job() {
 
 #[test]
 fn worker_job_task_job_with_crash_log_outlives_a_crashed_client() {
+    let cases: [fn(); 2] = [
+        worker_job_task_job_with_crash_log_outlives_a_crashed_client_case,
+        worker_job_task_job_without_crash_log_ends_with_its_client,
+    ];
+    for case in cases {
+        case();
+    }
+}
+
+fn worker_job_task_job_with_crash_log_outlives_a_crashed_client_case() {
     let root = tempfile::tempdir().expect("temp dir");
     let tree = tree(root.path(), 300);
     let target = root.path().join("target");
@@ -189,7 +199,6 @@ fn worker_job_task_job_with_crash_log_outlives_a_crashed_client() {
     }
 }
 
-#[test]
 fn worker_job_task_job_without_crash_log_ends_with_its_client() {
     let root = tempfile::tempdir().expect("temp dir");
     let tree = tree(root.path(), 3000);

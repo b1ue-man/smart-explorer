@@ -218,83 +218,94 @@ mod tests {
 
     #[test]
     fn recursive_filter_task_substring_text_narrows_by_containment() {
-        assert!(filter_is_at_least_as_narrow(
-            &with_text("invoice"),
-            &with_text("inv")
-        ));
-        assert!(filter_is_at_least_as_narrow(
-            &with_text("  Invoice "),
-            &with_text("invoice")
-        ));
-        assert!(filter_is_at_least_as_narrow(
-            &with_text("invoice, 2024"),
-            &with_text("invoice")
-        ));
-        assert!(filter_is_at_least_as_narrow(
-            &with_text("invoice"),
-            &with_text("invoice; receipt")
-        ));
-        assert!(filter_is_at_least_as_narrow(
-            &with_text("anything"),
-            &FilterDef::new()
-        ));
-        assert!(!filter_is_at_least_as_narrow(
-            &with_text("inv"),
-            &with_text("invoice")
-        ));
-        assert!(!filter_is_at_least_as_narrow(
-            &with_text("invoice; receipt"),
-            &with_text("invoice")
-        ));
-        assert!(!filter_is_at_least_as_narrow(
-            &FilterDef::new(),
-            &with_text("invoice")
-        ));
-        let mut regex = with_text("inv.*");
-        regex.text_mode = TextMode::Regex;
-        assert!(filter_is_at_least_as_narrow(&regex, &regex));
-        assert!(!filter_is_at_least_as_narrow(&regex, &with_text("inv")));
-        let mut longer_regex = with_text("inv.*ce");
-        longer_regex.text_mode = TextMode::Regex;
-        assert!(!filter_is_at_least_as_narrow(&longer_regex, &regex));
-    }
+        let cases: [(&str, fn()); 2] = [
+            (
+                "recursive_filter_task_substring_text_narrows_by_containment",
+                || {
+                    assert!(filter_is_at_least_as_narrow(
+                        &with_text("invoice"),
+                        &with_text("inv")
+                    ));
+                    assert!(filter_is_at_least_as_narrow(
+                        &with_text("  Invoice "),
+                        &with_text("invoice")
+                    ));
+                    assert!(filter_is_at_least_as_narrow(
+                        &with_text("invoice, 2024"),
+                        &with_text("invoice")
+                    ));
+                    assert!(filter_is_at_least_as_narrow(
+                        &with_text("invoice"),
+                        &with_text("invoice; receipt")
+                    ));
+                    assert!(filter_is_at_least_as_narrow(
+                        &with_text("anything"),
+                        &FilterDef::new()
+                    ));
+                    assert!(!filter_is_at_least_as_narrow(
+                        &with_text("inv"),
+                        &with_text("invoice")
+                    ));
+                    assert!(!filter_is_at_least_as_narrow(
+                        &with_text("invoice; receipt"),
+                        &with_text("invoice")
+                    ));
+                    assert!(!filter_is_at_least_as_narrow(
+                        &FilterDef::new(),
+                        &with_text("invoice")
+                    ));
+                    let mut regex = with_text("inv.*");
+                    regex.text_mode = TextMode::Regex;
+                    assert!(filter_is_at_least_as_narrow(&regex, &regex));
+                    assert!(!filter_is_at_least_as_narrow(&regex, &with_text("inv")));
+                    let mut longer_regex = with_text("inv.*ce");
+                    longer_regex.text_mode = TextMode::Regex;
+                    assert!(!filter_is_at_least_as_narrow(&longer_regex, &regex));
+                },
+            ),
+            (
+                "recursive_filter_task_structured_constraints_narrow_by_containment",
+                || {
+                    let mut scanned = FilterDef::new();
+                    scanned.extensions = vec!["jpg".into(), "png".into()];
+                    scanned.size.min = Some(100);
+                    scanned.mtime.max = Some(50);
+                    scanned.include_hidden = false;
 
-    #[test]
-    fn recursive_filter_task_structured_constraints_narrow_by_containment() {
-        let mut scanned = FilterDef::new();
-        scanned.extensions = vec!["jpg".into(), "png".into()];
-        scanned.size.min = Some(100);
-        scanned.mtime.max = Some(50);
-        scanned.include_hidden = false;
+                    let mut narrower = scanned.clone();
+                    narrower.extensions = vec![".PNG".into()];
+                    narrower.size.min = Some(200);
+                    narrower.size.max = Some(900);
+                    narrower.mtime.max = Some(40);
+                    narrower.include_system = false;
+                    narrower.problem_names_only = true;
+                    assert!(filter_is_at_least_as_narrow(&narrower, &scanned));
+                    assert!(filter_is_at_least_as_narrow(&scanned, &scanned));
 
-        let mut narrower = scanned.clone();
-        narrower.extensions = vec![".PNG".into()];
-        narrower.size.min = Some(200);
-        narrower.size.max = Some(900);
-        narrower.mtime.max = Some(40);
-        narrower.include_system = false;
-        narrower.problem_names_only = true;
-        assert!(filter_is_at_least_as_narrow(&narrower, &scanned));
-        assert!(filter_is_at_least_as_narrow(&scanned, &scanned));
-
-        let mut more_extensions = scanned.clone();
-        more_extensions.extensions.push("gif".into());
-        assert!(!filter_is_at_least_as_narrow(&more_extensions, &scanned));
-        let mut no_extensions = scanned.clone();
-        no_extensions.extensions.clear();
-        assert!(!filter_is_at_least_as_narrow(&no_extensions, &scanned));
-        let mut smaller_min = scanned.clone();
-        smaller_min.size.min = Some(50);
-        assert!(!filter_is_at_least_as_narrow(&smaller_min, &scanned));
-        let mut no_min = scanned.clone();
-        no_min.size.min = None;
-        assert!(!filter_is_at_least_as_narrow(&no_min, &scanned));
-        let mut hidden_again = scanned.clone();
-        hidden_again.include_hidden = true;
-        assert!(!filter_is_at_least_as_narrow(&hidden_again, &scanned));
-        let mut names = FilterDef::new();
-        names.problem_names_only = true;
-        assert!(!filter_is_at_least_as_narrow(&FilterDef::new(), &names));
+                    let mut more_extensions = scanned.clone();
+                    more_extensions.extensions.push("gif".into());
+                    assert!(!filter_is_at_least_as_narrow(&more_extensions, &scanned));
+                    let mut no_extensions = scanned.clone();
+                    no_extensions.extensions.clear();
+                    assert!(!filter_is_at_least_as_narrow(&no_extensions, &scanned));
+                    let mut smaller_min = scanned.clone();
+                    smaller_min.size.min = Some(50);
+                    assert!(!filter_is_at_least_as_narrow(&smaller_min, &scanned));
+                    let mut no_min = scanned.clone();
+                    no_min.size.min = None;
+                    assert!(!filter_is_at_least_as_narrow(&no_min, &scanned));
+                    let mut hidden_again = scanned.clone();
+                    hidden_again.include_hidden = true;
+                    assert!(!filter_is_at_least_as_narrow(&hidden_again, &scanned));
+                    let mut names = FilterDef::new();
+                    names.problem_names_only = true;
+                    assert!(!filter_is_at_least_as_narrow(&FilterDef::new(), &names));
+                },
+            ),
+        ];
+        for (case, check) in cases {
+            std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
+        }
     }
 
     #[test]

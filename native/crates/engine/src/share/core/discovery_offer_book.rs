@@ -206,6 +206,16 @@ mod tests {
 
     #[test]
     fn cli_task_offer_book_tracks_prepared_published_and_stopped() {
+        let cases: [fn(); 2] = [
+            cli_task_offer_book_tracks_prepared_published_and_stopped_case,
+            cli_task_offer_book_ends_all_and_bounds_recent_ends,
+        ];
+        for case in cases {
+            case();
+        }
+    }
+
+    fn cli_task_offer_book_tracks_prepared_published_and_stopped_case() {
         let mut book = DiscoveryOfferBook::default();
         book.observe(&prepared("a", DiscoveryPublishTarget::Direct, 1_300));
         let offers = book.offers(1_000);
@@ -232,32 +242,6 @@ mod tests {
         assert_eq!(book.lookup("unknown"), None);
     }
 
-    #[test]
-    fn cli_task_offer_book_lists_only_unexpired_offers_sorted() {
-        let mut book = DiscoveryOfferBook::default();
-        book.observe(&prepared("late", room("r1"), 2_000));
-        book.observe(&prepared("early", DiscoveryPublishTarget::Direct, 1_500));
-        book.observe(&prepared("gone", room("r2"), 1_000));
-        let ids: Vec<_> = book
-            .offers(1_000)
-            .into_iter()
-            .map(|offer| offer.offer_id)
-            .collect();
-        assert_eq!(ids, ["early", "late"]);
-        assert!(book
-            .offer_for_target(&DiscoveryPublishTarget::Direct, 1_000)
-            .is_some());
-        assert!(book.offer_for_target(&room("r2"), 1_000).is_none());
-        assert!(book.offer_for_target(&room("r1"), 1_000).is_some());
-        assert!(book.offer_for_target(&room("r1"), 2_000).is_none());
-        // Other discovery events never touch the own offers.
-        book.observe(&DiscoveryEvent::DiscoveryList {
-            advertisements: Vec::new(),
-        });
-        assert_eq!(book.offers(1_000).len(), 2);
-    }
-
-    #[test]
     fn cli_task_offer_book_ends_all_and_bounds_recent_ends() {
         let mut book = DiscoveryOfferBook::default();
         book.observe(&prepared("a", DiscoveryPublishTarget::Direct, 9_000));
@@ -282,5 +266,30 @@ mod tests {
             book.lookup(&format!("x{}", RECENTLY_ENDED_CAPACITY + 3)),
             Some(OfferLookup::Ended(DiscoveryOfferStopReason::Expired))
         );
+    }
+
+    #[test]
+    fn cli_task_offer_book_lists_only_unexpired_offers_sorted() {
+        let mut book = DiscoveryOfferBook::default();
+        book.observe(&prepared("late", room("r1"), 2_000));
+        book.observe(&prepared("early", DiscoveryPublishTarget::Direct, 1_500));
+        book.observe(&prepared("gone", room("r2"), 1_000));
+        let ids: Vec<_> = book
+            .offers(1_000)
+            .into_iter()
+            .map(|offer| offer.offer_id)
+            .collect();
+        assert_eq!(ids, ["early", "late"]);
+        assert!(book
+            .offer_for_target(&DiscoveryPublishTarget::Direct, 1_000)
+            .is_some());
+        assert!(book.offer_for_target(&room("r2"), 1_000).is_none());
+        assert!(book.offer_for_target(&room("r1"), 1_000).is_some());
+        assert!(book.offer_for_target(&room("r1"), 2_000).is_none());
+        // Other discovery events never touch the own offers.
+        book.observe(&DiscoveryEvent::DiscoveryList {
+            advertisements: Vec::new(),
+        });
+        assert_eq!(book.offers(1_000).len(), 2);
     }
 }

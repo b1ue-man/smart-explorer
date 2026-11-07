@@ -133,73 +133,84 @@ mod tests {
     };
 
     #[test]
-    fn changed_duplicate_is_skipped_before_trash() {
-        let base = std::env::temp_dir().join(format!("se_verify_changed_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&base);
-        std::fs::create_dir_all(&base).unwrap();
-        let keeper = base.join("keeper.bin");
-        let copy = base.join("copy.bin");
-        std::fs::write(&keeper, b"same").unwrap();
-        std::fs::write(&copy, b"same").unwrap();
-        let keeper_s = keeper.to_string_lossy().replace('\\', "/");
-        let copy_s = copy.to_string_lossy().replace('\\', "/");
-        let mut keep_item = ReclaimItem::new(keeper_s.clone(), "keeper.bin".into(), 4, 2, false);
-        keep_item.confidence = ReclaimConfidence::HashMatch;
-        let mut copy_item = ReclaimItem::new(copy_s.clone(), "copy.bin".into(), 4, 1, false);
-        copy_item.confidence = ReclaimConfidence::HashMatch;
-        let report = ReclaimReport {
-            duplicate_groups: vec![DuplicateGroup {
-                hash: ContentHash {
-                    algorithm: HashAlgorithm::Sha256,
-                    hex: "abc".into(),
-                },
-                evidence: DuplicateEvidence::LocalSha256,
-                size: 4,
-                reclaimable: 4,
-                items: vec![keep_item, copy_item],
-            }],
-            ..ReclaimReport::default()
-        };
-        std::fs::write(&copy, b"diff").unwrap();
-        let plan = prepare_reclaim_trash_plan(&report, std::slice::from_ref(&copy_s));
-        assert!(plan.delete_paths.is_empty());
-        assert_eq!(plan.skipped_paths, vec![copy_s]);
-        let _ = std::fs::remove_dir_all(&base);
-    }
-
-    #[test]
     fn duplicate_copy_is_verified_before_trash() {
-        let base = std::env::temp_dir().join(format!("se_verify_same_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&base);
-        std::fs::create_dir_all(&base).unwrap();
-        let keeper = base.join("keeper.bin");
-        let copy = base.join("copy.bin");
-        std::fs::write(&keeper, b"same").unwrap();
-        std::fs::write(&copy, b"same").unwrap();
-        let keeper_s = keeper.to_string_lossy().replace('\\', "/");
-        let copy_s = copy.to_string_lossy().replace('\\', "/");
-        let mut keep_item = ReclaimItem::new(keeper_s.clone(), "keeper.bin".into(), 4, 2, false);
-        keep_item.confidence = ReclaimConfidence::HashMatch;
-        let mut copy_item = ReclaimItem::new(copy_s.clone(), "copy.bin".into(), 4, 1, false);
-        copy_item.confidence = ReclaimConfidence::HashMatch;
-        let report = ReclaimReport {
-            duplicate_groups: vec![DuplicateGroup {
-                hash: ContentHash {
-                    algorithm: HashAlgorithm::Sha256,
-                    hex: "abc".into(),
-                },
-                evidence: DuplicateEvidence::LocalSha256,
-                size: 4,
-                reclaimable: 4,
-                items: vec![keep_item, copy_item],
-            }],
-            ..ReclaimReport::default()
-        };
-        let plan = prepare_reclaim_trash_plan(&report, std::slice::from_ref(&copy_s));
-        assert_eq!(plan.delete_paths, vec![copy_s.clone()]);
-        assert_eq!(plan.verified_duplicate_paths, vec![copy_s]);
-        assert!(plan.skipped_paths.is_empty());
-        let _ = std::fs::remove_dir_all(&base);
+        let cases: [(&str, fn()); 2] = [
+            ("duplicate_copy_is_verified_before_trash", || {
+                let base =
+                    std::env::temp_dir().join(format!("se_verify_same_{}", std::process::id()));
+                let _ = std::fs::remove_dir_all(&base);
+                std::fs::create_dir_all(&base).unwrap();
+                let keeper = base.join("keeper.bin");
+                let copy = base.join("copy.bin");
+                std::fs::write(&keeper, b"same").unwrap();
+                std::fs::write(&copy, b"same").unwrap();
+                let keeper_s = keeper.to_string_lossy().replace('\\', "/");
+                let copy_s = copy.to_string_lossy().replace('\\', "/");
+                let mut keep_item =
+                    ReclaimItem::new(keeper_s.clone(), "keeper.bin".into(), 4, 2, false);
+                keep_item.confidence = ReclaimConfidence::HashMatch;
+                let mut copy_item =
+                    ReclaimItem::new(copy_s.clone(), "copy.bin".into(), 4, 1, false);
+                copy_item.confidence = ReclaimConfidence::HashMatch;
+                let report = ReclaimReport {
+                    duplicate_groups: vec![DuplicateGroup {
+                        hash: ContentHash {
+                            algorithm: HashAlgorithm::Sha256,
+                            hex: "abc".into(),
+                        },
+                        evidence: DuplicateEvidence::LocalSha256,
+                        size: 4,
+                        reclaimable: 4,
+                        items: vec![keep_item, copy_item],
+                    }],
+                    ..ReclaimReport::default()
+                };
+                let plan = prepare_reclaim_trash_plan(&report, std::slice::from_ref(&copy_s));
+                assert_eq!(plan.delete_paths, vec![copy_s.clone()]);
+                assert_eq!(plan.verified_duplicate_paths, vec![copy_s]);
+                assert!(plan.skipped_paths.is_empty());
+                let _ = std::fs::remove_dir_all(&base);
+            }),
+            ("changed_duplicate_is_skipped_before_trash", || {
+                let base =
+                    std::env::temp_dir().join(format!("se_verify_changed_{}", std::process::id()));
+                let _ = std::fs::remove_dir_all(&base);
+                std::fs::create_dir_all(&base).unwrap();
+                let keeper = base.join("keeper.bin");
+                let copy = base.join("copy.bin");
+                std::fs::write(&keeper, b"same").unwrap();
+                std::fs::write(&copy, b"same").unwrap();
+                let keeper_s = keeper.to_string_lossy().replace('\\', "/");
+                let copy_s = copy.to_string_lossy().replace('\\', "/");
+                let mut keep_item =
+                    ReclaimItem::new(keeper_s.clone(), "keeper.bin".into(), 4, 2, false);
+                keep_item.confidence = ReclaimConfidence::HashMatch;
+                let mut copy_item =
+                    ReclaimItem::new(copy_s.clone(), "copy.bin".into(), 4, 1, false);
+                copy_item.confidence = ReclaimConfidence::HashMatch;
+                let report = ReclaimReport {
+                    duplicate_groups: vec![DuplicateGroup {
+                        hash: ContentHash {
+                            algorithm: HashAlgorithm::Sha256,
+                            hex: "abc".into(),
+                        },
+                        evidence: DuplicateEvidence::LocalSha256,
+                        size: 4,
+                        reclaimable: 4,
+                        items: vec![keep_item, copy_item],
+                    }],
+                    ..ReclaimReport::default()
+                };
+                std::fs::write(&copy, b"diff").unwrap();
+                let plan = prepare_reclaim_trash_plan(&report, std::slice::from_ref(&copy_s));
+                assert!(plan.delete_paths.is_empty());
+                assert_eq!(plan.skipped_paths, vec![copy_s]);
+                let _ = std::fs::remove_dir_all(&base);
+            }),
+        ];
+        for (case, check) in cases {
+            std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
+        }
     }
 
     #[test]

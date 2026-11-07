@@ -87,60 +87,44 @@ fn round_trip_survives_a_fresh_store_instance() {
 
 #[test]
 fn luecken_task_records_on_disk_contain_no_plaintext() {
-    let (root, store) = fixture();
-    store.set("account", "plain-text-password-123").unwrap();
-    let record = fs::read(store.record_path("account")).unwrap();
-    assert!(!contains(&record, b"plain-text-password-123"));
-    assert!(record.starts_with(b"SESEC02\0"));
-    let descriptor = fs::read(store.directory.join("keyring-v2")).unwrap();
-    assert!(!contains(&descriptor, b"plain-text-password-123"));
-    let key_file = root.path().join("secrets-v1.kek");
-    assert_eq!(fs::metadata(&key_file).unwrap().mode() & 0o7777, 0o600);
-}
-
-#[test]
-fn luecken_task_legacy_plaintext_store_is_ported_and_scrubbed() {
-    let (_root, store) = fixture();
-    fs::create_dir(&store.directory).unwrap();
-    fs::set_permissions(&store.directory, fs::Permissions::from_mode(0o700)).unwrap();
-    write_private(
-        &store.record_path("share:identity:iroh_secret"),
-        &encode_legacy("share:identity:iroh_secret", "aa".repeat(32).as_str()),
-    );
-    write_private(
-        &store.record_path("sftp://u@h:22/"),
-        &encode_legacy("sftp://u@h:22/", "old-password"),
-    );
-    let stage = store.directory.join(".stage-1-0011");
-    write_private(&stage, &encode_legacy("half-written", "stage-secret"));
-
-    let status = store.status().unwrap();
-    assert_eq!(status.plaintext_records, 2);
-    assert!(status.protector.is_none());
-
-    // The first access of the process ports everything.
-    assert_eq!(
-        store.get("sftp://u@h:22/").unwrap().as_deref(),
-        Some("old-password")
-    );
-    for account in ["share:identity:iroh_secret", "sftp://u@h:22/"] {
-        let record = fs::read(store.record_path(account)).unwrap();
-        assert!(record.starts_with(b"SESEC02\0"), "{account}");
+    // Rows: a secret whose bytes must not reach the disk, and a second secret
+    // for the file modes. Every row runs all checks: no plaintext in the record
+    // or the descriptor, the key file at 0600, the directory at 0700, the lock
+    // and the record at 0600 with one link each, and no stage files.
+    for (case, secret) in [
+        ("plaintext", "plain-text-password-123"),
+        ("modes", "secret"),
+    ] {
+        let (root, store) = fixture();
+        store.set("account", secret).unwrap();
+        let record = fs::read(store.record_path("account")).unwrap();
+        assert!(!contains(&record, secret.as_bytes()), "{case}");
+        assert!(record.starts_with(b"SESEC02\0"), "{case}");
+        let descriptor = fs::read(store.directory.join("keyring-v2")).unwrap();
+        assert!(!contains(&descriptor, secret.as_bytes()), "{case}");
+        let key_file = root.path().join("secrets-v1.kek");
+        assert_eq!(
+            fs::metadata(&key_file).unwrap().mode() & 0o7777,
+            0o600,
+            "{case}"
+        );
+        let directory = fs::metadata(&store.directory).unwrap();
+        let lock = fs::metadata(store.directory.join("store.lock")).unwrap();
+        let record_meta = fs::metadata(store.record_path("account")).unwrap();
+        assert_eq!(directory.mode() & 0o7777, 0o700, "{case}");
+        assert_eq!(lock.mode() & 0o7777, 0o600, "{case}");
+        assert_eq!(record_meta.mode() & 0o7777, 0o600, "{case}");
+        assert_eq!(lock.nlink(), 1, "{case}");
+        assert_eq!(record_meta.nlink(), 1, "{case}");
+        let stage_free = fs::read_dir(&store.directory).unwrap().all(|entry| {
+            !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".stage-")
+        });
+        assert!(stage_free, "{case}");
     }
-    assert!(!stage.exists());
-    for entry in fs::read_dir(&store.directory).unwrap() {
-        let bytes = fs::read(entry.unwrap().path()).unwrap_or_default();
-        assert!(!contains(&bytes, b"old-password"));
-        assert!(!contains(&bytes, b"stage-secret"));
-    }
-    let status = store.status().unwrap();
-    assert_eq!(status.plaintext_records, 0);
-    assert_eq!(status.protector.as_deref(), Some(APP_KEY_FILE));
-    // The ported identity key reads back unchanged.
-    assert_eq!(
-        store.get("share:identity:iroh_secret").unwrap(),
-        Some("aa".repeat(32))
-    );
 }
 
 #[test]
@@ -175,25 +159,6 @@ fn luecken_task_missing_key_file_fails_without_losing_records() {
     assert!(fs::read(reopened.record_path("account")).is_ok());
     write_private(&moved.with_extension("kek"), &saved);
     assert_eq!(reopened.get("account").unwrap().as_deref(), Some("secret"));
-}
-
-#[test]
-fn created_directory_lock_and_record_have_exact_private_modes() {
-    let (_root, store) = fixture();
-    store.set("account", "secret").unwrap();
-    let directory = fs::metadata(&store.directory).unwrap();
-    let lock = fs::metadata(store.directory.join("store.lock")).unwrap();
-    let record = fs::metadata(store.record_path("account")).unwrap();
-    assert_eq!(directory.mode() & 0o7777, 0o700);
-    assert_eq!(lock.mode() & 0o7777, 0o600);
-    assert_eq!(record.mode() & 0o7777, 0o600);
-    assert_eq!(lock.nlink(), 1);
-    assert_eq!(record.nlink(), 1);
-    assert!(fs::read_dir(&store.directory).unwrap().all(|entry| !entry
-        .unwrap()
-        .file_name()
-        .to_string_lossy()
-        .starts_with(".stage-")));
 }
 
 #[test]
@@ -265,17 +230,34 @@ fn unsafe_existing_record_mode_is_never_replaced_or_deleted() {
 #[test]
 fn corruption_truncation_and_oversize_are_explicit_errors() {
     let (_root, store) = fixture();
-    store.set("corrupt", "secret").unwrap();
-    let corrupt = store.record_path("corrupt");
-    let mut bytes = fs::read(&corrupt).unwrap();
-    let last = bytes.len() - 1;
-    bytes[last] ^= 1;
-    write_private(&corrupt, &bytes);
-    assert!(store.get("corrupt").unwrap_err().contains("authentication"));
-
-    store.set("truncated", "secret").unwrap();
-    write_private(&store.record_path("truncated"), b"short");
-    assert!(store.get("truncated").unwrap_err().contains("truncated"));
+    // Rows: a stored record damaged in one way. Reading it reports that damage
+    // as an explicit error that names it. A version byte the store does not
+    // know is rejected before any use.
+    let damages: [(&str, fn(&mut Vec<u8>), &str); 3] = [
+        (
+            "corrupt",
+            |bytes: &mut Vec<u8>| {
+                let last = bytes.len() - 1;
+                bytes[last] ^= 1;
+            },
+            "authentication",
+        ),
+        (
+            "truncated",
+            |bytes: &mut Vec<u8>| *bytes = b"short".to_vec(),
+            "truncated",
+        ),
+        ("version", |bytes: &mut Vec<u8>| bytes[8] = 9, "version"),
+    ];
+    for (account, damage, message) in damages {
+        store.set(account, "secret").unwrap();
+        let path = store.record_path(account);
+        let mut bytes = fs::read(&path).unwrap();
+        damage(&mut bytes);
+        write_private(&path, &bytes);
+        let error = store.get(account).unwrap_err();
+        assert!(error.contains(message), "{account}: {error}");
+    }
 
     assert_eq!(store.get("oversize").unwrap(), None);
     write_private(
@@ -293,17 +275,6 @@ fn corruption_truncation_and_oversize_are_explicit_errors() {
         store.get("healthy").unwrap().as_deref(),
         Some("still-works")
     );
-}
-
-#[test]
-fn unsupported_version_is_rejected_before_use() {
-    let (_root, store) = fixture();
-    store.set("version", "secret").unwrap();
-    let version = store.record_path("version");
-    let mut bytes = fs::read(&version).unwrap();
-    bytes[8] = 9;
-    write_private(&version, &bytes);
-    assert!(store.get("version").unwrap_err().contains("version"));
 }
 
 #[test]

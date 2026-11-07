@@ -33,7 +33,7 @@ const REPARSE_POINT: u32 = 0x400;
 const CANARY: &[u8] = b"owned runtime fixture data must remain unchanged";
 
 #[test]
-#[ignore = "remote optimization suite; pinned DLL/driver and symlink privilege required"]
+#[ignore = "needs the official Dokany runtime, the pinned DLL hash in SMART_EXPLORER_DOKANY_DLL_SHA256 and the symlink privilege; Suite mount-optimization-task"]
 fn mount_optimization_task_private_runtime_selection_and_rejections() {
     assert_fixture_provenance();
     let official = DokanyRuntime::preflight().expect("suite must install/start the official runtime");

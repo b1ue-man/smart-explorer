@@ -23,7 +23,7 @@ fn report(case: &str, files: usize, bytes: u64, started: Instant) {
 }
 
 #[test]
-#[ignore = "benchmark: cargo test speed_task_drive -- --ignored --nocapture"]
+#[ignore = "benchmark: cargo test speed_task_drive -- --ignored --nocapture; Suite rechte-desktop-tresore-task"]
 fn speed_task_drive_write_and_read_throughput() {
     for (case, files, size) in [
         ("5000x4KiB", 5000usize, 4096u64),
@@ -107,7 +107,7 @@ fn speed_task_drive_write_and_read_throughput() {
 /// (`drive_uploaded_<case>`), and the first byte of a streamed read
 /// (`BENCH drive_first_byte_<case> ms=<n>`).
 #[test]
-#[ignore = "benchmark: cargo test speed_task_drive -- --ignored --nocapture"]
+#[ignore = "benchmark: cargo test speed_task_drive -- --ignored --nocapture; Suite rechte-desktop-tresore-task"]
 fn speed_task_drive_write_back_and_first_byte() {
     for (case, files, size) in [
         ("5000x4KiB", 5000usize, 4096u64),

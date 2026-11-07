@@ -46,28 +46,39 @@ fn android_task_apptrash_round_trip_restores_the_original() {
 
 #[test]
 fn android_task_apptrash_restore_never_overwrites_an_occupied_name() {
-    let (_fixture, volumes) = volume();
-    let original = volumes[0].join("photo.jpg");
-    write(&original, "old");
-    let entry = move_to_trash_in(&volumes, &original).unwrap();
-    write(&original, "new");
+    let cases: [(&str, fn()); 2] = [
+        (
+            "android_task_apptrash_restore_never_overwrites_an_occupied_name",
+            || {
+                let (_fixture, volumes) = volume();
+                let original = volumes[0].join("photo.jpg");
+                write(&original, "old");
+                let entry = move_to_trash_in(&volumes, &original).unwrap();
+                write(&original, "new");
 
-    let restored = restore_in(&volumes, &entry.id).unwrap();
-    assert_eq!(restored, volumes[0].join("photo (2).jpg"));
-    assert_eq!(std::fs::read_to_string(&original).unwrap(), "new");
-    assert_eq!(std::fs::read_to_string(&restored).unwrap(), "old");
-}
+                let restored = restore_in(&volumes, &entry.id).unwrap();
+                assert_eq!(restored, volumes[0].join("photo (2).jpg"));
+                assert_eq!(std::fs::read_to_string(&original).unwrap(), "new");
+                assert_eq!(std::fs::read_to_string(&restored).unwrap(), "old");
+            },
+        ),
+        (
+            "android_task_apptrash_restore_recreates_a_removed_parent",
+            || {
+                let (_fixture, volumes) = volume();
+                let original = volumes[0].join("gone").join("deep").join("a.bin");
+                write(&original, "x");
+                let entry = move_to_trash_in(&volumes, &original).unwrap();
+                std::fs::remove_dir_all(volumes[0].join("gone")).unwrap();
 
-#[test]
-fn android_task_apptrash_restore_recreates_a_removed_parent() {
-    let (_fixture, volumes) = volume();
-    let original = volumes[0].join("gone").join("deep").join("a.bin");
-    write(&original, "x");
-    let entry = move_to_trash_in(&volumes, &original).unwrap();
-    std::fs::remove_dir_all(volumes[0].join("gone")).unwrap();
-
-    assert_eq!(restore_in(&volumes, &entry.id).unwrap(), original);
-    assert!(original.is_file());
+                assert_eq!(restore_in(&volumes, &entry.id).unwrap(), original);
+                assert!(original.is_file());
+            },
+        ),
+    ];
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
+    }
 }
 
 #[test]
@@ -227,98 +238,124 @@ fn emulated_and_sd() -> Vec<PathBuf> {
 
 #[test]
 fn android_background_task_protected_areas_below_a_volume_root() {
-    let areas = ProtectedAreas::for_walk_in(Path::new("/storage/emulated/0"), &emulated_and_sd());
-    assert_eq!(
-        areas.areas(),
-        [
-            PathBuf::from("/storage/emulated/0/Android/data"),
-            PathBuf::from("/storage/emulated/0/Android/obb"),
-        ]
-    );
-    let data = Path::new("/storage/emulated/0/Android/data");
-    assert!(areas.is_area(data));
-    assert!(areas.is_area(Path::new("/storage/emulated/0/Android/obb/")));
-    assert!(!areas.is_area(Path::new("/storage/emulated/0/Android/data/com.example")));
-    assert_eq!(
-        areas.area_of(Path::new(
-            "/storage/emulated/0/Android/data/com.example/files"
-        )),
-        Some(data)
-    );
-    assert_eq!(areas.area_of(data), Some(data));
-    for outside in [
-        "/storage/emulated/0/Android",
-        "/storage/emulated/0/Android/media/com.example",
-        "/storage/emulated/0/DCIM/Android/data",
-        "/storage/emulated/0/Android/database",
-    ] {
-        assert_eq!(areas.area_of(Path::new(outside)), None, "{outside}");
+    let cases: [(&str, fn()); 3] = [
+        (
+            "android_background_task_protected_areas_below_a_volume_root",
+            || {
+                let areas = ProtectedAreas::for_walk_in(
+                    Path::new("/storage/emulated/0"),
+                    &emulated_and_sd(),
+                );
+                assert_eq!(
+                    areas.areas(),
+                    [
+                        PathBuf::from("/storage/emulated/0/Android/data"),
+                        PathBuf::from("/storage/emulated/0/Android/obb"),
+                    ]
+                );
+                let data = Path::new("/storage/emulated/0/Android/data");
+                assert!(areas.is_area(data));
+                assert!(areas.is_area(Path::new("/storage/emulated/0/Android/obb/")));
+                assert!(!areas.is_area(Path::new("/storage/emulated/0/Android/data/com.example")));
+                assert_eq!(
+                    areas.area_of(Path::new(
+                        "/storage/emulated/0/Android/data/com.example/files"
+                    )),
+                    Some(data)
+                );
+                assert_eq!(areas.area_of(data), Some(data));
+                for outside in [
+                    "/storage/emulated/0/Android",
+                    "/storage/emulated/0/Android/media/com.example",
+                    "/storage/emulated/0/DCIM/Android/data",
+                    "/storage/emulated/0/Android/database",
+                ] {
+                    assert_eq!(areas.area_of(Path::new(outside)), None, "{outside}");
+                }
+                let children: Vec<&Path> = areas
+                    .children_of(Path::new("/storage/emulated/0/Android"))
+                    .collect();
+                assert_eq!(children.len(), 2);
+                assert_eq!(
+                    areas.children_of(Path::new("/storage/emulated/0")).count(),
+                    0
+                );
+            },
+        ),
+        (
+            "android_background_task_protected_areas_follow_aliases_case_and_sd_cards",
+            || {
+                let volumes = emulated_and_sd();
+                // `/sdcard` and `/storage/self/primary` name the primary volume; the
+                // areas keep the walk's own alias form.
+                for alias in ["/sdcard", "/storage/self/primary"] {
+                    let areas = ProtectedAreas::for_walk_in(Path::new(alias), &volumes);
+                    assert_eq!(
+                        areas.areas()[0],
+                        Path::new(alias).join("Android/data"),
+                        "{alias}"
+                    );
+                }
+                let inside = ProtectedAreas::for_walk_in(
+                    Path::new("/sdcard/Android/data/com.other/cache"),
+                    &volumes,
+                );
+                assert_eq!(inside.areas(), [PathBuf::from("/sdcard/Android/data")]);
+                assert_eq!(
+                    inside.area_of(Path::new("/sdcard/Android/data/com.other/cache")),
+                    Some(Path::new("/sdcard/Android/data"))
+                );
+                let lower = ProtectedAreas::for_walk_in(
+                    Path::new("/storage/emulated/0/android/DATA"),
+                    &volumes,
+                );
+                assert_eq!(
+                    lower.areas(),
+                    [PathBuf::from("/storage/emulated/0/android/DATA")]
+                );
+                let sd =
+                    ProtectedAreas::for_walk_in(Path::new("/storage/1234-ABCD/Android"), &volumes);
+                assert_eq!(
+                    sd.areas(),
+                    [
+                        PathBuf::from("/storage/1234-ABCD/Android/data"),
+                        PathBuf::from("/storage/1234-ABCD/Android/obb"),
+                    ]
+                );
+                let above = ProtectedAreas::for_walk_in(Path::new("/storage"), &volumes);
+                assert_eq!(above.areas().len(), 4);
+                // Elsewhere, relative and without volumes nothing is protected.
+                assert!(ProtectedAreas::for_walk_in(
+                    Path::new("/storage/emulated/0/DCIM"),
+                    &volumes
+                )
+                .is_empty());
+                assert!(
+                    ProtectedAreas::for_walk_in(Path::new("Android/data"), &volumes).is_empty()
+                );
+                assert!(
+                    ProtectedAreas::for_walk_in(Path::new("/storage/emulated/0"), &[]).is_empty()
+                );
+            },
+        ),
+        (
+            "android_background_task_protected_areas_on_a_real_volume",
+            || {
+                let (_fixture, volumes) = volume();
+                let root = volumes[0].clone();
+                std::fs::create_dir_all(root.join("Android/data/own")).unwrap();
+                // A missing (unlistable) folder below the area still resolves to it.
+                let deep = root.join("Android/data/gone/files");
+                let areas = ProtectedAreas::for_walk_in(&deep, &volumes);
+                assert_eq!(areas.areas(), [root.join("Android/data")]);
+                let whole = ProtectedAreas::for_walk_in(&root, &volumes);
+                assert!(whole.is_area(&root.join("Android/obb")));
+            },
+        ),
+    ];
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
     }
-    let children: Vec<&Path> = areas
-        .children_of(Path::new("/storage/emulated/0/Android"))
-        .collect();
-    assert_eq!(children.len(), 2);
-    assert_eq!(
-        areas.children_of(Path::new("/storage/emulated/0")).count(),
-        0
-    );
-}
-
-#[test]
-fn android_background_task_protected_areas_follow_aliases_case_and_sd_cards() {
-    let volumes = emulated_and_sd();
-    // `/sdcard` and `/storage/self/primary` name the primary volume; the
-    // areas keep the walk's own alias form.
-    for alias in ["/sdcard", "/storage/self/primary"] {
-        let areas = ProtectedAreas::for_walk_in(Path::new(alias), &volumes);
-        assert_eq!(
-            areas.areas()[0],
-            Path::new(alias).join("Android/data"),
-            "{alias}"
-        );
-    }
-    let inside =
-        ProtectedAreas::for_walk_in(Path::new("/sdcard/Android/data/com.other/cache"), &volumes);
-    assert_eq!(inside.areas(), [PathBuf::from("/sdcard/Android/data")]);
-    assert_eq!(
-        inside.area_of(Path::new("/sdcard/Android/data/com.other/cache")),
-        Some(Path::new("/sdcard/Android/data"))
-    );
-    let lower =
-        ProtectedAreas::for_walk_in(Path::new("/storage/emulated/0/android/DATA"), &volumes);
-    assert_eq!(
-        lower.areas(),
-        [PathBuf::from("/storage/emulated/0/android/DATA")]
-    );
-    let sd = ProtectedAreas::for_walk_in(Path::new("/storage/1234-ABCD/Android"), &volumes);
-    assert_eq!(
-        sd.areas(),
-        [
-            PathBuf::from("/storage/1234-ABCD/Android/data"),
-            PathBuf::from("/storage/1234-ABCD/Android/obb"),
-        ]
-    );
-    let above = ProtectedAreas::for_walk_in(Path::new("/storage"), &volumes);
-    assert_eq!(above.areas().len(), 4);
-    // Elsewhere, relative and without volumes nothing is protected.
-    assert!(
-        ProtectedAreas::for_walk_in(Path::new("/storage/emulated/0/DCIM"), &volumes).is_empty()
-    );
-    assert!(ProtectedAreas::for_walk_in(Path::new("Android/data"), &volumes).is_empty());
-    assert!(ProtectedAreas::for_walk_in(Path::new("/storage/emulated/0"), &[]).is_empty());
-}
-
-#[test]
-fn android_background_task_protected_areas_on_a_real_volume() {
-    let (_fixture, volumes) = volume();
-    let root = volumes[0].clone();
-    std::fs::create_dir_all(root.join("Android/data/own")).unwrap();
-    // A missing (unlistable) folder below the area still resolves to it.
-    let deep = root.join("Android/data/gone/files");
-    let areas = ProtectedAreas::for_walk_in(&deep, &volumes);
-    assert_eq!(areas.areas(), [root.join("Android/data")]);
-    let whole = ProtectedAreas::for_walk_in(&root, &volumes);
-    assert!(whole.is_area(&root.join("Android/obb")));
 }
 
 #[test]

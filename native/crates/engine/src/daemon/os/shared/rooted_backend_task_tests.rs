@@ -125,6 +125,16 @@ impl Fixture {
 
 #[test]
 fn remote_drive_task_enforced_root_rejects_unverified_backend() {
+    let cases: [fn(); 2] = [
+        remote_drive_task_enforced_root_rejects_unverified_backend_case,
+        remote_drive_task_trusted_root_accepts_unverified_backend,
+    ];
+    for case in cases {
+        case();
+    }
+}
+
+fn remote_drive_task_enforced_root_rejects_unverified_backend_case() {
     let fixture = Fixture::new();
     let error = only_error(RootedBackend::open_windows(
         fixture.unverified(),
@@ -135,7 +145,6 @@ fn remote_drive_task_enforced_root_rejects_unverified_backend() {
     assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
 }
 
-#[test]
 fn remote_drive_task_trusted_root_accepts_unverified_backend() {
     let fixture = Fixture::new();
     let backend = RootedBackend::open_windows(
@@ -192,6 +201,16 @@ fn remote_drive_task_rooted_backend_consumes_one_combined_capability_snapshot() 
 
 #[test]
 fn remote_drive_task_enforced_reads_reuse_resolution_but_keep_final_stat_live() {
+    let cases: [fn(); 2] = [
+        remote_drive_task_enforced_reads_reuse_resolution_but_keep_final_stat_live_case,
+        remote_drive_task_trusted_reads_cache_case_resolution_but_revalidate_root,
+    ];
+    for case in cases {
+        case();
+    }
+}
+
+fn remote_drive_task_enforced_reads_reuse_resolution_but_keep_final_stat_live_case() {
     let fixture = Fixture::new();
     let stats = Arc::new(AtomicUsize::new(0));
     let lists = Arc::new(AtomicUsize::new(0));
@@ -240,7 +259,6 @@ fn remote_drive_task_enforced_reads_reuse_resolution_but_keep_final_stat_live() 
     );
 }
 
-#[test]
 fn remote_drive_task_trusted_reads_cache_case_resolution_but_revalidate_root() {
     let fixture = Fixture::new();
     let stats = Arc::new(AtomicUsize::new(0));

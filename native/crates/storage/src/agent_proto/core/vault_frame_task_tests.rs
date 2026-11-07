@@ -6,7 +6,7 @@ mod fixture;
 use fixture::{InterruptedReader, ProbeWriter};
 
 use super::super::types::{Frame, SearchSpec, WireMeta, WireNode, CHUNK};
-use super::{read_frame, write_frame, MAX_FRAME, MIN_WIRE_META_BYTES};
+use super::{read_frame, write_frame, MIN_WIRE_META_BYTES};
 
 const REQUEST: u64 = 0x1020_3040_5060_7080;
 
@@ -29,238 +29,308 @@ fn assert_error<T>(result: io::Result<T>, expected: ErrorKind) {
 
 #[test]
 fn mount_vault_task_all_frame_variants_keep_exact_protocol_bytes() {
-    // Independent field literals: UTF-8 byte lengths, little-endian integers,
-    // negative i64, both boolean values, and present/absent optional strings.
-    let path = "é";
-    let p = [2, 0, 0, 0, 0xc3, 0xa9];
-    let number = 0x0102_0304_0506_0708;
-    let n = [8, 7, 6, 5, 4, 3, 2, 1];
-    let negative = [254, 255, 255, 255, 255, 255, 255, 255];
-    let meta = WireMeta {
-        name: path.into(),
-        is_dir: true,
-        is_symlink: false,
-        special: false,
-        size: number,
-        mtime_ms: -2,
-        content_md5: Some(path.into()),
-    };
-    let meta_bytes = join(&[&p, &[1, 0], &n, &negative, &[1], &p]);
-    let tree = WireNode {
-        name: path.into(),
-        size: number,
-        is_dir: true,
-        children: vec![WireNode {
-            name: path.into(),
-            size: 0,
-            is_dir: false,
-            children: Vec::new(),
-        }],
-    };
-    let tree_bytes = join(&[&p, &n, &[1], &[1, 0, 0, 0], &p, &[0; 13]]);
-    let entry_bytes = join(&[&p, &[0], &n, &negative]);
-    let cases = vec![
-        (1, Frame::Hello { proto: 0x0102_0304 }, vec![4, 3, 2, 1]),
+    let cases: [(&str, fn()); 2] = [
         (
-            2,
-            Frame::HelloOk {
-                proto: 0x0102_0304,
-                version: path.into(),
+            "mount_vault_task_all_frame_variants_keep_exact_protocol_bytes",
+            || {
+                // Independent field literals: UTF-8 byte lengths, little-endian integers,
+                // negative i64, both boolean values, and present/absent optional strings.
+                let path = "é";
+                let p = [2, 0, 0, 0, 0xc3, 0xa9];
+                let number = 0x0102_0304_0506_0708;
+                let n = [8, 7, 6, 5, 4, 3, 2, 1];
+                let negative = [254, 255, 255, 255, 255, 255, 255, 255];
+                let meta = WireMeta {
+                    name: path.into(),
+                    is_dir: true,
+                    is_symlink: false,
+                    special: false,
+                    size: number,
+                    mtime_ms: -2,
+                    content_md5: Some(path.into()),
+                };
+                let meta_bytes = join(&[&p, &[1, 0], &n, &negative, &[1], &p]);
+                let tree = WireNode {
+                    name: path.into(),
+                    size: number,
+                    is_dir: true,
+                    children: vec![WireNode {
+                        name: path.into(),
+                        size: 0,
+                        is_dir: false,
+                        children: Vec::new(),
+                    }],
+                };
+                let tree_bytes = join(&[&p, &n, &[1], &[1, 0, 0, 0], &p, &[0; 13]]);
+                let entry_bytes = join(&[&p, &[0], &n, &negative]);
+                let cases = vec![
+                    (1, Frame::Hello { proto: 0x0102_0304 }, vec![4, 3, 2, 1]),
+                    (
+                        2,
+                        Frame::HelloOk {
+                            proto: 0x0102_0304,
+                            version: path.into(),
+                        },
+                        join(&[&[4, 3, 2, 1], &p]),
+                    ),
+                    (3, Frame::ListDir(path.into()), p.to_vec()),
+                    (
+                        4,
+                        Frame::Dir(vec![meta.clone(), WireMeta::default()]),
+                        join(&[&[2, 0, 0, 0], &meta_bytes, &[0; 23]]),
+                    ),
+                    (5, Frame::Stat(path.into()), p.to_vec()),
+                    (6, Frame::Meta(meta), meta_bytes),
+                    (7, Frame::WalkTree(path.into()), p.to_vec()),
+                    (8, Frame::Tree(tree), tree_bytes),
+                    (
+                        9,
+                        Frame::Read {
+                            path: path.into(),
+                            offset: number,
+                            len: 0,
+                        },
+                        join(&[&p, &n, &[0; 8]]),
+                    ),
+                    (10, Frame::Write(path.into()), p.to_vec()),
+                    (
+                        11,
+                        Frame::Data(vec![0, 128, 255]),
+                        vec![3, 0, 0, 0, 0, 128, 255],
+                    ),
+                    (
+                        12,
+                        Frame::Copy {
+                            src: path.into(),
+                            dst: "".into(),
+                        },
+                        join(&[&p, &[0; 4]]),
+                    ),
+                    (
+                        13,
+                        Frame::Rename {
+                            src: path.into(),
+                            dst: "".into(),
+                        },
+                        join(&[&p, &[0; 4]]),
+                    ),
+                    (
+                        14,
+                        Frame::Remove {
+                            path: path.into(),
+                            recursive: true,
+                        },
+                        join(&[&p, &[1]]),
+                    ),
+                    (15, Frame::Mkdir(path.into()), p.to_vec()),
+                    (16, Frame::GetTree(path.into()), p.to_vec()),
+                    (17, Frame::PutTree(path.into()), p.to_vec()),
+                    (
+                        18,
+                        Frame::TreeEntry {
+                            rel: path.into(),
+                            is_dir: false,
+                            size: number,
+                            mtime_ms: -2,
+                        },
+                        entry_bytes.clone(),
+                    ),
+                    (
+                        19,
+                        Frame::Search {
+                            root: path.into(),
+                            spec: SearchSpec {
+                                query: path.into(),
+                                glob: true,
+                                min_size: number,
+                                max_size: 0,
+                                max_results: 1,
+                                want_dirs: false,
+                            },
+                        },
+                        join(&[&p, &p, &[1], &n, &[0; 8], &[1, 0, 0, 0, 0, 0, 0, 0], &[0]]),
+                    ),
+                    (
+                        20,
+                        Frame::Match {
+                            rel: path.into(),
+                            is_dir: false,
+                            size: number,
+                            mtime_ms: -2,
+                        },
+                        entry_bytes.clone(),
+                    ),
+                    (
+                        21,
+                        Frame::WalkHashed {
+                            root: path.into(),
+                            want_hash: true,
+                        },
+                        join(&[&p, &[1]]),
+                    ),
+                    (
+                        22,
+                        Frame::HashEntry {
+                            rel: path.into(),
+                            is_dir: false,
+                            size: number,
+                            mtime_ms: -2,
+                            md5: None,
+                        },
+                        join(&[&entry_bytes, &[0]]),
+                    ),
+                    (
+                        23,
+                        Frame::Progress {
+                            done: number,
+                            total: 0,
+                        },
+                        join(&[&n, &[0; 8]]),
+                    ),
+                    (24, Frame::Ok, vec![]),
+                    (25, Frame::End, vec![]),
+                    (26, Frame::Err(path.into()), p.to_vec()),
+                    (27, Frame::Cancel, vec![]),
+                    (28, Frame::TryExists(path.into()), p.to_vec()),
+                    (29, Frame::Exists(false), vec![0]),
+                    (
+                        30,
+                        Frame::RenameNoReplace {
+                            src: path.into(),
+                            dst: "".into(),
+                        },
+                        join(&[&p, &[0; 4]]),
+                    ),
+                    (
+                        31,
+                        Frame::Promote {
+                            staged: path.into(),
+                            destination: "".into(),
+                        },
+                        join(&[&p, &[0; 4]]),
+                    ),
+                    (
+                        32,
+                        Frame::PromoteNoReplace {
+                            staged: path.into(),
+                            destination: "".into(),
+                        },
+                        join(&[&p, &[0; 4]]),
+                    ),
+                    (33, Frame::WriteNew(path.into()), p.to_vec()),
+                ];
+                assert_eq!(cases.len(), 33);
+                for (index, (tag, frame, fields)) in cases.into_iter().enumerate() {
+                    assert_eq!(
+                        usize::from(tag),
+                        index + 1,
+                        "every opcode must be represented"
+                    );
+                    let expected = body(tag, &fields);
+                    assert_eq!(frame.encode(REQUEST).unwrap(), expected, "opcode {tag}");
+                    assert_eq!(Frame::decode(&expected).unwrap(), (REQUEST, frame.clone()));
+                    let mut writer = ProbeWriter::default();
+                    write_frame(&mut writer, REQUEST, &frame).unwrap();
+                    assert_eq!(writer.bytes, transport(&expected), "framed opcode {tag}");
+                    assert_eq!((writer.calls, writer.flushes), (1, 1), "opcode {tag}");
+                    assert_eq!(
+                        read_frame(&mut Cursor::new(&writer.bytes)).unwrap(),
+                        Some((REQUEST, frame))
+                    );
+                }
             },
-            join(&[&[4, 3, 2, 1], &p]),
         ),
-        (3, Frame::ListDir(path.into()), p.to_vec()),
         (
-            4,
-            Frame::Dir(vec![meta.clone(), WireMeta::default()]),
-            join(&[&[2, 0, 0, 0], &meta_bytes, &[0; 23]]),
-        ),
-        (5, Frame::Stat(path.into()), p.to_vec()),
-        (6, Frame::Meta(meta), meta_bytes),
-        (7, Frame::WalkTree(path.into()), p.to_vec()),
-        (8, Frame::Tree(tree), tree_bytes),
-        (
-            9,
-            Frame::Read {
-                path: path.into(),
-                offset: number,
-                len: 0,
+            "remote_drive_task_write_new_codec_roundtrip_keeps_exclusive_opcode",
+            || {
+                let request_id = 0x1020_3040_5060_7080;
+                let frame = Frame::WriteNew("/vault/.note.md.smart-explorer-stage".into());
+
+                let encoded = frame.encode(request_id).unwrap();
+                assert_eq!(&encoded[..8], &request_id.to_le_bytes());
+                assert_eq!(
+                    encoded[8], 33,
+                    "WriteNew must retain its dedicated wire tag"
+                );
+
+                let (decoded_id, decoded_frame) = Frame::decode(&encoded).unwrap();
+                assert_eq!(decoded_id, request_id);
+                assert_eq!(decoded_frame, frame);
             },
-            join(&[&p, &n, &[0; 8]]),
         ),
-        (10, Frame::Write(path.into()), p.to_vec()),
-        (
-            11,
-            Frame::Data(vec![0, 128, 255]),
-            vec![3, 0, 0, 0, 0, 128, 255],
-        ),
-        (
-            12,
-            Frame::Copy {
-                src: path.into(),
-                dst: "".into(),
-            },
-            join(&[&p, &[0; 4]]),
-        ),
-        (
-            13,
-            Frame::Rename {
-                src: path.into(),
-                dst: "".into(),
-            },
-            join(&[&p, &[0; 4]]),
-        ),
-        (
-            14,
-            Frame::Remove {
-                path: path.into(),
-                recursive: true,
-            },
-            join(&[&p, &[1]]),
-        ),
-        (15, Frame::Mkdir(path.into()), p.to_vec()),
-        (16, Frame::GetTree(path.into()), p.to_vec()),
-        (17, Frame::PutTree(path.into()), p.to_vec()),
-        (
-            18,
-            Frame::TreeEntry {
-                rel: path.into(),
-                is_dir: false,
-                size: number,
-                mtime_ms: -2,
-            },
-            entry_bytes.clone(),
-        ),
-        (
-            19,
-            Frame::Search {
-                root: path.into(),
-                spec: SearchSpec {
-                    query: path.into(),
-                    glob: true,
-                    min_size: number,
-                    max_size: 0,
-                    max_results: 1,
-                    want_dirs: false,
-                },
-            },
-            join(&[&p, &p, &[1], &n, &[0; 8], &[1, 0, 0, 0, 0, 0, 0, 0], &[0]]),
-        ),
-        (
-            20,
-            Frame::Match {
-                rel: path.into(),
-                is_dir: false,
-                size: number,
-                mtime_ms: -2,
-            },
-            entry_bytes.clone(),
-        ),
-        (
-            21,
-            Frame::WalkHashed {
-                root: path.into(),
-                want_hash: true,
-            },
-            join(&[&p, &[1]]),
-        ),
-        (
-            22,
-            Frame::HashEntry {
-                rel: path.into(),
-                is_dir: false,
-                size: number,
-                mtime_ms: -2,
-                md5: None,
-            },
-            join(&[&entry_bytes, &[0]]),
-        ),
-        (
-            23,
-            Frame::Progress {
-                done: number,
-                total: 0,
-            },
-            join(&[&n, &[0; 8]]),
-        ),
-        (24, Frame::Ok, vec![]),
-        (25, Frame::End, vec![]),
-        (26, Frame::Err(path.into()), p.to_vec()),
-        (27, Frame::Cancel, vec![]),
-        (28, Frame::TryExists(path.into()), p.to_vec()),
-        (29, Frame::Exists(false), vec![0]),
-        (
-            30,
-            Frame::RenameNoReplace {
-                src: path.into(),
-                dst: "".into(),
-            },
-            join(&[&p, &[0; 4]]),
-        ),
-        (
-            31,
-            Frame::Promote {
-                staged: path.into(),
-                destination: "".into(),
-            },
-            join(&[&p, &[0; 4]]),
-        ),
-        (
-            32,
-            Frame::PromoteNoReplace {
-                staged: path.into(),
-                destination: "".into(),
-            },
-            join(&[&p, &[0; 4]]),
-        ),
-        (33, Frame::WriteNew(path.into()), p.to_vec()),
     ];
-    assert_eq!(cases.len(), 33);
-    for (index, (tag, frame, fields)) in cases.into_iter().enumerate() {
-        assert_eq!(
-            usize::from(tag),
-            index + 1,
-            "every opcode must be represented"
-        );
-        let expected = body(tag, &fields);
-        assert_eq!(frame.encode(REQUEST).unwrap(), expected, "opcode {tag}");
-        assert_eq!(Frame::decode(&expected).unwrap(), (REQUEST, frame.clone()));
-        let mut writer = ProbeWriter::default();
-        write_frame(&mut writer, REQUEST, &frame).unwrap();
-        assert_eq!(writer.bytes, transport(&expected), "framed opcode {tag}");
-        assert_eq!((writer.calls, writer.flushes), (1, 1), "opcode {tag}");
-        assert_eq!(
-            read_frame(&mut Cursor::new(&writer.bytes)).unwrap(),
-            Some((REQUEST, frame))
-        );
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
     }
 }
 
 #[test]
 fn mount_vault_task_directory_above_50000_real_entries_roundtrips() {
-    let entries: Vec<_> = (0..50_001)
-        .map(|index| WireMeta {
-            name: format!("note-{index:05}-é.md"),
-            is_dir: index % 17 == 0,
-            is_symlink: index % 19 == 0,
-            special: false,
-            size: index as u64 * 31,
-            mtime_ms: index as i64 - 25_000,
-            content_md5: (index % 23 == 0).then(|| "0123456789abcdef0123456789abcdef".into()),
-        })
-        .collect();
-    let frame = Frame::Dir(entries);
-    let encoded = frame.encode(REQUEST).unwrap();
-    assert_eq!(
-        u32::from_le_bytes(encoded[9..13].try_into().unwrap()),
-        50_001
-    );
-    let (request, decoded) = Frame::decode(&encoded).unwrap();
-    assert_eq!(request, REQUEST);
-    assert!(
-        decoded == frame,
-        "the complete named directory must survive encoding"
-    );
+    let cases: [(&str, fn()); 2] = [
+        (
+            "mount_vault_task_directory_above_50000_real_entries_roundtrips",
+            || {
+                let entries: Vec<_> = (0..50_001)
+                    .map(|index| WireMeta {
+                        name: format!("note-{index:05}-é.md"),
+                        is_dir: index % 17 == 0,
+                        is_symlink: index % 19 == 0,
+                        special: false,
+                        size: index as u64 * 31,
+                        mtime_ms: index as i64 - 25_000,
+                        content_md5: (index % 23 == 0)
+                            .then(|| "0123456789abcdef0123456789abcdef".into()),
+                    })
+                    .collect();
+                let frame = Frame::Dir(entries);
+                let encoded = frame.encode(REQUEST).unwrap();
+                assert_eq!(
+                    u32::from_le_bytes(encoded[9..13].try_into().unwrap()),
+                    50_001
+                );
+                let (request, decoded) = Frame::decode(&encoded).unwrap();
+                assert_eq!(request, REQUEST);
+                assert!(
+                    decoded == frame,
+                    "the complete named directory must survive encoding"
+                );
+            },
+        ),
+        (
+            "remote_drive_task_directory_frames_accept_real_records_above_fifty_thousand",
+            || {
+                {
+                    let maximum = Frame::Dir(vec![WireMeta::default(); 50_000]);
+                    let encoded = maximum.encode(6).unwrap();
+                    let (decoded_id, decoded) = Frame::decode(&encoded).unwrap();
+                    assert_eq!(decoded_id, 6);
+                    let Frame::Dir(entries) = decoded else {
+                        panic!("directory frame decoded as another variant");
+                    };
+                    assert_eq!(entries.len(), 50_000);
+                }
+
+                let above_old_limit = Frame::Dir(vec![WireMeta::default(); 50_001]);
+                let encoded = above_old_limit.encode(7).unwrap();
+                let (decoded_id, decoded) = Frame::decode(&encoded).unwrap();
+                assert_eq!(decoded_id, 7);
+                assert!(
+                    decoded == above_old_limit,
+                    "all 50,001 real records must roundtrip"
+                );
+
+                let mut hostile_header = Vec::new();
+                hostile_header.extend_from_slice(&7_u64.to_le_bytes());
+                hostile_header.push(4);
+                hostile_header.extend_from_slice(&50_001_u32.to_le_bytes());
+                let decode_error = Frame::decode(&hostile_header).unwrap_err();
+                assert_eq!(decode_error.kind(), std::io::ErrorKind::InvalidData);
+            },
+        ),
+    ];
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
+    }
 }
 
 #[test]
@@ -341,44 +411,6 @@ fn mount_vault_task_utf8_and_optional_md5_use_encoded_byte_lengths() {
         assert_eq!(encoded.len(), 37 + md5.unwrap().len());
         assert_eq!(Frame::decode(&encoded).unwrap(), (REQUEST, frame));
     }
-}
-
-#[test]
-fn mount_vault_task_exact_64_mib_body_and_one_byte_over() {
-    assert_eq!(MAX_FRAME, 64 * 1024 * 1024);
-    // Only the input and one encoded/decoded copy coexist. Do not clone the
-    // giant frame, construct a transport copy, or print its contents on failure.
-    let frame = Frame::Dir(vec![WireMeta {
-        name: "x".repeat(MAX_FRAME - 13 - 23),
-        ..WireMeta::default()
-    }]);
-    let encoded = frame.encode(REQUEST).unwrap();
-    assert_eq!(encoded.len(), MAX_FRAME);
-    drop(frame);
-    let (request, mut decoded) = Frame::decode(&encoded).unwrap();
-    assert_eq!(request, REQUEST);
-    drop(encoded);
-    let Frame::Dir(entries) = &mut decoded else {
-        panic!("expected directory");
-    };
-    assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0].name.len(), MAX_FRAME - 36);
-    assert!(entries[0].name.bytes().all(|byte| byte == b'x'));
-    entries[0].name.reserve_exact(1);
-    entries[0].name.push('x');
-    assert_error(decoded.encode(REQUEST), ErrorKind::InvalidData);
-    let mut writer = ProbeWriter::default();
-    assert_error(
-        write_frame(&mut writer, REQUEST, &decoded),
-        ErrorKind::InvalidData,
-    );
-    assert_eq!((writer.calls, writer.flushes), (0, 0));
-    drop(decoded);
-    // The receive path must reject the oversized length before reading a body.
-    let prefix = u32::try_from(MAX_FRAME + 1).unwrap().to_le_bytes();
-    let mut reader = Cursor::new(prefix);
-    assert_error(read_frame(&mut reader), ErrorKind::InvalidData);
-    assert_eq!(reader.position(), 4);
 }
 
 #[test]

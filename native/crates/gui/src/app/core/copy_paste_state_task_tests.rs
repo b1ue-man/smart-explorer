@@ -9,7 +9,7 @@ fn task_runner_only() {
 }
 
 #[test]
-#[ignore = "requires isolated remote copy/paste task runner"]
+#[ignore = "requires isolated remote copy/paste task runner; Suite copy-paste-task"]
 fn copy_paste_task_pending_admission_requires_current_generation_and_sequence() {
     task_runner_only();
     let mut state = ClipboardPreparation::default();
@@ -30,7 +30,7 @@ fn copy_paste_task_pending_admission_requires_current_generation_and_sequence() 
 }
 
 #[test]
-#[ignore = "requires isolated remote copy/paste task runner"]
+#[ignore = "requires isolated remote copy/paste task runner; Suite copy-paste-task"]
 fn copy_paste_task_cancel_and_restart_never_readmit_an_old_result() {
     task_runner_only();
     let mut state = ClipboardPreparation::default();
@@ -48,7 +48,7 @@ fn copy_paste_task_cancel_and_restart_never_readmit_an_old_result() {
 }
 
 #[test]
-#[ignore = "requires isolated remote copy/paste task runner"]
+#[ignore = "requires isolated remote copy/paste task runner; Suite copy-paste-task"]
 fn copy_paste_task_external_sequence_supersedes_a_pending_result() {
     task_runner_only();
     let mut state = ClipboardPreparation::default();
@@ -62,7 +62,7 @@ fn copy_paste_task_external_sequence_supersedes_a_pending_result() {
 }
 
 #[test]
-#[ignore = "requires isolated remote copy/paste task runner"]
+#[ignore = "requires isolated remote copy/paste task runner; Suite copy-paste-task"]
 fn copy_paste_task_generation_exhaustion_cannot_reuse_an_old_stamp() {
     task_runner_only();
     let mut state = ClipboardPreparation::default();

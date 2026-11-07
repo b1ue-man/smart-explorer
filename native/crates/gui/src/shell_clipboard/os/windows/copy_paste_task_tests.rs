@@ -121,7 +121,7 @@ fn assert_selection(paths: &[String], is_cut: bool) {
 }
 
 #[test]
-#[ignore = "requires isolated remote copy/paste task runner"]
+#[ignore = "requires isolated remote copy/paste task runner; Suite copy-paste-task"]
 fn copy_paste_task_windows_roundtrip_copy_move() {
     let _isolated = IsolatedClipboard::enter();
     let paths = [
@@ -142,7 +142,7 @@ fn copy_paste_task_windows_roundtrip_copy_move() {
 }
 
 #[test]
-#[ignore = "requires isolated remote copy/paste task runner"]
+#[ignore = "requires isolated remote copy/paste task runner; Suite copy-paste-task"]
 fn copy_paste_task_windows_guarded_sequence() {
     let _isolated = IsolatedClipboard::enter();
     let old = vec!["C:\\old.txt".to_owned()];
@@ -169,7 +169,7 @@ fn copy_paste_task_windows_guarded_sequence() {
 }
 
 #[test]
-#[ignore = "requires isolated remote copy/paste task runner"]
+#[ignore = "requires isolated remote copy/paste task runner; Suite copy-paste-task"]
 fn copy_paste_task_windows_contention_and_recovery() {
     let _isolated = IsolatedClipboard::enter();
     assert_eq!(read_files().unwrap(), None, "An empty clipboard has no CF_HDROP");
@@ -223,7 +223,7 @@ fn publish_raw(bytes: &[u8], effect: Option<u32>) -> Result<()> {
 }
 
 #[test]
-#[ignore = "requires isolated remote copy/paste task runner"]
+#[ignore = "requires isolated remote copy/paste task runner; Suite copy-paste-task"]
 fn copy_paste_task_windows_malformed_dropfiles_and_recovery() {
     let _isolated = IsolatedClipboard::enter();
     let mut inside_header = wide_payload("C:\\offset.txt", 2);
@@ -265,7 +265,7 @@ fn read_effect_prefix(length: usize) -> Result<bool> {
 }
 
 #[test]
-#[ignore = "requires isolated remote copy/paste task runner"]
+#[ignore = "requires isolated remote copy/paste task runner; Suite copy-paste-task"]
 fn copy_paste_task_windows_undersized_effect_and_recovery() {
     let _isolated = IsolatedClipboard::enter();
     let paths = vec!["C:\\effect.txt".to_owned()];
@@ -303,7 +303,7 @@ fn windows_ansi(path: &[u8]) -> String {
 }
 
 #[test]
-#[ignore = "requires isolated remote copy/paste task runner"]
+#[ignore = "requires isolated remote copy/paste task runner; Suite copy-paste-task"]
 fn copy_paste_task_windows_ansi_hdrop_conversion() {
     let _isolated = IsolatedClipboard::enter();
     let paths: [&[u8]; 3] = [

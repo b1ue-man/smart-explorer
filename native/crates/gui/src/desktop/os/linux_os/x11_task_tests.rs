@@ -141,7 +141,7 @@ fn start_surface(x: &XServer, key: &str, extra: &[(&str, &str)]) -> SurfaceProc 
 }
 
 #[test]
-#[ignore = "braucht Xvfb und openbox (Stufe linux-desktop: x11)"]
+#[ignore = "braucht Xvfb und openbox (Stufe linux-desktop: x11); Suite rechte-desktop-tresore-task"]
 fn desktop_task_x11_window_type_desktop() {
     require_task();
     let mut x = XServer::start("1280x800x24");
@@ -203,7 +203,7 @@ fn x11_facts_ready(x: &XServer, foreign: bool) {
 }
 
 #[test]
-#[ignore = "braucht Xvfb, xfwm4 und xfdesktop (Stufe linux-desktop: x11)"]
+#[ignore = "braucht Xvfb, xfwm4 und xfdesktop (Stufe linux-desktop: x11); Suite rechte-desktop-tresore-task"]
 fn desktop_task_x11_below_with_foreign_desktop() {
     require_task();
     let mut x = XServer::start("1280x800x24");
@@ -264,7 +264,7 @@ fn desktop_task_x11_below_with_foreign_desktop() {
 }
 
 #[test]
-#[ignore = "braucht Xvfb (Stufe linux-desktop: x11)"]
+#[ignore = "braucht Xvfb (Stufe linux-desktop: x11); Suite rechte-desktop-tresore-task"]
 fn desktop_task_x11_no_ewmh_unavailable() {
     require_task();
     let _x = XServer::start("1024x768x24");
@@ -340,7 +340,7 @@ fn server_monitors(x: &XServer) -> String {
 }
 
 #[test]
-#[ignore = "braucht Xvfb, openbox und xrandr (Stufe linux-desktop: x11)"]
+#[ignore = "braucht Xvfb, openbox und xrandr (Stufe linux-desktop: x11); Suite rechte-desktop-tresore-task"]
 fn desktop_task_x11_monitors_two_screens() {
     require_task();
     let mut x = XServer::start("1600x600x24");
@@ -391,7 +391,7 @@ fn x11_monitors_names() -> Vec<(String, String)> {
 }
 
 #[test]
-#[ignore = "braucht Xvfb, openbox, xrandr und xdotool (Stufe linux-desktop: x11)"]
+#[ignore = "braucht Xvfb, openbox, xrandr und xdotool (Stufe linux-desktop: x11); Suite rechte-desktop-tresore-task"]
 fn desktop_task_cross_monitor_drag() {
     require_task();
     let mut x = XServer::start("1600x600x24");

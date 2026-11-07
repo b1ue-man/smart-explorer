@@ -36,7 +36,7 @@ fn tiles() -> CodecChoice {
 }
 
 #[test]
-#[ignore = "needs the development se (SE_SCREEN_TASK_WORKER)"]
+#[ignore = "needs the development se (SE_SCREEN_TASK_WORKER); Suite rechte-desktop-tresore-task, review-task"]
 fn screen_task_host_worker_exits_on_update_stop() {
     // The host process reads its stop marker from its own app data.
     let data = tempfile::tempdir().unwrap();

@@ -24,6 +24,21 @@ class BatchesScreenBudgetTest {
         assertThrows(IllegalArgumentException::class.java) { b.copy(workingBytes = 24L * b.imageBytes - 1) }
         // Keep the 24I floor satisfied while exhausting the separately funded record slots.
         assertThrows(IllegalArgumentException::class.java) { b.copy(recordBytes = b.imageBytes) }
+        // A small legacy receiver keeps its scaler bound (the former batches_android_session_budget_small_legacy_receiver_keeps_its_scaler_bound).
+        val legacyImage = 128 * 128 * 4
+        val legacyRecord = legacyImage + 256
+        val legacyPacket = legacyRecord + 1024
+        val legacyWorking = 20L * legacyImage + 32L * (legacyRecord + 1099) + legacyPacket - legacyImage
+        val legacyBudget = ScreenBufferBudget(
+            legacyWorking, legacyImage, legacyRecord, legacyPacket, legacyRecord + 32,
+            legacy = true, boundedLegacy = true,
+        )
+        assertTrue(legacyBudget.workingBytes < 512L * 1024 * 1024)
+        assertEquals(7L * legacyImage, legacyBudget.scalingBytes())
+        assertEquals(legacyBudget.scalingBytes(), legacyBudget.copy(boundedLegacy = false).scalingBytes())
+        assertEquals(legacyImage, legacyBudget.checkedBytes(128, 128))
+        assertThrows(IllegalArgumentException::class.java) { legacyBudget.checkedBytes(129, 128) }
+        assertThrows(IllegalArgumentException::class.java) { legacyBudget.copy(workingBytes = legacyWorking - 1) }
     }
 
     @Test

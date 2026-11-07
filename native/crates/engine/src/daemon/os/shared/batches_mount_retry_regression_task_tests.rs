@@ -52,6 +52,16 @@ fn restart(
 
 #[test]
 fn batches_task_vault_retry_preflight_failure_keeps_list_warning_and_same_id() {
+    let cases: [fn(); 2] = [
+        batches_task_vault_retry_preflight_failure_keeps_list_warning_and_same_id_case,
+        batches_task_vault_retry_clean_preflight_error_retains_failed_action,
+    ];
+    for case in cases {
+        case();
+    }
+}
+
+fn batches_task_vault_retry_preflight_failure_keeps_list_warning_and_same_id_case() {
     for recovery in [
         MountRecovery::Required,
         MountRecovery::Unknown,
@@ -97,8 +107,53 @@ fn batches_task_vault_retry_preflight_failure_keeps_list_warning_and_same_id() {
     }
 }
 
+fn batches_task_vault_retry_clean_preflight_error_retains_failed_action() {
+    let config = vault_config().with_auto_remount(false);
+    let manager = manager(config.clone(), MountRecovery::Clean);
+    // This entry has no persisted owner to remove. The fixture never reads or
+    // writes the runner's default registry, even for the clean Stop path.
+    manager
+        .state_guard()
+        .unwrap()
+        .get_mut(config.id.as_str())
+        .unwrap()
+        .registry_recorded = false;
+    manager
+        .retry_with(&config.id, |manager, _, recorded| {
+            assert!(!recorded);
+            assert_eq!(only_mount(manager).status, MountStatus::Unmounted);
+            Err("Vault-Policy konnte nicht geprüft werden".into())
+        })
+        .unwrap_err();
+    let retained = only_mount(&manager);
+    assert_eq!(retained.config, config);
+    assert_eq!(retained.recovery, MountRecovery::Clean);
+    assert!(!retained.recovery_required_compat);
+    assert!(matches!(&retained.status, MountStatus::Failed { detail }
+        if detail == "Vault-Policy konnte nicht geprüft werden"));
+    manager.tick();
+    assert_eq!(only_mount(&manager), retained);
+    manager
+        .retry_with(&config.id, |manager, received, recorded| {
+            assert!(!recorded);
+            restart(manager, received, recorded, None)
+        })
+        .unwrap();
+    assert_eq!(only_mount(&manager).status, MountStatus::Mounting);
+}
+
 #[test]
 fn batches_task_vault_retry_failure_preserves_unlock_code_tokens_and_lease() {
+    let cases: [fn(); 2] = [
+        batches_task_vault_retry_failure_preserves_unlock_code_tokens_and_lease_case,
+        batches_task_vault_retry_existing_and_late_backend_stream_keep_owner,
+    ];
+    for case in cases {
+        case();
+    }
+}
+
+fn batches_task_vault_retry_failure_preserves_unlock_code_tokens_and_lease_case() {
     let config = vault_config();
     let manager = manager(config.clone(), MountRecovery::Unknown);
     let old_owner = Arc::new(());
@@ -180,7 +235,6 @@ fn batches_task_vault_retry_failure_preserves_unlock_code_tokens_and_lease() {
     assert!(next_weak.upgrade().is_none());
 }
 
-#[test]
 fn batches_task_vault_retry_existing_and_late_backend_stream_keep_owner() {
     for late in [false, true] {
         let config = vault_config();
@@ -272,42 +326,6 @@ fn batches_task_vault_retry_new_start_cannot_replace_and_missing_retry_cannot_cr
     .unwrap_err()
     .contains("nicht verwaltet"));
     assert_eq!(only_mount(&manager), before);
-}
-
-#[test]
-fn batches_task_vault_retry_clean_preflight_error_retains_failed_action() {
-    let config = vault_config().with_auto_remount(false);
-    let manager = manager(config.clone(), MountRecovery::Clean);
-    // This entry has no persisted owner to remove. The fixture never reads or
-    // writes the runner's default registry, even for the clean Stop path.
-    manager
-        .state_guard()
-        .unwrap()
-        .get_mut(config.id.as_str())
-        .unwrap()
-        .registry_recorded = false;
-    manager
-        .retry_with(&config.id, |manager, _, recorded| {
-            assert!(!recorded);
-            assert_eq!(only_mount(manager).status, MountStatus::Unmounted);
-            Err("Vault-Policy konnte nicht geprüft werden".into())
-        })
-        .unwrap_err();
-    let retained = only_mount(&manager);
-    assert_eq!(retained.config, config);
-    assert_eq!(retained.recovery, MountRecovery::Clean);
-    assert!(!retained.recovery_required_compat);
-    assert!(matches!(&retained.status, MountStatus::Failed { detail }
-        if detail == "Vault-Policy konnte nicht geprüft werden"));
-    manager.tick();
-    assert_eq!(only_mount(&manager), retained);
-    manager
-        .retry_with(&config.id, |manager, received, recorded| {
-            assert!(!recorded);
-            restart(manager, received, recorded, None)
-        })
-        .unwrap();
-    assert_eq!(only_mount(&manager).status, MountStatus::Mounting);
 }
 
 #[test]

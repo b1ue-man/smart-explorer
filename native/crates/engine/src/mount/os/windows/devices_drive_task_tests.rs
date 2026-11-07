@@ -170,7 +170,7 @@ fn listed(path: PathBuf) -> io::Result<Vec<String>> {
 }
 
 #[test]
-#[ignore = "requires the pinned Dokany runtime and its installed driver (windows-core: drive-cli)"]
+#[ignore = "requires the pinned Dokany runtime and its installed driver (windows-core: drive-cli); Suite rechte-desktop-tresore-task"]
 fn drive_task_devices_windows_drive_lists_peer() -> io::Result<()> {
     let env = Env::new(&[direct("a", "Laptop", &["Docs"])]);
     fs::write(env.share_file("direct~a", "Docs/readme.txt"), b"hallo")?;

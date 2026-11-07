@@ -172,35 +172,46 @@ mod tests {
 
     #[test]
     fn speed_task_range_journal_removes_unfinished_stages_of_a_dead_process() {
-        let dir = tempfile::tempdir().expect("temp dir");
-        let lists = dir.path().join("lists");
-        let (open, done, user) = stage_files(dir.path());
-        let dead = Journal::open(lists.clone()).expect("journal");
-        dead.add(&open);
-        dead.add(&done);
-        dead.add(&user);
-        dead.done(&done);
-        drop(dead);
+        let cases: [(&str, fn()); 2] = [
+            (
+                "speed_task_range_journal_removes_unfinished_stages_of_a_dead_process",
+                || {
+                    let dir = tempfile::tempdir().expect("temp dir");
+                    let lists = dir.path().join("lists");
+                    let (open, done, user) = stage_files(dir.path());
+                    let dead = Journal::open(lists.clone()).expect("journal");
+                    dead.add(&open);
+                    dead.add(&done);
+                    dead.add(&user);
+                    dead.done(&done);
+                    drop(dead);
 
-        let restarted = Journal::open(lists).expect("journal");
-        assert!(!open.exists(), "an unfinished stage is removed at start");
-        assert!(done.exists(), "a finished stage is not the journal's");
-        assert!(
-            user.exists(),
-            "a file that is no stage name is never removed"
-        );
-        drop(restarted);
-    }
-
-    #[test]
-    fn speed_task_range_journal_keeps_the_stages_of_a_live_process() {
-        let dir = tempfile::tempdir().expect("temp dir");
-        let lists = dir.path().join("lists");
-        let (open, _, _) = stage_files(dir.path());
-        let live = Journal::open(lists.clone()).expect("journal");
-        live.add(&open);
-        let second = Journal::open(lists).expect("journal");
-        assert!(open.exists(), "its owner still holds the lock");
-        drop((live, second));
+                    let restarted = Journal::open(lists).expect("journal");
+                    assert!(!open.exists(), "an unfinished stage is removed at start");
+                    assert!(done.exists(), "a finished stage is not the journal's");
+                    assert!(
+                        user.exists(),
+                        "a file that is no stage name is never removed"
+                    );
+                    drop(restarted);
+                },
+            ),
+            (
+                "speed_task_range_journal_keeps_the_stages_of_a_live_process",
+                || {
+                    let dir = tempfile::tempdir().expect("temp dir");
+                    let lists = dir.path().join("lists");
+                    let (open, _, _) = stage_files(dir.path());
+                    let live = Journal::open(lists.clone()).expect("journal");
+                    live.add(&open);
+                    let second = Journal::open(lists).expect("journal");
+                    assert!(open.exists(), "its owner still holds the lock");
+                    drop((live, second));
+                },
+            ),
+        ];
+        for (case, check) in cases {
+            std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
+        }
     }
 }

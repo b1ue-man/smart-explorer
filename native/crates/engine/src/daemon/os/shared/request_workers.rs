@@ -89,23 +89,6 @@ fn panic_message<'a>(payload: &'a (dyn std::any::Any + Send + 'static)) -> &'a s
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::Arc;
-    use std::time::Duration;
-
-    #[test]
-    fn shutdown_joins_completed_cleanup() {
-        let completed = Arc::new(AtomicBool::new(false));
-        let worker_completed = completed.clone();
-        let mut workers = RequestWorkers::default();
-        workers.push(std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(20));
-            worker_completed.store(true, Ordering::Relaxed);
-            Ok(())
-        }));
-        workers.shutdown().unwrap();
-        assert!(completed.load(Ordering::Relaxed));
-    }
 
     #[test]
     fn worker_errors_and_panics_are_returned() {

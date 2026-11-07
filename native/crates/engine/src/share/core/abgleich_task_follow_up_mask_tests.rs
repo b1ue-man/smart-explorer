@@ -145,6 +145,16 @@ fn abgleich_task_cancel_rights_keep_account_and_end_and_turn_every_decision_off(
 
 #[test]
 fn abgleich_task_narrowing_change_is_masked_for_the_worker_but_a_widening_is_not() {
+    let cases: [fn(); 2] = [
+        abgleich_task_narrowing_change_is_masked_for_the_worker_but_a_widening_is_not_case,
+        abgleich_task_a_change_that_narrows_one_right_and_widens_another_is_both,
+    ];
+    for case in cases {
+        case();
+    }
+}
+
+fn abgleich_task_narrowing_change_is_masked_for_the_worker_but_a_widening_is_not_case() {
     // Widening: a new connection with the Direct code's rights.
     let mut profiles = host();
     profiles
@@ -192,7 +202,6 @@ fn abgleich_task_narrowing_change_is_masked_for_the_worker_but_a_widening_is_not
     assert!(profiles.grant_for("peer").unwrap().exec.grants_any());
 }
 
-#[test]
 fn abgleich_task_a_change_that_narrows_one_right_and_widens_another_is_both() {
     let mut profiles = host();
     profiles

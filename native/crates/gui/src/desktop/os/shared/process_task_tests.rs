@@ -276,7 +276,7 @@ impl Drop for TaskEnv {
 }
 
 #[test]
-#[ignore = "run only through the isolated remote desktop task entrypoint"]
+#[ignore = "run only through the isolated remote desktop task entrypoint; Suite rechte-desktop-tresore-task"]
 fn desktop_task_supervisor_restarts_after_crash() {
     let mut env = TaskEnv::new(&[MONITOR, HEADLESS, ("SE_DESKTOP_TEST_SURFACE_EXIT", "3")]);
     env.enable_surface();
@@ -305,7 +305,7 @@ fn desktop_task_supervisor_restarts_after_crash() {
 }
 
 #[test]
-#[ignore = "run only through the isolated remote desktop task entrypoint"]
+#[ignore = "run only through the isolated remote desktop task entrypoint; Suite rechte-desktop-tresore-task"]
 fn desktop_task_supervisor_kills_hung_surface() {
     let mut env = TaskEnv::new(&[MONITOR, HEADLESS, ("SE_DESKTOP_TEST_NO_ALIVE", "1")]);
     env.enable_surface();
@@ -329,7 +329,7 @@ fn desktop_task_supervisor_kills_hung_surface() {
 }
 
 #[test]
-#[ignore = "run only through the isolated remote desktop task entrypoint"]
+#[ignore = "run only through the isolated remote desktop task entrypoint; Suite rechte-desktop-tresore-task"]
 fn desktop_task_surface_exits_on_channel_end() {
     let mut env = TaskEnv::new(&[MONITOR, HEADLESS]);
     // The channel ends: the surface ends with 76 within two seconds.
@@ -358,7 +358,7 @@ fn desktop_task_surface_exits_on_channel_end() {
 }
 
 #[test]
-#[ignore = "run only through the isolated remote desktop task entrypoint"]
+#[ignore = "run only through the isolated remote desktop task entrypoint; Suite rechte-desktop-tresore-task"]
 fn desktop_task_update_stop_ends_shell_and_surfaces() {
     let mut env = TaskEnv::new(&[MONITOR, HEADLESS]);
     env.enable_surface();
@@ -406,7 +406,7 @@ fn desktop_task_update_stop_ends_shell_and_surfaces() {
 }
 
 #[test]
-#[ignore = "run only through the isolated remote desktop task entrypoint"]
+#[ignore = "run only through the isolated remote desktop task entrypoint; Suite rechte-desktop-tresore-task"]
 fn desktop_task_feed_never_starts_worker() {
     let mut env = TaskEnv::new(&[MONITOR, HEADLESS]);
     env.enable_surface();
@@ -432,7 +432,7 @@ fn desktop_task_feed_never_starts_worker() {
 }
 
 #[test]
-#[ignore = "run only through the isolated remote desktop task entrypoint"]
+#[ignore = "run only through the isolated remote desktop task entrypoint; Suite rechte-desktop-tresore-task"]
 fn desktop_task_peek_does_not_start_share_host() {
     let mut env = TaskEnv::new(&[]);
     let daemon = env.spawn(&["--sync-daemon", "--drive-restore"]);
@@ -460,7 +460,7 @@ fn desktop_task_peek_does_not_start_share_host() {
 }
 
 #[test]
-#[ignore = "run only through the isolated remote desktop task entrypoint"]
+#[ignore = "run only through the isolated remote desktop task entrypoint; Suite rechte-desktop-tresore-task"]
 fn desktop_task_connect_starts_worker() {
     let mut env = TaskEnv::new(&[MONITOR, HEADLESS, ("SE_DESKTOP_TEST_CONNECT", "1")]);
     env.enable_surface();

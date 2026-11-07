@@ -24,115 +24,149 @@ fn events_starting(server: &Server, prefix: &str) -> usize {
 }
 
 #[test]
-fn speed_task_ftp_new_connection_takes_over_the_feat_answer() {
-    let known = Features {
-        mlst: false,
-        mlsd: false,
-        mfmt: true,
-        ..Features::default()
-    };
-    let own = Features {
-        mlst: true,
-        mlsd: true,
-        mfmt: false,
-        ..Features::default()
-    };
-    let taken = inherited_features(None, Some(known)).expect("the other answer");
-    assert!(taken.mfmt && !taken.mlst);
-    let kept = inherited_features(Some(own), Some(known)).expect("its own answer");
-    assert!(kept.mlst && !kept.mfmt);
-    assert!(inherited_features(None, None).is_none());
-}
-
-#[test]
 fn speed_task_ftp_inherited_feat_answer_saves_the_request() {
-    let server = Server::start();
-    server.state.no_mlst.store(true, Ordering::SeqCst);
-    let first = plain(&server);
-    let second = plain(&server);
-    assert!(!first.features().expect("FEAT").mlst);
-    assert_eq!(events_starting(&server, "FEAT"), 1);
-    second.inherit_server_facts(&first);
-    assert!(!second.features().expect("inherited").mlst);
-    assert_eq!(events_starting(&server, "FEAT"), 1, "no second FEAT");
+    let cases: [(&str, fn()); 2] = [
+        (
+            "speed_task_ftp_inherited_feat_answer_saves_the_request",
+            || {
+                let server = Server::start();
+                server.state.no_mlst.store(true, Ordering::SeqCst);
+                let first = plain(&server);
+                let second = plain(&server);
+                assert!(!first.features().expect("FEAT").mlst);
+                assert_eq!(events_starting(&server, "FEAT"), 1);
+                second.inherit_server_facts(&first);
+                assert!(!second.features().expect("inherited").mlst);
+                assert_eq!(events_starting(&server, "FEAT"), 1, "no second FEAT");
+            },
+        ),
+        (
+            "speed_task_ftp_new_connection_takes_over_the_feat_answer",
+            || {
+                let known = Features {
+                    mlst: false,
+                    mlsd: false,
+                    mfmt: true,
+                    ..Features::default()
+                };
+                let own = Features {
+                    mlst: true,
+                    mlsd: true,
+                    mfmt: false,
+                    ..Features::default()
+                };
+                let taken = inherited_features(None, Some(known)).expect("the other answer");
+                assert!(taken.mfmt && !taken.mlst);
+                let kept = inherited_features(Some(own), Some(known)).expect("its own answer");
+                assert!(kept.mlst && !kept.mfmt);
+                assert!(inherited_features(None, None).is_none());
+            },
+        ),
+    ];
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
+    }
 }
 
 #[test]
 fn speed_task_ftp_publish_without_mlst_probes_no_other_file() {
-    let server = Server::start();
-    server.state.no_mlst.store(true, Ordering::SeqCst);
-    {
-        let mut files = lock(&server.state.files);
-        for name in ["/up/stage", "/up/other-1", "/up/other-2", "/up/other-3"] {
-            files.insert(name.to_string(), b"x".to_vec());
-        }
+    let cases: [(&str, fn()); 2] = [
+        (
+            "speed_task_ftp_publish_without_mlst_probes_no_other_file",
+            || {
+                let server = Server::start();
+                server.state.no_mlst.store(true, Ordering::SeqCst);
+                {
+                    let mut files = lock(&server.state.files);
+                    for name in ["/up/stage", "/up/other-1", "/up/other-2", "/up/other-3"] {
+                        files.insert(name.to_string(), b"x".to_vec());
+                    }
+                }
+                let connection = plain(&server);
+                publish_with(true, &connection, "/up/stage", "/up/final", false)
+                    .expect("published");
+                assert!(lock(&server.state.files).contains_key("/up/final"));
+                assert!(!lock(&server.state.files).contains_key("/up/stage"));
+                assert_eq!(events_starting(&server, "LIST"), 1, "one listing");
+                assert_eq!(events_starting(&server, "SIZE"), 0, "no SIZE of any file");
+                assert_eq!(events_starting(&server, "MDTM"), 0, "no MDTM of any file");
+            },
+        ),
+        (
+            "speed_task_ftp_publish_without_mlst_lists_only_the_stage_and_its_name",
+            || {
+                let server = Server::start();
+                server.state.no_mlst.store(true, Ordering::SeqCst);
+                let stage = "/up/final.se-upload-0123456789abcdef";
+                {
+                    let mut files = lock(&server.state.files);
+                    files.insert(stage.to_string(), b"new".to_vec());
+                    files.insert("/up/other-1".to_string(), b"x".to_vec());
+                }
+                let connection = plain(&server);
+                publish_with(true, &connection, stage, "/up/final", false).expect("published");
+                assert_eq!(lock(&server.state.files)["/up/final"], b"new");
+                assert!(!lock(&server.state.files).contains_key(stage));
+                assert_eq!(events_starting(&server, "LIST -a /up/final*"), 1);
+                assert_eq!(
+                    events_starting(&server, "LIST"),
+                    1,
+                    "no listing of the folder"
+                );
+                assert_eq!(events_starting(&server, "CWD"), 0, "no folder change");
+                assert_eq!(events_starting(&server, "SIZE"), 0);
+            },
+        ),
+    ];
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
     }
-    let connection = plain(&server);
-    publish_with(true, &connection, "/up/stage", "/up/final", false).expect("published");
-    assert!(lock(&server.state.files).contains_key("/up/final"));
-    assert!(!lock(&server.state.files).contains_key("/up/stage"));
-    assert_eq!(events_starting(&server, "LIST"), 1, "one listing");
-    assert_eq!(events_starting(&server, "SIZE"), 0, "no SIZE of any file");
-    assert_eq!(events_starting(&server, "MDTM"), 0, "no MDTM of any file");
 }
 
 #[test]
 fn speed_task_ftp_publish_without_mlst_still_refuses_an_existing_destination() {
-    let server = Server::start();
-    server.state.no_mlst.store(true, Ordering::SeqCst);
-    {
-        let mut files = lock(&server.state.files);
-        files.insert("/up/stage".to_string(), b"new".to_vec());
-        files.insert("/up/final".to_string(), b"old".to_vec());
+    let cases: [(&str, fn()); 2] = [
+        (
+            "speed_task_ftp_publish_without_mlst_still_refuses_an_existing_destination",
+            || {
+                let server = Server::start();
+                server.state.no_mlst.store(true, Ordering::SeqCst);
+                {
+                    let mut files = lock(&server.state.files);
+                    files.insert("/up/stage".to_string(), b"new".to_vec());
+                    files.insert("/up/final".to_string(), b"old".to_vec());
+                }
+                let connection = plain(&server);
+                let error = publish_with(true, &connection, "/up/stage", "/up/final", false)
+                    .expect_err("an existing destination is not replaced");
+                assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists, "{error}");
+                assert_eq!(lock(&server.state.files)["/up/final"], b"old");
+                assert_eq!(events_starting(&server, "RNFR"), 0, "nothing was renamed");
+            },
+        ),
+        (
+            "speed_task_ftp_publish_by_pattern_still_refuses_an_existing_destination",
+            || {
+                let server = Server::start();
+                server.state.no_mlst.store(true, Ordering::SeqCst);
+                let stage = "/up/final.se-upload-0123456789abcdef";
+                {
+                    let mut files = lock(&server.state.files);
+                    files.insert(stage.to_string(), b"new".to_vec());
+                    files.insert("/up/final".to_string(), b"old".to_vec());
+                }
+                let connection = plain(&server);
+                let error = publish_with(true, &connection, stage, "/up/final", false)
+                    .expect_err("an existing destination is not replaced");
+                assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists, "{error}");
+                assert_eq!(lock(&server.state.files)["/up/final"], b"old");
+                assert_eq!(events_starting(&server, "RNFR"), 0, "nothing was renamed");
+            },
+        ),
+    ];
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
     }
-    let connection = plain(&server);
-    let error = publish_with(true, &connection, "/up/stage", "/up/final", false)
-        .expect_err("an existing destination is not replaced");
-    assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists, "{error}");
-    assert_eq!(lock(&server.state.files)["/up/final"], b"old");
-    assert_eq!(events_starting(&server, "RNFR"), 0, "nothing was renamed");
-}
-
-#[test]
-fn speed_task_ftp_publish_without_mlst_lists_only_the_stage_and_its_name() {
-    let server = Server::start();
-    server.state.no_mlst.store(true, Ordering::SeqCst);
-    let stage = "/up/final.se-upload-0123456789abcdef";
-    {
-        let mut files = lock(&server.state.files);
-        files.insert(stage.to_string(), b"new".to_vec());
-        files.insert("/up/other-1".to_string(), b"x".to_vec());
-    }
-    let connection = plain(&server);
-    publish_with(true, &connection, stage, "/up/final", false).expect("published");
-    assert_eq!(lock(&server.state.files)["/up/final"], b"new");
-    assert!(!lock(&server.state.files).contains_key(stage));
-    assert_eq!(events_starting(&server, "LIST -a /up/final*"), 1);
-    assert_eq!(
-        events_starting(&server, "LIST"),
-        1,
-        "no listing of the folder"
-    );
-    assert_eq!(events_starting(&server, "CWD"), 0, "no folder change");
-    assert_eq!(events_starting(&server, "SIZE"), 0);
-}
-
-#[test]
-fn speed_task_ftp_publish_by_pattern_still_refuses_an_existing_destination() {
-    let server = Server::start();
-    server.state.no_mlst.store(true, Ordering::SeqCst);
-    let stage = "/up/final.se-upload-0123456789abcdef";
-    {
-        let mut files = lock(&server.state.files);
-        files.insert(stage.to_string(), b"new".to_vec());
-        files.insert("/up/final".to_string(), b"old".to_vec());
-    }
-    let connection = plain(&server);
-    let error = publish_with(true, &connection, stage, "/up/final", false)
-        .expect_err("an existing destination is not replaced");
-    assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists, "{error}");
-    assert_eq!(lock(&server.state.files)["/up/final"], b"old");
-    assert_eq!(events_starting(&server, "RNFR"), 0, "nothing was renamed");
 }
 
 #[test]

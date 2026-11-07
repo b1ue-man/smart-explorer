@@ -18,11 +18,8 @@ fn basic() {
     let exact = fuzzy_score(b"downloads", b"C:/Users/Silas/Downloads".as_ref()).unwrap();
     let fuzzy = fuzzy_score(b"dnlds", b"C:/Users/Silas/Downloads".as_ref()).unwrap();
     assert!(exact > fuzzy);
-}
-
-#[test]
-fn no_match() {
-    assert!(fuzzy_score(b"xyz", b"abc").is_none());
+    // Case "no match": a pattern without a match scores nothing.
+    assert!(fuzzy_score(b"xyz", b"abc").is_none(), "no match");
 }
 
 #[test]
@@ -66,6 +63,7 @@ fn load_rejects_an_oversized_sparse_file() {
 
 #[test]
 fn canceled_build_does_not_publish_or_persist_partial_data() {
+    // Case "canceled": a canceled build neither publishes nor persists partial data.
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("root");
     std::fs::create_dir(&root).unwrap();
@@ -74,12 +72,13 @@ fn canceled_build_does_not_publish_or_persist_partial_data() {
     let (tx, rx) = crossbeam_channel::unbounded();
     FolderIndex::build_async(vec![root], target.clone(), tx, cancel).unwrap();
 
-    assert!(matches!(terminal_message(&rx), IndexMsg::Canceled));
-    assert!(!target.exists());
-}
+    assert!(
+        matches!(terminal_message(&rx), IndexMsg::Canceled),
+        "canceled"
+    );
+    assert!(!target.exists(), "canceled");
 
-#[test]
-fn invalid_root_fails_without_replacing_the_index() {
+    // Case "invalid root": a failed build keeps the existing index unchanged.
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("missing");
     let target = temp.path().join("folder_index.txt");
@@ -94,8 +93,11 @@ fn invalid_root_fails_without_replacing_the_index() {
     )
     .unwrap();
 
-    assert!(matches!(terminal_message(&rx), IndexMsg::Failed(_)));
-    assert_eq!(std::fs::read(target).unwrap(), original);
+    assert!(
+        matches!(terminal_message(&rx), IndexMsg::Failed(_)),
+        "invalid root"
+    );
+    assert_eq!(std::fs::read(target).unwrap(), original, "invalid root");
 }
 
 #[cfg(unix)]

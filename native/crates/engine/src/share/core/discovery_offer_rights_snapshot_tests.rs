@@ -31,6 +31,16 @@ fn rights_event(offer_id: &str, rights: Option<ConnectionRights>) -> DiscoveryEv
 
 #[test]
 fn abgleich_task_offer_book_names_the_rights_of_a_running_offer() {
+    let cases: [fn(); 2] = [
+        abgleich_task_offer_book_names_the_rights_of_a_running_offer_case,
+        abgleich_task_offer_book_offer_without_rights_waits_and_other_offers_stay_apart,
+    ];
+    for case in cases {
+        case();
+    }
+}
+
+fn abgleich_task_offer_book_names_the_rights_of_a_running_offer_case() {
     let mut book = DiscoveryOfferBook::default();
     book.observe(&prepared("a", 1_300));
     book.observe(&rights_event("a", Some(RightsPreset::FilesExec.rights())));
@@ -52,7 +62,6 @@ fn abgleich_task_offer_book_names_the_rights_of_a_running_offer() {
     );
 }
 
-#[test]
 fn abgleich_task_offer_book_offer_without_rights_waits_and_other_offers_stay_apart() {
     let mut book = DiscoveryOfferBook::default();
     book.observe(&prepared("none", 1_300));

@@ -197,29 +197,7 @@ fn vault_bytes(view: &BackendHandle, path: &str) -> io::Result<Vec<u8>> {
 }
 
 #[test]
-#[ignore = "requires the pinned Dokany runtime and its installed driver (windows-core: drive-vault)"]
-fn drive_task_vault_drive_letter_rw() -> io::Result<()> {
-    let vault = vault()?;
-    let cache = vault.base.path().join("mount-cache");
-    let id = MountId::new_random()?;
-    let host = VaultHost::start(Arc::clone(&vault.view), &id, &cache)?;
-    fs::write(host.path("Bericht.txt"), MARKER)?;
-    assert_eq!(fs::read(host.path("Bericht.txt"))?, MARKER);
-    fs::create_dir(host.path("Ordner"))?;
-    fs::write(host.path("Ordner\\Notiz.txt"), b"Notiz")?;
-    assert_eq!(host.finish(), Ok(HostExit::Stopped));
-    assert_eq!(vault_bytes(&vault.view, "/Bericht.txt")?, MARKER);
-    assert_eq!(vault_bytes(&vault.view, "/Ordner/Notiz.txt")?, b"Notiz");
-    assert!(!holds(&cache, MARKER), "cleartext in the drive cache");
-    assert!(
-        !holds(Path::new(&vault.storage_root), MARKER),
-        "cleartext in the vault storage"
-    );
-    Ok(())
-}
-
-#[test]
-#[ignore = "requires the pinned Dokany runtime and its installed driver (windows-core: vault-mount)"]
+#[ignore = "requires the pinned Dokany runtime and its installed driver (windows-core: vault-mount); Suite rechte-desktop-tresore-task"]
 fn vault_task_mount_windows_dokany_e2e() -> io::Result<()> {
     let vault = vault()?;
     let cache = vault.base.path().join("mount-cache");
@@ -232,5 +210,40 @@ fn vault_task_mount_windows_dokany_e2e() -> io::Result<()> {
     assert_eq!(fs::read(host.path("Bericht.txt"))?, MARKER);
     assert_eq!(host.finish(), Ok(HostExit::Stopped));
     assert!(!holds(&cache, MARKER), "cleartext in the drive cache");
+    // Case "drive letter read-write": files and folders written through the drive are read back, and cleartext stays out of the cache and the storage.
+    {
+        let vault = self::vault()?;
+        let cache = vault.base.path().join("mount-cache");
+        let id = MountId::new_random()?;
+        let host = VaultHost::start(Arc::clone(&vault.view), &id, &cache)?;
+        fs::write(host.path("Bericht.txt"), MARKER)?;
+        assert_eq!(
+            fs::read(host.path("Bericht.txt"))?,
+            MARKER,
+            "drive letter read-write"
+        );
+        fs::create_dir(host.path("Ordner"))?;
+        fs::write(host.path("Ordner\\Notiz.txt"), b"Notiz")?;
+        assert_eq!(
+            host.finish(),
+            Ok(HostExit::Stopped),
+            "drive letter read-write"
+        );
+        assert_eq!(
+            vault_bytes(&vault.view, "/Bericht.txt")?,
+            MARKER,
+            "drive letter read-write"
+        );
+        assert_eq!(
+            vault_bytes(&vault.view, "/Ordner/Notiz.txt")?,
+            b"Notiz",
+            "drive letter read-write"
+        );
+        assert!(!holds(&cache, MARKER), "cleartext in the drive cache");
+        assert!(
+            !holds(Path::new(&vault.storage_root), MARKER),
+            "cleartext in the vault storage"
+        );
+    }
     Ok(())
 }

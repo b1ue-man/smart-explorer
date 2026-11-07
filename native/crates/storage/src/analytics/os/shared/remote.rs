@@ -162,26 +162,37 @@ mod tests {
 
     #[test]
     fn review_task_legacy_walk_counts_the_tree_and_names_only_old_peers() {
-        let progress = Progress::default();
-        let outcome = scan_remote(&AgentWalk(Scheme::Sftp), "/", &progress);
-        assert_eq!(outcome.tree.as_ref().map(|tree| tree.size), Some(30));
-        assert_eq!(progress.files.load(Ordering::Relaxed), 3);
-        assert_eq!(progress.bytes.load(Ordering::Relaxed), 30);
-        assert!(outcome.notes.is_empty(), "{:?}", outcome.notes);
+        let cases: [(&str, fn()); 2] = [
+            (
+                "review_task_legacy_walk_counts_the_tree_and_names_only_old_peers",
+                || {
+                    let progress = Progress::default();
+                    let outcome = scan_remote(&AgentWalk(Scheme::Sftp), "/", &progress);
+                    assert_eq!(outcome.tree.as_ref().map(|tree| tree.size), Some(30));
+                    assert_eq!(progress.files.load(Ordering::Relaxed), 3);
+                    assert_eq!(progress.bytes.load(Ordering::Relaxed), 30);
+                    assert!(outcome.notes.is_empty(), "{:?}", outcome.notes);
 
-        let outcome = scan_remote(&AgentWalk(Scheme::Peer), "/", &Progress::default());
-        assert_eq!(outcome.notes.len(), 1);
-        assert!(outcome.notes[0].contains("älteren Analysepfad"));
-    }
-
-    #[test]
-    fn review_task_legacy_walk_keeps_earlier_segment_counters() {
-        let progress = Progress::default();
-        progress.files.store(13, Ordering::Relaxed);
-        progress.bytes.store(123, Ordering::Relaxed);
-        let outcome = scan_remote(&AgentWalk(Scheme::Sftp), "/", &progress);
-        assert_eq!(outcome.tree.as_ref().map(|tree| tree.size), Some(30));
-        assert_eq!(progress.files.load(Ordering::Relaxed), 16);
-        assert_eq!(progress.bytes.load(Ordering::Relaxed), 153);
+                    let outcome = scan_remote(&AgentWalk(Scheme::Peer), "/", &Progress::default());
+                    assert_eq!(outcome.notes.len(), 1);
+                    assert!(outcome.notes[0].contains("älteren Analysepfad"));
+                },
+            ),
+            (
+                "review_task_legacy_walk_keeps_earlier_segment_counters",
+                || {
+                    let progress = Progress::default();
+                    progress.files.store(13, Ordering::Relaxed);
+                    progress.bytes.store(123, Ordering::Relaxed);
+                    let outcome = scan_remote(&AgentWalk(Scheme::Sftp), "/", &progress);
+                    assert_eq!(outcome.tree.as_ref().map(|tree| tree.size), Some(30));
+                    assert_eq!(progress.files.load(Ordering::Relaxed), 16);
+                    assert_eq!(progress.bytes.load(Ordering::Relaxed), 153);
+                },
+            ),
+        ];
+        for (case, check) in cases {
+            std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
+        }
     }
 }

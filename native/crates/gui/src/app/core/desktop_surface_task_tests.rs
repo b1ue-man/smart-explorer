@@ -421,7 +421,7 @@ fn in_process_view() {
 }
 
 #[test]
-#[ignore = "run only through the isolated remote GUI task entrypoint"]
+#[ignore = "run only through the isolated remote GUI task entrypoint; Suite rechte-desktop-tresore-task"]
 fn desktop_task_surface_windowed_gui_harness() {
     assert_eq!(std::env::var("SMART_EXPLORER_GUI_TASK").as_deref(), Ok("1"));
     in_process_view();

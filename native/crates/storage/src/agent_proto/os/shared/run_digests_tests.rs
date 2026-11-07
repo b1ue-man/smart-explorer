@@ -28,28 +28,39 @@ fn abgleich_task_run_digests_two_walks_read_a_file_once() {
 
 #[test]
 fn abgleich_task_run_digests_a_later_walk_takes_the_stored_digest() {
-    let run = RunDigests::default();
-    let stop = AtomicBool::new(false);
-    assert_eq!(
-        run.once(key("g"), &stop, || Ok("one".into())).unwrap(),
-        "one"
-    );
-    assert_eq!(run.held(), 1, "a file only one walk asked for stays");
-    let second = run.once(key("g"), &stop, || panic!("read twice")).unwrap();
-    assert_eq!(second, "one");
-    assert_eq!(run.held(), 0);
-}
-
-#[test]
-fn abgleich_task_run_digests_a_changed_file_is_read_again() {
-    let run = RunDigests::default();
-    let stop = AtomicBool::new(false);
-    run.once(key("h"), &stop, || Ok("old".into())).unwrap();
-    let changed: FileKey = (PathBuf::from("h"), 4, 7);
-    assert_eq!(
-        run.once(changed, &stop, || Ok("new".into())).unwrap(),
-        "new"
-    );
+    let cases: [(&str, fn()); 2] = [
+        (
+            "abgleich_task_run_digests_a_later_walk_takes_the_stored_digest",
+            || {
+                let run = RunDigests::default();
+                let stop = AtomicBool::new(false);
+                assert_eq!(
+                    run.once(key("g"), &stop, || Ok("one".into())).unwrap(),
+                    "one"
+                );
+                assert_eq!(run.held(), 1, "a file only one walk asked for stays");
+                let second = run.once(key("g"), &stop, || panic!("read twice")).unwrap();
+                assert_eq!(second, "one");
+                assert_eq!(run.held(), 0);
+            },
+        ),
+        (
+            "abgleich_task_run_digests_a_changed_file_is_read_again",
+            || {
+                let run = RunDigests::default();
+                let stop = AtomicBool::new(false);
+                run.once(key("h"), &stop, || Ok("old".into())).unwrap();
+                let changed: FileKey = (PathBuf::from("h"), 4, 7);
+                assert_eq!(
+                    run.once(changed, &stop, || Ok("new".into())).unwrap(),
+                    "new"
+                );
+            },
+        ),
+    ];
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
+    }
 }
 
 #[test]

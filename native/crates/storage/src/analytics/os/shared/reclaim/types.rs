@@ -290,29 +290,34 @@ mod tests {
 
     #[test]
     fn truncation_and_pruning_keep_total_counts_honest() {
-        let mut report = ReclaimReport {
-            large_files: vec![ReclaimItem::new("/a".into(), "a".into(), 1, 0, false)],
-            result_counts: ReclaimResultCounts {
-                large_files: 3,
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        assert!(report.has_truncated_results());
-        report.prune_paths(&["/a".into()]);
-        assert_eq!(report.result_counts.large_files, 2);
-        assert!(report.large_files.is_empty());
-    }
-
-    #[test]
-    fn duplicate_candidate_truncation_is_explicit() {
-        let report = ReclaimReport {
-            duplicate_candidates: 12,
-            duplicate_candidates_retained: 3,
-            ..Default::default()
-        };
-        assert!(report.duplicate_candidates_truncated());
-        assert!(report.has_truncated_results());
+        let cases: [(&str, fn()); 2] = [
+            ("truncation_and_pruning_keep_total_counts_honest", || {
+                let mut report = ReclaimReport {
+                    large_files: vec![ReclaimItem::new("/a".into(), "a".into(), 1, 0, false)],
+                    result_counts: ReclaimResultCounts {
+                        large_files: 3,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                };
+                assert!(report.has_truncated_results());
+                report.prune_paths(&["/a".into()]);
+                assert_eq!(report.result_counts.large_files, 2);
+                assert!(report.large_files.is_empty());
+            }),
+            ("duplicate_candidate_truncation_is_explicit", || {
+                let report = ReclaimReport {
+                    duplicate_candidates: 12,
+                    duplicate_candidates_retained: 3,
+                    ..Default::default()
+                };
+                assert!(report.duplicate_candidates_truncated());
+                assert!(report.has_truncated_results());
+            }),
+        ];
+        for (case, check) in cases {
+            std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
+        }
     }
 }
 

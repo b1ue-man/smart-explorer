@@ -216,24 +216,30 @@ mod tests {
         }
         let within = |part: &(u64, u64)| part.1 <= MAX_PART && part.1 >= MIN_PART;
         assert!(parts.iter().all(within));
-    }
-
-    #[test]
-    fn speed_task_webdav_chunk_parts_stay_below_the_server_cap() {
-        let len = 2048 * MIB;
-        let parts = pieces(0, len, FIRST_PART_CAP);
-        assert_eq!(parts.len(), 4);
-        assert!(parts.iter().all(|part| part.1 <= FIRST_PART_CAP));
-        assert_eq!(parts.iter().map(|part| part.1).sum::<u64>(), len);
-        // Every part is longer than half the cap: distinct part numbers.
-        let parts = pieces(0, 21 * MIB, 10 * MIB);
-        assert!(parts.iter().all(|part| part.1 >= 5 * MIB), "{parts:?}");
-        let unit = unit(len).unwrap();
-        let numbers: Vec<u64> = parts.iter().map(|part| part_number(part.0, unit)).collect();
-        assert!(
-            numbers.windows(2).all(|pair| pair[0] < pair[1]),
-            "{numbers:?}"
-        );
+        // Case "parts below the server cap": every part stays below the first cap, and the part numbers rise.
+        {
+            let len = 2048 * MIB;
+            let parts = pieces(0, len, FIRST_PART_CAP);
+            assert_eq!(parts.len(), 4, "server cap");
+            assert!(
+                parts.iter().all(|part| part.1 <= FIRST_PART_CAP),
+                "server cap"
+            );
+            assert_eq!(
+                parts.iter().map(|part| part.1).sum::<u64>(),
+                len,
+                "server cap"
+            );
+            // Every part is longer than half the cap: distinct part numbers.
+            let parts = pieces(0, 21 * MIB, 10 * MIB);
+            assert!(parts.iter().all(|part| part.1 >= 5 * MIB), "{parts:?}");
+            let unit = unit(len).unwrap();
+            let numbers: Vec<u64> = parts.iter().map(|part| part_number(part.0, unit)).collect();
+            assert!(
+                numbers.windows(2).all(|pair| pair[0] < pair[1]),
+                "{numbers:?}"
+            );
+        }
     }
 
     #[test]

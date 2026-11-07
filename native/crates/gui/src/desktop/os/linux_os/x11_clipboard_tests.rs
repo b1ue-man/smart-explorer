@@ -77,7 +77,7 @@ fn existing(dir: &std::path::Path, names: &[&str]) -> Vec<PathBuf> {
 }
 
 #[test]
-#[ignore = "braucht Xvfb (Stufe linux-desktop: x11)"]
+#[ignore = "braucht Xvfb (Stufe linux-desktop: x11); Suite rechte-desktop-tresore-task"]
 fn desktop_task_x11_clipboard_roundtrip_files() {
     require_task();
     let _x = XServer::start("320x200x24");
@@ -108,7 +108,7 @@ fn desktop_task_x11_clipboard_roundtrip_files() {
 }
 
 #[test]
-#[ignore = "braucht Xvfb (Stufe linux-desktop: x11)"]
+#[ignore = "braucht Xvfb (Stufe linux-desktop: x11); Suite rechte-desktop-tresore-task"]
 fn desktop_task_x11_clipboard_too_large_refused() {
     require_task();
     let _x = XServer::start("320x200x24");

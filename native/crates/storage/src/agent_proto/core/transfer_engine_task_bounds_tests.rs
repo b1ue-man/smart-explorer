@@ -125,48 +125,101 @@ fn transfer_engine_task_server_copy_removes_only_the_stage_it_created() {
 
 #[test]
 fn transfer_engine_task_item_texts_are_bounded_on_both_codec_ends() {
-    let fits = Frame::ItemEnd {
-        index: 0,
-        error: Some("x".repeat(ITEM_TEXT_MAX)),
-    };
-    assert_eq!(Frame::decode(&fits.encode(1).unwrap()).unwrap().1, fits);
-    let path = Frame::ItemPublished {
-        index: 0,
-        path: "p".repeat(ITEM_PATH_MAX),
-    };
-    assert_eq!(Frame::decode(&path.encode(1).unwrap()).unwrap().1, path);
-    for frame in [
-        Frame::ItemEnd {
-            index: 0,
-            error: Some("x".repeat(ITEM_TEXT_MAX + 1)),
-        },
-        Frame::ItemFailed {
-            index: 0,
-            message: "x".repeat(ITEM_TEXT_MAX + 1),
-        },
-        Frame::ItemPublished {
-            index: 0,
-            path: "p".repeat(ITEM_PATH_MAX + 1),
-        },
-    ] {
-        assert_eq!(frame.encode(1).unwrap_err().kind(), ErrorKind::InvalidData);
+    let cases: [(&str, fn()); 2] = [
+        (
+            "transfer_engine_task_item_texts_are_bounded_on_both_codec_ends",
+            || {
+                let fits = Frame::ItemEnd {
+                    index: 0,
+                    error: Some("x".repeat(ITEM_TEXT_MAX)),
+                };
+                assert_eq!(Frame::decode(&fits.encode(1).unwrap()).unwrap().1, fits);
+                let path = Frame::ItemPublished {
+                    index: 0,
+                    path: "p".repeat(ITEM_PATH_MAX),
+                };
+                assert_eq!(Frame::decode(&path.encode(1).unwrap()).unwrap().1, path);
+                for frame in [
+                    Frame::ItemEnd {
+                        index: 0,
+                        error: Some("x".repeat(ITEM_TEXT_MAX + 1)),
+                    },
+                    Frame::ItemFailed {
+                        index: 0,
+                        message: "x".repeat(ITEM_TEXT_MAX + 1),
+                    },
+                    Frame::ItemPublished {
+                        index: 0,
+                        path: "p".repeat(ITEM_PATH_MAX + 1),
+                    },
+                ] {
+                    assert_eq!(frame.encode(1).unwrap_err().kind(), ErrorKind::InvalidData);
+                }
+                // A peer that encodes an oversize trailer anyway is refused on decode.
+                let mut raw = Vec::new();
+                raw.extend_from_slice(&1u64.to_le_bytes());
+                raw.push(38);
+                raw.extend_from_slice(&0u32.to_le_bytes());
+                raw.push(1);
+                raw.extend_from_slice(&((ITEM_TEXT_MAX + 1) as u32).to_le_bytes());
+                raw.resize(raw.len() + ITEM_TEXT_MAX + 1, b'x');
+                assert_eq!(
+                    Frame::decode(&raw).unwrap_err().kind(),
+                    ErrorKind::InvalidData
+                );
+                // Senders clip on a character boundary instead.
+                let clipped = clip_text("ä".repeat(ITEM_TEXT_MAX));
+                assert!(clipped.len() <= ITEM_TEXT_MAX && clipped.ends_with('…'));
+                assert_eq!(clip_text("kurz".into()), "kurz");
+            },
+        ),
+        (
+            "transfer_engine_task_batch_headers_above_the_file_limit_are_refused",
+            || {
+                let entry = BatchEntry {
+                    path: "/a".into(),
+                    size: 0,
+                    nonce: 0,
+                    mtime_ms: None,
+                };
+                let full = Frame::BatchPut {
+                    entries: vec![entry.clone(); BATCH_MAX_FILES],
+                };
+                assert_eq!(Frame::decode(&full.encode(1).unwrap()).unwrap().1, full);
+                let over = Frame::BatchPut {
+                    entries: vec![entry; BATCH_MAX_FILES + 1],
+                };
+                assert_eq!(over.encode(1).unwrap_err().kind(), ErrorKind::InvalidData);
+                let items = Frame::BatchGet {
+                    items: vec![
+                        BatchItem {
+                            path: "/a".into(),
+                            id: None,
+                            size: 0,
+                        };
+                        BATCH_MAX_FILES + 1
+                    ],
+                };
+                assert_eq!(items.encode(1).unwrap_err().kind(), ErrorKind::InvalidData);
+
+                // A peer that sends more anyway is refused before anything is allocated.
+                for (tag, element) in [(35u8, 20usize), (36, 13)] {
+                    let mut raw = Vec::new();
+                    raw.extend_from_slice(&1u64.to_le_bytes());
+                    raw.push(tag);
+                    raw.extend_from_slice(&((BATCH_MAX_FILES + 1) as u32).to_le_bytes());
+                    raw.resize(raw.len() + (BATCH_MAX_FILES + 1) * element, 0);
+                    assert_eq!(
+                        Frame::decode(&raw).unwrap_err().kind(),
+                        ErrorKind::InvalidData
+                    );
+                }
+            },
+        ),
+    ];
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
     }
-    // A peer that encodes an oversize trailer anyway is refused on decode.
-    let mut raw = Vec::new();
-    raw.extend_from_slice(&1u64.to_le_bytes());
-    raw.push(38);
-    raw.extend_from_slice(&0u32.to_le_bytes());
-    raw.push(1);
-    raw.extend_from_slice(&((ITEM_TEXT_MAX + 1) as u32).to_le_bytes());
-    raw.resize(raw.len() + ITEM_TEXT_MAX + 1, b'x');
-    assert_eq!(
-        Frame::decode(&raw).unwrap_err().kind(),
-        ErrorKind::InvalidData
-    );
-    // Senders clip on a character boundary instead.
-    let clipped = clip_text("ä".repeat(ITEM_TEXT_MAX));
-    assert!(clipped.len() <= ITEM_TEXT_MAX && clipped.ends_with('…'));
-    assert_eq!(clip_text("kurz".into()), "kurz");
 }
 
 #[test]
@@ -207,48 +260,6 @@ fn transfer_engine_task_uploads_carry_only_their_free_frames() {
     assert!(!write.cancel.load(Ordering::Relaxed));
     assert!(session.route(4, trailer()).is_none());
     assert!(write.cancel.load(Ordering::Relaxed));
-}
-
-#[test]
-fn transfer_engine_task_batch_headers_above_the_file_limit_are_refused() {
-    let entry = BatchEntry {
-        path: "/a".into(),
-        size: 0,
-        nonce: 0,
-        mtime_ms: None,
-    };
-    let full = Frame::BatchPut {
-        entries: vec![entry.clone(); BATCH_MAX_FILES],
-    };
-    assert_eq!(Frame::decode(&full.encode(1).unwrap()).unwrap().1, full);
-    let over = Frame::BatchPut {
-        entries: vec![entry; BATCH_MAX_FILES + 1],
-    };
-    assert_eq!(over.encode(1).unwrap_err().kind(), ErrorKind::InvalidData);
-    let items = Frame::BatchGet {
-        items: vec![
-            BatchItem {
-                path: "/a".into(),
-                id: None,
-                size: 0,
-            };
-            BATCH_MAX_FILES + 1
-        ],
-    };
-    assert_eq!(items.encode(1).unwrap_err().kind(), ErrorKind::InvalidData);
-
-    // A peer that sends more anyway is refused before anything is allocated.
-    for (tag, element) in [(35u8, 20usize), (36, 13)] {
-        let mut raw = Vec::new();
-        raw.extend_from_slice(&1u64.to_le_bytes());
-        raw.push(tag);
-        raw.extend_from_slice(&((BATCH_MAX_FILES + 1) as u32).to_le_bytes());
-        raw.resize(raw.len() + (BATCH_MAX_FILES + 1) * element, 0);
-        assert_eq!(
-            Frame::decode(&raw).unwrap_err().kind(),
-            ErrorKind::InvalidData
-        );
-    }
 }
 
 #[test]

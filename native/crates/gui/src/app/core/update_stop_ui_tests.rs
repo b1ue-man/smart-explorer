@@ -84,7 +84,7 @@ fn frame(
 }
 
 #[test]
-#[ignore = "run only through the isolated remote GUI task entrypoint"]
+#[ignore = "run only through the isolated remote GUI task entrypoint; Suite rechte-desktop-tresore-task"]
 fn desktop_task_gui_window_exits_on_update_stop() {
     let _serial = MARKER
         .lock()
@@ -120,7 +120,7 @@ fn desktop_task_gui_window_exits_on_update_stop() {
 }
 
 #[test]
-#[ignore = "run only through the isolated remote GUI task entrypoint"]
+#[ignore = "run only through the isolated remote GUI task entrypoint; Suite rechte-desktop-tresore-task"]
 fn desktop_task_stale_stop_marker_ignored_at_start() {
     let _serial = MARKER
         .lock()

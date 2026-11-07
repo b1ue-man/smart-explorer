@@ -1,7 +1,18 @@
 #![cfg(target_os = "linux")]
 
-#[path = "../../native/src/agent_proto/mod.rs"]
+// The shared protocol source from its crate, with the three modules it takes from the app by path
+// (`crate::host`, `crate::support_dirs`, `crate::vfs`), as `src/main.rs` includes them.
+#[path = "../../native/crates/storage/src/agent_proto/mod.rs"]
 mod agent_proto;
+#[allow(dead_code, unused_imports)]
+#[path = "../src/host.rs"]
+mod host;
+#[allow(dead_code, unused_imports)]
+#[path = "../src/support_dirs.rs"]
+mod support_dirs;
+#[allow(dead_code, unused_imports)]
+#[path = "../src/vfs.rs"]
+mod vfs;
 
 use agent_proto::{read_frame, write_frame, Frame, PROTO_VERSION};
 use std::io::{self, Read};

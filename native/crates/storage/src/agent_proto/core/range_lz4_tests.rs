@@ -1,7 +1,6 @@
 //! Ranged uploads on the agent (`range-v1`) and LZ4 content blocks
 //! (`lz4-v1`): the stage table behind the frames, the frame layouts, the
 //! block format and what the credit counts.
-use std::io::ErrorKind;
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
@@ -9,21 +8,20 @@ use std::time::{Duration, Instant};
 
 use crate::agent_proto::server_session::ServerSession;
 use crate::agent_proto::{
-    credit_cost, pack_lz4, pack_raw, raw_len, read_frame, serve, server_version,
-    server_version_with, unpack, write_frame, BlockSender, Frame, ServerFeatures, CHUNK,
-    CREDIT_INITIAL, MAX_RAW,
+    credit_cost, pack_lz4, raw_len, read_frame, serve, server_version, server_version_with, unpack,
+    write_frame, BlockSender, Frame, ServerFeatures, CHUNK, CREDIT_INITIAL, MAX_RAW,
 };
 use crate::host::compress_policy::{Policy, METER_WINDOW};
 
 const MIB: usize = 1024 * 1024;
 
-fn text(len: usize) -> Vec<u8> {
+pub(super) fn text(len: usize) -> Vec<u8> {
     let words = b"the quick brown fox jumps over the lazy dog and then does it again ";
     words.iter().copied().cycle().take(len).collect()
 }
 
 /// Bytes zlib-style compressors cannot shrink: a xorshift stream.
-fn random(len: usize) -> Vec<u8> {
+pub(super) fn random(len: usize) -> Vec<u8> {
     let mut state = 0x9E37_79B9_7F4A_7C15u64;
     (0..len)
         .map(|_| {
@@ -408,28 +406,6 @@ fn speed_task_agent_labels_range_and_lz4() {
     );
     let old = ServerFeatures::parse("0.5.100+sync-links-v1.credit-v1.stage-v1.slots-64");
     assert!(!old.ranges && !old.lz4, "an old agent announces neither");
-}
-
-#[test]
-fn speed_task_agent_lz4_frames_roundtrip_on_the_wire() {
-    let block = pack_lz4(&text(MAX_RAW)).expect("packs");
-    for frame in [
-        Frame::DataLz4(block),
-        Frame::DataLz4(pack_raw(&random(1000))),
-        Frame::ReadLz4 {
-            path: "/data/x".into(),
-            offset: 5,
-            len: 77,
-        },
-    ] {
-        let bytes = frame.encode(9).expect("encode");
-        assert_eq!(Frame::decode(&bytes).expect("decode"), (9, frame));
-    }
-    let oversized = Frame::DataLz4(vec![0; MAX_RAW + 6]);
-    assert_eq!(
-        oversized.encode(1).expect_err("too long").kind(),
-        ErrorKind::InvalidData
-    );
 }
 
 #[path = "lz4_block_tests.rs"]

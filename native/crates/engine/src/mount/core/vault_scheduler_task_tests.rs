@@ -201,6 +201,55 @@ fn mount_vault_task_scheduler_stop_joins_started_work_without_dispatching_childr
         6, &|| true, &|path, depth| work.work(path, depth)));
     assert_eq!(cancelled.finish().unwrap(), 0);
     assert_eq!(never.starts(), 0);
+    // Case "panicking stop predicate": a panic in the stop predicate wakes and joins the workers.
+    {
+        let trace = Arc::new(Trace::default());
+        let panic_stop = Arc::new(AtomicBool::new(false));
+        let release = trace.gate("/held");
+        let work = Arc::clone(&trace);
+        let stop = Arc::clone(&panic_stop);
+        let running = Running::spawn(move || {
+            run_metadata_batch(
+                targets(&[("/held", 1), ("/held/child", 2)]),
+                2,
+                &|| {
+                    if stop.load(Ordering::SeqCst) {
+                        work.record("stop-panic", 0, Phase::StopObserved);
+                        panic!("injected stop predicate panic");
+                    }
+                    false
+                },
+                &|path, depth| work.work(path, depth),
+            )
+        });
+        trace.started("/held");
+        panic_stop.store(true, Ordering::SeqCst);
+        trace.wait_for(|events| {
+            events
+                .iter()
+                .any(|event| event.phase == Phase::StopObserved)
+        });
+        assert_eq!(
+            trace.active.load(Ordering::SeqCst),
+            1,
+            "panicking stop predicate"
+        );
+        release.release();
+        assert!(
+            running
+                .finish()
+                .unwrap_err()
+                .to_string()
+                .contains("worker panicked"),
+            "panicking stop predicate"
+        );
+        assert_eq!(trace.starts(), 1, "panicking stop predicate");
+        assert_eq!(
+            trace.active.load(Ordering::SeqCst),
+            0,
+            "panicking stop predicate"
+        );
+    }
 }
 
 #[test]
@@ -225,31 +274,6 @@ fn mount_vault_task_scheduler_work_errors_and_panics_join_and_do_not_starve() {
         assert_eq!(trace.active.load(Ordering::SeqCst), 0);
         trace.before("/failed", "/failed/child");
     }
-}
-
-#[test]
-fn mount_vault_task_scheduler_panicking_stop_predicate_wakes_and_joins_workers() {
-    let trace = Arc::new(Trace::default());
-    let panic_stop = Arc::new(AtomicBool::new(false));
-    let release = trace.gate("/held");
-    let work = Arc::clone(&trace);
-    let stop = Arc::clone(&panic_stop);
-    let running = Running::spawn(move || run_metadata_batch(targets(&[("/held", 1), ("/held/child", 2)]),
-        2, &|| {
-            if stop.load(Ordering::SeqCst) {
-                work.record("stop-panic", 0, Phase::StopObserved);
-                panic!("injected stop predicate panic");
-            }
-            false
-        }, &|path, depth| work.work(path, depth)));
-    trace.started("/held");
-    panic_stop.store(true, Ordering::SeqCst);
-    trace.wait_for(|events| events.iter().any(|event| event.phase == Phase::StopObserved));
-    assert_eq!(trace.active.load(Ordering::SeqCst), 1);
-    release.release();
-    assert!(running.finish().unwrap_err().to_string().contains("worker panicked"));
-    assert_eq!(trace.starts(), 1);
-    assert_eq!(trace.active.load(Ordering::SeqCst), 0);
 }
 
 #[test]

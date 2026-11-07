@@ -177,73 +177,105 @@ fn access_walk(root: &Path, threads: usize, answer: Result<bool, String>) -> (Se
 
 #[test]
 fn abgleich_task_listing_threads_keep_the_serial_order_and_entries() {
-    let tree = fixture("order");
-    let serial = seen(&walk_with(&tree.0, 0, Limits::PRODUCTION, None));
-    assert!(serial.5, "the fixture is walked completely");
-    assert!(serial.0.len() > 40, "the fixture has its folders and files");
-    for threads in [1, 2, 4, 16] {
-        assert_eq!(
-            seen(&walk_with(&tree.0, threads, Limits::PRODUCTION, None)),
-            serial,
-            "{threads} listing thread(s) keep the serial order"
-        );
-    }
-}
-
-#[test]
-fn abgleich_task_listing_threads_report_the_same_failures_in_the_same_order() {
-    let tree = fixture("failures");
-    let _denied = [
-        Denied::new(&tree.0.join("a").join("sub"), ErrorKind::PermissionDenied),
-        Denied::new(&tree.0.join("d").join("d05"), ErrorKind::Other),
+    let cases: [(&str, fn()); 4] = [
+        (
+            "abgleich_task_listing_threads_keep_the_serial_order_and_entries",
+            || {
+                let tree = fixture("order");
+                let serial = seen(&walk_with(&tree.0, 0, Limits::PRODUCTION, None));
+                assert!(serial.5, "the fixture is walked completely");
+                assert!(serial.0.len() > 40, "the fixture has its folders and files");
+                for threads in [1, 2, 4, 16] {
+                    assert_eq!(
+                        seen(&walk_with(&tree.0, threads, Limits::PRODUCTION, None)),
+                        serial,
+                        "{threads} listing thread(s) keep the serial order"
+                    );
+                }
+            },
+        ),
+        ("abgleich_task_listing_threads_finish_a_wide_tree", || {
+            let tree = fixture("wide");
+            for number in 0..300 {
+                let folder = tree.0.join(format!("many/m{number:03}"));
+                std::fs::create_dir_all(&folder).expect("folder");
+                std::fs::write(folder.join("x.txt"), b"x").expect("file");
+            }
+            let root = tree.0.clone();
+            let (sent, finished) = mpsc::channel();
+            std::thread::spawn(move || {
+                let cancel = AtomicBool::new(false);
+                let outcome = collect(&root, false, 1, &cancel, None, Limits::PRODUCTION, 8);
+                let _ = sent.send(outcome.is_complete() && outcome.entries.len() > 600);
+            });
+            assert_eq!(
+                finished.recv_timeout(Duration::from_secs(120)),
+                Ok(true),
+                "the walk with 8 listing threads ends with a complete result"
+            );
+        }),
+        (
+            "abgleich_task_listing_threads_keep_the_budgets_and_their_messages",
+            || {
+                let tree = fixture("budgets");
+                let _denied = [
+                    Denied::new(&tree.0.join("a").join("sub"), ErrorKind::PermissionDenied),
+                    Denied::new(&tree.0.join("d").join("d05"), ErrorKind::Other),
+                ];
+                let limits = [
+                    Limits {
+                        entries: 7,
+                        ..Limits::PRODUCTION
+                    },
+                    Limits {
+                        name_bytes: 400,
+                        ..Limits::PRODUCTION
+                    },
+                    Limits {
+                        depth: 2,
+                        ..Limits::PRODUCTION
+                    },
+                    Limits {
+                        issues: 1,
+                        ..Limits::PRODUCTION
+                    },
+                ];
+                for limit in limits {
+                    let serial = seen(&walk_with(&tree.0, 0, limit, None));
+                    assert_eq!(
+                        seen(&walk_with(&tree.0, 4, limit, None)),
+                        serial,
+                        "{limit:?} stops at the same entry with the same message"
+                    );
+                }
+            },
+        ),
+        (
+            "abgleich_task_listing_threads_report_the_same_failures_in_the_same_order",
+            || {
+                let tree = fixture("failures");
+                let _denied = [
+                    Denied::new(&tree.0.join("a").join("sub"), ErrorKind::PermissionDenied),
+                    Denied::new(&tree.0.join("d").join("d05"), ErrorKind::Other),
+                ];
+                let serial = seen(&walk_with(&tree.0, 0, Limits::PRODUCTION, None));
+                assert_eq!(serial.1.len(), 2, "both failing folders are reported");
+                assert!(
+                    !serial.5,
+                    "a failing folder makes the copy expansion incomplete"
+                );
+                for threads in [1, 2, 4] {
+                    assert_eq!(
+                        seen(&walk_with(&tree.0, threads, Limits::PRODUCTION, None)),
+                        serial,
+                        "{threads} listing thread(s) report the same failures"
+                    );
+                }
+            },
+        ),
     ];
-    let serial = seen(&walk_with(&tree.0, 0, Limits::PRODUCTION, None));
-    assert_eq!(serial.1.len(), 2, "both failing folders are reported");
-    assert!(
-        !serial.5,
-        "a failing folder makes the copy expansion incomplete"
-    );
-    for threads in [1, 2, 4] {
-        assert_eq!(
-            seen(&walk_with(&tree.0, threads, Limits::PRODUCTION, None)),
-            serial,
-            "{threads} listing thread(s) report the same failures"
-        );
-    }
-}
-
-#[test]
-fn abgleich_task_listing_threads_keep_the_budgets_and_their_messages() {
-    let tree = fixture("budgets");
-    let _denied = [
-        Denied::new(&tree.0.join("a").join("sub"), ErrorKind::PermissionDenied),
-        Denied::new(&tree.0.join("d").join("d05"), ErrorKind::Other),
-    ];
-    let limits = [
-        Limits {
-            entries: 7,
-            ..Limits::PRODUCTION
-        },
-        Limits {
-            name_bytes: 400,
-            ..Limits::PRODUCTION
-        },
-        Limits {
-            depth: 2,
-            ..Limits::PRODUCTION
-        },
-        Limits {
-            issues: 1,
-            ..Limits::PRODUCTION
-        },
-    ];
-    for limit in limits {
-        let serial = seen(&walk_with(&tree.0, 0, limit, None));
-        assert_eq!(
-            seen(&walk_with(&tree.0, 4, limit, None)),
-            serial,
-            "{limit:?} stops at the same entry with the same message"
-        );
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
     }
 }
 
@@ -310,28 +342,6 @@ fn abgleich_task_listing_threads_read_a_folder_above_the_read_ahead_cap_at_its_t
         seen(&walk_with(&tree.0, 4, Limits::PRODUCTION, None)),
         serial,
         "the folder above the cap is read by the walk at its turn"
-    );
-}
-
-#[test]
-fn abgleich_task_listing_threads_finish_a_wide_tree() {
-    let tree = fixture("wide");
-    for number in 0..300 {
-        let folder = tree.0.join(format!("many/m{number:03}"));
-        std::fs::create_dir_all(&folder).expect("folder");
-        std::fs::write(folder.join("x.txt"), b"x").expect("file");
-    }
-    let root = tree.0.clone();
-    let (sent, finished) = mpsc::channel();
-    std::thread::spawn(move || {
-        let cancel = AtomicBool::new(false);
-        let outcome = collect(&root, false, 1, &cancel, None, Limits::PRODUCTION, 8);
-        let _ = sent.send(outcome.is_complete() && outcome.entries.len() > 600);
-    });
-    assert_eq!(
-        finished.recv_timeout(Duration::from_secs(120)),
-        Ok(true),
-        "the walk with 8 listing threads ends with a complete result"
     );
 }
 

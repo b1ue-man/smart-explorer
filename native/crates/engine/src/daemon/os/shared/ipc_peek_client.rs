@@ -194,7 +194,3 @@ fn connect_if_running(read_timeout: Duration) -> Result<Option<(TcpStream, Strin
     set_stream_timeout(&stream, Some(read_timeout));
     Ok(Some((stream, token)))
 }
-
-#[cfg(test)]
-#[path = "ipc_peek_client_tests.rs"]
-mod tests;

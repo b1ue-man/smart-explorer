@@ -326,6 +326,12 @@ mod vault_locator_tests {
             ),
             ("", "error Leerer oder ungültiger Pfad"),
             ("a\0b", "error Leerer oder ungültiger Pfad"),
+            ("/", "local /"),
+            ("/tmp/a%20 # ? ", "local /tmp/a%20 # ? "),
+            (r"C:\Users\A", r"local C:\Users\A"),
+            (r"\\server\share\Ü", r"local \\server\share\Ü"),
+            (r"\\?\C:\data", r"local \\?\C:\data"),
+            ("/tmp/sftp://literal", "local /tmp/sftp://literal"),
         ];
         for (endpoint, expected) in table {
             assert_eq!(shape(endpoint), expected, "{endpoint:?}");
@@ -340,9 +346,20 @@ mod vault_locator_tests {
             "sftp://u@h:22/x",
             "webdav://u@h:443/dav",
             "share://direct/c/G",
+            "share://direct/contact-a/Gate",
         ] {
             assert!(crate::connect::is_remote_url(remote), "{remote}");
         }
+        for local in ["/home/anna", "C:/local", r"\\srv\share"] {
+            assert!(!crate::connect::is_remote_url(local), "{local}");
+        }
+        let (protocol, user, host, port, path) =
+            crate::connect::parse_remote_url("sftp://bob@example.com:2222/home/bob").unwrap();
+        assert_eq!(protocol, crate::creds::Protocol::Sftp);
+        assert_eq!(
+            (user.as_str(), host.as_str(), port, path.as_str()),
+            ("bob", "example.com", 2222, "/home/bob")
+        );
         assert!(!crate::connect::is_remote_url("/home/anna"));
         assert!(!crate::vfs::is_remote_root(r"C:\Users"));
         assert!(crate::vfs::is_remote_root("sftp://h/p"));
@@ -357,6 +374,59 @@ mod vault_locator_tests {
         assert_eq!(
             crate::connect::local_endpoint_path("sftp://u@h:22/x"),
             Ok(None)
+        );
+        for url in ["sftp://u@[::1]:2222/Docs", "sftp://u@::1:2222/Docs"] {
+            let (_, user, host, port, path) = crate::connect::parse_remote_url(url).unwrap();
+            assert_eq!(
+                (user.as_str(), host.as_str(), port, path.as_str()),
+                ("u", "::1", 2222, "/Docs"),
+                "{url}"
+            );
+        }
+        assert_eq!(
+            crate::connect::parse_remote_url("SFTP://u@[::1]/Docs")
+                .unwrap()
+                .3,
+            22
+        );
+        for input in [
+            "webdva://host/Docs",
+            "sftp:/host/Docs",
+            "share://broken",
+            "sftp://",
+            "",
+        ] {
+            assert!(EndpointSpec::parse(input).is_err(), "{input}");
+        }
+        for input in [
+            "sftp://u@host:bad/Docs",
+            "sftp://u@/Docs",
+            "sftp://u@[::1/Docs",
+        ] {
+            assert!(crate::connect::parse_remote_url(input).is_none(), "{input}");
+        }
+        // SMB: protocol name, default port and endpoint recognition.
+        assert_eq!(
+            crate::creds::Protocol::parse("smb"),
+            Some(crate::creds::Protocol::Smb)
+        );
+        assert_eq!(crate::creds::Protocol::Smb.as_str(), "smb");
+        assert_eq!(crate::creds::Protocol::Smb.default_port(), 445);
+        assert!(crate::creds::Protocol::Smb.is_url());
+        let smb = "smb://FIRMA\\anna@nas:1445/daten/x";
+        assert!(crate::connect::is_remote_url(smb));
+        let (smb_protocol, smb_user, smb_host, smb_port, smb_path) =
+            crate::connect::parse_remote_url(smb).unwrap();
+        assert_eq!(smb_protocol, crate::creds::Protocol::Smb);
+        assert_eq!(
+            (smb_user.as_str(), smb_host.as_str(), smb_port),
+            ("FIRMA\\anna", "nas", 1445)
+        );
+        assert_eq!(smb_path, "/daten/x");
+        crate::connect::validate_sync_endpoints(smb, "/storage/emulated/0/x").unwrap();
+        assert!(
+            crate::connect::validate_sync_endpoints(smb, "smb://FIRMA\\anna@nas:1445/daten")
+                .is_err()
         );
     }
 

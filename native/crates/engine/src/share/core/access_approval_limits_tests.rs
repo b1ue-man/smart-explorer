@@ -46,6 +46,16 @@ fn perm_task_open_requests_have_no_device_or_host_limit() {
 
 #[test]
 fn perm_task_ask_start_beside_three_running_jobs_of_the_device() {
+    let cases: [fn(); 2] = [
+        perm_task_ask_start_beside_three_running_jobs_of_the_device_case,
+        perm_task_screen_request_beside_running_jobs,
+    ];
+    for case in cases {
+        case();
+    }
+}
+
+fn perm_task_ask_start_beside_three_running_jobs_of_the_device_case() {
     let host = Host::new(&[(Capability::ExecCommands, Ask)]);
     let _running: Vec<_> = ["e0", "e1", "e2"]
         .iter()
@@ -69,7 +79,6 @@ fn perm_task_ask_start_beside_three_running_jobs_of_the_device() {
     assert_eq!(host.registry.active_views().len(), 4);
 }
 
-#[test]
 fn perm_task_screen_request_beside_running_jobs() {
     let host = Host::new(&[(Capability::ExecCommands, Allow)]);
     host.running(&shell("f0", "sleep 60"));

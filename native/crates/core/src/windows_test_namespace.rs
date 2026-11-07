@@ -58,15 +58,23 @@ mod tests {
 
     #[test]
     fn default_name_is_exactly_the_production_name() {
-        assert_eq!(qualify("production", ".test.", None).unwrap(), "production");
-    }
-
-    #[test]
-    fn isolated_name_uses_the_validated_namespace() {
-        assert_eq!(
-            qualify("production", ".test.", Some("pair_A-01")).unwrap(),
-            "production.test.pair_A-01"
-        );
+        // Rows: no namespace keeps the production name exactly; a validated
+        // namespace is appended with the separator.
+        let cases = [
+            ("no namespace", None, "production"),
+            (
+                "validated namespace",
+                Some("pair_A-01"),
+                "production.test.pair_A-01",
+            ),
+        ];
+        for (case, namespace, expected) in cases {
+            assert_eq!(
+                qualify("production", ".test.", namespace).unwrap(),
+                expected,
+                "{case}"
+            );
+        }
     }
 
     #[test]

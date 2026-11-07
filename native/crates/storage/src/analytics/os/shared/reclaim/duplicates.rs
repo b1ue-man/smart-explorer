@@ -224,78 +224,86 @@ mod tests {
 
     #[test]
     fn same_size_different_content_is_not_duplicate() {
-        let base = temp_base("se_dupe_diff");
-        let _ = std::fs::remove_dir_all(&base);
-        std::fs::create_dir_all(&base).unwrap();
-        std::fs::write(base.join("a.bin"), b"aaaa").unwrap();
-        std::fs::write(base.join("b.bin"), b"bbbb").unwrap();
-        let item_a = ReclaimItem::new("a".into(), "a.bin".into(), 4, 2, false);
-        let item_b = ReclaimItem::new("b".into(), "b.bin".into(), 4, 1, false);
-        let p = ReclaimProgress::default();
-        let opts = ReclaimOptions {
-            duplicate_min_bytes: 1,
-            partial_fingerprint_bytes: 2,
-            ..ReclaimOptions::default()
-        };
-        let mut errors = Vec::new();
-        let mut suppressed_errors = 0;
-        let groups = duplicate_groups(
-            vec![
-                FileCandidate {
-                    path: base.join("a.bin"),
-                    item: item_a,
+        let cases: [(&str, fn()); 2] = [
+            ("same_size_different_content_is_not_duplicate", || {
+                let base = temp_base("se_dupe_diff");
+                let _ = std::fs::remove_dir_all(&base);
+                std::fs::create_dir_all(&base).unwrap();
+                std::fs::write(base.join("a.bin"), b"aaaa").unwrap();
+                std::fs::write(base.join("b.bin"), b"bbbb").unwrap();
+                let item_a = ReclaimItem::new("a".into(), "a.bin".into(), 4, 2, false);
+                let item_b = ReclaimItem::new("b".into(), "b.bin".into(), 4, 1, false);
+                let p = ReclaimProgress::default();
+                let opts = ReclaimOptions {
+                    duplicate_min_bytes: 1,
+                    partial_fingerprint_bytes: 2,
+                    ..ReclaimOptions::default()
+                };
+                let mut errors = Vec::new();
+                let mut suppressed_errors = 0;
+                let groups = duplicate_groups(
+                    vec![
+                        FileCandidate {
+                            path: base.join("a.bin"),
+                            item: item_a,
+                        },
+                        FileCandidate {
+                            path: base.join("b.bin"),
+                            item: item_b,
+                        },
+                    ],
+                    &p,
+                    &opts,
+                    &mut errors,
+                    &mut suppressed_errors,
+                )
+                .groups;
+                assert!(groups.is_empty());
+                assert!(errors.is_empty());
+                let _ = std::fs::remove_dir_all(&base);
+            }),
+            (
+                "same_prefix_suffix_different_middle_is_not_duplicate",
+                || {
+                    let base = temp_base("se_dupe_middle");
+                    let _ = std::fs::remove_dir_all(&base);
+                    std::fs::create_dir_all(&base).unwrap();
+                    std::fs::write(base.join("a.bin"), b"aa1111zz").unwrap();
+                    std::fs::write(base.join("b.bin"), b"aa2222zz").unwrap();
+                    let p = ReclaimProgress::default();
+                    let opts = ReclaimOptions {
+                        duplicate_min_bytes: 1,
+                        partial_fingerprint_bytes: 2,
+                        ..ReclaimOptions::default()
+                    };
+                    let mut errors = Vec::new();
+                    let mut suppressed_errors = 0;
+                    let groups = duplicate_groups(
+                        vec![
+                            FileCandidate {
+                                path: base.join("a.bin"),
+                                item: ReclaimItem::new("a".into(), "a.bin".into(), 8, 2, false),
+                            },
+                            FileCandidate {
+                                path: base.join("b.bin"),
+                                item: ReclaimItem::new("b".into(), "b.bin".into(), 8, 1, false),
+                            },
+                        ],
+                        &p,
+                        &opts,
+                        &mut errors,
+                        &mut suppressed_errors,
+                    )
+                    .groups;
+                    assert!(groups.is_empty());
+                    assert_eq!(p.hashed.load(Ordering::Relaxed), 2);
+                    let _ = std::fs::remove_dir_all(&base);
                 },
-                FileCandidate {
-                    path: base.join("b.bin"),
-                    item: item_b,
-                },
-            ],
-            &p,
-            &opts,
-            &mut errors,
-            &mut suppressed_errors,
-        )
-        .groups;
-        assert!(groups.is_empty());
-        assert!(errors.is_empty());
-        let _ = std::fs::remove_dir_all(&base);
-    }
-
-    #[test]
-    fn same_prefix_suffix_different_middle_is_not_duplicate() {
-        let base = temp_base("se_dupe_middle");
-        let _ = std::fs::remove_dir_all(&base);
-        std::fs::create_dir_all(&base).unwrap();
-        std::fs::write(base.join("a.bin"), b"aa1111zz").unwrap();
-        std::fs::write(base.join("b.bin"), b"aa2222zz").unwrap();
-        let p = ReclaimProgress::default();
-        let opts = ReclaimOptions {
-            duplicate_min_bytes: 1,
-            partial_fingerprint_bytes: 2,
-            ..ReclaimOptions::default()
-        };
-        let mut errors = Vec::new();
-        let mut suppressed_errors = 0;
-        let groups = duplicate_groups(
-            vec![
-                FileCandidate {
-                    path: base.join("a.bin"),
-                    item: ReclaimItem::new("a".into(), "a.bin".into(), 8, 2, false),
-                },
-                FileCandidate {
-                    path: base.join("b.bin"),
-                    item: ReclaimItem::new("b".into(), "b.bin".into(), 8, 1, false),
-                },
-            ],
-            &p,
-            &opts,
-            &mut errors,
-            &mut suppressed_errors,
-        )
-        .groups;
-        assert!(groups.is_empty());
-        assert_eq!(p.hashed.load(Ordering::Relaxed), 2);
-        let _ = std::fs::remove_dir_all(&base);
+            ),
+        ];
+        for (case, check) in cases {
+            std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
+        }
     }
 
     #[test]

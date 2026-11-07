@@ -55,7 +55,7 @@ fn screen_task_windows_input_records_map_positions_keys_text() {
 
 /// An edit window of this process, in front, that takes the text.
 #[test]
-#[ignore = "needs an interactive desktop (stage windows-screen)"]
+#[ignore = "needs an interactive desktop (stage windows-screen); Suite rechte-desktop-tresore-task"]
 fn screen_task_windows_sendinput_text_reaches_window() {
     use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -138,7 +138,7 @@ fn screen_task_windows_sendinput_text_reaches_window() {
 /// The runner starts an elevated window and brings it to the front
 /// (`SE_SCREEN_ELEVATED_TASK=1`); without it the test is not run (NR N7).
 #[test]
-#[ignore = "needs an elevated window beside medium integrity (stage windows-screen)"]
+#[ignore = "needs an elevated window beside medium integrity (stage windows-screen); Suite rechte-desktop-tresore-task"]
 fn screen_task_windows_elevated_blocked_reported() {
     if std::env::var_os("SE_SCREEN_ELEVATED_TASK").is_none() {
         eprintln!("not run: the runner started no elevated window");

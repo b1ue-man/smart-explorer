@@ -270,32 +270,30 @@ fn node_folders_are_never_created_empty_and_emptied_ones_are_removed() {
         ],
         "each emptied node folder once, before the folder around them"
     );
-}
-
-#[test]
-fn node_folders_of_a_held_back_deletion_are_not_removed() {
-    let rules = VaultRules::new(None);
-    let node = format!("{ROOT}/YWx0.c9r");
-    // R2: A deleted the folder SUB, B changed it; the node deletion waits.
-    let mut plan = plan_of(vec![
-        Action::DeleteB(format!("{SUB}/dirid.c9r")),
-        Action::CopyBtoA(format!("{SUB}/neu.c9r")),
-        Action::DeleteB(format!("{node}/dir.c9r")),
-    ]);
-    rules.adjust(&mut plan);
-    assert!(plan.dirs.is_empty(), "{:?}", plan.dirs);
-}
-
-#[test]
-fn node_folder_that_receives_a_new_type_file_stays() {
-    let rules = VaultRules::new(None);
-    let node = format!("{ROOT}/YWx0.c9r");
-    // A replaced the link with a folder of the same name: B's node folder
-    // loses `symlink.c9r` and receives `dir.c9r` in the same run.
-    let mut plan = plan_of(vec![
-        Action::DeleteB(format!("{node}/symlink.c9r")),
-        Action::CopyAtoB(format!("{node}/dir.c9r")),
-    ]);
-    rules.adjust(&mut plan);
-    assert!(plan.dirs.is_empty(), "{:?}", plan.dirs);
+    // Case "held back deletion": a node folder whose deletion is held back is not removed.
+    {
+        let rules = VaultRules::new(None);
+        let node = format!("{ROOT}/YWx0.c9r");
+        // R2: A deleted the folder SUB, B changed it; the node deletion waits.
+        let mut plan = plan_of(vec![
+            Action::DeleteB(format!("{SUB}/dirid.c9r")),
+            Action::CopyBtoA(format!("{SUB}/neu.c9r")),
+            Action::DeleteB(format!("{node}/dir.c9r")),
+        ]);
+        rules.adjust(&mut plan);
+        assert!(plan.dirs.is_empty(), "held back deletion: {:?}", plan.dirs);
+    }
+    // Case "new type file": a node folder that receives a new type file stays.
+    {
+        let rules = VaultRules::new(None);
+        let node = format!("{ROOT}/YWx0.c9r");
+        // A replaced the link with a folder of the same name: B's node folder
+        // loses `symlink.c9r` and receives `dir.c9r` in the same run.
+        let mut plan = plan_of(vec![
+            Action::DeleteB(format!("{node}/symlink.c9r")),
+            Action::CopyAtoB(format!("{node}/dir.c9r")),
+        ]);
+        rules.adjust(&mut plan);
+        assert!(plan.dirs.is_empty(), "new type file: {:?}", plan.dirs);
+    }
 }

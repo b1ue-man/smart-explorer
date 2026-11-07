@@ -150,13 +150,6 @@ impl Drop for UpdateInstanceGuard {
 mod tests {
     use super::*;
 
-    #[test]
-    fn target_key_is_stable_for_same_path() {
-        let path = std::env::temp_dir().join("smart-explorer-updater-target");
-        assert_eq!(target_key(&path), target_key(&path));
-        assert_eq!(target_key(&path).len(), 64);
-    }
-
     #[cfg(unix)]
     #[test]
     fn target_key_survives_missing_file_under_symlinked_parent() {

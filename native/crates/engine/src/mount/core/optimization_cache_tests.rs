@@ -76,6 +76,36 @@ fn mount_optimization_task_reopen_reuses_contents_but_revalidates() {
     backend.make_link("/link");
     assert_eq!(open_error(&engine, "\\link").kind(), io::ErrorKind::InvalidInput);
     assert_eq!(backend.read_count(), 2, "missing/type/link failures must not transfer content");
+    // Case "changed spool length": a retained spool that was truncated is never reused.
+    {
+        let directory = FixtureDirectory::new();
+        let backend = OptimizationBackend::new();
+        backend.put("/note", b"complete");
+        let engine = new_engine(&directory, &backend, 500);
+        assert_eq!(
+            read_path(&engine, "\\note"),
+            b"complete",
+            "changed spool length"
+        );
+        let record = engine.clean_cache.claim("/note").unwrap().unwrap();
+        engine
+            .spool
+            .open_file(&record.spool_name, true)
+            .unwrap()
+            .set_len(1)
+            .unwrap();
+        engine.clean_cache.retain(record).unwrap();
+        assert_eq!(
+            read_path(&engine, "\\note"),
+            b"complete",
+            "changed spool length"
+        );
+        assert_eq!(
+            backend.read_count(),
+            2,
+            "a truncated retained spool is never reused"
+        );
+    }
 }
 
 #[test]
@@ -96,20 +126,6 @@ fn mount_optimization_task_short_and_overlong_streams_never_enter_cache() {
     }
     assert_eq!(read_path(&engine, "\\note"), b"abc");
     assert_eq!(backend.read_count(), 3);
-}
-
-#[test]
-fn mount_optimization_task_reuse_rejects_a_changed_local_spool_length() {
-    let directory = FixtureDirectory::new();
-    let backend = OptimizationBackend::new();
-    backend.put("/note", b"complete");
-    let engine = new_engine(&directory, &backend, 500);
-    assert_eq!(read_path(&engine, "\\note"), b"complete");
-    let record = engine.clean_cache.claim("/note").unwrap().unwrap();
-    engine.spool.open_file(&record.spool_name, true).unwrap().set_len(1).unwrap();
-    engine.clean_cache.retain(record).unwrap();
-    assert_eq!(read_path(&engine, "\\note"), b"complete");
-    assert_eq!(backend.read_count(), 2, "a truncated retained spool is never reused");
 }
 
 #[test]
@@ -166,31 +182,47 @@ fn mount_optimization_task_post_transfer_stat_rejects_remote_change() {
     assert!(lock(&engine.entries).unwrap().is_empty());
     assert_eq!(engine.clean_cache.usage().unwrap(), (0, 0));
     assert_eq!(read_path(&engine, "\\note"), b"new");
-}
-
-#[test]
-fn mount_optimization_task_namespace_change_after_verification_rejects_install() {
-    let directory = FixtureDirectory::new();
-    let backend = OptimizationBackend::new();
-    backend.put("/note", b"captured");
-    let engine = Arc::new(new_engine(&directory, &backend, 500));
-    let gate = backend.gate_stat("/note", 1); // Pause the post-download stat, after snapshotting it.
-    let (done_tx, done) = mpsc::channel();
-    let worker_engine = Arc::clone(&engine);
-    let worker = std::thread::spawn(move || {
-        let result = worker_engine.open_file("\\note", OpenFileOptions {
-            writable: false, disposition: OpenDisposition::OpenExisting,
+    // Case "namespace change": a rename after the verification rejects the install.
+    {
+        let directory = FixtureDirectory::new();
+        let backend = OptimizationBackend::new();
+        backend.put("/note", b"captured");
+        let engine = Arc::new(new_engine(&directory, &backend, 500));
+        let gate = backend.gate_stat("/note", 1); // Pause the post-download stat, after snapshotting it.
+        let (done_tx, done) = mpsc::channel();
+        let worker_engine = Arc::clone(&engine);
+        let worker = std::thread::spawn(move || {
+            let result = worker_engine.open_file(
+                "\\note",
+                OpenFileOptions {
+                    writable: false,
+                    disposition: OpenDisposition::OpenExisting,
+                },
+            );
+            done_tx
+                .send(result.map(|_| ()).map_err(|error| error.kind()))
+                .unwrap();
         });
-        done_tx.send(result.map(|_| ()).map_err(|error| error.kind())).unwrap();
-    });
-    gate.wait();
-    assert!(matches!(engine.rename("\\note", "\\renamed", false).unwrap(), RenameOutcome::Complete));
-    gate.release();
-    let result = done.recv_timeout(Duration::from_secs(10)).expect("content acquisition finished");
-    worker.join().unwrap();
-    assert_eq!(result, Err(io::ErrorKind::WouldBlock));
-    assert!(!lock(&engine.entries).unwrap().contains_key("/note"));
-    assert_eq!(backend.bytes("/renamed"), b"captured");
+        gate.wait();
+        assert!(
+            matches!(
+                engine.rename("\\note", "\\renamed", false).unwrap(),
+                RenameOutcome::Complete
+            ),
+            "namespace change"
+        );
+        gate.release();
+        let result = done
+            .recv_timeout(Duration::from_secs(10))
+            .expect("content acquisition finished");
+        worker.join().unwrap();
+        assert_eq!(result, Err(io::ErrorKind::WouldBlock), "namespace change");
+        assert!(
+            !lock(&engine.entries).unwrap().contains_key("/note"),
+            "namespace change"
+        );
+        assert_eq!(backend.bytes("/renamed"), b"captured", "namespace change");
+    }
 }
 
 #[test]

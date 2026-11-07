@@ -124,7 +124,7 @@ fn parents_now() -> Vec<bool> {
 }
 
 #[test]
-#[ignore = "run only through the isolated remote desktop task entrypoint"]
+#[ignore = "run only through the isolated remote desktop task entrypoint; Suite rechte-desktop-tresore-task"]
 fn desktop_task_windows_nav_pane_keys_match_spec() {
     require_task_entrypoint();
     let before = parents_now();
@@ -212,7 +212,7 @@ fn nav_entries(dir: &DesktopDir) -> Vec<String> {
 }
 
 #[test]
-#[ignore = "run only through the isolated remote desktop task entrypoint"]
+#[ignore = "run only through the isolated remote desktop task entrypoint; Suite rechte-desktop-tresore-task"]
 fn desktop_task_windows_nav_pane_follows_device_root() {
     require_task_entrypoint();
     let before = parents_now();

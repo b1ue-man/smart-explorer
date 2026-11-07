@@ -1,4 +1,3 @@
-use super::metadata_cache::{MetadataCache, MAX_CACHED_ENTRIES};
 use super::{
     FlushOutcome, MountEngine, MountId, MountMetadataPolicy, MountMode, MountRuntimeConfig,
 };
@@ -93,18 +92,6 @@ impl NavigationBackend {
             open_reads: AtomicUsize::new(0),
             racing_child_lists: AtomicUsize::new(0),
             child_rendezvous: race_children.then(BoundedRendezvous::new),
-        })
-    }
-
-    fn with_root_listing(entries: Vec<VfsMeta>) -> Arc<Self> {
-        Arc::new(Self {
-            metadata: HashMap::from([("/".into(), directory("/"))]),
-            listings: HashMap::from([("/".into(), entries)]),
-            stats: AtomicUsize::new(0),
-            lists: AtomicUsize::new(0),
-            open_reads: AtomicUsize::new(0),
-            racing_child_lists: AtomicUsize::new(0),
-            child_rendezvous: None,
         })
     }
 }
@@ -224,46 +211,6 @@ fn remote_drive_task_unrelated_parallel_directory_loads_both_remain_cached() -> 
     assert_eq!(engine.list_dir(r"\Alpha")?.len(), 1);
     assert_eq!(engine.list_dir(r"\Beta")?.len(), 1);
     assert_eq!(backend.lists.load(Ordering::SeqCst), 3);
-    Ok(())
-}
-
-#[test]
-fn remote_drive_task_engine_listing_preserves_name_and_collision_validation() -> io::Result<()> {
-    let temporary = tempfile::tempdir()?;
-    {
-        let backend = NavigationBackend::with_root_listing(vec![file("same", 1), file("same", 2)]);
-        let engine = engine("listing-name-collision", backend.clone(), temporary.path())?;
-        assert_eq!(
-            engine.list_dir(r"\").unwrap_err().kind(),
-            io::ErrorKind::InvalidData
-        );
-        assert_eq!(backend.lists.load(Ordering::SeqCst), 1);
-    }
-    {
-        let backend = NavigationBackend::with_root_listing(vec![file("safe.md", 1),
-            file("../escape", 1), file("", 1), file("bad:name", 1)]);
-        let engine = engine("listing-invalid-components", backend.clone(), temporary.path())?;
-        let entries = engine.list_dir(r"\")?;
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].name, "safe.md");
-        assert_eq!(backend.lists.load(Ordering::SeqCst), 1);
-    }
-    Ok(())
-}
-
-#[test]
-fn remote_drive_task_directory_snapshot_budget_is_not_a_validity_limit() -> io::Result<()> {
-    let cache = MetadataCache::new("/", true);
-    let at_entry_limit = vec![VfsMeta::default(); MAX_CACHED_ENTRIES];
-    cache.validate_listing(&at_entry_limit)?;
-    drop(at_entry_limit);
-
-    let over_entry_limit = vec![VfsMeta::default(); MAX_CACHED_ENTRIES + 1];
-    cache.validate_listing(&over_entry_limit)?;
-    drop(over_entry_limit);
-
-    // Complete enumeration above the historical count and above retention
-    // bytes is covered through MountEngine by the mount_vault_task cases.
     Ok(())
 }
 

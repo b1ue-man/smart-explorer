@@ -21,17 +21,11 @@ class AppsLockedScreenTest {
         assertEquals(expected, lockedSessionScreen(room, locked = false, sessionUnlocked = false))
         // The existing screen-open flow (NavRequest.OpenScreen) carries the same target.
         assertEquals(expected, ScreenTargetJson.parse(expected.toJson()).getOrThrow())
-    }
-
-    @Test
-    fun noButtonWhileUnlockedOrWithoutDevice() {
+        // No button while the session is unlocked or without a device (the former noButtonWhileUnlockedOrWithoutDevice).
         assertNull(lockedSessionScreen(room, locked = false, sessionUnlocked = true))
         assertNull(lockedSessionScreen(room, locked = false, sessionUnlocked = null))
         assertNull(lockedSessionScreen(null, locked = true, sessionUnlocked = false))
-    }
-
-    @Test
-    fun directDeviceWithoutIdsKeepsThemUnset() {
+        // A direct device without ids keeps them unset (the former directDeviceWithoutIdsKeepsThemUnset).
         val direct = room.copy(relation = "direct", relationId = "kontakt", deviceId = "", nodeId = "")
         assertEquals(
             ScreenTarget("direct", "kontakt", null, control = true, expectedNodeId = null),

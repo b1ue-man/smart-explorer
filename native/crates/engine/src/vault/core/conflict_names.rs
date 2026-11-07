@@ -101,26 +101,29 @@ mod tests {
             conflict_name("Bericht.txt", STAMP, "Laptop", &twice),
             "Bericht (Konflikt 2026-10-19 1405 Laptop)-3.txt"
         );
-    }
-
-    #[test]
-    fn vault_task_conflict_name_without_extension_and_with_separators() {
-        let free = |_: &str| false;
-        assert_eq!(
-            conflict_name("Makefile", STAMP, "A/B\\C", &free),
-            "Makefile (Konflikt 2026-10-19 1405 A_B_C)"
-        );
-        assert_eq!(
-            conflict_name(".profile", STAMP, "A", &free),
-            ".profile (Konflikt 2026-10-19 1405 A)"
-        );
-        assert_eq!(
-            conflict_name("archiv.tar.gz", STAMP, "A", &free),
-            "archiv.tar (Konflikt 2026-10-19 1405 A).gz"
-        );
-        assert_eq!(
-            folder_conflict_name("Fotos.2026", STAMP, "B", &free),
-            "Fotos.2026 (Konflikt 2026-10-19 1405 B)"
-        );
+        // Case "without extension and with separators": names without an extension and with path separators.
+        {
+            let free = |_: &str| false;
+            assert_eq!(
+                conflict_name("Makefile", STAMP, "A/B\\C", &free),
+                "Makefile (Konflikt 2026-10-19 1405 A_B_C)",
+                "without extension"
+            );
+            assert_eq!(
+                conflict_name(".profile", STAMP, "A", &free),
+                ".profile (Konflikt 2026-10-19 1405 A)",
+                "hidden name"
+            );
+            assert_eq!(
+                conflict_name("archiv.tar.gz", STAMP, "A", &free),
+                "archiv.tar (Konflikt 2026-10-19 1405 A).gz",
+                "double extension"
+            );
+            assert_eq!(
+                folder_conflict_name("Fotos.2026", STAMP, "B", &free),
+                "Fotos.2026 (Konflikt 2026-10-19 1405 B)",
+                "folder name"
+            );
+        }
     }
 }

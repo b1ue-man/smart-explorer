@@ -50,7 +50,7 @@ fn finish(app: &mut App) {
 }
 
 #[test]
-#[ignore = "requires the isolated remote sync-path task profile"]
+#[ignore = "requires the isolated remote sync-path task profile; Suite crates-task"]
 fn sync_paths_task_all_backend_pairs_transfer_changes_and_keep_baselines_separate() {
     let schemes = [
         Scheme::Local,
@@ -106,7 +106,7 @@ fn sync_paths_task_all_backend_pairs_transfer_changes_and_keep_baselines_separat
 }
 
 #[test]
-#[ignore = "requires the isolated remote sync-path task profile"]
+#[ignore = "requires the isolated remote sync-path task profile; Suite crates-task"]
 fn sync_paths_task_picker_setup_and_quick_actions_retain_remote_provenance() {
     for prefix in [
         "sftp://u@h:22",
@@ -166,7 +166,7 @@ fn sync_paths_task_picker_setup_and_quick_actions_retain_remote_provenance() {
 }
 
 #[test]
-#[ignore = "requires the isolated remote sync-path task profile"]
+#[ignore = "requires the isolated remote sync-path task profile; Suite crates-task"]
 fn sync_paths_task_split_same_paths_on_different_remotes_and_uncached_metadata() {
     let mut app = App::new_for_copy_task();
     let (a, b) = (Location::new(Scheme::Peer), Location::new(Scheme::Peer));
@@ -234,7 +234,7 @@ fn sync_paths_task_split_same_paths_on_different_remotes_and_uncached_metadata()
 }
 
 #[test]
-#[ignore = "requires the isolated remote sync-path task profile"]
+#[ignore = "requires the isolated remote sync-path task profile; Suite crates-task"]
 fn sync_paths_task_saved_local_job_uses_worker_resolution_and_preserves_old_behavior() {
     let mut app = App::new_for_copy_task();
     let (a, b) = (Location::new(Scheme::Local), Location::new(Scheme::Local));
@@ -265,7 +265,7 @@ fn sync_paths_task_saved_local_job_uses_worker_resolution_and_preserves_old_beha
 }
 
 #[test]
-#[ignore = "requires the isolated remote sync-path task profile"]
+#[ignore = "requires the isolated remote sync-path task profile; Suite crates-task"]
 fn sync_paths_task_real_share_cross_peer_sync_and_local_roundtrip() {
     let first = crate::share::CopyPastePeerFixture::new().unwrap();
     let second = crate::share::CopyPastePeerFixture::new().unwrap();

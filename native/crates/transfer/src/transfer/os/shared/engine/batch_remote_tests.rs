@@ -227,13 +227,13 @@ fn bench(case: &str, files: usize, packets: bool) {
 }
 
 #[test]
-#[ignore = "benchmark: run with --release --ignored --nocapture"]
+#[ignore = "benchmark: run with --release --ignored --nocapture; Suite rechte-desktop-tresore-task"]
 fn speed_task_remote_to_remote_packets_2000_small_files() {
     bench("remote_to_remote_packets", 2000, true);
 }
 
 #[test]
-#[ignore = "benchmark: run with --release --ignored --nocapture"]
+#[ignore = "benchmark: run with --release --ignored --nocapture; Suite rechte-desktop-tresore-task"]
 fn speed_task_remote_to_remote_single_files_2000_small_files() {
     bench("remote_to_remote_single_files", 2000, false);
 }

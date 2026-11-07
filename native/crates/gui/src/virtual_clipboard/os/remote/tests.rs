@@ -456,7 +456,7 @@ fn transfer_engine_task_remote_async_capability_ends_the_paste() {
 }
 
 #[test]
-#[ignore = "requires isolated remote copy/paste task runner"]
+#[ignore = "requires isolated remote copy/paste task runner; Suite transfer-engine-task"]
 fn transfer_engine_task_remote_clipboard_ole_roundtrip() {
     assert_eq!(
         std::env::var("SMART_EXPLORER_COPY_PASTE_TASK").as_deref(),

@@ -1,21 +1,47 @@
 use super::*;
 
 #[test]
-fn identical_is_one_equal_hunk() {
-    let h = diff("a\nb\nc", "a\nb\nc").unwrap();
-    assert_eq!(h.len(), 1);
-    assert!(h[0].equal);
-    assert_eq!(assemble(&h), "a\nb\nc");
-}
-
-#[test]
 fn middle_change_splits_into_three() {
-    let h = diff("a\nb1\nc", "a\nb2\nc").unwrap();
-    assert_eq!(h.len(), 3);
-    assert!(h[0].equal && !h[1].equal && h[2].equal);
-    assert_eq!(h[1].a, vec!["b1".to_string()]);
-    assert_eq!(h[1].b, vec!["b2".to_string()]);
-    assert_eq!(assemble(&h), "a\nb1\nc");
+    // Rows: identical texts are one equal hunk; a changed middle line splits
+    // into equal, change, equal; a pure insertion on B is one change block
+    // with no lines on A. Each row checks the hunk pattern, the change blocks
+    // and that the default choice (A) assembles the text of A.
+    type Change = (&'static [&'static str], &'static [&'static str]);
+    let cases: [(&str, &str, &str, &[bool], &[Change]); 3] = [
+        ("identical", "a\nb\nc", "a\nb\nc", &[true], &[]),
+        (
+            "middle change",
+            "a\nb1\nc",
+            "a\nb2\nc",
+            &[true, false, true],
+            &[(&["b1"], &["b2"])],
+        ),
+        (
+            "pure insertion on B",
+            "a\nc",
+            "a\nb\nc",
+            &[true, false, true],
+            &[(&[], &["b"])],
+        ),
+    ];
+    let owned =
+        |lines: &[&str]| -> Vec<String> { lines.iter().map(|line| line.to_string()).collect() };
+    for (case, a, b, pattern, changes) in cases {
+        let h = diff(a, b).unwrap();
+        let flags: Vec<bool> = h.iter().map(|hunk| hunk.equal).collect();
+        assert_eq!(flags, pattern, "{case}");
+        let found: Vec<(Vec<String>, Vec<String>)> = h
+            .iter()
+            .filter(|hunk| !hunk.equal)
+            .map(|hunk| (hunk.a.clone(), hunk.b.clone()))
+            .collect();
+        let expected: Vec<(Vec<String>, Vec<String>)> = changes
+            .iter()
+            .map(|&(left, right)| (owned(left), owned(right)))
+            .collect();
+        assert_eq!(found, expected, "{case}");
+        assert_eq!(assemble(&h), a, "{case}");
+    }
 }
 
 #[test]
@@ -31,33 +57,25 @@ fn choices_assemble_correctly() {
 
 #[test]
 fn rows_align_and_default_to_a() {
-    let r = rows("a\nx\nc", "a\ny\nc").unwrap();
+    let mut r = rows("a\nx\nc", "a\ny\nc").unwrap();
     assert_eq!(r.len(), 3);
     assert!(r[0].equal && r[2].equal);
     assert!(!r[1].equal);
     assert_eq!(r[1].left.as_deref(), Some("x"));
     assert_eq!(r[1].right.as_deref(), Some("y"));
     assert!(r[1].take_left && !r[1].take_right);
-    assert_eq!(assemble_rows(&r), "a\nx\nc");
-}
-
-#[test]
-fn rows_per_line_accept() {
-    let mut r = rows("a\nx\nc", "a\ny\nc").unwrap();
-    r[1].take_left = false;
-    r[1].take_right = true;
-    assert_eq!(assemble_rows(&r), "a\ny\nc");
-    r[1].take_left = true;
-    assert_eq!(assemble_rows(&r), "a\nx\ny\nc");
-}
-
-#[test]
-fn pure_insertion_on_b() {
-    let h = diff("a\nc", "a\nb\nc").unwrap();
-    let change: Vec<&Hunk> = h.iter().filter(|x| !x.equal).collect();
-    assert_eq!(change.len(), 1);
-    assert!(change[0].a.is_empty());
-    assert_eq!(change[0].b, vec!["b".to_string()]);
+    // Rows: the default (the A line), the B line alone, and both lines. Each
+    // row sets the toggles of the changed row and assembles what they keep.
+    let cases = [
+        ("A line", true, false, "a\nx\nc"),
+        ("B line", false, true, "a\ny\nc"),
+        ("both lines", true, true, "a\nx\ny\nc"),
+    ];
+    for (case, take_left, take_right, expected) in cases {
+        r[1].take_left = take_left;
+        r[1].take_right = take_right;
+        assert_eq!(assemble_rows(&r), expected, "{case}");
+    }
 }
 
 #[test]

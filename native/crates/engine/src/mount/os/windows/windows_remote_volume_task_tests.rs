@@ -24,7 +24,7 @@ impl Drop for MountedPeer {
 }
 
 #[test]
-#[ignore = "requires the remote Windows task runner and pinned Dokany runtime"]
+#[ignore = "requires the remote Windows task runner and pinned Dokany runtime; Suite windows-remote-task"]
 fn windows_remote_task_actual_drive_mounts_case_colliding_share_roots() -> io::Result<()> {
     assert_eq!(std::env::var("SMART_EXPLORER_WINDOWS_REMOTE_TASK").as_deref(), Ok("1"));
     assert_eq!(std::env::var("SMART_EXPLORER_DOKANY_DLL_SHA256").as_deref(),

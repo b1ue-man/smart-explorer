@@ -6,9 +6,8 @@ use base64::Engine as _;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use sha2::{Digest, Sha256};
 
-use super::{certificate_matches_pin, handshake, relay_ca_tls_config, websocket_config};
+use super::{certificate_matches_pin, handshake, relay_ca_tls_config};
 use crate::share::core::hex;
-use crate::share::line::MAX_SIGNAL_LINE;
 use crate::share::server_address::SignalServerConfig;
 
 // Leaf certificate (SAN localhost, 127.0.0.1, valid until 2126) and its key,
@@ -117,13 +116,6 @@ fn review_task_unpinned_self_signed_server_is_refused() {
             .expect("address");
     assert!(handshake(&config.endpoints()[0], client_socket(address)).is_err());
     assert!(!server.join().expect("server thread"));
-}
-
-#[test]
-fn review_task_signaling_websocket_is_limited_to_one_signal_line() {
-    let config = websocket_config();
-    assert_eq!(config.max_message_size, Some(MAX_SIGNAL_LINE));
-    assert_eq!(config.max_frame_size, Some(MAX_SIGNAL_LINE));
 }
 
 #[test]

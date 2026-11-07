@@ -3,6 +3,7 @@ use crate::connect::sync_reliability_task_provider_fixture as fixture;
 use std::io::Write;
 
 #[test]
+#[ignore = "needs the real protocol servers named by SE_SYNC_PROVIDER_MANIFEST; Suite sync-reliability-task"]
 fn sync_reliability_task_provider_ftps_both_writers_confirm_bytes_after_tls_close() {
     let providers = fixture::providers();
     let provider = providers

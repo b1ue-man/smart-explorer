@@ -37,55 +37,66 @@ fn fill(table: &Arc<RangeStages>, offset: u64, len: u64) -> io::Result<()> {
 
 #[test]
 fn speed_task_range_stage_rejects_overlap_with_taken_and_finished_ranges() {
-    let dir = tempfile::tempdir().expect("temp dir");
-    let table = table(8);
-    open(&table, dir.path(), NAME, 4 * MIB).expect("open");
+    let cases: [(&str, fn()); 2] = [
+        (
+            "speed_task_range_stage_rejects_overlap_with_taken_and_finished_ranges",
+            || {
+                let dir = tempfile::tempdir().expect("temp dir");
+                let table = table(8);
+                open(&table, dir.path(), NAME, 4 * MIB).expect("open");
 
-    let first = table.claim(NAME, 0, MIB).expect("first range");
-    let overlap = table
-        .claim(NAME, MIB - 1, 2)
-        .err()
-        .expect("overlaps a taken range");
-    assert_eq!(overlap.kind(), io::ErrorKind::InvalidInput);
-    table
-        .claim(NAME, MIB, MIB)
-        .expect("a neighbour touching the taken range is fine")
-        .complete()
-        .expect_err("nothing was written into it");
+                let first = table.claim(NAME, 0, MIB).expect("first range");
+                let overlap = table
+                    .claim(NAME, MIB - 1, 2)
+                    .err()
+                    .expect("overlaps a taken range");
+                assert_eq!(overlap.kind(), io::ErrorKind::InvalidInput);
+                table
+                    .claim(NAME, MIB, MIB)
+                    .expect("a neighbour touching the taken range is fine")
+                    .complete()
+                    .expect_err("nothing was written into it");
 
-    drop(first);
-    fill(&table, 0, MIB).expect("a dropped claim frees its range");
-    let finished = table
-        .claim(NAME, 0, 1)
-        .err()
-        .expect("overlaps a finished range");
-    assert_eq!(finished.kind(), io::ErrorKind::InvalidInput);
-}
-
-#[test]
-fn speed_task_range_stage_rejects_ranges_outside_the_stage() {
-    let dir = tempfile::tempdir().expect("temp dir");
-    let table = table(8);
-    open(&table, dir.path(), NAME, 2 * MIB).expect("open");
-    for (offset, len) in [
-        (0, 0),
-        (0, 2 * MIB + 1),
-        (2 * MIB, 1),
-        (MIB, MIB + 1),
-        (u64::MAX, 2),
-        (1, u64::MAX),
-    ] {
-        let error = table
-            .claim(NAME, offset, len)
-            .err()
-            .unwrap_or_else(|| panic!("({offset}, {len}) is outside the stage"));
-        assert_eq!(
-            error.kind(),
-            io::ErrorKind::InvalidInput,
-            "({offset}, {len})"
-        );
+                drop(first);
+                fill(&table, 0, MIB).expect("a dropped claim frees its range");
+                let finished = table
+                    .claim(NAME, 0, 1)
+                    .err()
+                    .expect("overlaps a finished range");
+                assert_eq!(finished.kind(), io::ErrorKind::InvalidInput);
+            },
+        ),
+        (
+            "speed_task_range_stage_rejects_ranges_outside_the_stage",
+            || {
+                let dir = tempfile::tempdir().expect("temp dir");
+                let table = table(8);
+                open(&table, dir.path(), NAME, 2 * MIB).expect("open");
+                for (offset, len) in [
+                    (0, 0),
+                    (0, 2 * MIB + 1),
+                    (2 * MIB, 1),
+                    (MIB, MIB + 1),
+                    (u64::MAX, 2),
+                    (1, u64::MAX),
+                ] {
+                    let error = table
+                        .claim(NAME, offset, len)
+                        .err()
+                        .unwrap_or_else(|| panic!("({offset}, {len}) is outside the stage"));
+                    assert_eq!(
+                        error.kind(),
+                        io::ErrorKind::InvalidInput,
+                        "({offset}, {len})"
+                    );
+                }
+                assert!(table.claim(NAME, MIB, MIB).is_ok(), "the last range fits");
+            },
+        ),
+    ];
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
     }
-    assert!(table.claim(NAME, MIB, MIB).is_ok(), "the last range fits");
 }
 
 #[test]
@@ -145,37 +156,48 @@ fn speed_task_range_stage_data_lands_at_its_offsets() {
 
 #[test]
 fn speed_task_range_stage_closing_removes_only_unfinished_stages() {
-    let dir = tempfile::tempdir().expect("temp dir");
-    let table = table(8);
-    let unfinished = open(&table, dir.path(), NAME, MIB).expect("open");
-    let done_name = "done.bin.se-upload-fedcba9876543210";
-    let finished = open(&table, dir.path(), done_name, 4).expect("open");
-    let mut claim = table.claim(done_name, 0, 4).expect("claim");
-    claim.write(b"data").expect("write");
-    claim.complete().expect("complete");
-    table.finish(done_name).expect("finish");
+    let cases: [(&str, fn()); 2] = [
+        (
+            "speed_task_range_stage_closing_removes_only_unfinished_stages",
+            || {
+                let dir = tempfile::tempdir().expect("temp dir");
+                let table = table(8);
+                let unfinished = open(&table, dir.path(), NAME, MIB).expect("open");
+                let done_name = "done.bin.se-upload-fedcba9876543210";
+                let finished = open(&table, dir.path(), done_name, 4).expect("open");
+                let mut claim = table.claim(done_name, 0, 4).expect("claim");
+                claim.write(b"data").expect("write");
+                claim.complete().expect("complete");
+                table.finish(done_name).expect("finish");
 
-    assert_eq!(table.open_count(), 1);
-    table.close();
-    assert!(!unfinished.exists(), "the connection ended: stage removed");
-    assert!(finished.exists(), "a finished stage is kept");
-    let error = table
-        .begin(dir.path(), 1)
-        .err()
-        .expect("a closed table opens nothing");
-    assert_eq!(error.kind(), io::ErrorKind::ConnectionAborted);
-}
-
-#[test]
-fn speed_task_range_stage_discard_removes_the_file_and_forgets_it() {
-    let dir = tempfile::tempdir().expect("temp dir");
-    let table = table(8);
-    let path = open(&table, dir.path(), NAME, MIB).expect("open");
-    assert!(table.holds(NAME));
-    assert!(table.discard(NAME));
-    assert!(!path.exists());
-    assert!(!table.holds(NAME));
-    assert!(!table.discard(NAME), "nothing left to discard");
+                assert_eq!(table.open_count(), 1);
+                table.close();
+                assert!(!unfinished.exists(), "the connection ended: stage removed");
+                assert!(finished.exists(), "a finished stage is kept");
+                let error = table
+                    .begin(dir.path(), 1)
+                    .err()
+                    .expect("a closed table opens nothing");
+                assert_eq!(error.kind(), io::ErrorKind::ConnectionAborted);
+            },
+        ),
+        (
+            "speed_task_range_stage_discard_removes_the_file_and_forgets_it",
+            || {
+                let dir = tempfile::tempdir().expect("temp dir");
+                let table = table(8);
+                let path = open(&table, dir.path(), NAME, MIB).expect("open");
+                assert!(table.holds(NAME));
+                assert!(table.discard(NAME));
+                assert!(!path.exists());
+                assert!(!table.holds(NAME));
+                assert!(!table.discard(NAME), "nothing left to discard");
+            },
+        ),
+    ];
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
+    }
 }
 
 #[test]
@@ -195,55 +217,66 @@ fn speed_task_range_stage_table_is_limited() {
 
 #[test]
 fn speed_task_range_stage_sums_the_space_of_all_open_stages() {
-    let _serial = super::super::range_space::space_test_lock();
-    let dir = tempfile::tempdir().expect("temp dir");
-    let available = super::local_platform::available_space(dir.path()).expect("free space");
-    assert!(available > 64 * MIB, "the test needs some free space");
-    let size = available / 10 * 6;
-    let first = table(8);
-    let second = table(8);
-    open(&first, dir.path(), "a.se-upload-0000000000000001", size).expect("fits alone");
-    let error = open(&second, dir.path(), "b.se-upload-0000000000000002", size)
-        .expect_err("together the stages overbook the volume");
-    assert_eq!(error.kind(), io::ErrorKind::StorageFull);
-    first.close();
-    open(&second, dir.path(), "b.se-upload-0000000000000002", size).expect("space is back");
-    let huge = second
-        .begin(dir.path(), u64::MAX / 2)
-        .err()
-        .expect("more than the disk");
-    assert_eq!(huge.kind(), io::ErrorKind::StorageFull);
-    // The reservation is per process: give it back before the next test.
-    second.close();
-}
-
-#[test]
-fn speed_task_range_stage_drop_releases_the_space() {
-    let _serial = super::super::range_space::space_test_lock();
-    let dir = tempfile::tempdir().expect("temp dir");
-    let available = super::local_platform::available_space(dir.path()).expect("free space");
-    assert!(available > 64 * MIB, "the test needs some free space");
-    let size = available / 10 * 6;
-    let first = table(8);
-    let path = open(&first, dir.path(), "a.se-upload-0000000000000001", size).expect("fits");
-    let second = table(8);
-    open(&second, dir.path(), "b.se-upload-0000000000000002", size)
-        .expect_err("the first table still holds the space");
-    // A handler that ends without `close()` (a panic, an early return).
-    drop(first);
-    assert!(!path.exists(), "the unfinished stage went with its table");
-    open(&second, dir.path(), "b.se-upload-0000000000000002", size).expect("space is back");
-    // `close()` and the drop that follows release the space once, not twice.
-    second.close();
-    let third = table(8);
-    open(&third, dir.path(), "c.se-upload-0000000000000003", size).expect("fits again");
-    let fourth = table(8);
-    open(&fourth, dir.path(), "d.se-upload-0000000000000004", size)
-        .expect_err("a double release would have made room");
-    drop(second);
-    open(&fourth, dir.path(), "d.se-upload-0000000000000004", size)
-        .expect_err("dropping a closed table releases nothing");
-    third.close();
+    let cases: [(&str, fn()); 2] = [
+        (
+            "speed_task_range_stage_sums_the_space_of_all_open_stages",
+            || {
+                let _serial = super::super::range_space::space_test_lock();
+                let dir = tempfile::tempdir().expect("temp dir");
+                let available =
+                    super::local_platform::available_space(dir.path()).expect("free space");
+                assert!(available > 64 * MIB, "the test needs some free space");
+                let size = available / 10 * 6;
+                let first = table(8);
+                let second = table(8);
+                open(&first, dir.path(), "a.se-upload-0000000000000001", size).expect("fits alone");
+                let error = open(&second, dir.path(), "b.se-upload-0000000000000002", size)
+                    .expect_err("together the stages overbook the volume");
+                assert_eq!(error.kind(), io::ErrorKind::StorageFull);
+                first.close();
+                open(&second, dir.path(), "b.se-upload-0000000000000002", size)
+                    .expect("space is back");
+                let huge = second
+                    .begin(dir.path(), u64::MAX / 2)
+                    .err()
+                    .expect("more than the disk");
+                assert_eq!(huge.kind(), io::ErrorKind::StorageFull);
+                // The reservation is per process: give it back before the next test.
+                second.close();
+            },
+        ),
+        ("speed_task_range_stage_drop_releases_the_space", || {
+            let _serial = super::super::range_space::space_test_lock();
+            let dir = tempfile::tempdir().expect("temp dir");
+            let available = super::local_platform::available_space(dir.path()).expect("free space");
+            assert!(available > 64 * MIB, "the test needs some free space");
+            let size = available / 10 * 6;
+            let first = table(8);
+            let path =
+                open(&first, dir.path(), "a.se-upload-0000000000000001", size).expect("fits");
+            let second = table(8);
+            open(&second, dir.path(), "b.se-upload-0000000000000002", size)
+                .expect_err("the first table still holds the space");
+            // A handler that ends without `close()` (a panic, an early return).
+            drop(first);
+            assert!(!path.exists(), "the unfinished stage went with its table");
+            open(&second, dir.path(), "b.se-upload-0000000000000002", size).expect("space is back");
+            // `close()` and the drop that follows release the space once, not twice.
+            second.close();
+            let third = table(8);
+            open(&third, dir.path(), "c.se-upload-0000000000000003", size).expect("fits again");
+            let fourth = table(8);
+            open(&fourth, dir.path(), "d.se-upload-0000000000000004", size)
+                .expect_err("a double release would have made room");
+            drop(second);
+            open(&fourth, dir.path(), "d.se-upload-0000000000000004", size)
+                .expect_err("dropping a closed table releases nothing");
+            third.close();
+        }),
+    ];
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
+    }
 }
 
 #[test]

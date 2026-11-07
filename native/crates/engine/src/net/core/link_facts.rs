@@ -145,6 +145,20 @@ mod tests {
 
     #[test]
     fn lan_cleanup_task_apipa_without_gateway_is_router_less() {
+        let cases: [fn(); 6] = [
+            lan_cleanup_task_apipa_without_gateway_is_router_less_case,
+            lan_cleanup_task_a_link_with_a_paired_peer_never_counts_as_uplink,
+            lan_cleanup_task_dhcp_lease_without_gateway_is_routed,
+            lan_cleanup_task_gateway_is_uplink_unless_platform_denies_internet,
+            lan_cleanup_task_shared_and_inactive_links,
+            lan_cleanup_task_static_addresses_without_gateway_are_router_less_too,
+        ];
+        for case in cases {
+            case();
+        }
+    }
+
+    fn lan_cleanup_task_apipa_without_gateway_is_router_less_case() {
         let facts = [iface(
             2,
             true,
@@ -156,16 +170,16 @@ mod tests {
         assert_eq!(classes[0].1, LinkClass::RouterLess);
     }
 
-    #[test]
-    fn lan_cleanup_task_static_addresses_without_gateway_are_router_less_too() {
-        let facts = [iface(3, true, &["10.0.0.2"], false, None)];
+    fn lan_cleanup_task_a_link_with_a_paired_peer_never_counts_as_uplink() {
+        // The receiving side got DHCP from the sharing peer: its only gateway
+        // is the peer, which must not read as "has own internet".
+        let facts = [iface(5, true, &["192.168.137.20"], true, Some(true))];
         assert_eq!(
-            classify_links(&facts, &[], None, &[])[0].1,
-            LinkClass::RouterLess
+            classify_links(&facts, &[5], None, &[])[0].1,
+            LinkClass::Routed
         );
     }
 
-    #[test]
     fn lan_cleanup_task_dhcp_lease_without_gateway_is_routed() {
         let facts = [iface(3, true, &["192.168.1.7"], false, Some(true))];
         assert_eq!(
@@ -174,7 +188,6 @@ mod tests {
         );
     }
 
-    #[test]
     fn lan_cleanup_task_gateway_is_uplink_unless_platform_denies_internet() {
         let facts = [iface(4, true, &["192.168.1.7"], true, Some(true))];
         assert_eq!(
@@ -191,18 +204,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn lan_cleanup_task_a_link_with_a_paired_peer_never_counts_as_uplink() {
-        // The receiving side got DHCP from the sharing peer: its only gateway
-        // is the peer, which must not read as "has own internet".
-        let facts = [iface(5, true, &["192.168.137.20"], true, Some(true))];
-        assert_eq!(
-            classify_links(&facts, &[5], None, &[])[0].1,
-            LinkClass::Routed
-        );
-    }
-
-    #[test]
     fn lan_cleanup_task_shared_and_inactive_links() {
         let facts = [
             iface(6, true, &["192.168.137.1"], false, Some(false)),
@@ -217,6 +218,14 @@ mod tests {
         assert_eq!(classes[0].1, LinkClass::RouterLess);
         assert_eq!(classes[1].1, LinkClass::Inactive);
         assert_eq!(classes[2].1, LinkClass::Inactive);
+    }
+
+    fn lan_cleanup_task_static_addresses_without_gateway_are_router_less_too() {
+        let facts = [iface(3, true, &["10.0.0.2"], false, None)];
+        assert_eq!(
+            classify_links(&facts, &[], None, &[])[0].1,
+            LinkClass::RouterLess
+        );
     }
 
     #[test]

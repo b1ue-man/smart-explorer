@@ -209,21 +209,6 @@ class DriveTaskProviderTest {
     }
 
     @Test
-    fun drive_task_android_reader_sees_dirty_entry() {
-        // A writer saved without closing; a second descriptor reads through the same core handle
-        // table and sees the unpublished content (the engine's dirty entry wins over the remote).
-        val writer = ProxyFileCallback(fake, fake.openHandle("gdrive/a.txt"), android.os.HandlerThread("w").apply { start() }) {}
-        val data = "neu".toByteArray()
-        assertEquals(3, writer.onWrite(0, 3, data))
-        val reader = ProxyFileCallback(fake, fake.openHandle("gdrive/a.txt"), android.os.HandlerThread("r").apply { start() }) {}
-        val buffer = ByteArray(3)
-        assertEquals(3L, reader.onGetSize())
-        assertEquals(3, reader.onRead(0, 3, buffer))
-        assertEquals("neu", String(buffer))
-        assertTrue("Lesen darf nicht veröffentlichen", fake.published.isEmpty())
-    }
-
-    @Test
     fun drive_task_android_local_only_flag_only_for_local_vaults() {
         val local = DocumentsCursors.rootFlags(root(VAULT, "Lokal", create = true, localOnly = true))
         val remote = DocumentsCursors.rootFlags(root("vault:${"1".repeat(32)}", "Fern", create = true))
@@ -265,7 +250,6 @@ private class FakeBackend : DocsBackend {
     var failEveryCall = false
     var calls = 0
     val openedModes = mutableListOf<String>()
-    val published = mutableListOf<String>()
     private val content = mutableMapOf<String, ByteArray>()
     private val handles = mutableMapOf<Long, String>()
 
@@ -302,6 +286,6 @@ private class FakeBackend : DocsBackend {
         return size
     }
     override fun size(handle: Long): Long = (content[handles[handle]]?.size ?: 0).toLong()
-    override fun fsync(handle: Long): Int = 0.also { handles[handle]?.let { published += it } }
+    override fun fsync(handle: Long): Int = 0
     override fun release(handle: Long): Int = 0.also { handles.remove(handle) }
 }

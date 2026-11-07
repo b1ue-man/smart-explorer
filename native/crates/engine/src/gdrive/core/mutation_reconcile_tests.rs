@@ -127,111 +127,111 @@ fn folder_state(id: &str) -> String {
 
 #[test]
 fn rename_commit_then_drop_reconciles_exact_id_without_replaying_patch() {
-    let (listener, base) = listener();
-    let server = thread::spawn(move || {
-        let mut methods = Vec::new();
+    // Case "rename": the PATCH commits, its acknowledgement is lost, and the exact ID settles it.
+    {
+        let (listener, base) = listener();
+        let server = thread::spawn(move || {
+            let mut methods = Vec::new();
 
-        let (mut stream, request) = receive(&listener);
-        methods.push(request.method.clone());
-        assert_eq!(request.method, "GET");
-        assert!(request.target.contains("files?q="));
-        reply(
-            &mut stream,
-            r#"{"files":[{"id":"file-id","name":"old.txt","mimeType":"text/plain","size":"1","md5Checksum":"abc","parents":["root"],"trashed":false}]}"#,
+            let (mut stream, request) = receive(&listener);
+            methods.push(request.method.clone());
+            assert_eq!(request.method, "GET");
+            assert!(request.target.contains("files?q="));
+            reply(
+                &mut stream,
+                r#"{"files":[{"id":"file-id","name":"old.txt","mimeType":"text/plain","size":"1","md5Checksum":"abc","parents":["root"],"trashed":false}]}"#,
+            );
+
+            let (mut stream, request) = receive(&listener);
+            methods.push(request.method.clone());
+            assert_eq!(request.method, "GET");
+            reply(&mut stream, r#"{"files":[]}"#);
+
+            let (stream, request) = receive(&listener);
+            methods.push(request.method.clone());
+            assert_eq!(request.method, "PATCH");
+            assert!(request.target.contains("/files/file-id?fields=id"));
+            let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
+            assert_eq!(body["name"], "new.txt");
+            drop(stream); // Drive committed the PATCH, but its ACK was lost.
+
+            let (mut stream, request) = receive(&listener);
+            methods.push(request.method.clone());
+            assert_eq!(request.method, "GET");
+            assert!(request.target.contains("/files/file-id?fields=id"));
+            reply(
+                &mut stream,
+                r#"{"id":"file-id","name":"new.txt","mimeType":"text/plain","parents":["root"],"trashed":false}"#,
+            );
+
+            let (mut stream, request) = receive(&listener);
+            methods.push(request.method.clone());
+            assert_eq!(request.method, "GET");
+            reply(
+                &mut stream,
+                r#"{"files":[{"id":"file-id","name":"new.txt","mimeType":"text/plain","size":"1","md5Checksum":"abc","parents":["root"],"trashed":false}]}"#,
+            );
+            methods
+        });
+
+        let backend = GDriveBackend::test_backend(&base);
+        backend
+            .remember_path("old.txt", "file-id", Some("text/plain"))
+            .unwrap();
+        backend.listed_guard().unwrap().insert(String::new());
+        backend.rename_serialized("old.txt", "new.txt").unwrap();
+        let methods = server.join().unwrap();
+
+        let count = methods.iter().filter(|method| *method == "PATCH").count();
+        assert_eq!(count, 1, "rename");
+        assert_eq!(backend.cached_id("old.txt").unwrap(), None, "rename");
+        assert_eq!(
+            backend.cached_id("new.txt").unwrap().as_deref(),
+            Some("file-id"),
+            "rename"
         );
+        assert!(backend.listed_guard().unwrap().contains(""), "rename");
+    }
 
-        let (mut stream, request) = receive(&listener);
-        methods.push(request.method.clone());
-        assert_eq!(request.method, "GET");
-        reply(&mut stream, r#"{"files":[]}"#);
+    // Case "trash": a trash that commits before its 503 answer is settled by the exact ID.
+    {
+        let (listener, base) = listener();
+        let server = thread::spawn(move || {
+            let mut methods = Vec::new();
+            answer_trash_identity(&listener);
+            let (mut stream, request) = receive(&listener);
+            methods.push(request.method.clone());
+            assert_eq!(request.method, "PATCH");
+            assert!(request.target.contains("/files/file-id?fields=id,trashed"));
+            let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
+            assert_eq!(body["trashed"], true);
+            reply_status(
+                &mut stream,
+                "503 Service Unavailable",
+                r#"{"error":{"message":"response failed after commit"}}"#,
+            );
 
-        let (stream, request) = receive(&listener);
-        methods.push(request.method.clone());
-        assert_eq!(request.method, "PATCH");
-        assert!(request.target.contains("/files/file-id?fields=id"));
-        let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
-        assert_eq!(body["name"], "new.txt");
-        drop(stream); // Drive committed the PATCH, but its ACK was lost.
+            let (mut stream, request) = receive(&listener);
+            methods.push(request.method.clone());
+            assert_eq!(request.method, "GET");
+            assert!(request.target.contains("/files/file-id?fields=id,trashed"));
+            reply(&mut stream, r#"{"id":"file-id","trashed":true}"#);
+            methods
+        });
 
-        let (mut stream, request) = receive(&listener);
-        methods.push(request.method.clone());
-        assert_eq!(request.method, "GET");
-        assert!(request.target.contains("/files/file-id?fields=id"));
-        reply(
-            &mut stream,
-            r#"{"id":"file-id","name":"new.txt","mimeType":"text/plain","parents":["root"],"trashed":false}"#,
-        );
+        let backend = GDriveBackend::test_backend(&base);
+        backend
+            .remember_path("gone.txt", "file-id", Some("text/plain"))
+            .unwrap();
+        backend.listed_guard().unwrap().insert(String::new());
+        backend.trash_path_id("gone.txt", "file-id").unwrap();
+        let methods = server.join().unwrap();
 
-        let (mut stream, request) = receive(&listener);
-        methods.push(request.method.clone());
-        assert_eq!(request.method, "GET");
-        reply(
-            &mut stream,
-            r#"{"files":[{"id":"file-id","name":"new.txt","mimeType":"text/plain","size":"1","md5Checksum":"abc","parents":["root"],"trashed":false}]}"#,
-        );
-        methods
-    });
-
-    let backend = GDriveBackend::test_backend(&base);
-    backend
-        .remember_path("old.txt", "file-id", Some("text/plain"))
-        .unwrap();
-    backend.listed_guard().unwrap().insert(String::new());
-    backend.rename_serialized("old.txt", "new.txt").unwrap();
-    let methods = server.join().unwrap();
-
-    assert_eq!(
-        methods.iter().filter(|method| *method == "PATCH").count(),
-        1
-    );
-    assert_eq!(backend.cached_id("old.txt").unwrap(), None);
-    assert_eq!(
-        backend.cached_id("new.txt").unwrap().as_deref(),
-        Some("file-id")
-    );
-    assert!(backend.listed_guard().unwrap().contains(""));
-}
-
-#[test]
-fn trash_commit_then_503_reconciles_exact_id_without_replaying_patch() {
-    let (listener, base) = listener();
-    let server = thread::spawn(move || {
-        let mut methods = Vec::new();
-        answer_trash_identity(&listener);
-        let (mut stream, request) = receive(&listener);
-        methods.push(request.method.clone());
-        assert_eq!(request.method, "PATCH");
-        assert!(request.target.contains("/files/file-id?fields=id,trashed"));
-        let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
-        assert_eq!(body["trashed"], true);
-        reply_status(
-            &mut stream,
-            "503 Service Unavailable",
-            r#"{"error":{"message":"response failed after commit"}}"#,
-        );
-
-        let (mut stream, request) = receive(&listener);
-        methods.push(request.method.clone());
-        assert_eq!(request.method, "GET");
-        assert!(request.target.contains("/files/file-id?fields=id,trashed"));
-        reply(&mut stream, r#"{"id":"file-id","trashed":true}"#);
-        methods
-    });
-
-    let backend = GDriveBackend::test_backend(&base);
-    backend
-        .remember_path("gone.txt", "file-id", Some("text/plain"))
-        .unwrap();
-    backend.listed_guard().unwrap().insert(String::new());
-    backend.trash_path_id("gone.txt", "file-id").unwrap();
-    let methods = server.join().unwrap();
-
-    assert_eq!(
-        methods.iter().filter(|method| *method == "PATCH").count(),
-        1
-    );
-    assert_eq!(backend.cached_id("gone.txt").unwrap(), None);
-    assert!(backend.listed_guard().unwrap().contains(""));
+        let count = methods.iter().filter(|method| *method == "PATCH").count();
+        assert_eq!(count, 1, "trash");
+        assert_eq!(backend.cached_id("gone.txt").unwrap(), None, "trash");
+        assert!(backend.listed_guard().unwrap().contains(""), "trash");
+    }
 }
 
 #[test]
@@ -279,137 +279,154 @@ fn trash_blackholed_ack_times_out_and_reconciles_without_replay() {
 
 #[test]
 fn folder_create_commit_then_drop_uses_reserved_id_and_updates_parent_snapshot() {
-    let (listener, base) = listener();
-    let server = thread::spawn(move || {
-        let mut methods = Vec::new();
-        answer_free_name_probe(&listener);
-        let (mut stream, request) = receive(&listener);
-        methods.push(request.method.clone());
-        assert_eq!(request.method, "GET");
-        assert!(request.target.contains("/files/generateIds?"));
-        reply(&mut stream, r#"{"ids":["folder-id"]}"#);
+    // Case "folder create": the create commits, its response is lost, and the reserved ID settles it.
+    {
+        let (listener, base) = listener();
+        let server = thread::spawn(move || {
+            let mut methods = Vec::new();
+            answer_free_name_probe(&listener);
+            let (mut stream, request) = receive(&listener);
+            methods.push(request.method.clone());
+            assert_eq!(request.method, "GET");
+            assert!(request.target.contains("/files/generateIds?"));
+            reply(&mut stream, r#"{"ids":["folder-id"]}"#);
 
-        let (stream, request) = receive(&listener);
-        methods.push(request.method.clone());
-        assert_eq!(request.method, "POST");
-        assert!(request.target.contains("/files?fields=id"));
-        let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
-        assert_eq!(body["id"], "folder-id");
-        assert_eq!(body["name"], "folder");
-        assert_eq!(body["mimeType"], FOLDER_MIME);
-        assert_eq!(body["parents"], serde_json::json!(["root"]));
-        drop(stream);
+            let (stream, request) = receive(&listener);
+            methods.push(request.method.clone());
+            assert_eq!(request.method, "POST");
+            assert!(request.target.contains("/files?fields=id"));
+            let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
+            assert_eq!(body["id"], "folder-id");
+            assert_eq!(body["name"], "folder");
+            assert_eq!(body["mimeType"], FOLDER_MIME);
+            assert_eq!(body["parents"], serde_json::json!(["root"]));
+            drop(stream);
 
-        let (mut stream, request) = receive(&listener);
-        methods.push(request.method.clone());
-        assert_eq!(request.method, "GET");
-        assert!(request.target.contains("/files/folder-id?fields=id"));
-        reply(
-            &mut stream,
-            &serde_json::json!({
-                "id": "folder-id",
-                "name": "folder",
-                "mimeType": FOLDER_MIME,
-                "parents": ["root"],
-                "trashed": false
-            })
-            .to_string(),
+            let (mut stream, request) = receive(&listener);
+            methods.push(request.method.clone());
+            assert_eq!(request.method, "GET");
+            assert!(request.target.contains("/files/folder-id?fields=id"));
+            reply(
+                &mut stream,
+                &serde_json::json!({
+                    "id": "folder-id",
+                    "name": "folder",
+                    "mimeType": FOLDER_MIME,
+                    "parents": ["root"],
+                    "trashed": false
+                })
+                .to_string(),
+            );
+            methods
+        });
+
+        let backend = GDriveBackend::test_backend(&base);
+        backend.listed_guard().unwrap().insert(String::new());
+        let created = backend.ensure_dir("folder").unwrap();
+        assert_eq!(created, "folder-id", "folder create");
+        let methods = server.join().unwrap();
+
+        let count = methods.iter().filter(|method| *method == "POST").count();
+        assert_eq!(count, 1, "folder create");
+        let cached = backend.cached_id("folder").unwrap();
+        assert_eq!(cached.as_deref(), Some("folder-id"), "folder create");
+        let mime = backend.mime_of("folder");
+        assert_eq!(mime.as_deref(), Some(FOLDER_MIME), "folder create");
+        let listed = backend.listed_guard().unwrap();
+        assert!(listed.contains(""), "folder create");
+        assert!(listed.contains("folder"), "folder create");
+    }
+
+    // Case "ambiguous retry": a later call reuses the reserved ID and never generates another.
+    {
+        let (listener, base) = listener();
+        let server = thread::spawn(move || {
+            let mut requests = Vec::new();
+            answer_free_name_probe(&listener);
+
+            let (mut stream, request) = receive(&listener);
+            requests.push((request.method.clone(), request.target.clone()));
+            assert_eq!(request.method, "GET");
+            assert!(request.target.contains("/files/generateIds?"));
+            reply(&mut stream, r#"{"ids":["folder-id"]}"#);
+
+            let (stream, request) = receive(&listener);
+            requests.push((request.method.clone(), request.target.clone()));
+            assert_folder_create(&request, "folder-id");
+            drop(stream); // The create may have committed, but its response was lost.
+
+            let (mut stream, request) = receive(&listener);
+            requests.push((request.method.clone(), request.target.clone()));
+            assert_eq!(request.method, "GET");
+            assert!(request.target.contains("/files/folder-id?fields=id"));
+            reply_status(&mut stream, "404 Not Found", r#"{"error":{}}"#);
+
+            // A later call must reconcile the durable exact ID before doing
+            // anything else. If it is not visible yet, Drive explicitly permits a
+            // same-ID retry; 409 means the first request did commit.
+            let (mut stream, request) = receive(&listener);
+            requests.push((request.method.clone(), request.target.clone()));
+            assert_eq!(request.method, "GET");
+            assert!(request.target.contains("/files/folder-id?fields=id"));
+            reply_status(&mut stream, "404 Not Found", r#"{"error":{}}"#);
+
+            let (mut stream, request) = receive(&listener);
+            requests.push((request.method.clone(), request.target.clone()));
+            assert_folder_create(&request, "folder-id");
+            reply_status(
+                &mut stream,
+                "409 Conflict",
+                r#"{"error":{"message":"ID already exists"}}"#,
+            );
+
+            let (mut stream, request) = receive(&listener);
+            requests.push((request.method.clone(), request.target.clone()));
+            assert_eq!(request.method, "GET");
+            assert!(request.target.contains("/files/folder-id?fields=id"));
+            reply(&mut stream, &folder_state("folder-id"));
+            requests
+        });
+
+        let backend = GDriveBackend::test_backend(&base);
+        backend.listed_guard().unwrap().insert(String::new());
+        let first = backend.ensure_dir("folder").unwrap_err();
+        assert!(
+            first.to_string().contains("ambiguous completion"),
+            "ambiguous retry"
         );
-        methods
-    });
-
-    let backend = GDriveBackend::test_backend(&base);
-    backend.listed_guard().unwrap().insert(String::new());
-    assert_eq!(backend.ensure_dir("folder").unwrap(), "folder-id");
-    let methods = server.join().unwrap();
-
-    assert_eq!(methods.iter().filter(|method| *method == "POST").count(), 1);
-    assert_eq!(
-        backend.cached_id("folder").unwrap().as_deref(),
-        Some("folder-id")
-    );
-    assert_eq!(backend.mime_of("folder").as_deref(), Some(FOLDER_MIME));
-    let listed = backend.listed_guard().unwrap();
-    assert!(listed.contains(""));
-    assert!(listed.contains("folder"));
-}
-
-#[test]
-fn ambiguous_folder_retry_reuses_the_reserved_id_and_never_generates_another() {
-    let (listener, base) = listener();
-    let server = thread::spawn(move || {
-        let mut requests = Vec::new();
-        answer_free_name_probe(&listener);
-
-        let (mut stream, request) = receive(&listener);
-        requests.push((request.method.clone(), request.target.clone()));
-        assert_eq!(request.method, "GET");
-        assert!(request.target.contains("/files/generateIds?"));
-        reply(&mut stream, r#"{"ids":["folder-id"]}"#);
-
-        let (stream, request) = receive(&listener);
-        requests.push((request.method.clone(), request.target.clone()));
-        assert_folder_create(&request, "folder-id");
-        drop(stream); // The create may have committed, but its response was lost.
-
-        let (mut stream, request) = receive(&listener);
-        requests.push((request.method.clone(), request.target.clone()));
-        assert_eq!(request.method, "GET");
-        assert!(request.target.contains("/files/folder-id?fields=id"));
-        reply_status(&mut stream, "404 Not Found", r#"{"error":{}}"#);
-
-        // A later call must reconcile the durable exact ID before doing
-        // anything else. If it is not visible yet, Drive explicitly permits a
-        // same-ID retry; 409 means the first request did commit.
-        let (mut stream, request) = receive(&listener);
-        requests.push((request.method.clone(), request.target.clone()));
-        assert_eq!(request.method, "GET");
-        assert!(request.target.contains("/files/folder-id?fields=id"));
-        reply_status(&mut stream, "404 Not Found", r#"{"error":{}}"#);
-
-        let (mut stream, request) = receive(&listener);
-        requests.push((request.method.clone(), request.target.clone()));
-        assert_folder_create(&request, "folder-id");
-        reply_status(
-            &mut stream,
-            "409 Conflict",
-            r#"{"error":{"message":"ID already exists"}}"#,
+        assert_eq!(
+            backend.pending_folder_create("folder").unwrap().unwrap().id,
+            "folder-id",
+            "ambiguous retry"
         );
 
-        let (mut stream, request) = receive(&listener);
-        requests.push((request.method.clone(), request.target.clone()));
-        assert_eq!(request.method, "GET");
-        assert!(request.target.contains("/files/folder-id?fields=id"));
-        reply(&mut stream, &folder_state("folder-id"));
-        requests
-    });
-
-    let backend = GDriveBackend::test_backend(&base);
-    backend.listed_guard().unwrap().insert(String::new());
-    let first = backend.ensure_dir("folder").unwrap_err();
-    assert!(first.to_string().contains("ambiguous completion"));
-    assert_eq!(
-        backend.pending_folder_create("folder").unwrap().unwrap().id,
-        "folder-id"
-    );
-
-    assert_eq!(backend.ensure_dir("folder").unwrap(), "folder-id");
-    assert!(backend.pending_folder_create("folder").unwrap().is_none());
-    let requests = server.join().unwrap();
-    assert_eq!(
-        requests
-            .iter()
-            .filter(|(_, target)| target.contains("/files/generateIds?"))
-            .count(),
-        1
-    );
-    assert_eq!(
-        requests
-            .iter()
-            .filter(|(method, target)| method == "POST" && target.contains("/files?fields=id"))
-            .count(),
-        2
-    );
+        assert_eq!(
+            backend.ensure_dir("folder").unwrap(),
+            "folder-id",
+            "ambiguous retry"
+        );
+        assert!(
+            backend.pending_folder_create("folder").unwrap().is_none(),
+            "ambiguous retry"
+        );
+        let requests = server.join().unwrap();
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|(_, target)| target.contains("/files/generateIds?"))
+                .count(),
+            1,
+            "ambiguous retry"
+        );
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|(method, target)| method == "POST" && target.contains("/files?fields=id"))
+                .count(),
+            2,
+            "ambiguous retry"
+        );
+    }
 }
 
 #[test]

@@ -78,53 +78,64 @@ impl BackendExtensions for Plain {}
 
 #[test]
 fn screen_metadata_runtime_task_local_file_digest_equals_known_sha256() {
-    let (_directory, root) = fixture();
-    std::fs::write(format!("{root}/abc.txt"), b"abc").unwrap();
-    std::fs::write(format!("{root}/empty.txt"), b"").unwrap();
-    let backend = LocalBackend::new(&root);
-    assert_eq!(
-        content_digest(&backend, &format!("{root}/abc.txt"), &idle()).unwrap(),
-        Some(ContentDigest {
-            sha256: ABC_SHA256.into(),
-            size: 3,
-        })
-    );
-    assert_eq!(
-        content_digest(&backend, &format!("{root}/empty.txt"), &idle()).unwrap(),
-        Some(ContentDigest {
-            sha256: EMPTY_SHA256.into(),
-            size: 0,
-        })
-    );
-}
-
-#[test]
-fn screen_metadata_runtime_task_local_digest_spans_many_reads() {
-    // Larger than three hashing portions and not a multiple of one; checked
-    // against the independent `sha2` implementation.
-    let (_directory, root) = fixture();
-    let payload = (0..3 * 1024 * 1024 + 7)
-        .map(|index: usize| (index % 251) as u8)
-        .collect::<Vec<_>>();
-    std::fs::write(format!("{root}/big.bin"), &payload).unwrap();
-    let expected = format!("{:x}", sha2::Sha256::digest(&payload));
-    let path = format!("{root}/big.bin");
-    let local = content_digest(&LocalBackend::new(&root), &path, &idle())
-        .unwrap()
-        .unwrap();
-    assert_eq!(local.sha256, expected);
-    assert_eq!(local.size, payload.len() as u64);
-    // Confinement needs a qualified filesystem; elsewhere it is not offered.
-    match ConfinedLocalBackend::open(&root) {
-        Ok(confined) => {
-            let held = content_digest(&confined, &path, &idle()).unwrap().unwrap();
-            assert_eq!(held, local, "the confined backend hashes the same file");
-        }
-        Err(error) => assert_eq!(error.kind(), io::ErrorKind::Unsupported, "{error}"),
+    let cases: [(&str, fn()); 2] = [
+        (
+            "screen_metadata_runtime_task_local_file_digest_equals_known_sha256",
+            || {
+                let (_directory, root) = fixture();
+                std::fs::write(format!("{root}/abc.txt"), b"abc").unwrap();
+                std::fs::write(format!("{root}/empty.txt"), b"").unwrap();
+                let backend = LocalBackend::new(&root);
+                assert_eq!(
+                    content_digest(&backend, &format!("{root}/abc.txt"), &idle()).unwrap(),
+                    Some(ContentDigest {
+                        sha256: ABC_SHA256.into(),
+                        size: 3,
+                    })
+                );
+                assert_eq!(
+                    content_digest(&backend, &format!("{root}/empty.txt"), &idle()).unwrap(),
+                    Some(ContentDigest {
+                        sha256: EMPTY_SHA256.into(),
+                        size: 0,
+                    })
+                );
+            },
+        ),
+        (
+            "screen_metadata_runtime_task_local_digest_spans_many_reads",
+            || {
+                // Larger than three hashing portions and not a multiple of one; checked
+                // against the independent `sha2` implementation.
+                let (_directory, root) = fixture();
+                let payload = (0..3 * 1024 * 1024 + 7)
+                    .map(|index: usize| (index % 251) as u8)
+                    .collect::<Vec<_>>();
+                std::fs::write(format!("{root}/big.bin"), &payload).unwrap();
+                let expected = format!("{:x}", sha2::Sha256::digest(&payload));
+                let path = format!("{root}/big.bin");
+                let local = content_digest(&LocalBackend::new(&root), &path, &idle())
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(local.sha256, expected);
+                assert_eq!(local.size, payload.len() as u64);
+                // Confinement needs a qualified filesystem; elsewhere it is not offered.
+                match ConfinedLocalBackend::open(&root) {
+                    Ok(confined) => {
+                        let held = content_digest(&confined, &path, &idle()).unwrap().unwrap();
+                        assert_eq!(held, local, "the confined backend hashes the same file");
+                    }
+                    Err(error) => assert_eq!(error.kind(), io::ErrorKind::Unsupported, "{error}"),
+                }
+                let cached = CachingBackend::new(Arc::new(LocalBackend::new(&root)));
+                let forwarded = content_digest(&cached, &path, &idle()).unwrap().unwrap();
+                assert_eq!(forwarded, local, "the browsing cache forwards the digest");
+            },
+        ),
+    ];
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
     }
-    let cached = CachingBackend::new(Arc::new(LocalBackend::new(&root)));
-    let forwarded = content_digest(&cached, &path, &idle()).unwrap().unwrap();
-    assert_eq!(forwarded, local, "the browsing cache forwards the digest");
 }
 
 #[test]

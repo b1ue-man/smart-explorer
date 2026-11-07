@@ -175,45 +175,6 @@ fn drive_task_devices_offline_closes_idle_children_only() {
 }
 
 #[test]
-fn drive_task_devices_room_readonly() {
-    let env = Env::new(&[Spec {
-        id: "d1",
-        name: "Laptop",
-        room: Some(("r1", "Team")),
-        writable: true,
-        shares: &["Docs"],
-    }]);
-    let key = "room~r1~d1";
-    std::fs::write(env.share_file(key, "Docs/a.txt"), b"x").unwrap();
-    env.publish();
-    let tree = env.tree();
-    assert_eq!(names(tree.list_dir("/").unwrap()), ["Räume"]);
-    assert_eq!(names(tree.list_dir("/Räume").unwrap()), ["Team"]);
-    assert_eq!(names(tree.list_dir("/Räume/Team").unwrap()), ["Laptop"]);
-    let handle = tree
-        .open_file("/Räume/Team/Laptop/Docs/a.txt", open_existing())
-        .unwrap();
-    tree.close(handle).unwrap();
-    // A room device is read-only even when the device itself would allow it.
-    let error = tree
-        .open_file(
-            "/Räume/Team/Laptop/Docs/a.txt",
-            OpenFileOptions {
-                writable: true,
-                disposition: OpenDisposition::OpenExisting,
-            },
-        )
-        .unwrap_err();
-    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
-    assert_eq!(
-        tree.mkdir("/Räume/Team/Laptop/Docs/new")
-            .unwrap_err()
-            .kind(),
-        io::ErrorKind::PermissionDenied
-    );
-}
-
-#[test]
 fn drive_task_devices_child_mode_rules() {
     let env = Env::new(&[
         direct("a", "Laptop", &["Docs"]),
@@ -259,6 +220,52 @@ fn drive_task_devices_child_mode_rules() {
         .open_file("/Server/Docs/new.txt", create_options())
         .unwrap_err();
     assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+    // Case "room device": a room device is read-only even when the device itself would allow writing.
+    {
+        let env = Env::new(&[Spec {
+            id: "d1",
+            name: "Laptop",
+            room: Some(("r1", "Team")),
+            writable: true,
+            shares: &["Docs"],
+        }]);
+        let key = "room~r1~d1";
+        std::fs::write(env.share_file(key, "Docs/a.txt"), b"x").unwrap();
+        env.publish();
+        let tree = env.tree();
+        assert_eq!(names(tree.list_dir("/").unwrap()), ["Räume"], "room device");
+        assert_eq!(
+            names(tree.list_dir("/Räume").unwrap()),
+            ["Team"],
+            "room device"
+        );
+        assert_eq!(
+            names(tree.list_dir("/Räume/Team").unwrap()),
+            ["Laptop"],
+            "room device"
+        );
+        let handle = tree
+            .open_file("/Räume/Team/Laptop/Docs/a.txt", open_existing())
+            .unwrap();
+        tree.close(handle).unwrap();
+        let error = tree
+            .open_file(
+                "/Räume/Team/Laptop/Docs/a.txt",
+                OpenFileOptions {
+                    writable: true,
+                    disposition: OpenDisposition::OpenExisting,
+                },
+            )
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied, "room device");
+        assert_eq!(
+            tree.mkdir("/Räume/Team/Laptop/Docs/new")
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::PermissionDenied,
+            "room device"
+        );
+    }
 }
 
 #[test]

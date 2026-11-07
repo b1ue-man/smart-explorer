@@ -196,27 +196,26 @@ fn batches_task_optical_media_change_rejects_open_reader_and_queued_index() {
 }
 
 #[test]
-fn batches_task_optical_process_child() {
-    let Some(root) = std::env::var_os("SE_TEST_OPTICAL_ROOT") else {
-        return;
-    };
-    let root = std::path::PathBuf::from(root);
-    let device = source(&root);
-    let _profile = test_profiles::register(&root, device);
-    fs::write(root.join("child-ready"), b"ready").unwrap();
-    let cancel = AtomicBool::new(false);
-    let _guard = acquire(&root, Priority::Foreground, &cancel)
-        .unwrap()
-        .unwrap();
-    assert!(
-        !root.join("parent-holds").exists(),
-        "a second process entered the held physical reader"
-    );
-    fs::write(root.join("child-entered"), b"entered").unwrap();
-}
-
-#[test]
 fn batches_task_optical_process_lock_excludes_second_process() {
+    // Child mode: the parent starts this test again with SE_TEST_OPTICAL_ROOT set,
+    // and that second process tries to enter the lock the parent holds.
+    if let Some(root) = std::env::var_os("SE_TEST_OPTICAL_ROOT") {
+        let root = std::path::PathBuf::from(root);
+        let device = source(&root);
+        let _profile = test_profiles::register(&root, device);
+        fs::write(root.join("child-ready"), b"ready").unwrap();
+        let cancel = AtomicBool::new(false);
+        let _guard = acquire(&root, Priority::Foreground, &cancel)
+            .unwrap()
+            .unwrap();
+        assert!(
+            !root.join("parent-holds").exists(),
+            "a second process entered the held physical reader"
+        );
+        fs::write(root.join("child-entered"), b"entered").unwrap();
+        return;
+    }
+
     let fixture = tempfile::tempdir().unwrap();
     let _profile = test_profiles::register(fixture.path(), source(fixture.path()));
     let cancel = AtomicBool::new(false);
@@ -226,7 +225,7 @@ fn batches_task_optical_process_lock_excludes_second_process() {
     fs::write(fixture.path().join("parent-holds"), b"held").unwrap();
     let mut child = std::process::Command::new(std::env::current_exe().unwrap())
         .args([
-            "folder_index::source_media_optical_tests::batches_task_optical_process_child",
+            "folder_index::source_media_optical_tests::batches_task_optical_process_lock_excludes_second_process",
             "--exact",
         ])
         .env("SE_TEST_OPTICAL_ROOT", fixture.path())

@@ -70,62 +70,75 @@ fn vault_task_compare_groups_match_preview() {
         [ItemAction::ConfirmDelete, ItemAction::Restore]
     );
     assert!(view.items.iter().all(|entry| entry.kind != ItemKind::Node));
-}
-
-#[test]
-fn vault_task_compare_groups_from_actions() {
-    // Every kind of action lands in its group (U26-4), with the target side
-    // deciding between new and changed.
-    let dir = tempfile::tempdir().expect("temporary folder");
-    let root = |name: &str| format!("{}/{name}", super::compare_test_support::fwd(dir.path()));
-    let (root_a, root_b) = (root("a"), root("b"));
-    for root in [&root_a, &root_b] {
-        std::fs::create_dir_all(root).expect("side folder");
+    // Case "groups from actions": every kind of action lands in its group, with the target side
+    // deciding between new and changed (U26-4).
+    {
+        let dir = tempfile::tempdir().expect("temporary folder");
+        let root = |name: &str| format!("{}/{name}", super::compare_test_support::fwd(dir.path()));
+        let (root_a, root_b) = (root("a"), root("b"));
+        for root in [&root_a, &root_b] {
+            std::fs::create_dir_all(root).expect("side folder");
+        }
+        std::fs::write(format!("{root_a}/auf-beiden"), b"x").expect("file");
+        std::fs::write(format!("{root_b}/auf-beiden"), b"y").expect("file");
+        let side = |root: &String, label: &str| SideIo {
+            backend: Arc::new(LocalBackend::new("/")),
+            root: root.clone(),
+            site: label.to_string(),
+            label: label.to_string(),
+        };
+        let sides = [side(&root_a, "A"), side(&root_b, "B")];
+        let group = |action: Action| group_of(&action, &[], &sides);
+        let rel = |name: &str| name.to_string();
+        assert_eq!(
+            group(Action::CopyAtoB(rel("nur-auf-a"))),
+            CompareGroup::NewA,
+            "action groups"
+        );
+        assert_eq!(
+            group(Action::CopyAtoB(rel("auf-beiden"))),
+            CompareGroup::ChangedA,
+            "action groups"
+        );
+        assert_eq!(
+            group(Action::CopyBtoA(rel("nur-auf-b"))),
+            CompareGroup::NewB,
+            "action groups"
+        );
+        assert_eq!(
+            group(Action::CopyBtoA(rel("auf-beiden"))),
+            CompareGroup::ChangedB,
+            "action groups"
+        );
+        assert_eq!(
+            group(Action::FinalizeMoveAtoB(rel("x"))),
+            CompareGroup::ChangedA,
+            "action groups"
+        );
+        assert_eq!(
+            group(Action::FinalizeMoveBtoA(rel("x"))),
+            CompareGroup::ChangedB,
+            "action groups"
+        );
+        // The deletion that B would follow is a deletion on A.
+        assert_eq!(
+            group(Action::DeleteB(rel("x"))),
+            CompareGroup::DeletedA,
+            "action groups"
+        );
+        assert_eq!(
+            group(Action::DeleteA(rel("x"))),
+            CompareGroup::DeletedB,
+            "action groups"
+        );
+        // An action the rules hold back is deferred, whatever it would do.
+        let held = Action::CopyAtoB(rel("auf-beiden"));
+        assert_eq!(
+            group_of(&held, &[(held.clone(), "Grund".into())], &sides),
+            CompareGroup::Deferred,
+            "held back"
+        );
     }
-    std::fs::write(format!("{root_a}/auf-beiden"), b"x").expect("file");
-    std::fs::write(format!("{root_b}/auf-beiden"), b"y").expect("file");
-    let side = |root: &String, label: &str| SideIo {
-        backend: Arc::new(LocalBackend::new("/")),
-        root: root.clone(),
-        site: label.to_string(),
-        label: label.to_string(),
-    };
-    let sides = [side(&root_a, "A"), side(&root_b, "B")];
-    let group = |action: Action| group_of(&action, &[], &sides);
-    let rel = |name: &str| name.to_string();
-    assert_eq!(
-        group(Action::CopyAtoB(rel("nur-auf-a"))),
-        CompareGroup::NewA
-    );
-    assert_eq!(
-        group(Action::CopyAtoB(rel("auf-beiden"))),
-        CompareGroup::ChangedA
-    );
-    assert_eq!(
-        group(Action::CopyBtoA(rel("nur-auf-b"))),
-        CompareGroup::NewB
-    );
-    assert_eq!(
-        group(Action::CopyBtoA(rel("auf-beiden"))),
-        CompareGroup::ChangedB
-    );
-    assert_eq!(
-        group(Action::FinalizeMoveAtoB(rel("x"))),
-        CompareGroup::ChangedA
-    );
-    assert_eq!(
-        group(Action::FinalizeMoveBtoA(rel("x"))),
-        CompareGroup::ChangedB
-    );
-    // The deletion that B would follow is a deletion on A.
-    assert_eq!(group(Action::DeleteB(rel("x"))), CompareGroup::DeletedA);
-    assert_eq!(group(Action::DeleteA(rel("x"))), CompareGroup::DeletedB);
-    // An action the rules hold back is deferred, whatever it would do.
-    let held = Action::CopyAtoB(rel("auf-beiden"));
-    assert_eq!(
-        group_of(&held, &[(held.clone(), "Grund".into())], &sides),
-        CompareGroup::Deferred
-    );
 }
 
 #[test]

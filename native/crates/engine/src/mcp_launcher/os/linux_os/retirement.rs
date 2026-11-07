@@ -167,6 +167,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "needs the candidate se binary named by SE_SCREEN_TASK_WORKER; Suite review-task"]
     fn batches_p13_linux_retirement_handoff_cannot_select_a_foreign_installation() {
         use std::os::unix::process::CommandExt;
         let source = std::env::var_os("SE_SCREEN_TASK_WORKER")

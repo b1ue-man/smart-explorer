@@ -218,7 +218,7 @@ pub fn run_pdh() -> Result<(), String> {
 }
 
 #[test]
-#[ignore = "needs the stage's drives and robocopy"]
+#[ignore = "needs the stage's drives and robocopy; Suite rechte-desktop-tresore-task"]
 fn speed_task_windows_local_large_same_volume() {
     let case = Case::new(
         "speed_task_windows_local_large_same_volume",
@@ -230,7 +230,7 @@ fn speed_task_windows_local_large_same_volume() {
 }
 
 #[test]
-#[ignore = "needs the stage's drives and robocopy"]
+#[ignore = "needs the stage's drives and robocopy; Suite rechte-desktop-tresore-task"]
 fn speed_task_windows_local_large_two_volumes() {
     let case = Case::new(
         "speed_task_windows_local_large_two_volumes",
@@ -242,7 +242,7 @@ fn speed_task_windows_local_large_two_volumes() {
 }
 
 #[test]
-#[ignore = "needs the stage's drives and robocopy"]
+#[ignore = "needs the stage's drives and robocopy; Suite rechte-desktop-tresore-task"]
 fn speed_task_windows_local_small_two_volumes() {
     let case = Case::new(
         "speed_task_windows_local_small_two_volumes",
@@ -254,7 +254,7 @@ fn speed_task_windows_local_small_two_volumes() {
 }
 
 #[test]
-#[ignore = "needs typeperf of the Windows runner"]
+#[ignore = "needs typeperf of the Windows runner; Suite rechte-desktop-tresore-task"]
 fn speed_task_windows_pdh_physicaldisk_counters_exist() {
     guarded(
         "speed_task_windows_pdh_physicaldisk_counters_exist",

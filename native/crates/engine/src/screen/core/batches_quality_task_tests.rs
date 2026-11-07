@@ -18,6 +18,16 @@ fn policy() -> QualityPolicy {
 
 #[test]
 fn batches_task_b6_full_preview_full_preserves_requested_quality() {
+    let cases: [fn(); 2] = [
+        batches_task_b6_full_preview_full_preserves_requested_quality_case,
+        batches_task_b6_coalesced_modes_keep_each_requested_rate,
+    ];
+    for case in cases {
+        case();
+    }
+}
+
+fn batches_task_b6_full_preview_full_preserves_requested_quality_case() {
     let mut quality = policy();
     let full = FrameSize::new(3840, 2160);
     let preview = FrameSize::new(640, 360);
@@ -50,7 +60,6 @@ fn batches_task_b6_full_preview_full_preserves_requested_quality() {
     assert_eq!(quality.max_fps(), 3);
 }
 
-#[test]
 fn batches_task_b6_coalesced_modes_keep_each_requested_rate() {
     let mut quality = policy();
     quality.mode = quality

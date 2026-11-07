@@ -1,40 +1,73 @@
 //! Focused M3 cases, selected only by the one remote mount task entrypoint.
-use super::metadata_cache::{Admission, DirectoryObservation, MetadataCache, MetadataChange,
-    MetadataLookup, run_metadata_batch};
+use super::metadata_cache::{
+    run_metadata_batch, Admission, DirectoryObservation, MetadataCache, MetadataChange,
+    MetadataLookup,
+};
 use super::metadata_point_cache::MetadataPointCache;
-use super::{engine::MountEngine, optimization_fixture::OptimizationBackend,
-    types::{MountId, MountMode, MountRuntimeConfig}};
+use super::{
+    engine::MountEngine,
+    optimization_fixture::OptimizationBackend,
+    types::{MountId, MountMode, MountRuntimeConfig},
+};
 use crate::vfs::{BackendHandle, VfsMeta};
-use std::{collections::HashSet, io, sync::{Arc, Condvar, Mutex, atomic::{AtomicUsize, Ordering}},
-    time::{Duration, Instant}};
+use std::{
+    collections::HashSet,
+    io,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Condvar, Mutex,
+    },
+    time::{Duration, Instant},
+};
 
 fn directory(name: &str) -> VfsMeta {
-    VfsMeta { name: name.into(), is_dir: true, ..VfsMeta::default() }
+    VfsMeta {
+        name: name.into(),
+        is_dir: true,
+        ..VfsMeta::default()
+    }
 }
 
 fn file(name: &str, generation: i64) -> VfsMeta {
-    VfsMeta { name: name.into(), size: 4, mtime_ms: generation,
-        id: Some(format!("object-{name}")), ..VfsMeta::default() }
+    VfsMeta {
+        name: name.into(),
+        size: 4,
+        mtime_ms: generation,
+        id: Some(format!("object-{name}")),
+        ..VfsMeta::default()
+    }
 }
 
 fn observe(entries: Vec<VfsMeta>, expires: Instant) -> DirectoryObservation {
-    DirectoryObservation { metadata: directory(""), metadata_expires_at: expires,
-        entries: entries.into(), listing_expires_at: expires }
+    DirectoryObservation {
+        metadata: directory(""),
+        metadata_expires_at: expires,
+        entries: entries.into(),
+        listing_expires_at: expires,
+    }
 }
 
 fn rendezvous(wave: &(Mutex<usize>, Condvar), participants: usize) -> io::Result<()> {
     let deadline = Instant::now() + Duration::from_secs(5);
-    let mut arrived = wave.0.lock().map_err(|_| io::Error::other("metadata rendezvous poisoned"))?;
+    let mut arrived = wave
+        .0
+        .lock()
+        .map_err(|_| io::Error::other("metadata rendezvous poisoned"))?;
     *arrived += 1;
     wave.1.notify_all();
     while *arrived < participants {
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
-            return Err(io::Error::new(io::ErrorKind::TimedOut,
-                "independent metadata workers did not overlap"));
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "independent metadata workers did not overlap",
+            ));
         }
-        arrived = wave.1.wait_timeout(arrived, remaining)
-            .map_err(|_| io::Error::other("metadata rendezvous poisoned"))?.0;
+        arrived = wave
+            .1
+            .wait_timeout(arrived, remaining)
+            .map_err(|_| io::Error::other("metadata rendezvous poisoned"))?
+            .0;
     }
     Ok(())
 }
@@ -44,37 +77,88 @@ fn mount_vault_task_metadata_authority_and_revision() -> io::Result<()> {
     let cache = MetadataCache::new("/", true);
     let past = Instant::now() - Duration::from_secs(1);
     let future = Instant::now() + Duration::from_secs(20);
-    assert!(cache.install_observation("/", observe(Vec::new(), past),
-        0, None, Admission::Demand)?);
+    assert!(cache.install_observation(
+        "/",
+        observe(Vec::new(), past),
+        0,
+        None,
+        Admission::Demand
+    )?);
     assert!(matches!(cache.stat("/missing")?, MetadataLookup::Uncached));
     assert!(cache.directory("/")?.is_none());
     // A fresh child remains usable without inheriting expired parent absence.
-    assert!(cache.install_observation("/folder", observe(vec![file("note.md", 1)], future),
-        1, None, Admission::Demand)?);
-    assert!(matches!(cache.stat("/folder/note.md")?, MetadataLookup::Found(_)));
-    assert!(matches!(cache.stat("/folder/absent")?, MetadataLookup::KnownMissing));
+    assert!(cache.install_observation(
+        "/folder",
+        observe(vec![file("note.md", 1)], future),
+        1,
+        None,
+        Admission::Demand
+    )?);
+    assert!(matches!(
+        cache.stat("/folder/note.md")?,
+        MetadataLookup::Found(_)
+    ));
+    assert!(matches!(
+        cache.stat("/folder/absent")?,
+        MetadataLookup::KnownMissing
+    ));
     // Expired images are retained only for a concrete future change diff.
-    assert!(cache.install_observation("/folder", observe(vec![file("note.md", 2)], past),
-        1, None, Admission::Demand)?);
-    assert!(matches!(cache.stat("/folder/note.md")?, MetadataLookup::Uncached));
-    assert!(cache.drain_changes(20)?.iter().any(|change| matches!(change,
+    assert!(cache.install_observation(
+        "/folder",
+        observe(vec![file("note.md", 2)], past),
+        1,
+        None,
+        Admission::Demand
+    )?);
+    assert!(matches!(
+        cache.stat("/folder/note.md")?,
+        MetadataLookup::Uncached
+    ));
+    assert!(cache
+        .drain_changes(20)?
+        .iter()
+        .any(|change| matches!(change,
         MetadataChange::Modified { path } if path == "/folder/note.md")));
 
     let slot = cache.load_slot("/folder")?;
     let revision = slot.revision();
-    assert!(cache.install_observation("/folder", observe(vec![file("new.md", 3)], future),
-        1, Some((&slot, revision)), Admission::Demand)?);
-    assert!(!cache.install_observation("/folder", observe(vec![file("stale.md", 1)], future),
-        1, Some((&slot, revision)), Admission::Refresh)?);
-    assert!(matches!(cache.stat("/folder/new.md")?, MetadataLookup::Found(_)));
+    assert!(cache.install_observation(
+        "/folder",
+        observe(vec![file("new.md", 3)], future),
+        1,
+        Some((&slot, revision)),
+        Admission::Demand
+    )?);
+    assert!(!cache.install_observation(
+        "/folder",
+        observe(vec![file("stale.md", 1)], future),
+        1,
+        Some((&slot, revision)),
+        Admission::Refresh
+    )?);
+    assert!(matches!(
+        cache.stat("/folder/new.md")?,
+        MetadataLookup::Found(_)
+    ));
     let changes = cache.drain_changes(20)?;
-    assert!(!changes.iter().any(|change| change.path() == "/folder/stale.md"));
+    assert!(!changes
+        .iter()
+        .any(|change| change.path() == "/folder/stale.md"));
     cache.note_path_observation("/folder/new.md")?;
     assert!(cache.directory("/folder")?.is_none());
-    assert!(cache.install_observation("/folder", observe(vec![file("new.md", 4)], future),
-        1, None, Admission::Refresh)?);
-    assert_eq!(cache.drain_changes(20)?, vec![MetadataChange::Modified {
-        path: "/folder/new.md".into() }]);
+    assert!(cache.install_observation(
+        "/folder",
+        observe(vec![file("new.md", 4)], future),
+        1,
+        None,
+        Admission::Refresh
+    )?);
+    assert_eq!(
+        cache.drain_changes(20)?,
+        vec![MetadataChange::Modified {
+            path: "/folder/new.md".into()
+        }]
+    );
 
     // Refreshing child entries must not renew an older directory-metadata hint.
     let hints = MetadataCache::new("/", true);
@@ -89,12 +173,24 @@ fn mount_vault_task_metadata_authority_and_revision() -> io::Result<()> {
     let points = MetadataPointCache::new(true);
     points.install("/present", file("present", 1))?;
     points.install_missing("/missing")?;
-    assert!(matches!(points.lookup("/missing")?, MetadataLookup::KnownMissing));
+    assert!(matches!(
+        points.lookup("/missing")?,
+        MetadataLookup::KnownMissing
+    ));
     std::thread::sleep(Duration::from_millis(1_100));
-    assert!(matches!(points.lookup("/missing")?, MetadataLookup::Uncached));
-    assert!(matches!(points.lookup("/present")?, MetadataLookup::Found(_)));
+    assert!(matches!(
+        points.lookup("/missing")?,
+        MetadataLookup::Uncached
+    ));
+    assert!(matches!(
+        points.lookup("/present")?,
+        MetadataLookup::Found(_)
+    ));
     points.invalidate("/present", false)?;
-    assert!(matches!(points.lookup("/present")?, MetadataLookup::Uncached));
+    assert!(matches!(
+        points.lookup("/present")?,
+        MetadataLookup::Uncached
+    ));
     Ok(())
 }
 
@@ -103,35 +199,86 @@ fn mount_optimization_task_change_queue_preserves_concrete_events() -> io::Resul
     let cache = MetadataCache::new("/", true);
     let future = Instant::now() + Duration::from_secs(20);
     // A name replacement drains as delete then create, even across calls.
-    assert!(cache.install_observation("/", observe(vec![file("Old.md", 1)], future),
-        0, None, Admission::Demand)?);
-    assert!(cache.install_observation("/", observe(vec![file("New.md", 2)], future),
-        0, None, Admission::Refresh)?);
-    assert_eq!(cache.drain_changes(1)?, vec![MetadataChange::Deleted {
-        path: "/Old.md".into(), is_directory: false }]);
-    assert!(cache.install_observation("/", observe(vec![file("Newest.md", 3)], future),
-        0, None, Admission::Refresh)?);
-    assert_eq!(cache.drain_changes(20)?, vec![
-        MetadataChange::Created { path: "/New.md".into(), is_directory: false },
-        MetadataChange::Deleted { path: "/New.md".into(), is_directory: false },
-        MetadataChange::Created { path: "/Newest.md".into(), is_directory: false },
-    ]);
+    assert!(cache.install_observation(
+        "/",
+        observe(vec![file("Old.md", 1)], future),
+        0,
+        None,
+        Admission::Demand
+    )?);
+    assert!(cache.install_observation(
+        "/",
+        observe(vec![file("New.md", 2)], future),
+        0,
+        None,
+        Admission::Refresh
+    )?);
+    assert_eq!(
+        cache.drain_changes(1)?,
+        vec![MetadataChange::Deleted {
+            path: "/Old.md".into(),
+            is_directory: false
+        }]
+    );
+    assert!(cache.install_observation(
+        "/",
+        observe(vec![file("Newest.md", 3)], future),
+        0,
+        None,
+        Admission::Refresh
+    )?);
+    assert_eq!(
+        cache.drain_changes(20)?,
+        vec![
+            MetadataChange::Created {
+                path: "/New.md".into(),
+                is_directory: false
+            },
+            MetadataChange::Deleted {
+                path: "/New.md".into(),
+                is_directory: false
+            },
+            MetadataChange::Created {
+                path: "/Newest.md".into(),
+                is_directory: false
+            },
+        ]
+    );
 
     // Tiny pending images are no longer rejected at the old 64-directory cap.
     // Byte-pressure rollback is exercised separately with a per-instance limit.
     // Use an independent, truthful root image: /q* cannot be admitted beneath
     // the preceding fresh root that listed only /Newest.md.
     let cache = MetadataCache::new("/", true);
-    assert!(cache.install_observation("/", observe((0..65)
-        .map(|number| directory(&format!("q{number}"))).collect(), future),
-        0, None, Admission::Demand)?);
+    assert!(cache.install_observation(
+        "/",
+        observe(
+            (0..65)
+                .map(|number| directory(&format!("q{number}")))
+                .collect(),
+            future
+        ),
+        0,
+        None,
+        Admission::Demand
+    )?);
     assert!(cache.drain_changes(20)?.is_empty());
     for number in 0..65 {
         let path = format!("/q{number}");
-        assert!(cache.install_observation(&path, observe(vec![file("note.md", 1)], future),
-            1, None, Admission::Demand)?);
-        let accepted = cache.install_observation(&path,
-            observe(vec![file("note.md", 2)], future), 1, None, Admission::Refresh)?;
+        assert!(cache.install_observation(
+            &path,
+            observe(vec![file("note.md", 1)], future),
+            1,
+            None,
+            Admission::Demand
+        )?);
+        let accepted = cache.install_observation(
+            &path,
+            observe(vec![file("note.md", 2)], future),
+            1,
+            None,
+            Admission::Refresh,
+        )?;
         assert!(accepted);
     }
     assert!(cache.directory("/q64")?.is_some());
@@ -141,54 +288,10 @@ fn mount_optimization_task_change_queue_preserves_concrete_events() -> io::Resul
     assert_eq!(old.mtime_ms, 2);
     let drained = cache.drain_changes(usize::MAX)?;
     assert_eq!(drained.len(), 65);
-    assert!(drained.iter().all(|change| matches!(change, MetadataChange::Modified { .. })));
+    assert!(drained
+        .iter()
+        .all(|change| matches!(change, MetadataChange::Modified { .. })));
     assert!(cache.drain_changes(20)?.is_empty());
-    Ok(())
-}
-
-#[test]
-fn mount_optimization_task_metadata_parallelism_and_selected_ancestor_order() -> io::Result<()> {
-    let active = AtomicUsize::new(0);
-    let maximum = AtomicUsize::new(0);
-    let wave = (Mutex::new(0), Condvar::new());
-    let parent_finished = AtomicUsize::new(0);
-    let log = Mutex::new(Vec::new());
-    let targets = vec![("/a/child".into(), 2), ("/d".into(), 1),
-        ("/c".into(), 1), ("/a".into(), 1), ("/b".into(), 1)];
-    let count = run_metadata_batch(targets, 4, &|| false, &|path, depth| {
-        let current = active.fetch_add(1, Ordering::SeqCst) + 1;
-        maximum.fetch_max(current, Ordering::SeqCst);
-        if depth == 1 {
-            rendezvous(&wave, 4)?;
-            if path == "/a" { parent_finished.store(1, Ordering::SeqCst); }
-        } else {
-            assert_eq!(parent_finished.load(Ordering::SeqCst), 1);
-        }
-        log.lock().unwrap().push(path.to_string());
-        active.fetch_sub(1, Ordering::SeqCst);
-        Ok(true)
-    })?;
-    assert_eq!(count, 5);
-    assert_eq!(maximum.load(Ordering::SeqCst), 4);
-    let order = log.lock().unwrap();
-    let parent = order.iter().position(|path| path == "/a").unwrap();
-    let child = order.iter().position(|path| path == "/a/child").unwrap();
-    assert!(parent < child, "only the selected ancestor must precede its child");
-    drop(order);
-    let calls = AtomicUsize::new(0);
-    assert_eq!(run_metadata_batch(vec![("/cancelled".into(), 0)], 4, &|| true, &|_, _| {
-        calls.fetch_add(1, Ordering::SeqCst);
-        Ok(true)
-    })?, 0);
-    assert_eq!(calls.load(Ordering::SeqCst), 0);
-    // Worker failure is returned after every started sibling has been joined.
-    let joined = Arc::new(AtomicUsize::new(0));
-    assert!(run_metadata_batch(vec![("/a".into(), 1), ("/b".into(), 1)], 2,
-        &|| false, &|path, _| {
-            joined.fetch_add(1, Ordering::SeqCst);
-            if path == "/a" { Err(io::Error::other("injected metadata error")) } else { Ok(true) }
-        }).is_err());
-    assert_eq!(joined.load(Ordering::SeqCst), 2);
     Ok(())
 }
 
@@ -196,23 +299,41 @@ fn mount_optimization_task_metadata_parallelism_and_selected_ancestor_order() ->
 fn mount_optimization_task_speculative_admission_preserves_demand() -> io::Result<()> {
     let cache = MetadataCache::new("/", true);
     let future = Instant::now() + Duration::from_secs(20);
-    assert!(cache.install_observation("/",
+    assert!(cache.install_observation(
+        "/",
         observe(vec![directory("demand"), directory("speculative")], future),
-        0, None, Admission::Demand)?);
+        0,
+        None,
+        Admission::Demand
+    )?);
     // Charge a small fixture image as a full retained cache. This reaches the
     // real byte-admission branch without allocating 128 MiB in the fixture.
     let files = 2;
-    assert!(cache.install_observation("/demand", observe((0..files)
-        .map(|number| file(&format!("f{number}"), 1)).collect(), future),
-        1, None, Admission::Demand)?);
+    assert!(cache.install_observation(
+        "/demand",
+        observe(
+            (0..files)
+                .map(|number| file(&format!("f{number}"), 1))
+                .collect(),
+            future
+        ),
+        1,
+        None,
+        Admission::Demand
+    )?);
     cache.test_fill_retention("/demand")?;
     let before = cache.usage()?;
     assert_eq!(before.2, 128 * 1024 * 1024);
     let demand_revision = cache.revision("/demand")?;
     let descendant = cache.load_slot("/speculative/note.md")?;
     let descendant_revision = descendant.revision();
-    assert!(!cache.install_observation("/speculative", observe(vec![file("note.md", 1)], future),
-        1, None, Admission::Speculative)?);
+    assert!(!cache.install_observation(
+        "/speculative",
+        observe(vec![file("note.md", 1)], future),
+        1,
+        None,
+        Admission::Speculative
+    )?);
     assert_eq!(cache.usage()?, before);
     assert_eq!(cache.revision("/demand")?, demand_revision);
     // The refused image still publishes its fresh authority (df56c854): an
@@ -220,7 +341,10 @@ fn mount_optimization_task_speculative_admission_preserves_demand() -> io::Resul
     // itself, so the direct child's running load is invalidated
     // (metadata_cache_support.rs `reconcile_loads`). Demand data stays intact.
     assert!(descendant.revision() > descendant_revision);
-    assert_eq!(cache.directory("/demand")?.map(|entries| entries.len()), Some(files));
+    assert_eq!(
+        cache.directory("/demand")?.map(|entries| entries.len()),
+        Some(files)
+    );
     assert!(cache.directory("/speculative")?.is_none());
     assert!(cache.preload_targets(2, 8)?.is_empty());
     assert!(cache.drain_changes(20)?.is_empty());
@@ -232,11 +356,21 @@ fn mount_optimization_task_failed_refresh_attempts_remain_fair() -> io::Result<(
     let cache = MetadataCache::new("/", true);
     let future = Instant::now() + Duration::from_secs(20);
     let names = ["a", "b", "c", "hot-a", "hot-b"];
-    assert!(cache.install_observation("/", observe(names.iter()
-        .map(|name| directory(name)).collect(), future), 0, None, Admission::Demand)?);
+    assert!(cache.install_observation(
+        "/",
+        observe(names.iter().map(|name| directory(name)).collect(), future),
+        0,
+        None,
+        Admission::Demand
+    )?);
     for name in names {
-        assert!(cache.install_observation(&format!("/{name}"),
-            observe(vec![file("note.md", 1)], future), 1, None, Admission::Demand)?);
+        assert!(cache.install_observation(
+            &format!("/{name}"),
+            observe(vec![file("note.md", 1)], future),
+            1,
+            None,
+            Admission::Demand
+        )?);
     }
     let attempted = Mutex::new(HashSet::new());
     for _ in 0..3 {
@@ -250,7 +384,8 @@ fn mount_optimization_task_failed_refresh_attempts_remain_fair() -> io::Result<(
         assert!(run_metadata_batch(targets, 2, &|| false, &|path, _| {
             attempted.lock().unwrap().insert(path.to_string());
             Err(io::Error::other("injected refresh failure"))
-        }).is_err());
+        })
+        .is_err());
     }
     let attempted = attempted.lock().unwrap();
     for path in ["/a", "/b", "/c"] {
@@ -269,9 +404,11 @@ fn mount_vault_task_point_stat_coalescence_and_error_policy() -> io::Result<()> 
     let spool = tempfile::tempdir()?;
     let backend = OptimizationBackend::new();
     let backend_handle: BackendHandle = backend.clone();
-    let engine = MountEngine::open_host_cache(MountRuntimeConfig::new(
-        MountId::parse("metadata-stat-cache")?, MountMode::ReadOnly),
-        backend_handle, spool.path())?;
+    let engine = MountEngine::open_host_cache(
+        MountRuntimeConfig::new(MountId::parse("metadata-stat-cache")?, MountMode::ReadOnly),
+        backend_handle,
+        spool.path(),
+    )?;
     let before = backend.stat_count();
     let wave = (Mutex::new(0), Condvar::new());
     std::thread::scope(|scope| -> io::Result<()> {
@@ -287,7 +424,10 @@ fn mount_vault_task_point_stat_coalescence_and_error_policy() -> io::Result<()> 
         }
         gate.wait();
         gate.release();
-        let results = workers.into_iter().map(|worker| worker.join()).collect::<Vec<_>>();
+        let results = workers
+            .into_iter()
+            .map(|worker| worker.join())
+            .collect::<Vec<_>>();
         for result in results {
             let result = result.map_err(|_| io::Error::other("point stat worker panicked"))?;
             assert_eq!(result.unwrap_err().kind(), io::ErrorKind::NotFound);
@@ -295,8 +435,10 @@ fn mount_vault_task_point_stat_coalescence_and_error_policy() -> io::Result<()> 
         Ok(())
     })?;
     assert_eq!(backend.stat_count(), before + 1);
-    assert_eq!(engine.cached_remote_stat("/missing").unwrap_err().kind(),
-        io::ErrorKind::NotFound);
+    assert_eq!(
+        engine.cached_remote_stat("/missing").unwrap_err().kind(),
+        io::ErrorKind::NotFound
+    );
     assert_eq!(backend.stat_count(), before + 1);
 
     // Explicit local invalidation clears the negative point immediately; the
@@ -310,8 +452,13 @@ fn mount_vault_task_point_stat_coalescence_and_error_policy() -> io::Result<()> 
     // Exercise this backend-facing cache directly. The in-memory fixture
     // rejects the invalid path lexically; no host filesystem path is traversed.
     for attempt in 1..=2 {
-        assert_eq!(engine.cached_remote_stat("/bad/../path").unwrap_err().kind(),
-            io::ErrorKind::InvalidInput);
+        assert_eq!(
+            engine
+                .cached_remote_stat("/bad/../path")
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidInput
+        );
         assert_eq!(backend.stat_count(), before + 2 + attempt);
     }
     assert!(engine.drain_metadata_changes(20)?.is_empty());

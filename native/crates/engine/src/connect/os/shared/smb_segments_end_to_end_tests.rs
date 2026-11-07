@@ -6,7 +6,7 @@ use crate::vfs::SegmentedStage;
 use std::io::Write;
 
 #[test]
-#[ignore = "requires the suite-owned real SMB fixture (SE_SYNC_PROVIDER_MANIFEST)"]
+#[ignore = "requires the suite-owned real SMB fixture (SE_SYNC_PROVIDER_MANIFEST); Suite rechte-desktop-tresore-task"]
 fn speed_task_smb_segments_end_to_end() {
     const MIB: usize = 1024 * 1024;
     let providers = fixture::providers();

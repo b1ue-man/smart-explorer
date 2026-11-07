@@ -219,7 +219,7 @@ fn canonical(path: &str) -> String {
 }
 
 #[test]
-#[ignore = "needs the pinned Dokany runtime, node and the built se (Windows task stage windows-core: drive-dokany-regression)"]
+#[ignore = "needs the pinned Dokany runtime, node and the built se (Windows task stage windows-core: drive-dokany-regression); Suite rechte-desktop-tresore-task"]
 fn drive_task_windows_realpath_native_on_dokany() {
     let Some(se) = std::env::var_os(SE_BIN).map(PathBuf::from) else {
         not_run(format!("{SE_BIN} fehlt (Platzhalter {{se}} der Stufe)"));

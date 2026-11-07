@@ -146,7 +146,7 @@ fn read_until(stream: &mut TcpStream, mut target: &mut [u8], deadline: Instant) 
 }
 
 #[test]
-#[ignore = "requires isolated remote copy/paste task runner"]
+#[ignore = "requires isolated remote copy/paste task runner; Suite copy-paste-task"]
 fn copy_paste_task_provider_webdav_conditional_create_and_abort() {
     require_task();
     let fixture = Fixture::new(201);
@@ -168,7 +168,7 @@ fn copy_paste_task_provider_webdav_conditional_create_and_abort() {
 }
 
 #[test]
-#[ignore = "requires isolated remote copy/paste task runner"]
+#[ignore = "requires isolated remote copy/paste task runner; Suite copy-paste-task"]
 fn copy_paste_task_provider_webdav_conflict_kind_survives_repeat_flush() {
     require_task();
     let fixture = Fixture::new(412);
@@ -185,7 +185,7 @@ fn copy_paste_task_provider_webdav_conflict_kind_survives_repeat_flush() {
 }
 
 #[test]
-#[ignore = "requires isolated remote copy/paste task runner"]
+#[ignore = "requires isolated remote copy/paste task runner; Suite copy-paste-task"]
 fn copy_paste_task_provider_webdav_edit_put_remains_unconditional() {
     require_task();
     let fixture = Fixture::new(204);
@@ -202,7 +202,7 @@ fn copy_paste_task_provider_webdav_edit_put_remains_unconditional() {
 }
 
 #[test]
-#[ignore = "requires isolated remote copy/paste task runner"]
+#[ignore = "requires isolated remote copy/paste task runner; Suite copy-paste-task"]
 fn copy_paste_task_provider_webdav_pending_status_is_not_commit() {
     require_task();
     let fixture = Fixture::new(202);

@@ -55,6 +55,7 @@ impl Drop for OwnedShareVersionState {
 }
 
 #[test]
+#[ignore = "needs the real protocol servers named by SE_SYNC_PROVIDER_MANIFEST; Suite sync-reliability-task"]
 fn sync_reliability_task_options_share_private_versions_restore_restart_and_noop() {
     use crate::connect::sync_reliability_task_provider_fixture as fixture;
     use crate::vfs::{self, Backend, CachingBackend, LocalBackend};

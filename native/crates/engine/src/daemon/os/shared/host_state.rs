@@ -219,6 +219,16 @@ mod tests {
 
     #[test]
     fn android_task_host_state_encoding_keeps_both_conditions() {
+        let cases: [fn(); 2] = [
+            android_task_host_state_encoding_keeps_both_conditions_case,
+            android_background_task_defer_bit_is_independent_of_conditions,
+        ];
+        for case in cases {
+            case();
+        }
+    }
+
+    fn android_task_host_state_encoding_keeps_both_conditions_case() {
         for power_save in [false, true] {
             for metered in [false, true] {
                 let state = HostState {
@@ -232,7 +242,6 @@ mod tests {
         assert_eq!(decode(0), HostState::default());
     }
 
-    #[test]
     fn android_background_task_defer_bit_is_independent_of_conditions() {
         for bits in 0..8u8 {
             let state = decode(bits);

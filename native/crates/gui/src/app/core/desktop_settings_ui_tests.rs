@@ -25,7 +25,7 @@ fn input() -> egui::RawInput {
 }
 
 #[test]
-#[ignore = "run only through the isolated remote GUI task entrypoint"]
+#[ignore = "run only through the isolated remote GUI task entrypoint; Suite rechte-desktop-tresore-task"]
 fn desktop_task_absent_starts_nothing() {
     let dir = DesktopDir::production();
     assert!(!dir.exists(), "precondition: se Desktop is absent");

@@ -28,22 +28,19 @@ fn domain_rejects_legacy_forwarding_for_non_request_envelopes() {
 }
 
 #[test]
-fn persisted_ledger_rejects_impossible_legacy_forwarding_state() {
-    let (mut profiles, _) = incoming_profiles();
-    profiles.direct_requests[0].retries.request_receipt = DirectRetryState {
-        attempt_count: 1,
-        last_attempt_at: Some(12),
-        relay_outcome: Some(DirectRelayOutcome::LegacyForwarded),
-        relay_changed_at: Some(12),
-        last_error: None,
-    };
-
-    let error = profiles.validate_direct_ledger().unwrap_err();
-    assert!(error.contains("envelope conflicts"));
+fn persisted_ledger_rejects_overlong_timestamps_in_every_signed_envelope() {
+    let cases: [fn(); 4] = [
+        persisted_ledger_rejects_overlong_timestamps_in_every_signed_envelope_case,
+        persisted_ledger_rejects_impossible_legacy_forwarding_state,
+        persisted_ledger_rejects_overlong_tombstone_request,
+        profile_load_fails_closed_with_actionable_lifetime_corruption,
+    ];
+    for case in cases {
+        case();
+    }
 }
 
-#[test]
-fn persisted_ledger_rejects_overlong_timestamps_in_every_signed_envelope() {
+fn persisted_ledger_rejects_overlong_timestamps_in_every_signed_envelope_case() {
     let profiles = complete_incoming_profiles();
 
     let mut overlong_request = profiles.clone();
@@ -78,7 +75,20 @@ fn persisted_ledger_rejects_overlong_timestamps_in_every_signed_envelope() {
     assert_lifetime_corruption(overlong_decision_receipt);
 }
 
-#[test]
+fn persisted_ledger_rejects_impossible_legacy_forwarding_state() {
+    let (mut profiles, _) = incoming_profiles();
+    profiles.direct_requests[0].retries.request_receipt = DirectRetryState {
+        attempt_count: 1,
+        last_attempt_at: Some(12),
+        relay_outcome: Some(DirectRelayOutcome::LegacyForwarded),
+        relay_changed_at: Some(12),
+        last_error: None,
+    };
+
+    let error = profiles.validate_direct_ledger().unwrap_err();
+    assert!(error.contains("envelope conflicts"));
+}
+
 fn persisted_ledger_rejects_overlong_tombstone_request() {
     let (mut profiles, request_id) = incoming_profiles();
     profiles
@@ -87,6 +97,18 @@ fn persisted_ledger_rejects_overlong_tombstone_request() {
     profiles.direct_request_tombstones[0].request.expires_at = i64::MAX;
 
     assert_lifetime_corruption(profiles);
+}
+
+fn profile_load_fails_closed_with_actionable_lifetime_corruption() {
+    let (mut profiles, _) = incoming_profiles();
+    profiles.direct_requests[0].record.request.expires_at = i64::MAX;
+    let mut storage = ReadOnlyProfile(Some(serde_json::to_string(&profiles).unwrap()));
+
+    let error = ShareProfiles::load_checked_with(None, &mut storage).unwrap_err();
+
+    assert!(error.contains("Share-Profile sind beschaedigt"));
+    assert!(error.contains("lifetime_exceeded"));
+    assert!(error.contains("ungueltiger direkter Request"));
 }
 
 #[test]
@@ -116,19 +138,6 @@ fn persisted_ledger_tolerates_clock_rollback_for_bounded_signed_state() {
         .unwrap();
 
     profiles.validate_direct_ledger().unwrap();
-}
-
-#[test]
-fn profile_load_fails_closed_with_actionable_lifetime_corruption() {
-    let (mut profiles, _) = incoming_profiles();
-    profiles.direct_requests[0].record.request.expires_at = i64::MAX;
-    let mut storage = ReadOnlyProfile(Some(serde_json::to_string(&profiles).unwrap()));
-
-    let error = ShareProfiles::load_checked_with(None, &mut storage).unwrap_err();
-
-    assert!(error.contains("Share-Profile sind beschaedigt"));
-    assert!(error.contains("lifetime_exceeded"));
-    assert!(error.contains("ungueltiger direkter Request"));
 }
 
 fn assert_lifetime_corruption(profiles: ShareProfiles) {

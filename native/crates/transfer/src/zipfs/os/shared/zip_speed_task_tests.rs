@@ -35,7 +35,7 @@ fn report(case: &str, files: usize, bytes: usize, started: Instant) {
 }
 
 #[test]
-#[ignore = "benchmark: cargo test speed_task_zip -- --ignored --nocapture"]
+#[ignore = "benchmark: cargo test speed_task_zip -- --ignored --nocapture; Suite rechte-desktop-tresore-task"]
 fn speed_task_zip_extract_throughput() {
     for (case, files, size) in [
         ("5000x4KiB", 5000usize, 4096usize),

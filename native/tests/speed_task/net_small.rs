@@ -306,7 +306,7 @@ macro_rules! small_cases {
     ($($name:ident => ($way:literal, $direction:literal, $profile:literal)),* $(,)?) => {
         $(
             #[test]
-            #[ignore = "needs the stage's server, shaped loopback and capacity file"]
+            #[ignore = "needs the stage's server, shaped loopback and capacity file; Suite rechte-desktop-tresore-task"]
             fn $name() {
                 let case = Case::new(stringify!($name), $way, $direction, $profile);
                 guarded(case.name, || run_small(case));
@@ -346,7 +346,7 @@ macro_rules! mixed_cases {
     ($($name:ident => ($way:literal, $direction:literal)),* $(,)?) => {
         $(
             #[test]
-            #[ignore = "needs the stage's server, shaped loopback and capacity file"]
+            #[ignore = "needs the stage's server, shaped loopback and capacity file; Suite rechte-desktop-tresore-task"]
             fn $name() {
                 let case = Case::new(stringify!($name), $way, $direction, "wan");
                 guarded(case.name, || run_mixed(case));
@@ -363,7 +363,7 @@ mixed_cases! {
 }
 
 #[test]
-#[ignore = "needs the stage's WebDAV server with its access log"]
+#[ignore = "needs the stage's WebDAV server with its access log; Suite rechte-desktop-tresore-task"]
 fn speed_task_webdav_requests_per_file() {
     guarded("speed_task_webdav_requests_per_file", run_requests_per_file);
 }

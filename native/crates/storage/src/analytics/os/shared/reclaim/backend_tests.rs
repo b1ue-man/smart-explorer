@@ -288,103 +288,114 @@ fn review_task_agent_walk_failure_falls_back_to_listing() {
 
 #[test]
 fn review_task_host_search_is_preferred_over_any_walk() {
-    let group = super::types::DuplicateGroup {
-        hash: super::types::ContentHash {
-            algorithm: super::types::HashAlgorithm::Sha256,
-            hex: "ab".into(),
-        },
-        evidence: DuplicateEvidence::LocalSha256,
-        size: 3,
-        reclaimable: 3,
-        items: vec![
-            ReclaimItem::new("/a.bin".into(), "a.bin".into(), 3, 1, false),
-            ReclaimItem::new("/b.bin".into(), "b.bin".into(), 3, 1, false),
-        ],
-    };
-    let be = Arc::new(MockBackend {
-        scheme: Some(Scheme::Peer),
-        host_search: Some(DuplicateReport {
-            groups: vec![group],
-            summary: DuplicateSummary {
-                files: 9,
-                candidates: 2,
-                compared: 2,
-                groups: 1,
-                ..DuplicateSummary::default()
-            },
-            root_error: None,
+    let cases: [(&str, fn()); 2] = [
+        ("review_task_host_search_is_preferred_over_any_walk", || {
+            let group = super::types::DuplicateGroup {
+                hash: super::types::ContentHash {
+                    algorithm: super::types::HashAlgorithm::Sha256,
+                    hex: "ab".into(),
+                },
+                evidence: DuplicateEvidence::LocalSha256,
+                size: 3,
+                reclaimable: 3,
+                items: vec![
+                    ReclaimItem::new("/a.bin".into(), "a.bin".into(), 3, 1, false),
+                    ReclaimItem::new("/b.bin".into(), "b.bin".into(), 3, 1, false),
+                ],
+            };
+            let be = Arc::new(MockBackend {
+                scheme: Some(Scheme::Peer),
+                host_search: Some(DuplicateReport {
+                    groups: vec![group],
+                    summary: DuplicateSummary {
+                        files: 9,
+                        candidates: 2,
+                        compared: 2,
+                        groups: 1,
+                        ..DuplicateSummary::default()
+                    },
+                    root_error: None,
+                }),
+                ..MockBackend::default()
+            });
+            *be.walk_hits.lock().unwrap() =
+                Some(vec![hit("a.bin", 3, "900150983cd24fb0d6963f7d28e17f72")]);
+            let report = find_backend_duplicates(be.clone(), "/", &ReclaimProgress::default(), 1);
+            assert_eq!(report.groups.len(), 1);
+            assert_eq!(report.summary.files, 9);
+            assert_eq!(
+                be.lists.load(Ordering::Relaxed),
+                0,
+                "the host searched, nothing was listed"
+            );
+            assert_eq!(be.open_reads.load(Ordering::Relaxed), 0);
+
+            let desktop = duplicates_from_one_byte();
+            be.entries.lock().unwrap().insert(
+                "/".to_string(),
+                vec![file("a.bin", 3, None), file("b.bin", 3, None)],
+            );
+            let reclaim =
+                scan_reclaim_backend(be.clone(), "/", &ReclaimProgress::default(), &desktop);
+            assert_eq!(reclaim.duplicate_groups.len(), 1);
+            assert_eq!(reclaim.duplicate_candidates, 2);
+            assert_eq!(
+                be.open_reads.load(Ordering::Relaxed),
+                0,
+                "no content compared here"
+            );
         }),
-        ..MockBackend::default()
-    });
-    *be.walk_hits.lock().unwrap() = Some(vec![hit("a.bin", 3, "900150983cd24fb0d6963f7d28e17f72")]);
-    let report = find_backend_duplicates(be.clone(), "/", &ReclaimProgress::default(), 1);
-    assert_eq!(report.groups.len(), 1);
-    assert_eq!(report.summary.files, 9);
-    assert_eq!(
-        be.lists.load(Ordering::Relaxed),
-        0,
-        "the host searched, nothing was listed"
-    );
-    assert_eq!(be.open_reads.load(Ordering::Relaxed), 0);
-
-    let desktop = duplicates_from_one_byte();
-    be.entries.lock().unwrap().insert(
-        "/".to_string(),
-        vec![file("a.bin", 3, None), file("b.bin", 3, None)],
-    );
-    let reclaim = scan_reclaim_backend(be.clone(), "/", &ReclaimProgress::default(), &desktop);
-    assert_eq!(reclaim.duplicate_groups.len(), 1);
-    assert_eq!(reclaim.duplicate_candidates, 2);
-    assert_eq!(
-        be.open_reads.load(Ordering::Relaxed),
-        0,
-        "no content compared here"
-    );
-}
-
-#[test]
-fn review_task_withdrawn_host_search_keeps_the_sparse_fallback() {
-    let be = Arc::new(MockBackend {
-        host_withdraws: true,
-        ..MockBackend::default()
-    });
-    be.entries.lock().unwrap().insert(
-        "/".into(),
-        vec![
-            file("a", 3, None),
-            file("b", 3, None),
-            file("unique", 7, None),
-        ],
-    );
-    be.contents.lock().unwrap().extend([
-        ("/a".into(), b"abc".to_vec()),
-        ("/b".into(), b"abc".to_vec()),
-    ]);
-    let report = find_backend_duplicates(be.clone(), "/", &ReclaimProgress::default(), 1);
-    assert!(report.root_error.is_none());
-    assert_eq!(report.summary.files, 3);
-    assert_eq!(report.groups.len(), 1);
-    assert!(!be
-        .read_paths
-        .lock()
-        .unwrap()
-        .iter()
-        .any(|path| path == "/unique"));
-    be.read_paths.lock().unwrap().clear();
-    let report = scan_reclaim_backend(
-        be.clone(),
-        "/",
-        &ReclaimProgress::default(),
-        &duplicates_from_one_byte(),
-    );
-    assert_eq!(report.files, 3);
-    assert_eq!(report.duplicate_groups.len(), 1);
-    assert!(!be
-        .read_paths
-        .lock()
-        .unwrap()
-        .iter()
-        .any(|path| path == "/unique"));
+        (
+            "review_task_withdrawn_host_search_keeps_the_sparse_fallback",
+            || {
+                let be = Arc::new(MockBackend {
+                    host_withdraws: true,
+                    ..MockBackend::default()
+                });
+                be.entries.lock().unwrap().insert(
+                    "/".into(),
+                    vec![
+                        file("a", 3, None),
+                        file("b", 3, None),
+                        file("unique", 7, None),
+                    ],
+                );
+                be.contents.lock().unwrap().extend([
+                    ("/a".into(), b"abc".to_vec()),
+                    ("/b".into(), b"abc".to_vec()),
+                ]);
+                let report =
+                    find_backend_duplicates(be.clone(), "/", &ReclaimProgress::default(), 1);
+                assert!(report.root_error.is_none());
+                assert_eq!(report.summary.files, 3);
+                assert_eq!(report.groups.len(), 1);
+                assert!(!be
+                    .read_paths
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|path| path == "/unique"));
+                be.read_paths.lock().unwrap().clear();
+                let report = scan_reclaim_backend(
+                    be.clone(),
+                    "/",
+                    &ReclaimProgress::default(),
+                    &duplicates_from_one_byte(),
+                );
+                assert_eq!(report.files, 3);
+                assert_eq!(report.duplicate_groups.len(), 1);
+                assert!(!be
+                    .read_paths
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|path| path == "/unique"));
+            },
+        ),
+    ];
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
+    }
 }
 
 #[test]

@@ -71,48 +71,59 @@ fn walk(root: &std::path::Path, algorithm: u8) -> (io::Result<()>, Vec<Frame>) {
 
 #[test]
 fn screen_metadata_runtime_task_agent_file_walk_returns_one_entry() {
-    assert_eq!(query::FILE_DIGEST, 7);
-    assert_eq!(answer(query::FILE_DIGEST, "/").unwrap(), Frame::Answer(1));
-    let root = temp_dir("one");
-    let file = root.join("abc.txt");
-    std::fs::write(&file, b"abc").unwrap();
-    let (result, frames) = walk(&file, digest::SHA256);
-    result.unwrap();
-    assert_eq!(frames.len(), 2, "{frames:?}");
-    match &frames[0] {
-        Frame::HashEntry {
-            rel,
-            is_dir,
-            size,
-            md5,
-            ..
-        } => {
-            assert_eq!(rel, "");
-            assert!(!is_dir);
-            assert_eq!(*size, 3);
-            assert_eq!(md5.as_deref(), Some(ABC_SHA256));
-        }
-        other => panic!("expected the file entry, got {other:?}"),
+    let cases: [(&str, fn()); 2] = [
+        (
+            "screen_metadata_runtime_task_agent_file_walk_returns_one_entry",
+            || {
+                assert_eq!(query::FILE_DIGEST, 7);
+                assert_eq!(answer(query::FILE_DIGEST, "/").unwrap(), Frame::Answer(1));
+                let root = temp_dir("one");
+                let file = root.join("abc.txt");
+                std::fs::write(&file, b"abc").unwrap();
+                let (result, frames) = walk(&file, digest::SHA256);
+                result.unwrap();
+                assert_eq!(frames.len(), 2, "{frames:?}");
+                match &frames[0] {
+                    Frame::HashEntry {
+                        rel,
+                        is_dir,
+                        size,
+                        md5,
+                        ..
+                    } => {
+                        assert_eq!(rel, "");
+                        assert!(!is_dir);
+                        assert_eq!(*size, 3);
+                        assert_eq!(md5.as_deref(), Some(ABC_SHA256));
+                    }
+                    other => panic!("expected the file entry, got {other:?}"),
+                }
+                assert_eq!(frames[1], Frame::End);
+                let _ = std::fs::remove_dir_all(&root);
+            },
+        ),
+        (
+            "screen_metadata_runtime_task_agent_file_walk_keeps_other_roots_unchanged",
+            || {
+                let root = temp_dir("roots");
+                let file = root.join("abc.txt");
+                std::fs::write(&file, b"abc").unwrap();
+                // A folder with SHA-256 stays "unsupported" (the client falls back).
+                let (result, frames) = walk(&root, digest::SHA256);
+                result.unwrap();
+                assert_eq!(frames, [Frame::Err(UNSUPPORTED_EXTENSION.to_string())]);
+                // A missing file is an error, never a digest or "unsupported".
+                let (result, frames) = walk(&root.join("gone.txt"), digest::SHA256);
+                assert_eq!(result.unwrap_err().kind(), io::ErrorKind::NotFound);
+                assert!(frames.is_empty(), "{frames:?}");
+                // MD5 walks still take folders only.
+                let (result, _) = walk(&file, digest::MD5);
+                assert_eq!(result.unwrap_err().kind(), io::ErrorKind::InvalidInput);
+                let _ = std::fs::remove_dir_all(&root);
+            },
+        ),
+    ];
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
     }
-    assert_eq!(frames[1], Frame::End);
-    let _ = std::fs::remove_dir_all(&root);
-}
-
-#[test]
-fn screen_metadata_runtime_task_agent_file_walk_keeps_other_roots_unchanged() {
-    let root = temp_dir("roots");
-    let file = root.join("abc.txt");
-    std::fs::write(&file, b"abc").unwrap();
-    // A folder with SHA-256 stays "unsupported" (the client falls back).
-    let (result, frames) = walk(&root, digest::SHA256);
-    result.unwrap();
-    assert_eq!(frames, [Frame::Err(UNSUPPORTED_EXTENSION.to_string())]);
-    // A missing file is an error, never a digest or "unsupported".
-    let (result, frames) = walk(&root.join("gone.txt"), digest::SHA256);
-    assert_eq!(result.unwrap_err().kind(), io::ErrorKind::NotFound);
-    assert!(frames.is_empty(), "{frames:?}");
-    // MD5 walks still take folders only.
-    let (result, _) = walk(&file, digest::MD5);
-    assert_eq!(result.unwrap_err().kind(), io::ErrorKind::InvalidInput);
-    let _ = std::fs::remove_dir_all(&root);
 }

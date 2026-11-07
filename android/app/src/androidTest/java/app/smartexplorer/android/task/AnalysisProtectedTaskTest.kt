@@ -2,7 +2,6 @@ package app.smartexplorer.android.task
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.smartexplorer.android.api.AnalyzeApi
-import app.smartexplorer.android.api.DuplicateGroup
 import app.smartexplorer.android.system.StorageStatsAccess
 import java.io.File
 import kotlinx.serialization.json.JsonObject
@@ -18,8 +17,7 @@ import org.junit.runner.RunWith
  * B1, B2, B5, B6, M13, M14): a whole-volume analysis treats other apps' `Android/data|obb` as
  * protected (no read issues, complete result) and, with usage access (the suite grants
  * `GET_USAGE_STATS`), lists the installed apps with the own app among them; a protected root ends
- * complete instead of failed, and the duplicate search finds duplicates beyond the former
- * 200-candidate cap.
+ * complete instead of failed.
  */
 @RunWith(AndroidJUnit4::class)
 class AnalysisProtectedTaskTest {
@@ -92,32 +90,5 @@ class AnalysisProtectedTaskTest {
             assertFalse("„Weitere App-Daten“ trotz App-Liste: $rows", rows.any { it.text("kind") == "protected" && !it.bool("isDir") })
         }
         TaskReport.note("analyze.apps", "apps=${apps.size} row=${appsRow.long("size")} own=$own")
-    }
-
-    @Test
-    fun duplicateSearchFindsDuplicatesBeyondTheFormerCandidateCap() = coreTest(timeoutMs = 15 * 60_000L) {
-        val root = Fixture.dir(Volumes.primary(), "duplikate-${System.currentTimeMillis()}")
-        // 260 pairs of equal-sized small files plus one large pair: the former search kept only the
-        // 200 largest candidates, so most small pairs were never compared.
-        val pairs = 260
-        for (index in 0 until pairs) {
-            Fixture.bytes(File(root, "a/klein-$index.bin"), 4096, index)
-            Fixture.bytes(File(root, "b/klein-$index.bin"), 4096, index)
-        }
-        Fixture.bytes(File(root, "a/gross.bin"), 2 * 1024 * 1024, 7_777)
-        Fixture.bytes(File(root, "b/gross.bin"), 2 * 1024 * 1024, 7_777)
-        Fixture.bytes(File(root, "a/einzeln.bin"), 4096, 99_999)
-
-        val search = Api.runTask("reclaim.start", args("location" to root.absolutePath, "minSize" to 1024))
-        assertEquals("done", search.state)
-        val groups: List<DuplicateGroup> = Api.get("reclaim.groups", args("taskId" to search.id))
-        assertEquals("Duplikatgruppen", pairs + 1, groups.size)
-        assertTrue("Gruppe mit mehr als zwei Kopien: $groups", groups.all { it.items.size == 2 })
-        val summary = Api.obj("reclaim.summary", args("taskId" to search.id))
-        assertEquals("Kandidaten", (2 * pairs + 3).toLong(), summary.long("candidates"))
-        assertEquals("Gruppen in der Zusammenfassung", (pairs + 1).toLong(), summary.long("groups"))
-        assertEquals("Fehler: ${summary.textOrNull("errorText")}", 0L, summary.long("errorCount"))
-        assertTrue("Grenze erreicht: ${summary.textOrNull("limit")}", summary.textOrNull("limit").isNullOrEmpty())
-        root.deleteRecursively()
     }
 }

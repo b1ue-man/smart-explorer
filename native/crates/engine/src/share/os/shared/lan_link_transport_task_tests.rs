@@ -68,6 +68,7 @@ async fn raw_challenge(
 }
 
 #[test]
+#[ignore = "needs the runner's private LAN interface (SE_REVIEW_LAN_IP, SE_REVIEW_LAN_IFINDEX, SE_REVIEW_LAN_IFNAME); Suite review-task"]
 fn review_task_s09_transport_real_private_tls_round_has_only_status_rights() {
     let mut fixture = Fixture::start(10);
     let rt = fixture.a.rt.clone();
@@ -101,6 +102,7 @@ fn review_task_s09_transport_real_private_tls_round_has_only_status_rights() {
 }
 
 #[test]
+#[ignore = "needs the runner's private LAN interface (SE_REVIEW_LAN_IP, SE_REVIEW_LAN_IFINDEX, SE_REVIEW_LAN_IFNAME); Suite review-task"]
 fn review_task_s09_transport_rejects_wrong_pin_and_replayed_confirm() {
     let mut fixture = Fixture::start(20);
     let rt = fixture.a.rt.clone();
@@ -214,6 +216,7 @@ fn review_task_s09_transport_rejects_wrong_pin_and_replayed_confirm() {
 }
 
 #[test]
+#[ignore = "needs the runner's private LAN interface (SE_REVIEW_LAN_IP, SE_REVIEW_LAN_IFINDEX, SE_REVIEW_LAN_IFNAME); Suite review-task"]
 fn review_task_s09_transport_malformed_and_stalled_frames_are_bounded() {
     for mode in 0..4 {
         let fixture = Fixture::start(80 + mode * 2);

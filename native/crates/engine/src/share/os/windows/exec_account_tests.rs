@@ -222,7 +222,7 @@ pub(super) fn remote_account() -> RunAsAccount {
 }
 
 #[test]
-#[ignore = "needs an elevated runner and the account service: windows-core job (perm-windows)"]
+#[ignore = "needs an elevated runner and the account service: windows-core job (perm-windows); Suite rechte-desktop-tresore-task"]
 fn perm_task_windows_helper_setup_remote_account() {
     let task = task();
     let report = set_up(&task);
@@ -255,7 +255,7 @@ fn perm_task_windows_helper_setup_remote_account() {
 }
 
 #[test]
-#[ignore = "needs an elevated runner and the account service: windows-core job (perm-windows)"]
+#[ignore = "needs an elevated runner and the account service: windows-core job (perm-windows); Suite rechte-desktop-tresore-task"]
 fn perm_task_windows_helper_refuses_unlisted_account() {
     let task = task();
     set_up(&task);
@@ -293,7 +293,7 @@ fn perm_task_windows_helper_refuses_unlisted_account() {
 }
 
 #[test]
-#[ignore = "needs an elevated runner and the account service: windows-core job (perm-windows)"]
+#[ignore = "needs an elevated runner and the account service: windows-core job (perm-windows); Suite rechte-desktop-tresore-task"]
 fn perm_task_windows_pipe_caller_impersonation() {
     let task = task();
     set_up(&task);
@@ -365,7 +365,7 @@ fn open_service_pipe(flags: u32) -> std::io::Result<File> {
 }
 
 #[test]
-#[ignore = "needs an elevated runner and the account service: windows-core job (perm-windows)"]
+#[ignore = "needs an elevated runner and the account service: windows-core job (perm-windows); Suite rechte-desktop-tresore-task"]
 fn perm_task_windows_probe_reports_token_level() {
     let task = task();
     set_up(&task);
@@ -442,7 +442,7 @@ fn remote_filtering() -> bool {
 }
 
 #[test]
-#[ignore = "needs the built se.exe: windows-core job (perm-windows)"]
+#[ignore = "needs the built se.exe: windows-core job (perm-windows); Suite rechte-desktop-tresore-task"]
 fn perm_task_windows_own_account_path_unchanged() {
     let task = task();
     // Outside `prepare_as` no start is prepared for another account.
@@ -470,7 +470,7 @@ fn perm_task_windows_own_account_path_unchanged() {
 /// R15c: one user runs more account jobs at once than the former 8 per
 /// connection of the account service.
 #[test]
-#[ignore = "needs an elevated runner and the account service: windows-core job (perm-windows)"]
+#[ignore = "needs an elevated runner and the account service: windows-core job (perm-windows); Suite rechte-desktop-tresore-task"]
 fn perm_task_windows_helper_many_jobs_at_once() {
     let task = task();
     set_up(&task);

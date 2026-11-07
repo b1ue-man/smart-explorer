@@ -42,7 +42,7 @@ fn export(fixture: &tempfile::TempDir) -> std::path::PathBuf {
 }
 
 #[test]
-#[ignore = "FUSE task stage linux-root: drive-fuse (SMART_EXPLORER_FUSE_TASK=1)"]
+#[ignore = "FUSE task stage linux-root: drive-fuse (SMART_EXPLORER_FUSE_TASK=1); Suite rechte-desktop-tresore-task"]
 fn drive_task_fuse_mount_local_fixture_rw() -> io::Result<()> {
     require_task_stage();
     let (fixture, host) = local_drive(&[("docs/seed.txt", b"seed")])?;
@@ -83,7 +83,7 @@ fn drive_task_fuse_mount_local_fixture_rw() -> io::Result<()> {
 }
 
 #[test]
-#[ignore = "FUSE task stage linux-root: drive-fuse with the sftp fixture (SMART_EXPLORER_FUSE_TASK=1)"]
+#[ignore = "FUSE task stage linux-root: drive-fuse with the sftp fixture (SMART_EXPLORER_FUSE_TASK=1); Suite rechte-desktop-tresore-task"]
 fn drive_task_fuse_sftp_container_rw() -> io::Result<()> {
     require_task_stage();
     let (raw, drive, server) = sftp(RW)?;
@@ -117,8 +117,19 @@ fn drive_task_fuse_sftp_container_rw() -> io::Result<()> {
 }
 
 #[test]
-#[ignore = "FUSE task stage linux-root: drive-fuse (SMART_EXPLORER_FUSE_TASK=1)"]
+#[ignore = "FUSE task stage linux-root: drive-fuse (SMART_EXPLORER_FUSE_TASK=1); Suite rechte-desktop-tresore-task"]
 fn drive_task_fuse_editor_save_rename_over() -> io::Result<()> {
+    let cases: [fn() -> io::Result<()>; 2] = [
+        drive_task_fuse_editor_save_rename_over_case,
+        drive_task_fuse_gio_replace_stays_atomic,
+    ];
+    for case in cases {
+        case()?;
+    }
+    Ok(())
+}
+
+fn drive_task_fuse_editor_save_rename_over_case() -> io::Result<()> {
     require_task_stage();
     let (fixture, host) = local_drive(&[("note.txt", b"v1")])?;
     let root = export(&fixture);
@@ -147,36 +158,6 @@ fn drive_task_fuse_editor_save_rename_over() -> io::Result<()> {
     unmount_cleanly(host)
 }
 
-/// The system calls of GLib's `g_file_replace` on an existing file
-/// (`glocalfileoutputstream.c`, `handle_overwrite_open`) where `gio` is
-/// missing: a failing `fchown` or `fchmod` with the original's owner and
-/// mode would make GLib fall back to rewriting the file in place.
-fn glib_replace(target: &Path, contents: &[u8]) -> io::Result<()> {
-    let original = OpenOptions::new()
-        .write(true)
-        .create(true)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(target)?;
-    let stat = original.metadata()?;
-    let temporary_path = target.with_file_name(".goutputstream-FUSE01");
-    let mut temporary = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create_new(true)
-        .mode(0o666)
-        .open(&temporary_path)?;
-    std::os::unix::fs::fchown(&temporary, Some(stat.uid()), Some(stat.gid()))?;
-    temporary.set_permissions(fs::Permissions::from_mode(stat.mode() & 0o7777))?;
-    drop(original);
-    temporary.write_all(contents)?;
-    temporary.sync_all()?;
-    fs::rename(&temporary_path, target)?;
-    drop(temporary);
-    Ok(())
-}
-
-#[test]
-#[ignore = "FUSE task stage linux-root: drive-fuse (SMART_EXPLORER_FUSE_TASK=1)"]
 fn drive_task_fuse_gio_replace_stays_atomic() -> io::Result<()> {
     require_task_stage();
     let (fixture, host) = local_drive(&[("doc.txt", b"first")])?;
@@ -223,6 +204,34 @@ fn drive_task_fuse_gio_replace_stays_atomic() -> io::Result<()> {
     unmount_cleanly(host)
 }
 
+/// The system calls of GLib's `g_file_replace` on an existing file
+/// (`glocalfileoutputstream.c`, `handle_overwrite_open`) where `gio` is
+/// missing: a failing `fchown` or `fchmod` with the original's owner and
+/// mode would make GLib fall back to rewriting the file in place.
+fn glib_replace(target: &Path, contents: &[u8]) -> io::Result<()> {
+    let original = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(target)?;
+    let stat = original.metadata()?;
+    let temporary_path = target.with_file_name(".goutputstream-FUSE01");
+    let mut temporary = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .mode(0o666)
+        .open(&temporary_path)?;
+    std::os::unix::fs::fchown(&temporary, Some(stat.uid()), Some(stat.gid()))?;
+    temporary.set_permissions(fs::Permissions::from_mode(stat.mode() & 0o7777))?;
+    drop(original);
+    temporary.write_all(contents)?;
+    temporary.sync_all()?;
+    fs::rename(&temporary_path, target)?;
+    drop(temporary);
+    Ok(())
+}
+
 /// A source tree with fixed times and modes; returns (name, bytes, mode).
 fn source_tree(root: &Path) -> io::Result<Vec<(&'static str, &'static [u8], u32)>> {
     let files: Vec<(&'static str, &'static [u8], u32)> = vec![
@@ -247,7 +256,7 @@ fn source_tree(root: &Path) -> io::Result<Vec<(&'static str, &'static [u8], u32)
 }
 
 #[test]
-#[ignore = "FUSE task stage linux-root: drive-fuse with the sftp fixture (SMART_EXPLORER_FUSE_TASK=1)"]
+#[ignore = "FUSE task stage linux-root: drive-fuse with the sftp fixture (SMART_EXPLORER_FUSE_TASK=1); Suite rechte-desktop-tresore-task"]
 fn drive_task_fuse_cp_a_exit_zero_and_times_applied_on_sftp() -> io::Result<()> {
     require_task_stage();
     let (raw, drive, server) = sftp(RW)?;
@@ -276,7 +285,7 @@ fn drive_task_fuse_cp_a_exit_zero_and_times_applied_on_sftp() -> io::Result<()> 
 }
 
 #[test]
-#[ignore = "FUSE task stage linux-root: drive-fuse (SMART_EXPLORER_FUSE_TASK=1)"]
+#[ignore = "FUSE task stage linux-root: drive-fuse (SMART_EXPLORER_FUSE_TASK=1); Suite rechte-desktop-tresore-task"]
 fn drive_task_fuse_rsync_a_exit_zero() -> io::Result<()> {
     require_task_stage();
     let rsync = tool("rsync").expect("rsync fehlt auf dem Runner der Stufe linux-root: drive-fuse");

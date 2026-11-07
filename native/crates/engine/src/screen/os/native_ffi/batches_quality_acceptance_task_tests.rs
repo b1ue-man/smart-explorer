@@ -273,6 +273,7 @@ fn hybrid_still(registry: &CodecRegistry) -> Value {
 }
 
 #[test]
+#[ignore = "needs the pinned Cisco OpenH264 file named by SE_SCREEN_TASK_OPENH264; Suite review-task"]
 fn batches_task_b6_quality_openh264_baseline_transport_and_still() {
     if std::env::var_os("SE_SCREEN_TASK_OPENH264").is_none()
         || super::super::openh264_pins::PIN.is_none()

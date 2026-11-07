@@ -61,68 +61,85 @@ fn drain(rx: &crossbeam_channel::Receiver<ScanMessage>) -> (HashSet<String>, u64
 
 #[test]
 fn walks_full_tree_via_backend() {
-    let directory = temp_tree();
-    let root = directory.to_string_lossy().replace('\\', "/");
-    let backend: BackendHandle = Arc::new(LocalBackend::new(&root));
-    let (tx, rx) = unbounded();
-    start_scan_backend(backend, root, None, None, tx);
-    let (names, scanned) = drain(&rx);
-    assert!(names.contains("a.txt"), "names: {names:?}");
-    assert!(names.contains("sub"));
-    assert!(names.contains("b.dat"), "should recurse into sub");
-    assert_eq!(scanned, 3);
-    std::fs::remove_dir_all(&directory).ok();
+    let cases: [(&str, fn()); 2] = [
+        ("walks_full_tree_via_backend", || {
+            let directory = temp_tree();
+            let root = directory.to_string_lossy().replace('\\', "/");
+            let backend: BackendHandle = Arc::new(LocalBackend::new(&root));
+            let (tx, rx) = unbounded();
+            start_scan_backend(backend, root, None, None, tx);
+            let (names, scanned) = drain(&rx);
+            assert!(names.contains("a.txt"), "names: {names:?}");
+            assert!(names.contains("sub"));
+            assert!(names.contains("b.dat"), "should recurse into sub");
+            assert_eq!(scanned, 3);
+            std::fs::remove_dir_all(&directory).ok();
+        }),
+        ("flat_depth_one_does_not_recurse", || {
+            let directory = temp_tree();
+            let root = directory.to_string_lossy().replace('\\', "/");
+            let backend: BackendHandle = Arc::new(LocalBackend::new(&root));
+            let (tx, rx) = unbounded();
+            start_scan_backend(backend, root, Some(1), None, tx);
+            let (names, scanned) = drain(&rx);
+            assert!(names.contains("a.txt") && names.contains("sub"));
+            assert!(!names.contains("b.dat"), "depth 1 must not recurse");
+            assert_eq!(scanned, 2);
+            std::fs::remove_dir_all(&directory).ok();
+        }),
+    ];
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
+    }
 }
 
 #[test]
 fn recursive_filter_task_remote_retention_emits_matches_with_their_ancestors_only() {
-    let directory = retention_tree();
-    let root = directory.to_string_lossy().replace('\\', "/");
-    let backend: BackendHandle = Arc::new(LocalBackend::new(&root));
-    let (tx, rx) = unbounded();
-    let retention: crate::scanner::RetentionHandle = Arc::new(TxtOnly { skip_dir: None });
-    start_scan_backend(backend, root.clone(), None, Some(retention), tx);
-    let (names, scanned) = drain(&rx);
-    let root_name = directory.file_name().unwrap().to_string_lossy().to_string();
-    for expected in [root_name.as_str(), "a.txt", "sub", "deep", "keep.txt"] {
-        assert!(names.contains(expected), "missing {expected}: {names:?}");
+    let cases: [(&str, fn()); 2] = [
+        (
+            "recursive_filter_task_remote_retention_emits_matches_with_their_ancestors_only",
+            || {
+                let directory = retention_tree();
+                let root = directory.to_string_lossy().replace('\\', "/");
+                let backend: BackendHandle = Arc::new(LocalBackend::new(&root));
+                let (tx, rx) = unbounded();
+                let retention: crate::scanner::RetentionHandle =
+                    Arc::new(TxtOnly { skip_dir: None });
+                start_scan_backend(backend, root.clone(), None, Some(retention), tx);
+                let (names, scanned) = drain(&rx);
+                let root_name = directory.file_name().unwrap().to_string_lossy().to_string();
+                for expected in [root_name.as_str(), "a.txt", "sub", "deep", "keep.txt"] {
+                    assert!(names.contains(expected), "missing {expected}: {names:?}");
+                }
+                for pruned in ["b.dat", "other", "x.dat"] {
+                    assert!(!names.contains(pruned), "retained {pruned}: {names:?}");
+                }
+                assert_eq!(scanned, 7, "progress still counts every visited entry");
+                std::fs::remove_dir_all(&directory).ok();
+            },
+        ),
+        (
+            "recursive_filter_task_remote_retention_can_prune_whole_subtrees",
+            || {
+                let directory = retention_tree();
+                let root = directory.to_string_lossy().replace('\\', "/");
+                let backend: BackendHandle = Arc::new(LocalBackend::new(&root));
+                let (tx, rx) = unbounded();
+                let retention: crate::scanner::RetentionHandle = Arc::new(TxtOnly {
+                    skip_dir: Some("sub"),
+                });
+                start_scan_backend(backend, root, None, Some(retention), tx);
+                let (names, scanned) = drain(&rx);
+                assert!(names.contains("a.txt"));
+                assert!(!names.contains("sub") && !names.contains("keep.txt"));
+                assert_eq!(scanned, 4, "root children plus other/x.dat only");
+                std::fs::remove_dir_all(&directory).ok();
+            },
+        ),
+    ];
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
     }
-    for pruned in ["b.dat", "other", "x.dat"] {
-        assert!(!names.contains(pruned), "retained {pruned}: {names:?}");
-    }
-    assert_eq!(scanned, 7, "progress still counts every visited entry");
-    std::fs::remove_dir_all(&directory).ok();
-}
-
-#[test]
-fn recursive_filter_task_remote_retention_can_prune_whole_subtrees() {
-    let directory = retention_tree();
-    let root = directory.to_string_lossy().replace('\\', "/");
-    let backend: BackendHandle = Arc::new(LocalBackend::new(&root));
-    let (tx, rx) = unbounded();
-    let retention: crate::scanner::RetentionHandle = Arc::new(TxtOnly {
-        skip_dir: Some("sub"),
-    });
-    start_scan_backend(backend, root, None, Some(retention), tx);
-    let (names, scanned) = drain(&rx);
-    assert!(names.contains("a.txt"));
-    assert!(!names.contains("sub") && !names.contains("keep.txt"));
-    assert_eq!(scanned, 4, "root children plus other/x.dat only");
-    std::fs::remove_dir_all(&directory).ok();
-}
-
-#[test]
-fn flat_depth_one_does_not_recurse() {
-    let directory = temp_tree();
-    let root = directory.to_string_lossy().replace('\\', "/");
-    let backend: BackendHandle = Arc::new(LocalBackend::new(&root));
-    let (tx, rx) = unbounded();
-    start_scan_backend(backend, root, Some(1), None, tx);
-    let (names, scanned) = drain(&rx);
-    assert!(names.contains("a.txt") && names.contains("sub"));
-    assert!(!names.contains("b.dat"), "depth 1 must not recurse");
-    assert_eq!(scanned, 2);
-    std::fs::remove_dir_all(&directory).ok();
 }
 
 #[test]

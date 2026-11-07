@@ -296,13 +296,13 @@ fn headless(variant: GnomeVariant, majors: std::ops::RangeInclusive<u32>) {
 }
 
 #[test]
-#[ignore = "braucht eine kopflose GNOME Shell 45 bis 48 (Stufe desktop-gnome, Ubuntu 24.04)"]
+#[ignore = "braucht eine kopflose GNOME Shell 45 bis 48 (Stufe desktop-gnome, Ubuntu 24.04); Suite rechte-desktop-tresore-task"]
 fn desktop_task_gnome_headless_variant_a() {
     headless(GnomeVariant::A, 45..=48);
 }
 
 #[test]
-#[ignore = "braucht eine kopflose GNOME Shell 49 bis 51 (Stufe desktop-gnome, Container fedora:43)"]
+#[ignore = "braucht eine kopflose GNOME Shell 49 bis 51 (Stufe desktop-gnome, Container fedora:43); Suite rechte-desktop-tresore-task"]
 fn desktop_task_gnome_headless_variant_b() {
     headless(GnomeVariant::B, 49..=51);
 }

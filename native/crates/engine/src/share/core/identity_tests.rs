@@ -171,12 +171,36 @@ fn stale_rename_preserves_a_newer_direct_code_rotation() {
 
 #[test]
 fn healthy_identity_refuses_repair_without_mutation() {
+    let cases: [fn(); 2] = [
+        healthy_identity_refuses_repair_without_mutation_case,
+        repair_preflight_refuses_a_healthy_identity_without_mutation,
+    ];
+    for case in cases {
+        case();
+    }
+}
+
+fn healthy_identity_refuses_repair_without_mutation_case() {
     let mut storage = FakePersistence::default();
     create_identity(&mut storage, "device");
     let old_identity = storage.identity.clone();
     let old_secrets = storage.secrets.clone();
 
     let error = ShareIdentity::repair_missing_with("fallback".into(), &mut storage).unwrap_err();
+
+    assert!(error.contains("vollstaendig"));
+    assert_eq!(storage.identity, old_identity);
+    assert_eq!(storage.secrets, old_secrets);
+}
+
+fn repair_preflight_refuses_a_healthy_identity_without_mutation() {
+    let mut storage = FakePersistence::default();
+    create_identity(&mut storage, "device");
+    let old_identity = storage.identity.clone();
+    let old_secrets = storage.secrets.clone();
+
+    let error =
+        ShareIdentity::repair_action_needed_with("fallback".into(), &mut storage).unwrap_err();
 
     assert!(error.contains("vollstaendig"));
     assert_eq!(storage.identity, old_identity);
@@ -211,21 +235,6 @@ fn repair_preflight_reports_missing_iroh_secret_without_mutation() {
     let action = ShareIdentity::repair_action_needed_with("fallback".into(), &mut storage).unwrap();
 
     assert_eq!(action, IdentityRepairAction::IdentityReplaced);
-    assert_eq!(storage.identity, old_identity);
-    assert_eq!(storage.secrets, old_secrets);
-}
-
-#[test]
-fn repair_preflight_refuses_a_healthy_identity_without_mutation() {
-    let mut storage = FakePersistence::default();
-    create_identity(&mut storage, "device");
-    let old_identity = storage.identity.clone();
-    let old_secrets = storage.secrets.clone();
-
-    let error =
-        ShareIdentity::repair_action_needed_with("fallback".into(), &mut storage).unwrap_err();
-
-    assert!(error.contains("vollstaendig"));
     assert_eq!(storage.identity, old_identity);
     assert_eq!(storage.secrets, old_secrets);
 }

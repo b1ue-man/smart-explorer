@@ -23,18 +23,15 @@ class DeviceNavigationRegressionTest {
             val (kind, value) = AppNav.encode(request)
             assertEquals("Navigation must retain the exact target", request, AppNav.decode(kind, value))
         }
-    }
-
-    @Test
-    fun batches_android_non_device_requests_do_not_override_settings_navigation() {
-        val requests = listOf(
+        // The other requests do not override the settings navigation (the former batches_android_non_device_requests_do_not_override_settings_navigation).
+        val others = listOf(
             NavRequest.OpenLocation("/storage/emulated/0"),
             NavRequest.OpenLocation("share://room/saved-room/device/folder"),
             NavRequest.ShowTransfers, NavRequest.OpenJobConflicts("sync-job"),
             NavRequest.ShowUpdate, NavRequest.ShowBackgroundSettings,
             NavRequest.OpenVaultCompare("vault-job"), NavRequest.ShowLauncherSettings,
         ) + MainTab.entries.map { NavRequest.SelectTab(it) }
-        requests.forEach { request -> assertNull(request.toString(), deviceSettingsAreaFor(request)) }
+        others.forEach { request -> assertNull(request.toString(), deviceSettingsAreaFor(request)) }
         assertNull(deviceSettingsAreaFor(null))
     }
 }

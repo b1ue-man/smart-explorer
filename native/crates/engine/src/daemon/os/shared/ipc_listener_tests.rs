@@ -45,6 +45,17 @@ fn spawn_accept_loop(
 #[cfg(any(target_os = "linux", target_os = "android"))]
 #[test]
 fn android_background_task_ipc_listener_blocks_and_stops_on_shutdown() {
+    let cases: [fn(); 2] = [
+        android_background_task_ipc_listener_blocks_and_stops_on_shutdown_case,
+        android_background_task_ipc_listener_honours_stop_control_within_wait,
+    ];
+    for case in cases {
+        case();
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn android_background_task_ipc_listener_blocks_and_stops_on_shutdown_case() {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::Arc;
 
@@ -77,7 +88,6 @@ fn android_background_task_ipc_listener_blocks_and_stops_on_shutdown() {
 }
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
-#[test]
 fn android_background_task_ipc_listener_honours_stop_control_within_wait() {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::Arc;

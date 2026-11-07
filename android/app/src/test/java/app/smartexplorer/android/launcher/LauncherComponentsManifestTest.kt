@@ -112,19 +112,6 @@ class LauncherComponentsManifestTest {
     }
 
     @Test
-    fun theWidgetPartSwitchesExactlyTheProviderAndItsService() {
-        assertEquals(
-            listOf(
-                "app.smartexplorer.android.widget.DevicesWidgetProvider",
-                "app.smartexplorer.android.widget.DevicesWidgetService",
-            ),
-            LauncherParts.widget,
-        )
-        // The parts do not overlap: switching the widget part never touches the launcher components.
-        assertTrue(LauncherParts.launcher.none { it in LauncherParts.widget })
-    }
-
-    @Test
     fun theWidgetInfoFilesCarryTheSizesOfTheDevicesWidget() {
         for ((path, v31) in listOf("src/main/res/xml/devices_widget_info.xml" to false, "src/main/res/xml-v31/devices_widget_info.xml" to true)) {
             val factory = DocumentBuilderFactory.newInstance().apply { isNamespaceAware = true }

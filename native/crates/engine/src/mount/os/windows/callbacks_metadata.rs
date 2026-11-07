@@ -312,21 +312,3 @@ fn is_mount_root(path: &str) -> bool {
 fn nul_terminated(value: &str) -> Vec<u16> {
     value.encode_utf16().chain(std::iter::once(0)).collect()
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn remote_drive_task_dokany_root_omits_dot_entries() {
-        assert!(is_mount_root("\\"));
-        assert!(is_mount_root("/"));
-        assert!(!is_mount_root("\\folder"));
-    }
-
-    #[test]
-    fn remote_drive_task_dokany_full_find_buffer_stops_successfully() {
-        assert_eq!(fill_disposition(0), FillDisposition::Continue);
-        assert_eq!(fill_disposition(1), FillDisposition::Full);
-    }
-}

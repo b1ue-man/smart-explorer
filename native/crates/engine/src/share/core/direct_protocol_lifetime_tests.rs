@@ -6,6 +6,16 @@ const REQUEST_ID: &str = "123e4567-e89b-42d3-a456-426614174000";
 
 #[test]
 fn maximum_lifetime_and_clock_skew_are_accepted_for_every_envelope() {
+    let cases: [fn(); 2] = [
+        maximum_lifetime_and_clock_skew_are_accepted_for_every_envelope_case,
+        windows_direct_task_receipts_accept_clocks_within_the_skew,
+    ];
+    for case in cases {
+        case();
+    }
+}
+
+fn maximum_lifetime_and_clock_skew_are_accepted_for_every_envelope_case() {
     let timestamp = NOW + MAX_TRACKED_DIRECT_CLOCK_SKEW_SECS;
     let expires_at = timestamp + MAX_TRACKED_DIRECT_ENVELOPE_LIFETIME_SECS;
     let request = request(timestamp, expires_at).unwrap();
@@ -54,85 +64,9 @@ fn maximum_lifetime_and_clock_skew_are_accepted_for_every_envelope() {
         .unwrap();
 }
 
-#[test]
-fn overlong_and_i64_max_envelopes_fail_before_authentication() {
-    let overlong =
-        NOW + MAX_TRACKED_DIRECT_ENVELOPE_LIFETIME_SECS + MAX_TRACKED_DIRECT_CLOCK_SKEW_SECS + 1;
-    assert_eq!(
-        request(NOW, overlong),
-        Err(DirectProtocolError::LifetimeExceeded)
-    );
-    assert_eq!(
-        request(NOW, i64::MAX),
-        Err(DirectProtocolError::LifetimeExceeded)
-    );
-
-    let valid_expires = NOW + MAX_TRACKED_DIRECT_ENVELOPE_LIFETIME_SECS;
-    let valid_request = request(NOW, valid_expires).unwrap();
-    let mut receipt = SignedDirectRequestReceipt::sign_with_nonce(
-        &valid_request,
-        target(),
-        NOW,
-        "request-receipt-nonce",
-        None,
-        &RELATION_SECRET,
-        &key(2),
-    )
-    .unwrap();
-    receipt.expires_at = overlong;
-    assert_eq!(
-        receipt.verify_for(&valid_request, &RELATION_SECRET, NOW),
-        Err(DirectProtocolError::LifetimeExceeded)
-    );
-
-    assert_eq!(
-        SignedDirectDecision::sign_with_nonce(
-            &valid_request,
-            target(),
-            DirectDecisionKind::Accepted,
-            1,
-            NOW,
-            overlong,
-            "overlong-decision",
-            None,
-            &RELATION_SECRET,
-            &key(2),
-        ),
-        Err(DirectProtocolError::LifetimeExceeded)
-    );
-    let decision = SignedDirectDecision::sign_with_nonce(
-        &valid_request,
-        target(),
-        DirectDecisionKind::Accepted,
-        1,
-        NOW,
-        valid_expires,
-        "decision-nonce",
-        None,
-        &RELATION_SECRET,
-        &key(2),
-    )
-    .unwrap();
-    let mut decision_receipt = SignedDirectDecisionReceipt::sign_with_nonce(
-        &decision,
-        NOW,
-        "decision-receipt-nonce",
-        None,
-        &RELATION_SECRET,
-        &key(1),
-    )
-    .unwrap();
-    decision_receipt.expires_at = overlong;
-    assert_eq!(
-        decision_receipt.verify_for(&decision, &RELATION_SECRET, NOW),
-        Err(DirectProtocolError::LifetimeExceeded)
-    );
-}
-
 /// Win10 and Ubuntu, 2026-10-22: a decision from a device whose clock ran
 /// ahead was discarded for good as `lifetime_exceeded`, because the receipt
 /// pairs the confirming device's earlier clock with the decision's end.
-#[test]
 fn windows_direct_task_receipts_accept_clocks_within_the_skew() {
     let behind = MAX_TRACKED_DIRECT_CLOCK_SKEW_SECS - 60;
     let request = request(NOW, NOW + MAX_TRACKED_DIRECT_ENVELOPE_LIFETIME_SECS).unwrap();
@@ -214,6 +148,90 @@ fn windows_direct_task_receipts_accept_clocks_within_the_skew() {
 }
 
 #[test]
+fn overlong_and_i64_max_envelopes_fail_before_authentication() {
+    let cases: [fn(); 2] = [
+        overlong_and_i64_max_envelopes_fail_before_authentication_case,
+        timestamps_beyond_clock_skew_fail_for_every_envelope,
+    ];
+    for case in cases {
+        case();
+    }
+}
+
+fn overlong_and_i64_max_envelopes_fail_before_authentication_case() {
+    let overlong =
+        NOW + MAX_TRACKED_DIRECT_ENVELOPE_LIFETIME_SECS + MAX_TRACKED_DIRECT_CLOCK_SKEW_SECS + 1;
+    assert_eq!(
+        request(NOW, overlong),
+        Err(DirectProtocolError::LifetimeExceeded)
+    );
+    assert_eq!(
+        request(NOW, i64::MAX),
+        Err(DirectProtocolError::LifetimeExceeded)
+    );
+
+    let valid_expires = NOW + MAX_TRACKED_DIRECT_ENVELOPE_LIFETIME_SECS;
+    let valid_request = request(NOW, valid_expires).unwrap();
+    let mut receipt = SignedDirectRequestReceipt::sign_with_nonce(
+        &valid_request,
+        target(),
+        NOW,
+        "request-receipt-nonce",
+        None,
+        &RELATION_SECRET,
+        &key(2),
+    )
+    .unwrap();
+    receipt.expires_at = overlong;
+    assert_eq!(
+        receipt.verify_for(&valid_request, &RELATION_SECRET, NOW),
+        Err(DirectProtocolError::LifetimeExceeded)
+    );
+
+    assert_eq!(
+        SignedDirectDecision::sign_with_nonce(
+            &valid_request,
+            target(),
+            DirectDecisionKind::Accepted,
+            1,
+            NOW,
+            overlong,
+            "overlong-decision",
+            None,
+            &RELATION_SECRET,
+            &key(2),
+        ),
+        Err(DirectProtocolError::LifetimeExceeded)
+    );
+    let decision = SignedDirectDecision::sign_with_nonce(
+        &valid_request,
+        target(),
+        DirectDecisionKind::Accepted,
+        1,
+        NOW,
+        valid_expires,
+        "decision-nonce",
+        None,
+        &RELATION_SECRET,
+        &key(2),
+    )
+    .unwrap();
+    let mut decision_receipt = SignedDirectDecisionReceipt::sign_with_nonce(
+        &decision,
+        NOW,
+        "decision-receipt-nonce",
+        None,
+        &RELATION_SECRET,
+        &key(1),
+    )
+    .unwrap();
+    decision_receipt.expires_at = overlong;
+    assert_eq!(
+        decision_receipt.verify_for(&decision, &RELATION_SECRET, NOW),
+        Err(DirectProtocolError::LifetimeExceeded)
+    );
+}
+
 fn timestamps_beyond_clock_skew_fail_for_every_envelope() {
     let future = NOW + MAX_TRACKED_DIRECT_CLOCK_SKEW_SECS + 1;
     let future_expires = future + MAX_TRACKED_DIRECT_ENVELOPE_LIFETIME_SECS;

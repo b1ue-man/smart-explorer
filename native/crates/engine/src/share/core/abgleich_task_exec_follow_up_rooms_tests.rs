@@ -49,6 +49,16 @@ fn room_with(members: Vec<RoomMember>) -> RoomProfile {
 
 #[test]
 fn abgleich_task_follow_up_room_rights_reach_members_only_through_the_journal() {
+    let cases: [fn(); 2] = [
+        abgleich_task_follow_up_room_rights_reach_members_only_through_the_journal_case,
+        abgleich_task_follow_up_room_creation_without_members_and_cancel,
+    ];
+    for case in cases {
+        case();
+    }
+}
+
+fn abgleich_task_follow_up_room_rights_reach_members_only_through_the_journal_case() {
     let mut profiles = host();
     profiles.rooms.push(room_with(vec![member("m1", 11)]));
     profiles
@@ -93,7 +103,6 @@ fn abgleich_task_follow_up_room_rights_reach_members_only_through_the_journal() 
     assert!(!profiles.exec_follow_ups_waiting());
 }
 
-#[test]
 fn abgleich_task_follow_up_room_creation_without_members_and_cancel() {
     let mut profiles = host();
     profiles.rooms.push(room_with(Vec::new()));

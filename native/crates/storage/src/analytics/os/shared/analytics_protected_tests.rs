@@ -36,51 +36,84 @@ fn omission(area: &Path, entries: u64) -> ProtectedOmission {
 
 #[test]
 fn android_background_task_protected_denials_keep_the_result_complete() {
-    let (_fixture, root) = volume();
-    let areas = ProtectedAreas::for_walk_in(&root, std::slice::from_ref(&root));
-    let progress = Progress::default();
-    let outcome = scan_in(&root, &progress, Some(&deny_foreign), Some(areas), None);
-    assert_eq!(outcome.status, ScanStatus::Complete, "{:?}", outcome.issues);
-    assert!(outcome.issues.is_empty());
-    assert_eq!(outcome.permission_denied, 0);
-    assert_eq!(
-        outcome.protected,
-        [
-            omission(&root.join("Android/data"), 1),
-            omission(&root.join("Android/obb"), 0),
-        ]
-    );
-    // The readable own folder is measured; the denied one is not.
-    let tree = outcome.tree.expect("tree");
-    assert_eq!(tree.size, 150);
-    assert_eq!(progress.files.load(Ordering::Relaxed), 2);
-}
+    let cases: [(&str, fn()); 3] = [
+        (
+            "android_background_task_protected_denials_keep_the_result_complete",
+            || {
+                let (_fixture, root) = volume();
+                let areas = ProtectedAreas::for_walk_in(&root, std::slice::from_ref(&root));
+                let progress = Progress::default();
+                let outcome = scan_in(&root, &progress, Some(&deny_foreign), Some(areas), None);
+                assert_eq!(outcome.status, ScanStatus::Complete, "{:?}", outcome.issues);
+                assert!(outcome.issues.is_empty());
+                assert_eq!(outcome.permission_denied, 0);
+                assert_eq!(
+                    outcome.protected,
+                    [
+                        omission(&root.join("Android/data"), 1),
+                        omission(&root.join("Android/obb"), 0),
+                    ]
+                );
+                // The readable own folder is measured; the denied one is not.
+                let tree = outcome.tree.expect("tree");
+                assert_eq!(tree.size, 150);
+                assert_eq!(progress.files.load(Ordering::Relaxed), 2);
+            },
+        ),
+        (
+            "android_background_task_protected_root_is_complete_and_empty",
+            || {
+                let (_fixture, root) = volume();
+                let volumes = [root.clone()];
+                let gone = root.join("Android/data/gone");
+                let areas = ProtectedAreas::for_walk_in(&gone, &volumes);
+                let outcome = scan_in(&gone, &Progress::default(), None, Some(areas), None);
+                assert_eq!(outcome.status, ScanStatus::Complete);
+                assert!(outcome.issues.is_empty());
+                assert_eq!(outcome.protected, [omission(&root.join("Android/data"), 1)]);
+                let tree = outcome.tree.expect("an empty result, not a failure");
+                assert_eq!((tree.size, tree.children.len()), (0, 0));
 
-#[test]
-fn android_background_task_protected_root_is_complete_and_empty() {
-    let (_fixture, root) = volume();
-    let volumes = [root.clone()];
-    let gone = root.join("Android/data/gone");
-    let areas = ProtectedAreas::for_walk_in(&gone, &volumes);
-    let outcome = scan_in(&gone, &Progress::default(), None, Some(areas), None);
-    assert_eq!(outcome.status, ScanStatus::Complete);
-    assert!(outcome.issues.is_empty());
-    assert_eq!(outcome.protected, [omission(&root.join("Android/data"), 1)]);
-    let tree = outcome.tree.expect("an empty result, not a failure");
-    assert_eq!((tree.size, tree.children.len()), (0, 0));
-
-    let data = root.join("Android/data");
-    let areas = ProtectedAreas::for_walk_in(&data, &volumes);
-    let outcome = scan_in(
-        &data,
-        &Progress::default(),
-        Some(&deny_foreign),
-        Some(areas),
-        None,
-    );
-    assert_eq!(outcome.status, ScanStatus::Complete);
-    assert_eq!(outcome.protected, [omission(&data, 1)]);
-    assert_eq!(outcome.tree.expect("tree").size, 100);
+                let data = root.join("Android/data");
+                let areas = ProtectedAreas::for_walk_in(&data, &volumes);
+                let outcome = scan_in(
+                    &data,
+                    &Progress::default(),
+                    Some(&deny_foreign),
+                    Some(areas),
+                    None,
+                );
+                assert_eq!(outcome.status, ScanStatus::Complete);
+                assert_eq!(outcome.protected, [omission(&data, 1)]);
+                assert_eq!(outcome.tree.expect("tree").size, 100);
+            },
+        ),
+        (
+            "android_background_task_walks_without_volumes_keep_reporting_denials",
+            || {
+                let (_fixture, root) = volume();
+                let outcome = scan_in(
+                    &root,
+                    &Progress::default(),
+                    Some(&deny_foreign),
+                    Some(ProtectedAreas::default()),
+                    None,
+                );
+                assert_eq!(outcome.status, ScanStatus::Partial);
+                assert_eq!(outcome.permission_denied, 1);
+                assert!(outcome.issues[0].path.ends_with("foreign"));
+                assert!(outcome.protected.is_empty());
+                #[cfg(not(target_os = "android"))]
+                assert_eq!(
+                    crate::analytics::os::default_scan_threads(),
+                    std::thread::available_parallelism().map_or(2, |cores| cores.get())
+                );
+            },
+        ),
+    ];
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
+    }
 }
 
 #[test]
@@ -129,25 +162,4 @@ fn android_background_task_protected_entry_errors_of_android_are_omissions() {
     assert!(outcome.issues[0].detail.contains("database"));
     assert_eq!(outcome.status, ScanStatus::Partial);
     assert_eq!(outcome.tree.expect("tree").size, 9);
-}
-
-#[test]
-fn android_background_task_walks_without_volumes_keep_reporting_denials() {
-    let (_fixture, root) = volume();
-    let outcome = scan_in(
-        &root,
-        &Progress::default(),
-        Some(&deny_foreign),
-        Some(ProtectedAreas::default()),
-        None,
-    );
-    assert_eq!(outcome.status, ScanStatus::Partial);
-    assert_eq!(outcome.permission_denied, 1);
-    assert!(outcome.issues[0].path.ends_with("foreign"));
-    assert!(outcome.protected.is_empty());
-    #[cfg(not(target_os = "android"))]
-    assert_eq!(
-        crate::analytics::os::default_scan_threads(),
-        std::thread::available_parallelism().map_or(2, |cores| cores.get())
-    );
 }

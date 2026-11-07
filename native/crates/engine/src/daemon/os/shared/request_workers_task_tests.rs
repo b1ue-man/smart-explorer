@@ -1,10 +1,21 @@
 use super::request_workers::RequestWorkers;
 use std::io;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
 #[test]
 fn remote_drive_task_worker_shutdown_waits_for_running_writer() {
+    let cases: [fn(); 2] = [
+        remote_drive_task_worker_shutdown_waits_for_running_writer_case,
+        shutdown_joins_completed_cleanup,
+    ];
+    for case in cases {
+        case();
+    }
+}
+
+fn remote_drive_task_worker_shutdown_waits_for_running_writer_case() {
     let committed = Arc::new(Mutex::new(Vec::new()));
     let worker_committed = committed.clone();
     let (entered_tx, entered_rx) = mpsc::channel();
@@ -33,4 +44,17 @@ fn remote_drive_task_worker_shutdown_waits_for_running_writer() {
         .unwrap();
     shutdown.join().unwrap();
     assert_eq!(committed.lock().unwrap().as_slice(), b"saved");
+}
+
+fn shutdown_joins_completed_cleanup() {
+    let completed = Arc::new(AtomicBool::new(false));
+    let worker_completed = completed.clone();
+    let mut workers = RequestWorkers::default();
+    workers.push(std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(20));
+        worker_completed.store(true, Ordering::Relaxed);
+        Ok(())
+    }));
+    workers.shutdown().unwrap();
+    assert!(completed.load(Ordering::Relaxed));
 }

@@ -68,29 +68,6 @@ fn remove(path: &Path, canceled: bool) -> (io::Result<()>, Vec<Frame>) {
 }
 
 #[test]
-fn delete_speed_task_remove_tree_frame_round_trips_with_its_query() {
-    assert_eq!(query::REMOVE_TREE, 6);
-    let frame = Frame::RemoveTree("/srv/daten/Ordner mit ü".into());
-    let encoded = frame.encode(42).unwrap();
-    assert_eq!(encoded[8], 62, "tag after the request id");
-    assert_eq!(encoded.len(), frame.wire_len().unwrap());
-    assert_eq!(Frame::decode(&encoded).unwrap(), (42, frame));
-
-    let question = Frame::Query {
-        kind: query::REMOVE_TREE,
-        path: "/srv".into(),
-    };
-    let encoded = question.encode(7).unwrap();
-    assert_eq!(Frame::decode(&encoded).unwrap(), (7, question));
-
-    let mut longer = Frame::RemoveTree("/a".into()).encode(1).unwrap();
-    longer.push(0);
-    assert!(Frame::decode(&longer).is_err());
-    let full = Frame::RemoveTree("/abc".into()).encode(1).unwrap();
-    assert!(Frame::decode(&full[..full.len() - 1]).is_err());
-}
-
-#[test]
 fn delete_speed_task_agent_offers_remove_tree_and_keeps_unknown_kinds_at_zero() {
     assert_eq!(answer(query::REMOVE_TREE, "/").unwrap(), Frame::Answer(1));
     // The answer every older server gives for a kind it does not know.

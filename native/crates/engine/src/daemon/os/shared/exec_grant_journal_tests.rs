@@ -4,6 +4,16 @@ use super::{decode_entry, drive_steps, should_fail_closed, JournalPhase, StepPro
 
 #[test]
 fn enable_is_persisted_before_runtime_apply_and_ack_clear() {
+    let cases: [fn(); 2] = [
+        enable_is_persisted_before_runtime_apply_and_ack_clear_case,
+        enable_apply_failure_leaves_a_retryable_pending_apply,
+    ];
+    for case in cases {
+        case();
+    }
+}
+
+fn enable_is_persisted_before_runtime_apply_and_ack_clear_case() {
     let order = RefCell::new(Vec::new());
     let progress = drive_steps(
         JournalPhase::PendingApply,
@@ -33,7 +43,6 @@ fn enable_is_persisted_before_runtime_apply_and_ack_clear() {
     );
 }
 
-#[test]
 fn enable_apply_failure_leaves_a_retryable_pending_apply() {
     let order = RefCell::new(Vec::new());
     let progress = drive_steps(
@@ -64,6 +73,16 @@ fn enable_apply_failure_leaves_a_retryable_pending_apply() {
 
 #[test]
 fn deny_is_applied_before_persistence_and_ack_clear() {
+    let cases: [fn(); 2] = [
+        deny_is_applied_before_persistence_and_ack_clear_case,
+        deny_persist_failure_never_clears_the_deny_tombstone,
+    ];
+    for case in cases {
+        case();
+    }
+}
+
+fn deny_is_applied_before_persistence_and_ack_clear_case() {
     let order = RefCell::new(Vec::new());
     let progress = drive_steps(
         JournalPhase::PendingDeny,
@@ -85,7 +104,6 @@ fn deny_is_applied_before_persistence_and_ack_clear() {
     assert!(progress.persisted && progress.applied && progress.cleared);
 }
 
-#[test]
 fn deny_persist_failure_never_clears_the_deny_tombstone() {
     let order = RefCell::new(Vec::new());
     let progress = drive_steps(

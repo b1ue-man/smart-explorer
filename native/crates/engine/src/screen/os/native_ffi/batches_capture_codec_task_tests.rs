@@ -58,6 +58,7 @@ fn batches_task_capture_openh264_denies_i420_before_unfunded_conversion() {
 }
 
 #[test]
+#[ignore = "needs the pinned Cisco OpenH264 file named by SE_SCREEN_TASK_OPENH264; Suite review-task"]
 fn batches_task_capture_openh264_au_keeps_credit_and_decoder_contract() {
     let fixture = "batches_task_capture_openh264_au_keeps_credit_and_decoder_contract";
     if std::env::var_os("SE_SCREEN_TASK_OPENH264").is_none() {

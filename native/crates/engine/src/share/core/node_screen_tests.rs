@@ -402,7 +402,7 @@ fn screen_task_fs_exec_unchanged() {
 /// Over the share server's relay only (`SE_SHARE_RELAY_ONLY=1`, suite
 /// fixture `share`).
 #[test]
-#[ignore = "needs the share-server fixture and SE_SHARE_RELAY_ONLY=1"]
+#[ignore = "needs the share-server fixture and SE_SHARE_RELAY_ONLY=1; Suite rechte-desktop-tresore-task"]
 fn screen_task_relay_only_bench() {
     let signal = std::env::var("SE_TASK_SHARE_SIGNAL").expect("SE_TASK_SHARE_SIGNAL");
     assert_eq!(std::env::var("SE_SHARE_RELAY_ONLY").as_deref(), Ok("1"));
@@ -416,7 +416,7 @@ fn screen_task_relay_only_bench() {
 
 /// With `tc netem` on `lo` (2 % loss, 12.5 ms each way), set up by the suite.
 #[test]
-#[ignore = "needs tc netem on lo; the suite sets SE_SCREEN_TASK_NETEM=1"]
+#[ignore = "needs tc netem on lo; the suite sets SE_SCREEN_TASK_NETEM=1; Suite rechte-desktop-tresore-task"]
 fn screen_task_netem_recovery() {
     assert_eq!(
         std::env::var("SE_SCREEN_TASK_NETEM").as_deref(),

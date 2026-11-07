@@ -175,7 +175,7 @@ impl GateFrame {
 }
 
 #[test]
-#[ignore = "requires isolated RV1 app data and SMART_EXPLORER_COPY_PASTE_TASK=1"]
+#[ignore = "needs isolated app data and SMART_EXPLORER_COPY_PASTE_TASK=1; Suite review-task"]
 fn review_task_y156_close_waits_for_completion_after_cancel_and_deadline() {
     let mut fixture = HeldWorker::new();
     let ctx = egui::Context::default();
@@ -197,7 +197,7 @@ fn review_task_y156_close_waits_for_completion_after_cancel_and_deadline() {
 }
 
 #[test]
-#[ignore = "requires isolated RV1 app data and SMART_EXPLORER_COPY_PASTE_TASK=1"]
+#[ignore = "needs isolated app data and SMART_EXPLORER_COPY_PASTE_TASK=1; Suite review-task"]
 fn review_task_y156_results_drain_while_worker_is_still_alive() {
     let mut fixture = HeldWorker::new();
     let ctx = egui::Context::default();
@@ -235,7 +235,7 @@ fn review_task_y156_results_drain_while_worker_is_still_alive() {
 }
 
 #[test]
-#[ignore = "requires isolated RV1 app data and SMART_EXPLORER_COPY_PASTE_TASK=1"]
+#[ignore = "needs isolated app data and SMART_EXPLORER_COPY_PASTE_TASK=1; Suite review-task"]
 fn review_task_y156_update_preflight_waits_for_actual_completion() {
     let directory = tempfile::tempdir().expect("isolated missing update payloads");
     let payload = |name: &str| {

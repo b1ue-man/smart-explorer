@@ -29,7 +29,7 @@ fn decode_all(decoder: &mut dyn ScreenDecoder, payloads: &[Vec<u8>]) -> bool {
 }
 
 #[test]
-#[ignore = "needs SE_SCREEN_TASK_OPENH264 (the suite downloads the pinned file)"]
+#[ignore = "needs SE_SCREEN_TASK_OPENH264 (the suite downloads the pinned file); Suite rechte-desktop-tresore-task"]
 fn screen_task_decoder_prefer_yuv_skips_bgra() {
     let _lock = TEST_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
     let (_dir, store) = store_with_openh264();

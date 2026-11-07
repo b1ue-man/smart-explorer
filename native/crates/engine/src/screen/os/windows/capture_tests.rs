@@ -265,7 +265,7 @@ fn pixel(image: &BgraImage, x: u32, y: u32) -> [u8; 3] {
 }
 
 #[test]
-#[ignore = "needs an interactive Windows session; SE_SCREEN_TASK_WINDOWS=1"]
+#[ignore = "needs an interactive Windows session; SE_SCREEN_TASK_WINDOWS=1; Suite rechte-desktop-tresore-task"]
 fn screen_task_windows_wgc_snapshot_matches() {
     if !desktop_tests() || !capture_wgc::available() {
         return;
@@ -300,7 +300,7 @@ fn screen_task_windows_wgc_snapshot_matches() {
 }
 
 #[test]
-#[ignore = "needs an interactive Windows session; SE_SCREEN_TASK_WINDOWS=1"]
+#[ignore = "needs an interactive Windows session; SE_SCREEN_TASK_WINDOWS=1; Suite rechte-desktop-tresore-task"]
 fn screen_task_windows_window_list_has_test_window() {
     if !desktop_tests() {
         return;
@@ -329,7 +329,7 @@ fn screen_task_windows_window_list_has_test_window() {
 }
 
 #[test]
-#[ignore = "needs an interactive Windows session; SE_SCREEN_TASK_WINDOWS=1"]
+#[ignore = "needs an interactive Windows session; SE_SCREEN_TASK_WINDOWS=1; Suite rechte-desktop-tresore-task"]
 fn screen_task_windows_minimized_state() {
     if !desktop_tests() || !capture_wgc::available() {
         return;
@@ -357,7 +357,7 @@ fn screen_task_windows_minimized_state() {
 }
 
 #[test]
-#[ignore = "needs an interactive Windows session; SE_SCREEN_TASK_WINDOWS=1"]
+#[ignore = "needs an interactive Windows session; SE_SCREEN_TASK_WINDOWS=1; Suite rechte-desktop-tresore-task"]
 fn screen_task_windows_bench_real_capture() {
     if !desktop_tests() || !capture_wgc::available() {
         return;
@@ -406,7 +406,7 @@ fn screen_task_windows_bench_real_capture() {
 }
 
 #[test]
-#[ignore = "needs an interactive Windows session; SE_SCREEN_TASK_WINDOWS=1 and SE_SCREEN_TASK_DXGI=1"]
+#[ignore = "needs an interactive Windows session; SE_SCREEN_TASK_WINDOWS=1 and SE_SCREEN_TASK_DXGI=1; Suite rechte-desktop-tresore-task"]
 fn screen_task_windows_dxgi_fallback_captures_monitor() {
     if !desktop_tests() || std::env::var("SE_SCREEN_TASK_DXGI").as_deref() != Ok("1") {
         eprintln!("not run: SE_SCREEN_TASK_DXGI=1 is not set");
@@ -479,7 +479,7 @@ extern "system" {
 /// The last step of the Windows job: locks the workstation and expects the
 /// secure desktop within 10 seconds.
 #[test]
-#[ignore = "locks the workstation; last step of the windows-screen stage; SE_SCREEN_TASK_WINDOWS=1"]
+#[ignore = "locks the workstation; last step of the windows-screen stage; SE_SCREEN_TASK_WINDOWS=1; Suite rechte-desktop-tresore-task"]
 fn screen_task_windows_lock_reports_secure_desktop() {
     if !desktop_tests() {
         return;

@@ -19,7 +19,7 @@ fn remote_only() {
 }
 
 #[test]
-#[ignore = "real ACL and token fixture: remote Windows task only"]
+#[ignore = "real ACL and token fixture: remote Windows task only; Suite crates-task"]
 fn analytics_access_task_real_denied_directory_locked_files_and_unchanged_acl() {
     remote_only();
     let process = process_token();
@@ -63,7 +63,7 @@ fn analytics_access_task_real_denied_directory_locked_files_and_unchanged_acl() 
 }
 
 #[test]
-#[ignore = "thread impersonation fixture: remote Windows task only"]
+#[ignore = "thread impersonation fixture: remote Windows task only; Suite crates-task"]
 fn analytics_access_task_restricted_identity_never_falls_back_to_process_authority() {
     remote_only();
     let fixture = tempfile::tempdir().unwrap();
@@ -118,7 +118,7 @@ fn analytics_access_task_restricted_identity_never_falls_back_to_process_authori
 }
 
 #[test]
-#[ignore = "real junction fixture: remote Windows task only"]
+#[ignore = "real junction fixture: remote Windows task only; Suite crates-task"]
 fn analytics_access_task_redirect_children_are_traversal_boundaries() {
     remote_only();
     let fixture = tempfile::tempdir().unwrap();

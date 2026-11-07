@@ -48,7 +48,7 @@ fn require_fusectl(folder: &Path) {
 }
 
 #[test]
-#[ignore = "FUSE task stage linux-root: drive-fuse (SMART_EXPLORER_FUSE_TASK=1)"]
+#[ignore = "FUSE task stage linux-root: drive-fuse (SMART_EXPLORER_FUSE_TASK=1); Suite rechte-desktop-tresore-task"]
 fn drive_task_host_session_update_stop_unmounts_and_exits() -> io::Result<()> {
     require_task_stage();
     let (fixture, drive) = memory(RW)?;
@@ -74,7 +74,7 @@ fn drive_task_host_session_update_stop_unmounts_and_exits() -> io::Result<()> {
 }
 
 #[test]
-#[ignore = "FUSE task stage linux-root: drive-fuse (SMART_EXPLORER_FUSE_TASK=1)"]
+#[ignore = "FUSE task stage linux-root: drive-fuse (SMART_EXPLORER_FUSE_TASK=1); Suite rechte-desktop-tresore-task"]
 fn drive_task_fuse_unmount_busy_then_force() -> io::Result<()> {
     require_task_stage();
     let (fixture, drive) = memory(RW)?;
@@ -101,7 +101,7 @@ fn drive_task_fuse_unmount_busy_then_force() -> io::Result<()> {
 }
 
 #[test]
-#[ignore = "FUSE task stage linux-root: drive-fuse (SMART_EXPLORER_FUSE_TASK=1)"]
+#[ignore = "FUSE task stage linux-root: drive-fuse (SMART_EXPLORER_FUSE_TASK=1); Suite rechte-desktop-tresore-task"]
 fn drive_task_fuse_force_abort_frees_blocked_reader() -> io::Result<()> {
     require_task_stage();
     let gated = GatedBackend::new();
@@ -149,7 +149,7 @@ fn drive_task_fuse_force_abort_frees_blocked_reader() -> io::Result<()> {
 }
 
 #[test]
-#[ignore = "FUSE task stage linux-root: drive-fuse with fs.fuse.default_request_timeout (SMART_EXPLORER_FUSE_TASK=1)"]
+#[ignore = "FUSE task stage linux-root: drive-fuse with fs.fuse.default_request_timeout (SMART_EXPLORER_FUSE_TASK=1); Suite rechte-desktop-tresore-task"]
 fn drive_task_fuse_kernel_request_timeout_reported() -> io::Result<()> {
     require_task_stage();
     let seconds: u64 = variable("SE_TASK_FUSE_REQUEST_TIMEOUT_S")?
@@ -231,7 +231,7 @@ fn spawn_child_host(places: &Places, stderr: Stdio) -> io::Result<Child> {
 
 /// Child process of the two tests below: a host until it is killed.
 #[test]
-#[ignore = "child process of drive_task_fuse_host_kill_daemon_cleans_mount and drive_task_fuse_stale_mount_cleaned_before_remount"]
+#[ignore = "child process of drive_task_fuse_host_kill_daemon_cleans_mount and drive_task_fuse_stale_mount_cleaned_before_remount; Suite rechte-desktop-tresore-task"]
 fn fuse_task_child_host_serves_until_killed() -> io::Result<()> {
     require_task_stage();
     let place = |name: &str| {
@@ -250,7 +250,7 @@ fn fuse_task_child_host_serves_until_killed() -> io::Result<()> {
 }
 
 #[test]
-#[ignore = "FUSE task stage linux-root: drive-fuse (SMART_EXPLORER_FUSE_TASK=1)"]
+#[ignore = "FUSE task stage linux-root: drive-fuse (SMART_EXPLORER_FUSE_TASK=1); Suite rechte-desktop-tresore-task"]
 fn drive_task_fuse_host_kill_daemon_cleans_mount() -> io::Result<()> {
     require_task_stage();
     let places = Places::new()?;
@@ -276,7 +276,7 @@ fn drive_task_fuse_host_kill_daemon_cleans_mount() -> io::Result<()> {
 }
 
 #[test]
-#[ignore = "FUSE task stage linux-root: drive-fuse (SMART_EXPLORER_FUSE_TASK=1)"]
+#[ignore = "FUSE task stage linux-root: drive-fuse (SMART_EXPLORER_FUSE_TASK=1); Suite rechte-desktop-tresore-task"]
 fn drive_task_fuse_stale_mount_cleaned_before_remount() -> io::Result<()> {
     require_task_stage();
     let places = Places::new()?;
@@ -298,7 +298,7 @@ fn drive_task_fuse_stale_mount_cleaned_before_remount() -> io::Result<()> {
 }
 
 #[test]
-#[ignore = "FUSE task stage linux-root: drive-fuse (SMART_EXPLORER_FUSE_TASK=1)"]
+#[ignore = "FUSE task stage linux-root: drive-fuse (SMART_EXPLORER_FUSE_TASK=1); Suite rechte-desktop-tresore-task"]
 fn drive_task_fuse_mountpoint_locked_after_unmount() -> io::Result<()> {
     require_task_stage();
     let (fixture, drive) = memory(RW)?;
@@ -325,7 +325,7 @@ fn drive_task_fuse_mountpoint_locked_after_unmount() -> io::Result<()> {
 }
 
 #[test]
-#[ignore = "FUSE task stage linux-root: drive-fuse (SMART_EXPLORER_FUSE_TASK=1)"]
+#[ignore = "FUSE task stage linux-root: drive-fuse (SMART_EXPLORER_FUSE_TASK=1); Suite rechte-desktop-tresore-task"]
 fn drive_task_fuse_recovery_retries_pending_after_restart() -> io::Result<()> {
     require_task_stage();
     let fixture = OptimizationBackend::new();

@@ -26,29 +26,20 @@ class MediaSetTest {
         assertEquals(1, set.start)
         assertEquals(true, set.local)
         assertEquals(2, mediaSetFor(shown, shown[5], local = false)!!.start)
-    }
-
-    @Test
-    fun audioIsBrowsedSeparately() {
-        val set = mediaSetFor(shown, shown[6], local = false)!!
-        assertEquals(listOf("Lied.mp3", "Ton.m4a"), set.items.map { it.name })
-        assertEquals(1, set.start)
-        assertEquals(false, set.local)
-    }
-
-    @Test
-    fun foldersAndOtherFilesOpenWithoutViewer() {
+        // Audio is browsed separately (the former audioIsBrowsedSeparately).
+        val audioSet = mediaSetFor(shown, shown[6], local = false)!!
+        assertEquals(listOf("Lied.mp3", "Ton.m4a"), audioSet.items.map { it.name })
+        assertEquals(1, audioSet.start)
+        assertEquals(false, audioSet.local)
+        // Folders and other files open without a viewer (the former foldersAndOtherFilesOpenWithoutViewer).
         assertNull(mediaSetFor(shown, shown[0], local = true))
         assertNull(mediaSetFor(shown, shown[2], local = true))
         assertNull(mediaSetFor(shown, entry("x.jpg", "image", isDir = true), local = true))
-    }
-
-    @Test
-    fun aMediumOutsideTheShownListIsViewedAlone() {
+        // A medium outside the shown list is viewed alone (the former aMediumOutsideTheShownListIsViewedAlone).
         val single = entry("allein.webp", "image")
-        val set = mediaSetFor(shown, single, local = true)!!
-        assertEquals(listOf(single), set.items)
-        assertEquals(0, set.start)
+        val alone = mediaSetFor(shown, single, local = true)!!
+        assertEquals(listOf(single), alone.items)
+        assertEquals(0, alone.start)
         assertEquals(MediaGroup.Visual, mediaGroupOf("video"))
         assertEquals(MediaGroup.Audio, mediaGroupOf("audio"))
         assertNull(mediaGroupOf("document"))

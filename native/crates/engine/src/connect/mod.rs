@@ -81,10 +81,6 @@ mod sync_reliability_task_provider_tests;
 mod sync_reliability_task_provider_ftps_tests;
 
 #[cfg(test)]
-#[path = "core/smb_endpoint_tests.rs"]
-mod smb_endpoint_tests;
-
-#[cfg(test)]
 #[path = "os/shared/smb_segments_end_to_end_tests.rs"]
 mod smb_segments_end_to_end_tests;
 

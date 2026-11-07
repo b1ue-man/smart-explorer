@@ -33,6 +33,27 @@ fn abgleich_task_webdav_digest_comes_from_the_checksum_property_without_a_downlo
     assert_eq!(found.size, 5);
     assert_eq!(server.dav.count("GET"), 0, "the content was not read");
     assert_eq!(server.dav.count("PUT"), 0);
+    // Case "MD5 property": an MD5 from the checksum property needs no download.
+    {
+        let server = Server::start();
+        let backend = server.backend();
+        put(
+            &server,
+            "/a.bin",
+            Some(&format!(
+                "SHA1:da39a3ee5e6b4b0d3255bfef95601890afd80709 MD5:{} SHA256:{HEX}",
+                MD5.to_ascii_uppercase()
+            )),
+        );
+        let asked = server.dav.count("PROPFIND");
+        let found = content_md5(&backend, "/a.bin", &AtomicBool::new(false))
+            .unwrap()
+            .expect("the server stores an MD5");
+        assert_eq!(found, MD5, "lowercase hex");
+        assert_eq!(server.dav.count("GET"), 0, "the content was not read");
+        assert_eq!(server.dav.count("PUT"), 0);
+        assert_eq!(server.dav.count("PROPFIND"), asked + 1, "one question");
+    }
 }
 
 #[test]
@@ -50,6 +71,19 @@ fn abgleich_task_webdav_digest_needs_a_sha256_entry() {
         assert_eq!(found, None, "{path}");
     }
     assert_eq!(server.dav.count("GET"), 0);
+    // Case "MD5 needs an MD5 entry": a SHA-256 entry, a short MD5 and no property give no MD5.
+    {
+        let server = Server::start();
+        let backend = server.backend();
+        put(&server, "/sha.bin", Some(&format!("SHA256:{HEX}")));
+        put(&server, "/short.bin", Some("MD5:abc"));
+        put(&server, "/none.bin", None);
+        for path in ["/sha.bin", "/short.bin", "/none.bin"] {
+            let found = content_md5(&backend, path, &AtomicBool::new(false)).unwrap();
+            assert_eq!(found, None, "{path}");
+        }
+        assert_eq!(server.dav.count("GET"), 0, "MD5 needs an MD5 entry");
+    }
 }
 
 #[test]
@@ -74,61 +108,32 @@ fn abgleich_task_webdav_digest_of_a_collection_is_refused() {
         from_propfind(xml).unwrap_err().kind(),
         std::io::ErrorKind::InvalidInput
     );
+    // Case "MD5 of a collection": a collection gives no MD5, and a cancel asks nothing.
+    {
+        assert_eq!(
+            md5_from_propfind(xml).unwrap_err().kind(),
+            std::io::ErrorKind::InvalidInput,
+            "MD5 of a collection"
+        );
+        let server = Server::start();
+        let backend = server.backend();
+        put(&server, "/a.bin", Some(&format!("MD5:{MD5}")));
+        let before = server.dav.count("PROPFIND");
+        let error = content_md5(&backend, "/a.bin", &AtomicBool::new(true)).unwrap_err();
+        assert_eq!(
+            error.kind(),
+            std::io::ErrorKind::Interrupted,
+            "a cancel asks nothing"
+        );
+        assert_eq!(
+            server.dav.count("PROPFIND"),
+            before,
+            "a cancel asks nothing"
+        );
+    }
 }
 
 const MD5: &str = "5d41402abc4b2a76b9719d911017c592";
-
-#[test]
-fn abgleich_task_webdav_md5_comes_from_the_checksum_property_without_a_download() {
-    let server = Server::start();
-    let backend = server.backend();
-    put(
-        &server,
-        "/a.bin",
-        Some(&format!(
-            "SHA1:da39a3ee5e6b4b0d3255bfef95601890afd80709 MD5:{} SHA256:{HEX}",
-            MD5.to_ascii_uppercase()
-        )),
-    );
-    let asked = server.dav.count("PROPFIND");
-    let found = content_md5(&backend, "/a.bin", &AtomicBool::new(false))
-        .unwrap()
-        .expect("the server stores an MD5");
-    assert_eq!(found, MD5, "lowercase hex");
-    assert_eq!(server.dav.count("GET"), 0, "the content was not read");
-    assert_eq!(server.dav.count("PUT"), 0);
-    assert_eq!(server.dav.count("PROPFIND"), asked + 1, "one question");
-}
-
-#[test]
-fn abgleich_task_webdav_md5_needs_an_md5_entry() {
-    let server = Server::start();
-    let backend = server.backend();
-    put(&server, "/sha.bin", Some(&format!("SHA256:{HEX}")));
-    put(&server, "/short.bin", Some("MD5:abc"));
-    put(&server, "/none.bin", None);
-    for path in ["/sha.bin", "/short.bin", "/none.bin"] {
-        let found = content_md5(&backend, path, &AtomicBool::new(false)).unwrap();
-        assert_eq!(found, None, "{path}");
-    }
-    assert_eq!(server.dav.count("GET"), 0);
-}
-
-#[test]
-fn abgleich_task_webdav_md5_of_a_collection_is_refused_and_a_cancel_asks_nothing() {
-    let xml = r#"<?xml version="1.0"?><d:multistatus xmlns:d="DAV:"><d:response><d:href>/x/</d:href><d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response></d:multistatus>"#;
-    assert_eq!(
-        md5_from_propfind(xml).unwrap_err().kind(),
-        std::io::ErrorKind::InvalidInput
-    );
-    let server = Server::start();
-    let backend = server.backend();
-    put(&server, "/a.bin", Some(&format!("MD5:{MD5}")));
-    let before = server.dav.count("PROPFIND");
-    let error = content_md5(&backend, "/a.bin", &AtomicBool::new(true)).unwrap_err();
-    assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
-    assert_eq!(server.dav.count("PROPFIND"), before);
-}
 
 /// A server without `oc:checksums` (Apache `mod_dav`, nginx, IIS): the first
 /// answer shows none, so the connection asks no more PROPFIND for a MD5 or
@@ -167,50 +172,51 @@ fn abgleich_task_webdav_without_checksums_asks_once_per_connection() {
         );
     }
     assert_eq!(carrying.dav.count("PROPFIND"), before + 2);
-}
+    // Case "listing without MD5": a listing without an MD5 spares the question; a folder says nothing.
+    {
+        use super::super::content_digest::ChecksumMemory;
+        use crate::vfs::VfsMeta;
+        let file = |md5: Option<&str>| VfsMeta {
+            name: "f".into(),
+            size: 5,
+            content_md5: md5.map(str::to_string),
+            ..VfsMeta::default()
+        };
+        let folder = VfsMeta {
+            name: "d".into(),
+            is_dir: true,
+            ..VfsMeta::default()
+        };
+        let memory = ChecksumMemory::default();
+        memory.note_listing(std::slice::from_ref(&folder));
+        assert!(!memory.md5_absent(), "a listing of folders says nothing");
+        memory.note_listing(&[folder.clone(), file(None)]);
+        assert!(memory.md5_absent(), "listing without MD5");
+        assert!(!memory.sha256_absent(), "each algorithm on its own");
+        memory.note_listing(&[file(None), file(Some(MD5))]);
+        assert!(!memory.md5_absent(), "a MD5 seen: ask again");
+        memory.note_listing(&[file(None)]);
+        memory.note_md5(false);
+        assert!(!memory.md5_absent(), "once seen it stays");
 
-/// What a listing showed decides too: files without a MD5 in the listing
-/// mean the Depth-0 answer has none either; a later listing or answer with
-/// one makes the connection ask again.
-#[test]
-fn abgleich_task_webdav_listing_without_md5_spares_the_question() {
-    use super::super::content_digest::ChecksumMemory;
-    use crate::vfs::VfsMeta;
-    let file = |md5: Option<&str>| VfsMeta {
-        name: "f".into(),
-        size: 5,
-        content_md5: md5.map(str::to_string),
-        ..VfsMeta::default()
-    };
-    let folder = VfsMeta {
-        name: "d".into(),
-        is_dir: true,
-        ..VfsMeta::default()
-    };
-    let memory = ChecksumMemory::default();
-    memory.note_listing(std::slice::from_ref(&folder));
-    assert!(!memory.md5_absent(), "a listing of folders says nothing");
-    memory.note_listing(&[folder.clone(), file(None)]);
-    assert!(memory.md5_absent());
-    assert!(!memory.sha256_absent(), "each algorithm on its own");
-    memory.note_listing(&[file(None), file(Some(MD5))]);
-    assert!(!memory.md5_absent(), "a MD5 seen: ask again");
-    memory.note_listing(&[file(None)]);
-    memory.note_md5(false);
-    assert!(!memory.md5_absent(), "once seen it stays");
-
-    let server = Server::start();
-    let backend = server.backend();
-    put(&server, "/a.bin", Some(&format!("MD5:{MD5}")));
-    backend.checksums.note_listing(&[file(None)]);
-    let before = server.dav.count("PROPFIND");
-    let cancel = AtomicBool::new(false);
-    assert_eq!(content_md5(&backend, "/a.bin", &cancel).unwrap(), None);
-    assert_eq!(server.dav.count("PROPFIND"), before, "no request");
-    backend.checksums.note_listing(&[file(Some(MD5))]);
-    assert_eq!(
-        content_md5(&backend, "/a.bin", &cancel).unwrap().as_deref(),
-        Some(MD5)
-    );
-    assert_eq!(server.dav.count("PROPFIND"), before + 1);
+        let server = Server::start();
+        let backend = server.backend();
+        put(&server, "/a.bin", Some(&format!("MD5:{MD5}")));
+        backend.checksums.note_listing(&[file(None)]);
+        let before = server.dav.count("PROPFIND");
+        let cancel = AtomicBool::new(false);
+        assert_eq!(
+            content_md5(&backend, "/a.bin", &cancel).unwrap(),
+            None,
+            "listing without MD5"
+        );
+        assert_eq!(server.dav.count("PROPFIND"), before, "no request");
+        backend.checksums.note_listing(&[file(Some(MD5))]);
+        assert_eq!(
+            content_md5(&backend, "/a.bin", &cancel).unwrap().as_deref(),
+            Some(MD5),
+            "listing with MD5"
+        );
+        assert_eq!(server.dav.count("PROPFIND"), before + 1, "listing with MD5");
+    }
 }

@@ -116,6 +116,7 @@ fn draw(state: &egui_wgpu::RenderState, id: egui::TextureId) {
         .submit(extra.into_iter().chain([encoder.finish()]));
 }
 #[test]
+#[ignore = "needs a real WGPU adapter (SE_SCREEN_TASK_GPU=1 makes its absence a failure); Suite review-task"]
 fn batches_task_b6_renderer_wgpu_upload_without_surface_and_retire_after_later_draw() {
     let Some(state) = state() else {
         missing("batches_task_b6_renderer_wgpu_upload_without_surface_and_retire_after_later_draw");
@@ -196,6 +197,7 @@ fn batches_task_b6_renderer_wgpu_upload_without_surface_and_retire_after_later_d
     login_owner.returned();
 }
 #[test]
+#[ignore = "needs a real WGPU adapter (SE_SCREEN_TASK_GPU=1 makes its absence a failure); Suite review-task"]
 fn batches_task_b6_renderer_wgpu_yuv_planes_leave_slot_on_cpu_fallback() {
     let Some(state) = state() else {
         missing("batches_task_b6_renderer_wgpu_yuv_planes_leave_slot_on_cpu_fallback");

@@ -65,7 +65,7 @@ fn library_loaded() -> bool {
 }
 
 #[test]
-#[ignore = "needs SE_SCREEN_TASK_OPENH264 (the suite downloads the pinned file)"]
+#[ignore = "needs SE_SCREEN_TASK_OPENH264 (the suite downloads the pinned file); Suite rechte-desktop-tresore-task"]
 fn screen_task_local_bench_h264_openh264() {
     let _lock = locked();
     let (_dir, store) = store_with_openh264();
@@ -94,7 +94,7 @@ fn screen_task_local_bench_h264_openh264() {
 }
 
 #[test]
-#[ignore = "needs SE_SCREEN_TASK_OPENH264 (the suite downloads the pinned file)"]
+#[ignore = "needs SE_SCREEN_TASK_OPENH264 (the suite downloads the pinned file); Suite rechte-desktop-tresore-task"]
 fn screen_task_openh264_disable_unloads() {
     let _lock = locked();
     let (_dir, store) = store_with_openh264();
@@ -145,7 +145,7 @@ fn codecs_of(
 }
 
 #[test]
-#[ignore = "needs SE_SCREEN_TASK_OPENH264 and SE_SCREEN_TASK_H264_HIGH (made by the suite)"]
+#[ignore = "needs SE_SCREEN_TASK_OPENH264 and SE_SCREEN_TASK_H264_HIGH (made by the suite); Suite rechte-desktop-tresore-task"]
 fn screen_task_openh264_decodes_constrained_high() {
     let _lock = locked();
     let (_dir, store) = store_with_openh264();

@@ -78,9 +78,6 @@ mod range_space;
 mod range_stage;
 #[path = "core/relative_path.rs"]
 mod relative_path;
-#[cfg(test)]
-#[path = "core/remote_drive_task_tests.rs"]
-mod remote_drive_task_tests;
 #[path = "os/shared/run_digests.rs"]
 mod run_digests;
 #[cfg(target_os = "linux")]

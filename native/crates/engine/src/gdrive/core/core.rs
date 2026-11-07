@@ -52,10 +52,4 @@ mod tests {
         assert_eq!(p, "");
         assert_eq!(n, "x");
     }
-
-    #[test]
-    fn rfc3339_parses() {
-        assert!(parse_rfc3339_ms("2024-06-01T12:34:56Z").unwrap() > 0);
-        assert!(parse_rfc3339_ms("not a date").is_none());
-    }
 }

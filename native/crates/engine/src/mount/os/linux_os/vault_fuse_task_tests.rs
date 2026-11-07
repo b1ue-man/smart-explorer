@@ -151,7 +151,7 @@ fn holds(root: &Path, needle: &[u8]) -> bool {
 }
 
 #[test]
-#[ignore = "vault task stage linux-root: vault-mount (fuse, runtime-tmpfs, SMART_EXPLORER_FUSE_TASK=1)"]
+#[ignore = "vault task stage linux-root: vault-mount (fuse, runtime-tmpfs, SMART_EXPLORER_FUSE_TASK=1); Suite rechte-desktop-tresore-task"]
 fn vault_task_mount_linux_fuse_e2e() -> io::Result<()> {
     assert_eq!(
         std::env::var("SMART_EXPLORER_FUSE_TASK").as_deref(),

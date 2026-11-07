@@ -135,61 +135,19 @@ mod tests {
     }
 
     #[test]
-    fn akku_task_refused_feed_waits_for_a_relation_change_of_that_device() {
-        let refused = facts(Phase::Refused);
-        assert_eq!(step(&refused), Step::Keep);
-        // Presence and arrivals are no reason for a refused feed.
-        let arrived = Facts {
-            device_event: true,
-            ..refused
-        };
-        assert_eq!(step(&arrived), Step::Keep);
-        let changed = Facts {
-            relation_changed: true,
-            ..refused
-        };
-        assert_eq!(step(&changed), Step::Start);
-        // The other device's user may have allowed this one since: after its
-        // refusal backoff the feed asks once more (rights change unseen here).
-        let waited = Facts {
-            backoff_over: true,
-            ..refused
-        };
-        assert_eq!(step(&waited), Step::Start);
-        assert_eq!(refused_backoff(0), Duration::from_secs(60));
-        assert_eq!(refused_backoff(1), Duration::from_secs(120));
-        assert_eq!(refused_backoff(10), LONGEST_REFUSED_RETRY);
-        assert_eq!(refused_backoff(u32::MAX), LONGEST_REFUSED_RETRY);
-        let low_power = Facts {
-            low_power: true,
-            ..changed
-        };
-        assert_eq!(step(&low_power), Step::Pause);
-    }
-
-    #[test]
-    fn akku_task_lost_feed_backs_off_and_an_event_of_the_device_retries_at_once() {
-        let lost = facts(Phase::Lost);
-        assert_eq!(step(&lost), Step::Keep);
-        let due = Facts {
-            backoff_over: true,
-            ..lost
-        };
-        assert_eq!(step(&due), Step::Start);
-        let arrived = Facts {
-            device_event: true,
-            ..lost
-        };
-        assert_eq!(step(&arrived), Step::Start);
-        assert_eq!(backoff(0), Duration::from_secs(5));
-        assert_eq!(backoff(1), Duration::from_secs(10));
-        assert_eq!(backoff(3), Duration::from_secs(40));
-        assert_eq!(backoff(10), LONGEST_RETRY);
-        assert_eq!(backoff(u32::MAX), LONGEST_RETRY);
-    }
-
-    #[test]
     fn akku_task_low_power_holds_no_feed_connection_without_a_tunnel_in_use() {
+        let cases: [fn(); 4] = [
+            akku_task_low_power_holds_no_feed_connection_without_a_tunnel_in_use_case,
+            akku_task_lost_feed_backs_off_and_an_event_of_the_device_retries_at_once,
+            akku_task_refused_feed_waits_for_a_relation_change_of_that_device,
+            akku_task_running_feed_follows_a_changed_target_or_service,
+        ];
+        for case in cases {
+            case();
+        }
+    }
+
+    fn akku_task_low_power_holds_no_feed_connection_without_a_tunnel_in_use_case() {
         let running = Facts {
             low_power: true,
             ..facts(Phase::Running)
@@ -222,7 +180,58 @@ mod tests {
         assert_eq!(first(false), Step::Start);
     }
 
-    #[test]
+    fn akku_task_lost_feed_backs_off_and_an_event_of_the_device_retries_at_once() {
+        let lost = facts(Phase::Lost);
+        assert_eq!(step(&lost), Step::Keep);
+        let due = Facts {
+            backoff_over: true,
+            ..lost
+        };
+        assert_eq!(step(&due), Step::Start);
+        let arrived = Facts {
+            device_event: true,
+            ..lost
+        };
+        assert_eq!(step(&arrived), Step::Start);
+        assert_eq!(backoff(0), Duration::from_secs(5));
+        assert_eq!(backoff(1), Duration::from_secs(10));
+        assert_eq!(backoff(3), Duration::from_secs(40));
+        assert_eq!(backoff(10), LONGEST_RETRY);
+        assert_eq!(backoff(u32::MAX), LONGEST_RETRY);
+    }
+
+    fn akku_task_refused_feed_waits_for_a_relation_change_of_that_device() {
+        let refused = facts(Phase::Refused);
+        assert_eq!(step(&refused), Step::Keep);
+        // Presence and arrivals are no reason for a refused feed.
+        let arrived = Facts {
+            device_event: true,
+            ..refused
+        };
+        assert_eq!(step(&arrived), Step::Keep);
+        let changed = Facts {
+            relation_changed: true,
+            ..refused
+        };
+        assert_eq!(step(&changed), Step::Start);
+        // The other device's user may have allowed this one since: after its
+        // refusal backoff the feed asks once more (rights change unseen here).
+        let waited = Facts {
+            backoff_over: true,
+            ..refused
+        };
+        assert_eq!(step(&waited), Step::Start);
+        assert_eq!(refused_backoff(0), Duration::from_secs(60));
+        assert_eq!(refused_backoff(1), Duration::from_secs(120));
+        assert_eq!(refused_backoff(10), LONGEST_REFUSED_RETRY);
+        assert_eq!(refused_backoff(u32::MAX), LONGEST_REFUSED_RETRY);
+        let low_power = Facts {
+            low_power: true,
+            ..changed
+        };
+        assert_eq!(step(&low_power), Step::Pause);
+    }
+
     fn akku_task_running_feed_follows_a_changed_target_or_service() {
         let moved = Facts {
             same: false,

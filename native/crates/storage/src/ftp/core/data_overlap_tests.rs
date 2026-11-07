@@ -13,41 +13,52 @@ use suppaftp::FtpError;
 
 #[test]
 fn speed_task_ftp_stor_is_sent_while_the_data_connection_connects() {
-    let server = Server::start();
-    let connection = server.connection_after_command();
-    let mut writer = connection
-        .open_store("/stage", 5)
-        .expect("STOR before connect");
-    writer.write_all(b"hello").unwrap();
-    writer.flush().unwrap();
-    assert_eq!(lock(&server.state.files)["/stage"], b"hello");
-    let (stor, accepted) = (
-        server.state.position("STOR /stage"),
-        server.state.position("data accepted"),
-    );
-    assert!(
-        stor.is_some() && stor < accepted,
-        "STOR is read before the data accept"
-    );
-}
-
-#[test]
-fn speed_task_ftp_retr_is_sent_while_the_data_connection_connects() {
-    let server = Server::start();
-    lock(&server.state.files).insert("/file".to_string(), b"payload".to_vec());
-    let connection = server.connection_after_command();
-    let mut reader = connection
-        .open_reader_at("/file", 0)
-        .unwrap()
-        .expect("RETR");
-    let mut body = Vec::new();
-    reader.read_to_end(&mut body).unwrap();
-    assert_eq!(body, b"payload");
-    let (retr, accepted) = (
-        server.state.position("RETR /file"),
-        server.state.position("data accepted"),
-    );
-    assert!(retr.is_some() && retr < accepted);
+    let cases: [(&str, fn()); 2] = [
+        (
+            "speed_task_ftp_stor_is_sent_while_the_data_connection_connects",
+            || {
+                let server = Server::start();
+                let connection = server.connection_after_command();
+                let mut writer = connection
+                    .open_store("/stage", 5)
+                    .expect("STOR before connect");
+                writer.write_all(b"hello").unwrap();
+                writer.flush().unwrap();
+                assert_eq!(lock(&server.state.files)["/stage"], b"hello");
+                let (stor, accepted) = (
+                    server.state.position("STOR /stage"),
+                    server.state.position("data accepted"),
+                );
+                assert!(
+                    stor.is_some() && stor < accepted,
+                    "STOR is read before the data accept"
+                );
+            },
+        ),
+        (
+            "speed_task_ftp_retr_is_sent_while_the_data_connection_connects",
+            || {
+                let server = Server::start();
+                lock(&server.state.files).insert("/file".to_string(), b"payload".to_vec());
+                let connection = server.connection_after_command();
+                let mut reader = connection
+                    .open_reader_at("/file", 0)
+                    .unwrap()
+                    .expect("RETR");
+                let mut body = Vec::new();
+                reader.read_to_end(&mut body).unwrap();
+                assert_eq!(body, b"payload");
+                let (retr, accepted) = (
+                    server.state.position("RETR /file"),
+                    server.state.position("data accepted"),
+                );
+                assert!(retr.is_some() && retr < accepted);
+            },
+        ),
+    ];
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
+    }
 }
 
 #[test]

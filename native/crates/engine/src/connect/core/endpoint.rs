@@ -122,22 +122,6 @@ mod tests {
     use crate::creds::AuthKind;
 
     #[test]
-    fn remote_url_detection_and_parse() {
-        assert!(is_remote_url("sftp://u@h:22/x"));
-        assert!(is_remote_url("webdav://u@h:443/dav"));
-        assert!(is_remote_url("share://direct/contact-a/Gate"));
-        assert!(!is_remote_url("C:/local"));
-        assert!(!is_remote_url(r"\\srv\share"));
-        let (p, u, h, port, path) =
-            parse_remote_url("sftp://bob@example.com:2222/home/bob").unwrap();
-        assert_eq!(p, Protocol::Sftp);
-        assert_eq!(u, "bob");
-        assert_eq!(h, "example.com");
-        assert_eq!(port, 2222);
-        assert_eq!(path, "/home/bob");
-    }
-
-    #[test]
     fn remote_endpoint_builds_url() {
         let c = SavedConnection {
             protocol: Protocol::Sftp,

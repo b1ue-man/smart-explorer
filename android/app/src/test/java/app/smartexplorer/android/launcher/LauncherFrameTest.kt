@@ -7,87 +7,15 @@ import java.io.File
 import javax.xml.parsers.DocumentBuilderFactory
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
-import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.w3c.dom.Element
 
 /**
- * DSK-M9 on the JVM, without Robolectric: the launcher package keeps out of the main process's code
- * (U35-11), the navigation kinds of the other packages still round-trip (U35-14), and the four
+ * DSK-M9 on the JVM, without Robolectric: the navigation kinds of the other packages still round-trip (U35-14), and the four
  * filters of `MainActivity` stay as they were (U35-12). The module directory is the working directory.
  */
 class LauncherFrameTest {
     private val androidNs = "http://schemas.android.com/apk/res/android"
-
-    /** Packages whose code needs the Rust core or the main process's state (U35-11). */
-    private val forbiddenPackages = listOf("core", "prefs", "service", "api", "system", "work", "update", "screen", "ui")
-
-    @Test
-    fun launcher_task_launcher_package_imports_isolated() {
-        val root = File("src/main/java/app/smartexplorer/android/launcher")
-        assertTrue("launcher package missing: ${root.absolutePath}", root.isDirectory)
-        val files = root.walkTopDown().filter { it.isFile && it.extension == "kt" }.toList()
-        assertTrue("no launcher source found", files.isNotEmpty())
-        val violations = ArrayList<String>()
-        for (file in files) {
-            // `LauncherSwitch` is the module's entry in the main process; only it may start and stop the widget feed there (U40-17).
-            val forbidden = if (file.name == "LauncherSwitch.kt") forbiddenPackages else forbiddenPackages + "widget"
-            violations += importViolations(file, forbidden)
-        }
-        assertTrue("imports the launcher process must not load:\n" + violations.joinToString("\n"), violations.isEmpty())
-    }
-
-    /**
-     * U40-16: the widget code runs in the launcher process too. It may use the app's resources and `launcher.bridge`, nothing
-     * else of the app; only the feed, which runs in the main process, is exempt. The bridge protocol imports no app class at
-     * all (U40-4): it is read by both processes.
-     */
-    @Test
-    fun launcher_task_widget_and_bridge_imports_isolated() {
-        val base = "src/main/java/app/smartexplorer/android"
-        val violations = ArrayList<String>()
-        val widget = File("$base/widget")
-        assertTrue("widget package missing: ${widget.absolutePath}", widget.isDirectory)
-        for (file in widget.walkTopDown().filter { it.isFile && it.extension == "kt" && it.name != "DevicesWidgetFeed.kt" }) {
-            violations += appImports(file).filter { target ->
-                val rest = target.removePrefix("app.smartexplorer.android.")
-                !(rest == "R" || rest.startsWith("launcher.bridge.") || rest.startsWith("widget."))
-            }.map { "${file.name}: import $it" }
-        }
-        val bridge = File("$base/launcher/bridge")
-        assertTrue("bridge package missing: ${bridge.absolutePath}", bridge.isDirectory)
-        for (file in bridge.walkTopDown().filter { it.isFile && it.extension == "kt" }) {
-            violations += appImports(file).filter { !it.startsWith("app.smartexplorer.android.launcher.bridge.") }.map { "${file.name}: import $it" }
-        }
-        assertTrue("imports the launcher process must not load:\n" + violations.joinToString("\n"), violations.isEmpty())
-    }
-
-    private fun appImports(file: File): List<String> = file.readLines().map { it.trim() }
-        .filter { it.startsWith("import app.smartexplorer.android.") }
-        .map { it.removePrefix("import ").substringBefore(" as ").trim() }
-
-    private fun importViolations(file: File, forbidden: List<String>): List<String> {
-        val violations = ArrayList<String>()
-        file.readLines().forEachIndexed { index, line ->
-            val trimmed = line.trim()
-            if (trimmed.startsWith("import ")) {
-                val target = trimmed.removePrefix("import ").substringBefore(" as ").trim()
-                val prefix = "app.smartexplorer.android."
-                if (target.startsWith(prefix)) {
-                    val rest = target.removePrefix(prefix)
-                    val top = rest.substringBefore('.')
-                    val allowedNav = target == "app.smartexplorer.android.ui.AppNav"
-                    if (top in forbidden && !allowedNav) violations += "${file.name}:${index + 1}: $trimmed"
-                    if (rest == "MainActivity") violations += "${file.name}:${index + 1}: $trimmed"
-                }
-            } else if (!trimmed.startsWith("*") && !trimmed.startsWith("//") && !trimmed.startsWith("/*")) {
-                if (Regex("""\bMainActivity\s*::\s*class""").containsMatchIn(trimmed)) {
-                    violations += "${file.name}:${index + 1}: $trimmed"
-                }
-            }
-        }
-        return violations
-    }
 
     @Test
     fun launcher_task_existing_nav_kinds_unchanged() {

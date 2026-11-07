@@ -27,6 +27,7 @@ fn grant(owner: CaptureOwner, bytes: u64) -> CaptureGrant {
 }
 
 #[test]
+#[ignore = "needs Media Foundation (mfplat.dll, MFStartup) on a Windows runner; Suite review-task"]
 fn batches_task_capture_mf_buffer_credit_lasts_through_final_com_alias() {
     if !media_foundation("batches_task_capture_mf_buffer_credit_lasts_through_final_com_alias") {
         return;
@@ -60,6 +61,7 @@ fn fill(buffer: &IMFMediaBuffer, bytes: &[u8]) {
 }
 
 #[test]
+#[ignore = "needs Media Foundation (mfplat.dll, MFStartup) on a Windows runner; Suite review-task"]
 fn batches_task_capture_mf_copies_multiple_buffers_with_one_fixed_au() {
     if !media_foundation("batches_task_capture_mf_copies_multiple_buffers_with_one_fixed_au") {
         return;
@@ -102,11 +104,13 @@ fn unverified(fixture: &str, reason: &str) {
 }
 
 #[test]
+#[ignore = "needs Media Foundation (mfplat.dll, MFStartup) on a Windows runner; Suite review-task"]
 fn batches_task_capture_mf_sync_admitted_roundtrip() {
     encoder_roundtrip(false, "batches_task_capture_mf_sync_admitted_roundtrip");
 }
 
 #[test]
+#[ignore = "needs Media Foundation (mfplat.dll, MFStartup) on a Windows runner; Suite review-task"]
 fn batches_task_capture_mf_async_admitted_roundtrip() {
     encoder_roundtrip(true, "batches_task_capture_mf_async_admitted_roundtrip");
 }

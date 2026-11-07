@@ -1,7 +1,7 @@
 use super::{take_clipboard_keys, ClipKey};
 
 #[test]
-#[ignore = "requires isolated remote copy/paste task runner"]
+#[ignore = "requires isolated remote copy/paste task runner; Suite copy-paste-task"]
 fn copy_paste_task_keyboard_blocked_queue_is_consumed_not_replayed() {
     assert_eq!(std::env::var("SMART_EXPLORER_COPY_PASTE_TASK").as_deref(), Ok("1"));
     let (tx, rx) = crossbeam_channel::unbounded();

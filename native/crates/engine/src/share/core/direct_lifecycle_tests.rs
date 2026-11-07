@@ -111,6 +111,18 @@ fn persisted_record_round_trips_all_orthogonal_states() {
 
 #[test]
 fn delivery_reducer_is_monotonic_idempotent_and_order_independent() {
+    let cases: [fn(); 4] = [
+        delivery_reducer_is_monotonic_idempotent_and_order_independent_case,
+        decision_delivery_is_revision_scoped_and_order_independent,
+        expiry_and_failure_are_terminal_and_timestamp_checked,
+        reducer_rejects_events_for_another_request,
+    ];
+    for case in cases {
+        case();
+    }
+}
+
+fn delivery_reducer_is_monotonic_idempotent_and_order_independent_case() {
     let mut record = DirectRequestRecord::new(request());
     assert!(record
         .apply(delivery(DirectDeliveryState::Delivered, 130))
@@ -131,85 +143,6 @@ fn delivery_reducer_is_monotonic_idempotent_and_order_independent() {
     assert_eq!(record.delivery.changed_at, 140);
 }
 
-#[test]
-fn expiry_and_failure_are_terminal_and_timestamp_checked() {
-    let mut record = DirectRequestRecord::new(request());
-    assert_eq!(
-        record.apply(delivery(DirectDeliveryState::Expired, 199)),
-        Err(DirectLifecycleError::InvalidTimestamp)
-    );
-    assert!(record
-        .apply(delivery(DirectDeliveryState::Expired, 200))
-        .unwrap());
-    assert!(!record
-        .apply(delivery(DirectDeliveryState::Received, 200))
-        .unwrap());
-
-    let mut record = DirectRequestRecord::new(request());
-    assert_eq!(
-        record.apply(delivery(DirectDeliveryState::Failed, 120)),
-        Err(DirectLifecycleError::MissingFailure)
-    );
-    assert!(record
-        .apply(DirectLifecycleEvent::Delivery {
-            request_id: request_id(REQUEST_ID),
-            state: DirectDeliveryState::Failed,
-            at: 120,
-            failure: Some(DirectFailure {
-                code: "invalid_signature".into(),
-                message: "target rejected the envelope".into(),
-            }),
-        })
-        .unwrap());
-    assert_eq!(record.delivery.state, DirectDeliveryState::Failed);
-    assert_eq!(
-        record.apply(delivery(DirectDeliveryState::Sent, 201)),
-        Err(DirectLifecycleError::AfterExpiry)
-    );
-}
-
-#[test]
-fn accepted_decision_can_only_advance_to_higher_revision_revoke() {
-    let mut record = DirectRequestRecord::new(request());
-    assert!(record
-        .apply(decision(DirectDecisionKind::Accepted, 1, 130))
-        .unwrap());
-    assert!(!record
-        .apply(decision(DirectDecisionKind::Accepted, 1, 130))
-        .unwrap());
-    assert_eq!(
-        record.apply(decision(DirectDecisionKind::Rejected, 1, 130)),
-        Err(DirectLifecycleError::DecisionRevisionConflict)
-    );
-    assert!(record
-        .apply(decision(DirectDecisionKind::Revoked, 2, 250))
-        .unwrap());
-    assert_eq!(record.decision.state, DirectDecisionState::Revoked);
-    assert_eq!(record.decision.revision, 2);
-    assert_eq!(
-        record.decision_delivery.state,
-        DirectDecisionDeliveryState::Queued
-    );
-    assert_eq!(record.decision_delivery.revision, 2);
-    assert!(!record
-        .apply(decision(DirectDecisionKind::Accepted, 1, 130))
-        .unwrap());
-}
-
-#[test]
-fn out_of_order_revoke_converges_without_resurrecting_acceptance() {
-    let mut record = DirectRequestRecord::new(request());
-    assert!(record
-        .apply(decision(DirectDecisionKind::Revoked, 2, 250))
-        .unwrap());
-    assert!(!record
-        .apply(decision(DirectDecisionKind::Accepted, 1, 130))
-        .unwrap());
-    assert_eq!(record.decision.state, DirectDecisionState::Revoked);
-    assert_eq!(record.decision.revision, 2);
-}
-
-#[test]
 fn decision_delivery_is_revision_scoped_and_order_independent() {
     let mut record = DirectRequestRecord::new(request());
     record
@@ -246,7 +179,42 @@ fn decision_delivery_is_revision_scoped_and_order_independent() {
     );
 }
 
-#[test]
+fn expiry_and_failure_are_terminal_and_timestamp_checked() {
+    let mut record = DirectRequestRecord::new(request());
+    assert_eq!(
+        record.apply(delivery(DirectDeliveryState::Expired, 199)),
+        Err(DirectLifecycleError::InvalidTimestamp)
+    );
+    assert!(record
+        .apply(delivery(DirectDeliveryState::Expired, 200))
+        .unwrap());
+    assert!(!record
+        .apply(delivery(DirectDeliveryState::Received, 200))
+        .unwrap());
+
+    let mut record = DirectRequestRecord::new(request());
+    assert_eq!(
+        record.apply(delivery(DirectDeliveryState::Failed, 120)),
+        Err(DirectLifecycleError::MissingFailure)
+    );
+    assert!(record
+        .apply(DirectLifecycleEvent::Delivery {
+            request_id: request_id(REQUEST_ID),
+            state: DirectDeliveryState::Failed,
+            at: 120,
+            failure: Some(DirectFailure {
+                code: "invalid_signature".into(),
+                message: "target rejected the envelope".into(),
+            }),
+        })
+        .unwrap());
+    assert_eq!(record.delivery.state, DirectDeliveryState::Failed);
+    assert_eq!(
+        record.apply(delivery(DirectDeliveryState::Sent, 201)),
+        Err(DirectLifecycleError::AfterExpiry)
+    );
+}
+
 fn reducer_rejects_events_for_another_request() {
     let mut record = DirectRequestRecord::new(request());
     let event = DirectLifecycleEvent::Delivery {
@@ -256,4 +224,54 @@ fn reducer_rejects_events_for_another_request() {
         failure: None,
     };
     assert_eq!(record.apply(event), Err(DirectLifecycleError::WrongRequest));
+}
+
+#[test]
+fn accepted_decision_can_only_advance_to_higher_revision_revoke() {
+    let cases: [fn(); 2] = [
+        accepted_decision_can_only_advance_to_higher_revision_revoke_case,
+        out_of_order_revoke_converges_without_resurrecting_acceptance,
+    ];
+    for case in cases {
+        case();
+    }
+}
+
+fn accepted_decision_can_only_advance_to_higher_revision_revoke_case() {
+    let mut record = DirectRequestRecord::new(request());
+    assert!(record
+        .apply(decision(DirectDecisionKind::Accepted, 1, 130))
+        .unwrap());
+    assert!(!record
+        .apply(decision(DirectDecisionKind::Accepted, 1, 130))
+        .unwrap());
+    assert_eq!(
+        record.apply(decision(DirectDecisionKind::Rejected, 1, 130)),
+        Err(DirectLifecycleError::DecisionRevisionConflict)
+    );
+    assert!(record
+        .apply(decision(DirectDecisionKind::Revoked, 2, 250))
+        .unwrap());
+    assert_eq!(record.decision.state, DirectDecisionState::Revoked);
+    assert_eq!(record.decision.revision, 2);
+    assert_eq!(
+        record.decision_delivery.state,
+        DirectDecisionDeliveryState::Queued
+    );
+    assert_eq!(record.decision_delivery.revision, 2);
+    assert!(!record
+        .apply(decision(DirectDecisionKind::Accepted, 1, 130))
+        .unwrap());
+}
+
+fn out_of_order_revoke_converges_without_resurrecting_acceptance() {
+    let mut record = DirectRequestRecord::new(request());
+    assert!(record
+        .apply(decision(DirectDecisionKind::Revoked, 2, 250))
+        .unwrap());
+    assert!(!record
+        .apply(decision(DirectDecisionKind::Accepted, 1, 130))
+        .unwrap());
+    assert_eq!(record.decision.state, DirectDecisionState::Revoked);
+    assert_eq!(record.decision.revision, 2);
 }

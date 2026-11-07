@@ -134,7 +134,7 @@ fn drive_task_windows_status_table_covers_emitted_codes() {
 }
 
 #[test]
-#[ignore = "requires the pinned Dokany runtime and its installed driver (Windows task stage)"]
+#[ignore = "requires the pinned Dokany runtime and its installed driver (Windows task stage); Suite rechte-desktop-tresore-task"]
 fn drive_task_windows_unmapped_error_is_io_device_not_access_denied() -> io::Result<()> {
     let host = MountedHost::start(FailingBackend::new(), MountMode::ReadOnly)?;
     let seen = read_error(&host.root().join("other.txt"))?;
@@ -149,25 +149,22 @@ fn drive_task_windows_unmapped_error_is_io_device_not_access_denied() -> io::Res
         Some(5),
         "an unmapped error still reads as Access denied"
     );
+    // Case "host unreachable": an unreachable host is reported as Win32 1232, not as Access denied.
+    {
+        let host = MountedHost::start(FailingBackend::new(), MountMode::ReadOnly)?;
+        let seen = read_error(&host.root().join("unreachable.txt"))?;
+        let readable = std::fs::read(host.root().join("fine.txt"));
+        eprintln!("[drive task] unreachable host seen as Win32 {seen:?}");
+        let (result, _) = host.finish(false)?;
+        assert_eq!(result, Ok(HostExit::Stopped), "unreachable host");
+        assert_eq!(readable?, b"fine", "unreachable host");
+        assert_eq!(seen, Some(1232), "unreachable host");
+    }
     Ok(())
 }
 
 #[test]
-#[ignore = "requires the pinned Dokany runtime and its installed driver (Windows task stage)"]
-fn drive_task_windows_host_unreachable_maps_1232() -> io::Result<()> {
-    let host = MountedHost::start(FailingBackend::new(), MountMode::ReadOnly)?;
-    let seen = read_error(&host.root().join("unreachable.txt"))?;
-    let readable = std::fs::read(host.root().join("fine.txt"));
-    eprintln!("[drive task] unreachable host seen as Win32 {seen:?}");
-    let (result, _) = host.finish(false)?;
-    assert_eq!(result, Ok(HostExit::Stopped));
-    assert_eq!(readable?, b"fine");
-    assert_eq!(seen, Some(1232));
-    Ok(())
-}
-
-#[test]
-#[ignore = "requires the pinned Dokany runtime and its installed driver (Windows task stage)"]
+#[ignore = "requires the pinned Dokany runtime and its installed driver (Windows task stage); Suite rechte-desktop-tresore-task"]
 fn drive_task_host_session_update_stop_unmounts_and_exits() -> io::Result<()> {
     let backend = OptimizationBackend::new();
     backend.put("/note.txt", b"before");

@@ -42,18 +42,27 @@ mod tests {
         assert_eq!(windows_ordinal_key("readme.txt"), "README.TXT");
         assert_eq!(windows_ordinal_key("Grüße"), "GRÜßE");
         // ß never expands to SS: the two spellings stay distinct names.
-        assert_ne!(windows_ordinal_key("Straße"), windows_ordinal_key("STRASSE"));
+        assert_ne!(
+            windows_ordinal_key("Straße"),
+            windows_ordinal_key("STRASSE")
+        );
         // Case-only variants of the same sharp-s name still match.
         assert_eq!(windows_ordinal_key("straße"), windows_ordinal_key("STRAßE"));
-    }
-
-    #[test]
-    fn remote_drive_task_expanding_uppercase_components_are_representable() {
-        for name in ["Straße", "Maße 2026.pdf", "ﬁle", "ŉou"] {
-            assert!(validate_windows_case_component(name).is_ok());
-            let key = windows_ordinal_key(name);
-            assert_eq!(key.chars().count(), name.chars().count());
-            assert!(!key.contains('\0'));
+        // Case "expanding uppercase": names whose upper-case form grows stay representable.
+        {
+            for name in ["Straße", "Maße 2026.pdf", "ﬁle", "ŉou"] {
+                assert!(
+                    validate_windows_case_component(name).is_ok(),
+                    "expanding uppercase: {name}"
+                );
+                let key = windows_ordinal_key(name);
+                assert_eq!(
+                    key.chars().count(),
+                    name.chars().count(),
+                    "expanding uppercase: {name}"
+                );
+                assert!(!key.contains('\0'), "expanding uppercase: {name}");
+            }
         }
     }
 }

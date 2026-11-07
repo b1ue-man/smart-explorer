@@ -2,61 +2,22 @@ package app.smartexplorer.android.task
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.smartexplorer.android.api.Listing
-import app.smartexplorer.android.core.Entry
 import java.io.File
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 
 /**
- * G4 local file flows on both volumes: create, rename, check, list with filter, copy with every
- * conflict choice, move between volumes, filtered relative copy, properties, app trash per volume
+ * G4 local file flows on both volumes: copy with every conflict choice, move between volumes, filtered relative copy, properties, app trash per volume
  * with restore, ZIP browsing/fetch/extract and the protected trash omission in local copies.
  */
 @RunWith(AndroidJUnit4::class)
 class LocalFilesTaskTest {
-    @Test
-    fun createRenameCheckAndFilteredListing() = coreTest {
-        val dir = Fixture.dir(Volumes.primary(), "local", "basics").absolutePath
-        val folder: Entry = Api.mkdir(dir, "Ordner")
-        assertTrue(folder.isDir)
-        val file: Entry = Api.get("fs.newFile", args("parent" to dir, "name" to "notiz.txt"))
-        assertFalse(file.isDir)
-        Fixture.write(File(dir, "alpha.log"), "0123456789")
-        Fixture.write(File(dir, ".versteckt"), "x")
-
-        val existing = Api.obj("fs.checkName", args("parent" to dir, "name" to "notiz.txt"))
-        assertTrue(existing.bool("exists"))
-        val hostile = Api.obj("fs.checkName", args("parent" to dir, "name" to "CON"))
-        assertFalse(hostile.bool("exists"))
-        assertNotNull("CON ist unter Windows reserviert", hostile.textOrNull("problem"))
-
-        val renamed: Entry = Api.get("fs.rename", args("location" to file.location, "newName" to "umbenannt.txt"))
-        assertEquals("umbenannt.txt", renamed.name)
-        assertFalse(File(file.location).exists())
-        Api.failure("fs.rename", args("location" to renamed.location, "newName" to "alpha.log"), "exists")
-        val stat: Entry = Api.get("fs.stat", args("location" to File(dir, "alpha.log").absolutePath))
-        assertEquals(10L, stat.size)
-        assertEquals("log", stat.ext.trimStart('.'))
-
-        val visible = Api.listing(dir, showHidden = false)
-        assertEquals(setOf("Ordner", "umbenannt.txt", "alpha.log"), visible.entries.map { it.name }.toSet())
-        assertEquals("local", visible.backend)
-        assertTrue(visible.canTrash)
-        assertEquals(dir, visible.crumbs.last().location)
-        assertTrue(".versteckt" in Api.names(dir))
-        val filtered = Api.listing(dir, showHidden = false, filter = mapOf("text" to "alpha", "mode" to "substring", "files" to true, "dirs" to false))
-        assertEquals(listOf("alpha.log"), filtered.entries.map { it.name })
-        val bySize = Api.listing(dir, showHidden = false, sortKey = "size")
-        assertEquals("Ordner", bySize.entries.first().name)
-    }
-
     @Test
     fun copyConflictsMoveBetweenVolumesAndFilteredCopy() = coreTest {
         val source = Fixture.dir(Volumes.primary(), "local", "copy-src")

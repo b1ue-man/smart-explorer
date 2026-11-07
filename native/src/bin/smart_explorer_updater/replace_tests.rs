@@ -266,53 +266,42 @@ fn missing_rollback_backup_does_not_delete_only_runnable_target() {
 
 #[test]
 fn partial_replace_state_with_missing_target_restores_verified_backup() {
-    let dir = tempfile::tempdir().unwrap();
-    let staged = dir.path().join("staged");
-    let target = dir.path().join("target");
-    std::fs::write(&staged, b"new").unwrap();
-    std::fs::write(&target, b"old").unwrap();
-    let hash = sha256_file(&staged).unwrap();
-    let mut transaction = replace_transaction(&[Replacement {
-        label: "App",
-        staged: &staged,
-        target: &target,
-        sha256: &hash,
-        expected_target_sha256: None,
-    }])
-    .unwrap();
-    std::fs::remove_file(&target).unwrap();
+    // Rows: an intact pending file, where recovery succeeds, and a corrupt one,
+    // where recovery is an error. In both rows the missing target is restored
+    // from the verified backup before the outcome is reported.
+    for (case, corrupt_pending, succeeds) in [
+        ("intact pending", false, true),
+        ("corrupt pending", true, false),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let staged = dir.path().join("staged");
+        let target = dir.path().join("target");
+        std::fs::write(&staged, b"new").unwrap();
+        std::fs::write(&target, b"old").unwrap();
+        let hash = sha256_file(&staged).unwrap();
+        let mut transaction = replace_transaction(&[Replacement {
+            label: "App",
+            staged: &staged,
+            target: &target,
+            sha256: &hash,
+            expected_target_sha256: None,
+        }])
+        .unwrap();
+        let pending = transaction.prepared[0].pending.clone();
+        std::fs::remove_file(&target).unwrap();
+        if corrupt_pending {
+            std::fs::write(&pending, b"corrupt-pending").unwrap();
+        }
 
-    replace_platform::recover_failed_install(&transaction.prepared[0]).unwrap();
+        let outcome = replace_platform::recover_failed_install(&transaction.prepared[0]);
 
-    assert_eq!(std::fs::read(&target).unwrap(), b"old");
-    transaction.rollback().unwrap();
-}
-
-#[test]
-fn missing_target_is_restored_before_corrupt_pending_is_reported() {
-    let dir = tempfile::tempdir().unwrap();
-    let staged = dir.path().join("staged");
-    let target = dir.path().join("target");
-    std::fs::write(&staged, b"new").unwrap();
-    std::fs::write(&target, b"old").unwrap();
-    let hash = sha256_file(&staged).unwrap();
-    let mut transaction = replace_transaction(&[Replacement {
-        label: "App",
-        staged: &staged,
-        target: &target,
-        sha256: &hash,
-        expected_target_sha256: None,
-    }])
-    .unwrap();
-    let pending = transaction.prepared[0].pending.clone();
-    std::fs::remove_file(&target).unwrap();
-    std::fs::write(&pending, b"corrupt-pending").unwrap();
-
-    assert!(replace_platform::recover_failed_install(&transaction.prepared[0]).is_err());
-
-    assert_eq!(std::fs::read(&target).unwrap(), b"old");
-    std::fs::remove_file(pending).unwrap();
-    transaction.rollback().unwrap();
+        assert_eq!(outcome.is_ok(), succeeds, "{case}: {outcome:?}");
+        assert_eq!(std::fs::read(&target).unwrap(), b"old", "{case}");
+        if corrupt_pending {
+            std::fs::remove_file(pending).unwrap();
+        }
+        transaction.rollback().unwrap();
+    }
 }
 
 #[test]

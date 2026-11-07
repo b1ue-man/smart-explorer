@@ -190,24 +190,33 @@ mod tests {
 
     #[test]
     fn per_source_accept_burst_is_bounded_and_refills() {
+        // Rows: a source with its own bucket, and the externally limited proxy,
+        // which draws only on the global budget. Each row admits its burst,
+        // refuses the next accept and admits again one second later.
         let started = Instant::now();
-        let mut limiter = AcceptRateLimiter::new_at(started);
-        let source = SourceKey::Ipv4([192, 0, 2, 1]);
-        for _ in 0..ACCEPT_BURST_PER_SOURCE as usize {
-            assert!(limiter.try_admit_at(source, started));
+        let cases = [
+            (
+                "per source",
+                SourceKey::Ipv4([192, 0, 2, 1]),
+                ACCEPT_BURST_PER_SOURCE as usize,
+            ),
+            (
+                "externally limited proxy",
+                SourceKey::ExternallyLimitedProxy,
+                ACCEPT_BURST_GLOBAL as usize,
+            ),
+        ];
+        for (case, source, burst) in cases {
+            let mut limiter = AcceptRateLimiter::new_at(started);
+            for _ in 0..burst {
+                assert!(limiter.try_admit_at(source, started), "{case}");
+            }
+            assert!(!limiter.try_admit_at(source, started), "{case}");
+            assert!(
+                limiter.try_admit_at(source, started + Duration::from_secs(1)),
+                "{case}"
+            );
         }
-        assert!(!limiter.try_admit_at(source, started));
-        assert!(limiter.try_admit_at(source, started + Duration::from_secs(1)));
-    }
-
-    #[test]
-    fn proxy_still_consumes_global_accept_budget() {
-        let started = Instant::now();
-        let mut limiter = AcceptRateLimiter::new_at(started);
-        for _ in 0..ACCEPT_BURST_GLOBAL as usize {
-            assert!(limiter.try_admit_at(SourceKey::ExternallyLimitedProxy, started));
-        }
-        assert!(!limiter.try_admit_at(SourceKey::ExternallyLimitedProxy, started));
     }
 
     #[test]

@@ -197,48 +197,61 @@ impl Drop for DropCommitWriter {
 
 #[test]
 fn remote_drive_task_writer_drop_invalidates_a_listing_loaded_while_open() -> io::Result<()> {
-    let size = Arc::new(AtomicUsize::new(1));
-    let inner = Arc::new(DropCommitBackend {
-        size: Arc::clone(&size),
-        lists: AtomicUsize::new(0),
-        publish_on_write: false,
-        fail_flush: false,
-        commit_on_drop: true,
-    });
-    let cache = CachingBackend::new(inner.clone() as BackendHandle);
-    assert_eq!(cache.list_dir("/docs")?[0].size, 1);
+    let cases: [(&str, fn() -> std::io::Result<()>); 2] = [
+        (
+            "remote_drive_task_writer_drop_invalidates_a_listing_loaded_while_open",
+            || -> std::io::Result<()> {
+                let size = Arc::new(AtomicUsize::new(1));
+                let inner = Arc::new(DropCommitBackend {
+                    size: Arc::clone(&size),
+                    lists: AtomicUsize::new(0),
+                    publish_on_write: false,
+                    fail_flush: false,
+                    commit_on_drop: true,
+                });
+                let cache = CachingBackend::new(inner.clone() as BackendHandle);
+                assert_eq!(cache.list_dir("/docs")?[0].size, 1);
 
-    let mut writer = cache.open_write("/docs/note.md")?;
-    writer.write_all(b"updated")?;
-    assert_eq!(cache.list_dir("/docs")?[0].size, 1);
-    drop(writer);
+                let mut writer = cache.open_write("/docs/note.md")?;
+                writer.write_all(b"updated")?;
+                assert_eq!(cache.list_dir("/docs")?[0].size, 1);
+                drop(writer);
 
-    assert_eq!(cache.list_dir("/docs")?[0].size, 7);
-    assert_eq!(inner.lists.load(Ordering::SeqCst), 3);
-    Ok(())
-}
+                assert_eq!(cache.list_dir("/docs")?[0].size, 7);
+                assert_eq!(inner.lists.load(Ordering::SeqCst), 3);
+                Ok(())
+            },
+        ),
+        (
+            "remote_drive_task_ambiguous_flush_invalidates_while_writer_is_open",
+            || -> std::io::Result<()> {
+                let size = Arc::new(AtomicUsize::new(1));
+                let inner = Arc::new(DropCommitBackend {
+                    size: Arc::clone(&size),
+                    lists: AtomicUsize::new(0),
+                    publish_on_write: true,
+                    fail_flush: true,
+                    commit_on_drop: false,
+                });
+                let cache = CachingBackend::new(inner.clone() as BackendHandle);
+                assert_eq!(cache.list_dir("/docs")?[0].size, 1);
 
-#[test]
-fn remote_drive_task_ambiguous_flush_invalidates_while_writer_is_open() -> io::Result<()> {
-    let size = Arc::new(AtomicUsize::new(1));
-    let inner = Arc::new(DropCommitBackend {
-        size: Arc::clone(&size),
-        lists: AtomicUsize::new(0),
-        publish_on_write: true,
-        fail_flush: true,
-        commit_on_drop: false,
-    });
-    let cache = CachingBackend::new(inner.clone() as BackendHandle);
-    assert_eq!(cache.list_dir("/docs")?[0].size, 1);
+                let mut writer = cache.open_write("/docs/note.md")?;
+                assert_eq!(cache.list_dir("/docs")?[0].size, 1);
+                writer.write_all(b"updated")?;
+                assert!(writer.flush().is_err());
 
-    let mut writer = cache.open_write("/docs/note.md")?;
-    assert_eq!(cache.list_dir("/docs")?[0].size, 1);
-    writer.write_all(b"updated")?;
-    assert!(writer.flush().is_err());
-
-    assert_eq!(cache.list_dir("/docs")?[0].size, 7);
-    assert_eq!(inner.lists.load(Ordering::SeqCst), 3);
-    Ok(())
+                assert_eq!(cache.list_dir("/docs")?[0].size, 7);
+                assert_eq!(inner.lists.load(Ordering::SeqCst), 3);
+                Ok(())
+            },
+        ),
+    ];
+    for (case, check) in cases {
+        std::panic::catch_unwind(check)
+            .unwrap_or_else(|_| panic!("{case}"))
+            .unwrap_or_else(|error| panic!("{case}: {error}"));
+    }
 }
 
 #[derive(Default)]

@@ -28,7 +28,7 @@ fn run_on(provider: &fixture::Provider, kind: &str, marker: &str) {
 }
 
 #[test]
-#[ignore = "braucht die Testserver der Stufe vault-backends (Manifest SE_SYNC_PROVIDER_MANIFEST aus native/sync-reliability-providers.py)"]
+#[ignore = "braucht die Testserver der Stufe vault-backends (Manifest SE_SYNC_PROVIDER_MANIFEST aus native/sync-reliability-providers.py); Suite rechte-desktop-tresore-task"]
 fn vault_task_backends_provider_matrix() {
     require_servers();
     let providers = fixture::providers();
@@ -66,7 +66,7 @@ fn vault_task_backends_provider_matrix() {
 }
 
 #[test]
-#[ignore = "braucht das Direct-Share-Paar der Stufe vault-backends (Manifest SE_SYNC_PROVIDER_MANIFEST, Kandidaten-Share-Server)"]
+#[ignore = "braucht das Direct-Share-Paar der Stufe vault-backends (Manifest SE_SYNC_PROVIDER_MANIFEST, Kandidaten-Share-Server); Suite rechte-desktop-tresore-task"]
 fn vault_task_backends_share_pair() {
     require_servers();
     let providers = fixture::providers();

@@ -106,47 +106,58 @@ fn review_task_backend_walk_is_exact_serial_and_parallel() {
 
 #[test]
 fn review_task_backend_walk_honours_the_retention_budget() {
-    let backend = wide_tree(10, 3, 1);
-    let progress = Progress::default();
-    let diagnostics = Diagnostics::default();
-    // The root and three more nodes; everything else folds into aggregates.
-    let budget = AnalyticsBudget::with_limits(4, 1 << 20, 2048);
-    let _ = budget.claim(Path::new("/"), 0, 1, &diagnostics);
-    let walker = Walker {
-        backend: &backend,
-        progress: &progress,
-        diagnostics: &diagnostics,
-        budget: &budget,
-        parallel: false,
-    };
-    let tree = walker.dir("/", "root".into(), 0, true);
-    let outcome = diagnostics.finish(tree, false);
-    assert_eq!(outcome.status, ScanStatus::Complete);
-    assert!(outcome.aggregated_files > 0);
-    assert_eq!(outcome.notes.len(), 1, "{:?}", outcome.notes);
-    let tree = outcome.tree.expect("tree");
-    assert_eq!(tree.size, 351, "sizes stay exact while detail folds");
-    fn count(node: &SizeNode) -> usize {
-        1 + node.children.iter().map(count).sum::<usize>()
+    let cases: [(&str, fn()); 2] = [
+        (
+            "review_task_backend_walk_honours_the_retention_budget",
+            || {
+                let backend = wide_tree(10, 3, 1);
+                let progress = Progress::default();
+                let diagnostics = Diagnostics::default();
+                // The root and three more nodes; everything else folds into aggregates.
+                let budget = AnalyticsBudget::with_limits(4, 1 << 20, 2048);
+                let _ = budget.claim(Path::new("/"), 0, 1, &diagnostics);
+                let walker = Walker {
+                    backend: &backend,
+                    progress: &progress,
+                    diagnostics: &diagnostics,
+                    budget: &budget,
+                    parallel: false,
+                };
+                let tree = walker.dir("/", "root".into(), 0, true);
+                let outcome = diagnostics.finish(tree, false);
+                assert_eq!(outcome.status, ScanStatus::Complete);
+                assert!(outcome.aggregated_files > 0);
+                assert_eq!(outcome.notes.len(), 1, "{:?}", outcome.notes);
+                let tree = outcome.tree.expect("tree");
+                assert_eq!(tree.size, 351, "sizes stay exact while detail folds");
+                fn count(node: &SizeNode) -> usize {
+                    1 + node.children.iter().map(count).sum::<usize>()
+                }
+                // The root, three kept nodes and the aggregates that hold the rest.
+                assert!(count(&tree) < 20, "{} nodes kept", count(&tree));
+            },
+        ),
+        (
+            "review_task_listing_fallback_honours_the_offered_node_budget",
+            || {
+                let backend = wide_tree(10, 3, 1);
+                let progress = Progress::default();
+                progress.set_node_budget(2);
+                let outcome = scan_backend(&backend, "/", &progress);
+                assert_eq!(outcome.status, ScanStatus::Complete);
+                let tree = outcome.tree.unwrap();
+                assert_eq!(tree.size, 351);
+                fn count(node: &SizeNode) -> usize {
+                    1 + node.children.iter().map(count).sum::<usize>()
+                }
+                assert!(count(&tree) <= 2);
+                assert!(!outcome.notes.is_empty());
+            },
+        ),
+    ];
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
     }
-    // The root, three kept nodes and the aggregates that hold the rest.
-    assert!(count(&tree) < 20, "{} nodes kept", count(&tree));
-}
-
-#[test]
-fn review_task_listing_fallback_honours_the_offered_node_budget() {
-    let backend = wide_tree(10, 3, 1);
-    let progress = Progress::default();
-    progress.set_node_budget(2);
-    let outcome = scan_backend(&backend, "/", &progress);
-    assert_eq!(outcome.status, ScanStatus::Complete);
-    let tree = outcome.tree.unwrap();
-    assert_eq!(tree.size, 351);
-    fn count(node: &SizeNode) -> usize {
-        1 + node.children.iter().map(count).sum::<usize>()
-    }
-    assert!(count(&tree) <= 2);
-    assert!(!outcome.notes.is_empty());
 }
 
 #[test]

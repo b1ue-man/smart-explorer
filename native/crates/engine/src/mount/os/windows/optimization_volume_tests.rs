@@ -179,7 +179,7 @@ impl Drop for Deadline {
 }
 
 #[test]
-#[ignore = "remote Windows suite only: requires approved private payload and installed Dokany driver"]
+#[ignore = "remote Windows suite only: requires approved private payload and installed Dokany driver; Suite mount-optimization-task"]
 fn mount_vault_task_actual_volume_metadata_apps_watchers() -> io::Result<()> {
     for private in [true, false] {
         let _deadline = Deadline::start()?;

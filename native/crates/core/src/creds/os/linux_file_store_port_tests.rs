@@ -117,44 +117,65 @@ fn read_through(held: &fs::File) -> Vec<u8> {
 
 #[test]
 fn luecken_task_port_without_secret_access_seals_every_old_secret() {
-    let (root, store) = fixture();
-    make_directory(&store);
-    let identity_secret = "cd".repeat(32);
-    write_legacy(&store, "share:identity:iroh_secret", &identity_secret);
-    write_legacy(&store, "sftp://u@h:22/", "old-password");
-    let stage = store.directory.join(".stage-7-ab");
-    write_private(&stage, &encode_legacy("half-written", "stage-secret"));
+    // Rows: the port alone, and the first get of a process, which ports every
+    // record too. Both rows start from the same store and run the same checks:
+    // the old secrets are gone, the stage file is removed, every record is
+    // sealed and the key file is private.
+    for (case, first_access_is_get) in [("port", false), ("get", true)] {
+        let (root, store) = fixture();
+        make_directory(&store);
+        let identity_secret = "cd".repeat(32);
+        write_legacy(&store, "share:identity:iroh_secret", &identity_secret);
+        write_legacy(&store, "sftp://u@h:22/", "old-password");
+        let stage = store.directory.join(".stage-7-ab");
+        write_private(&stage, &encode_legacy("half-written", "stage-secret"));
+        let status = store.status().unwrap();
+        assert_eq!(status.plaintext_records, 2, "{case}");
+        assert!(status.protector.is_none(), "{case}");
 
-    // No get, no set: the port alone must do it.
-    store.port_existing().unwrap();
+        if first_access_is_get {
+            // The first access of the process ports everything.
+            assert_eq!(
+                store.get("sftp://u@h:22/").unwrap().as_deref(),
+                Some("old-password"),
+                "{case}"
+            );
+        } else {
+            // No get, no set: the port alone must do it.
+            store.port_existing().unwrap();
+        }
 
-    let old_secrets: [&[u8]; 3] = [identity_secret.as_bytes(), b"old-password", b"stage-secret"];
-    for needle in old_secrets {
-        assert!(!directory_contains(&store.directory, needle));
+        let old_secrets: [&[u8]; 3] =
+            [identity_secret.as_bytes(), b"old-password", b"stage-secret"];
+        for needle in old_secrets {
+            assert!(!directory_contains(&store.directory, needle), "{case}");
+        }
+        assert!(!stage.exists(), "{case}");
+        for account in ["share:identity:iroh_secret", "sftp://u@h:22/"] {
+            let record = fs::read(store.record_path(account)).unwrap();
+            assert!(record.starts_with(b"SESEC02\0"), "{case}: {account}");
+        }
+        let status = store.status().unwrap();
+        assert_eq!(status.plaintext_records, 0, "{case}");
+        assert_eq!(status.stage_files, 0, "{case}");
+        assert_eq!(status.unreadable_records, 0, "{case}");
+        assert_eq!(status.protector.as_deref(), Some(APP_KEY_FILE), "{case}");
+        assert!(status.locked.is_none(), "{case}");
+        let key_file = fs::metadata(root.path().join("secrets-v1.kek")).unwrap();
+        assert_eq!(key_file.mode() & 0o7777, 0o600, "{case}");
+        assert_eq!(key_file.len(), 32, "{case}");
+        // The ported secrets read back unchanged.
+        assert_eq!(
+            store.get("share:identity:iroh_secret").unwrap(),
+            Some(identity_secret),
+            "{case}"
+        );
+        assert_eq!(
+            store.get("sftp://u@h:22/").unwrap().as_deref(),
+            Some("old-password"),
+            "{case}"
+        );
     }
-    assert!(!stage.exists());
-    for account in ["share:identity:iroh_secret", "sftp://u@h:22/"] {
-        let record = fs::read(store.record_path(account)).unwrap();
-        assert!(record.starts_with(b"SESEC02\0"), "{account}");
-    }
-    let status = store.status().unwrap();
-    assert_eq!(status.plaintext_records, 0);
-    assert_eq!(status.stage_files, 0);
-    assert_eq!(status.unreadable_records, 0);
-    assert_eq!(status.protector.as_deref(), Some(APP_KEY_FILE));
-    assert!(status.locked.is_none());
-    let key_file = fs::metadata(root.path().join("secrets-v1.kek")).unwrap();
-    assert_eq!(key_file.mode() & 0o7777, 0o600);
-    assert_eq!(key_file.len(), 32);
-    // The ported secrets read back unchanged.
-    assert_eq!(
-        store.get("share:identity:iroh_secret").unwrap(),
-        Some(identity_secret)
-    );
-    assert_eq!(
-        store.get("sftp://u@h:22/").unwrap().as_deref(),
-        Some("old-password")
-    );
 }
 
 #[test]
@@ -339,36 +360,34 @@ fn luecken_task_store_is_never_created_inside_a_directory_of_another_user() {
 
 #[test]
 fn luecken_task_replacing_a_late_plaintext_record_overwrites_its_old_bytes() {
-    let (_root, store) = fixture();
-    store.set("first", "sealed").unwrap();
-    write_legacy(&store, "late", "old-plain-secret");
-    let held = fs::File::open(store.record_path("late")).unwrap();
+    // Rows: a late plaintext record that is replaced, and one that is deleted.
+    // In both, the bytes it held are zeroed through a handle opened before.
+    // `None` is the deletion; `Some` is the secret that replaces the record.
+    let cases: [(&str, Option<&str>); 2] = [("replace", Some("new-secret")), ("delete", None)];
+    for (case, replacement) in cases {
+        let (_root, store) = fixture();
+        store.set("first", "sealed").unwrap();
+        write_legacy(&store, "late", "old-plain-secret");
+        let held = fs::File::open(store.record_path("late")).unwrap();
 
-    store.set("late", "new-secret").unwrap();
+        match replacement {
+            Some(secret) => store.set("late", secret).unwrap(),
+            None => store.delete("late").unwrap(),
+        }
 
-    let old = read_through(&held);
-    assert!(!old.is_empty());
-    assert!(old.iter().all(|byte| *byte == 0), "old plaintext survived");
-    assert_eq!(store.get("late").unwrap().as_deref(), Some("new-secret"));
-}
-
-#[test]
-fn luecken_task_delete_overwrites_the_removed_plaintext_record() {
-    let (_root, store) = fixture();
-    store.set("first", "sealed").unwrap();
-    write_legacy(&store, "late", "plain-to-delete");
-    let held = fs::File::open(store.record_path("late")).unwrap();
-
-    store.delete("late").unwrap();
-
-    assert!(!store.record_path("late").exists());
-    let old = read_through(&held);
-    assert!(!old.is_empty());
-    assert!(
-        old.iter().all(|byte| *byte == 0),
-        "deleted plaintext survived"
-    );
-    assert_eq!(store.get("late").unwrap(), None);
+        assert_eq!(
+            store.record_path("late").exists(),
+            replacement.is_some(),
+            "{case}"
+        );
+        let old = read_through(&held);
+        assert!(!old.is_empty(), "{case}");
+        assert!(
+            old.iter().all(|byte| *byte == 0),
+            "{case}: old plaintext survived"
+        );
+        assert_eq!(store.get("late").unwrap().as_deref(), replacement, "{case}");
+    }
 }
 
 #[test]

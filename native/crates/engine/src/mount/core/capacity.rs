@@ -232,11 +232,9 @@ mod status_tests {
             serde_json::from_str::<MountCapacityReport>(&encoded).unwrap(),
             report
         );
-    }
 
-    #[test]
-    fn batches_task_capacity_status_never_promotes_compatibility_to_remote_quota() {
-        let remote = CapacitySnapshot::known(
+        // Case "compatibility source": a cache compatibility figure is never shown as remote quota.
+        let compatibility = CapacitySnapshot::known(
             "cache".into(),
             "/",
             CapacitySource::CacheCompatibility,
@@ -244,27 +242,38 @@ mod status_tests {
             0,
             999,
         );
-        let report = MountCapacityReport::from_observation(remote, Ok(400));
-        assert_eq!(report.source, CapacitySource::CacheCompatibility);
-        assert!(report.display_lines()[0].contains("unbekannt"));
-        assert!(report.display_lines()[4].contains("Cachebudget"));
-    }
+        let compat_report = MountCapacityReport::from_observation(compatibility, Ok(400));
+        assert_eq!(
+            compat_report.source,
+            CapacitySource::CacheCompatibility,
+            "compatibility source"
+        );
+        assert!(
+            compat_report.display_lines()[0].contains("unbekannt"),
+            "compatibility source"
+        );
+        assert!(
+            compat_report.display_lines()[4].contains("Cachebudget"),
+            "compatibility source"
+        );
 
-    #[test]
-    fn batches_task_capacity_status_unknown_unbounded_and_read_only_remain_distinct() {
+        // Case "unknown, unbounded and read-only remain distinct".
         let unknown = CapacitySnapshot::unknown("remote".into(), "/");
-        let report = MountCapacityReport::from_observation(unknown.clone(), Ok(300));
-        assert_eq!(report.remote.available_bytes, None);
-        assert_eq!(report.usable_bytes, Some(300));
+        let unknown_report = MountCapacityReport::from_observation(unknown.clone(), Ok(300));
+        assert_eq!(unknown_report.remote.available_bytes, None, "unknown");
+        assert_eq!(unknown_report.usable_bytes, Some(300), "unknown");
         let mut unbounded = unknown;
         unbounded.state = CapacityState::Unbounded;
-        let report = MountCapacityReport::from_observation(unbounded.clone(), Ok(300));
-        assert_eq!(report.remote.total_bytes, None);
-        assert!(report.display_lines()[0].contains("unbegrenzt"));
+        let unbounded_report = MountCapacityReport::from_observation(unbounded.clone(), Ok(300));
+        assert_eq!(unbounded_report.remote.total_bytes, None, "unbounded");
+        assert!(
+            unbounded_report.display_lines()[0].contains("unbegrenzt"),
+            "unbounded"
+        );
         unbounded.read_only = true;
         let read_only = MountCapacityReport::from_observation(unbounded, Ok(300));
-        assert_eq!(read_only.usable_bytes, Some(0));
-        assert_eq!(read_only.cache_available_bytes, Some(300));
+        assert_eq!(read_only.usable_bytes, Some(0), "read-only");
+        assert_eq!(read_only.cache_available_bytes, Some(300), "read-only");
         read_only.validate().unwrap();
     }
 

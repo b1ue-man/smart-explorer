@@ -33,7 +33,7 @@ fn sorted_values(candidates: &[(String, String)]) -> Vec<&str> {
 }
 
 #[test]
-#[ignore = "braucht die gebaute se in SMART_EXPLORER_VAULT_SE_BIN (Stufe vault-cli, env=SMART_EXPLORER_VAULT_SE_BIN={se})"]
+#[ignore = "braucht die gebaute se in SMART_EXPLORER_VAULT_SE_BIN (Stufe vault-cli, env=SMART_EXPLORER_VAULT_SE_BIN={se}); Suite rechte-desktop-tresore-task"]
 fn vault_task_cli_completion() {
     let env = TaskEnv::isolated();
     let site = env.create_vault("orte/vervollstaendigung", "Vervollstaendigung");
@@ -162,7 +162,7 @@ fn assert_names_unlock(env: &TaskEnv, args: &[&str], unlock: &str) {
 }
 
 #[test]
-#[ignore = "braucht die gebaute se in SMART_EXPLORER_VAULT_SE_BIN (Stufe vault-cli, env=SMART_EXPLORER_VAULT_SE_BIN={se})"]
+#[ignore = "braucht die gebaute se in SMART_EXPLORER_VAULT_SE_BIN (Stufe vault-cli, env=SMART_EXPLORER_VAULT_SE_BIN={se}); Suite rechte-desktop-tresore-task"]
 fn vault_task_cli_locked_vault_names_unlock() {
     let env = TaskEnv::isolated();
     let site = env.create_vault("orte/gesperrt", "Gesperrt");

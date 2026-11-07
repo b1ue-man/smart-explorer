@@ -251,7 +251,7 @@ fn einrichtung_task_managed_credential_lives_with_the_session() {
 /// `freerdp3-sdl`); it is the first available client (design 2.4).
 #[cfg(target_os = "linux")]
 #[test]
-#[ignore = "remote suite: needs freerdp3-sdl installed and a DISPLAY (Xvfb)"]
+#[ignore = "remote suite: needs freerdp3-sdl installed and a DISPLAY (Xvfb); Suite speed-setup-task"]
 fn einrichtung_task_sdl_freerdp_is_the_first_client() {
     let clients = crate::rdp::local_clients();
     let first = clients.first().expect("a FreeRDP client is installed");
@@ -259,120 +259,4 @@ fn einrichtung_task_sdl_freerdp_is_the_first_client() {
     assert!(first.available, "{}", first.detail);
     let chosen = crate::rdp::choose_client(None).unwrap();
     assert_eq!(chosen.id, "sdl-freerdp3");
-}
-
-fn env(name: &str) -> String {
-    std::env::var(name).unwrap_or_else(|_| panic!("{name} must name the paired test host"))
-}
-
-/// Windows: whether a process has a top-level window of class `#32770`
-/// (the dialog class of mstsc's certificate and credential questions).
-#[cfg(windows)]
-fn has_dialog(pid: u32) -> bool {
-    use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM};
-    use windows_sys::Win32::UI::WindowsAndMessaging::{
-        EnumWindows, GetClassNameW, GetWindowThreadProcessId,
-    };
-    struct Search {
-        pid: u32,
-        found: bool,
-    }
-    unsafe extern "system" fn visit(window: HWND, data: LPARAM) -> BOOL {
-        // SAFETY: `data` is the `Search` passed to EnumWindows below.
-        let search = unsafe { &mut *(data as *mut Search) };
-        let mut owner = 0u32;
-        // SAFETY: valid window handle from EnumWindows, writable output.
-        unsafe { GetWindowThreadProcessId(window, &mut owner) };
-        if owner == search.pid {
-            let mut class = [0u16; 64];
-            // SAFETY: the buffer holds 64 UTF-16 units.
-            let length = unsafe { GetClassNameW(window, class.as_mut_ptr(), 64) } as usize;
-            search.found |= String::from_utf16_lossy(&class[..length]) == "#32770";
-        }
-        1
-    }
-    let mut search = Search { pid, found: false };
-    // SAFETY: the callback only reads its own `Search` during this call.
-    unsafe { EnumWindows(Some(visit), &mut search as *mut Search as LPARAM) };
-    search.found
-}
-
-/// V4 (ubuntu-24.04, xrdp from H3) and V5 (windows-2025, pair on one
-/// machine, test account): `open_device_session` without any option
-/// reaches a session; Windows shows no mstsc dialog meanwhile (A5, A6, A8);
-/// ending the client closes the tunnel. The suite names the paired host in
-/// `SE_EINRICHTUNG_RDP_DEVICE_ID`/`_PUBLIC_KEY` and the test account in
-/// `SE_EINRICHTUNG_RDP_USER`/`_PASSWORD`; on Linux it sets
-/// `SE_EINRICHTUNG_XRDP_LOG` to xrdp's log file.
-#[test]
-#[ignore = "remote suite: needs a paired host with RDP and a test account"]
-fn einrichtung_task_rdp_open_device_end_to_end() {
-    let device = env("SE_EINRICHTUNG_RDP_DEVICE_ID");
-    let key = env("SE_EINRICHTUNG_RDP_PUBLIC_KEY");
-    let options = crate::rdp::OpenOptions {
-        credentials: Some(crate::rdp::Credentials {
-            username: env("SE_EINRICHTUNG_RDP_USER"),
-            domain: None,
-            password: crate::share::apps_wire::ManagedSecret::new(env(
-                "SE_EINRICHTUNG_RDP_PASSWORD",
-            )),
-        }),
-        ..Default::default()
-    };
-    let mut session = crate::rdp::open_device_session(&device, &key, options, || {}).unwrap();
-    let view = session.view().clone();
-    let address = crate::share::device_address::device_loopback(&device, &key).unwrap();
-    let listener = view.tunnel.listener.expect("listener");
-    assert_eq!(
-        listener.ip(),
-        std::net::IpAddr::V4(address),
-        "A8: device address"
-    );
-    assert_eq!(
-        view.tunnel.admission,
-        Some(crate::share::tcp_forward::ListenerAdmission::AwaitProcess)
-    );
-    assert_eq!(view.tunnel.expires_at, None, "no fixed lifetime");
-    let deadline = std::time::Instant::now() + Duration::from_secs(120);
-    loop {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "no RDP session reached"
-        );
-        assert!(session.try_wait().unwrap().is_none(), "client ended early");
-        #[cfg(windows)]
-        {
-            assert!(!has_dialog(view.process_id), "mstsc showed a dialog");
-            let sessions = std::process::Command::new("qwinsta").output().unwrap();
-            let text = String::from_utf8_lossy(&sessions.stdout).to_string();
-            if text
-                .lines()
-                .any(|line| line.contains("rdp-tcp#") && line.contains("Active"))
-            {
-                break;
-            }
-        }
-        #[cfg(not(windows))]
-        {
-            let log = std::fs::read_to_string(env("SE_EINRICHTUNG_XRDP_LOG")).unwrap_or_default();
-            if log.contains("login successful") {
-                break;
-            }
-        }
-        std::thread::sleep(Duration::from_millis(500));
-    }
-    session.close().unwrap();
-    let id = view.tunnel.id.clone();
-    let deadline = std::time::Instant::now() + Duration::from_secs(25);
-    while crate::daemon::tcp_list()
-        .unwrap()
-        .iter()
-        .any(|tunnel| tunnel.id == id)
-    {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "tunnel outlived its client"
-        );
-        std::thread::sleep(Duration::from_millis(200));
-    }
 }

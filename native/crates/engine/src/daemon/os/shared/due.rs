@@ -230,23 +230,18 @@ mod tests {
     }
 
     #[test]
-    fn review_task_schedules_count_from_the_last_success() {
-        let job = job(Trigger::Interval);
-        let state = JobState {
-            last_success: Some(NOW - 3_000),
-            last_attempt: Some(NOW - 10),
-            ..JobState::default()
-        };
-        assert_eq!(due_now(&job, &state, NOW, None), None);
-        let state = JobState {
-            last_success: Some(NOW - 3_700),
-            ..state
-        };
-        assert_eq!(due_now(&job, &state, NOW, None), Some(RunCause::Interval));
+    fn review_task_failures_retry_with_backoff_and_wait_for_the_user() {
+        let cases: [fn(); 3] = [
+            review_task_failures_retry_with_backoff_and_wait_for_the_user_case,
+            review_task_outstanding_triggers_run_after_a_restart,
+            review_task_schedules_count_from_the_last_success,
+        ];
+        for case in cases {
+            case();
+        }
     }
 
-    #[test]
-    fn review_task_failures_retry_with_backoff_and_wait_for_the_user() {
+    fn review_task_failures_retry_with_backoff_and_wait_for_the_user_case() {
         let job = job(Trigger::Interval);
         let transient = failed(FailureKind::Unreachable);
         assert_eq!(due_now(&job, &transient, NOW, None), None);
@@ -275,6 +270,37 @@ mod tests {
         );
     }
 
+    fn review_task_outstanding_triggers_run_after_a_restart() {
+        let job = job(Trigger::OnConnect);
+        let state = JobState {
+            pending_trigger: Some(PendingTrigger {
+                kind: PendingKind::Connect,
+                since: NOW - 60,
+                volume: Some("USB-1".into()),
+            }),
+            ..JobState::default()
+        };
+        assert_eq!(due_now(&job, &state, NOW, None), Some(RunCause::Connect));
+        let mut disabled = job.clone();
+        disabled.enabled = false;
+        assert_eq!(due_now(&disabled, &state, NOW, None), None);
+    }
+
+    fn review_task_schedules_count_from_the_last_success() {
+        let job = job(Trigger::Interval);
+        let state = JobState {
+            last_success: Some(NOW - 3_000),
+            last_attempt: Some(NOW - 10),
+            ..JobState::default()
+        };
+        assert_eq!(due_now(&job, &state, NOW, None), None);
+        let state = JobState {
+            last_success: Some(NOW - 3_700),
+            ..state
+        };
+        assert_eq!(due_now(&job, &state, NOW, None), Some(RunCause::Interval));
+    }
+
     #[test]
     fn review_task_blocks_wait_for_confirmation() {
         let job = job(Trigger::Interval);
@@ -292,23 +318,6 @@ mod tests {
             block.confirmed = true;
         }
         assert_eq!(due_now(&job, &state, NOW, None), Some(RunCause::Confirmed));
-    }
-
-    #[test]
-    fn review_task_outstanding_triggers_run_after_a_restart() {
-        let job = job(Trigger::OnConnect);
-        let state = JobState {
-            pending_trigger: Some(PendingTrigger {
-                kind: PendingKind::Connect,
-                since: NOW - 60,
-                volume: Some("USB-1".into()),
-            }),
-            ..JobState::default()
-        };
-        assert_eq!(due_now(&job, &state, NOW, None), Some(RunCause::Connect));
-        let mut disabled = job.clone();
-        disabled.enabled = false;
-        assert_eq!(due_now(&disabled, &state, NOW, None), None);
     }
 
     fn local(day: u32, hour: u32, minute: u32) -> i64 {
@@ -333,6 +342,16 @@ mod tests {
 
     #[test]
     fn battery_task_next_due_outside_the_active_window_is_the_next_window_start() {
+        let cases: [fn(); 2] = [
+            battery_task_next_due_outside_the_active_window_is_the_next_window_start_case,
+            battery_task_a_timer_time_outside_the_window_moves_to_the_window_start,
+        ];
+        for case in cases {
+            case();
+        }
+    }
+
+    fn battery_task_next_due_outside_the_active_window_is_the_next_window_start_case() {
         let mut windowed = job(Trigger::Interval);
         windowed.active_from_min = 9 * 60;
         windowed.active_to_min = 17 * 60;
@@ -359,7 +378,6 @@ mod tests {
         assert_eq!(next_due(&windowed, &state, noon), Some(noon));
     }
 
-    #[test]
     fn battery_task_a_timer_time_outside_the_window_moves_to_the_window_start() {
         let mut windowed = job(Trigger::Interval);
         windowed.interval_min = 60;

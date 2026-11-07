@@ -213,7 +213,7 @@ macro_rules! benches {
     ($($name:ident => $data:expr, $way:expr;)*) => {
         $(
             #[test]
-            #[ignore = "benchmark: run with --release --ignored --nocapture"]
+            #[ignore = "benchmark: run with --release --ignored --nocapture; Suite rechte-desktop-tresore-task"]
             fn $name() {
                 bench($data, $way);
             }

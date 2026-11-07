@@ -199,7 +199,7 @@ pub fn run_r2r(case: Case, from: Way, to: Way) -> Result<(), String> {
 }
 
 #[test]
-#[ignore = "needs both servers, shaped loopback and capacity file"]
+#[ignore = "needs both servers, shaped loopback and capacity file; Suite rechte-desktop-tresore-task"]
 fn speed_task_r2r_sftp_to_ftp_large_wan() {
     let case = Case::new(
         "speed_task_r2r_sftp_to_ftp_large_wan",
@@ -211,7 +211,7 @@ fn speed_task_r2r_sftp_to_ftp_large_wan() {
 }
 
 #[test]
-#[ignore = "needs both servers, shaped loopback and capacity file"]
+#[ignore = "needs both servers, shaped loopback and capacity file; Suite rechte-desktop-tresore-task"]
 fn speed_task_r2r_share_to_sftp_large_wan() {
     let case = Case::new(
         "speed_task_r2r_share_to_sftp_large_wan",
@@ -226,7 +226,7 @@ macro_rules! large_cases {
     ($($name:ident => ($way:literal, $direction:literal, $profile:literal)),* $(,)?) => {
         $(
             #[test]
-            #[ignore = "needs the stage's server, shaped loopback and capacity file"]
+            #[ignore = "needs the stage's server, shaped loopback and capacity file; Suite rechte-desktop-tresore-task"]
             fn $name() {
                 let case = Case::new(stringify!($name), $way, $direction, $profile);
                 guarded(case.name, || run_large(case));

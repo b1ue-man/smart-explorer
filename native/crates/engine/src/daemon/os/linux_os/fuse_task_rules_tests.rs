@@ -25,7 +25,7 @@ const RW: MountMode = MountMode::ReadWrite;
 const RO: MountMode = MountMode::ReadOnly;
 
 #[test]
-#[ignore = "FUSE task stage linux-root: drive-fuse (SMART_EXPLORER_FUSE_TASK=1)"]
+#[ignore = "FUSE task stage linux-root: drive-fuse (SMART_EXPLORER_FUSE_TASK=1); Suite rechte-desktop-tresore-task"]
 fn drive_task_fuse_chown_other_uid_eperm() -> io::Result<()> {
     require_task_stage();
     let (fixture, drive) = memory(RW)?;
@@ -62,7 +62,7 @@ fn drive_task_fuse_chown_other_uid_eperm() -> io::Result<()> {
 }
 
 #[test]
-#[ignore = "FUSE task stage linux-root: drive-fuse (SMART_EXPLORER_FUSE_TASK=1)"]
+#[ignore = "FUSE task stage linux-root: drive-fuse (SMART_EXPLORER_FUSE_TASK=1); Suite rechte-desktop-tresore-task"]
 fn drive_task_fuse_conflict_returns_ebusy_and_copy() -> io::Result<()> {
     require_task_stage();
     let gated = GatedBackend::new();
@@ -115,7 +115,7 @@ fn drive_task_fuse_conflict_returns_ebusy_and_copy() -> io::Result<()> {
 }
 
 #[test]
-#[ignore = "FUSE task stage linux-root: drive-fuse (SMART_EXPLORER_FUSE_TASK=1)"]
+#[ignore = "FUSE task stage linux-root: drive-fuse (SMART_EXPLORER_FUSE_TASK=1); Suite rechte-desktop-tresore-task"]
 fn drive_task_fuse_large_readonly_range_read() -> io::Result<()> {
     require_task_stage();
     let raw = RangeBackend::new(64 * 1024 * 1024);
@@ -156,7 +156,7 @@ fn drive_task_fuse_large_readonly_range_read() -> io::Result<()> {
 }
 
 #[test]
-#[ignore = "FUSE task stage linux-root: drive-fuse (SMART_EXPLORER_FUSE_TASK=1)"]
+#[ignore = "FUSE task stage linux-root: drive-fuse (SMART_EXPLORER_FUSE_TASK=1); Suite rechte-desktop-tresore-task"]
 fn drive_task_fuse_names_colon_con_listed() -> io::Result<()> {
     require_task_stage();
     let host = FuseTaskHost::start(HostSetup::new(NamesBackend::drive()?, RO))?;
@@ -184,7 +184,7 @@ fn make_fifo(path: &Path) -> io::Result<()> {
 }
 
 #[test]
-#[ignore = "FUSE task stage linux-root: drive-fuse (SMART_EXPLORER_FUSE_TASK=1)"]
+#[ignore = "FUSE task stage linux-root: drive-fuse (SMART_EXPLORER_FUSE_TASK=1); Suite rechte-desktop-tresore-task"]
 fn drive_task_fuse_links_hidden() -> io::Result<()> {
     require_task_stage();
     // The fixture's links and FIFO are hidden.

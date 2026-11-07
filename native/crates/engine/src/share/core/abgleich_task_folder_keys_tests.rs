@@ -9,6 +9,7 @@ use std::fs;
 use std::io;
 use std::sync::atomic::AtomicBool;
 
+use super::abgleich_task_hash_walk_tests::{plain, walk};
 use super::CopyPastePeerFixture;
 use crate::agent_proto::{entry_part, folder_key, known_prefix, run_digest, EntryKind, FolderKey};
 use crate::vfs::{self as vfs, HashWalkItem, HashWalkRequest, KeyedWalkItem};
@@ -73,6 +74,17 @@ fn runs(items: &[KeyedWalkItem]) -> Vec<String> {
 
 #[test]
 fn abgleich_task_share_host_keys_every_folder_as_the_client_computes_it() -> io::Result<()> {
+    let cases: [fn() -> io::Result<()>; 2] = [
+        abgleich_task_share_host_keys_every_folder_as_the_client_computes_it_case,
+        abgleich_task_share_host_answers_known_folders_with_one_mark,
+    ];
+    for case in cases {
+        case()?;
+    }
+    Ok(())
+}
+
+fn abgleich_task_share_host_keys_every_folder_as_the_client_computes_it_case() -> io::Result<()> {
     let fixture = CopyPastePeerFixture::for_transfer_engine_task()?;
     tree(&fixture)?;
     let (ran, items) = keyed(&fixture, &[])?;
@@ -106,7 +118,6 @@ fn abgleich_task_share_host_keys_every_folder_as_the_client_computes_it() -> io:
     Ok(())
 }
 
-#[test]
 fn abgleich_task_share_host_answers_known_folders_with_one_mark() -> io::Result<()> {
     let fixture = CopyPastePeerFixture::for_transfer_engine_task()?;
     tree(&fixture)?;
@@ -143,6 +154,17 @@ fn abgleich_task_share_host_answers_known_folders_with_one_mark() -> io::Result<
 
 #[test]
 fn abgleich_task_share_host_without_keys_capability_is_not_asked() -> io::Result<()> {
+    let cases: [fn() -> io::Result<()>; 2] = [
+        abgleich_task_share_host_without_keys_capability_is_not_asked_case,
+        abgleich_task_share_host_without_meta_capability_is_not_asked,
+    ];
+    for case in cases {
+        case()?;
+    }
+    Ok(())
+}
+
+fn abgleich_task_share_host_without_keys_capability_is_not_asked_case() -> io::Result<()> {
     let fixture = CopyPastePeerFixture::for_transfer_engine_task()?;
     fs::write(fixture.root_a.join("a.txt"), b"abc")?;
     assert!(keyed(&fixture, &[])?.0);
@@ -153,6 +175,22 @@ fn abgleich_task_share_host_without_keys_capability_is_not_asked() -> io::Result
     }
     let (ran, items) = keyed(&fixture, &[])?;
     assert!(!ran && items.is_empty());
+    Ok(())
+}
+
+fn abgleich_task_share_host_without_meta_capability_is_not_asked() -> io::Result<()> {
+    let fixture = CopyPastePeerFixture::for_transfer_engine_task()?;
+    fs::write(fixture.root_a.join("a.txt"), b"abc")?;
+    // Learn the host's features first, then pose as a host before this change.
+    assert!(walk(&fixture, plain(false))?.0);
+    if let Ok(mut slot) = fixture.peer.transfer.features.lock() {
+        if let Some((_, features)) = slot.as_mut() {
+            features.hash_walk_meta_v1 = false;
+        }
+    }
+    let (ran, items) = walk(&fixture, plain(true))?;
+    assert!(!ran && items.is_empty());
+    assert!(walk(&fixture, plain(false))?.0);
     Ok(())
 }
 

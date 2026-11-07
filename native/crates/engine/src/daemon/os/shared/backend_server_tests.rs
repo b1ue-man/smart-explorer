@@ -12,6 +12,16 @@ use std::time::Duration;
 
 #[test]
 fn inbound_transfer_channel_is_bounded_and_disconnects_both_ends() {
+    let cases: [fn(); 2] = [
+        inbound_transfer_channel_is_bounded_and_disconnects_both_ends_case,
+        cancel_disconnects_a_blocked_transfer_receiver,
+    ];
+    for case in cases {
+        case();
+    }
+}
+
+fn inbound_transfer_channel_is_bounded_and_disconnects_both_ends_case() {
     let (sender, receiver) = transfer_channel();
     for _ in 0..TRANSFER_FRAME_BACKLOG {
         sender.try_send(Frame::Ok).unwrap();
@@ -30,7 +40,6 @@ fn inbound_transfer_channel_is_bounded_and_disconnects_both_ends() {
     assert!(receiver.recv().is_err());
 }
 
-#[test]
 fn cancel_disconnects_a_blocked_transfer_receiver() {
     let session = ServerSession::new(Arc::new(Mutex::new(Box::new(Vec::<u8>::new()))));
     let context = session.open(9, &Frame::Write("/upload".into()));

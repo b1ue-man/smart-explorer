@@ -28,6 +28,16 @@ fn asking(device: Option<&str>, facts: &str) -> Asking {
 
 #[test]
 fn einrichtung_task_triggers_follow_the_marker_rules() {
+    let cases: [fn(); 2] = [
+        einrichtung_task_triggers_follow_the_marker_rules_case,
+        einrichtung_task_review_no_session_waits_for_changed_facts,
+    ];
+    for case in cases {
+        case();
+    }
+}
+
+fn einrichtung_task_triggers_follow_the_marker_rules_case() {
     use SetupTrigger::{Grant, PeerOnline, PeerRequest, VersionStart};
     let now = asking(None, "session-b");
     let decide = |trigger, marker: Option<&Marker>| decide(trigger, marker, &now);
@@ -58,7 +68,6 @@ fn einrichtung_task_triggers_follow_the_marker_rules() {
 
 /// Review R1: a missing interactive session is retried by a presence event
 /// only after the session facts changed, not on every event.
-#[test]
 fn einrichtung_task_review_no_session_waits_for_changed_facts() {
     let failed = marker(SetupState::Failed("no_interactive_session".into()));
     let same = decide(
@@ -352,7 +361,7 @@ fn einrichtung_task_linux_setup_decisions() {
 /// it listens on 127.0.0.1:3389 only and the probe finds it startable.
 #[cfg(target_os = "linux")]
 #[test]
-#[ignore = "installs and starts xrdp; the suite runs it as root with --ignored"]
+#[ignore = "installs and starts xrdp; the suite runs it as root with --ignored; Suite speed-setup-task"]
 fn einrichtung_task_h3_xrdp_on_loopback_as_root() {
     let (line, code) = run_system_step("install-xrdp", None);
     assert_eq!((line.as_str(), code), ("state=done", 0));
@@ -385,7 +394,7 @@ fn powershell(command: &str) -> String {
 /// and probe v2 reports the listener's SHA-1 thumbprint.
 #[cfg(windows)]
 #[test]
-#[ignore = "switches Remote Desktop on; the suite runs it elevated with --ignored"]
+#[ignore = "switches Remote Desktop on; the suite runs it elevated with --ignored; Suite speed-setup-task"]
 fn einrichtung_task_h4_windows_rdp_switched_on_without_firewall_change() {
     let rules = "Get-NetFirewallRule -Group '@FirewallAPI.dll,-28752' | Sort-Object Name | \
         ForEach-Object { $_.Name + '=' + $_.Enabled }";

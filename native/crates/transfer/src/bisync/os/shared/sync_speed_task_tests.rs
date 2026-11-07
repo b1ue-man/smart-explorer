@@ -36,7 +36,7 @@ fn report(case: &str, files: usize, bytes: usize, started: Instant) {
 }
 
 #[test]
-#[ignore = "benchmark: cargo test speed_task_sync -- --ignored --nocapture"]
+#[ignore = "benchmark: cargo test speed_task_sync -- --ignored --nocapture; Suite rechte-desktop-tresore-task"]
 fn speed_task_sync_local_first_run_throughput() {
     for (case, files, folders, size) in [
         ("5000x4KiB", 5000usize, 50usize, 4096usize),

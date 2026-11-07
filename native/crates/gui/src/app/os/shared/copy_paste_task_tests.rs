@@ -143,7 +143,7 @@ fn finish_preparation(app: &mut App) {
 }
 
 #[test]
-#[ignore = "requires isolated remote copy/paste task runner"]
+#[ignore = "requires isolated remote copy/paste task runner; Suite copy-paste-task"]
 fn copy_paste_task_gui_clipboard_lifecycle_and_real_share_routing() {
     assert_eq!(
         std::env::var("SMART_EXPLORER_COPY_PASTE_TASK").as_deref(),

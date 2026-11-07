@@ -131,21 +131,21 @@ fn paste_twice(case: &str, backend: BackendHandle, root: &str) {
 }
 
 #[test]
-#[ignore = "needs the task suite's SFTP container"]
+#[ignore = "needs the task suite's SFTP container; Suite speed-setup-task"]
 fn transfer_task_crash_log_sftp_packets_roundtrip() {
     let (backend, root) = sftp();
     roundtrip("sftp-crash-log", backend, &root);
 }
 
 #[test]
-#[ignore = "needs the task suite's SFTP container"]
+#[ignore = "needs the task suite's SFTP container; Suite speed-setup-task"]
 fn transfer_task_crash_log_sftp_paste_twice_numbers_files() {
     let (backend, root) = sftp();
     paste_twice("sftp-crash-log-twice", backend, &root);
 }
 
 #[test]
-#[ignore = "needs the task suite's Samba container"]
+#[ignore = "needs the task suite's Samba container; Suite speed-setup-task"]
 fn transfer_task_crash_log_smb_packets_roundtrip() {
     let Some((backend, root)) = smb() else {
         return;
@@ -154,21 +154,21 @@ fn transfer_task_crash_log_smb_packets_roundtrip() {
 }
 
 #[test]
-#[ignore = "needs the task suite's FTP container"]
+#[ignore = "needs the task suite's FTP container; Suite speed-setup-task"]
 fn transfer_task_crash_log_ftp_roundtrip() {
     let (backend, root) = ftp();
     roundtrip("ftp-crash-log", backend, &root);
 }
 
 #[test]
-#[ignore = "needs the task suite's FTP container"]
+#[ignore = "needs the task suite's FTP container; Suite speed-setup-task"]
 fn transfer_task_crash_log_ftp_paste_twice_numbers_files() {
     let (backend, root) = ftp();
     paste_twice("ftp-crash-log-twice", backend, &root);
 }
 
 #[test]
-#[ignore = "needs the task suite's WebDAV server"]
+#[ignore = "needs the task suite's WebDAV server; Suite speed-setup-task"]
 fn transfer_task_crash_log_webdav_roundtrip() {
     let Some((backend, root)) = webdav() else {
         return;
@@ -177,7 +177,7 @@ fn transfer_task_crash_log_webdav_roundtrip() {
 }
 
 #[test]
-#[ignore = "needs the task suite's WebDAV server"]
+#[ignore = "needs the task suite's WebDAV server; Suite speed-setup-task"]
 fn transfer_task_crash_log_webdav_paste_twice_numbers_files() {
     let Some((backend, root)) = webdav() else {
         return;

@@ -374,6 +374,13 @@ mod tests {
             .find(|entry| entry.name == "sub dir")
             .unwrap();
         assert!(dir.is_dir);
+        // Case "optional failed propstat": a failed optional property does not hide the core properties.
+        {
+            let xml = r#"<multistatus xmlns="DAV:"><response><href>/dav</href><propstat><prop><resourcetype><collection/></resourcetype></prop><status>HTTP/1.1 200 OK</status></propstat></response><response><href>/dav/x</href><propstat><prop><getcontentlength>7</getcontentlength></prop><status>HTTP/1.1 200 OK</status></propstat><propstat><prop><checksums/></prop><status>HTTP/1.1 404 Not Found</status></propstat></response></multistatus>"#;
+            let entries = parse_multistatus(xml, "/dav").unwrap();
+            assert_eq!(entries.len(), 1, "optional failed propstat");
+            assert_eq!(entries[0].size, 7, "optional failed propstat");
+        }
     }
 
     #[test]
@@ -394,14 +401,6 @@ mod tests {
                 .kind(),
             io::ErrorKind::NotFound
         );
-    }
-
-    #[test]
-    fn optional_failed_propstat_does_not_hide_successful_core_props() {
-        let xml = r#"<multistatus xmlns="DAV:"><response><href>/dav</href><propstat><prop><resourcetype><collection/></resourcetype></prop><status>HTTP/1.1 200 OK</status></propstat></response><response><href>/dav/x</href><propstat><prop><getcontentlength>7</getcontentlength></prop><status>HTTP/1.1 200 OK</status></propstat><propstat><prop><checksums/></prop><status>HTTP/1.1 404 Not Found</status></propstat></response></multistatus>"#;
-        let entries = parse_multistatus(xml, "/dav").unwrap();
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].size, 7);
     }
 
     #[test]

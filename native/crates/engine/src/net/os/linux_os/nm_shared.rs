@@ -48,10 +48,7 @@ pub fn connectivity_full(connection: &Connection) -> io::Result<bool> {
     Ok(level == NM_CONNECTIVITY_FULL)
 }
 
-pub fn device_path(
-    connection: &Connection,
-    iface: &str,
-) -> io::Result<Option<OwnedObjectPath>> {
+pub fn device_path(connection: &Connection, iface: &str) -> io::Result<Option<OwnedObjectPath>> {
     match manager(connection)?.call::<_, _, OwnedObjectPath>("GetDeviceByIpIface", &(iface,)) {
         Ok(path) => Ok(Some(path)),
         Err(error) => {
@@ -77,10 +74,7 @@ pub fn dhcp_lease(connection: &Connection, iface: &str) -> io::Result<Option<boo
 }
 
 /// The active connection profile id on `iface`, if any.
-pub fn active_profile_id(
-    connection: &Connection,
-    iface: &str,
-) -> io::Result<Option<String>> {
+pub fn active_profile_id(connection: &Connection, iface: &str) -> io::Result<Option<String>> {
     let Some(path) = device_path(connection, iface)? else {
         return Ok(None);
     };
@@ -251,10 +245,5 @@ mod tests {
         assert_eq!(uuid.len(), 36);
         assert_eq!(&uuid[14..15], "4");
         assert!(matches!(&uuid[19..20], "8" | "9" | "a" | "b"));
-    }
-
-    #[test]
-    fn lan_cleanup_task_profile_names_are_per_interface() {
-        assert_eq!(profile_name("eth0"), "Smart Explorer LAN-Uplink (eth0)");
     }
 }

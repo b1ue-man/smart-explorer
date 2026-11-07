@@ -103,6 +103,17 @@ pub(super) fn journal_step(profiles: &mut ShareProfiles, at: i64) -> ExecGrantMu
 
 #[test]
 fn abgleich_task_follow_up_code_rights_reach_the_grant_only_through_the_journal() {
+    let cases: [fn(); 3] = [
+        abgleich_task_follow_up_code_rights_reach_the_grant_only_through_the_journal_case,
+        abgleich_task_follow_up_readmitted_device_regains_exec_only_through_the_journal,
+        abgleich_task_follow_up_signed_acceptance_with_code_rights,
+    ];
+    for case in cases {
+        case();
+    }
+}
+
+fn abgleich_task_follow_up_code_rights_reach_the_grant_only_through_the_journal_case() {
     let mut profiles = host();
     profiles
         .set_code_rights(Some(RightsPreset::All.rights()))
@@ -142,7 +153,6 @@ fn abgleich_task_follow_up_code_rights_reach_the_grant_only_through_the_journal(
     assert!(profiles.pending_rights.is_empty());
 }
 
-#[test]
 fn abgleich_task_follow_up_readmitted_device_regains_exec_only_through_the_journal() {
     let mut profiles = host();
     accept(&mut profiles, NOW);
@@ -175,7 +185,6 @@ fn abgleich_task_follow_up_readmitted_device_regains_exec_only_through_the_journ
     assert!(!decisions[2].is_on() && !decisions[3].is_on(), "no screen");
 }
 
-#[test]
 fn abgleich_task_follow_up_signed_acceptance_with_code_rights() {
     let request = ledger::request(None);
     let mut profiles = host();

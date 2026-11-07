@@ -321,7 +321,7 @@ pub fn run_reflink(case: Case) -> Result<(), String> {
 }
 
 #[test]
-#[ignore = "needs the stage's drives, fio capacities and sudo"]
+#[ignore = "needs the stage's drives, fio capacities and sudo; Suite rechte-desktop-tresore-task"]
 fn speed_task_local_large_same_volume() {
     let case = Case::new(
         "speed_task_local_large_same_volume",
@@ -333,14 +333,14 @@ fn speed_task_local_large_same_volume() {
 }
 
 #[test]
-#[ignore = "needs the stage's drives, fio capacities and sudo"]
+#[ignore = "needs the stage's drives, fio capacities and sudo; Suite rechte-desktop-tresore-task"]
 fn speed_task_local_large_two_volumes() {
     let case = Case::new("speed_task_local_large_two_volumes", "local", "copy", "two");
     guarded(case.name, || run_large(case, false));
 }
 
 #[test]
-#[ignore = "needs the stage's drives, fio capacities and sudo"]
+#[ignore = "needs the stage's drives, fio capacities and sudo; Suite rechte-desktop-tresore-task"]
 fn speed_task_local_small_same_volume() {
     let case = Case::new(
         "speed_task_local_small_same_volume",
@@ -352,14 +352,14 @@ fn speed_task_local_small_same_volume() {
 }
 
 #[test]
-#[ignore = "needs the stage's drives, fio capacities and sudo"]
+#[ignore = "needs the stage's drives, fio capacities and sudo; Suite rechte-desktop-tresore-task"]
 fn speed_task_local_small_two_volumes() {
     let case = Case::new("speed_task_local_small_two_volumes", "local", "copy", "two");
     guarded(case.name, || run_small(case, false));
 }
 
 #[test]
-#[ignore = "needs the stage's XFS volume and sudo"]
+#[ignore = "needs the stage's XFS volume and sudo; Suite rechte-desktop-tresore-task"]
 fn speed_task_local_reflink_xfs() {
     let case = Case::new("speed_task_local_reflink_xfs", "local", "clone", "xfs");
     guarded(case.name, || run_reflink(case));

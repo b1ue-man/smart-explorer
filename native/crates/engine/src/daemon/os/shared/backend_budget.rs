@@ -64,6 +64,16 @@ mod tests {
 
     #[test]
     fn backend_walk_budget_rejects_excessive_depth() {
+        let cases: [fn(); 2] = [
+            backend_walk_budget_rejects_excessive_depth_case,
+            review_task_streaming_walks_leave_the_entry_limit_to_the_client,
+        ];
+        for case in cases {
+            case();
+        }
+    }
+
+    fn backend_walk_budget_rejects_excessive_depth_case() {
         for mut budget in [WalkBudget::streaming(), WalkBudget::retaining()] {
             assert_eq!(
                 budget
@@ -75,7 +85,6 @@ mod tests {
         }
     }
 
-    #[test]
     fn review_task_streaming_walks_leave_the_entry_limit_to_the_client() {
         let mut streaming = WalkBudget::streaming();
         let mut retaining = WalkBudget::retaining();

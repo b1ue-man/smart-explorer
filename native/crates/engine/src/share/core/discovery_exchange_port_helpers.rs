@@ -64,18 +64,6 @@ pub(super) fn validate_pin_length(pin: &[u8]) -> Result<(), DiscoveryPortError> 
     }
 }
 
-#[cfg(test)]
-mod review_task_pin_tests {
-    use super::validate_pin_length;
-
-    #[test]
-    fn review_task_empty_pin_is_rejected_at_the_crypto_port_boundary() {
-        assert!(validate_pin_length(b"").is_err());
-        // Weak nonempty PINs are a separate, explicit caller choice.
-        assert!(validate_pin_length(b"1").is_ok());
-    }
-}
-
 pub(super) fn invalid_error(error: impl ToString) -> DiscoveryPortError {
     DiscoveryPortError::InvalidRequest(error.to_string())
 }

@@ -48,58 +48,71 @@ mod tests {
 
     #[test]
     fn authorize_requires_a_refresh_token() {
-        let called = Cell::new(false);
-        let error = finish_authorize(Provider::GDrive, tokens(""), |_, _| {
-            called.set(true);
-            Ok(())
-        })
-        .err()
-        .expect("missing refresh token must fail");
+        let cases: [(&str, fn()); 2] = [
+            ("authorize_requires_a_refresh_token", || {
+                let called = Cell::new(false);
+                let error = finish_authorize(Provider::GDrive, tokens(""), |_, _| {
+                    called.set(true);
+                    Ok(())
+                })
+                .err()
+                .expect("missing refresh token must fail");
 
-        assert!(!called.get());
-        assert!(error.contains("kein dauerhaftes Aktualisierungstoken"));
-    }
+                assert!(!called.get());
+                assert!(error.contains("kein dauerhaftes Aktualisierungstoken"));
+            }),
+            ("authorize_propagates_persistence_failure", || {
+                let error = finish_authorize(Provider::GDrive, tokens("refresh"), |_, _| {
+                    Err("credential store locked".to_string())
+                })
+                .err()
+                .expect("failed persistence must fail authorization");
 
-    #[test]
-    fn authorize_propagates_persistence_failure() {
-        let error = finish_authorize(Provider::GDrive, tokens("refresh"), |_, _| {
-            Err("credential store locked".to_string())
-        })
-        .err()
-        .expect("failed persistence must fail authorization");
-
-        assert!(error.contains("credential store locked"));
+                assert!(error.contains("credential store locked"));
+            }),
+        ];
+        for (case, check) in cases {
+            std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
+        }
     }
 
     #[test]
     fn refresh_keeps_the_previous_token_when_provider_omits_one() {
-        let called = Cell::new(false);
-        let refreshed = finish_refresh(
-            Provider::GDrive,
-            tokens(""),
-            "previous".to_string(),
-            |_, _| {
-                called.set(true);
-                Ok(())
-            },
-        )
-        .expect("existing durable token is sufficient");
+        let cases: [(&str, fn()); 2] = [
+            (
+                "refresh_keeps_the_previous_token_when_provider_omits_one",
+                || {
+                    let called = Cell::new(false);
+                    let refreshed = finish_refresh(
+                        Provider::GDrive,
+                        tokens(""),
+                        "previous".to_string(),
+                        |_, _| {
+                            called.set(true);
+                            Ok(())
+                        },
+                    )
+                    .expect("existing durable token is sufficient");
 
-        assert_eq!(refreshed.refresh_token, "previous");
-        assert!(!called.get());
-    }
+                    assert_eq!(refreshed.refresh_token, "previous");
+                    assert!(!called.get());
+                },
+            ),
+            ("refresh_requires_rotated_token_persistence", || {
+                let error = finish_refresh(
+                    Provider::GDrive,
+                    tokens("rotated"),
+                    "previous".to_string(),
+                    |_, _| Err("disk unavailable".to_string()),
+                )
+                .err()
+                .expect("failed rotated-token persistence must fail refresh");
 
-    #[test]
-    fn refresh_requires_rotated_token_persistence() {
-        let error = finish_refresh(
-            Provider::GDrive,
-            tokens("rotated"),
-            "previous".to_string(),
-            |_, _| Err("disk unavailable".to_string()),
-        )
-        .err()
-        .expect("failed rotated-token persistence must fail refresh");
-
-        assert!(error.contains("disk unavailable"));
+                assert!(error.contains("disk unavailable"));
+            }),
+        ];
+        for (case, check) in cases {
+            std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
+        }
     }
 }

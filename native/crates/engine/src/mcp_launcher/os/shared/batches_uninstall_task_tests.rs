@@ -94,6 +94,7 @@ impl Fixture {
 
 #[cfg(target_os = "linux")]
 #[test]
+#[ignore = "needs the candidate se binary named by SE_SCREEN_TASK_WORKER; Suite review-task"]
 fn batches_p13_linux_installed_cli_retirement_reexecs_only_with_its_bound_root() {
     let source = std::env::var_os("SE_SCREEN_TASK_WORKER")
         .expect("the existing remote task runner must provide its candidate se binary");

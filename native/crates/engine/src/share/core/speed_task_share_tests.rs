@@ -213,7 +213,7 @@ fn bench_set(label: &str, files: usize, size: usize) -> io::Result<()> {
 }
 
 #[test]
-#[ignore = "benchmark: run explicitly with --ignored --nocapture"]
+#[ignore = "benchmark: run explicitly with --ignored --nocapture; Suite rechte-desktop-tresore-task"]
 fn speed_task_share_small_files_4k() -> io::Result<()> {
     bench_set("small_5000x4k", 5000, 4 * 1024)
 }
@@ -309,7 +309,7 @@ fn bench_large_file(label: &str, size: usize) -> io::Result<()> {
 }
 
 #[test]
-#[ignore = "benchmark: run explicitly with --ignored --nocapture"]
+#[ignore = "benchmark: run explicitly with --ignored --nocapture; Suite rechte-desktop-tresore-task"]
 fn speed_task_share_large_file_512m() -> io::Result<()> {
     bench_large_file("large_1x512m", 512 * 1024 * 1024)
 }

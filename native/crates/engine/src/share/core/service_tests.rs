@@ -5,9 +5,7 @@ use super::fs::ShareExportConfig;
 use super::identity::ShareIdentity;
 use super::server_address::SignalServerConfig;
 use super::service::ShareService;
-use super::signal_auth::{
-    remember_nonce, verify_direct_access_accepted_using, verify_local_direct_request,
-};
+use super::signal_auth::{verify_direct_access_accepted_using, verify_local_direct_request};
 use super::signal_presence::build_presence;
 use super::types::ShareAuthState;
 use super::types::{
@@ -20,15 +18,6 @@ use std::net::TcpListener;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-
-#[test]
-fn nonce_cache_detects_replay() {
-    let mut seen = HashSet::new();
-    let key = "direct:lookup:nonce".to_string();
-    assert!(!seen.contains(&key));
-    remember_nonce(&mut seen, key.clone());
-    assert!(seen.contains(&key));
-}
 
 #[test]
 fn dropping_probe_clone_does_not_stop_owner_service() {

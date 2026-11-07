@@ -101,21 +101,26 @@ fn socket_disconnect_cancels_put_tree_and_preserves_destination() {
 
 #[test]
 fn worker_shutdown_joins_cleanup_before_returning() {
-    let cleaned = Arc::new(AtomicBool::new(false));
-    let cleaned_worker = cleaned.clone();
-    let mut workers = vec![std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(20));
-        cleaned_worker.store(true, Ordering::Relaxed);
-    })];
-    join_workers(&mut workers).unwrap();
-    assert!(workers.is_empty());
-    assert!(cleaned.load(Ordering::Relaxed));
-}
-
-#[test]
-fn worker_shutdown_reports_panics() {
-    let mut workers = vec![std::thread::spawn(|| panic!("request worker test panic"))];
-    let error = join_workers(&mut workers).unwrap_err();
-    assert!(error.to_string().contains("panicked"));
-    assert!(workers.is_empty());
+    let cases: [(&str, fn()); 2] = [
+        ("worker_shutdown_joins_cleanup_before_returning", || {
+            let cleaned = Arc::new(AtomicBool::new(false));
+            let cleaned_worker = cleaned.clone();
+            let mut workers = vec![std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(20));
+                cleaned_worker.store(true, Ordering::Relaxed);
+            })];
+            join_workers(&mut workers).unwrap();
+            assert!(workers.is_empty());
+            assert!(cleaned.load(Ordering::Relaxed));
+        }),
+        ("worker_shutdown_reports_panics", || {
+            let mut workers = vec![std::thread::spawn(|| panic!("request worker test panic"))];
+            let error = join_workers(&mut workers).unwrap_err();
+            assert!(error.to_string().contains("panicked"));
+            assert!(workers.is_empty());
+        }),
+    ];
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
+    }
 }

@@ -56,21 +56,6 @@ fn speed_task_webdav_requests_per_new_file_at_most_three_plus_folder() {
 }
 
 #[test]
-fn speed_task_webdav_put_keeps_if_none_match() {
-    let server = Server::start();
-    upload_new_files(&server.backend(), 3);
-    let puts = server.dav.requests("PUT");
-    assert_eq!(puts.len(), 3);
-    for (path, headers) in puts {
-        assert_eq!(
-            headers.get("if-none-match").map(String::as_str),
-            Some("*"),
-            "{path}"
-        );
-    }
-}
-
-#[test]
 fn speed_task_webdav_move_keeps_overwrite_false() {
     let server = Server::start();
     let backend = server.backend();
@@ -94,6 +79,20 @@ fn speed_task_webdav_move_keeps_overwrite_false() {
         .expect_err("taken");
     assert_eq!(refused.kind(), io::ErrorKind::AlreadyExists, "{refused}");
     assert_eq!(lock(&server.dav.files)["/dir/f0.bin"].0, b"data");
+    // Case "PUT keeps If-None-Match": a new file's PUT carries If-None-Match: *.
+    {
+        let server = Server::start();
+        upload_new_files(&server.backend(), 3);
+        let puts = server.dav.requests("PUT");
+        assert_eq!(puts.len(), 3, "PUT keeps If-None-Match");
+        for (path, headers) in puts {
+            assert_eq!(
+                headers.get("if-none-match").map(String::as_str),
+                Some("*"),
+                "{path}"
+            );
+        }
+    }
 }
 
 /// One sync-style publication: a timed stage, `finish_stage`, then the

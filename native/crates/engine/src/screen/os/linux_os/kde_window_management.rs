@@ -172,7 +172,7 @@ mod tests {
     /// management` and its absolute `Exec` path (assumption A6). Where KWin
     /// cannot be started the stage reports „nicht ausgeführt“.
     #[test]
-    #[ignore = "needs headless KWin with the authorizing desktop file (SE_SCREEN_TASK_KDE=1)"]
+    #[ignore = "needs headless KWin with the authorizing desktop file (SE_SCREEN_TASK_KDE=1); Suite rechte-desktop-tresore-task"]
     fn screen_task_kde_window_list() {
         assert!(
             std::env::var("SE_SCREEN_TASK_KDE").is_ok_and(|value| value == "1"),

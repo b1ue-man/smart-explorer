@@ -66,35 +66,46 @@ mod tests {
 
     #[test]
     fn speed_task_ftp_connect_waits_out_a_missing_local_address() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = listener.local_addr().unwrap();
-        let mut attempts = 0;
-        let stream = connect_until(Instant::now() + Duration::from_secs(5), |left| {
-            attempts += 1;
-            if attempts < 3 {
-                return Err(io::Error::from(io::ErrorKind::AddrInUse));
-            }
-            TcpStream::connect_timeout(&address, left)
-        })
-        .expect("the third attempt finds a local address");
-        assert_eq!(attempts, 3);
-        drop(stream);
-    }
-
-    #[test]
-    fn speed_task_ftp_connect_returns_other_errors_and_the_shortage_at_the_deadline() {
-        let mut attempts = 0;
-        let refused = connect_until(Instant::now() + Duration::from_secs(5), |_| {
-            attempts += 1;
-            Err(io::Error::from(io::ErrorKind::ConnectionRefused))
-        })
-        .unwrap_err();
-        assert_eq!(refused.kind(), io::ErrorKind::ConnectionRefused);
-        assert_eq!(attempts, 1, "an answer of the server is not repeated");
-        let short = connect_until(Instant::now() + Duration::from_millis(30), |_| {
-            Err(io::Error::from(io::ErrorKind::AddrNotAvailable))
-        })
-        .unwrap_err();
-        assert!(local_address_shortage(&short), "{short}");
+        let cases: [(&str, fn()); 2] = [
+            (
+                "speed_task_ftp_connect_waits_out_a_missing_local_address",
+                || {
+                    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+                    let address = listener.local_addr().unwrap();
+                    let mut attempts = 0;
+                    let stream = connect_until(Instant::now() + Duration::from_secs(5), |left| {
+                        attempts += 1;
+                        if attempts < 3 {
+                            return Err(io::Error::from(io::ErrorKind::AddrInUse));
+                        }
+                        TcpStream::connect_timeout(&address, left)
+                    })
+                    .expect("the third attempt finds a local address");
+                    assert_eq!(attempts, 3);
+                    drop(stream);
+                },
+            ),
+            (
+                "speed_task_ftp_connect_returns_other_errors_and_the_shortage_at_the_deadline",
+                || {
+                    let mut attempts = 0;
+                    let refused = connect_until(Instant::now() + Duration::from_secs(5), |_| {
+                        attempts += 1;
+                        Err(io::Error::from(io::ErrorKind::ConnectionRefused))
+                    })
+                    .unwrap_err();
+                    assert_eq!(refused.kind(), io::ErrorKind::ConnectionRefused);
+                    assert_eq!(attempts, 1, "an answer of the server is not repeated");
+                    let short = connect_until(Instant::now() + Duration::from_millis(30), |_| {
+                        Err(io::Error::from(io::ErrorKind::AddrNotAvailable))
+                    })
+                    .unwrap_err();
+                    assert!(local_address_shortage(&short), "{short}");
+                },
+            ),
+        ];
+        for (case, check) in cases {
+            std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
+        }
     }
 }

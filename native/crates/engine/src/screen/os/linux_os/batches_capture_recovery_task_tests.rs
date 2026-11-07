@@ -235,14 +235,14 @@ fn resize_with_encoder(hybrid: bool, shm: bool) {
     ));
 }
 #[test]
-#[ignore = "requires isolated X11 DISPLAY >=640x480, MIT-SHM and SE_SCREEN_TASK_X11=1"]
+#[ignore = "requires isolated X11 DISPLAY >=640x480, MIT-SHM and SE_SCREEN_TASK_X11=1; Suite review-task"]
 fn batches_task_b6_x11_tiles_resize_releases_old_reference_before_retry() {
     for shm in [false, true] {
         resize_with_encoder(false, shm);
     }
 }
 #[test]
-#[ignore = "requires isolated X11 DISPLAY >=640x480, MIT-SHM and SE_SCREEN_TASK_X11=1"]
+#[ignore = "requires isolated X11 DISPLAY >=640x480, MIT-SHM and SE_SCREEN_TASK_X11=1; Suite review-task"]
 fn batches_task_b6_x11_hybrid_resize_releases_old_reference_before_retry() {
     for shm in [false, true] {
         resize_with_encoder(true, shm);

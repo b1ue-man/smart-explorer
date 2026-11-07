@@ -4,6 +4,16 @@ use super::*;
 
 #[test]
 fn unique_external_error_flood_is_fixed_memory_and_coalesced() {
+    let cases: [fn(); 2] = [
+        unique_external_error_flood_is_fixed_memory_and_coalesced_case,
+        report_window_emits_a_summary_and_leaves_room_for_recovery_events,
+    ];
+    for case in cases {
+        case();
+    }
+}
+
+fn unique_external_error_flood_is_fixed_memory_and_coalesced_case() {
     let reporter = ConnectionEventReporter::default();
     let (events, received) = channel();
     let now = Instant::now();
@@ -32,6 +42,41 @@ fn unique_external_error_flood_is_fixed_memory_and_coalesced() {
         assert_eq!(bucket.pending, 2_499);
         assert!(bucket.latest_detail.len() <= MAX_DETAIL_BYTES);
     }
+}
+
+fn report_window_emits_a_summary_and_leaves_room_for_recovery_events() {
+    let reporter = ConnectionEventReporter::default();
+    let (events, received) = channel();
+    let now = Instant::now();
+    reporter.report_at(ConnectionErrorKind::Accept, "first", &events, now);
+    for index in 0..100 {
+        reporter.report_at(
+            ConnectionErrorKind::Accept,
+            &format!("suppressed-{index}"),
+            &events,
+            now + Duration::from_secs(1),
+        );
+    }
+
+    events.try_send(ShareEvent::ServerConnected).unwrap();
+    reporter.report_at(
+        ConnectionErrorKind::Accept,
+        "after-window",
+        &events,
+        now + REPORT_INTERVAL,
+    );
+
+    let events: Vec<_> = received.try_iter().collect();
+    assert_eq!(events.len(), 3);
+    assert!(events
+        .iter()
+        .any(|event| matches!(event, ShareEvent::ServerConnected)));
+    assert!(events.iter().any(|event| matches!(
+        event,
+        ShareEvent::Error(message)
+            if message.contains("after-window")
+                && message.contains("100 weitere gleichartige Fehler")
+    )));
 }
 
 #[test]
@@ -66,41 +111,5 @@ fn full_event_queue_keeps_a_bounded_summary_until_delivery_recovers() {
         ShareEvent::Error(message)
             if message.contains("retry after drain")
                 && message.contains("1 weitere gleichartige Fehler")
-    )));
-}
-
-#[test]
-fn report_window_emits_a_summary_and_leaves_room_for_recovery_events() {
-    let reporter = ConnectionEventReporter::default();
-    let (events, received) = channel();
-    let now = Instant::now();
-    reporter.report_at(ConnectionErrorKind::Accept, "first", &events, now);
-    for index in 0..100 {
-        reporter.report_at(
-            ConnectionErrorKind::Accept,
-            &format!("suppressed-{index}"),
-            &events,
-            now + Duration::from_secs(1),
-        );
-    }
-
-    events.try_send(ShareEvent::ServerConnected).unwrap();
-    reporter.report_at(
-        ConnectionErrorKind::Accept,
-        "after-window",
-        &events,
-        now + REPORT_INTERVAL,
-    );
-
-    let events: Vec<_> = received.try_iter().collect();
-    assert_eq!(events.len(), 3);
-    assert!(events
-        .iter()
-        .any(|event| matches!(event, ShareEvent::ServerConnected)));
-    assert!(events.iter().any(|event| matches!(
-        event,
-        ShareEvent::Error(message)
-            if message.contains("after-window")
-                && message.contains("100 weitere gleichartige Fehler")
     )));
 }

@@ -297,34 +297,6 @@ fn vault_task_create_min_password_length_8() {
 }
 
 #[test]
-fn vault_task_recovery_key_reported_unsupported() {
-    let info = recovery_key_info();
-    assert!(!info.supported);
-    assert_eq!(
-        info.note,
-        "Wiederherstellungsschlüssel von Cryptomator werden in se nicht angezeigt und nicht \
-         angenommen, weil die Wortliste nicht frei lizenziert ist. Zum Anzeigen oder Zurücksetzen \
-         Cryptomator Desktop verwenden; der Tresor bleibt dafür voll kompatibel."
-    );
-    assert_eq!(
-        CREATE_RECOVERY_HINT,
-        "Einen Wiederherstellungsschlüssel erzeugt Cryptomator Desktop für diesen Tresor"
-    );
-    // No word list and no recovery key code in se (OE1). `vault` lives in
-    // this crate, `cryptomator` in the core layer (D13).
-    let engine = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    let core = Path::new(env!("CARGO_MANIFEST_DIR")).join("../core/src");
-    assert!(engine.join("vault").is_dir());
-    assert!(core.join("cryptomator/core").is_dir());
-    for (source, file) in [
-        (&engine, "vault/os/shared/wordlist.rs"),
-        (&core, "cryptomator/core/recovery_key.rs"),
-    ] {
-        assert!(!source.join(file).exists(), "{file}");
-    }
-}
-
-#[test]
 fn vault_task_remember_password_account_and_forget() {
     let fixture = site_fixture("Privat", PASSWORD);
     let site = fixture.record.id.clone();

@@ -310,7 +310,7 @@ fn review_task_watch_confined_overlap_preserves_recursive_job_watches() {
 }
 
 #[test]
-#[ignore = "Suite-Stufe: needs a container with a lowered fs.inotify.max_user_watches"]
+#[ignore = "needs a lowered fs.inotify.max_user_watches (native/review-task-runtime.sh --watch-limit); Suite review-task"]
 fn review_task_watch_limit_falls_back_to_polling() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();

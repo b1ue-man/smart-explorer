@@ -152,19 +152,6 @@ class SeTilesTest {
     // ---- navigation (U40-11, U40-12) -------------------------------------------------------------------
 
     @Test
-    fun launcher_task_screen_nav_kinds() {
-        val json = ScreenTarget("direct", "c1", "dev-c1").toJson()
-        assertEquals(NavRequest.OpenScreen(json), AppNav.decode("openScreen", json))
-        assertEquals(NavRequest.ShowScreenGrid(null), AppNav.decode("showScreenGrid", ""))
-        assertEquals(NavRequest.ShowScreenGrid("room-1"), AppNav.decode("showScreenGrid", "room-1"))
-        assertEquals("openScreen" to json, AppNav.encode(NavRequest.OpenScreen(json)))
-        assertEquals("showScreenGrid" to "", AppNav.encode(NavRequest.ShowScreenGrid(null)))
-        assertEquals("showScreenGrid" to "room-1", AppNav.encode(NavRequest.ShowScreenGrid("room-1")))
-        assertEquals(MainTab.Share, AppNav.tabFor(NavRequest.OpenScreen(json)))
-        assertEquals(MainTab.Share, AppNav.tabFor(NavRequest.ShowScreenGrid("room-1")))
-    }
-
-    @Test
     fun taps_open_the_folder_or_the_share_tab() {
         assertEquals(NavTarget("openLocation", "share://direct/c1/"), SeActions.tapDevice("connectedDirect", "share://direct/c1"))
         assertEquals(NavTarget("openLocation", "share://room/p1/d1/"), SeActions.tapDevice("offline", "share://room/p1/d1/"))

@@ -56,16 +56,13 @@ class AbgleichTaskRightsSheetTest {
         PendingRights(target, origin = "request", since = 1, name = name, rights = rights)
 
     @Test
-    fun abgleichTaskThereAreFivePresetsWithTheContractKeysAndLabels() {
+    fun abgleichTaskEachPresetFillsTheDraftAsTheContractSays() {
+        // There are five presets with the contract keys and labels (the former abgleichTaskThereAreFivePresetsWithTheContractKeysAndLabels).
         assertEquals(listOf("none", "read-only", "read-write", "files-exec", "all"), presets.map { it.key })
         assertEquals(
             listOf("Keine Rechte", "Nur lesen", "Dateien lesen und schreiben", "Dateien und Codeausführung", "Alles"),
             presets.map { it.label },
         )
-    }
-
-    @Test
-    fun abgleichTaskEachPresetFillsTheDraftAsTheContractSays() {
         val none = preset(PRESET_NONE).rights
         assertEquals(FOLDERS_NONE, none.folders.kind)
         assertFalse(none.write)

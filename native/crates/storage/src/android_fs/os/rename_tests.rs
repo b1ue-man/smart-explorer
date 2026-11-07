@@ -26,21 +26,51 @@ fn android_task_rename_fallback_decisions_follow_the_error_numbers() {
 
 #[test]
 fn android_task_rename_no_replace_moves_and_never_replaces() {
-    let fixture = tempfile::tempdir().unwrap();
-    let source = fixture.path().join("source.txt");
-    let moved = fixture.path().join("moved.txt");
-    let taken = fixture.path().join("taken.txt");
-    std::fs::write(&source, b"payload").unwrap();
-    std::fs::write(&taken, b"keep").unwrap();
+    let cases: [(&str, fn()); 2] = [
+        (
+            "android_task_rename_no_replace_moves_and_never_replaces",
+            || {
+                let fixture = tempfile::tempdir().unwrap();
+                let source = fixture.path().join("source.txt");
+                let moved = fixture.path().join("moved.txt");
+                let taken = fixture.path().join("taken.txt");
+                std::fs::write(&source, b"payload").unwrap();
+                std::fs::write(&taken, b"keep").unwrap();
 
-    rename_no_replace(&source, &moved).unwrap();
-    assert!(!source.exists());
-    assert_eq!(std::fs::read(&moved).unwrap(), b"payload");
+                rename_no_replace(&source, &moved).unwrap();
+                assert!(!source.exists());
+                assert_eq!(std::fs::read(&moved).unwrap(), b"payload");
 
-    let error = rename_no_replace(&moved, &taken).unwrap_err();
-    assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
-    assert_eq!(std::fs::read(&moved).unwrap(), b"payload");
-    assert_eq!(std::fs::read(&taken).unwrap(), b"keep");
+                let error = rename_no_replace(&moved, &taken).unwrap_err();
+                assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+                assert_eq!(std::fs::read(&moved).unwrap(), b"payload");
+                assert_eq!(std::fs::read(&taken).unwrap(), b"keep");
+            },
+        ),
+        (
+            "android_task_checked_rename_refuses_existing_names_and_moves_directories",
+            || {
+                let fixture = tempfile::tempdir().unwrap();
+                let directory = fixture.path().join("folder");
+                let moved = fixture.path().join("moved");
+                let taken = fixture.path().join("taken");
+                std::fs::create_dir(&directory).unwrap();
+                std::fs::write(directory.join("inner.txt"), b"inner").unwrap();
+                std::fs::create_dir(&taken).unwrap();
+
+                let error = checked_rename(&directory, &taken).unwrap_err();
+                assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+                assert!(directory.join("inner.txt").exists());
+
+                checked_rename(&directory, &moved).unwrap();
+                assert!(!directory.exists());
+                assert_eq!(std::fs::read(moved.join("inner.txt")).unwrap(), b"inner");
+            },
+        ),
+    ];
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
+    }
 }
 
 #[test]
@@ -60,25 +90,6 @@ fn android_task_hard_link_step_is_create_only_and_drops_the_source() {
     remove_linked_source(&source, &destination).unwrap();
     assert!(!source.exists());
     assert_eq!(std::fs::read(&destination).unwrap(), b"payload");
-}
-
-#[test]
-fn android_task_checked_rename_refuses_existing_names_and_moves_directories() {
-    let fixture = tempfile::tempdir().unwrap();
-    let directory = fixture.path().join("folder");
-    let moved = fixture.path().join("moved");
-    let taken = fixture.path().join("taken");
-    std::fs::create_dir(&directory).unwrap();
-    std::fs::write(directory.join("inner.txt"), b"inner").unwrap();
-    std::fs::create_dir(&taken).unwrap();
-
-    let error = checked_rename(&directory, &taken).unwrap_err();
-    assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
-    assert!(directory.join("inner.txt").exists());
-
-    checked_rename(&directory, &moved).unwrap();
-    assert!(!directory.exists());
-    assert_eq!(std::fs::read(moved.join("inner.txt")).unwrap(), b"inner");
 }
 
 #[test]

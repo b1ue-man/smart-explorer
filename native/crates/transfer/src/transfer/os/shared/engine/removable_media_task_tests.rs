@@ -48,8 +48,15 @@ fn assert_tree(folder: &Path) {
 }
 
 #[test]
+#[ignore = "needs real FAT32 and exFAT volumes named in SE_TASK_REMOVABLE_ROOTS; Suite speed-setup-task, fixes-2026-10-28-task"]
 fn removable_media_task_paste_into_root_and_folder() {
     let roots = roots();
+    // Ignored by default: a suite that attaches the volumes starts it on purpose, so no volume
+    // fails here instead of passing with nothing pasted.
+    assert!(
+        !roots.is_empty(),
+        "nicht ausgeführt: SE_TASK_REMOVABLE_ROOTS names no volume"
+    );
     for root in &roots {
         let local = tempfile::tempdir().expect("temp dir");
         let (folder, file) = source(local.path());

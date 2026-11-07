@@ -154,7 +154,7 @@ fn peek() -> ShareWorkerSnapshot {
 }
 
 #[test]
-#[ignore = "run only through the isolated remote desktop task entrypoint"]
+#[ignore = "run only through the isolated remote desktop task entrypoint; Suite rechte-desktop-tresore-task"]
 fn desktop_task_share_events_not_drained() {
     let mut env = Isolated::new();
     env.start_service(&["--sync-daemon"]);
@@ -193,7 +193,7 @@ fn desktop_task_share_events_not_drained() {
 }
 
 #[test]
-#[ignore = "run only through the isolated remote desktop task entrypoint"]
+#[ignore = "run only through the isolated remote desktop task entrypoint; Suite rechte-desktop-tresore-task"]
 fn desktop_task_feed_reads_keep_drive_restore_restricted() {
     let mut env = Isolated::new();
     env.start_service(&["--sync-daemon", "--drive-restore"]);

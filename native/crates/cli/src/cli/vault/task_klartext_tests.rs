@@ -35,7 +35,7 @@ fn assert_no_marker(env: &TaskEnv, token: &str, extra_roots: &[&std::path::Path]
 }
 
 #[test]
-#[ignore = "braucht fixture=marker und die gebaute se in SMART_EXPLORER_VAULT_SE_BIN (Stufe vault-klartext, env=SMART_EXPLORER_VAULT_SE_BIN={se})"]
+#[ignore = "braucht fixture=marker und die gebaute se in SMART_EXPLORER_VAULT_SE_BIN (Stufe vault-klartext, env=SMART_EXPLORER_VAULT_SE_BIN={se}); Suite rechte-desktop-tresore-task"]
 fn vault_task_klartext_actions_leave_no_marker() {
     let env = TaskEnv::marker(false);
     let token = marker_token();
@@ -204,7 +204,7 @@ fn mounted_path(listed: &Value, site: &str) -> Option<PathBuf> {
 }
 
 #[test]
-#[ignore = "braucht fixture=marker,fuse,runtime-tmpfs und die gebaute se in SMART_EXPLORER_VAULT_SE_BIN (Stufe vault-klartext-drive, env=SMART_EXPLORER_VAULT_SE_BIN={se})"]
+#[ignore = "braucht fixture=marker,fuse,runtime-tmpfs und die gebaute se in SMART_EXPLORER_VAULT_SE_BIN (Stufe vault-klartext-drive, env=SMART_EXPLORER_VAULT_SE_BIN={se}); Suite rechte-desktop-tresore-task"]
 fn vault_task_klartext_drive_actions_leave_no_marker() {
     let env = TaskEnv::marker(true);
     let token = marker_token();

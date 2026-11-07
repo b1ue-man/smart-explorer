@@ -67,14 +67,14 @@ fn paste(name: &str, files: usize, folders: usize, bytes: usize) {
 }
 
 #[test]
-#[ignore = "benchmark: run with --release --ignored --nocapture"]
+#[ignore = "benchmark: run with --release --ignored --nocapture; Suite rechte-desktop-tresore-task"]
 fn speed_task_local_small_gui_without_packets() {
     let _off = PacketsOff::new();
     paste("local_5000x4k_gui_without_packets", 5000, 50, 4096);
 }
 
 #[test]
-#[ignore = "benchmark: run with --release --ignored --nocapture"]
+#[ignore = "benchmark: run with --release --ignored --nocapture; Suite rechte-desktop-tresore-task"]
 fn speed_task_local_medium_gui_without_packets() {
     let _off = PacketsOff::new();
     paste("local_1000x1m_gui_without_packets", 1000, 10, 1024 * 1024);
@@ -83,7 +83,7 @@ fn speed_task_local_medium_gui_without_packets() {
 /// The same tree pasted twice into one folder whose folder policy merges:
 /// the second paste numbers every file ("keep both").
 #[test]
-#[ignore = "benchmark: run with --release --ignored --nocapture"]
+#[ignore = "benchmark: run with --release --ignored --nocapture; Suite rechte-desktop-tresore-task"]
 fn speed_task_local_small_gui_second_paste_numbers_every_file() {
     let (files, bytes) = (5000, 4096);
     let root = tempfile::tempdir().expect("temp dir");
@@ -114,7 +114,7 @@ fn speed_task_local_small_gui_second_paste_numbers_every_file() {
 /// One 2 GiB file replacing an older one: a durable copy (synced stage,
 /// write-through publication) with the range threads of M15.
 #[test]
-#[ignore = "benchmark: run with --release --ignored --nocapture"]
+#[ignore = "benchmark: run with --release --ignored --nocapture; Suite rechte-desktop-tresore-task"]
 fn speed_task_local_large_overwrite() {
     let bytes: u64 = 2 * 1024 * 1024 * 1024;
     let root = tempfile::tempdir().expect("temp dir");

@@ -144,6 +144,16 @@ fn batches_task_b5_control_owner_cancels_full_stdin_without_acquiring_stdin_mute
 
 #[test]
 fn batches_task_b5_terminal_registration_closes_control_without_cancelling_finished_owner() {
+    let cases: [fn(); 2] = [
+        batches_task_b5_terminal_registration_closes_control_without_cancelling_finished_owner_case,
+        batches_task_b5_finished_owner_releases_control_reader_without_socket_shutdown,
+    ];
+    for case in cases {
+        case();
+    }
+}
+
+fn batches_task_b5_terminal_registration_closes_control_without_cancelling_finished_owner_case() {
     let fixture = crate::share::ShareExecInput::batches_fixture();
     let owner = Arc::new(ExecLifetime::new(id("53"), fixture.input.clone()).unwrap());
     let registry = Arc::new(ExecState::new());
@@ -170,7 +180,6 @@ fn batches_task_b5_terminal_registration_closes_control_without_cancelling_finis
     );
 }
 
-#[test]
 fn batches_task_b5_finished_owner_releases_control_reader_without_socket_shutdown() {
     let fixture = crate::share::ShareExecInput::batches_fixture();
     let owner = Arc::new(ExecLifetime::new(id("55"), fixture.input.clone()).unwrap());
@@ -217,7 +226,10 @@ fn batches_task_b5_idle_control_owner_stays_live_until_peer_cancels() {
         completed.recv_timeout(OWNER_POLL_INTERVAL * 4),
         Err(mpsc::RecvTimeoutError::Timeout)
     ));
-    assert!(!*fixture.cancel.borrow(), "idle control is not cancellation");
+    assert!(
+        !*fixture.cancel.borrow(),
+        "idle control is not cancellation"
+    );
     assert!(registry.owner(owner.exec_id(), owner.token()).is_some());
     drop(client);
     completed
@@ -254,7 +266,9 @@ fn batches_task_b5_finished_control_cannot_cancel_same_id_live_owner() {
     finished_rx.recv_timeout(WAIT).unwrap().unwrap();
     finished_worker.join().unwrap();
     assert_eq!(finished_client.read(&mut [0]).unwrap(), 0);
-    assert!(registry.owner(finished.exec_id(), finished.token()).is_none());
+    assert!(registry
+        .owner(finished.exec_id(), finished.token())
+        .is_none());
     assert!(registry.owner(live.exec_id(), live.token()).is_some());
     assert!(matches!(
         live_rx.recv_timeout(OWNER_POLL_INTERVAL * 4),

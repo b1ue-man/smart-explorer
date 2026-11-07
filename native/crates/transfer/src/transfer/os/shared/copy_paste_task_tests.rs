@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 #[test]
-#[ignore = "requires isolated remote copy/paste task runner"]
+#[ignore = "requires isolated remote copy/paste task runner; Suite copy-paste-task"]
 fn copy_paste_task_transfer_tree_roundtrip_without_final_bulk() {
     let sandbox = Sandbox::new("tree");
     let source = sandbox.dir("source/Vault");
@@ -48,7 +48,7 @@ fn copy_paste_task_transfer_tree_roundtrip_without_final_bulk() {
 }
 
 #[test]
-#[ignore = "requires isolated remote copy/paste task runner"]
+#[ignore = "requires isolated remote copy/paste task runner; Suite copy-paste-task"]
 fn copy_paste_task_transfer_filtered_hierarchy_and_invalid_pairs() {
     let sandbox = Sandbox::new("pairs");
     let source = sandbox.dir("source");
@@ -115,7 +115,7 @@ fn copy_paste_task_transfer_filtered_hierarchy_and_invalid_pairs() {
 }
 
 #[test]
-#[ignore = "requires isolated remote copy/paste task runner"]
+#[ignore = "requires isolated remote copy/paste task runner; Suite copy-paste-task"]
 fn copy_paste_task_transfer_upload_collisions_and_explicit_saveback() {
     let sandbox = Sandbox::new("upload-collision");
     let source = sandbox.0.join("note.txt");
@@ -150,7 +150,7 @@ fn copy_paste_task_transfer_upload_collisions_and_explicit_saveback() {
 }
 
 #[test]
-#[ignore = "requires isolated remote copy/paste task runner"]
+#[ignore = "requires isolated remote copy/paste task runner; Suite copy-paste-task"]
 fn copy_paste_task_transfer_download_collisions_and_read_size() {
     let sandbox = Sandbox::new("download-collision");
     let remote = sandbox.dir("remote");
@@ -208,7 +208,7 @@ fn copy_paste_task_transfer_download_collisions_and_read_size() {
 }
 
 #[test]
-#[ignore = "requires isolated remote copy/paste task runner"]
+#[ignore = "requires isolated remote copy/paste task runner; Suite copy-paste-task"]
 fn copy_paste_task_transfer_stage_failures_preserve_foreign_data() {
     let sandbox = Sandbox::new("stages");
     let source = sandbox.0.join("note.txt");
@@ -276,7 +276,7 @@ fn copy_paste_task_transfer_stage_failures_preserve_foreign_data() {
 }
 
 #[test]
-#[ignore = "requires isolated remote copy/paste task runner"]
+#[ignore = "requires isolated remote copy/paste task runner; Suite copy-paste-task"]
 fn copy_paste_task_transfer_changed_upload_source_is_not_published() {
     let sandbox = Sandbox::new("changed-source");
     let source = sandbox.0.join("note.txt");
@@ -301,7 +301,7 @@ fn copy_paste_task_transfer_changed_upload_source_is_not_published() {
 }
 
 #[test]
-#[ignore = "requires isolated remote copy/paste task runner"]
+#[ignore = "requires isolated remote copy/paste task runner; Suite copy-paste-task"]
 fn copy_paste_task_transfer_cancellation_counts_acknowledged_commit() {
     let sandbox = Sandbox::new("commit-cancel");
     let source = sandbox.dir("source");
@@ -350,7 +350,7 @@ fn copy_paste_task_transfer_cancellation_counts_acknowledged_commit() {
 }
 
 #[test]
-#[ignore = "requires isolated remote copy/paste task runner"]
+#[ignore = "requires isolated remote copy/paste task runner; Suite copy-paste-task"]
 fn copy_paste_task_transfer_private_clipboard_bulk_and_honest_failure() {
     let sandbox = Sandbox::new("private-bulk");
     let source = sandbox.dir("source/Vault");
@@ -393,7 +393,7 @@ fn copy_paste_task_transfer_private_clipboard_bulk_and_honest_failure() {
 }
 
 #[test]
-#[ignore = "requires isolated remote copy/paste task runner"]
+#[ignore = "requires isolated remote copy/paste task runner; Suite copy-paste-task"]
 fn copy_paste_task_transfer_same_backend_uses_protected_bridge() {
     let sandbox = Sandbox::new("same-backend");
     let source = sandbox.dir("source");

@@ -41,7 +41,7 @@ impl SettingsSource for Bare {
 }
 
 #[test]
-#[ignore = "braucht Xvfb (Stufe linux-desktop: x11)"]
+#[ignore = "braucht Xvfb (Stufe linux-desktop: x11); Suite rechte-desktop-tresore-task"]
 fn desktop_task_x11_root_pixmap_background() {
     require_task();
     let x = XServer::start("320x200x24");

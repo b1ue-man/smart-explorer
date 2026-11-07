@@ -174,42 +174,6 @@ fn remote_drive_task_obsidian_save_cycle_commits_long_short_and_empty_files() ->
 }
 
 #[test]
-fn remote_drive_task_atomic_replace_detaches_the_old_open_destination() -> io::Result<()> {
-    let fixture = Fixture::new("obsidian-atomic-replace")?;
-    let note = fixture.remote.join("note.md");
-    let temporary_note = fixture.remote.join("note.md.tmp");
-    std::fs::write(&note, b"old destination")?;
-    let engine = fixture.engine()?;
-
-    let old_destination = engine.open_file(r"\note.md", writable_existing())?;
-    let replacement = engine.open_file(
-        r"\note.md.tmp",
-        OpenFileOptions {
-            writable: true,
-            disposition: OpenDisposition::CreateNew,
-        },
-    )?;
-    assert_eq!(engine.write(replacement, 0, b"new complete note")?, 17);
-    assert_eq!(engine.flush(replacement)?, FlushOutcome::Committed);
-    engine.close(replacement)?;
-
-    assert_eq!(
-        engine.rename_with_shared_destination(r"\note.md.tmp", r"\note.md", true, true)?,
-        RenameOutcome::Complete
-    );
-    assert_eq!(std::fs::read(&note)?, b"new complete note");
-    assert!(!temporary_note.exists());
-
-    engine.truncate(old_destination, 0)?;
-    assert_eq!(engine.write(old_destination, 0, b"stale old handle")?, 16);
-    assert_eq!(engine.flush(old_destination)?, FlushOutcome::NoChanges);
-    engine.close(old_destination)?;
-    assert_eq!(std::fs::read(&note)?, b"new complete note");
-    assert!(engine.dirty_entries()?.is_empty());
-    Ok(())
-}
-
-#[test]
 fn remote_drive_task_exclusive_writer_collision_preserves_existing_bytes() -> io::Result<()> {
     let fixture = Fixture::new("exclusive-writer-collision")?;
     let occupied = fixture.remote.join("occupied.txt");

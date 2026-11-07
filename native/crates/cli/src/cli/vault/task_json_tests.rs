@@ -108,7 +108,7 @@ fn assert_items(compared: &Value, what: &str) {
 }
 
 #[test]
-#[ignore = "braucht die gebaute se in SMART_EXPLORER_VAULT_SE_BIN (Stufe vault-cli, env=SMART_EXPLORER_VAULT_SE_BIN={se})"]
+#[ignore = "braucht die gebaute se in SMART_EXPLORER_VAULT_SE_BIN (Stufe vault-cli, env=SMART_EXPLORER_VAULT_SE_BIN={se}); Suite rechte-desktop-tresore-task"]
 fn vault_task_cli_every_command_json_keys() {
     let env = TaskEnv::isolated();
     let local = |name: &str, content: &str| -> PathBuf {

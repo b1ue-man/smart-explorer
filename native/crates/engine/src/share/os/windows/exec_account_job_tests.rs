@@ -16,7 +16,7 @@ use super::exec_account_tests::{
 };
 
 #[test]
-#[ignore = "needs an elevated runner and the account service: windows-core job (perm-windows)"]
+#[ignore = "needs an elevated runner and the account service: windows-core job (perm-windows); Suite rechte-desktop-tresore-task"]
 fn perm_task_windows_terminal_as_remote_account() {
     let task = task();
     set_up(&task);
@@ -32,7 +32,7 @@ fn perm_task_windows_terminal_as_remote_account() {
 }
 
 #[test]
-#[ignore = "needs an elevated runner and the account service: windows-core job (perm-windows)"]
+#[ignore = "needs an elevated runner and the account service: windows-core job (perm-windows); Suite rechte-desktop-tresore-task"]
 fn perm_task_windows_cancel_kills_job_tree() {
     let task = task();
     set_up(&task);
@@ -70,7 +70,7 @@ fn perm_task_windows_cancel_kills_job_tree() {
 }
 
 #[test]
-#[ignore = "needs an elevated runner and the account service: windows-core job (perm-windows)"]
+#[ignore = "needs an elevated runner and the account service: windows-core job (perm-windows); Suite rechte-desktop-tresore-task"]
 fn perm_task_windows_worker_disconnect_kills_jobs() {
     let task = task();
     set_up(&task);
@@ -95,7 +95,7 @@ fn perm_task_windows_worker_disconnect_kills_jobs() {
 }
 
 #[test]
-#[ignore = "needs an elevated runner and the account service: windows-core job (perm-windows)"]
+#[ignore = "needs an elevated runner and the account service: windows-core job (perm-windows); Suite rechte-desktop-tresore-task"]
 fn perm_task_remote_account_cannot_read_ipc_token_windows() {
     let task = task();
     set_up(&task);

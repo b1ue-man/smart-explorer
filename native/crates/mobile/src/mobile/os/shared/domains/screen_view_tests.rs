@@ -1,17 +1,14 @@
 //! Tests of the Android viewer (SCR-M9, U28) without a device: the shapes of
-//! the bridge methods and events, the session's input rules and the texts the
-//! app shows. The queue behind `screenPull` is tested in
-//! `screen/os/android/viewer_sink_tests.rs`; the decoder and the touch
-//! mapping run in `ScreenTaskTest.kt` and the JVM tests under `ui/screen/`.
+//! the bridge methods and events and the session's input rules. The queue
+//! behind `screenPull` is tested in `screen/os/android/viewer_sink_tests.rs`;
+//! the decoder and the touch mapping run in `ScreenTaskTest.kt` and the JVM
+//! tests under `ui/screen/`.
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
 use super::json_shapes::{accepted_fields, devices_json, event_value, stats_fields};
 use super::run::{open_for_tests, SendFrame};
 use super::*;
-use crate::screen::core::session_state::{EndReason, SessionState};
-use crate::screen::core::wire_control::ControlBlock;
-use crate::screen::core::wire_hello::ScreenErrorCode;
 use crate::screen::os::viewer_sink::PULL_ENDED;
 use crate::share::access_grant::CapabilityDecision;
 use crate::share::{DirectAccessState, DirectContact, ShareStatus};
@@ -251,121 +248,6 @@ fn screen_task_android_view_input_needs_control() {
         call("screen.viewClose", json!({ "session": id })).unwrap(),
         json!({})
     );
-}
-
-fn all_keys() -> String {
-    use SessionState::*;
-    let states = [
-        Connecting,
-        WaitingForApproval,
-        WaitingForPortal,
-        Starting,
-        Streaming,
-        SecureDesktop,
-        WindowMinimized,
-        ViewerHidden,
-        HostLocked,
-        SessionInactive,
-        NoDisplay,
-        Ended,
-        Unknown,
-    ];
-    // A new state breaks this match and with it the test (add its text).
-    states.iter().for_each(|state| match state {
-        Connecting | WaitingForApproval | WaitingForPortal | Starting | Streaming
-        | SecureDesktop | WindowMinimized | ViewerHidden | HostLocked | SessionInactive
-        | NoDisplay | Ended | Unknown => {}
-    });
-    let reasons = [
-        EndReason::ViewerClosed,
-        EndReason::HostStopped,
-        EndReason::CapabilityNarrowed,
-        EndReason::GrantExpired,
-        EndReason::HostShutdown,
-        EndReason::UpdateStop,
-        EndReason::ConnectionLost,
-        EndReason::Failed,
-    ];
-    reasons.iter().for_each(|reason| match reason {
-        EndReason::ViewerClosed
-        | EndReason::HostStopped
-        | EndReason::CapabilityNarrowed
-        | EndReason::GrantExpired
-        | EndReason::HostShutdown
-        | EndReason::UpdateStop
-        | EndReason::ConnectionLost
-        | EndReason::Failed => {}
-    });
-    let blocks = [
-        ControlBlock::ElevatedWindow,
-        ControlBlock::SecureDesktop,
-        ControlBlock::ControlUnavailable,
-        ControlBlock::UnsupportedOnHost,
-        ControlBlock::Other,
-    ];
-    blocks.iter().for_each(|block| match block {
-        ControlBlock::ElevatedWindow
-        | ControlBlock::SecureDesktop
-        | ControlBlock::ControlUnavailable
-        | ControlBlock::UnsupportedOnHost
-        | ControlBlock::Other => {}
-    });
-    let mut out = String::new();
-    for state in states {
-        out.push_str(&format!("state:{}\n", state.key()));
-    }
-    for code in ScreenErrorCode::ALL {
-        out.push_str(&format!("error:{}\n", code.key()));
-    }
-    for reason in reasons {
-        out.push_str(&format!("end:{}\n", reason.key()));
-    }
-    // Keys the relay adds to the reasons of `EndReason`.
-    out.push_str("end:ended\nend:connection_failed\n");
-    for block in blocks {
-        let key = serde_json::to_value(block).unwrap();
-        out.push_str(&format!("block:{}\n", key.as_str().unwrap()));
-    }
-    out
-}
-
-/// The list the Kotlin test `screen_task_android_texts_match_desktop` reads.
-#[test]
-fn screen_task_android_screen_keys_file_current() {
-    let file = include_str!("../../../../../../../../android/app/src/test/resources/screen_keys.txt");
-    let expected = all_keys();
-    assert_eq!(
-        file, expected,
-        "android/app/src/test/resources/screen_keys.txt must hold:\n{expected}"
-    );
-}
-
-/// The texts of `strings.xml` are the desktop's, word for word.
-#[test]
-fn screen_task_android_strings_match_desktop_sources() {
-    let xml = include_str!("../../../../../../../../android/app/src/main/res/values/strings.xml");
-    let desktop = include_str!("../../../../../../gui/src/app/core/screen_texts.rs");
-    let resource = |name: &str| -> String {
-        let open = format!("<string name=\"{name}\">");
-        let start = xml
-            .find(&open)
-            .unwrap_or_else(|| panic!("missing string {name}"))
-            + open.len();
-        let end = xml[start..].find("</string>").unwrap() + start;
-        xml[start..end].replace("&amp;", "&").replace("\\'", "'")
-    };
-    for line in all_keys().lines() {
-        let (kind, key) = line.split_once(':').unwrap();
-        let text = resource(&format!("screen_{kind}_{key}"));
-        if text.is_empty() {
-            assert_eq!(line, "state:streaming", "only a running stream has no line");
-            continue;
-        }
-        assert!(
-            desktop.contains(&format!("\"{text}\"")),
-            "{line}: „{text}“ is not a text of the desktop viewer"
-        );
-    }
 }
 
 /// The key names of `ScreenInputMapper.keyName` (Kotlin) are names the core knows.

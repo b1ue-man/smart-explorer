@@ -123,7 +123,7 @@ pub fn run_ramp(case: Case) -> Result<(), String> {
 /// The helper of `speed_task_ramp_persisted_hint_sftp_wan`: one more job in a
 /// new process that finds the hint file of the first one.
 #[test]
-#[ignore = "helper of speed_task_ramp_persisted_hint_sftp_wan, started by that case"]
+#[ignore = "helper of speed_task_ramp_persisted_hint_sftp_wan, started by that case; Suite rechte-desktop-tresore-task"]
 fn speed_task_ramp_child() {
     let Some(out) = var("SE_SPEED_CHILD_OUT") else {
         println!("kein SE_SPEED_CHILD_OUT: Hilfsfall ohne Aufrufer, nichts zu tun");
@@ -210,21 +210,21 @@ pub fn run_persisted_hint(case: Case) -> Result<(), String> {
 }
 
 #[test]
-#[ignore = "needs the stage's SFTP server and the shaped wan link"]
+#[ignore = "needs the stage's SFTP server and the shaped wan link; Suite rechte-desktop-tresore-task"]
 fn speed_task_ramp_sftp_small_wan() {
     let case = Case::new("speed_task_ramp_sftp_small_wan", "sftp", "up", "wan");
     guarded(case.name, || run_ramp(case));
 }
 
 #[test]
-#[ignore = "needs the stage's FTP server and the shaped wan link"]
+#[ignore = "needs the stage's FTP server and the shaped wan link; Suite rechte-desktop-tresore-task"]
 fn speed_task_ramp_ftp_small_wan() {
     let case = Case::new("speed_task_ramp_ftp_small_wan", "ftp", "up", "wan");
     guarded(case.name, || run_ramp(case));
 }
 
 #[test]
-#[ignore = "needs the stage's SFTP server and the shaped wan link"]
+#[ignore = "needs the stage's SFTP server and the shaped wan link; Suite rechte-desktop-tresore-task"]
 fn speed_task_ramp_persisted_hint_sftp_wan() {
     let case = Case::new(
         "speed_task_ramp_persisted_hint_sftp_wan",

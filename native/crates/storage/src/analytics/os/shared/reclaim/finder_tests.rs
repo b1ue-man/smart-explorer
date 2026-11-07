@@ -79,48 +79,59 @@ fn crowded_tree() -> (tempfile::TempDir, PathBuf, Vec<u8>, Vec<u8>) {
 
 #[test]
 fn android_background_task_duplicates_compare_every_candidate_in_parallel() {
-    let (_fixture, root, small, large) = crowded_tree();
-    let none = ProtectedAreas::default();
-    let parallel = search(&root, 4, MAX_CANDIDATE_TEXT_BYTES, &none, None);
-    let summary = &parallel.summary;
-    assert_eq!(summary.candidates, 237, "{summary:?}");
-    assert!(summary.candidates > 200);
-    assert_eq!(summary.compared, 7);
-    assert_eq!(summary.files, 238);
-    assert_eq!(summary.groups, 2);
-    assert!(summary.errors.is_empty(), "{:?}", summary.errors);
-    assert!(summary.limits.is_empty());
-    assert!(parallel.root_error.is_none());
+    let cases: [(&str, fn()); 2] = [
+        (
+            "android_background_task_duplicates_compare_every_candidate_in_parallel",
+            || {
+                let (_fixture, root, small, large) = crowded_tree();
+                let none = ProtectedAreas::default();
+                let parallel = search(&root, 4, MAX_CANDIDATE_TEXT_BYTES, &none, None);
+                let summary = &parallel.summary;
+                assert_eq!(summary.candidates, 237, "{summary:?}");
+                assert!(summary.candidates > 200);
+                assert_eq!(summary.compared, 7);
+                assert_eq!(summary.files, 238);
+                assert_eq!(summary.groups, 2);
+                assert!(summary.errors.is_empty(), "{:?}", summary.errors);
+                assert!(summary.limits.is_empty());
+                assert!(parallel.root_error.is_none());
 
-    let largest = &parallel.groups[0];
-    assert_eq!(largest.size, large.len() as u64);
-    assert_eq!(largest.hash.hex, sha256_hex(&large));
-    assert_eq!(largest.hash.algorithm, HashAlgorithm::Sha256);
-    assert_eq!(largest.evidence, DuplicateEvidence::LocalSha256);
-    let trio = &parallel.groups[1];
-    assert_eq!(trio.items.len(), 3);
-    assert_eq!(trio.hash.hex, sha256_hex(&small));
-    assert_eq!(trio.reclaimable, 2 * small.len() as u64);
-    assert!(trio
-        .items
-        .iter()
-        .all(|item| !item.path.ends_with("small-d.txt")));
+                let largest = &parallel.groups[0];
+                assert_eq!(largest.size, large.len() as u64);
+                assert_eq!(largest.hash.hex, sha256_hex(&large));
+                assert_eq!(largest.hash.algorithm, HashAlgorithm::Sha256);
+                assert_eq!(largest.evidence, DuplicateEvidence::LocalSha256);
+                let trio = &parallel.groups[1];
+                assert_eq!(trio.items.len(), 3);
+                assert_eq!(trio.hash.hex, sha256_hex(&small));
+                assert_eq!(trio.reclaimable, 2 * small.len() as u64);
+                assert!(trio
+                    .items
+                    .iter()
+                    .all(|item| !item.path.ends_with("small-d.txt")));
 
-    let serial = search(&root, 1, MAX_CANDIDATE_TEXT_BYTES, &none, None);
-    assert_eq!(shape(&serial), shape(&parallel));
-    assert_eq!(serial.summary, parallel.summary);
-}
-
-#[test]
-fn android_background_task_duplicates_report_the_candidate_budget() {
-    let (_fixture, root, _, _) = crowded_tree();
-    let one_path = root.join("unique/000.bin").as_os_str().len() as u64;
-    let report = search(&root, 2, 3 * one_path, &ProtectedAreas::default(), None);
-    let summary = report.summary.view();
-    assert_eq!(summary.candidates, 237);
-    let limit = summary.limit.expect("the spent budget is visible");
-    assert!(limit.contains("Kandidatenspeicher"), "{limit}");
-    assert!(report.summary.compared <= 3);
+                let serial = search(&root, 1, MAX_CANDIDATE_TEXT_BYTES, &none, None);
+                assert_eq!(shape(&serial), shape(&parallel));
+                assert_eq!(serial.summary, parallel.summary);
+            },
+        ),
+        (
+            "android_background_task_duplicates_report_the_candidate_budget",
+            || {
+                let (_fixture, root, _, _) = crowded_tree();
+                let one_path = root.join("unique/000.bin").as_os_str().len() as u64;
+                let report = search(&root, 2, 3 * one_path, &ProtectedAreas::default(), None);
+                let summary = report.summary.view();
+                assert_eq!(summary.candidates, 237);
+                let limit = summary.limit.expect("the spent budget is visible");
+                assert!(limit.contains("Kandidatenspeicher"), "{limit}");
+                assert!(report.summary.compared <= 3);
+            },
+        ),
+    ];
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
+    }
 }
 
 // Android volumes only: the expected area strings use the POSIX path form.

@@ -77,7 +77,7 @@ fn arrived(conn: &RustConnection) -> (Vec<u32>, Vec<u8>) {
 }
 
 #[test]
-#[ignore = "needs an X server with XTest (fixture=xvfb)"]
+#[ignore = "needs an X server with XTest (fixture=xvfb); Suite rechte-desktop-tresore-task"]
 fn screen_task_x11_xtest_text_and_click() {
     let (conn, root, window) = window();
     set_target(&SourceId::Window(x11_windows::window_id(window)));
@@ -104,7 +104,7 @@ fn screen_task_x11_xtest_text_and_click() {
 }
 
 #[test]
-#[ignore = "needs an X server with XTest (fixture=xvfb)"]
+#[ignore = "needs an X server with XTest (fixture=xvfb); Suite rechte-desktop-tresore-task"]
 fn screen_task_x11_unmapped_char_via_spare_keycode() {
     let (conn, root, window) = window();
     let before = x11_keymap::KeyMap::read(&conn).unwrap();

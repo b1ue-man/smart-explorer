@@ -249,7 +249,7 @@ fn stream_runs_nudged(source: &mut PortalSource, within: Duration, nudge: impl F
 }
 
 #[test]
-#[ignore = "needs headless Sway, xdg-desktop-portal-wlr and PipeWire (SE_SCREEN_TASK_WAYLAND=1)"]
+#[ignore = "needs headless Sway, xdg-desktop-portal-wlr and PipeWire (SE_SCREEN_TASK_WAYLAND=1); Suite rechte-desktop-tresore-task"]
 fn screen_task_wayland_portal_bench() {
     assert!(wayland_stage(), "SE_SCREEN_TASK_WAYLAND=1 is not set");
     let _data = private_data_home();
@@ -281,7 +281,7 @@ fn screen_task_wayland_portal_bench() {
 }
 
 #[test]
-#[ignore = "needs headless Sway, xdg-desktop-portal-wlr with XDPW_PERSIST_MODE=permanent (SE_SCREEN_TASK_WAYLAND=1)"]
+#[ignore = "needs headless Sway, xdg-desktop-portal-wlr with XDPW_PERSIST_MODE=permanent (SE_SCREEN_TASK_WAYLAND=1); Suite rechte-desktop-tresore-task"]
 fn screen_task_wayland_token_replaced_after_start() {
     assert!(wayland_stage(), "SE_SCREEN_TASK_WAYLAND=1 is not set");
     let _data = private_data_home();
@@ -318,7 +318,7 @@ fn screen_task_wayland_token_replaced_after_start() {
 /// remote control (`SE_SCREEN_TASK_KDE=1`, K3): the session that may control
 /// streams and takes a click and text; without that runner it is not run.
 #[test]
-#[ignore = "needs headless KWin, xdg-desktop-portal-kde, a permission store entry and PipeWire (SE_SCREEN_TASK_KDE=1)"]
+#[ignore = "needs headless KWin, xdg-desktop-portal-kde, a permission store entry and PipeWire (SE_SCREEN_TASK_KDE=1); Suite rechte-desktop-tresore-task"]
 fn screen_task_kde_remote_desktop_input() {
     if std::env::var("SE_SCREEN_TASK_KDE").ok().as_deref() != Some("1") {
         eprintln!("not run: no headless KWin with RemoteDesktop permission");

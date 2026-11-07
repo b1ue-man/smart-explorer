@@ -241,20 +241,25 @@ mod tests {
 
     #[test]
     fn android_task_host_values_redirect_data_and_temp_roots() {
-        let host = sample_host();
-        assert_eq!(
-            data_home_for(Some(&host)),
-            PathBuf::from("/data/user/0/app/files")
-        );
-        assert_eq!(
-            temp_dir_for(Some(&host)),
-            PathBuf::from("/data/user/0/app/cache/tmp")
-        );
-    }
-
-    #[test]
-    fn android_task_without_host_values_desktop_roots_stay_unchanged() {
-        assert_eq!(data_home_for(None), platform_data_home());
-        assert_eq!(temp_dir_for(None), std::env::temp_dir());
+        // Rows: host values redirect the data and temp roots; without host
+        // values the desktop roots stay unchanged.
+        let cases = [
+            (
+                "host values",
+                Some(sample_host()),
+                PathBuf::from("/data/user/0/app/files"),
+                PathBuf::from("/data/user/0/app/cache/tmp"),
+            ),
+            (
+                "without host values",
+                None,
+                platform_data_home(),
+                std::env::temp_dir(),
+            ),
+        ];
+        for (case, host, data_root, temp_root) in cases {
+            assert_eq!(data_home_for(host.as_ref()), data_root, "{case}");
+            assert_eq!(temp_dir_for(host.as_ref()), temp_root, "{case}");
+        }
     }
 }

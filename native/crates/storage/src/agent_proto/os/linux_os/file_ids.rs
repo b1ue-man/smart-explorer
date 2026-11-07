@@ -79,37 +79,45 @@ mod tests {
 
     #[test]
     fn abgleich_task_fat_exfat_fuse_and_network_types_have_no_durable_ids() {
-        for magic in [
-            0x4d44i64,
-            0x2011_BAB0,
-            0x6573_5546,
-            0xFF53_4D42,
-            0xFE53_4D42,
-            0x0102_1997,
-            0x9660,
-            0x1501_3346,
-        ] {
-            assert!(!type_has_durable_ids(magic), "{magic:#x}");
+        let cases: [(&str, fn()); 2] = [
+            (
+                "abgleich_task_fat_exfat_fuse_and_network_types_have_no_durable_ids",
+                || {
+                    for magic in [
+                        0x4d44i64,
+                        0x2011_BAB0,
+                        0x6573_5546,
+                        0xFF53_4D42,
+                        0xFE53_4D42,
+                        0x0102_1997,
+                        0x9660,
+                        0x1501_3346,
+                    ] {
+                        assert!(!type_has_durable_ids(magic), "{magic:#x}");
+                    }
+                    // 32-bit C libraries report 0xFF534D42 as a negative word.
+                    assert!(!type_has_durable_ids(0xFF53_4D42u32 as i32));
+                    // ext4, xfs, btrfs, tmpfs, nfs, ntfs.
+                    for magic in [
+                        0xEF53i64,
+                        0x5846_5342,
+                        0x9123_683E,
+                        0x0102_1994,
+                        0x6969,
+                        0x5346_544e,
+                    ] {
+                        assert!(type_has_durable_ids(magic), "{magic:#x}");
+                    }
+                },
+            ),
+            ("abgleich_task_a_missing_path_has_no_durable_ids", || {
+                assert!(!path_has_durable_ids(Path::new(
+                    "/nonexistent/abgleich-task/file"
+                )));
+            }),
+        ];
+        for (case, check) in cases {
+            std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
         }
-        // 32-bit C libraries report 0xFF534D42 as a negative word.
-        assert!(!type_has_durable_ids(0xFF53_4D42u32 as i32));
-        // ext4, xfs, btrfs, tmpfs, nfs, ntfs.
-        for magic in [
-            0xEF53i64,
-            0x5846_5342,
-            0x9123_683E,
-            0x0102_1994,
-            0x6969,
-            0x5346_544e,
-        ] {
-            assert!(type_has_durable_ids(magic), "{magic:#x}");
-        }
-    }
-
-    #[test]
-    fn abgleich_task_a_missing_path_has_no_durable_ids() {
-        assert!(!path_has_durable_ids(Path::new(
-            "/nonexistent/abgleich-task/file"
-        )));
     }
 }

@@ -335,29 +335,38 @@ mod tests {
 
     #[test]
     fn duplicate_search_hits_are_terminal_errors() {
-        let (tx, rx) = crossbeam_channel::unbounded();
-        let cancel = Arc::new(AtomicBool::new(false));
-        let mut relay = SearchRelay::new("/root".into(), tx, cancel.clone(), Arc::default());
-        assert!(relay.accept_hit(hit("same")));
-        assert!(!relay.accept_hit(hit("same")));
-        assert!(cancel.load(Ordering::Relaxed));
-        relay.finish();
-        assert!(matches!(rx.recv().unwrap(), ScanMessage::Entries(_)));
-        assert!(matches!(rx.recv().unwrap(), ScanMessage::Error(_)));
-        assert!(matches!(rx.recv().unwrap(), ScanMessage::Done(_)));
-    }
-
-    #[test]
-    fn search_relay_applies_depth_limit_to_valid_relative_paths() {
-        let (tx, rx) = crossbeam_channel::unbounded();
-        let cancel = Arc::new(AtomicBool::new(false));
-        let mut relay = SearchRelay::new("/root".into(), tx, cancel, Arc::default());
-        let too_deep = std::iter::repeat_n("d", 513).collect::<Vec<_>>().join("/");
-        assert!(validate_search_relative(&too_deep).is_ok());
-        assert!(!relay.accept_hit(hit(&too_deep)));
-        relay.finish();
-        assert!(matches!(rx.recv().unwrap(), ScanMessage::Error(_)));
-        assert!(matches!(rx.recv().unwrap(), ScanMessage::Done(_)));
+        let cases: [(&str, fn()); 2] = [
+            ("duplicate_search_hits_are_terminal_errors", || {
+                let (tx, rx) = crossbeam_channel::unbounded();
+                let cancel = Arc::new(AtomicBool::new(false));
+                let mut relay =
+                    SearchRelay::new("/root".into(), tx, cancel.clone(), Arc::default());
+                assert!(relay.accept_hit(hit("same")));
+                assert!(!relay.accept_hit(hit("same")));
+                assert!(cancel.load(Ordering::Relaxed));
+                relay.finish();
+                assert!(matches!(rx.recv().unwrap(), ScanMessage::Entries(_)));
+                assert!(matches!(rx.recv().unwrap(), ScanMessage::Error(_)));
+                assert!(matches!(rx.recv().unwrap(), ScanMessage::Done(_)));
+            }),
+            (
+                "search_relay_applies_depth_limit_to_valid_relative_paths",
+                || {
+                    let (tx, rx) = crossbeam_channel::unbounded();
+                    let cancel = Arc::new(AtomicBool::new(false));
+                    let mut relay = SearchRelay::new("/root".into(), tx, cancel, Arc::default());
+                    let too_deep = std::iter::repeat_n("d", 513).collect::<Vec<_>>().join("/");
+                    assert!(validate_search_relative(&too_deep).is_ok());
+                    assert!(!relay.accept_hit(hit(&too_deep)));
+                    relay.finish();
+                    assert!(matches!(rx.recv().unwrap(), ScanMessage::Error(_)));
+                    assert!(matches!(rx.recv().unwrap(), ScanMessage::Done(_)));
+                },
+            ),
+        ];
+        for (case, check) in cases {
+            std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
+        }
     }
 
     #[test]

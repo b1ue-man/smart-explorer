@@ -287,7 +287,7 @@ mod tests {
     /// back with their barcodes. Only where Media Foundation runs; the
     /// GitHub runners have none (K6), the suite reports it as not run there.
     #[test]
-    #[ignore = "needs Media Foundation; the suite runs it where `se screen codec` lists an MFT"]
+    #[ignore = "needs Media Foundation; the suite runs it where `se screen codec` lists an MFT; Suite rechte-desktop-tresore-task"]
     fn screen_task_mf_encode_decode() {
         assert!(super::super::mf_common::available(), "no Media Foundation");
         let (encoders, decoders) = super::super::mf_common::codecs();

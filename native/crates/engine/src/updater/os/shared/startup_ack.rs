@@ -207,15 +207,6 @@ mod tests {
     }
 
     #[test]
-    fn no_request_is_a_noop() {
-        let _guard = env_lock();
-        std::env::remove_var(ACK_PATH_ENV);
-        std::env::remove_var(ACK_TOKEN_ENV);
-        std::env::remove_var(ACK_SIGNAL_ENV);
-        assert!(requested_acknowledgement(false).unwrap().is_none());
-    }
-
-    #[test]
     fn arbitrary_ack_path_is_rejected() {
         let _guard = env_lock();
         std::env::set_var(ACK_TOKEN_ENV, "a".repeat(32));
@@ -242,19 +233,33 @@ mod tests {
         assert!(std::env::var_os(ACK_PATH_ENV).is_none());
         assert!(std::env::var_os(ACK_TOKEN_ENV).is_none());
         assert!(std::env::var_os(ACK_SIGNAL_ENV).is_none());
-    }
-
-    #[test]
-    fn ack_request_requires_updated_mode() {
-        let _guard = env_lock();
-        let token = "b".repeat(32);
-        std::env::set_var(ACK_TOKEN_ENV, &token);
-        std::env::set_var(
-            ACK_PATH_ENV,
-            crate::support_dirs::app_data_dir().join(format!("{ACK_PREFIX}{token}")),
-        );
-        std::env::set_var(ACK_SIGNAL_ENV, "127.0.0.1:1");
-        assert!(requested_acknowledgement(false).is_err());
+        // Case "no request": without the environment variables nothing is requested.
+        {
+            std::env::remove_var(ACK_PATH_ENV);
+            std::env::remove_var(ACK_TOKEN_ENV);
+            std::env::remove_var(ACK_SIGNAL_ENV);
+            assert!(
+                requested_acknowledgement(false).unwrap().is_none(),
+                "no request"
+            );
+        }
+        // Case "updated mode required": a request outside the updated mode is refused.
+        {
+            let token = "b".repeat(32);
+            std::env::set_var(ACK_TOKEN_ENV, &token);
+            std::env::set_var(
+                ACK_PATH_ENV,
+                crate::support_dirs::app_data_dir().join(format!("{ACK_PREFIX}{token}")),
+            );
+            std::env::set_var(ACK_SIGNAL_ENV, "127.0.0.1:1");
+            assert!(
+                requested_acknowledgement(false).is_err(),
+                "requires updated mode"
+            );
+            std::env::remove_var(ACK_PATH_ENV);
+            std::env::remove_var(ACK_TOKEN_ENV);
+            std::env::remove_var(ACK_SIGNAL_ENV);
+        }
     }
 
     #[test]

@@ -143,7 +143,7 @@ impl Drop for MountedFixture {
 }
 
 #[test]
-#[ignore = "requires the pinned System32 Dokany DLL, installed driver and task checker"]
+#[ignore = "requires the pinned System32 Dokany DLL, installed driver and task checker; Suite mount-batching-task"]
 pub(super) fn mount_batching_task_real_driver_navigation_and_checker() -> io::Result<()> {
     eprintln!("[mount fixture] task start");
     let checker = PathBuf::from(std::env::var_os("SMART_EXPLORER_MOUNT_CHECKER")

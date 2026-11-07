@@ -270,28 +270,28 @@ fn refuses_existing() -> Result<(), String> {
 }
 
 #[test]
-#[ignore = "needs se, the SFTP server, its saved connection and the engine cases' report"]
+#[ignore = "needs se, the SFTP server, its saved connection and the engine cases' report; Suite rechte-desktop-tresore-task"]
 fn speed_task_cli_put_large_wan() {
     let case = Case::new("speed_task_cli_put_large_wan", "sftp", "up", "wan");
     guarded(case.name, || large(case, true));
 }
 
 #[test]
-#[ignore = "needs se, the SFTP server, its saved connection and the engine cases' report"]
+#[ignore = "needs se, the SFTP server, its saved connection and the engine cases' report; Suite rechte-desktop-tresore-task"]
 fn speed_task_cli_get_large_wan() {
     let case = Case::new("speed_task_cli_get_large_wan", "sftp", "down", "wan");
     guarded(case.name, || large(case, false));
 }
 
 #[test]
-#[ignore = "needs se, the SFTP server, its saved connection and the engine cases' report"]
+#[ignore = "needs se, the SFTP server, its saved connection and the engine cases' report; Suite rechte-desktop-tresore-task"]
 fn speed_task_cli_cp_small_tree_up_wan() {
     let case = Case::new("speed_task_cli_cp_small_tree_up_wan", "sftp", "up", "wan");
     guarded(case.name, || small(case, true));
 }
 
 #[test]
-#[ignore = "needs se, the SFTP server, its saved connection and the engine cases' report"]
+#[ignore = "needs se, the SFTP server, its saved connection and the engine cases' report; Suite rechte-desktop-tresore-task"]
 fn speed_task_cli_cp_small_tree_down_wan() {
     let case = Case::new(
         "speed_task_cli_cp_small_tree_down_wan",
@@ -303,7 +303,7 @@ fn speed_task_cli_cp_small_tree_down_wan() {
 }
 
 #[test]
-#[ignore = "needs se of the candidate"]
+#[ignore = "needs se of the candidate; Suite rechte-desktop-tresore-task"]
 fn speed_task_cli_cp_refuses_existing_destination_unchanged() {
     guarded(
         "speed_task_cli_cp_refuses_existing_destination_unchanged",

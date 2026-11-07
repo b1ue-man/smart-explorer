@@ -48,7 +48,7 @@ fn content(len: usize, seed: u8) -> Vec<u8> {
 }
 
 #[test]
-#[ignore = "needs the task suite's SMB server"]
+#[ignore = "needs the task suite's SMB server; Suite speed-setup-task"]
 fn speed_task_remote_smb_compound_stage_never_replaces() {
     let Some((backend, root)) = smb() else {
         return;
@@ -125,7 +125,7 @@ fn cleanup(backend: &dyn Backend, folder: &str) {
 }
 
 #[test]
-#[ignore = "benchmark: needs the task suite's Nextcloud"]
+#[ignore = "benchmark: needs the task suite's Nextcloud; Suite speed-setup-task"]
 fn speed_task_remote_nextcloud_chunked_large_byte_exact() {
     let Some((backend, root)) = nextcloud() else {
         return;
@@ -168,7 +168,7 @@ fn speed_task_remote_nextcloud_chunked_large_byte_exact() {
 /// every member lands byte for byte in its own new stage; a taken stage
 /// name is `AlreadyExists` and keeps what is there.
 #[test]
-#[ignore = "needs the task suite's SFTP server"]
+#[ignore = "needs the task suite's SFTP server; Suite speed-setup-task"]
 fn speed_task_remote_sftp_server_copy_batch() {
     let (backend, root) = crate::support::sftp();
     let folder = remote_folder(&*backend, &root, "copy-batch");
@@ -221,7 +221,7 @@ fn speed_task_remote_sftp_server_copy_batch() {
 /// no private stage is left behind. Without `copy-data` the files stream
 /// alone and the same must hold.
 #[test]
-#[ignore = "needs the task suite's SFTP server"]
+#[ignore = "needs the task suite's SFTP server; Suite speed-setup-task"]
 fn speed_task_remote_sftp_same_account_packets_byte_exact_never_replace() {
     let (backend, root) = crate::support::sftp();
     let folder = remote_folder(&*backend, &root, "same-account-packets");

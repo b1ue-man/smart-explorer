@@ -85,6 +85,52 @@ fn drive_task_devices_names_collision_deterministic() {
     for name in names(&same, PathDialect::Windows) {
         assert!(PathDialect::Windows.validate_component(&name).is_ok());
     }
+    // Case "dialect rules": each dialect's reserved names, length limits and invalid components.
+    {
+        let long = "a".repeat(300);
+        let umlauts = "ä".repeat(200);
+        let rows = vec![
+            direct("1", "a:b?"),
+            direct("2", "PC."),
+            direct("3", "CON"),
+            direct("4", "nul.txt"),
+            direct("5", ""),
+            direct("6", &long),
+            direct("7", "COM¹"),
+            direct("8", &umlauts),
+        ];
+        let windows = folder_names(&rows, PathDialect::Windows);
+        assert_eq!(windows["direct~1"], "a_b_", "dialect rules");
+        assert_eq!(windows["direct~2"], "PC_", "dialect rules");
+        assert_eq!(windows["direct~3"], "CON_", "dialect rules");
+        // `nul.txt_` is still a DOS device name for the dialect: the probe of
+        // rule 2 replaces it.
+        assert!(windows["direct~4"].starts_with("Gerät "), "dialect rules");
+        assert_eq!(windows["direct~5"], "Gerät", "dialect rules");
+        assert_eq!(windows["direct~6"].len(), 255, "dialect rules");
+        assert!(windows["direct~7"].starts_with("Gerät "), "dialect rules");
+        assert_eq!(windows["direct~8"].chars().count(), 200, "dialect rules");
+        let posix = folder_names(&rows, PathDialect::Posix);
+        assert_eq!(posix["direct~1"], "a:b?", "dialect rules");
+        assert_eq!(posix["direct~3"], "CON", "dialect rules");
+        assert_eq!(posix["direct~8"].len(), 254, "cut at a character boundary");
+        for (key, name) in &windows {
+            assert!(
+                PathDialect::Windows.validate_component(name).is_ok(),
+                "{key}: {name}"
+            );
+        }
+        for (key, name) in &posix {
+            assert!(
+                PathDialect::Posix.validate_component(name).is_ok(),
+                "{key}: {name}"
+            );
+        }
+        let dots = vec![direct("9", ".."), direct("10", "a/b")];
+        let posix = folder_names(&dots, PathDialect::Posix);
+        assert_eq!(posix["direct~9"], "_", "dialect rules");
+        assert_eq!(posix["direct~10"], "a_b", "dialect rules");
+    }
 }
 
 #[test]
@@ -142,91 +188,46 @@ fn drive_task_devices_names_reserved_rooms() {
     assert_ne!(listed[0], listed[1]);
     assert!(listed.iter().all(|name| name != ROOMS_FOLDER));
     assert!(same_name(PathDialect::Windows, "RÄUME", ROOMS_FOLDER));
-}
-
-#[test]
-fn devices_task_names_follow_the_dialect_rules() {
-    let long = "a".repeat(300);
-    let umlauts = "ä".repeat(200);
-    let rows = vec![
-        direct("1", "a:b?"),
-        direct("2", "PC."),
-        direct("3", "CON"),
-        direct("4", "nul.txt"),
-        direct("5", ""),
-        direct("6", &long),
-        direct("7", "COM¹"),
-        direct("8", &umlauts),
-    ];
-    let windows = folder_names(&rows, PathDialect::Windows);
-    assert_eq!(windows["direct~1"], "a_b_");
-    assert_eq!(windows["direct~2"], "PC_");
-    assert_eq!(windows["direct~3"], "CON_");
-    // `nul.txt_` is still a DOS device name for the dialect: the probe of
-    // rule 2 replaces it.
-    assert!(windows["direct~4"].starts_with("Gerät "));
-    assert_eq!(windows["direct~5"], "Gerät");
-    assert_eq!(windows["direct~6"].len(), 255);
-    assert!(windows["direct~7"].starts_with("Gerät "));
-    assert_eq!(windows["direct~8"].chars().count(), 200);
-    let posix = folder_names(&rows, PathDialect::Posix);
-    assert_eq!(posix["direct~1"], "a:b?");
-    assert_eq!(posix["direct~3"], "CON");
-    assert_eq!(posix["direct~8"].len(), 254, "cut at a character boundary");
-    for (key, name) in &windows {
+    // Case "rooms have their own namespaces": equal room names get their own folder names.
+    {
+        let rows = vec![
+            member("r1", "Team", "d1", "Laptop"),
+            member("r2", "Team", "d1", "Laptop"),
+            member("r1", "Team", "d2", "Laptop"),
+        ];
+        let tree = layout(&rows, PathDialect::Posix);
+        let room_names: Vec<&str> = tree.rooms.iter().map(|room| room.name.as_str()).collect();
+        assert_eq!(room_names, ["Team (82f3e9)", "Team (db77fd)"], "rooms");
+        let first: Vec<&str> = tree.rooms[0]
+            .devices
+            .iter()
+            .map(|e| e.name.as_str())
+            .collect();
+        assert_eq!(first.len(), 2, "rooms");
         assert!(
-            PathDialect::Windows.validate_component(name).is_ok(),
-            "{key}: {name}"
+            first[0].starts_with("Laptop (") && first[1].starts_with("Laptop ("),
+            "rooms"
         );
+        let second: Vec<&str> = tree.rooms[1]
+            .devices
+            .iter()
+            .map(|e| e.name.as_str())
+            .collect();
+        assert_eq!(second, ["Laptop"], "a room names its devices on its own");
+        let folder = tree.folder_of("room~r2~d1").expect("folder");
+        assert_eq!(folder, ["Räume", "Team (db77fd)", "Laptop"], "rooms");
+        let room_refs = [
+            RoomRef {
+                id: "r2".into(),
+                name: "Team".into(),
+            },
+            RoomRef {
+                id: "r1".into(),
+                name: "Team".into(),
+            },
+        ];
+        let by_id = room_folder_names(&room_refs, PathDialect::Posix);
+        assert_eq!(by_id["r1"], "Team (82f3e9)", "rooms");
+        assert_eq!(by_id["r2"], "Team (db77fd)", "rooms");
     }
-    for (key, name) in &posix {
-        assert!(
-            PathDialect::Posix.validate_component(name).is_ok(),
-            "{key}: {name}"
-        );
-    }
-    let dots = vec![direct("9", ".."), direct("10", "a/b")];
-    let posix = folder_names(&dots, PathDialect::Posix);
-    assert_eq!(posix["direct~9"], "_");
-    assert_eq!(posix["direct~10"], "a_b");
-}
-
-#[test]
-fn devices_task_rooms_have_their_own_namespaces() {
-    let rows = vec![
-        member("r1", "Team", "d1", "Laptop"),
-        member("r2", "Team", "d1", "Laptop"),
-        member("r1", "Team", "d2", "Laptop"),
-    ];
-    let tree = layout(&rows, PathDialect::Posix);
-    let room_names: Vec<&str> = tree.rooms.iter().map(|room| room.name.as_str()).collect();
-    assert_eq!(room_names, ["Team (82f3e9)", "Team (db77fd)"]);
-    let first: Vec<&str> = tree.rooms[0]
-        .devices
-        .iter()
-        .map(|e| e.name.as_str())
-        .collect();
-    assert_eq!(first.len(), 2);
-    assert!(first[0].starts_with("Laptop (") && first[1].starts_with("Laptop ("));
-    let second: Vec<&str> = tree.rooms[1]
-        .devices
-        .iter()
-        .map(|e| e.name.as_str())
-        .collect();
-    assert_eq!(second, ["Laptop"], "a room names its devices on its own");
-    let folder = tree.folder_of("room~r2~d1").expect("folder");
-    assert_eq!(folder, ["Räume", "Team (db77fd)", "Laptop"]);
-    let rooms = [
-        RoomRef {
-            id: "r2".into(),
-            name: "Team".into(),
-        },
-        RoomRef {
-            id: "r1".into(),
-            name: "Team".into(),
-        },
-    ];
-    let by_id = room_folder_names(&rooms, PathDialect::Posix);
-    assert_eq!(by_id["r1"], "Team (82f3e9)");
-    assert_eq!(by_id["r2"], "Team (db77fd)");
 }
