@@ -67,7 +67,10 @@ fn transfer_engine_task_bisync_read_pair_cancel_reaches_both_sides() {
                 flag.store(true, Ordering::SeqCst);
             }
         }));
-    let side_b = FakeRemote::new(b.path(), "pair-b").with_delay(Duration::from_millis(40));
+    // The walks see the cancel through `read_pair`'s watcher, which looks
+    // every 50 ms. Side B learns its folders only after one slow listing, so
+    // the cancel has reached its walk before B could list all thirteen.
+    let side_b = FakeRemote::new(b.path(), "pair-b").with_delay(Duration::from_secs(1));
     let globs = empty_globset();
     let filter = WalkFilter::basic(true, &globs);
 
