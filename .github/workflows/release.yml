@@ -4,8 +4,12 @@ name: Release (assets only, parallel builds)
 # (plan docs/plaene/2026-11-01-idealzustand, D8). Windows, Linux and Android
 # build at the same time on their own runners from one prepared source
 # (version, embedded SSH-agent bundles, license notices); the publish job
-# binds the 26 assets to their hashes, the installer to its payloads, and
-# publishes them as one release: draft, upload, verify, then latest. No build
+# binds the 26 build assets to their hashes, the installer to its payloads,
+# signs a release manifest of them with the SE_UPDATE_SIGNING_KEY secret
+# (release-manifest, release-manifest.sig; checked against the updater's
+# public key), and publishes the 28 assets as one release: draft, upload,
+# verify, then latest. Without the secret the plan job stops before any build
+# and the publish script before any commit, tag or upload. No build
 # is committed to Git: the release commit carries only the version and the
 # prepared sources. dry_run builds and verifies everything into a draft and
 # deletes it again, without commit, tag or visible release.
@@ -44,6 +48,18 @@ jobs:
         with:
           fetch-depth: 0
           ref: main
+
+      # Only whether the secret is set reaches this job (the expression yields
+      # "true" or "false"); the key itself goes to the publish step alone.
+      - name: Require the release signing key
+        env:
+          SIGNING_KEY_PRESENT: ${{ secrets.SE_UPDATE_SIGNING_KEY != '' }}
+        run: |
+          if [ "$SIGNING_KEY_PRESENT" != "true" ]; then
+            echo "::error::The SE_UPDATE_SIGNING_KEY repository secret is missing: the release manifest cannot be signed, so nothing is built or published."
+            exit 1
+          fi
+          echo "Release signing key: present."
 
       - name: Bind to the exact main source and resolve the version
         id: plan
@@ -431,6 +447,10 @@ jobs:
         with:
           path: ${{ runner.temp }}/artifacts
 
-      - name: Assemble, verify and publish the 26 release assets
+      # The signing key is given to this step only; the script moves it out of
+      # the environment before any child process starts and never prints it.
+      - name: Assemble, sign, verify and publish the 28 release assets
         shell: pwsh
+        env:
+          SE_UPDATE_SIGNING_KEY: ${{ secrets.SE_UPDATE_SIGNING_KEY }}
         run: native/publish-release-assets.ps1
