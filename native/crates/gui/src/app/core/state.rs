@@ -13,6 +13,8 @@ type JobConnectEndpoints = (
 type JobConnectRx = Receiver<Result<JobConnectEndpoints, String>>;
 type FileOpenTask = (Receiver<Result<(String, i64), String>>, OpenMode, PathBuf);
 type EditSaveTask = (Receiver<(PathBuf, SaveResult)>, PathBuf);
+type RollbackResult = Result<(String, crate::updater::RollbackDownload), String>;
+type UnsignedPrompt = super::update_unsigned_ui::UnsignedUpdatePrompt;
 type ShareOpenRx =
     Receiver<Result<(String, crate::vfs::BackendHandle, crate::share::ShareStatus), String>>;
 
@@ -289,8 +291,9 @@ pub struct App {
     /// fetched yet; `Some(vec)` = fetched (possibly empty).
     pub(in crate::app) remote_versions: Option<Vec<String>>,
     pub(in crate::app) remote_versions_rx: Option<Receiver<Vec<String>>>,
-    /// Rollback-to-a-released-version download in flight: Ok((version, exe)).
-    pub(in crate::app) rollback_rx: Option<Receiver<Result<(String, PathBuf), String>>>,
+    /// Rollback download in flight; `unsigned_update_prompt` asks per update (E12).
+    pub(in crate::app) rollback_rx: Option<Receiver<RollbackResult>>,
+    pub(in crate::app) unsigned_update_prompt: Option<UnsignedPrompt>,
     /// Newest released version that is strictly newer than the running one, once
     /// the release list has been fetched. Drives the "Update verfügbar" banner
     /// and a one-shot notice, so a newer release is offered automatically
@@ -465,7 +468,7 @@ pub struct App {
     pub(in crate::app) share_export_path_draft: String,
     pub(in crate::app) share_export_label_draft: String,
     pub(in crate::app) share_block_symlink_escape: bool,
-    pub(in crate::app) share_regenerate_direct_confirm: bool,
+    pub(in crate::app) share_code_renewal: super::share::code_renewal_ui::CodeRenewalUi,
     pub(in crate::app) share_diag_log: String,
     pub(in crate::app) share_manual_stop: bool,
     pub(in crate::app) share_poll_rx:

@@ -138,7 +138,12 @@ impl ShareState {
         self.discovery
             .retain_live_offers(&snapshot.discovery_offers);
         self.after_discovery_changes();
-        self.worker = Some(WorkerFacts::from_snapshot(&snapshot));
+        let facts = WorkerFacts::from_snapshot(&snapshot);
+        // E17: the daemon renewed the Direct code; read the identity again.
+        if facts.renewal_changed(self.worker.as_ref()) {
+            self.identity = None;
+        }
+        self.worker = Some(facts);
         // A snapshot drained before the worker reloaded a commit still carries
         // the older profiles; the committed ones stay until the worker has it.
         let stale = reloaded_meanwhile

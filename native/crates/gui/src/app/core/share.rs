@@ -1,3 +1,5 @@
+#[path = "share_code_renewal_ui.rs"]
+pub(in crate::app) mod code_renewal_ui;
 #[path = "share_connections_ui.rs"]
 mod connections_ui;
 #[path = "share_device_page_ui.rs"]

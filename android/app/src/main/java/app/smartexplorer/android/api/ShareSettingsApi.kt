@@ -77,7 +77,10 @@ object ShareSettingsApi {
         Core.call("share.setLanPresence", buildJsonObject { put("enabled", enabled) })
     }
 
-    /** A new Direct code; returns it. Direct authorizations pause until confirmed again. */
+    /**
+     * A new Direct code; returns it. Authorizations stay (E17): each paired device takes the new
+     * data over, and `ShareStatus.codeRenewal` shows the devices that still wait.
+     */
     suspend fun renewCode(): String = Core.request<RenewedCode>("share.renewCode").directCode
 
     @Serializable

@@ -164,6 +164,28 @@ data class ShareWake(
     val reconnected: Boolean = false,
 )
 
+/**
+ * `ShareStatus.codeRenewal` (E17): a running renewal of this device's Direct code. The worker's
+ * texts [summary], [namesLine], [deferredText] and [errorText] are shown as they are, the same wording as the
+ * desktop pages; the numbers are the ones `se share status --json` reports as `code_renewal`.
+ */
+@Serializable
+data class CodeRenewalInfo(
+    val active: Boolean = false,
+    val generation: Long = 0,
+    val pendingDevices: Int = 0,
+    val legacyDevices: Int = 0,
+    val pendingNames: List<String> = emptyList(),
+    val pendingMore: Int = 0,
+    val sinceMs: Long? = null,
+    val deferred: Boolean = false,
+    val error: String? = null,
+    val errorText: String? = null,
+    val summary: String? = null,
+    val namesLine: String? = null,
+    val deferredText: String? = null,
+)
+
 /** `share.status`: the poller's latest snapshot. */
 @Serializable
 data class ShareStatus(
@@ -198,6 +220,8 @@ data class ShareStatus(
     val pendingRights: List<PendingRights> = emptyList(),
     /** The rights of the Direct code; `null`: a device that connects waits for a confirmation. */
     val codeRights: Rights? = null,
+    /** A running Direct-code renewal; `null` without one (E17). */
+    val codeRenewal: CodeRenewalInfo? = null,
 )
 
 /** `share.createRoom` */

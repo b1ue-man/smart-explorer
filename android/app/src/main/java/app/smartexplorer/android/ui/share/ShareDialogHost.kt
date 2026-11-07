@@ -312,8 +312,9 @@ internal fun ShareDialogHost(
         ) { ShareSettingsApi.resetMemberTrust(dialog.room.profileId, dialog.member.deviceId) }
         ShareDialog.RenewCode -> ShareConfirmAction(
             title = "Direct-Code erneuern?",
-            message = "Der bisherige Direct-Code gilt danach nicht mehr. Bestehende Direkt-Freigaben pausieren bis zur erneuten " +
-                "Bestätigung, ihre Befehle werden ausgeschaltet. Der Share-Dienst startet dafür kurz neu.",
+            message = "Der bisherige Direct-Code gilt danach für neue Kontakte nicht mehr. Bestehende Freigaben bleiben; " +
+                "gekoppelte Geräte übernehmen den neuen Code automatisch, Geräte, die offline sind, beim nächsten Verbinden. " +
+                "Der Share-Dienst startet dafür kurz neu.",
             confirm = "Erneuern",
             failure = "Direct-Code nicht erneuert",
             vm = vm,

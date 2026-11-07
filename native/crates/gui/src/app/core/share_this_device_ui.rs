@@ -39,19 +39,19 @@ pub(super) fn ui(app: &mut App, ui: &mut egui::Ui) {
     });
     super::pages_ui::heading(ui, "NEUER DIREKT-CODE");
     if ui.button("Code neu generieren").clicked() {
-        app.share_regenerate_direct_confirm = true;
+        app.share_code_renewal.confirm = true;
     }
-    if app.share_regenerate_direct_confirm {
+    if app.share_code_renewal.confirm {
         ui.colored_label(
             theme::warning(ui),
-            "Ein neuer Code pausiert bestehende Direkt-Freigaben bis zur erneuten Bestaetigung. Exec wird abgeschaltet.",
+            "Ein neuer Code ersetzt den bisherigen für neue Kontakte. Bestehende Freigaben bleiben; gekoppelte Geräte übernehmen den neuen Code automatisch, Geräte, die offline sind, beim nächsten Verbinden.",
         );
         ui.horizontal_wrapped(|ui| {
             if ui.button("Wirklich neu generieren").clicked() {
                 super::identity_rotation::rotate(app);
             }
             if ui.button("Abbrechen").clicked() {
-                app.share_regenerate_direct_confirm = false;
+                app.share_code_renewal.confirm = false;
             }
         });
     }
@@ -116,6 +116,7 @@ fn identity(app: &mut App, ui: &mut egui::Ui) {
             );
         }
     }
+    app.share_code_renewal.devices(ui);
     ui.horizontal_wrapped(|ui| {
         ui.label(format!(
             "Freigegeben: {}",

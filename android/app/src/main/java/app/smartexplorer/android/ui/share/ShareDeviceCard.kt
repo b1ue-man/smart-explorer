@@ -18,6 +18,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.smartexplorer.android.R
+import app.smartexplorer.android.api.CodeRenewalInfo
 import app.smartexplorer.android.api.RightsPresetInfo
 import app.smartexplorer.android.api.SHARE_DIRECT
 import app.smartexplorer.android.api.ShareStatus
@@ -131,6 +132,9 @@ internal fun ThisDeviceCard(
                 style = MaterialTheme.typography.bodySmall,
                 modifier = inset,
             )
+            status.codeRenewal?.let { renewal ->
+                ThisDeviceRenewal(renewal, inset)
+            }
             Row(Modifier.padding(start = 4.dp)) {
                 TextButton(onClick = { actions.setDirectOnline(true) }) { Text("Erreichbar") }
                 TextButton(onClick = { actions.setDirectOnline(false) }) { Text("Nicht erreichbar") }
@@ -146,6 +150,20 @@ internal fun ThisDeviceCard(
                 )
             }
         }
+    }
+}
+
+/**
+ * E17: "Code wird erneuert, n Geräte stehen aus", the pending devices, a waiting further renewal and
+ * a failure of the renewal; the texts come from the worker (same wording as the desktop pages).
+ */
+@Composable
+internal fun ThisDeviceRenewal(renewal: CodeRenewalInfo, modifier: Modifier = Modifier) {
+    renewal.summary?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary, modifier = modifier) }
+    renewal.namesLine?.let { Text(it, style = MaterialTheme.typography.bodySmall, modifier = modifier) }
+    renewal.deferredText?.let { Text(it, style = MaterialTheme.typography.bodySmall, modifier = modifier) }
+    renewal.errorText?.let {
+        Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error, modifier = modifier)
     }
 }
 

@@ -1,5 +1,7 @@
 use clap::Args;
 
+use super::status::code_renewal_output;
+
 const REPAIR_COMMAND: &str = "se share identity --repair";
 
 #[derive(Args)]
@@ -30,7 +32,7 @@ pub(super) struct IdentityArgs {
     direct_online: Option<bool>,
     #[arg(
         long,
-        help = "Create a new direct code: the old invite stops working, existing direct authorizations pause until confirmed again and their Exec turns off"
+        help = "Create a new direct code: the old invite stops working for new contacts; existing authorizations stay and paired devices take over the new code automatically (devices that are offline on their next connection)"
     )]
     rotate_code: bool,
     #[arg(
@@ -75,6 +77,8 @@ pub(super) fn run(args: IdentityArgs) -> Result<(), String> {
         super::checked_profiles()?.code_rights
     };
     let direct_code = identity.direct_code();
+    // E17 (plan M22): the same view the Share worker reports in `se share status`.
+    let renewal = crate::daemon::CodeRenewalView::of(&identity);
     if args.json {
         println!(
             "{}",
@@ -84,6 +88,7 @@ pub(super) fn run(args: IdentityArgs) -> Result<(), String> {
                 "fingerprint": identity.fingerprint,
                 "node_id": identity.node_id,
                 "direct_code": direct_code,
+                "code_renewal": code_renewal_output::value(renewal.as_ref()),
                 "code_rights": code_rights.as_ref().map(super::rights_args::rights_value),
             }))
             .map_err(|error| error.to_string())?
@@ -94,6 +99,9 @@ pub(super) fn run(args: IdentityArgs) -> Result<(), String> {
         println!("fingerprint\t{}", identity.fingerprint);
         println!("node_id\t{}", identity.node_id);
         println!("direct_code\t{direct_code}");
+        for line in code_renewal_output::text_lines(renewal.as_ref()) {
+            println!("{line}");
+        }
         println!("{}", code_rights_line(code_rights.as_ref()));
     }
     Ok(())
@@ -185,8 +193,9 @@ fn repair_identity() -> Result<crate::share::ShareIdentity, String> {
 }
 
 /// „Code neu generieren“ of the desktop page „Dieses Gerät“: the worker is
-/// stopped, the code renewed, pending direct authorizations are paused while
-/// it stays stopped, then the worker returns.
+/// stopped, the code renewed as a transition (E17: authorizations stay, the
+/// old data stay valid for each device until it took the new ones), then the
+/// worker returns.
 fn rotate_direct_code(confirmed: bool) -> Result<crate::share::ShareIdentity, String> {
     if !confirmed {
         confirm_rotation()?;
@@ -206,12 +215,14 @@ fn rotate_direct_code(confirmed: bool) -> Result<crate::share::ShareIdentity, St
     };
     if let Err(error) = identity.complete_pending_cleanup(Some(super::default_home())) {
         return Err(format!(
-            "direct code renewed, but the Share worker stays stopped for safety: direct authorizations could not be paused: {error}"
+            "direct code renewed, but the Share worker stays stopped for safety: the authorization cleanup failed: {error}"
         ));
     }
     restore_share_worker_after_repair(worker)
         .map_err(|error| format!("direct code renewed, but {error}"))?;
-    eprintln!("warning: The direct code was renewed; the old invite is invalid.");
+    eprintln!(
+        "warning: The direct code was renewed; the old invite is invalid for new contacts. Existing authorizations stay."
+    );
     if let Some(warning) = rotation.cleanup_warning {
         eprintln!("warning: {warning}");
     }
@@ -221,7 +232,7 @@ fn rotate_direct_code(confirmed: bool) -> Result<crate::share::ShareIdentity, St
 fn confirm_rotation() -> Result<(), String> {
     use std::io::Write;
     eprintln!(
-        "A new direct code invalidates the old one. Direct authorizations pause until they are confirmed again; their Exec turns off."
+        "A new direct code invalidates the old invite for new contacts. Existing authorizations stay; paired devices take over the new code automatically, devices that are offline on their next connection."
     );
     eprint!("Type YES to renew the direct code: ");
     std::io::stderr()

@@ -4,6 +4,8 @@ use std::collections::{BTreeMap, VecDeque};
 
 use serde_json::{json, Value};
 
+#[path = "share_code_renewal.rs"]
+mod code_renewal;
 #[path = "share_policy_status.rs"]
 mod policy_status;
 
@@ -28,6 +30,8 @@ pub(super) struct WorkerFacts {
     pub lan_presence: String,
     /// This device's Remote Desktop self-setup lines (design 3.4).
     pub rdp_setup: Vec<String>,
+    /// A running Direct-code renewal of this device (E17).
+    pub code_renewal: Option<crate::daemon::CodeRenewalView>,
 }
 
 impl WorkerFacts {
@@ -43,7 +47,17 @@ impl WorkerFacts {
                 .as_ref()
                 .map(|setup| setup.lines())
                 .unwrap_or_default(),
+            code_renewal: snapshot.code_renewal.clone(),
         }
+    }
+
+    /// The daemon renewed the Direct code since `previous` (E17): the cached
+    /// identity shows the old code until it is read again.
+    pub(super) fn renewal_changed(&self, previous: Option<&WorkerFacts>) -> bool {
+        code_renewal::changed(
+            self.code_renewal.as_ref(),
+            previous.and_then(|facts| facts.code_renewal.as_ref()),
+        )
     }
 }
 
@@ -302,6 +316,7 @@ pub(super) fn status_json(input: &StatusInput<'_>) -> Value {
         "server": (!server.is_empty()).then_some(server),
         "lanPresence": lan_presence,
         "rdpSetup": (!worker.rdp_setup.is_empty()).then(|| worker.rdp_setup.join("\n")),
+        "codeRenewal": code_renewal::value(worker.code_renewal.as_ref()),
         "identity": identity,
         "devices": devices,
         "execProvider": provider_json(input.exec_provider),

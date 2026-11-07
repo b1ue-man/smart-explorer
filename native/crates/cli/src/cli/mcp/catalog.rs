@@ -69,7 +69,7 @@ const MAX_BYTES: &str = "Payload budget of this answer in bytes (default 20000).
 pub(super) fn tools() -> Vec<Tool> {
     let tools = vec![
         tool("status", "Smart Explorer status",
-            "Version, installation and app-data paths, credential store, background worker (login start, pause, check interval, automatic pause), number of sync setups, Share worker and connectivity state. Use it when a connection, peer, sync or remote command does not work.",
+            "Version, installation and app-data paths, credential store, background worker (login start, pause, check interval, automatic pause), number of sync setups, Share worker and connectivity state, a running Direct-code renewal with the devices it still waits for (`share.code_renewal`, null without one). Use it when a connection, peer, sync or remote command does not work.",
             json!({}), &[], read_only(false)),
         tool("connections", "Saved remotes and Share peers",
             "Every saved remote and Share peer/room with the target prefix to use, its live status, and how commands run there: `exec: \"ssh\"` for saved SFTP remotes (the remote login shell), `exec: \"share\"` for Share peers (works once that device granted this one Exec).",

@@ -166,6 +166,8 @@ impl App {
         self.share_worker_relay_url = snapshot.relay_url;
         self.share_worker_candidates = snapshot.candidates;
         self.share_lan_status = snapshot.lan;
+        // E17: Direkt-Code renewal state; a new generation reloads the identity.
+        self.apply_code_renewal(snapshot.code_renewal);
         if self
             .share_profiles
             .legacy_direct_requests

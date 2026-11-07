@@ -112,6 +112,7 @@ impl App {
             });
         });
         ui.add(egui::Label::new(RichText::new(&self.share_status).color(theme::muted(ui))).wrap());
+        self.share_code_renewal.banner(ui);
     }
 }
 

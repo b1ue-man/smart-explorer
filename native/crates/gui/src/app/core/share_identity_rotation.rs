@@ -37,7 +37,7 @@ pub(super) fn rotate(app: &mut App) {
 }
 
 fn finish_success(app: &mut App, worker: WorkerState, outcome: crate::share::DirectCodeRotation) {
-    app.share_regenerate_direct_confirm = false;
+    app.share_code_renewal.confirm = false;
     let cleanup = app
         .share_identity
         .clone()
@@ -63,7 +63,7 @@ fn finish_success(app: &mut App, worker: WorkerState, outcome: crate::share::Dir
         return;
     }
     app.notice = Some((
-        "Direkt-Code dauerhaft erneuert".into(),
+        "Direkt-Code erneuert, gekoppelte Geräte übernehmen ihn automatisch".into(),
         std::time::Instant::now(),
     ));
     if let Some(warning) = outcome.cleanup_warning {

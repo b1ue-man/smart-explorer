@@ -139,8 +139,9 @@ pub(super) fn set_lan_presence(rt: &Runtime, args: &Value) -> Result<Value, ApiE
 }
 
 /// `share.renewCode {}`: a new direct code. The worker stops, the code is
-/// renewed and direct authorizations pause (Exec off) while it stays
-/// stopped; then the worker returns (desktop „Code neu generieren“).
+/// renewed as a transition (E17: authorizations stay, each device takes the
+/// new data over and the status shows `codeRenewal` until all did); then the
+/// worker returns (desktop „Code neu generieren“).
 pub(super) fn renew_code(rt: &Runtime) -> Result<Value, ApiError> {
     let mut identity = super::share_state::identity()?;
     let worker_was_running = stop_worker()?;

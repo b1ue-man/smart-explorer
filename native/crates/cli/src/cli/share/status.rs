@@ -2,6 +2,9 @@ use clap::Args;
 
 use super::{discoverable_output, grants, lifecycle_output};
 
+#[path = "code_renewal_output.rs"]
+pub(super) mod code_renewal_output;
+
 const RECENT_TEXT_EVENTS: usize = 20;
 
 #[derive(Args, Default)]
@@ -116,6 +119,9 @@ fn json_value(
             .map(|entry| super::requests_legacy::value(entry, profiles))
             .collect::<Vec<_>>(),
         "events": snapshot.events.iter().filter_map(public_event).collect::<Vec<_>>(),
+        // E17 (plan M22): Direct-code renewal and the devices it waits for;
+        // `null` without one (also while the worker cannot be reached).
+        "code_renewal": code_renewal_output::value(snapshot.code_renewal.as_ref()),
         "discoverable": discoverable_values(snapshot, profiles),
         // This host's Remote Desktop self-setup: running (an administrator
         // prompt of Smart Explorer may be open), last result, failure.
@@ -165,6 +171,9 @@ fn print_text(
             .unwrap_or("-")
     );
     println!("relay_url\t{}", snapshot.relay_url);
+    for line in code_renewal_output::text_lines(snapshot.code_renewal.as_ref()) {
+        println!("{line}");
+    }
     for line in snapshot.rdp_setup.iter().flat_map(|setup| setup.lines()) {
         println!("rdp_setup\t{}", clean(&line));
     }
