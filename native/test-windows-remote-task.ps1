@@ -199,7 +199,7 @@ $requiredCases = @(
     'windows_remote_task_analysis_progress_retains_stalls_and_actual_counters',
     'windows_remote_task_analysis_ui_keeps_evidence_until_worker_completion',
     'windows_remote_task_analysis_combines_export_roots_and_rejects_escape',
-    'windows_remote_task_analysis_cancel_closes_queued_peer_request',
+    'windows_remote_task_analysis_precancel_preserves_browsing',
     'windows_remote_task_local_scan_keeps_partial_results_and_live_counts',
     'windows_remote_task_analysis_preserves_junction_boundary_and_plain_directories'
 )

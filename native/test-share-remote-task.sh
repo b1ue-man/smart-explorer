@@ -87,7 +87,7 @@ run_task() {
 
 native_tests=(
     share_remote_task_discovery_wire_fixture_roundtrips
-    share_remote_task_discovery_accepts_empty_and_zero_pin
+    share_remote_task_pake_primitive_accepts_empty_and_zero_bytes
     share_remote_task_discovery_rejects_wrong_pin_tamper_replay_and_binding
     share_remote_task_discovery_lease_renewal_exchange_order_and_rejections
     share_remote_task_discovery_persists_direct_and_room_relations_idempotently
@@ -95,17 +95,23 @@ native_tests=(
     share_remote_task_reciprocal_direct_repairs_legacy_pins_and_retries_idempotently
     share_remote_task_reciprocal_direct_denial_unsupported_and_identity_conflict_fail_closed
     share_remote_task_legacy_direct_autoaccept_retry_tombstone_and_denial
-    share_remote_task_reciprocal_incoming_auth_is_reread_after_transition_permit
     share_remote_task_reciprocal_stale_generation_sends_no_repair_hello
     share_remote_task_reciprocal_direct_offline_snapshot_plans_nothing
     share_remote_task_reciprocal_exec_grant_epoch_resynchronizes_coordinator
-    share_remote_task_reciprocal_timeout_holds_transition_and_incoming_slots_until_store_finishes
     share_remote_task_reciprocal_full_event_channel_does_not_block_tokio_worker
     share_remote_task_storage_snapshot_finished_tree_and_legacy_fallback
     share_remote_task_storage_snapshot_corruption_is_rejected
     share_remote_task_remote_context_menu_plans_actions_and_open_with_boundary
     share_remote_task_discovery_ui_tracks_duration_list_renewal_and_cancel
     share_remote_task_discovery_ui_retains_pending_and_prunes_rotated_terminal_records
+)
+
+# The two reciprocal admission cases became review_task_ tests on 2026-10-03
+# (the authorization is reread at the durable write; the permits are held
+# until the store finishes) and run by their exact paths.
+reciprocal_tests=(
+    review_task_reciprocal_auth_is_reread_only_at_durable_write
+    review_task_reciprocal_timeout_holds_permits_until_store_finishes
 )
 
 server_tests=(
@@ -168,6 +174,15 @@ fi
     run_task cargo test --locked --no-fail-fast --workspace --exclude smart_explorer_android --exclude smart_explorer --lib share_remote_task_ -- --test-threads=1
 ) 2>&1 | tee "$native_log"
 verify_test_log "$native_log" "${#native_tests[@]}" "${native_tests[@]}"
+
+echo "share/remote task suite: reciprocal admission and store permits"
+(
+    cd "$repo_root/native"
+    run_task cargo test --locked --no-fail-fast --workspace --exclude smart_explorer_android --exclude smart_explorer --lib -- --test-threads=1 --exact \
+        share::direct_reciprocal_transport::task_tests::review_task_reciprocal_auth_is_reread_only_at_durable_write \
+        share::direct_reciprocal_transport::task_tests::review_task_reciprocal_timeout_holds_permits_until_store_finishes
+) 2>&1 | tee "$native_log"
+verify_test_log "$native_log" "${#reciprocal_tests[@]}" "${reciprocal_tests[@]}"
 
 echo "share/remote task suite: corrected legacy authorization regressions"
 (

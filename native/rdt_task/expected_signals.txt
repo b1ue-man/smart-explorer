@@ -1543,6 +1543,166 @@ vault_task_klartext_drive_actions_leave_no_marker linux-root:vault-klartext-driv
 mcp_task_spool_file_holds_no_plaintext  linux-core:unit,windows-core:unit  pfad=cli::mcp::spool::tests::mcp_task_spool_file_holds_no_plaintext  quelle=Code,K49
 mcp_task_spool_reads_pages_from_any_offset  linux-core:unit,windows-core:unit  pfad=cli::mcp::spool::tests::mcp_task_spool_reads_pages_from_any_offset  quelle=Code,K49
 
+# ---- SUITES-ALT (2026-11-07): Bibliothekstests mit Praefix speed_task_ des Stapels vom 2026-10-28 (Pfade aus
+# crates-task-Lauf 42334997380). Plattformuebergreifende Tests stehen wie die E13-Eintraege unter linux-core:unit,
+# der eine nur unter Windows kompilierte unter windows-core:unit. Die #[ignore]-Benchmarks laufen hier als
+# Funktionspruefung im Entwicklungsprofil (ignored threads=1, wie speed_task_smb_segments_end_to_end); ihre Messung im
+# Release-Profil bleibt in .github/workflows/build-measure.yml ----
+speed_task_batch_status_unconfirmed_outcomes_never_refuse_a_new_batch  linux-core:unit  pfad=share::server::batch_status::tests::speed_task_batch_status_unconfirmed_outcomes_never_refuse_a_new_batch  quelle=SUITES-ALT,Code
+speed_task_bulk_folders_create_a_deep_path_in_one_request      linux-core:unit  pfad=transfer::engine::test_backend::evidence_tests::speed_task_bulk_folders_create_a_deep_path_in_one_request  quelle=SUITES-ALT,Code
+speed_task_bulk_folders_merge_into_existing_folders            linux-core:unit  pfad=transfer::engine::test_backend::evidence_tests::speed_task_bulk_folders_merge_into_existing_folders  quelle=SUITES-ALT,Code
+speed_task_crash_log_converts_an_old_format_job_directory      linux-core:unit  pfad=transfer::engine::file_recovery::log_tests::speed_task_crash_log_converts_an_old_format_job_directory  quelle=SUITES-ALT,Code
+speed_task_crash_log_intent_without_publication_discards_the_stage  linux-core:unit  pfad=transfer::engine::file_recovery::log_tests::speed_task_crash_log_intent_without_publication_discards_the_stage  quelle=SUITES-ALT,Code
+speed_task_crash_log_packet_intents_are_one_record_and_host_evidence_acknowledges  linux-core:unit  pfad=transfer::engine::file_recovery::log_tests::speed_task_crash_log_packet_intents_are_one_record_and_host_evidence_acknowledges  quelle=SUITES-ALT,Code
+speed_task_crash_log_publication_without_acknowledgement_is_decided_by_metadata  linux-core:unit  pfad=transfer::engine::file_recovery::log_tests::speed_task_crash_log_publication_without_acknowledgement_is_decided_by_metadata  quelle=SUITES-ALT,Code
+speed_task_crash_log_torn_last_record_is_cut_and_the_file_stays_in_doubt  linux-core:unit  pfad=transfer::engine::file_recovery::log_tests::speed_task_crash_log_torn_last_record_is_cut_and_the_file_stays_in_doubt  quelle=SUITES-ALT,Code
+speed_task_drive_absent_engine_name_race_lands_numbered_and_never_shares  linux-core:unit  pfad=gdrive::absent_engine_task_tests::speed_task_drive_absent_engine_name_race_lands_numbered_and_never_shares  quelle=SUITES-ALT,Code
+speed_task_drive_absent_engine_upload_takes_one_write_request  linux-core:unit  pfad=gdrive::absent_engine_task_tests::speed_task_drive_absent_engine_upload_takes_one_write_request  quelle=SUITES-ALT,Code
+speed_task_drive_absent_file_takes_one_write_request           linux-core:unit  pfad=gdrive::absent_write_tests::speed_task_drive_absent_file_takes_one_write_request  quelle=SUITES-ALT,Code
+speed_task_drive_absent_name_proof                             linux-core:unit  pfad=gdrive::absent_write::tests::speed_task_drive_absent_name_proof  quelle=SUITES-ALT,Code
+speed_task_drive_absent_name_race_trashes_own_object_and_reports_taken  linux-core:unit  pfad=gdrive::absent_write_tests::speed_task_drive_absent_name_race_trashes_own_object_and_reports_taken  quelle=SUITES-ALT,Code
+speed_task_drive_absent_taken_before_create_is_never_shared    linux-core:unit  pfad=gdrive::absent_write_tests::speed_task_drive_absent_taken_before_create_is_never_shared  quelle=SUITES-ALT,Code
+speed_task_drive_bulk_copy_keeps_every_byte_across_block_edges  linux-core:unit  pfad=mount::bulk_copy::tests::speed_task_drive_bulk_copy_keeps_every_byte_across_block_edges  quelle=SUITES-ALT,Code
+speed_task_drive_change_during_download_fails_reads            linux-core:unit  pfad=mount::hydration::task_tests::speed_task_drive_change_during_download_fails_reads  quelle=SUITES-ALT,Code
+speed_task_drive_first_read_does_not_wait_for_download         linux-core:unit  pfad=mount::hydration::task_tests::speed_task_drive_first_read_does_not_wait_for_download  quelle=SUITES-ALT,Code
+speed_task_drive_gate_admits_full_pool_capacity                linux-core:unit  pfad=daemon::mount_request_gate::task_tests::speed_task_drive_gate_admits_full_pool_capacity  quelle=SUITES-ALT,Code
+speed_task_drive_gate_keeps_a_slot_for_metadata_behind_streams  linux-core:unit  pfad=daemon::mount_request_gate::task_tests::speed_task_drive_gate_keeps_a_slot_for_metadata_behind_streams  quelle=SUITES-ALT,Code
+speed_task_drive_gate_waits_without_deadline                   linux-core:unit  pfad=daemon::mount_request_gate::task_tests::speed_task_drive_gate_waits_without_deadline  quelle=SUITES-ALT,Code
+speed_task_drive_large_upload_sends_while_the_next_chunk_fills_byte_exact  linux-core:unit  pfad=gdrive::transfer_engine_task_tests::speed_task_drive_large_upload_sends_while_the_next_chunk_fills_byte_exact  quelle=SUITES-ALT,Code
+speed_task_drive_pacer_learns_only_from_refusals               linux-core:unit  pfad=gdrive::create_pacer::tests::speed_task_drive_pacer_learns_only_from_refusals  quelle=SUITES-ALT,Code
+speed_task_drive_pacer_wait_ends_at_cancel_and_gives_the_slot_back  linux-core:unit  pfad=gdrive::create_pacer::tests::speed_task_drive_pacer_wait_ends_at_cancel_and_gives_the_slot_back  quelle=SUITES-ALT,Code
+speed_task_drive_write_and_read_throughput                     linux-core:unit  ignored threads=1 pfad=mount::drive_speed_task_tests::speed_task_drive_write_and_read_throughput  quelle=SUITES-ALT,Code
+speed_task_drive_write_back_and_first_byte                     linux-core:unit  ignored threads=1 pfad=mount::drive_speed_task_tests::speed_task_drive_write_back_and_first_byte  quelle=SUITES-ALT,Code
+speed_task_drive_write_back_keeps_remote_change_as_conflict    linux-core:unit  pfad=mount::upload_queue::task_tests::speed_task_drive_write_back_keeps_remote_change_as_conflict  quelle=SUITES-ALT,Code
+speed_task_drive_write_back_publishes_newest_content           linux-core:unit  pfad=mount::upload_queue::task_tests::speed_task_drive_write_back_publishes_newest_content  quelle=SUITES-ALT,Code
+speed_task_drive_write_back_resumes_after_a_crash              linux-core:unit  pfad=mount::upload_queue::task_tests::speed_task_drive_write_back_resumes_after_a_crash  quelle=SUITES-ALT,Code
+speed_task_evidence_download_members_cost_no_requests          linux-core:unit  pfad=transfer::engine::test_backend::evidence_tests::speed_task_evidence_download_members_cost_no_requests  quelle=SUITES-ALT,Code
+speed_task_evidence_download_without_capability_keeps_its_requests  linux-core:unit  pfad=transfer::engine::test_backend::evidence_tests::speed_task_evidence_download_without_capability_keeps_its_requests  quelle=SUITES-ALT,Code
+speed_task_evidence_upload_members_cost_no_requests            linux-core:unit  pfad=transfer::engine::test_backend::evidence_tests::speed_task_evidence_upload_members_cost_no_requests  quelle=SUITES-ALT,Code
+speed_task_evidence_upload_without_capability_keeps_its_requests  linux-core:unit  pfad=transfer::engine::test_backend::evidence_tests::speed_task_evidence_upload_without_capability_keeps_its_requests  quelle=SUITES-ALT,Code
+speed_task_ftp_connect_returns_other_errors_and_the_shortage_at_the_deadline  linux-core:unit  pfad=ftp::local_address::tests::speed_task_ftp_connect_returns_other_errors_and_the_shortage_at_the_deadline  quelle=SUITES-ALT,Code
+speed_task_ftp_connect_waits_out_a_missing_local_address       linux-core:unit  pfad=ftp::local_address::tests::speed_task_ftp_connect_waits_out_a_missing_local_address  quelle=SUITES-ALT,Code
+speed_task_ftp_listing_probes_every_row_once_on_pool_connections  linux-core:unit  pfad=ftp::speed_task_ftp_tests::speed_task_ftp_listing_probes_every_row_once_on_pool_connections  quelle=SUITES-ALT,Code
+speed_task_ftp_name_cache_lives_only_within_a_scope            linux-core:unit  pfad=ftp::name_cache::tests::speed_task_ftp_name_cache_lives_only_within_a_scope  quelle=SUITES-ALT,Code
+speed_task_ftp_pair_listing_only_for_plain_names_in_one_folder  linux-core:unit  pfad=ftp::pair_listing::tests::speed_task_ftp_pair_listing_only_for_plain_names_in_one_folder  quelle=SUITES-ALT,Code
+speed_task_ftp_probe_helpers_grow_with_the_square_root         linux-core:unit  pfad=ftp::speed_task_ftp_tests::speed_task_ftp_probe_helpers_grow_with_the_square_root  quelle=SUITES-ALT,Code
+speed_task_ftp_publish_by_pattern_still_refuses_an_existing_destination  linux-core:unit  pfad=ftp::speed_task_ftp_tests::speed_task_ftp_publish_by_pattern_still_refuses_an_existing_destination  quelle=SUITES-ALT,Code
+speed_task_ftp_publish_without_mlst_lists_only_the_stage_and_its_name  linux-core:unit  pfad=ftp::speed_task_ftp_tests::speed_task_ftp_publish_without_mlst_lists_only_the_stage_and_its_name  quelle=SUITES-ALT,Code
+speed_task_local_cli_unrecoverable_5000_small_files            linux-core:unit  ignored threads=1 pfad=transfer::engine::speed_task_tests::speed_task_local_cli_unrecoverable_5000_small_files  quelle=SUITES-ALT,Code
+speed_task_local_clipboard_streams_are_read_while_the_gui_thread_is_busy  windows-core:unit  pfad=virtual_clipboard::imp::local_worker::tests::speed_task_local_clipboard_streams_are_read_while_the_gui_thread_is_busy  quelle=SUITES-ALT,Code
+speed_task_local_durable_move_across_real_file_systems_is_byte_exact  linux-core:unit  pfad=copy::imp::safe_file::durable_ranges_tests::speed_task_local_durable_move_across_real_file_systems_is_byte_exact  quelle=SUITES-ALT,Code
+speed_task_local_durable_move_to_another_volume_uses_range_threads_byte_exact  linux-core:unit  pfad=copy::imp::safe_file::durable_ranges_tests::speed_task_local_durable_move_to_another_volume_uses_range_threads_byte_exact  quelle=SUITES-ALT,Code
+speed_task_local_durable_new_copy_keeps_its_threads            linux-core:unit  pfad=copy::imp::safe_file::durable_ranges_tests::speed_task_local_durable_new_copy_keeps_its_threads  quelle=SUITES-ALT,Code
+speed_task_local_durable_replacement_uses_range_threads_byte_exact  linux-core:unit  pfad=copy::imp::safe_file::durable_ranges_tests::speed_task_local_durable_replacement_uses_range_threads_byte_exact  quelle=SUITES-ALT,Code
+speed_task_local_gui_recoverable_5000_small_files              linux-core:unit  ignored threads=1 pfad=transfer::engine::speed_task_tests::speed_task_local_gui_recoverable_5000_small_files  quelle=SUITES-ALT,Code
+speed_task_local_large_overwrite                               linux-core:unit  ignored threads=1 pfad=transfer::engine::batch::local_packet::benches::speed_task_local_large_overwrite  quelle=SUITES-ALT,Code
+speed_task_local_medium_gui_without_packets                    linux-core:unit  ignored threads=1 pfad=transfer::engine::batch::local_packet::benches::speed_task_local_medium_gui_without_packets  quelle=SUITES-ALT,Code
+speed_task_local_move_crosses_volumes_only_between_two_known_devices  linux-core:unit  pfad=transfer::engine::local::move_extras_tests::speed_task_local_move_crosses_volumes_only_between_two_known_devices  quelle=SUITES-ALT,Code
+speed_task_local_move_engine_grants_threads_only_across_volumes  linux-core:unit  pfad=transfer::engine::local::move_extras_tests::speed_task_local_move_engine_grants_threads_only_across_volumes  quelle=SUITES-ALT,Code
+speed_task_local_packet_cancel_mid_packet_publishes_no_more_and_resumes  linux-core:unit  pfad=transfer::engine::batch::local_packet::tests::speed_task_local_packet_cancel_mid_packet_publishes_no_more_and_resumes  quelle=SUITES-ALT,Code
+speed_task_local_packet_crash_after_the_intent_publishes_nothing_twice  linux-core:unit  pfad=transfer::engine::batch::local_packet::tests::speed_task_local_packet_crash_after_the_intent_publishes_nothing_twice  quelle=SUITES-ALT,Code
+speed_task_local_packet_crash_before_acknowledgements_loses_nothing  linux-core:unit  pfad=transfer::engine::batch::local_packet::tests::speed_task_local_packet_crash_before_acknowledgements_loses_nothing  quelle=SUITES-ALT,Code
+speed_task_local_packet_job_packs_small_files                  linux-core:unit  pfad=transfer::engine::batch::local_packet::tests::speed_task_local_packet_job_packs_small_files  quelle=SUITES-ALT,Code
+speed_task_local_packet_keep_both_numbers_inside_the_packet    linux-core:unit  pfad=transfer::engine::batch::local_packet::tests::speed_task_local_packet_keep_both_numbers_inside_the_packet  quelle=SUITES-ALT,Code
+speed_task_local_packet_takes_its_fair_share_of_the_queue      linux-core:unit  pfad=transfer::engine::batch::local_packet::tests::speed_task_local_packet_takes_its_fair_share_of_the_queue  quelle=SUITES-ALT,Code
+speed_task_local_small_gui_second_paste_numbers_every_file     linux-core:unit  ignored threads=1 pfad=transfer::engine::batch::local_packet::benches::speed_task_local_small_gui_second_paste_numbers_every_file  quelle=SUITES-ALT,Code
+speed_task_local_small_gui_without_packets                     linux-core:unit  ignored threads=1 pfad=transfer::engine::batch::local_packet::benches::speed_task_local_small_gui_without_packets  quelle=SUITES-ALT,Code
+speed_task_log_crc_matches_the_reference_value                 linux-core:unit  pfad=transfer::engine::file_recovery::crash_log::tests::speed_task_log_crc_matches_the_reference_value  quelle=SUITES-ALT,Code
+speed_task_log_cuts_a_torn_end_and_keeps_appending             linux-core:unit  pfad=transfer::engine::file_recovery::crash_log::tests::speed_task_log_cuts_a_torn_end_and_keeps_appending  quelle=SUITES-ALT,Code
+speed_task_log_damaged_record_ends_the_log                     linux-core:unit  pfad=transfer::engine::file_recovery::crash_log::tests::speed_task_log_damaged_record_ends_the_log  quelle=SUITES-ALT,Code
+speed_task_lz4_share_link_measures_per_writer                  linux-core:unit  pfad=share::framing::lz4_stream::link::tests::speed_task_lz4_share_link_measures_per_writer  quelle=SUITES-ALT,Code
+speed_task_lz4_share_link_shares_samples_between_streams       linux-core:unit  pfad=share::framing::lz4_stream::link::tests::speed_task_lz4_share_link_shares_samples_between_streams  quelle=SUITES-ALT,Code
+speed_task_publish_queue_publishes_off_the_stream_without_replacing  linux-core:unit  pfad=transfer::engine::speed_task_tests::speed_task_publish_queue_publishes_off_the_stream_without_replacing  quelle=SUITES-ALT,Code
+speed_task_remote_to_remote_packets_2000_small_files           linux-core:unit  ignored threads=1 pfad=transfer::engine::batch_remote::tests::speed_task_remote_to_remote_packets_2000_small_files  quelle=SUITES-ALT,Code
+speed_task_remote_to_remote_single_files_2000_small_files      linux-core:unit  ignored threads=1 pfad=transfer::engine::batch_remote::tests::speed_task_remote_to_remote_single_files_2000_small_files  quelle=SUITES-ALT,Code
+speed_task_service_pool_counts_running_requests_and_reports_failures  linux-core:unit  pfad=daemon::backend_server::backend_pool::tests::speed_task_service_pool_counts_running_requests_and_reports_failures  quelle=SUITES-ALT,Code
+speed_task_service_pool_reuses_threads_and_joins_every_request  linux-core:unit  pfad=daemon::backend_server::backend_pool::tests::speed_task_service_pool_reuses_threads_and_joins_every_request  quelle=SUITES-ALT,Code
+speed_task_service_pool_shutdown_runs_queued_requests          linux-core:unit  pfad=daemon::backend_server::backend_pool::tests::speed_task_service_pool_shutdown_runs_queued_requests  quelle=SUITES-ALT,Code
+speed_task_sftp_agent_extra_login_only_for_a_quick_plain_identity  linux-core:unit  pfad=sftp::agent_grant::tests::speed_task_sftp_agent_extra_login_only_for_a_quick_plain_identity  quelle=SUITES-ALT,Code
+speed_task_sftp_agent_grant_is_per_account_and_revocable       linux-core:unit  pfad=sftp::agent_grant::tests::speed_task_sftp_agent_grant_is_per_account_and_revocable  quelle=SUITES-ALT,Code
+speed_task_sftp_budget_follows_a_smaller_server_limit          linux-core:unit  pfad=sftp::handle_budget_tests::speed_task_sftp_budget_follows_a_smaller_server_limit  quelle=SUITES-ALT,Code
+speed_task_sftp_budget_keeps_every_handle_usable               linux-core:unit  pfad=sftp::handle_budget_tests::speed_task_sftp_budget_keeps_every_handle_usable  quelle=SUITES-ALT,Code
+speed_task_sftp_evidence_only_for_regular_files_with_size      linux-core:unit  pfad=sftp::stage_evidence::tests::speed_task_sftp_evidence_only_for_regular_files_with_size  quelle=SUITES-ALT,Code
+speed_task_sftp_extra_connection_host_key_mismatch_ends_only_that_attempt  linux-core:unit  pfad=sftp::extra_link_tests::speed_task_sftp_extra_connection_host_key_mismatch_ends_only_that_attempt  quelle=SUITES-ALT,Code
+speed_task_sftp_extra_connection_logs_in_with_the_main_host_key  linux-core:unit  pfad=sftp::extra_link_tests::speed_task_sftp_extra_connection_logs_in_with_the_main_host_key  quelle=SUITES-ALT,Code
+speed_task_sftp_finish_judges_what_the_server_kept             linux-core:unit  pfad=sftp::stage_finish::tests::speed_task_sftp_finish_judges_what_the_server_kept  quelle=SUITES-ALT,Code
+speed_task_sftp_finish_keeps_atime_and_masks_the_mode          linux-core:unit  pfad=sftp::stage_finish::tests::speed_task_sftp_finish_keeps_atime_and_masks_the_mode  quelle=SUITES-ALT,Code
+speed_task_sftp_growth_is_judged_after_the_first_byte_of_the_new_connection  linux-core:unit  pfad=sftp::link_tests::speed_task_sftp_growth_is_judged_after_the_first_byte_of_the_new_connection  quelle=SUITES-ALT,Code
+speed_task_sftp_handle_budget_stays_representable              linux-core:unit  pfad=sftp::handle_budget::tests::speed_task_sftp_handle_budget_stays_representable  quelle=SUITES-ALT,Code
+speed_task_sftp_mkdir_all_components_from_the_top              linux-core:unit  pfad=sftp::transfer_ops::tests::speed_task_sftp_mkdir_all_components_from_the_top  quelle=SUITES-ALT,Code
+speed_task_sftp_mkdir_all_starts_at_the_deepest_existing_folder  linux-core:unit  pfad=sftp::transfer_ops::tests::speed_task_sftp_mkdir_all_starts_at_the_deepest_existing_folder  quelle=SUITES-ALT,Code
+speed_task_sftp_raw_handles_from_slot_128_fail_like_the_measurement  linux-core:unit  pfad=sftp::handle_budget_tests::speed_task_sftp_raw_handles_from_slot_128_fail_like_the_measurement  quelle=SUITES-ALT,Code
+speed_task_sftp_stage_destination_only_for_engine_stages       linux-core:unit  pfad=sftp::stage_evidence::tests::speed_task_sftp_stage_destination_only_for_engine_stages  quelle=SUITES-ALT,Code
+speed_task_sftp_written_stages_keep_evidence_until_forgotten   linux-core:unit  pfad=sftp::stage_evidence::tests::speed_task_sftp_written_stages_keep_evidence_until_forgotten  quelle=SUITES-ALT,Code
+speed_task_share_auth_changed_local_identity_recomputes        linux-core:unit  pfad=share::session::authorize::tests::speed_task_share_auth_changed_local_identity_recomputes  quelle=SUITES-ALT,Code
+speed_task_share_auth_changed_peer_key_material_recomputes     linux-core:unit  pfad=share::session::authorize::tests::speed_task_share_auth_changed_peer_key_material_recomputes  quelle=SUITES-ALT,Code
+speed_task_share_auth_memo_is_filled_by_the_first_check        linux-core:unit  pfad=share::session::authorize::tests::speed_task_share_auth_memo_is_filled_by_the_first_check  quelle=SUITES-ALT,Code
+speed_task_share_auth_offline_and_secret_change_fail_the_next_check  linux-core:unit  pfad=share::session::authorize::tests::speed_task_share_auth_offline_and_secret_change_fail_the_next_check  quelle=SUITES-ALT,Code
+speed_task_share_auth_revoked_grant_fails_the_next_check       linux-core:unit  pfad=share::session::authorize::tests::speed_task_share_auth_revoked_grant_fails_the_next_check  quelle=SUITES-ALT,Code
+speed_task_share_auth_write_right_follows_the_current_grant    linux-core:unit  pfad=share::session::authorize::tests::speed_task_share_auth_write_right_follows_the_current_grant  quelle=SUITES-ALT,Code
+speed_task_share_bulk_connections_carry_transfers              linux-core:unit  pfad=share::copy_paste_task_fixture::speed_task_share_kp5_tests::speed_task_share_bulk_connections_carry_transfers  quelle=SUITES-ALT,Code
+speed_task_share_create_dirs_reports_created_folders           linux-core:unit  pfad=share::copy_paste_task_fixture::evidence_task_tests::speed_task_share_create_dirs_reports_created_folders  quelle=SUITES-ALT,Code
+speed_task_share_host_paths_refuse_parent_segments             linux-core:unit  pfad=share::fs_host_policy_task_tests::speed_task_share_host_paths_refuse_parent_segments  quelle=SUITES-ALT,Code
+speed_task_share_host_policy_cache_keeps_link_confinement      linux-core:unit  pfad=share::fs_host_policy_task_tests::speed_task_share_host_policy_cache_keeps_link_confinement  quelle=SUITES-ALT,Code
+speed_task_share_large_file_512m                               linux-core:unit  ignored threads=1 pfad=share::copy_paste_task_fixture::speed_task_share_tests::speed_task_share_large_file_512m  quelle=SUITES-ALT,Code
+speed_task_share_packets_pass_the_proxy                        linux-core:unit  pfad=share::copy_paste_task_fixture::speed_task_share_tests::speed_task_share_packets_pass_the_proxy  quelle=SUITES-ALT,Code
+speed_task_share_put_batch_evidence_equals_separate_requests   linux-core:unit  pfad=share::copy_paste_task_fixture::evidence_task_tests::speed_task_share_put_batch_evidence_equals_separate_requests  quelle=SUITES-ALT,Code
+speed_task_share_read_evidence_equals_separate_requests        linux-core:unit  pfad=share::copy_paste_task_fixture::evidence_task_tests::speed_task_share_read_evidence_equals_separate_requests  quelle=SUITES-ALT,Code
+speed_task_share_revoked_grant_stops_the_running_read          linux-core:unit  pfad=share::copy_paste_task_fixture::speed_task_share_kp5_tests::speed_task_share_revoked_grant_stops_the_running_read  quelle=SUITES-ALT,Code
+speed_task_share_single_file_goes_as_a_packet_of_one           linux-core:unit  pfad=share::copy_paste_task_fixture::speed_task_share_kp5_tests::speed_task_share_single_file_goes_as_a_packet_of_one  quelle=SUITES-ALT,Code
+speed_task_share_small_files_4k                                linux-core:unit  ignored threads=1 pfad=share::copy_paste_task_fixture::speed_task_share_tests::speed_task_share_small_files_4k  quelle=SUITES-ALT,Code
+speed_task_share_stage_and_promote_evidence                    linux-core:unit  pfad=share::copy_paste_task_fixture::evidence_task_tests::speed_task_share_stage_and_promote_evidence  quelle=SUITES-ALT,Code
+speed_task_share_withdrawn_write_right_stops_the_running_upload  linux-core:unit  pfad=share::copy_paste_task_fixture::speed_task_share_kp5_tests::speed_task_share_withdrawn_write_right_stops_the_running_upload  quelle=SUITES-ALT,Code
+speed_task_single_put_lost_answer_is_never_sent_again          linux-core:unit  pfad=transfer::engine::test_backend::single_put_tests::speed_task_single_put_lost_answer_is_never_sent_again  quelle=SUITES-ALT,Code
+speed_task_single_put_one_file_is_one_packet                   linux-core:unit  pfad=transfer::engine::test_backend::single_put_tests::speed_task_single_put_one_file_is_one_packet  quelle=SUITES-ALT,Code
+speed_task_single_put_without_capability_keeps_the_single_path  linux-core:unit  pfad=transfer::engine::test_backend::single_put_tests::speed_task_single_put_without_capability_keeps_the_single_path  quelle=SUITES-ALT,Code
+speed_task_smb_close_attributes_only_when_reported             linux-core:unit  pfad=smb::compound_put::tests::speed_task_smb_close_attributes_only_when_reported  quelle=SUITES-ALT,Code
+speed_task_smb_compound_stage_fits_one_write                   linux-core:unit  pfad=smb::compound_put::tests::speed_task_smb_compound_stage_fits_one_write  quelle=SUITES-ALT,Code
+speed_task_smb_evidence_only_for_regular_files                 linux-core:unit  pfad=smb::stage_evidence::tests::speed_task_smb_evidence_only_for_regular_files  quelle=SUITES-ALT,Code
+speed_task_smb_first_read_closes_only_when_the_range_fits      linux-core:unit  pfad=smb::compound_read::tests::speed_task_smb_first_read_closes_only_when_the_range_fits  quelle=SUITES-ALT,Code
+speed_task_smb_presence_needs_a_deciding_answer                linux-core:unit  pfad=smb::stage_evidence::tests::speed_task_smb_presence_needs_a_deciding_answer  quelle=SUITES-ALT,Code
+speed_task_sync_bandwidth_limit_keeps_the_limited_stream       linux-core:unit  pfad=bisync::apply_stage::kernel_tests::speed_task_sync_bandwidth_limit_keeps_the_limited_stream  quelle=SUITES-ALT,Code
+speed_task_sync_context_is_scoped_and_restored                 linux-core:unit  pfad=bisync::apply_path_context::tests::speed_task_sync_context_is_scoped_and_restored  quelle=SUITES-ALT,Code
+speed_task_sync_copy_without_digest_consumer_skips_the_md5     linux-core:unit  pfad=bisync::apply_stage::kernel_tests::speed_task_sync_copy_without_digest_consumer_skips_the_md5  quelle=SUITES-ALT,Code
+speed_task_sync_early_copy_is_off_for_dry_runs_and_moves       linux-core:unit  pfad=bisync::early_copy::tests::speed_task_sync_early_copy_is_off_for_dry_runs_and_moves  quelle=SUITES-ALT,Code
+speed_task_sync_early_copy_needs_target_proof_and_unknown_name  linux-core:unit  pfad=bisync::early_copy::tests::speed_task_sync_early_copy_needs_target_proof_and_unknown_name  quelle=SUITES-ALT,Code
+speed_task_sync_early_copy_waits_for_the_side_empty_guard      linux-core:unit  pfad=bisync::early_copy::tests::speed_task_sync_early_copy_waits_for_the_side_empty_guard  quelle=SUITES-ALT,Code
+speed_task_sync_folder_levels_keep_parents_before_children     linux-core:unit  pfad=bisync::apply_dir_levels::tests::speed_task_sync_folder_levels_keep_parents_before_children  quelle=SUITES-ALT,Code
+speed_task_sync_group_commit_records_finished_work_while_the_run_continues  linux-core:unit  pfad=bisync::checkpoint_run::commit_tests::speed_task_sync_group_commit_records_finished_work_while_the_run_continues  quelle=SUITES-ALT,Code
+speed_task_sync_limits_are_computed_once_per_root_and_run      linux-core:unit  pfad=bisync::apply_path_context::tests::speed_task_sync_limits_are_computed_once_per_root_and_run  quelle=SUITES-ALT,Code
+speed_task_sync_local_first_run_throughput                     linux-core:unit  ignored threads=1 pfad=bisync::sync_speed_task_tests::speed_task_sync_local_first_run_throughput  quelle=SUITES-ALT,Code
+speed_task_sync_parent_turned_link_is_refused_within_one_run   linux-core:unit  pfad=bisync::apply_path_context::tests::speed_task_sync_parent_turned_link_is_refused_within_one_run  quelle=SUITES-ALT,Code
+speed_task_sync_queue_beyond_its_bound_is_committed_by_the_worker  linux-core:unit  pfad=bisync::checkpoint_run::commit_tests::speed_task_sync_queue_beyond_its_bound_is_committed_by_the_worker  quelle=SUITES-ALT,Code
+speed_task_sync_run_records_early_copies_and_still_deletes     linux-core:unit  pfad=bisync::early_copy::tests::speed_task_sync_run_records_early_copies_and_still_deletes  quelle=SUITES-ALT,Code
+speed_task_sync_stage_parent_is_created_again_after_it_vanished  linux-core:unit  pfad=bisync::apply_path_context::tests::speed_task_sync_stage_parent_is_created_again_after_it_vanished  quelle=SUITES-ALT,Code
+speed_task_sync_verified_copy_keeps_its_streamed_digest        linux-core:unit  pfad=bisync::apply_stage::kernel_tests::speed_task_sync_verified_copy_keeps_its_streamed_digest  quelle=SUITES-ALT,Code
+speed_task_sync_workers_never_wait_for_a_group_commit          linux-core:unit  pfad=bisync::checkpoint_run::commit_tests::speed_task_sync_workers_never_wait_for_a_group_commit  quelle=SUITES-ALT,Code
+speed_task_upload_stage_names_their_destination                linux-core:unit  pfad=share::backend::peer_evidence::tests::speed_task_upload_stage_names_their_destination  quelle=SUITES-ALT,Code
+speed_task_vault_batched_stream_keeps_the_per_chunk_format     linux-core:unit  pfad=cryptomator::core::content_batch::tests::speed_task_vault_batched_stream_keeps_the_per_chunk_format  quelle=SUITES-ALT,Code
+speed_task_vault_damaged_chunk_inside_a_batch_releases_nothing_of_it  linux-core:unit  pfad=cryptomator::core::content_batch::tests::speed_task_vault_damaged_chunk_inside_a_batch_releases_nothing_of_it  quelle=SUITES-ALT,Code
+speed_task_vault_flush_writes_every_full_chunk_and_keeps_a_partial_one  linux-core:unit  pfad=cryptomator::core::content_batch::tests::speed_task_vault_flush_writes_every_full_chunk_and_keeps_a_partial_one  quelle=SUITES-ALT,Code
+speed_task_vault_stream_throughput                             linux-core:unit  ignored threads=1 pfad=cryptomator::core::content_batch::tests::speed_task_vault_stream_throughput  quelle=SUITES-ALT,Code
+speed_task_view_insert_keeps_sort_order_and_selection          linux-core:unit  pfad=app::view_refresh::tests::speed_task_view_insert_keeps_sort_order_and_selection  quelle=SUITES-ALT,Code
+speed_task_view_refresh_merge_equals_a_full_rescan             linux-core:unit  pfad=app::view_refresh::tests::speed_task_view_refresh_merge_equals_a_full_rescan  quelle=SUITES-ALT,Code
+speed_task_view_refresh_merge_handles_twice_listed_and_partial_roots  linux-core:unit  pfad=app::view_refresh::tests::speed_task_view_refresh_merge_handles_twice_listed_and_partial_roots  quelle=SUITES-ALT,Code
+speed_task_view_refresh_plans_outermost_roots_within_the_view_depth  linux-core:unit  pfad=app::view_refresh::tests::speed_task_view_refresh_plans_outermost_roots_within_the_view_depth  quelle=SUITES-ALT,Code
+speed_task_view_refresh_takes_resolved_roots_and_moved_sources  linux-core:unit  pfad=app::view_refresh::tests::speed_task_view_refresh_takes_resolved_roots_and_moved_sources  quelle=SUITES-ALT,Code
+speed_task_webdav_chunk_abort_removes_the_upload_folder        linux-core:unit  pfad=webdav::chunked_stage_tests::speed_task_webdav_chunk_abort_removes_the_upload_folder  quelle=SUITES-ALT,Code
+speed_task_webdav_chunk_cap_halves_after_413_down_to_two_units  linux-core:unit  pfad=webdav::chunked_upload::tests::speed_task_webdav_chunk_cap_halves_after_413_down_to_two_units  quelle=SUITES-ALT,Code
+speed_task_webdav_chunk_numbers_follow_offsets_and_stay_in_range  linux-core:unit  pfad=webdav::chunked_upload::tests::speed_task_webdav_chunk_numbers_follow_offsets_and_stay_in_range  quelle=SUITES-ALT,Code
+speed_task_webdav_chunk_parts_stay_below_the_server_cap        linux-core:unit  pfad=webdav::chunked_upload::tests::speed_task_webdav_chunk_parts_stay_below_the_server_cap  quelle=SUITES-ALT,Code
+speed_task_webdav_chunk_pieces_cover_the_range_within_limits   linux-core:unit  pfad=webdav::chunked_upload::tests::speed_task_webdav_chunk_pieces_cover_the_range_within_limits  quelle=SUITES-ALT,Code
+speed_task_webdav_chunk_upload_home_only_for_nextcloud_dav_paths  linux-core:unit  pfad=webdav::chunked_upload::tests::speed_task_webdav_chunk_upload_home_only_for_nextcloud_dav_paths  quelle=SUITES-ALT,Code
+speed_task_webdav_nextcloud_chunks_assemble_byte_exact         linux-core:unit  pfad=webdav::chunked_stage_tests::speed_task_webdav_nextcloud_chunks_assemble_byte_exact  quelle=SUITES-ALT,Code
+speed_task_webdav_part_too_large_starts_again_with_smaller_parts  linux-core:unit  pfad=webdav::chunked_stage_tests::speed_task_webdav_part_too_large_starts_again_with_smaller_parts  quelle=SUITES-ALT,Code
+speed_task_webdav_plain_server_keeps_the_single_put            linux-core:unit  pfad=webdav::chunked_stage_tests::speed_task_webdav_plain_server_keeps_the_single_put  quelle=SUITES-ALT,Code
+speed_task_webdav_put_stages_are_taken_once                    linux-core:unit  pfad=webdav::put_stages::tests::speed_task_webdav_put_stages_are_taken_once  quelle=SUITES-ALT,Code
+speed_task_webdav_refused_upload_folder_is_remembered          linux-core:unit  pfad=webdav::chunked_stage_tests::speed_task_webdav_refused_upload_folder_is_remembered  quelle=SUITES-ALT,Code
+speed_task_zip_canceled_extraction_leaves_no_partial_file      linux-core:unit  pfad=zipfs::zip_speed_task_tests::speed_task_zip_canceled_extraction_leaves_no_partial_file  quelle=SUITES-ALT,Code
+speed_task_zip_extract_throughput                              linux-core:unit  ignored threads=1 pfad=zipfs::zip_speed_task_tests::speed_task_zip_extract_throughput  quelle=SUITES-ALT,Code
+speed_task_zip_lanes_keep_same_named_targets_in_archive_order  linux-core:unit  pfad=zipfs::extract_lanes::tests::speed_task_zip_lanes_keep_same_named_targets_in_archive_order  quelle=SUITES-ALT,Code
+speed_task_zip_parallel_extraction_writes_every_entry_and_refuses_existing_files  linux-core:unit  pfad=zipfs::zip_speed_task_tests::speed_task_zip_parallel_extraction_writes_every_entry_and_refuses_existing_files  quelle=SUITES-ALT,Code
+
 [noch nicht umgesetzt]
 
 

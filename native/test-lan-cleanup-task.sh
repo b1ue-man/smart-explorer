@@ -96,7 +96,6 @@ native_tests=(
     lan_cleanup_task_canonical_and_prefix_selection
     # M2 complete peer removal and durable denial of automatic re-pairing
     lan_cleanup_task_record_lookup_and_readmit
-    lan_cleanup_task_ledger_is_bounded_and_keeps_newest_records
     lan_cleanup_task_re_recording_a_device_replaces_its_record
     lan_cleanup_task_forgetting_removes_contact_grant_and_records_denial
     lan_cleanup_task_forgetting_a_pending_contact_records_no_denial
@@ -152,21 +151,25 @@ analytics_tests=(
     analytics_access_task_existing_budget_stops_honestly
     analytics_access_task_diagnostics_keep_denial_identity_when_report_is_full
     analytics_access_task_cancellation_never_becomes_partial_success
-    analytics_access_task_exact_startup_admission
     analytics_access_task_report_lists_each_retained_path_and_omissions
     analytics_access_task_new_scan_resets_prompt_without_canceling_consented_launch
     analytics_access_task_remote_access_never_requests_local_privileges
     analytics_access_task_treemap_origin_change_invalidates_geometry
-    analytics_access_task_invalid_startup_cannot_spawn_or_restart_a_scan
 )
 
 # Directly affected integrations: profile schema 8 migration and the worker
-# start condition.
+# start condition. The removal ledger keeps every denial since 2026-10-03
+# (lan_cleanup_task_ledger_is_bounded_and_keeps_newest_records became
+# review_task_removed_denials_survive_historical_capacity); the elevated
+# analysis start became the read helper on 2026-09-19 (its exact admission:
+# search_recursive_access_task_helper_admits_exact_read_protocol_only).
 integration_tests=(
     v5_profile_migration_preserves_exec_and_defaults_tombstones_empty
     corrupt_evidence_and_future_schema_fail_closed_while_v6_defaults_empty
     explicit_stop_barrier_blocks_periodic_auto_connect_reload
     worker_runtime_update_preserves_concurrent_user_configuration
+    review_task_removed_denials_survive_historical_capacity
+    search_recursive_access_task_helper_admits_exact_read_protocol_only
 )
 
 verify_test_log() {
@@ -227,7 +230,9 @@ echo "lan/cleanup task suite: affected integrations"
         share::direct_request_tombstone::tests::v5_profile_migration_preserves_exec_and_defaults_tombstones_empty \
         share::legacy_direct_request_tests::corrupt_evidence_and_future_schema_fail_closed_while_v6_defaults_empty \
         daemon::ipc_host::service_lifecycle::tests::explicit_stop_barrier_blocks_periodic_auto_connect_reload \
-        daemon::ipc_host::profile_merge::tests::worker_runtime_update_preserves_concurrent_user_configuration
+        daemon::ipc_host::profile_merge::tests::worker_runtime_update_preserves_concurrent_user_configuration \
+        share::removed_direct_peers::tests::review_task_removed_denials_survive_historical_capacity \
+        local_access::protocol::tests::search_recursive_access_task_helper_admits_exact_read_protocol_only
 ) 2>&1 | tee "$integration_log"
 verify_test_log "$integration_log" "${#integration_tests[@]}" "${integration_tests[@]}"
 

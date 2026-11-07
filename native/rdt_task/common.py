@@ -2043,9 +2043,10 @@ CITATION_EXTENSIONS = ("rs", "kt", "kts", "java", "py", "ps1", "sh", "nsi", "md"
                        "xml", "txt", "gradle", "hbs", "conf", "c", "h", "i")
 CITATION = re.compile(r"(?<![\w/.-])((?:[\w.-]+/)*[\w.-]+\.(?:" + "|".join(CITATION_EXTENSIONS)
                       + r")):(\d+)(?:\s*[-–]\s*(\d+))?")
-CITATION_ALIASES = (("N/", "native/src/"), ("A/", "android/app/src/main/java/app/smartexplorer/android/"),
+# `N/` = `native/crates/` since D13 (the abbreviation the inventories under docs/oberflaechen/ define).
+CITATION_ALIASES = (("N/", "native/crates/"), ("A/", "android/app/src/main/java/app/smartexplorer/android/"),
                     ("AT/", "android/app/src/androidTest/java/app/smartexplorer/android/"))
-CITATION_BASES = ("", "native/src/", "native/", "android/app/src/main/java/app/smartexplorer/android/")
+CITATION_BASES = ("", "native/crates/", "native/src/", "native/", "android/app/src/main/java/app/smartexplorer/android/")
 
 
 class Citations:

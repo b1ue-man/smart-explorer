@@ -29,7 +29,7 @@ Abkürzungen: `N/` = `native/crates/`, `A/` = `android/app/src/main/java/app/sma
 | Erneut versuchen | `se drive retry <SELEKTOR>` (`drive.rs:191-197`), Vervollständigung wie oben | „Erneut versuchen“ (`mount_ui.rs:238`) | Ausnahme | `RetryMount` | `se` |
 | Status | `unmounted`, `mounting`, `mounted:<X:>`, `mounted:<Pfad>` (Ordner-Laufwerke, `MountStatus::MountedAt`), `unmounting`, `runtime-unavailable:…`, `conflict:…`, `failed:…` (`N/cli/src/cli/drive_print.rs:66-80`, `N/engine/src/mount/core/mount_status.rs:17-21`) | Statustext je Laufwerk; `MountedAt` braucht die Folgezeile in `N/gui/src/app/core/mount_ui_helpers.rs` (Abschnitt 10) | Ausnahme | `ListMounts`, `MountSnapshot` | `se` |
 
-Plattformen: Windows über Dokany 2.3.1.1000 und Linux über FUSE. `drive_mount_supported()` ist unter Windows und Linux `true` (`N/engine/src/mount/mod.rs:361-364`). Linux nutzt `fuser =0.18.0` (`native/Cargo.toml:326`), Einhängeort ist standardmäßig `~/SmartExplorer/<Name>` (`N/cli/src/cli/drive_options.rs:24`).
+Plattformen: Windows über Dokany 2.3.1.1000 und Linux über FUSE. `drive_mount_supported()` ist unter Windows und Linux `true` (`N/engine/src/mount/os/shared/runtime_info.rs:8-10`). Linux nutzt `fuser =0.18.0` (`native/Cargo.toml:326`), Einhängeort ist standardmäßig `~/SmartExplorer/<Name>` (`N/cli/src/cli/drive_options.rs:24`).
 
 ### Schreiben und Lesen ohne Warten (G4, 2026-10-28)
 
@@ -171,7 +171,7 @@ Quellstand 2026-10-26; gemeinsame Remote-Suite und Veröffentlichung stehen aus.
 |---|---|---|
 | Cache sichern und Laufwerk entfernen | Desktop `N/gui/src/app/core/mount_recovery_ui.rs`; `se drive save-remove` und `se drive recovery list/import/reactivate` (`N/cli/src/cli/drive_recovery.rs:23`); MCP über `se` | Der Daemon besitzt die Offline-Transaktion. Reaktivierung ergibt zunächst ein gestopptes Laufwerk mit ausgeschaltetem Auto-Remount; `retry` bleibt ausdrücklich nötig. |
 | Providerkapazität und Cachebelegung unterscheiden | Desktop `N/gui/src/app/core/mount_capacity_ui.rs`; CLI `N/cli/src/cli/drive_capacity.rs:14`, JSON im Mountsnapshot und Daemon-IPC | `N/engine/src/mount/core/capacity.rs` und `os/shared/capacity_refresh.rs` trennen belegte Providerkapazität, unbekannte Werte, veraltete Werte und lokale Cachebelegung. Unbekannt ist nicht null. |
-| Tresorroot ausdrücklich freigeben | Desktop `vault_settings_ui.rs`; CLI `vault/open_policy.rs:18`; Android `VaultOpenPolicy.kt` über `vault.openPolicy/confirmRootTrust/revokeRootTrust/providerRelease` (`N/mobile/src/mobile/os/shared/domains/vault_open_policy.rs:6`) | Rootvertrauen ist an Tresor, Backend, Account und Root gebunden. Klartextkopie und Android-Providerfreigabe bleiben eigene Entscheidungen. Widerruf betrifft auch bereits laufende Providerzugriffe. |
+| Tresorroot ausdrücklich freigeben | Desktop `vault_settings_ui.rs`; CLI `N/cli/src/cli/vault/open_policy.rs:25`; Android `VaultOpenPolicy.kt` über `vault.openPolicy/confirmRootTrust/revokeRootTrust/providerRelease` (`N/mobile/src/mobile/os/shared/domains/vault_open_policy.rs:6`) | Rootvertrauen ist an Tresor, Backend, Account und Root gebunden. Klartextkopie und Android-Providerfreigabe bleiben eigene Entscheidungen. Widerruf betrifft auch bereits laufende Providerzugriffe. |
 
 Die native Mount-Recoveryaktion betrifft Windows-/Linux-Mounts. Android bleibt
 Dokumentanbieter; aus dessen Existenz wird keine zusätzliche native Mountaktion
