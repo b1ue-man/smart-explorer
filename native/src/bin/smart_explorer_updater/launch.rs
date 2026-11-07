@@ -269,6 +269,10 @@ fn receive_signal(
         if !peer.ip().is_loopback() {
             continue;
         }
+        // Windows hands the accepted socket the listener's non-blocking
+        // mode: without this, a token not yet arrived fails the start with
+        // WouldBlock instead of waiting up to the read timeout.
+        stream.set_nonblocking(false)?;
         stream.set_read_timeout(Some(Duration::from_secs(1)))?;
         let mut response = [0u8; 32];
         (&stream).read_exact(&mut response)?;
