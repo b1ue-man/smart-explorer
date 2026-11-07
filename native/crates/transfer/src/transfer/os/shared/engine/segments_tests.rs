@@ -89,6 +89,23 @@ fn offsets(fake: &Fake) -> Vec<u64> {
     requests.iter().map(|(offset, _)| *offset).collect()
 }
 
+fn requests(fake: &Fake) -> Vec<(u64, u64)> {
+    fake.ranges.requests.lock().expect("fixture lock").clone()
+}
+
+/// The parts `(offset, len)` follow each other from `from` to `size` in the
+/// order given. Only the first part of a fresh connection has a known length
+/// (`MIN_SEGMENT`, 8 MiB): the later ones follow what this machine measured
+/// (`SegmentSizer::next_len`: 10 x set-up x rate), and a slow open stretches them.
+fn assert_follow(parts: &[(u64, u64)], from: u64, size: u64) {
+    let mut next = from;
+    for (offset, len) in parts {
+        assert_eq!(*offset, next, "the parts follow each other: {parts:?}");
+        next += len;
+    }
+    assert_eq!(next, size, "and cover the file: {parts:?}");
+}
+
 fn mib(count: usize) -> u64 {
     (count * MIB) as u64
 }
@@ -105,10 +122,11 @@ fn speed_task_segments_download_assembles_the_file_from_ranges() {
     assert_eq!(finished.progress.files_done, 1);
     assert_eq!(finished.progress.bytes_done, mib(40));
     assert!(fixture.downloaded("big.bin") == fixture.data, "content");
-    let mut asked = offsets(&fake);
+    let mut asked = requests(&fake);
     asked.sort_unstable();
-    let expected: Vec<u64> = (0..5).map(|part| mib(part * 8)).collect();
-    assert_eq!(asked, expected, "five parts of the shortest length");
+    assert!(asked.len() >= 2, "in parts: {asked:?}");
+    assert_eq!(asked[0], (0, mib(8)), "a fresh connection begins short");
+    assert_follow(&asked, 0, mib(40));
     assert!(
         fake.counters.max_active.load(Ordering::SeqCst) >= 2,
         "a helper took parts next to the owner"
@@ -126,18 +144,13 @@ fn speed_task_segments_single_permit_owner_does_all_ranges() {
     let fixture = Fixture::new(40 * MIB);
     let mut fake = ranged("single");
     fake.ceiling = Some(1);
-    // Every read takes 3 ms, as in the assembling test: the part sizer
-    // (`transfer/core/segments.rs`, `next_len`: 10 x set-up x rate) then
-    // learns about 10 reads of `COPY_BUFFER` (2.5 MiB) and keeps the
-    // shortest part (`MIN_SEGMENT`, 8 MiB) on every machine. Without it a
-    // set-up of 1 ms at local disk speed asks for parts above 8 MiB.
-    fake.read_delay = Duration::from_millis(3);
     let (fake, handle) = fake.handle();
     let finished = run_within(fixture.job(&handle), LIMIT);
     assert!(finished.issues.is_empty(), "{:?}", finished.issues);
     assert!(fixture.downloaded("big.bin") == fixture.data, "content");
-    let expected: Vec<u64> = (0..5).map(|part| mib(part * 8)).collect();
-    assert_eq!(offsets(&fake), expected, "one after the other, in order");
+    let asked = requests(&fake);
+    assert!(asked.len() >= 2, "in parts: {asked:?}");
+    assert_follow(&asked, 0, mib(40)); // one after the other, in order
     assert_eq!(fake.counters.max_active.load(Ordering::SeqCst), 1);
 }
 
@@ -146,14 +159,8 @@ fn speed_task_segments_retry_resumes_at_prefix() {
     let fixture = Fixture::new(40 * MIB);
     let mut fake = ranged("retry");
     fake.ceiling = Some(1);
-    // Every read takes 3 ms, as in the assembling test: the part sizer
-    // (`transfer/core/segments.rs`, `next_len`: 10 x set-up x rate) then
-    // learns about 10 reads of `COPY_BUFFER` (2.5 MiB) and keeps the
-    // shortest part (`MIN_SEGMENT`, 8 MiB) on every machine. Without it a
-    // set-up of 1 ms at local disk speed asks for parts above 8 MiB.
-    fake.read_delay = Duration::from_millis(3);
     fake.ranges.fail_once =
-        std::sync::Mutex::new(Some((mib(16), MIB, io::ErrorKind::ConnectionReset)));
+        std::sync::Mutex::new(Some((mib(8), MIB, io::ErrorKind::ConnectionReset)));
     let (fake, handle) = fake.handle();
     let finished = run_within(fixture.job(&handle), LIMIT);
     assert!(finished.issues.is_empty(), "{:?}", finished.issues);
@@ -164,11 +171,13 @@ fn speed_task_segments_retry_resumes_at_prefix() {
         "no byte counted twice"
     );
     assert!(fixture.downloaded("big.bin") == fixture.data, "content");
-    assert_eq!(
-        offsets(&fake),
-        vec![0, mib(8), mib(16), mib(16), mib(24), mib(32)],
-        "the retry starts where every earlier byte was written"
-    );
+    // The first part is the shortest, so the second one (which fails)
+    // starts at 8 MiB on every machine.
+    let asked = requests(&fake);
+    assert!(asked.len() >= 3, "{asked:?}");
+    assert_eq!(asked[..2], [(0, mib(8)), (mib(8), asked[1].1)], "{asked:?}");
+    assert_eq!(asked[2].0, mib(8), "the retry starts at the safe start");
+    assert_follow(&asked[2..], mib(8), mib(40));
 }
 
 #[test]
@@ -319,7 +328,10 @@ fn speed_task_segments_md5_prefix_hasher_matches_single_stream() {
     let (parts, handle) = parts.handle();
     let finished = run_within(fixture.job(&handle), LIMIT);
     assert!(finished.issues.is_empty(), "{:?}", finished.issues);
-    assert_eq!(offsets(&parts).len(), 5);
+    let mut asked = requests(&parts);
+    asked.sort_unstable();
+    assert!(asked.len() >= 2, "in parts: {asked:?}");
+    assert_follow(&asked, 0, mib(40));
     assert!(fixture.downloaded("big (2).bin") == fixture.data, "content");
     // A listed hash that is not the content is caught in parts too.
     let mut wrong = ranged("md5-wrong");
