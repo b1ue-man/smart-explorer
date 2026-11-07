@@ -40,7 +40,7 @@ NATIVE = Path(__file__).resolve().parent
 _spec = importlib.util.spec_from_file_location("ai_plugin_task", NATIVE / "test-ai-plugin-task.py")
 ai = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(ai)
-# rustfmt and clippy are no part of this suite: build.yml gates them at every push (the stages "fmt since
+# rustfmt and clippy are no part of this suite: build.yml has them, docs/TODO.md H1 (the stages "fmt since
 # the batch's base commit" and "no compiler warning in the files the batch created" were removed on
 # 2026-11-07, TODO TESTS-BEWERTUNG).
 WINDOWS = ai.WINDOWS

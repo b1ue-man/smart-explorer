@@ -723,6 +723,7 @@ screen_task_android_text_set                                  android-device:scr
 screen_task_android_consent_action_is_activity_intent         android-device:screen-android-device,android-device-api30:screen-android-api30  art=instr  quelle=B391,U27,D3
 screen_task_android_viewer_decodes_barcode                    android-device:screen-android-device  art=instr  quelle=B403,U28
 screen_task_android_grid_switch                               android-device:screen-android-device  art=instr  quelle=B403,U28
+screen_task_android_window_list_names_this_app                android-device:screen-android-device  art=instr  quelle=B403,TESTS-BEWERTUNG
 
 # ---- S5 Launcher DSK-M9 bis DSK-M12 (U35, U38): JVM in android-build launcher-jvm ----
 launcher_task_existing_nav_kinds_unchanged                    android-build:launcher-jvm  art=junit  quelle=F16,U35

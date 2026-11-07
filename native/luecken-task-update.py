@@ -4,9 +4,10 @@ Called only by native/test-luecken-task.py (`lib` is that module); no entry
 point of its own. Plan: docs/plaene/2026-10-16-luecken-schliessen/plan.md (E11,
 SP1, SP2, SP6, SP9).
 
-The published Linux `se` is taken from the update feed of the base commit
-(`git show <base>:release-native/update-feed/se`) and checked against the
-`se.sha256` of the same revision. With it an isolated host client "B" gets the
+The published Linux `se` is taken from the GitHub Release v0.5.180 (`gh release
+download`, GH_TOKEN set in the job; since the history rewrite of 2026-11-01 no
+commit carries the update feed of 0.5.180) and checked against the `se.sha256`
+published with it. With it an isolated host client "B" gets the
 state a user of 0.5.180 has:
 
   * a Share pair with a counterpart "A" (the candidate `se`, so the pair is
@@ -39,9 +40,8 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 
-OLD_REVISION = "01546a6307887f14d6e0b9a700d86a4c476bdb67"
 OLD_VERSION = "0.5.180"
-FEED = "release-native/update-feed"
+OLD_TAG = "v" + OLD_VERSION
 LEGACY_MAGIC = b"SESEC01\0"
 SEALED_MAGIC = b"SESEC02\0"
 LEGACY_HEADER_BYTES = 8 + 1 + 32 + 4
@@ -49,20 +49,25 @@ MIN_NEEDLE_BYTES = 12
 PROTECTORS = ("systemd-creds-system", "systemd-creds-user", "app-key-file")
 
 
-def feed_blob(lib, name):
-    done = subprocess.run(["git", "show", f"{OLD_REVISION}:{FEED}/{name}"], cwd=lib.ai.ROOT,
-                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=300)
-    lib.ensure(done.returncode == 0, f"git show {OLD_REVISION[:8]}:{FEED}/{name} failed (shallow checkout?): "
+def release_asset(lib, name, directory):
+    """One asset of the GitHub Release v0.5.180, as bytes (gh with GH_TOKEN of the job)."""
+    folder = directory / "release-download"
+    folder.mkdir(parents=True, exist_ok=True)
+    repo = os.environ.get("GITHUB_REPOSITORY", "b1ue-man/smart-explorer")
+    done = subprocess.run(["gh", "release", "download", OLD_TAG, "-R", repo, "-p", name, "-D", str(folder),
+                           "--clobber"], cwd=lib.ai.ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                          timeout=900)
+    lib.ensure(done.returncode == 0, f"gh release download {OLD_TAG} {name} failed: "
                                      f"{done.stderr.decode(errors='replace')[:400]}")
-    return done.stdout
+    return (folder / name).read_bytes()
 
 
 def fetch_published_se(lib, directory):
     """The published 0.5.180 `se`, verified against its published SHA-256."""
-    version = feed_blob(lib, "version.txt").decode().strip()
-    lib.ensure(version == OLD_VERSION, f"the feed of the base commit says {version}, expected {OLD_VERSION}")
-    blob = feed_blob(lib, "se")
-    sidecar = feed_blob(lib, "se.sha256").decode().split()[0]
+    version = release_asset(lib, "version.txt", directory).decode().strip()
+    lib.ensure(version == OLD_VERSION, f"version.txt of the release {OLD_TAG} says {version}, expected {OLD_VERSION}")
+    blob = release_asset(lib, "se", directory)
+    sidecar = release_asset(lib, "se.sha256", directory).decode().split()[0].lower()
     digest = hashlib.sha256(blob).hexdigest()
     lib.ensure(digest == sidecar, f"published se has SHA-256 {digest}, its sidecar says {sidecar}")
     lib.ensure(blob[:4] == b"\x7fELF", "the published se is not a Linux executable")
@@ -149,10 +154,11 @@ def stage_update(lib, results, candidate, work, log_root, server_binary):
     published_dir = work / "update-published"
     try:
         state.published, digest = fetch_published_se(lib, published_dir)
-        results.record(stage, f"published se {OLD_VERSION} from the feed of {OLD_REVISION[:8]}: SHA-256, ELF, version",
+        results.record(stage, f"published se {OLD_VERSION} from the GitHub Release {OLD_TAG}: SHA-256, ELF, version",
                        True, digest)
     except Exception as error:  # noqa: BLE001
-        results.record(stage, f"published se {OLD_VERSION} from the feed", False, f"{type(error).__name__}: {error}")
+        results.record(stage, f"published se {OLD_VERSION} from the GitHub Release {OLD_TAG}", False,
+                       f"{type(error).__name__}: {error}")
         return
     if server_binary is None:
         results.record(stage, "candidate share server fixture", False, "the server stage did not build it")

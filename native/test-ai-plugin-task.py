@@ -8,7 +8,7 @@ docs/plaene/2026-10-14-analyse-id-plugin-vorrang/plan.md. Builds only the develo
 `se` and the library test binary of this host (no release build), then checks every
 milestone once:
 
-  build    `se` plus the lib tests (rustfmt and clippy: build.yml at every push)
+  build    `se` plus the lib tests (rustfmt and clippy: build.yml, docs/TODO.md H1)
   unit     `mcp_task_` tests and the directly affected `cli::` and handoff tests
   mcp      `se mcp` over both lifecycles (Codex `initialize` 2025-06-18,
            Claude Code `server/discover` 2026-07-28): catalog (25 tools, read-only

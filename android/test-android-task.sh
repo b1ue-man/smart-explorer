@@ -6,7 +6,7 @@
 #   host                  G1 android_task_ unit tests (Linux host), G2 desktop unchanged
 #                         (the moved tests under their new paths, explorer-command metadata),
 #                         G7 static release path. rustfmt and clippy are no part of it: build.yml
-#                         gates them at every push (the gates on the lines since this batch's base
+#                         has them, docs/TODO.md H1 (the gates on the lines since this batch's base
 #                         commit were removed on 2026-11-07, TODO TESTS-BEWERTUNG)
 #   desktop-bins --out D  G5 prerequisites: only the Linux `se` and `se-share-server` dev binaries
 #   android-build --out D G3: Android dependency tree, NDK/cargo-ndk, arm64 check, x86_64 .so with
@@ -266,7 +266,11 @@ run_g1() {
   step "G1 android_task_ tests on the Linux host (${#g1_tests[@]} expected)"
   g1_source_check
   local log="$log_root/g1-android-task-tests.log"
-  (cd "$native_dir" && cargo test --locked --no-fail-fast --workspace --exclude smart_explorer_android --exclude smart_explorer --lib android_task_ -- --test-threads=1) 2>&1 | tee "$log"
+  # The filter also matches two tests of later batches whose names contain android_task_
+  # (speed_task_android_task_*, vault_task_android_task_*; crates-task runs them); --skip keeps the
+  # count exact.
+  (cd "$native_dir" && cargo test --locked --no-fail-fast --workspace --exclude smart_explorer_android --exclude smart_explorer --lib android_task_ -- --test-threads=1 \
+    --skip speed_task_android_task_ --skip vault_task_android_task_) 2>&1 | tee "$log"
   verify_test_log "$log" "${#g1_tests[@]}" "${g1_tests[@]}"
 }
 

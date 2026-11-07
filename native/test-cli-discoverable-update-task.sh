@@ -2,7 +2,7 @@
 # Single task-level suite for the terminal batch: `se share discoverable`
 # (offers kept by the Share daemon) and `se update` (terminal-only and desktop
 # installations). Run this one checked-in entrypoint with an outer timeout of
-# at least 30 minutes. rustfmt and clippy are no part of it: build.yml gates them at every push.
+# at least 30 minutes. rustfmt and clippy are no part of it: build.yml has them (docs/TODO.md H1).
 set -Eeuo pipefail
 
 usage() {
@@ -178,7 +178,10 @@ else
 fi
 (
     cd "$repo_root/native"
-    run_task cargo test --locked --no-fail-fast --workspace --exclude smart_explorer_android --exclude smart_explorer --lib cli_task_ -- --test-threads=1
+    # The filter also matches the module cli::mcp::rdp_tool::einrichtung_cli_task_tests (four einrichtung_task_
+    # tests of a later batch, which crates-task runs); --skip keeps the count exact.
+    run_task cargo test --locked --no-fail-fast --workspace --exclude smart_explorer_android --exclude smart_explorer --lib cli_task_ -- --test-threads=1 \
+        --skip einrichtung_cli_task_tests
 ) 2>&1 | tee "$suite_tmp/milestones.log"
 verify_test_log "$suite_tmp/milestones.log" "${#milestone_tests[@]}" "${milestone_tests[@]}"
 

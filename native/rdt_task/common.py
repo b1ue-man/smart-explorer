@@ -2193,9 +2193,12 @@ def rust_functions() -> set[str]:
 
 
 def source_names() -> dict[str, set[str]]:
-    """Batch names in the sources: Rust functions, Kotlin tests (methods and classes)."""
+    """Batch names in the sources: Rust tests (functions with a test attribute), Kotlin tests (methods
+    and classes). A row of a table-driven test keeps its former test name as a plain function without
+    the attribute (TESTS-BEWERTUNG, 2026-11-07); it is no test and needs no entry."""
     prefix = "|".join(re.escape(item) for item in BATCH_PREFIXES)
-    rust_re = re.compile(r"\bfn\s+((?:" + prefix + r")\w*)")
+    rust_re = re.compile(r"#\[(?:tokio::)?test\b[^\]]*\](?:\s*(?:#\[[^\]]*\]|//[^\n]*))*\s*"
+                         r"(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+((?:" + prefix + r")\w*)")
     kotlin_re = re.compile(r"\bfun\s+`?((?:" + prefix + r")\w*)`?\s*\(")
     found: dict[str, set[str]] = {"rust": set(), "junit": set(), "instr": set()}
     # The programs (native/src) and the workspace crates that hold the tests since D13 (native/crates).

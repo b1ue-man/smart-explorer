@@ -2,8 +2,8 @@ name: cli-discoverable-update-task
 
 # Single task-level suite for `se share discoverable` and `se update`.
 # Dispatch it once for the exact pushed candidate SHA after implementation
-# ends; it never publishes anything. rustfmt and clippy are no part of it: build.yml gates them
-# at every push.
+# ends; it never publishes anything. rustfmt and clippy are no part of it: build.yml has them
+# (docs/TODO.md H1).
 on:
   workflow_dispatch:
     inputs:

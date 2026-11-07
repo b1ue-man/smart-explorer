@@ -48,8 +48,8 @@ milestone once:
            worker runs a device's commands as a local account (own environment
            and home, `/` when the home is missing) and as root again for
            `standard`
-  update   (Linux) a real update: the published `se` 0.5.180 from the update
-           feed of the base commit builds the old state (Share pair with an
+  update   (Linux) a real update: the published `se` 0.5.180 from its GitHub
+           Release (gh with GH_TOKEN) builds the old state (Share pair with an
            Exec grant, saved SFTP password connection with a silently pinned
            host key of a server with several key types, plaintext secrets),
            then the candidate replaces it in place and every old record is
@@ -101,7 +101,7 @@ NATIVE = Path(__file__).resolve().parent
 _spec = importlib.util.spec_from_file_location("ai_plugin_task", NATIVE / "test-ai-plugin-task.py")
 ai = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(ai)
-# rustfmt and clippy are no part of this suite: build.yml gates them at every push (the stages "fmt since
+# rustfmt and clippy are no part of this suite: build.yml has them, docs/TODO.md H1 (the stages "fmt since
 # the batch's base commit" and "no compiler warning in the files the batch created" were removed on
 # 2026-11-07, TODO TESTS-BEWERTUNG).
 WINDOWS = ai.WINDOWS

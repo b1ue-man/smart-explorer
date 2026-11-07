@@ -6,7 +6,7 @@ name: filter-transfer-task
 # publishes anything. The Linux job evaluates every portable milestone, the
 # Share Room end-to-end script (invite code, file transactions, concurrent
 # transfers); the Windows job evaluates the real-filesystem hostile-name cases.
-# rustfmt and clippy are no part of it: build.yml gates them at every push.
+# rustfmt and clippy are no part of it: build.yml has them (docs/TODO.md H1).
 on:
   workflow_dispatch:
     inputs:

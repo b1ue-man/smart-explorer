@@ -480,8 +480,9 @@ def p27_network_tests(logs, env):
             owners.append(program)
     if len(owners) != 1:
         raise RuntimeError("Missing or ambiguous P27 network fixture.")
-    run(["bash", ROOT / "native/review-task-network.sh", "exec", str(owners[0]),
-        "--exact", plan["fixture"], "--ignored", "--nocapture", "--test-threads=1"],
+    # The test program and its arguments; the evidence names their digest (command_digest).
+    command = [str(owners[0]), "--exact", plan["fixture"], "--ignored", "--nocapture", "--test-threads=1"]
+    run(["bash", ROOT / "native/review-task-network.sh", "exec", *command],
         logs / "p27-network.log", env, seconds=1800, cwd=ROOT / "native")
     evidence_path = logs / "p27-network/acceptance.json"
     evidence = json.loads(evidence_path.read_text())

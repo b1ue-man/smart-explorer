@@ -8,7 +8,7 @@ name: android-task
 # Dispatch it once for the exact pushed candidate SHA; it never publishes anything. Every job
 # calls exactly one sub-command of android/test-android-task.sh:
 #   host          G1 android_task_ tests, G2 desktop unchanged, G7 static (rustfmt and clippy:
-#                 build.yml at every push)
+#                 build.yml, docs/TODO.md H1)
 #   desktop-bins  Linux `se` + `se-share-server` for the G5 Share check (artifact)
 #   android-build G3 Android tree, NDK/cargo-ndk, .so + 16 KB, debug/test APKs, JVM tests (artifact)
 #   device        G4/G5/G6 on an x86_64 emulator with SD card, SFTP/FTP containers, desktop Share

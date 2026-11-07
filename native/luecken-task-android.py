@@ -2,16 +2,18 @@
 
 Called only by native/test-luecken-task.py (`lib` is that module); no entry
 point of its own. Pattern: native/sync-reliability-android.py (published APK
-from the update feed, same-certificate development signing, instrumentation
+from its GitHub Release, same-certificate development signing, instrumentation
 marker on the status stream), plan E11/SP1/SP9.
 
 build   (job step 1) the candidate debug APK and the instrumentation APK, both
         signed with the release certificate (`sync-reliability-build` of
         android/test-android-task.sh passes `-PsyncReliabilitySigning=true`; the
         keystore comes from the repository secrets exactly as in
-        sync-reliability-task.yml), plus the published 0.5.180 APK from the feed
-        of the base commit, checked against its published SHA-256. All three must
-        carry one signing certificate: Android refuses an update otherwise.
+        sync-reliability-task.yml), plus the published 0.5.180 APK from the GitHub
+        Release v0.5.180 (gh with GH_TOKEN of the job; since the history rewrite of
+        2026-11-01 no commit carries the update feed), checked against the SHA-256
+        published with it. All three must carry one signing certificate: Android
+        refuses an update otherwise.
 device  (job step 2, inside the emulator) installs the published APK, runs
         `LueckenUpgradeTaskTest` in the published app (identity, saved SFTP
         connection with password, plaintext records), updates in place with
@@ -38,9 +40,8 @@ import tempfile
 import shutil
 from pathlib import Path
 
-OLD_REVISION = "01546a6307887f14d6e0b9a700d86a4c476bdb67"
 OLD_VERSION = "0.5.180"
-FEED = "release-native/update-feed"
+OLD_TAG = "v" + OLD_VERSION
 CLASS = "app.smartexplorer.android.task.LueckenUpgradeTaskTest#publishedUpgrade"
 SIGNING_ENV = ("ANDROID_KEYSTORE_FILE", "ANDROID_KEYSTORE_PASSWORD", "ANDROID_KEY_ALIAS", "ANDROID_KEY_PASSWORD")
 MARKER = re.compile(r"LUECKEN_UPGRADE_MARKER (\{[^\r\n]+\})")
@@ -104,8 +105,13 @@ def certificates(root, apks, env, logs):
     return result
 
 
-def feed_blob(root, name, env):
-    return command(root, ["git", "show", f"{OLD_REVISION}:{FEED}/{name}"], env, timeout=300, binary=True)
+def release_asset(root, name, env, folder):
+    """One asset of the GitHub Release v0.5.180, as bytes."""
+    folder.mkdir(parents=True, exist_ok=True)
+    repo = env.get("GITHUB_REPOSITORY", "b1ue-man/smart-explorer")
+    command(root, ["gh", "release", "download", OLD_TAG, "-R", repo, "-p", name, "-D", folder, "--clobber"], env,
+            timeout=900)
+    return (folder / name).read_bytes()
 
 
 def remote(env):
@@ -132,15 +138,17 @@ def build(lib, log_root, apks, env, candidate):
     task_env = dict(env, CANDIDATE_SHA=candidate, SMART_EXPLORER_TASK_LOG_ROOT=str(log_root / "android-logs"))
     command(root, ["bash", root / "android" / "test-android-task.sh", "sync-reliability-build", "--out", apks],
             task_env, timeout=7800, log=log_root / "android-build.log")
-    version = feed_blob(root, "version.txt", env).decode().strip()
+    download = log_root / "release-download"
+    version = release_asset(root, "version.txt", env, download).decode().strip()
     if version != OLD_VERSION:
-        raise RuntimeError(f"the feed of the base commit says {version}, expected {OLD_VERSION}")
-    published = feed_blob(root, "smart-explorer-android.apk", env)
-    expected = feed_blob(root, "smart-explorer-android.apk.sha256", env).decode().split()[0]
+        raise RuntimeError(f"version.txt of the release {OLD_TAG} says {version}, expected {OLD_VERSION}")
+    published = release_asset(root, "smart-explorer-android.apk", env, download)
+    expected = release_asset(root, "smart-explorer-android.apk.sha256", env, download).decode().split()[0].lower()
+    shutil.rmtree(download)
     (apks / "old-release.apk").write_bytes(published)
     if sha(apks / "old-release.apk") != expected:
         raise RuntimeError("the published APK differs from its published SHA-256")
-    record = {"candidate": candidate, "old_revision": OLD_REVISION, "old_version": OLD_VERSION,
+    record = {"candidate": candidate, "old_tag": OLD_TAG, "old_version": OLD_VERSION,
               "certificates": certificates(root, apks, env, log_root),
               "artifacts": {path.name: sha(path) for path in apks.glob("*.apk")}}
     (apks / "provenance.json").write_text(json.dumps(record, indent=2))

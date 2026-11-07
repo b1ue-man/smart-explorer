@@ -8,7 +8,7 @@
 #             of every module the batch touched and, on Linux, transfers
 #             against SFTP/FTP containers (plain and over a shaped link) and
 #             the Share Room end-to-end run with real binaries. rustfmt and
-#             clippy are no part of it: build.yml gates them at every push (the
+#             clippy are no part of it: build.yml has them, docs/TODO.md H1 (the
 #             gates on the lines since the batch's base commit were removed on
 #             2026-11-07, TODO TESTS-BEWERTUNG).
 set -Eeuo pipefail

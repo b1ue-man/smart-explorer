@@ -5,7 +5,7 @@ run-name: Security gaps and Share/Exec GUI parity (PQ key exchange, sealed secre
 # (docs/plaene/2026-10-16-luecken-schliessen/plan.md). Dispatch it once for the
 # exact pushed candidate SHA; it never builds release artifacts or publishes.
 # One entrypoint, native/test-luecken-task.py, with three jobs:
-#   suite          (--job host) fmt, development build, `luecken_task_` and
+#   suite          (--job host) development build, `luecken_task_` and
 #                  affected unit tests on Linux and Windows; on Linux also the
 #                  candidate share server (build, tests, lock versions, cargo
 #                  audit), the static host-key check of the older suites, the
@@ -58,8 +58,6 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.sha }}
-          # The update stage reads the published `se` 0.5.180 from the update feed of
-          # that commit (TODO: the feed is no longer in Git, see TESTS-BEWERTUNG).
           fetch-depth: 0
           persist-credentials: false
 
@@ -86,6 +84,9 @@ jobs:
       - name: Run the one task entrypoint
         shell: bash
         timeout-minutes: 350
+        env:
+          # The update stage downloads the published `se` 0.5.180 from its GitHub Release.
+          GH_TOKEN: ${{ github.token }}
         run: >-
           python native/test-luecken-task.py
           --log-root "$RUNNER_TEMP/luecken-task"
@@ -216,6 +217,8 @@ jobs:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          # The published APK 0.5.180 comes from its GitHub Release.
+          GH_TOKEN: ${{ github.token }}
         run: >-
           python native/test-luecken-task.py --job android-device --phase build
           --apks "$RUNNER_TEMP/luecken-apks"

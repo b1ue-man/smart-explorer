@@ -3,7 +3,7 @@ name: transfer-engine-task
 # Single task-level suite for the streaming transfer engine batch
 # (docs/superpowers/plans/2026-09-28-transfer-engine/). Dispatch it for the
 # exact pushed candidate SHA; it never publishes anything. The jobs (rustfmt
-# and clippy are no part of them: build.yml gates them at every push):
+# and clippy are no part of them: build.yml has them, docs/TODO.md H1):
 #   linux          milestone tests, affected integrations, container transfers,
 #                  throughput over shaped loopback
 #   windows        Windows milestones (virtual files, local kernel copy)

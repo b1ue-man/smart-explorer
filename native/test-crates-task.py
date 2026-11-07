@@ -21,11 +21,16 @@ Parts:
              token and SeBackupPrivilege (Windows). On Linux the program
              test that needs a systemd manager (se_cli, containment
              self-test) runs last. Tests that need another suite's
-             resources (live servers, Google account, the candidate se,
-             mounts, the runner's LAN interface, GPU, codec files, Media
-             Foundation, Dokany) are #[ignore = "<need>; Suite <name>"] and
-             run in that suite (sync-reliability-task, review-task,
-             mount-optimization-task), not here.
+             resources (live servers, containers, a Google account, the
+             candidate se, mounts and removable volumes, the runner's LAN
+             interface, a GPU, codec files, Media Foundation, Dokany, a
+             desktop session, the clipboard) are
+             #[ignore = "<need>; Suite <name>"] and run in that suite
+             (copy-paste-task, fixes-2026-10-28-task, mount-batching-task,
+             mount-optimization-task, rechte-desktop-tresore-task, review-task,
+             speed-setup-task, sync-reliability-task, transfer-engine-task,
+             windows-remote-task; analytics-access-task as well for the read
+             helper), not here.
   servers    (Linux) the tests of the two packages outside the workspace: the
              Share signaling/relay server (share-server, with its
              tests/relay_startup.rs) and the SSH agent (se-agent, its
@@ -383,10 +388,8 @@ def part_workspace():
     # The local loopback fixtures of the copy/paste and Windows-remote tests
     # refuse to start unless their switch is set; they need nothing else.
     env = dict(os.environ, SMART_EXPLORER_COPY_PASTE_TASK="1", SMART_EXPLORER_WINDOWS_REMOTE_TASK="1")
-    # Tests that need resources only their own suites provide (live servers, a Google account,
-    # the candidate se, the runner's mounts and LAN interface, a GPU, codec files, Media
-    # Foundation, Dokany) are #[ignore = "<need>; Suite <name>"]: a plain run does not start
-    # them, and their suite does (sync-reliability-task, review-task, mount-optimization-task).
+    # Tests that need resources only their own suites provide are #[ignore = "<need>; Suite <name>"]:
+    # a plain run does not start them, and the suite named there does (module docstring).
     # A test binary that did not compile is not run; its compile log above is the result.
     ok = crates_built and run("Tests of every crate",
                               ["cargo", "test", "--locked", *CRATES, "--no-fail-fast", "--", *threads],

@@ -1,9 +1,11 @@
 name: lock-refresh
 run-name: Cargo.lock refresh ${{ inputs.candidate_sha }}
 
-# Resolves native/Cargo.lock on the runner after a dependency change, since
+# Resolves a Cargo.lock on the runner after a dependency change, since
 # no cargo runs on the workstation (AGENTS.md). It only resolves (no build)
-# and uploads the lock for review and commit; it never pushes.
+# and uploads the lock for review and commit; it never pushes. Input `directory`
+# names the Cargo project: native (default), se-agent or share-server; a new
+# dependency alone is resolved with `update: --workspace`.
 
 on:
   workflow_dispatch:
@@ -16,6 +18,15 @@ on:
         description: "Arguments for cargo update, e.g. -p mdns-sd --precise 0.21.5"
         required: true
         type: string
+      directory:
+        description: Cargo project whose lock is resolved
+        required: false
+        default: native
+        type: choice
+        options:
+          - native
+          - se-agent
+          - share-server
 
 permissions:
   contents: read
@@ -27,6 +38,7 @@ jobs:
     env:
       CANDIDATE_SHA: ${{ inputs.candidate_sha }}
       UPDATE_ARGS: ${{ inputs.update }}
+      LOCK_DIR: ${{ inputs.directory }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -47,7 +59,7 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          cd native
+          cd "$LOCK_DIR"
           # shellcheck disable=SC2086
           cargo update $UPDATE_ARGS
           for target in x86_64-unknown-linux-gnu x86_64-pc-windows-msvc \
@@ -58,5 +70,5 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: cargo-lock
-          path: native/Cargo.lock
+          name: cargo-lock-${{ inputs.directory }}
+          path: ${{ inputs.directory }}/Cargo.lock
