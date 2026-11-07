@@ -7,6 +7,10 @@ sind hier nicht zugänglich; eine Zuordnung einzelner Dateien zu diesen 450 GB
 ist deshalb noch kein gesicherter Befund. Dieses Dokument hält den Reparaturumfang
 fest; offene Arbeit wird ausschließlich in `docs/TODO.md` geführt.
 
+Stand 2026-11-07: Die unten genannte Suite (`mount-recovery-cache-task.yml`,
+`native/test-mount-recovery-cache-task.ps1`) wurde entfernt; die 21 Bibliothekstests
+laufen in `crates-task.yml` (`docs/RELEASING.md`, „Task suites since 2026-11-07“).
+
 ## Befunde und erster Plan
 
 Die folgenden Befunde beziehen sich auf den Ausgangsstand 0.5.167.

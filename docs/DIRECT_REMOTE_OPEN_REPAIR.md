@@ -5,6 +5,11 @@ Updated: 2026-09-30. Shipped in
 after successful combined remote acceptance and publication. Open work is
 tracked only in `TODO.md`.
 
+Update 2026-11-07: the suite named below (`native/test-direct-open-task.py`,
+`direct-open-task.yml`) was removed; its ordinary cases run in `crates-task.yml`
+and its ten ignored tests in the group "Direct opening and reconnect" of that suite
+(`docs/RELEASING.md`, "Task suites since 2026-11-07").
+
 ## Goal and evidence
 
 Fix intermittent desktop opening of Android Direct files: premature missing-temp

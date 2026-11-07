@@ -634,9 +634,10 @@ afterward. It also proves that active accepted history cannot be erased, then
 performs signed base-grant revoke, waits for its receipt, deletes the inactive
 history context-free, and confirms denied file access.
 
-The exact-candidate Linux gate also downloads the published `se` from v0.5.126
-under its pinned SHA-256 and runs `native/test-share-mixed-version-e2e.sh`.
-It proves new-to-old retry and acceptance plus old-to-new durable inbox,
+Until commit 3f0092b0 (2026-11-02) the exact-candidate Linux gate of `build.yml` also
+downloaded the published `se` from v0.5.126 under its pinned SHA-256 and ran
+`native/test-share-mixed-version-e2e.sh`; no workflow calls the script since then
+(`docs/TODO.md` SHARE-MIXED-VERSION). The script proves new-to-old retry and acceptance plus old-to-new durable inbox,
 context-free accept/reject/retry/revoke/delete, completion, and file access.
 Every selector used by that scenario is obtained from earlier CLI output in the
 same run.

@@ -134,6 +134,17 @@ These rules apply to first-party documentation (`README.md`, `native/README.md`,
 - After documentation changes, run stale searches for old versions, `Current release`, `WIP`, `needs release`, `prefetch next`, contradictory status words, and old release commands.
 - Documentation-only changes do not require native checks, a native patch bump, release build, release tag, or graphify rebuild. Native source changes require the native and graphify validation rules below, but do not independently trigger versioning or a release; release timing follows the single final release policy above.
 
+## test register
+
+- `docs/tests/register.tsv` lists every Rust and Kotlin test with the requirement it protects, its
+  verdict and the suite that runs it (`docs/tests/README.md`). Adding, removing, renaming or moving a
+  test changes its row in the same commit; `native/test-register.py`, run by `crates-task`, fails on a
+  test without a row and on a row without a test.
+- A test that checks the same behaviour as an existing one becomes a row or case of that test instead
+  of a new test. A test that needs services, devices, rights or environment of one suite carries
+  `#[ignore = "<need>; Suite <name>"]` and that suite starts it; an ordinary `cargo test` never fails or
+  passes vacuously for want of that environment.
+
 ## preserve existing behavior
 
 - Every agent must identify and preserve the established behavior directly affected by a change.

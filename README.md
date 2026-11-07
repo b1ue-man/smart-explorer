@@ -300,7 +300,8 @@ Oberflächen und Belege stehen in [`docs/oberflaechen/tresore.md`](docs/oberflae
 
 
 **Verifikation des Quellstands (2026-09-08):** Der Kandidat
-`0bfdc0665ba746493304030dc18e89bde11e36d6` wurde in der
+`0bfdc0665ba746493304030dc18e89bde11e36d6` (seit der Historienumschreibung vom 2026-11-01
+`b0e82b474d8e5457700292478f96e9d1258af754`, `docs/plaene/2026-11-01-idealzustand/commit-map.txt`) wurde in der
 [Remote-Task-Suite](https://github.com/b1ue-man/smart-explorer/actions/runs/34218461978)
 erfolgreich geprüft: ungecachte große Node-Verzeichnisabfragen, Speichern/Replace,
 Skriptzugriffe und Änderungsbeobachter auf einem echten Windows-Mount, private

@@ -246,7 +246,7 @@ Wert null. Die API wurde am selben Tag gegen Python 3 überprüft.
 ## Subprozesse
 
 Primärquelle: [Python subprocess](https://docs.python.org/3/library/subprocess.html).
-Die vorhandene Suite `native/test-sync-paths-task.py` ist das geprüfte Projektmuster.
+Das geprüfte Projektmuster war die Suite `native/test-sync-paths-task.py` (am 2026-11-07 entfernt); das gleiche Muster steht in `native/review-task-native.py` (`run`).
 `Popen` erhält Argumentlisten, `cwd` und eine kopierte `env`; kein Shell-String für dynamische
 Werte. POSIX `start_new_session=True` trennt die Kindgruppe. `wait(timeout=...)` wirft
 `TimeoutExpired`; danach beendet der Besitzer die Gruppe und wartet auf Completion.
@@ -705,3 +705,18 @@ Funktionssuite ausgeführt. Der Releaseerfolg ersetzt weder diesen fehlenden
 Laufzeitnachweis noch eine Geräte- oder Leistungsabnahme. Der beauftragte
 terminal veröffentlichte Batch ist abgeschlossen; es läuft keine weitere
 Releasepipeline und es wird keine zusätzliche Version erzeugt.
+
+## Stufe `runtime-behavior` (2026-11-07)
+
+Die ignorierten `review_task_`-Tests, die nur diese Suite versorgt, laufen in der Stufe
+`runtime_tests` von `native/review-task-native.py`; ihre Namen stehen im Abschnitt
+`native.runtime` von `native/review-task-manifest.json` (je Betriebssystem). Jeder Name muss
+genau einen Test treffen und eine eigene erfolgreiche libtest-Zeile liefern; ausgewählt wird mit
+`--include-ignored --exact`. Die Stufe setzt vor dem Lauf `SE_REVIEW_LAN_IP`, `SE_REVIEW_LAN_IFINDEX`
+und `SE_REVIEW_LAN_IFNAME` auf die private IPv4-Schnittstelle des Läufers (`lan_facts`; ohne
+Docker-, veth- und Bridge-Schnittstellen, ohne Loopback-Ersatz). Unter Linux läuft der Befehl durch
+`native/review-task-runtime.sh`, das ein FAT32- und ein exFAT-Schleifenabbild und einen sshfs-Einhängepunkt
+bereitstellt (`SE_REVIEW_FAT_DIR`, `SE_REVIEW_EXFAT_DIR`, `SE_REVIEW_NOREPLACE_DIR`); danach läuft
+`review_task_watch_limit_falls_back_to_polling` ein zweites Mal durch `review-task-runtime.sh --watch-limit`
+mit `fs.inotify.max_user_watches=16`. Ungeprüft bis zum ersten Lauf: ob der Läufer genau eine
+passende private Schnittstelle liefert.

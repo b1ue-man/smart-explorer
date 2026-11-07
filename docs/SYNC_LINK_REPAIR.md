@@ -4,6 +4,10 @@ Task batch: fix the reported whole-job abort at a nested `node_modules` entry,
 retain cross-backend synchronization, and preserve existing files, baselines,
 permissions and root boundaries. No local builds, compilers or tests are allowed.
 
+Update 2026-11-07: the suite named below (`native/test-sync-paths-task.py`,
+`sync-paths-task.yml`) was removed; its cases run in `crates-task.yml`, the ignored
+ones in the group "Sync paths and links" (`docs/RELEASING.md`, "Task suites since 2026-11-07").
+
 ## Stage one: code findings and initial approach
 
 Inspected on 2026-09-23 at `0180b7b`, using the root Graphify query and current
@@ -113,8 +117,10 @@ real link type, rather than relying only on ordinary backend fixtures.
 ## Implemented acceptance mapping
 
 All implementation milestones precede the single remote suite. The entrypoint
-`native/test-sync-paths-task.py` selects the existing `sync_paths_task_` contract
-and the new `sync_links_task_` cases, plus the directly affected failure guards.
+`native/test-sync-paths-task.py` selected the existing `sync_paths_task_` contract
+and the new `sync_links_task_` cases, plus the directly affected failure guards. That
+suite was removed on 2026-11-07; its tests run in `crates-task.yml` (see
+[RELEASING.md](RELEASING.md), "Task suites since 2026-11-07").
 
 | Expected result | Remote acceptance boundary |
 | --- | --- |

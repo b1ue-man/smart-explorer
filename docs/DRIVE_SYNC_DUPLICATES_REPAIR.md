@@ -4,6 +4,10 @@ Updated: 2026-09-30. Delivered with the Direct-opening repair batch in
 [v0.5.167](https://github.com/b1ue-man/smart-explorer/releases/tag/v0.5.167).
 Combined remote acceptance and publication succeeded; evidence is recorded below.
 
+Update 2026-11-07: the suite named below (`native/test-direct-open-task.py`,
+`direct-open-task.yml`) was removed; its cases run in `crates-task.yml`
+(`docs/RELEASING.md`, "Task suites since 2026-11-07").
+
 ## Goal and evidence
 
 The complete batch includes the Direct-opening/recovery work in

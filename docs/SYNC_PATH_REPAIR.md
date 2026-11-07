@@ -64,10 +64,12 @@ an explicit error instead of falling through to a local filesystem operation.
 | Preserve safe sync across namespaces | VFS backend metadata/cache interface, sync pair guard, mirror/bisync launch | Equal path text on different remotes works; identical/nested roots in the same namespace are refused; browsing caches do not hide live changes; existing backup, conflict, cancellation and retry semantics remain intact. |
 
 After all implementation, one checked-in `native/test-sync-paths-task.py`
-entrypoint will cover these expectations and directly affected existing safety
-integrations through one exact-candidate GitHub Actions dispatch. It reuses a
-source-bound library fixture or an incremental host library build, with isolated
-app data and local/loopback fixtures on remote Linux and Windows runners.
+entrypoint covered these expectations and directly affected existing safety
+integrations through one exact-candidate GitHub Actions dispatch, with isolated
+app data and local/loopback fixtures on remote Linux and Windows runners. That suite
+was removed on 2026-11-07: the ordinary cases run in `crates-task.yml`, the seven
+ignored ones in its group "Sync paths and links" (see [RELEASING.md](RELEASING.md),
+"Task suites since 2026-11-07").
 No build, compiler or test entrypoint runs on the initiating workstation.
 Only after the suite is evaluated successfully may the existing `build.yml`
 complete-release transaction run for the pushed candidate. No intermediate

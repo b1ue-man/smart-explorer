@@ -196,6 +196,16 @@ Android-APIs: `docs/refs/android-apis.md`, `docs/refs/android-platform.md`; CI: 
 ## Bauen, Prüfen, Konventionen
 - Keine lokalen Builds/Tests (AGENTS.md); Prüfung ausschließlich über die eine Remote-Task-Suite je Batch
   (Android: `.github/workflows/android-task.yml` → `android/test-android-task.sh`).
+- Alle Rust-Tests: `.github/workflows/crates-task.yml` → `native/test-crates-task.py` (Teile `workspace`
+  Linux/Windows, `windows-gnu`, `android`, `agent`, `servers`). `workspace` führt auch die `#[ignore]`-Tests
+  aus, die eine eigene Umgebung brauchen (`IGNORED_GROUPS`: Direct-Öffnen und Sync-Pfade mit isolierten
+  App-Daten, egui-Harness, Windows-Zugriffsfixtures mit Administratortoken); `servers` testet die Pakete
+  `share-server` und `se-agent` (dessen Testdatei `se-agent/tests/remote_drive_task.rs`). Tests, die Dienste,
+  Server, Geräte, Netzwerkumgebung, Programme, Rechte oder Umgebungsvariablen einer Suite brauchen, tragen
+  `#[ignore = "<Bedarf>; Suite <Name>"]` und laufen nur in dieser Suite; `crates-task` hat keine Liste
+  übersprungener Tests. Eigene Suiten bleiben nur für Tests mit echten Servern, Containern,
+  Treibern, Geräten oder Desktop-Sitzungen. Am 2026-11-07 entfielen 8 Suiten, und 8 Suiten sowie ein Skript gingen in ein Ziel auf
+  (`docs/RELEASING.md`, „Task suites since 2026-11-07“).
 - Aktiver Gesamtbatch B1–B8/P31/P32: `.github/workflows/review-task.yml` →
   `native/test-review-task.sh`; Auswahl und Meilensteinbindung in
   `native/review-task-manifest.json`, Linux-/Windows-Entwicklungsausgaben und
@@ -203,22 +213,23 @@ Android-APIs: `docs/refs/android-apis.md`, `docs/refs/android-platform.md`; CI: 
   stehen die frische normale Gesamtreview und die zwei unabhängigen
   Release-Regressionsreviews. Vertrag: `docs/refs/rv1-remote-suite.md`.
   Die früheren RV1-Fälle dieses Dokuments sind historische Recherche.
-- Windows-Startregression 0.5.170: `startup-regression-task.yml` →
-  `native/test-startup-regression-task.py`, reale bestehende DACLs und Worker-Handoff
-  aus v0.5.169 mit den inkrementellen Development-Ausgaben derselben RV1-Caches.
+- Windows-Startregression 0.5.170: Fall C08 von `sync-reliability-task.yml` (die frühere Suite
+  `startup-regression-task.yml` ging am 2026-11-07 darin auf): reale bestehende DACLs und Worker-Handoff
+  aus dem veröffentlichten v0.5.169 (Download aus dem GitHub Release).
 - KI-Agenten-Plugin 2026-10-12: `ai-plugin-task.yml` → `native/test-ai-plugin-task.py` (Präfix
   `mcp_task_`, Linux/Windows mit MCP-E2E über beide Protokoll-Lebenszyklen, SSH-/Share-Exec,
   echten `claude`-/`codex`-CLIs, plus Android-Build). Plan: `docs/plaene/2026-10-12-ki-agenten-plugin/`.
-- Analyse-ID, Plugin-Vorrang und Shell-Sitzungen 2026-10-14: `analysis-plugin-task.yml` →
-  `native/test-analysis-plugin-task.py` (Präfixe `analysis_id_task_`, `mcp_task_`,
-  `shell_session_task_`; Linux mit OpenSSH-Container und Share-Paar, Windows mit lokaler
-  PowerShell). Plan: `docs/plaene/2026-10-14-analyse-id-plugin-vorrang/`.
+  Seit 2026-11-07 enthält sie auch die frühere Suite `analysis-plugin-task.yml` (Analyse-ID,
+  Plugin-Vorrang und Shell-Sitzungen 2026-10-14): Vorrangabsatz und `alwaysLoad` in der Katalogprüfung,
+  die Stufen `ssh-sessions` und `share-sessions` (Linux mit OpenSSH-Container und Share-Paar; Präfixe
+  `analysis_id_task_`, `shell_session_task_` laufen als Crate-Tests in `crates-task.yml`).
+  Plan: `docs/plaene/2026-10-14-analyse-id-plugin-vorrang/`.
 - Echte Terminalsitzungen 2026-10-14: `terminal-task.yml` → `native/test-terminal-task.py`
   (Präfix `terminal_task_`; Linux mit OpenSSH-Container und Share-Paar unter PTY, Windows mit
   Share-Paar unter ConPTY über pywinpty). Plan: `docs/plaene/2026-10-14-echtes-terminal/`.
 - Sicherheitslücken 2026-10-16: `luecken-task.yml` → `native/test-luecken-task.py` (Präfix
   `luecken_task_`; Jobs `suite` Linux/Windows, `android` (Build) und `android-device`
-  (Emulator). Stufen: `unit` (mindestens Linux 175, Windows 141 Tests mit Namensabgleich), `server`
+  (Emulator). Stufen: `unit` (mindestens Linux 169, Windows 139 Tests mit Namensabgleich), `server`
   (Kandidaten-`se-share-server` und `share-server/Cargo.lock`: `cargo build --locked`, Tests,
   `cargo audit` beider Locks; `native/luecken-task-server.py`), `hostkeys` (statisch: ältere
   Suiten bestätigen den Hostschlüssel), `secrets`, `ssh` (OpenSSH-Container, `@revoked`,
@@ -236,8 +247,8 @@ Android-APIs: `docs/refs/android-apis.md`, `docs/refs/android-platform.md`; CI: 
 - Ordner schnell löschen 2026-10-14: `delete-speed-task.yml` → `native/test-delete-speed-task.py`
   (Präfix `delete_speed_task_`, Linux/Windows; Linux mit Share-Paar, OpenSSH-Container und
   pyftpdlib). Plan: `docs/plaene/2026-10-14-ordner-loeschen-schnell/`.
-- Sync-Transparenz 2026-10-08: `sync-transparency-task.yml` → `native/test-sync-transparency-task.py`
-  (Präfix `sync_transparency_task_`, Linux/Windows plus Android-Build). Plan: `docs/plaene/2026-10-08-sync-transparenz/`.
+- Sync-Transparenz 2026-10-08: Präfix `sync_transparency_task_`, Crate-Tests in `crates-task.yml`
+  (die Suite `sync-transparency-task.yml` entfiel am 2026-11-07). Plan: `docs/plaene/2026-10-08-sync-transparenz/`.
 - Sync-Verlässlichkeit: `sync-reliability-task.yml` → `native/test-sync-reliability-task.py`
   als einziger Remote-Einstieg für native Provider-/Job-/Wiederanlaufverträge und
   echtes Android-Altappupdate. Plan und Ergebnisorakel: `docs/plaene/2026-10-04-sync-verlaesslichkeit/`.
@@ -247,5 +258,6 @@ Android-APIs: `docs/refs/android-apis.md`, `docs/refs/android-platform.md`; CI: 
 - Release-APK: `android/build-release-apk.sh` (Job `android-release-apk` in `build.yml`), Signatur aus Repo-Secrets.
 - Neue Rust-Dateien < 500 Zeilen; Test-Präfix je Batch (Android: `android_task_`, Übertragungs-Engine:
   `transfer_engine_task_`, Suite `native/test-transfer-engine-task.sh` über `transfer-engine-task.yml`;
-  Android-Hintergrund/Analyse: `android_background_task_`, Suite `native/test-android-background-task.sh` über
-  `android-background-task.yml`, Gerätestufen in `android/test-android-task.sh`).
+  Android-Hintergrund/Analyse: `android_background_task_`, Crate-Tests in `crates-task.yml`, Share-Server-Tests
+  im Teil `servers`, Gerätestufen in `android/test-android-task.sh` über `android-task.yml`; die Suite
+  `android-background-task.yml` ging dort am 2026-11-07 auf).

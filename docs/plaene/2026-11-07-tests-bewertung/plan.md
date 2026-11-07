@@ -52,3 +52,28 @@ Reihenfolge: T1 → T2, T3, T5 parallel, getrennt nach Dateien → T4 → Gesamt
   - I5 für Android;
   - I6 für die Suiten.
 - T3 folgt als zweiter Teil von I6. Danach kommt T4 (Register), dann die Gesamtreview.
+- 2026-11-07, T2 bis T5 umgesetzt. Kompiliert ist noch nichts, geprüft nur statisch: rustfmt ohne neue Abweichung, Python, Shell, PowerShell, JSON und actionlint.
+  - T2:
+    - 319 Rust-Tests und 18 Android-Tests sind Fälle ihres Ziels.
+      - Die Fälle heißen nach dem früheren Test.
+      - In storage und in Teilen von engine nennt ein Fehlschlag den Fall.
+    - 25 Rust-Tests und 16 Android-Tests sind gelöscht.
+    - 67 Tests blieben eigene Tests, je mit Grund: anderer Aufbau, andere Plattformbedingung, anderer Ignorier-Status oder eine Datei an der 500-Zeilen-Grenze.
+  - T3:
+    - 31 Tests sind neu `#[ignore]` mit Bedarf und Suite, und 286 bestehende Gründe nennen jetzt ihre Suite.
+    - `crates-task` braucht keine `skips`-Liste mehr.
+  - T4:
+    - `docs/tests/register.tsv` verzeichnet 5 316 Tests: 5 281 behalten, 35 unklar.
+    - Eine Suite fehlt nur bei den 8 Tests der zwei Instrumentierungsklassen ohne Läufer (TODO SUITES-ANDROID-KLASSEN).
+    - `native/test-register.py` prüft das Register in `crates-task`.
+  - T5:
+    - 16 Workflows und 18 Skripte sind entfernt.
+    - `crates-task` hat zusätzlich:
+      - den Job `servers` für share-server und se-agent;
+      - je OS die ignorierten Tests der zusammengeführten Suiten;
+      - die systemd-Prüfung;
+      - das Übersetzen der Instrumentierungsquellen.
+    - Die bleibenden Suiten verweisen nur auf Bestehendes, und die Stapel-Gates sind entfallen.
+- Nächster Schritt: zwei Opus-Reviews mit Effort xhigh, danach ein Lauf von `crates-task`.
+  - Review A prüft die vier Haiku-Pakete I1 bis I4.
+  - Review B prüft I5, I6 und das Register, also die Gesamtreview vor dem Test.

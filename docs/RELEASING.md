@@ -210,7 +210,8 @@ run:
 - `native/assets/dokany-private/corresponding-source.zip`.
 
 The current retained set was approved in run `34218461978` at source
-`0bfdc0665ba746493304030dc18e89bde11e36d6`. Exact payload/provenance identities and
+`0bfdc0665ba746493304030dc18e89bde11e36d6` (since the history rewrite of 2026-11-01
+`b0e82b474d8e5457700292478f96e9d1258af754`, `docs/plaene/2026-11-01-idealzustand/commit-map.txt`). Exact payload/provenance identities and
 observed continuation/fallback behavior are recorded in
 [MOUNT_BULK_ACCESS.md](MOUNT_BULK_ACCESS.md#accepted-exact-candidate-2026-09-08).
 The older `34049677053` approval is historical provenance for the preceding
@@ -281,6 +282,68 @@ packing, Linux 13.1 (desktop app) and 17.9 (static programs) plus 1.1 for stagin
 
 ## Cut a release
 
+### Task suites since 2026-11-07
+
+`.github/workflows/crates-task.yml` (`native/test-crates-task.py`) is the suite of every Rust test.
+Part `workspace` runs on Linux and Windows: all crate tests with `cargo test` (one thread per
+binary), the programs and their integration tests with cargo-nextest, and then the crate tests that
+are `#[ignore]` because they need an environment a plain run lacks, each group with that
+environment (`IGNORED_GROUPS` in the script): direct opening and reconnect, and sync paths and
+links, with isolated app data and the suite switches (Linux and Windows); the egui layout harness
+with its visuals folder (Linux); real ACL, token, junction and read-helper fixtures with the
+runner's administrator token and `SeBackupPrivilege` (Windows; assumed for `windows-2025`, the
+group fails with the reason when one is missing). The other parts: `windows-gnu` (GNU ld),
+`android` (JNI library, Kotlin, JVM tests), `agent` (SSH-agent bundles) and `servers` (Linux:
+`share-server` with `tests/relay_startup.rs` and `se-agent`, the two packages outside the
+workspace). A change needs no suite of its own for such tests; a suite of its own remains only
+where the test needs real servers, containers, a driver, a device or a desktop session.
+
+On 2026-11-07 the evaluation of the suites (TODO TESTS-BEWERTUNG) removed eight suites whose
+tests crates-task already ran: `fixes-2026-10-27`, `ideal`, `lan-cleanup`, `media-navigation`,
+`mount-recovery-cache`, `share-write-mount-save`, `sync-transparency` and `windows-direct`, with
+their scripts and `native/test-ci-automation-task.ps1` (it checked the former release wrapper; the
+size and SHA-256 of every asset are checked by `release.yml` at each publication). Eight suites and one
+script were merged: `analysis-plugin` into `ai-plugin-task.yml` (stages `ssh-sessions`, `share-sessions`,
+priority paragraph and `alwaysLoad` in the catalog check), `android-background` into
+`android-task.yml` (`BackgroundReachTaskTest` and `BootPrepTaskTest` run in its device job; the
+Share server tests run in crates-task `servers`), `startup-regression` into `sync-reliability-task.yml`
+(case C08), and `direct-open`, `gui-design`, `search-recursive-access`, `share-remote`,
+`sync-paths` and `native/test-remote-drive-task.sh` into crates-task. The batch gates against the
+base commits of earlier batches (rustfmt and clippy on the lines since a base commit, and the
+`fetch-depth: 0` checkouts, Windows targets and MinGW installs that only served them) are gone from
+the remaining suites `filter-transfer`, `cli-discoverable-update`, `transfer-engine`, `luecken`,
+`ai-plugin`, `delete-speed`, `links` and the host job of `android-task`; `build.yml` checks rustfmt and
+clippy at each push (`luecken-task.yml` keeps `fetch-depth: 0` because its update stage reads the
+published se 0.5.180 from the update feed of that commit). Expected test counts and test lists of
+these suites name the tests that exist after the merges of the evaluation: a merged test is a table
+test, and its old name remains as a plain function (a table row) without `#[test]`, so counts come
+from functions with `#[test]` or `#[tokio::test]`. The paragraphs below that name the removed suites
+are history.
+
+Every Rust test that needs services, servers, devices, a network environment, installed programs,
+rights or environment variables of one suite carries `#[ignore = "<need>; Suite <name>"]`; a plain
+`cargo test` (build.yml, crates-task) does not start it, and the suite named in the attribute starts
+it on purpose with `--ignored` or `--include-ignored` and the environment it builds. crates-task has
+no list of skipped tests any more. Where the suites start them: `sync-reliability-task` (the five
+tests that need the provider manifest or a live Google account, `--include-ignored --exact`);
+`review-task` (stage `runtime-behavior` of `native/review-task-native.py`, cases in the manifest
+section `native.runtime`: the six `review_task_s09_transport_*` tests with the runner's private
+IPv4 interface from `SE_REVIEW_LAN_IP`, `_IFINDEX` and `_IFNAME`, the three `review_task_y156_*`
+tests with isolated app data, on Linux the mounts of `native/review-task-runtime.sh`
+(`review_task_publishing_never_replaces_on_network_and_fuse_mounts` on an sshfs mount,
+`review_task_fat_and_exfat_targets_report_their_limits` on FAT32 and exFAT loop images) and, in a
+second run of `review-task-runtime.sh --watch-limit`, `review_task_watch_limit_falls_back_to_polling`
+under `fs.inotify.max_user_watches=16`; the stage `native-behavior` starts the OpenH264, GPU,
+Media Foundation and candidate-`se` tests with `--include-ignored`);
+`mount-optimization-task` (`mount_optimization_task_private_runtime_selection_and_rejections` with
+the official Dokany runtime and `SMART_EXPLORER_DOKANY_DLL_SHA256`); `speed-setup-task` and
+`fixes-2026-10-28-task` (`removable_media_task_paste_into_root_and_folder` on the attached FAT32 and
+exFAT volumes); crates-task (the groups of `IGNORED_GROUPS` and, on Linux, the program test
+`real_systemd_cgroup_exec_provider_contains_and_drains_processes` of `se_cli`, which fails instead of
+passing when the host has no systemd manager). `desktop_task_gnome_extension_static` needs `node`,
+fails visibly without it and stays without `#[ignore]` because the rechte-desktop-tresore suite
+lists it as an ordinary test.
+
 For the historical 0.5.150 Dokany request-delivery correction, the task-level pipeline was
 `.github/workflows/mount-batching-task.yml`, bound by its full `candidate_sha`
 input to the pushed source. It invokes only `native/test-mount-batching-task.ps1`
@@ -319,22 +382,16 @@ not the historical workflow or a second validation pipeline.
 See [MOUNT_BULK_ACCESS.md](MOUNT_BULK_ACCESS.md) for the current task's scope;
 [MOUNT_VAULT_METADATA.md](MOUNT_VAULT_METADATA.md) records the preceding work.
 
-The current search/recursive/read-access batch uses only
-`native/test-search-recursive-access-task.py` through
-`.github/workflows/search-recursive-access-task.yml`, with the full pushed
-`candidate_sha` matching the selected `main` ref. Linux and Windows run the same
-entrypoint with directly affected host integrations; Windows adds real ACL,
-process-authenticated read-helper and clipboard-stream cases. The script obtains
-the library fixture path from Cargo's artifact records, builds only that affected
-component incrementally if no exact source/hash-bound binary was supplied, and
-reuses it for the entire suite. Job/task timeouts are 190/185 minutes. A retained,
-hash-verified fixture cache is keyed by native build inputs and compiler
-identity; orchestration-only retries reuse that binary. Workspace crate output
-is also retained in the Cargo cache for incremental source fixes. Diagnostics
-include the selected cases, build output and source/binary hashes. This pipeline
-does not publish. After successful acceptance, dispatch the existing `build.yml`
-complete-release transaction for that exact source SHA; never run another
-historical task suite or a verification branch for the same candidate.
+The search, recursive-navigation and read-access batch (0.5.160) had its own suite,
+`native/test-search-recursive-access-task.py` (`search-recursive-access-task.yml`), until
+2026-11-07. Its host cases are ordinary crate tests that crates-task runs on Linux and Windows; the
+four tests that need real ACL, impersonation-token, junction and process-authenticated
+read-helper fixtures (`analytics_access_task_real_denied_directory_locked_files_and_unchanged_acl`,
+`analytics_access_task_restricted_identity_never_falls_back_to_process_authority`,
+`analytics_access_task_redirect_children_are_traversal_boundaries`,
+`search_recursive_access_task_authenticated_helper_reuses_read_handles_in_parent`) run in the Windows
+group "Windows access fixtures" of crates-task, which needs the runner's administrator token and
+`SeBackupPrivilege`. See [ANALYTICS_ACCESS.md](ANALYTICS_ACCESS.md) and TODO F2.
 
 The historical protected-storage-analysis follow-up had one entrypoint,
 `native/test-analytics-access-task.ps1`, selected by the exact-SHA
@@ -386,36 +443,22 @@ Share/HTTP fixtures. The job/entrypoint timeouts are 180/170 minutes. The
 entrypoint records source and binary identity in `approval.json`; use that same
 suite for relevant fix retries. See [COPY_PASTE_REPAIR.md](COPY_PASTE_REPAIR.md).
 
-For the compact desktop GUI correction and Drive scan follow-up, dispatch only
-`.github/workflows/gui-design-task.yml` with the completed candidate SHA.
-Its single entrypoint is `bash native/test-gui-design-task.sh` on Ubuntu, with
-120/110-minute job/entrypoint timeouts. It builds only the affected host library
-development fixture incrementally and executes the `gui_design_task_` selector
-once, including isolated GUI input, window geometry, complete diagnostic clipboard
-output, optional empty Drive pages and safe name/mutation regressions. The artifact contains candidate and
-binary hashes, protocol/layout results, actual egui paint geometry and PNG
-previews for visual review. An existing fixture binary can be supplied through
-`SMART_EXPLORER_TASK_BINARY`, `SMART_EXPLORER_TASK_SOURCE_SHA` and
-`SMART_EXPLORER_TASK_BINARY_SHA256`; mismatches fail before execution.
-This entrypoint must not be invoked locally by Codex. After evaluating this
-suite, dispatch the existing `build.yml` complete-release mode for the same
-source candidate; its stable top-level release wrapper owns publication.
-See the [desktop correction plan](superpowers/plans/2026-09-15-desktop-gui-correction.md)
-and [Drive follow-up evidence](superpowers/plans/2026-09-15-drive-scan-followup.md).
+The compact desktop GUI correction and Drive scan follow-up (`gui_design_task_`) had the suite
+`native/test-gui-design-task.sh` (`gui-design-task.yml`) until 2026-11-07. Fifteen of its nineteen
+cases are ordinary crate tests; the four egui harness tests (light and dark, minimum and desktop
+window size) run in the crates-task group "GUI layout harness" on Linux with
+`SMART_EXPLORER_GUI_TASK=1`; they write one JSON paint dump per view into
+`native/target/crates-task-logs/gui-visuals`, which the job uploads. The PNG preview that the old
+suite rendered from those dumps (Pillow, NumPy) contained no check and is gone. See the
+[desktop correction plan](superpowers/plans/2026-09-15-desktop-gui-correction.md) and
+[Drive follow-up evidence](superpowers/plans/2026-09-15-drive-scan-followup.md).
 
-For the connection-cleanup / Drive-duplicates / LAN-presence / uplink-sharing
-batch, use only `native/test-lan-cleanup-task.sh` through the exact-SHA
-`.github/workflows/lan-cleanup-task.yml` Ubuntu dispatch. It runs the
-`lan_cleanup_task_` and `analytics_access_task_` library cases plus four
-directly affected integrations with one build job, checks the new CLI surface,
-and then gates only what the batch changed: rustfmt per changed file (stdin
-mode, never descending into other modules) and clippy for the host and the
-`x86_64-pc-windows-gnu` target (the workflow installs mingw-w64 for `ring`),
-matched against the lines the batch added or changed; a compile error anywhere
-still fails it. The job/step timeouts are 90/80 minutes and the Cargo cache is
-kept on failure so fix reruns rebuild only the crate. Formatting and dead-code
-drift outside the batch stays tracked as [TODO.md](TODO.md) H1 rather than
-failing a feature batch.
+The connection-cleanup / Drive-duplicates / LAN-presence / uplink-sharing batch had the suite
+`native/test-lan-cleanup-task.sh` (`lan-cleanup-task.yml`) until 2026-11-07. Its 65 library cases
+(`lan_cleanup_task_`, `analytics_access_task_`, six integration tests) are ordinary crate tests that
+crates-task runs; the per-batch rustfmt and clippy gates on the changed lines are gone, formatting
+and clippy are checked by `build.yml` at each push. Formatting and dead-code drift outside a batch
+stays tracked as [TODO.md](TODO.md) H1.
 
 For the terminal discoverability / `se update` batch, use only
 `native/test-cli-discoverable-update-task.sh` through the exact-SHA
@@ -439,22 +482,15 @@ update-source rules and gates rustfmt and host/`x86_64-pc-windows-gnu` clippy on
 the lines the batch changed. See the
 [batch plan](superpowers/plans/2026-09-26-cli-discoverable-update.md).
 
-For the sync endpoint / cross-remote compatibility batch, dispatch only
-`.github/workflows/sync-paths-task.yml` with the full pushed candidate SHA. Its
-single `python native/test-sync-paths-task.py` entrypoint runs on Linux and Windows,
-reuses a source-bound library fixture or the affected incremental host library
-build, and preserves the Cargo and fixture caches for fix retries. Job/entrypoint
-timeouts are 190/185 minutes. The isolated suite covers picker/setup provenance,
-literal endpoint persistence, all existing backend pairings at the VFS boundary,
-real loopback Share-to-Share/Share-to-local sync, and directly affected backup,
-conflict, retry, WebDAV and Drive integration behavior. It does not contact users'
-remote accounts. Artifacts include candidate/binary identity and acceptance logs.
-The follow-up link/junction batch uses this same entrypoint and workflow. It adds
-real Windows junction and Unix link fixtures, cloud-tag classification, protected
-counterparts/baselines, incremental recovery, quick mirror and agent hash fallback.
-Cloud-provider account access is not simulated as a live provider certification.
-Codex must not invoke this entrypoint locally. See [SYNC_PATH_REPAIR.md](SYNC_PATH_REPAIR.md)
-and [SYNC_LINK_REPAIR.md](SYNC_LINK_REPAIR.md).
+The sync endpoint / cross-remote compatibility batch and its link/junction follow-up
+(`sync_paths_task_`, `sync_links_task_`) had the suite `native/test-sync-paths-task.py`
+(`sync-paths-task.yml`) until 2026-11-07. Its directly affected integrations are ordinary crate
+tests; the seven tests that need isolated app data and the switches
+`SMART_EXPLORER_COPY_PASTE_TASK=1` and `SMART_EXPLORER_ANALYTICS_TASK=1` (all backend pairs,
+picker and quick-action provenance, same paths on different remotes, saved local job, real Share
+cross-peer sync, partial-result notice, cross-remote counterpart protection) run in the crates-task
+group "Sync paths and links" on Linux and Windows. They do not contact users' remote accounts. See
+[SYNC_PATH_REPAIR.md](SYNC_PATH_REPAIR.md) and [SYNC_LINK_REPAIR.md](SYNC_LINK_REPAIR.md).
 
 The release is one terminal transaction, started only after the complete task
 batch and its single task-level suite are finished. Do not bump the version or
@@ -498,33 +534,23 @@ callbacks and unloads normally.
 See [the evidence and milestone plan](WINDOWS_REMOTE_REGRESSION.md). Codex must
 not invoke this task entrypoint on the workstation.
 
-For the combined Direct Android-to-desktop opening and Drive sync conflict repair, dispatch only
-`.github/workflows/direct-open-task.yml` with the full pushed `candidate_sha`.
-Its single `python native/test-direct-open-task.py` entrypoint runs the focused
-editor/recovery/download cases, controlled Drive HTTP duplicate transactions,
-and directly affected transport/sync integrations on Windows and Linux.
-Linux also compiles the changed Kotlin consumer and runs only its conflict JSON
-contract fixture through Gradle, without an APK or Android native build.
-It uses one source/hash-bound development library fixture per
-host, reusing cached output or incrementally building that library when needed.
-Job/entrypoint timeouts are 250/245 minutes. Tests use isolated profiles and a
-Windows credential namespace. Real authenticated Direct and Room loopback peers
-cross daemon/agent IPC with a forced connection drop; this does not emulate
-Android Doze or a physical Wi-Fi transition. Evidence and limits are recorded in
-[the opening plan](DIRECT_REMOTE_OPEN_REPAIR.md) and
-[the sync plan](DRIVE_SYNC_DUPLICATES_REPAIR.md). After this suite succeeds, use the
-same terminal complete-release path below, without a separate verification run.
+The combined Direct Android-to-desktop opening and Drive sync conflict repair had the suite
+`native/test-direct-open-task.py` (`direct-open-task.yml`) until 2026-11-07. Its focused cases and
+integrations are ordinary crate tests, and the Kotlin conflict contract
+(`SyncConflictVariantTest`) runs in the JVM unit tests of the crates-task Android part. The ten
+`#[ignore]` tests (eight editor/recovery cases of the GUI, two real Direct and Room reconnect cases
+through the daemon without replay and with revoked access) run in the crates-task group "Direct
+opening and reconnect" on Linux and Windows with isolated app data, `SMART_EXPLORER_COPY_PASTE_TASK=1`
+and a Windows credential namespace. This does not emulate Android Doze or a physical Wi-Fi
+transition. Evidence and limits are recorded in [the opening plan](DIRECT_REMOTE_OPEN_REPAIR.md) and
+[the sync plan](DRIVE_SYNC_DUPLICATES_REPAIR.md).
 
-For the mount recovery and oversized read-cache repair, dispatch only
-`.github/workflows/mount-recovery-cache-task.yml` with the full pushed
-`candidate_sha`. Its one `native/test-mount-recovery-cache-task.ps1` entrypoint
-reuses a hash-bound Windows library fixture or incrementally builds that library.
-It covers partial recovery loss, restored payload retry, missing/corrupt journals,
-bounded reads of a synthetic 450-GiB file through the rooted daemon/TCP proxy,
-unseekable fallback, locked-cache reclamation, startup presentation and the
-directly affected write/delete/replace/pin/space contracts. It requires no Dokany
-driver installation and performs no release or workspace build. Job/entrypoint
-timeouts are 180/170 minutes. Scope and evidence:
+The mount recovery and oversized read-cache repair had the suite
+`native/test-mount-recovery-cache-task.ps1` (`mount-recovery-cache-task.yml`) until 2026-11-07. It
+selected 21 ordinary library tests (partial recovery loss, restored payload retry, missing and
+corrupt journals, bounded reads of a synthetic 450-GiB file through the rooted daemon/TCP proxy,
+unseekable fallback, locked-cache reclamation, startup presentation, the write/delete/replace/pin/space
+contracts) that need no Dokany driver; crates-task runs them on Linux and Windows. Scope and evidence:
 [mount recovery and cache repair](MOUNT_RECOVERY_CACHE_REPAIR.md).
 
 For remote automation, dispatch `.github/workflows/build.yml` exactly once from
@@ -775,9 +801,10 @@ publishes a GitHub Release.
 An explicit `workflow_dispatch` with `verify_release_candidate=true`, or the
 non-publishing `verify/v*` push fallback, enables the exact-candidate jobs
 without enabling publication when verification without a release was requested.
-That explicit verify-only path adds the committed Linux, mixed-version, and
-Windows Share/Exec lifecycle runs; it still does not rebuild or rewrite the
-candidate.
+That explicit verify-only path added the committed Linux, mixed-version, and
+Windows Share/Exec lifecycle runs; commit 3f0092b0 (2026-11-02) removed it from
+`build.yml`, and `native/test-share-mixed-version-e2e.sh` has had no caller since
+(`docs/TODO.md` SHARE-MIXED-VERSION).
 
 An explicit `workflow_dispatch` from `main` with only
 `complete_release_source_sha=<full origin/main SHA>` starts the one remote
@@ -805,14 +832,12 @@ Apply fixes, commit/push, and rerun this same suite; no local build/test or extr
 verification pipeline belongs to this batch. Once its results pass, the complete
 release dispatch above starts the terminal transaction without repeating the suite.
 
-The Windows startup correction after 0.5.170 uses `startup-regression-task.yml`
-with the full pushed `candidate_sha` and its single remote-only entrypoint,
-`native/test-startup-regression-task.py`. It reuses the RV1 development cache,
-reproduces the old directory DACL on existing jobs and cloud configuration,
-checks the real OAuth refresh request, and hands off a published v0.5.169 worker
-to the current CLI. Its owned workers are stopped before completion. Once that
-suite passes, the same complete-release dispatch described above publishes the
-corrected release without repeating the suite or changing the release procedure.
+The Windows startup correction after 0.5.170 had the suite `startup-regression-task.yml`
+(`native/test-startup-regression-task.py`) until 2026-11-07. Its behavior cases (old directory DACL
+on existing jobs and cloud configuration, the real OAuth refresh request) are in case C08 of
+`sync-reliability-task.yml`, and so is the hand-off of the published v0.5.169 worker to the current
+CLI (`update --complete-install`): C08 downloads that worker from the GitHub Release v0.5.169 with
+`gh` (the tags no longer carry builds), as C09 does with the published Android app.
 
 The normal release wrapper does not use the verify-only path. On a human-run
 host its one tag push, or its mutually exclusive `release/v*` fallback, starts
