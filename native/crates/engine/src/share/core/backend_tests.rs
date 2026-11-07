@@ -77,7 +77,7 @@ fn remote_drive_task_iroh_mount_reconnects_without_losing_lease() {
         authorization_epoch: 0,
     }));
 
-    let node_b = ShareIrohNode::start("relay-disabled://test", &b, auth_b, tx_b).unwrap();
+    let node_b = ShareIrohNode::start("relay-disabled://test", &b, auth_b.clone(), tx_b).unwrap();
     let node_a = ShareIrohNode::start("relay-disabled://test", &a, auth_a.clone(), tx_a).unwrap();
     let mut candidates = node_b.candidates();
     if let Some(port) = candidates
@@ -248,6 +248,15 @@ fn remote_drive_task_iroh_mount_reconnects_without_losing_lease() {
         "a physical reconnect must replace the transport without remounting",
     );
 
+    // Ended sessions under unchanged rights: the host forgot the lease and
+    // the drive renews it for the same directory under the host's current
+    // rights (R6, plan 2026-11-06-akku-rechte), as a reconnect would.
+    node_b.invalidate_sessions().unwrap();
+    assert_eq!(backend.stat("/Gate/new.txt").unwrap().size, 17);
+
+    // A revoked grant ends the drive: the renewal is refused like a new
+    // connection.
+    auth_b.lock().unwrap().direct_grants[0].state = DirectGrantState::Ignored;
     node_b.invalidate_sessions().unwrap();
     let revoked = backend.stat("/Gate/new.txt").unwrap_err();
     assert_eq!(revoked.kind(), io::ErrorKind::PermissionDenied);

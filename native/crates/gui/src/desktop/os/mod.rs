@@ -46,6 +46,20 @@ pub mod platform;
 #[path = "windows/mod.rs"]
 pub mod platform;
 
+/// The Windows traces (Run value, navigation pane keys, jump list, context
+/// menu) live in the one HKCU of the account, so two transitions at once
+/// see each other's registrations (run 3: `disable` left residue; crates-task
+/// run 42308441438: a test of `control_tests.rs` found the Run value of one
+/// in `preserve_tests.rs`). Every test that changes or checks them holds
+/// this guard; the Linux fixtures have a folder per test and lose nothing.
+#[cfg(test)]
+fn account_traces_one_at_a_time() -> std::sync::MutexGuard<'static, ()> {
+    static ACCOUNT_TRACES: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    ACCOUNT_TRACES
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 #[cfg(test)]
 #[path = "shared/control_tests.rs"]
 mod control_tests;

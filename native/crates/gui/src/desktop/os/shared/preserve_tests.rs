@@ -3,7 +3,7 @@
 //! and the sync daemon's login start stay as they were.
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::MutexGuard;
 
 use super::control::{Control, ShellProcesses, StopReport};
 use super::platform::{self, task_fixtures, PlatformIntegration};
@@ -14,17 +14,11 @@ use crate::desktop::core::ledger::removal_plan;
 use crate::desktop::core::state::{Part, PartSet};
 use crate::share::PeerOpenTarget;
 
-/// The Windows traces (Run value, navigation pane keys, jump list, context
-/// menu) live in the one HKCU of the account, so two transitions at once
-/// see each other's registrations (run 3: `disable` left residue). Tests of
-/// this file that change them run one after the other; the Linux fixtures
-/// have a folder per test and are not affected.
-static ACCOUNT_TRACES: Mutex<()> = Mutex::new(());
-
+/// Tests of this file that change the account's traces run one after the
+/// other and after the transitions of `control_tests.rs`
+/// (`account_traces_one_at_a_time` in `desktop/os/mod.rs`).
 fn one_at_a_time() -> MutexGuard<'static, ()> {
-    ACCOUNT_TRACES
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+    super::account_traces_one_at_a_time()
 }
 
 /// Values between `marker"` and the next `"` in `text`.

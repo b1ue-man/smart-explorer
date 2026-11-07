@@ -129,6 +129,7 @@ fn autostart_present(integration: &PlatformIntegration) -> bool {
 
 #[test]
 fn desktop_task_enable_disable_leaves_no_trace() {
+    let _traces = super::account_traces_one_at_a_time();
     for remove in [false, true] {
         let fixture = Fixture::new();
         let mut integration = fixture.integration();
@@ -182,6 +183,7 @@ fn desktop_task_enable_disable_leaves_no_trace() {
 
 #[test]
 fn desktop_task_remove_without_ledger() {
+    let _traces = super::account_traces_one_at_a_time();
     for with_state in [false, true] {
         let fixture = Fixture::new();
         let mut integration = fixture.integration();
@@ -210,6 +212,7 @@ fn desktop_task_remove_without_ledger() {
 
 #[test]
 fn desktop_task_foreign_values_untouched() {
+    let _traces = super::account_traces_one_at_a_time();
     let fixture = Fixture::new();
     let mut integration = fixture.integration();
     task_fixtures::plant_foreign(fixture.root());
@@ -246,6 +249,7 @@ fn desktop_task_foreign_values_untouched() {
 
 #[test]
 fn desktop_task_user_disabled_autostart_respected() {
+    let _traces = super::account_traces_one_at_a_time();
     let fixture = Fixture::new();
     let mut integration = fixture.integration();
     task_fixtures::switch_off_by_user(fixture.root(), &fixture.gui);
@@ -294,6 +298,7 @@ fn started(gui: &Path) -> usize {
 
 #[test]
 fn desktop_task_halt_survives_gui_start_until_version_change() {
+    let _traces = super::account_traces_one_at_a_time();
     let fixture = Fixture::new();
     let version = env!("CARGO_PKG_VERSION");
     fixture.write_state(Some(version), Vec::new());

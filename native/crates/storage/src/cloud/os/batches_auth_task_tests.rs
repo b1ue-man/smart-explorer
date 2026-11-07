@@ -79,6 +79,9 @@ impl ProviderFixture {
                         Err(error) => panic!("fixture accept: {error}"),
                     }
                 };
+                // Windows hands the accepted socket the listener's
+                // non-blocking mode; the reads below wait with a timeout.
+                stream.set_nonblocking(false).unwrap();
                 stream
                     .set_read_timeout(Some(Duration::from_secs(10)))
                     .unwrap();

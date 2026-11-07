@@ -61,8 +61,20 @@ impl Drop for Fault {
 }
 
 fn raw_directory(path: &Path, sharing: u32) -> File {
+    directory_with_access(path, FILE_READ_ATTRIBUTES | 0x0010_0000, sharing)
+}
+
+/// A foreign reader of the directory's entries: only a handle with data
+/// access (here FILE_LIST_DIRECTORY, 0x0001) takes part in the sharing check
+/// of later opens; one with only attribute and synchronize access reserves
+/// nothing (IoCheckShareAccess), whatever share mode it names.
+fn listing_directory(path: &Path, sharing: u32) -> File {
+    directory_with_access(path, 0x0001 | FILE_READ_ATTRIBUTES | 0x0010_0000, sharing)
+}
+
+fn directory_with_access(path: &Path, access: u32, sharing: u32) -> File {
     fs::OpenOptions::new()
-        .access_mode(FILE_READ_ATTRIBUTES | 0x0010_0000)
+        .access_mode(access)
         .share_mode(sharing)
         .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
         .open(path)
@@ -117,7 +129,7 @@ fn batches_task_transfer_compat_windows_publication_rejects_wrong_type_and_write
         reopen_directory(&file).unwrap_err().kind(),
         io::ErrorKind::InvalidData,
     );
-    let held = raw_directory(root.path(), FILE_SHARE_READ);
+    let held = listing_directory(root.path(), FILE_SHARE_READ);
     let error = reopen_directory(&held).unwrap_err();
     assert_eq!(error.raw_os_error(), Some(32), "{error}");
     assert_eq!(fs::read(&path).unwrap(), b"unchanged");
