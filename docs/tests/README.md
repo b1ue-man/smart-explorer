@@ -1,8 +1,10 @@
 # Testregister
 
 `register.tsv` nennt jeden Test des Repositorys:
-- die Rust-Tests unter `native/crates`, `native/src`, `native/tests`, `share-server` und `se-agent`;
-- die Kotlin-Tests unter `android/app/src/test` und `android/app/src/androidTest`.
+- die Rust-Tests unter `native/crates`, `native/src`, `native/tests`, `share-server` und `se-agent`: jede Funktion mit `#[test]` oder `#[tokio::test]` und jeden Test, den ein `macro_rules!`-Makro erzeugt (je Aufruf ein Test pro `<Name> =>`, so in `native/tests/speed_task/` und `native/tests/transfer_task/speed.rs`);
+- die Kotlin-Tests (`@Test`) unter `android/app/src/test` und `android/app/src/androidTest`.
+
+Die Zeile eines früheren Tests, der als Fall in einem tabellengetriebenen Test aufging, entfällt: sein Name bleibt als gewöhnliche Funktion ohne Testattribut stehen und ist kein Test.
 
 Zu jedem Test nennt es die Anforderung, die er schützt, und die Suite, die ihn ausführt.
 
@@ -28,8 +30,9 @@ Die Datei ist UTF-8, die Spalten sind durch Tab getrennt, die erste Zeile ist di
 | Suite | der Workflow unter `.github/workflows`, der den Test ausführt. Mehrere werden mit `,` getrennt. Führt keine Suite ihn aus, steht dort `keine (<Grund>)`. |
 
 Welche Suite ausführt:
-- Gewöhnliche Rust-Tests und die JVM-Tests der App führt `crates-task` aus.
-- Ein Test mit `#[ignore = "…"]` braucht Dienste, Geräte, Rechte oder Umgebungsvariablen. Ihn startet die Suite, die sein Grund nennt.
+- Gewöhnliche Rust-Tests und die JVM-Tests der App (`android/app/src/test`) führt `crates-task` aus.
+- Ein Rust-Test mit `#[ignore = "<Bedarf>; Suite <Name>"]` braucht Dienste, Geräte, Rechte oder Umgebungsvariablen. Ihn startet die Suite, die sein Grund nennt.
+- Die Instrumentierungstests (`android/app/src/androidTest`) brauchen ein Gerät. Ihre Klassen starten `android-task` (Job `device`), `review-task`, `rechte-desktop-tresore-task`, `luecken-task` und `sync-reliability-task`; welche Klasse wohin gehört, steht in `android/test-android-task.sh` (Klassenwacht von `emulator-run`).
 
 ## Pflege
 
@@ -37,21 +40,24 @@ Welche Suite ausführt:
 - `native/test-register.py` vergleicht das Register mit dem Code. `crates-task` führt die Prüfung unter Linux aus. Sie scheitert:
   - bei einem Test ohne Zeile;
   - bei einer Zeile ohne Test;
-  - bei einem unbekannten Urteil, einer unbekannten Kategorie oder einer unbekannten Suite.
+  - bei einer Zeile mit falscher Spaltenzahl, doppeltem Schlüssel oder leerer Spalte Schützt;
+  - bei einem unbekannten Urteil, einer unbekannten Kategorie oder einer unbekannten Suite;
+  - bei einem Makro, das Tests erzeugt, deren Namen die Prüfung nicht lesen kann.
+- Wer das Register neu erzeugt, liest die Rust-Tests über `rust_tests()` aus `native/test-register.py` (geschriebene und von Makros erzeugte Tests, je mit ihren Attributen), damit Erzeugung und Prüfung dieselben Tests sehen.
 - Die Prüfung liest nur Quelltext. Lokal läuft sie mit `python3 native/test-register.py`.
 - Ein Test, der dasselbe Verhalten wie ein bestehender prüft, wird dessen Tabellenzeile oder Fall. Er entsteht nicht als eigener Test.
 - Eine Testdatei hat höchstens 500 Zeilen (AGENTS.md).
 
 ## Bewertung vom 2026-11-02 und 2026-11-07
 
-Bewertet wurden 5 281 Rust-Tests, 413 Android-Tests und 46 Suiten: 38 Workflows und 8 Einzelskripte.
+Bewertet wurden 5 281 Rust-Tests, dazu 113 Messfälle, die `macro_rules!`-Makros erzeugen, und 413 Android-Tests und 46 Suiten: 38 Workflows und 8 Einzelskripte. Nicht im Bestand der Bewertung waren die 113 Rust-Tests, die Makros erzeugen (sie stehen nicht als `fn <Name>` im Quelltext): die `#[ignore]`-Messläufe in `native/tests/speed_task/` (81), `native/tests/transfer_task/speed.rs` (20) und `native/crates/transfer/src/transfer/os/shared/engine/speed_task_local_tests.rs` (12).
 
 | Ergebnis | Zahl |
 |---|---|
 | Veraltet | 6 von 4 415 Tests der ersten Bewertung, also nicht mehr als die Hälfte. Die Nutzerregel, dann alles zu löschen, greift nicht. |
-| Gelöscht, Rust | 66 am 2026-11-02, 25 am 2026-11-07 |
+| Gelöscht, Rust | 66 am 2026-11-02, 19 am 2026-11-07 |
 | Gelöscht, Android | 16 |
-| Zusammengeführt | als Fälle tabellengetriebener Tests: 319 Rust-Tests und 18 Android-Tests. Weitere 67 Tests blieben eigene Tests, weil Aufbau, Plattformbedingung oder Ignorier-Status ihres Ziels nicht passten. |
+| Zusammengeführt | als Fälle tabellengetriebener Tests: 322 Rust-Tests und 18 Android-Tests. Weitere 68 Tests blieben eigene Tests, weil Aufbau, Plattformbedingung oder Ignorier-Status ihres Ziels nicht passten. |
 | Suiten entfernt | 16 Workflows. Ihre noch wirksamen Prüfungen führen jetzt `crates-task`, `ai-plugin-task`, `android-task` und `sync-reliability-task` aus. |
 
 Die genauen Zahlen der Umsetzung stehen im Plan. Die Bewertungsdaten selbst liegen nicht im Repository. Ihr Ergebnis für jeden heutigen Test ist dieses Register.

@@ -54,16 +54,16 @@ Reihenfolge: T1 → T2, T3, T5 parallel, getrennt nach Dateien → T4 → Gesamt
 - T3 folgt als zweiter Teil von I6. Danach kommt T4 (Register), dann die Gesamtreview.
 - 2026-11-07, T2 bis T5 umgesetzt. Kompiliert ist noch nichts, geprüft nur statisch: rustfmt ohne neue Abweichung, Python, Shell, PowerShell, JSON und actionlint.
   - T2:
-    - 319 Rust-Tests und 18 Android-Tests sind Fälle ihres Ziels.
+    - 322 Rust-Tests und 18 Android-Tests sind Fälle ihres Ziels.
       - Die Fälle heißen nach dem früheren Test.
       - In storage und in Teilen von engine nennt ein Fehlschlag den Fall.
-    - 25 Rust-Tests und 16 Android-Tests sind gelöscht.
+    - 19 Rust-Tests und 16 Android-Tests sind gelöscht.
     - 67 Tests blieben eigene Tests, je mit Grund: anderer Aufbau, andere Plattformbedingung, anderer Ignorier-Status oder eine Datei an der 500-Zeilen-Grenze.
   - T3:
     - 31 Tests sind neu `#[ignore]` mit Bedarf und Suite, und 286 bestehende Gründe nennen jetzt ihre Suite.
     - `crates-task` braucht keine `skips`-Liste mehr.
   - T4:
-    - `docs/tests/register.tsv` verzeichnet 5 316 Tests: 5 281 behalten, 35 unklar.
+    - `docs/tests/register.tsv` verzeichnet 5 430 Tests: 5 282 behalten, 148 unklar. Unter den unklaren sind 113 Messfälle aus `macro_rules!`-Makros, die Review B gefunden hat; die Registerprüfung liest diese Makros jetzt mit.
     - Eine Suite fehlt nur bei den 8 Tests der zwei Instrumentierungsklassen ohne Läufer (TODO SUITES-ANDROID-KLASSEN).
     - `native/test-register.py` prüft das Register in `crates-task`.
   - T5:
@@ -73,7 +73,24 @@ Reihenfolge: T1 → T2, T3, T5 parallel, getrennt nach Dateien → T4 → Gesamt
       - je OS die ignorierten Tests der zusammengeführten Suiten;
       - die systemd-Prüfung;
       - das Übersetzen der Instrumentierungsquellen.
-    - Die bleibenden Suiten verweisen nur auf Bestehendes, und die Stapel-Gates sind entfallen.
-- Nächster Schritt: zwei Opus-Reviews mit Effort xhigh, danach ein Lauf von `crates-task`.
-  - Review A prüft die vier Haiku-Pakete I1 bis I4.
-  - Review B prüft I5, I6 und das Register, also die Gesamtreview vor dem Test.
+    - Die bleibenden Suiten verweisen nur auf Bestehendes. Die Stapel-Gates gegen Basiscommits früherer Stapel sind aus filter-transfer, cli-discoverable-update, transfer-engine, luecken, ai-plugin, delete-speed, links und dem Job `host` von android-task entfallen.
+    - Geblieben sind die Zeilen-Gates gegen Tags in fixes-2026-10-28 (Clippy seit v0.5.187), greeter-keyboard (Clippy seit v0.5.188), speed-setup (Clippy und rustfmt seit v0.5.188) und sync-abgleich (Clippy und rustfmt seit v0.5.189), die Formatstufen gegen Basiscommits in review-task (`c935b763`) und sync-reliability (`a78f4d1c`) und die rustfmt-Stufe der festen Dateiliste in terminal.
+- 2026-11-07, Reviews (Opus, Effort xhigh):
+  - Review A (I1 bis I4) hat behoben:
+    - 3 Kompilierfehler;
+    - einen Fall, dessen Prüfungen beim Zusammenführen verloren gegangen waren;
+    - 5 Löschungen, deren deckender Test sie nicht ganz prüfte; sie sind jetzt Fälle;
+    - die zwei ungedeckten gdrive-Prüfungen;
+    - fehlende Fallnamen in den I1-Tabellen;
+    - vier Dateien ab 500 Zeilen;
+    - neue ungenutzte Importe.
+  - Review B (I5, I6, Register, Dokumente) hat behoben:
+    - die Inventur von rechte-desktop-tresore, die Fallfunktionen als Tests zählte;
+    - ein totes Pflichtpräfix in review-task;
+    - die luecken-Altstände, die jetzt aus dem Release v0.5.180 kommen;
+    - zwei ungenaue Zählfilter;
+    - einen NameError in review-task;
+    - die Makro-Tests im Register.
+  - Offen geblieben und danach behoben: se-agent braucht `tempfile` als Dev-Abhängigkeit, der Lock wird auf dem Runner aufgelöst (`lock-refresh.yml`).
+  - Wiederhergestellt: `screen_task_android_screen_keys_file_current`. Er liest keinen Quelltext. Er vergleicht die Schlüsselliste aus den Android-Testressourcen mit den Rust-Enums, also einen Vertrag zwischen beiden Seiten, den der Kotlin-Test `ScreenTextsTest` voraussetzt.
+- Nächster Schritt: ein Lauf von `crates-task`.

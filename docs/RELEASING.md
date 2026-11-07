@@ -312,9 +312,12 @@ Share server tests run in crates-task `servers`), `startup-regression` into `syn
 base commits of earlier batches (rustfmt and clippy on the lines since a base commit, and the
 `fetch-depth: 0` checkouts, Windows targets and MinGW installs that only served them) are gone from
 the remaining suites `filter-transfer`, `cli-discoverable-update`, `transfer-engine`, `luecken`,
-`ai-plugin`, `delete-speed`, `links` and the host job of `android-task`; `build.yml` checks rustfmt and
-clippy at each push (`luecken-task.yml` keeps `fetch-depth: 0` because its update stage reads the
-published se 0.5.180 from the update feed of that commit). Expected test counts and test lists of
+`ai-plugin`, `delete-speed`, `links` and the host job of `android-task`. The rustfmt and clippy checks
+left are those of `build.yml` (`cargo fmt --all -- --check`, clippy with `-D warnings`); they run on
+pushes and pull requests whose head commit carries neither `[skip ci]` nor `[task candidate]`, and they
+fail on the older drift recorded as [TODO.md](TODO.md) H1 until it is cleared. The update stage of
+`luecken-task.yml` and its Android upgrade job take the published `se` and APK 0.5.180 from the GitHub
+Release v0.5.180 (`gh`, `GH_TOKEN`), as case C08/C09 of `sync-reliability-task.yml` does for v0.5.169. Expected test counts and test lists of
 these suites name the tests that exist after the merges of the evaluation: a merged test is a table
 test, and its old name remains as a plain function (a table row) without `#[test]`, so counts come
 from functions with `#[test]` or `#[tokio::test]`. The paragraphs below that name the removed suites
@@ -338,9 +341,20 @@ Media Foundation and candidate-`se` tests with `--include-ignored`);
 `mount-optimization-task` (`mount_optimization_task_private_runtime_selection_and_rejections` with
 the official Dokany runtime and `SMART_EXPLORER_DOKANY_DLL_SHA256`); `speed-setup-task` and
 `fixes-2026-10-28-task` (`removable_media_task_paste_into_root_and_folder` on the attached FAT32 and
-exFAT volumes); crates-task (the groups of `IGNORED_GROUPS` and, on Linux, the program test
+exFAT volumes; `speed-setup-task` also starts the crash-log and G3 cases of `--test transfer_task`
+against its servers, the `einrichtung_task_` RDP and xrdp cases on its prepared runner and, with
+`measure`, the `speed_task_remote_*` benchmarks); `copy-paste-task` (the 37 `copy_paste_task_` tests,
+`--include-ignored`); `transfer-engine-task` (the container and throughput tests of
+`native/tests/transfer_containers.rs` and `transfer_throughput.rs`, the OLE clipboard round trip on
+Windows); `windows-remote-task`, `mount-batching-task` (their real-Dokany drive tests);
+`rechte-desktop-tresore-task` (every entry of `native/rdt_task/expected_signals.txt` with the option
+`ignored`, and the `--test speed_task` cases of its speed stages); crates-task (the groups of
+`IGNORED_GROUPS` and, on Linux, the program test
 `real_systemd_cgroup_exec_provider_contains_and_drains_processes` of `se_cli`, which fails instead of
-passing when the host has no systemd manager). `desktop_task_gnome_extension_static` needs `node`,
+passing when the host has no systemd manager). Exception: the twelve benchmarks
+`speed_task_local_{small,medium,large}_{gui,cli,move_same_volume,move_cross_volume}` of
+`native/crates/transfer/src/transfer/os/shared/engine/speed_task_local_tests.rs` name
+`rechte-desktop-tresore-task`, but no suite starts them yet (`docs/TODO.md` TESTS-BEWERTUNG). `desktop_task_gnome_extension_static` needs `node`,
 fails visibly without it and stays without `#[ignore]` because the rechte-desktop-tresore suite
 lists it as an ordinary test.
 
@@ -456,8 +470,8 @@ suite rendered from those dumps (Pillow, NumPy) contained no check and is gone. 
 The connection-cleanup / Drive-duplicates / LAN-presence / uplink-sharing batch had the suite
 `native/test-lan-cleanup-task.sh` (`lan-cleanup-task.yml`) until 2026-11-07. Its 65 library cases
 (`lan_cleanup_task_`, `analytics_access_task_`, six integration tests) are ordinary crate tests that
-crates-task runs; the per-batch rustfmt and clippy gates on the changed lines are gone, formatting
-and clippy are checked by `build.yml` at each push. Formatting and dead-code drift outside a batch
+crates-task runs; the per-batch rustfmt and clippy gates on the changed lines are gone, the rustfmt
+and clippy checks left are those of `build.yml`. Formatting and dead-code drift outside a batch
 stays tracked as [TODO.md](TODO.md) H1.
 
 For the terminal discoverability / `se update` batch, use only
