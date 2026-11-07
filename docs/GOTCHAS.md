@@ -200,10 +200,14 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
   `parse_dos` only (unreadable rows stay errors and omissions); `abort` reads
   one closing reply and a second only after 426, so after a transfer that had
   already finished the server's reply to ABOR can still be queued, and
-  `FtpReader` hands the connection back healthy only after a PWD probe answers
-  257; every data stream must end through `finalize_retr_stream`,
-  `finalize_put_stream` or `abort`, otherwise the next data command fails with
-  `FtpError::DataConnectionAlreadyOpen`. suppaftp checks only CR and LF; NUL
+  `FtpReader` hands the connection back healthy only after it has read the 257
+  of a PWD probe, past at most that queued answer (225 or 226, or 426 and 226;
+  read through `finalize_retr_stream` with an empty stream, suppaftp's only
+  public call that reads a reply without a command; any other reply means a
+  reconnect, `streams.rs::pwd_in_step`); every data stream must end through
+  `finalize_retr_stream`, `finalize_put_stream` or `abort`, otherwise the next
+  data command fails with `FtpError::DataConnectionAlreadyOpen`. suppaftp
+  checks only CR and LF; NUL
   and the server's own PWD reply (sent back in the restoring CWD) are checked by
   `errors::command_path` / `errors::working_dir`. The lock entry was edited
   without cargo (TODO `LUECKEN-SUPPAFTP`).

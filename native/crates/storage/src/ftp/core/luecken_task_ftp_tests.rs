@@ -131,21 +131,37 @@ fn luecken_task_ftp_pwd_reply_with_a_delimiter_is_never_sent_back() {
 }
 
 #[test]
-fn luecken_task_ftp_abort_after_a_finished_transfer_reconnects_before_reuse() {
-    let server = Server::start(
-        Script::default(),
-        &[("/data.bin", &[7u8; 16][..]), ("/victim", &b"x"[..])],
-    );
-    let connection = server.connection();
-    let mut reader = connection.open_reader("/data.bin").unwrap();
-    let mut first = [0u8; 1];
-    assert_eq!(reader.read(&mut first).unwrap(), 1);
-    // ABOR after the server's 226: its own 226 for ABOR is still queued.
-    drop(reader);
-    let removed = connection.with_stream_mutation(|stream| stream.rm("/victim").map_err(map));
-    assert!(removed.is_ok(), "{removed:?}: {:?}", server.commands());
-    assert!(server.file("/victim").is_none());
-    assert_eq!(server.accepts(), 2, "the connection was reused out of step");
+fn luecken_task_ftp_abort_after_a_finished_transfer_reads_its_queued_reply() {
+    // (PWD reply, control connections): the ABOR's own 226 is read past to
+    // PWD's 257 and the connection stays; a PWD answered otherwise leaves it
+    // out of step, and it is reconnected before the next command.
+    for (pwd, accepts) in [
+        ("257 \"/\" is current directory", 1),
+        ("550 PWD refused", 2),
+    ] {
+        let script = Script {
+            pwd: pwd.to_string(),
+            ..Script::default()
+        };
+        let server = Server::start(
+            script,
+            &[("/data.bin", &[7u8; 16][..]), ("/victim", &b"x"[..])],
+        );
+        let connection = server.connection();
+        let mut reader = connection.open_reader("/data.bin").unwrap();
+        let mut first = [0u8; 1];
+        assert_eq!(reader.read(&mut first).unwrap(), 1);
+        // ABOR after the server's 226: its own 226 for ABOR is still queued.
+        drop(reader);
+        let removed = connection.with_stream_mutation(|stream| stream.rm("/victim").map_err(map));
+        assert!(
+            removed.is_ok(),
+            "{pwd}: {removed:?}: {:?}",
+            server.commands()
+        );
+        assert!(server.file("/victim").is_none(), "{pwd}");
+        assert_eq!(server.accepts(), accepts, "{pwd}: {:?}", server.commands());
+    }
 }
 
 #[test]

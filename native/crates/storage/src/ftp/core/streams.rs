@@ -200,17 +200,48 @@ impl FtpReader {
 
 /// ABOR of an unfinished RETR. suppaftp 10 reads one closing reply, and a
 /// second one only after 426 (6.3 always read two). When the transfer had
-/// already ended, the server's own answer to ABOR (225, or a second 226) can
-/// still be queued and would pass for the reply to the next command. PWD
-/// answers 257, which no ABOR reply is: only then is the connection handed
-/// back in step; otherwise it is reconnected before its next use.
+/// already ended, the server's own answer to ABOR is still queued (RFC 959
+/// §4.1.3: one more 226; 225 from vsftpd and pyftpdlib) and would pass for
+/// the reply to the next command. The connection is handed back in step only
+/// once PWD's 257, which no ABOR reply is, has been read (`pwd_in_step`);
+/// otherwise it is reconnected before its next use.
 fn abort(control: &mut RustlsFtpStream, data: Box<dyn Read + Send>) -> (io::Result<()>, bool) {
     let result = control.abort(data).map_err(super::errors::map);
-    let in_step = result.is_ok()
-        && control
-            .custom_command("PWD", &[Status::PathCreated])
-            .is_ok();
+    let in_step = result.is_ok() && pwd_in_step(control);
     (result, in_step)
+}
+
+/// PWD after an ABOR, read up to its 257. Before it only the ABOR's own
+/// queued answer may come: 225 or 226, or 426 and then 226 from a server that
+/// answers as if the transfer were still running. Every other reply, or a
+/// read that fails, leaves the connection out of step. A queued answer is
+/// read without a command, so it never costs a login: the transfer's 226 had
+/// arrived, and reconnecting for the ABOR's own answer would log in again
+/// for every range cut after the server had sent its end (G3-11).
+fn pwd_in_step(control: &mut RustlsFtpStream) -> bool {
+    let queued = match control.custom_command("PWD", &[Status::PathCreated]) {
+        Ok(_) => return true,
+        Err(FtpError::UnexpectedResponse(response)) => response.status,
+        Err(_) => return false,
+    };
+    match queued {
+        Status::DataConnectionOpen | Status::ClosingDataConnection => {}
+        // The 226 that follows a 426.
+        Status::TransferAborted if next_reply(control).is_ok() => {}
+        _ => return false,
+    }
+    matches!(
+        next_reply(control),
+        Err(FtpError::UnexpectedResponse(response)) if response.status == Status::PathCreated
+    )
+}
+
+/// One reply, read without sending a command. suppaftp 10 has no public call
+/// for it; `finalize_retr_stream` drops the stream it gets (an empty one
+/// here), reads exactly one reply, and answers `Ok` for 226 or 250 and
+/// `UnexpectedResponse` with the reply for any other code.
+fn next_reply(control: &mut RustlsFtpStream) -> suppaftp::FtpResult<()> {
+    control.finalize_retr_stream(io::empty())
 }
 
 impl Read for FtpReader {

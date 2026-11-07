@@ -185,6 +185,8 @@ fn serve(
                 )?
             }
             "RETR" => reply(&mut control, "550 No such file")?,
+            // ABOR after the transfer's 226 (RFC 959 §4.1.3).
+            "ABOR" => reply(&mut control, "226 ABOR command successful")?,
             "QUIT" => return reply(&mut control, "221 bye"),
             _ => reply(&mut control, "500 unsupported")?,
         }
@@ -208,7 +210,8 @@ fn accept_data(passive: Option<TcpListener>) -> io::Result<TcpStream> {
 }
 
 /// 150, the bytes from `offset`, then 226; with `hold` the data connection
-/// stays open until the client's ABOR, answered 426 and 226.
+/// stays open until the client's ABOR, answered 426 and 226. A transfer that
+/// had ended answers a later ABOR with 226 in `serve`.
 fn retrieve(
     control: &mut TcpStream,
     reader: &mut BufReader<TcpStream>,
@@ -219,7 +222,12 @@ fn retrieve(
 ) -> io::Result<()> {
     let mut data = accept_data(passive)?;
     reply(control, "150 opening data connection")?;
-    data.write_all(&content()[offset..])?;
+    if data.write_all(&content()[offset..]).is_err() {
+        // The client closed the data connection before the end (its ABOR
+        // follows): 426, and the control connection stays, like a server's.
+        drop(data);
+        return reply(control, "426 Connection closed; transfer aborted");
+    }
     if !hold {
         drop(data);
         return reply(control, "226 done");
@@ -273,6 +281,10 @@ fn speed_task_ftp_range_reader_aborts_after_len_and_resyncs() {
     assert_eq!(bytes, content()[1_000..11_000], "exactly len bytes");
     assert!(server.saw("REST 1000"));
     assert!(server.saw("ABOR"), "the transfer is cut after the range");
+    // A range cut after the server had sent its end (offset 0 is not held):
+    // the ABOR's own 226 is read past to PWD's 257, the connection stays.
+    let head = read_range(&backend, 0, 1_000).unwrap().expect("ranges");
+    assert_eq!(head, content()[..1_000]);
     // The connection went back in step (PWD answered 257 after the abort):
     // the next range runs on it without a new login.
     let again = read_range(&backend, 20_000, 5_000)

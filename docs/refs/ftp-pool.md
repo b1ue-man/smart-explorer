@@ -176,8 +176,13 @@ Projekts (github.com/veeso/suppaftp, `main`, gelesen 2026-10-16); RustSec `RUSTS
   (`data_command_with_response` :1033, seit 8.0.4).
 - `abort` (:574-590): ABOR, Strom schließen, 226 oder 426 lesen, eine zweite Antwort (226) nur nach 426.
   War die Übertragung schon beendet (226 der Übertragung bereits gesendet), bleibt die Antwort des Servers
-  auf ABOR (225 bei vsftpd/pyftpdlib, nach RFC 959 ein weiteres 226) ungelesen; das Backend prüft deshalb
-  mit PWD (257), bevor es die Verbindung als gesund zurückgibt (`ftp/core/streams.rs::abort`).
+  auf ABOR (225 bei vsftpd/pyftpdlib, nach RFC 959 ein weiteres 226) ungelesen; das Backend sendet deshalb
+  PWD und gibt die Verbindung erst als gesund zurück, wenn es dessen 257 gelesen hat. Davor nimmt es nur die
+  ausstehende ABOR-Antwort an (225 oder 226, oder 426 und dann 226) und liest sie ohne neuen Befehl über
+  `finalize_retr_stream` mit leerem Strom (der einzige öffentliche Aufruf, der nur eine Antwort liest:
+  `Ok` bei 226/250, sonst `UnexpectedResponse` mit der Antwort); jede andere Antwort führt zur
+  Neuverbindung vor der nächsten Nutzung (`ftp/core/streams.rs::pwd_in_step`, seit 2026-11-07: vorher
+  meldete sich jeder nach dem Ende der Übertragung abgeschnittene Bereich neu an).
 - `read_response_in` (:880): jede Zeile `NNN<SP>` beendet eine Mehrzeilenantwort (10.0.1, auch mit
   anderem Code als die erste Zeile); EOF in einer Mehrzeilenantwort → `ConnectionError(UnexpectedEof)`.
 - `mkdir`, `rmdir`, `rm`, `rename`, `cwd` nehmen neben 257/250 auch 200 an (8.0.3/8.0.5, bftpd).

@@ -3841,7 +3841,7 @@ native/crates/storage/src/ftp/core/ftp_tests.rs	list_rows_are_fail_closed	behalt
 native/crates/storage/src/ftp/core/ftp_tests.rs	path_helpers	behalten	K5	ftp basename/parent_dir	crates-task
 native/crates/storage/src/ftp/core/ftp_tests.rs	url_plain_with_creds	behalten	K4	ftp/core/ftp.rs parse_ftp_url [Tabelle aus 5 Fällen]	crates-task
 native/crates/storage/src/ftp/core/local_address.rs	speed_task_ftp_connect_waits_out_a_missing_local_address	behalten	K3	ftp/core/local_address.rs connect_until [Tabelle aus 2 Fällen]	crates-task
-native/crates/storage/src/ftp/core/luecken_task_ftp_tests.rs	luecken_task_ftp_abort_after_a_finished_transfer_reconnects_before_reuse	behalten	K2	storage::ftp open_reader()/with_stream_mutation: Abbruch nach beendeter Übertragung	crates-task
+native/crates/storage/src/ftp/core/luecken_task_ftp_tests.rs	luecken_task_ftp_abort_after_a_finished_transfer_reads_its_queued_reply	behalten	K2	storage::ftp open_reader()/with_stream_mutation: Abbruch nach beendeter Übertragung (ABOR-Antwort gelesen, sonst Neuverbindung)	crates-task
 native/crates/storage/src/ftp/core/luecken_task_ftp_tests.rs	luecken_task_ftp_abort_during_a_transfer_keeps_the_connection	behalten	K3	storage::ftp open_reader(): Abbruch mitten in der Übertragung (426, 226)	crates-task
 native/crates/storage/src/ftp/core/luecken_task_ftp_tests.rs	luecken_task_ftp_delimiters_in_arguments_never_reach_the_server	behalten	K2	storage::ftp Backend-Operationen (stat, list_dir, open_read, open_write, remove_file, ...): Zeilenumbruch/Nullbyte im Pfad	crates-task
 native/crates/storage/src/ftp/core/luecken_task_ftp_tests.rs	luecken_task_ftp_list_rows_use_only_the_posix_and_dos_parsers	behalten	K2	ftp/core parse_list_line_unchecked	crates-task
