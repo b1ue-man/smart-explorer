@@ -353,7 +353,9 @@ fn gui_design_task_settings_persistence_shortcut_guard_and_dialogs() {
         h.click("Bericht.md");
         h.click("Einstellungen");
         assert!(h.app.settings.open);
-        h.assert_visible("Darstellung");
+        // The settings open on „Dieses Gerät“; the colour scheme is on „Darstellung“.
+        h.click("Darstellung");
+        assert_eq!(h.app.settings.page, SettingsPage::Appearance);
         h.click(if dark { "Hell" } else { "Dunkel" });
         assert_eq!(
             UiState::load().appearance.mode,
@@ -444,15 +446,24 @@ fn gui_design_task_drive_failure_reaches_readable_report_and_complete_clipboard(
     for dark in [false, true] {
         let mode = if dark { "dark" } else { "light" };
         let mut h = Harness::new(dark, [900.0, 600.0]);
-        let fixture = Fixture::new(vec![step(
-            "GET",
-            "/drive/v3/files",
-            Reply::HttpError(
-                403,
-                serde_json::json!({"error": {"message": "Zugriff auf diesen Ordner verweigert",
-                "errors": [{"reason": "insufficientFilePermissions"}]}}),
+        // Drive resolves the My-Drive root ID first; listing that root is denied.
+        let fixture = Fixture::new(vec![
+            step(
+                "GET",
+                "/drive/v3/files/root",
+                Reply::Json(serde_json::json!({"id": "gui-root-id"})),
+            )
+            .query("fields", Some("id".into())),
+            step(
+                "GET",
+                "/drive/v3/files",
+                Reply::HttpError(
+                    403,
+                    serde_json::json!({"error": {"message": "Zugriff auf diesen Ordner verweigert",
+                    "errors": [{"reason": "insufficientFilePermissions"}]}}),
+                ),
             ),
-        )]);
+        ]);
         let backend: crate::vfs::BackendHandle = std::sync::Arc::new(fixture.backend());
         h.app.root_path = "/".into();
         h.app.remote = Some(crate::connect::RemoteState {
