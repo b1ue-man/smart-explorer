@@ -6,8 +6,7 @@ Builds only the development `se`, the library test binary and the development
 `se-share-server` of this host (no release build), then checks every
 milestone once:
 
-  fmt      rustfmt of the batch's Rust files (stdin mode, no crate-wide debt)
-  build    `se` plus the lib tests; compiler warnings inside new batch files fail
+  build    `se` plus the lib tests
   unit     `luecken_task_` tests (M1 sealed secrets and their porting, M2 exec
            account/programs/environment/audit/penalties and the profile
            encoding for older readers, M3 SSH host keys and logins, M4 hybrid
@@ -102,38 +101,9 @@ NATIVE = Path(__file__).resolve().parent
 _spec = importlib.util.spec_from_file_location("ai_plugin_task", NATIVE / "test-ai-plugin-task.py")
 ai = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(ai)
-# The shared fmt/build helpers read these module globals: the batch starts
-# after this commit, and a compiler warning inside one of these new files fails.
-ai.BATCH_BASE = "01546a6307887f14d6e0b9a700d86a4c476bdb67"
-ai.NEW_FILE_PREFIXES = ("src/share/core/pq_kx", "src/share/core/auth_penalty.rs",
-                        "src/share/core/exec_policy_wire", "src/share/core/exec_policy_tests",
-                        "src/share/core/exec_profile_compat_tests", "src/share/core/exec_program_path",
-                        "src/share/os/shared/exec_audit", "src/share/os/linux_os/exec_account.rs",
-                        "src/share/os/linux_os/exec_program_search.rs",
-                        "src/share/os/linux_os/exec_supervisor_account.rs", "src/creds/core/sealed_record",
-                        "src/creds/os/key_protector.rs", "src/creds/os/linux_systemd_creds.rs",
-                        "src/creds/os/linux_file_store", "src/sftp/core/host_key",
-                        "src/sftp/core/session_auth.rs", "src/sftp/os/shared/known_hosts",
-                        "src/sftp/os/ssh_agent_",
-                        "src/app/core/host_key_ui.rs", "src/cli/connections/host_keys.rs",
-                        "src/cli/host_key_prompt.rs", "src/cli/setup_tests.rs",
-                        "src/ftp/core/luecken_task_ftp",
-                        # GUI parity of the Share and Exec settings (plan I).
-                        "src/share/core/profile_settings", "src/app/core/share_exec_programs_ui.rs",
-                        "src/app/core/share_exec_log_ui.rs", "src/app/core/share_pages_ui.rs",
-                        "src/app/core/share_device_page_ui.rs", "src/app/core/share_room_page_ui.rs",
-                        "src/app/core/share_this_device_ui.rs", "src/cli/share/rooms.rs",
-                        "src/cli/share/devices.rs", "src/cli/share/requests_policy.rs",
-                        "src/cli/share/exports_order.rs", "src/cli/share/host_trash.rs",
-                        "src/mobile/os/shared/domains/share_device_settings",
-                        # Parity of every other setting (plan docs/plaene/2026-10-16-paritaet-einstellungen).
-                        "src/cli/background.rs", "src/cli/sync_jobs", "src/cli/integration.rs",
-                        "src/cli/parse_tests.rs", "src/cli/connections/edit.rs",
-                        "src/cli/connections/gdrive.rs", "src/connect/os/shared/connection_edit.rs",
-                        "src/connect/os/shared/connection_edit_refs.rs",
-                        "src/app/core/connect_dialog_ui.rs", "src/app/core/connection_edit_ui.rs",
-                        "src/app/core/job_editor_pages", "src/app/core/settings_ai_plugin.rs",
-                        "src/mobile/os/shared/domains/settings_parity_tests.rs")
+# rustfmt and clippy are no part of this suite: build.yml gates them at every push (the stages "fmt since
+# the batch's base commit" and "no compiler warning in the files the batch created" were removed on
+# 2026-11-07, TODO TESTS-BEWERTUNG).
 WINDOWS = ai.WINDOWS
 ensure = ai.ensure
 Client = ai.Client
@@ -147,18 +117,16 @@ UNIT_FILTERS = ["luecken_task_", "creds::", "sftp::", "share::exec", "share::nod
 UNIT_SKIPS = ["sync_reliability_task_provider_ftps", "sync_reliability_task_provider_matrix"]
 FTPS_PROVIDER_TEST = ("connect::sync_reliability_task_provider_ftps_tests::"
                       "sync_reliability_task_provider_ftps_both_writers_confirm_bytes_after_tls_close")
-# The `luecken_task_` test functions of native/src (146: `grep -c "fn luecken_task_"`
-# over the gap batch and the Share/Exec GUI parity of plan I; 125 + 21) and what each
-# platform compiles. Windows lacks the Linux/Android file store and its tests
-# (`creds/os/linux_*`, 20), the `mobile` module (6: it is built for
-# `any(target_os = "android", all(unix, test))`), the Linux account and
-# program-search adapters (2) and three tests gated with `cfg(unix)` (3).
-# The name check below runs every compiled `luecken_task_` test of the sources,
-# also those other parts of the batch add. The parity of every other setting adds
-# 31 (Windows 28: without the three bridge tests of
-# mobile/os/shared/domains/settings_parity_tests.rs).
-EXPECTED_LINUX = 146 + 31
-EXPECTED_WINDOWS = 115 + 28
+# The `luecken_task_` test functions (`#[test]`) of the workspace crates and the programs: 169 on
+# 2026-11-07 (177 before the merges of that day; `grep -c "fn luecken_task_"` also counts the rows of
+# merged table tests, which are no tests), and what each platform compiles. Windows lacks the
+# Linux/Android file store and its tests (`creds/os/linux_*`), the `mobile` module (it is built for
+# `any(target_os = "android", all(unix, test))`), the Linux account and program-search adapters and
+# three tests gated with `cfg(unix)` (NOT_ON_WINDOWS_FILES and NOT_ON_WINDOWS_TESTS below): 139. The
+# name check below runs every compiled `luecken_task_` test of the sources, also those other parts of
+# the batch add.
+EXPECTED_LINUX = 169
+EXPECTED_WINDOWS = 139
 NOT_ON_WINDOWS_FILES = ("creds/os/linux_file_store_port_tests.rs", "creds/os/linux_file_store_tests.rs",
                         "creds/os/linux_os.rs", "mobile/os/shared/init.rs",
                         "mobile/os/shared/domains/host_keys.rs", "share/os/linux_os/exec_account.rs",
@@ -195,9 +163,13 @@ def source_test_names():
         relative = path.relative_to(src).as_posix()
         if WINDOWS and relative in NOT_ON_WINDOWS_FILES:
             continue
-        for name in re.findall(r"\bfn (luecken_task_\w+)", path.read_text(encoding="utf-8", errors="replace")):
-            if not (WINDOWS and name in NOT_ON_WINDOWS_TESTS):
-                names.add(name)
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        for number, line in enumerate(lines):
+            found = re.search(r"\bfn (luecken_task_\w+)", line)
+            # Only functions with a test attribute: the rows of a merged table test are plain functions.
+            if found and any(before.strip().startswith(("#[test", "#[tokio::test")) for before in lines[max(0, number - 6):number]):
+                if not (WINDOWS and found.group(1) in NOT_ON_WINDOWS_TESTS):
+                    names.add(found.group(1))
     return names
 
 
@@ -1142,7 +1114,7 @@ def exec_root_checks(results, se_binary, work, logs, signal, relay):
 
 # --------------------------------------------------------------------------- older suites (static)
 
-OLDER_PYTHON_SUITES = ("test-ai-plugin-task.py", "test-analysis-plugin-task.py", "test-delete-speed-task.py",
+OLDER_PYTHON_SUITES = ("test-ai-plugin-task.py", "test-delete-speed-task.py",
                        "test-links-task.py", "test-terminal-task.py")
 
 
@@ -1446,7 +1418,6 @@ def main():
             parser.error("--job android-device requires --apks")
         stage_android_device(results, args, log_root)
         return results.finish()
-    ai.stage_fmt(results, log_root)
     built, _ = ai.stage_build(results, log_root)
     stage_unit(results, log_root)
     if not WINDOWS:

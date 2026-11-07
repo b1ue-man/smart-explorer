@@ -2,15 +2,12 @@ name: transfer-engine-task
 
 # Single task-level suite for the streaming transfer engine batch
 # (docs/superpowers/plans/2026-09-28-transfer-engine/). Dispatch it for the
-# exact pushed candidate SHA; it never publishes anything. `check` is the
-# narrow compile check while the batch is built (batch gates for the host and
-# the Windows target, Linux job only); `suite` runs the complete task-level
-# suite once the batch is implemented:
+# exact pushed candidate SHA; it never publishes anything. The jobs (rustfmt
+# and clippy are no part of them: build.yml gates them at every push):
 #   linux          milestone tests, affected integrations, container transfers,
-#                  throughput over shaped loopback, batch gates (host + Windows)
-#   windows        Windows milestones (virtual files, local kernel copy) and gates
-#   android-host   the Android batch's host checks (mobile facade unchanged),
-#                  without its line gates (this suite gates its own lines)
+#                  throughput over shaped loopback
+#   windows        Windows milestones (virtual files, local kernel copy)
+#   android-host   the Android batch's host checks (mobile facade unchanged)
 #   desktop-bins   Linux `se` + `se-share-server` for the device Share check
 #   android-build  Android tree, NDK, APKs, JVM tests
 #   device         the Android device suite on an emulator (transfers included)
@@ -21,14 +18,6 @@ on:
         description: Full 40-character commit SHA to verify (must match the selected ref)
         required: true
         type: string
-      mode:
-        description: check (batch gates only) or suite (complete task-level suite)
-        required: true
-        default: check
-        type: choice
-        options:
-          - check
-          - suite
 
 permissions:
   contents: read
@@ -79,26 +68,21 @@ jobs:
       - name: Rust toolchain and dependency cache
         uses: ./.github/actions/native-setup
         with:
-          targets: x86_64-pc-windows-gnu
-          components: rustfmt, clippy
           workspaces: |
             native
             share-server
 
-      - name: Install the Windows cross C toolchain and the server-check tools
+      - name: Install the server-check tools
         shell: bash
-        env:
-          SUITE_MODE: ${{ inputs.mode }}
         run: |
           set -Eeuo pipefail
           sudo apt-get update
-          sudo apt-get install -y mingw-w64 jq iproute2
-          x86_64-w64-mingw32-gcc --version | head -n 1
+          sudo apt-get install -y jq iproute2
           jq --version
           docker --version
           # The shaped-link throughput check needs the netem qdisc; Azure
           # kernels ship it in the extra modules package.
-          if [[ "$SUITE_MODE" == suite ]] && ! sudo modprobe sch_netem 2>/dev/null; then
+          if ! sudo modprobe sch_netem 2>/dev/null; then
             sudo apt-get install -y "linux-modules-extra-$(uname -r)"
             sudo modprobe sch_netem
           fi
@@ -106,15 +90,9 @@ jobs:
       - name: Run the task-level suite
         shell: bash
         timeout-minutes: 160
-        env:
-          SUITE_MODE: ${{ inputs.mode }}
         run: |
           set -Eeuo pipefail
-          arguments=(--direct)
-          if [[ "$SUITE_MODE" == check ]]; then
-            arguments+=(--check)
-          fi
-          bash native/test-transfer-engine-task.sh "${arguments[@]}" 2>&1 | \
+          bash native/test-transfer-engine-task.sh --direct 2>&1 | \
             tee "$SMART_EXPLORER_TASK_LOG_ROOT/suite.log"
 
       - name: Upload failure diagnostics
@@ -127,7 +105,6 @@ jobs:
           retention-days: 7
 
   windows:
-    if: ${{ inputs.mode == 'suite' }}
     runs-on: windows-2025
     timeout-minutes: 180
     env:
@@ -165,7 +142,6 @@ jobs:
       - name: Rust toolchain and dependency cache
         uses: ./.github/actions/native-setup
         with:
-          components: rustfmt, clippy
           workspaces: native
 
       - name: Run the task-level suite (Windows milestones)
@@ -186,7 +162,6 @@ jobs:
           retention-days: 7
 
   android-host:
-    if: ${{ inputs.mode == 'suite' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     env:
@@ -224,27 +199,14 @@ jobs:
       - name: Rust toolchain and dependency cache
         uses: ./.github/actions/native-setup
         with:
-          targets: x86_64-pc-windows-gnu
-          components: rustfmt, clippy
           workspaces: native
-
-      - name: Install the Windows cross C toolchain
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          sudo apt-get update
-          sudo apt-get install -y mingw-w64 jq
-          x86_64-w64-mingw32-gcc --version | head -n 1
 
       - name: Run the Android host checks
         shell: bash
         timeout-minutes: 170
         run: |
           set -Eeuo pipefail
-          # The Android batch's own rustfmt/clippy line gates would now cover
-          # every later batch too; this suite gates its own lines (linux job)
-          # and type-checks both targets there.
-          bash android/test-android-task.sh host --without-batch-gates 2>&1 | \
+          bash android/test-android-task.sh host 2>&1 | \
             tee "$SMART_EXPLORER_TASK_LOG_ROOT/suite-host.log"
 
       - name: Upload failure diagnostics
@@ -255,7 +217,6 @@ jobs:
           path: ${{ runner.temp }}/android-task-logs
 
   desktop-bins:
-    if: ${{ inputs.mode == 'suite' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
@@ -322,7 +283,6 @@ jobs:
           path: ${{ runner.temp }}/android-task-logs
 
   android-build:
-    if: ${{ inputs.mode == 'suite' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 150
     env:
@@ -394,7 +354,6 @@ jobs:
           path: ${{ runner.temp }}/android-task-logs
 
   device:
-    if: ${{ inputs.mode == 'suite' }}
     needs: [android-build, desktop-bins]
     runs-on: ubuntu-24.04
     timeout-minutes: 200

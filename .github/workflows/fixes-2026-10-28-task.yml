@@ -141,8 +141,11 @@ jobs:
           set -Eeuo pipefail
           cd native
           cargo test --workspace --exclude smart_explorer_android --exclude smart_explorer --lib -- --test-threads=1 --nocapture \
-            removable_media_task_ install_owner_task_ | tee "$RUNNER_TEMP/task.txt"
+            install_owner_task_ | tee "$RUNNER_TEMP/task.txt"
           if [[ "$RUNNER_OS" == "Windows" ]]; then
+            # #[ignore]: it needs the two volumes attached above (SE_TASK_REMOVABLE_ROOTS).
+            cargo test --workspace --exclude smart_explorer_android --exclude smart_explorer --lib -- --test-threads=1 --nocapture \
+              --ignored removable_media_task_ | tee -a "$RUNNER_TEMP/task.txt"
             grep -F 'removable media roots checked: 2' "$RUNNER_TEMP/task.txt"
             grep -F 'install_owner_task_elevated_setup_root_trusts_the_running_account ... ok' \
               "$RUNNER_TEMP/task.txt"

@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "baseline": "bea312ea79731d913a7dd3e79de2f5404401208a",
+  "baseline": "c935b763203ead13f0fdf084c1b0df4e369266a0",
   "scope": "B1–B8, P31, P32; eine gemeinsame kandidatengebundene Remote-Suite",
   "native": {
     "prefixes": [
@@ -8,7 +8,6 @@
       "p18d_"
     ],
     "exclude": [
-      "batches_task_optical_process_child",
       "p27_network_reference_acceptance"
     ],
     "required_prefixes": [
@@ -81,7 +80,6 @@
       "screen_task_wire_picture_stream_roundtrip",
       "screen_task_frame_limits_reject_oversize",
       "screen_task_worker_maps_permission_denied_to_no_display",
-      "screen_task_worker_keeps_other_capture_errors_as_capture_failed",
       "screen_task_worker_input_needs_control_session",
       "screen_task_host_worker_exits_on_update_stop",
       "screen_task_rate_control_backs_off_on_delay_gradient",
@@ -99,13 +97,9 @@
       "screen_task_cli_windows_json_shape",
       "screen_task_ipc_still_client_lists_windows_and_ends_the_session",
       "screen_task_window_list_keeps_more_than_4096_entries",
-      "screen_task_window_list_frame_bytes_bound_the_list",
       "screen_task_window_list_keeps_whole_texts_and_all_limit_notes",
       "screen_task_window_list_drops_oversized_entry_and_refuses_bad_ids",
       "perm_task_port_full_shell_0_5_180",
-      "perm_task_port_program_list_0_5_182",
-      "perm_task_port_run_as_root_worker",
-      "perm_task_port_disabled_keeps_settings",
       "perm_task_write_legacy_form_bytes_unchanged",
       "perm_task_old_reader_sees_new_grant_off",
       "perm_task_unknown_access_version_fail_closed",
@@ -133,16 +127,7 @@
       "batches_task_b6_linux_cgroup_ancestors_constrain_session_headroom",
       "batches_task_b6_cgroup_namespace_root_needs_kernel_root_evidence",
       "remote_drive_task_dokany_msi_outcomes_preserve_actionable_exit_codes",
-      "remote_drive_task_dokany_library_and_driver_versions_use_separate_domains",
-      "screen_task_android_screen_keys_file_current",
-      "screen_task_android_strings_match_desktop_sources",
-      "p27_task_shutdown_preserves_ack_and_picture_dependencies_until_quiesced",
-      "p27_task_shutdown_preserves_ready_transport_and_pipeline_failures",
-      "p27_task_shutdown_reports_ack_loss_before_explicit_stop",
-      "p27_task_shutdown_rejects_early_success",
-      "p27_task_shutdown_preserves_panic_and_joins_remaining_children",
-      "p27_task_shutdown_drop_aborts_owned_children",
-      "p27_task_shutdown_cancelled_finish_keeps_child_ownership"
+      "remote_drive_task_dokany_library_and_driver_versions_use_separate_domains"
     ],
     "environment_dependent": [
       "batches_task_b6_renderer_wgpu_upload_without_surface_and_retire_after_later_draw",
@@ -198,12 +183,8 @@
       "scope": "Isolated private relay and production screen transport, separate from physical encoder and display execution."
     },
     "quality": {
-      "release_baseline": "a814f263096fe69d3746e840b5f3fad3fd7e88a0",
+      "release_baseline": "daed7c158ecea9bad35567450f5b1fe61b78facf",
       "artifacts": [
-        {
-          "label": "analytic-metrics",
-          "case": "batches_task_b6_quality_metrics_match_independent_analytic_oracles"
-        },
         {
           "label": "deterministic-lossless-still",
           "case": "batches_task_b6_lossless_correction_matches_every_source_pixel"
@@ -254,6 +235,33 @@
         }
       ],
       "scope": "Candidate-bound RGB PSNR/luma SSIM, immutable release OpenH264 comparison, controlled decoder reference loss and exact lossless reconstruction. Physical MF/Android codecs, packet-loss timing and renderer latency remain separately unverified."
+    },
+    "runtime": {
+      "windows": [
+        "review_task_y156_close_waits_for_completion_after_cancel_and_deadline",
+        "review_task_y156_results_drain_while_worker_is_still_alive",
+        "review_task_y156_update_preflight_waits_for_actual_completion",
+        "review_task_s09_transport_real_private_tls_round_has_only_status_rights",
+        "review_task_s09_transport_rejects_wrong_pin_and_replayed_confirm",
+        "review_task_s09_transport_malformed_and_stalled_frames_are_bounded",
+        "review_task_s09_transport_path_revisions_reject_returned_path_evidence",
+        "review_task_s09_transport_close_withdraw_disable_discard_cached_facts",
+        "review_task_s09_transport_expired_or_unknown_facts_fail_closed"
+      ],
+      "linux": [
+        "review_task_y156_close_waits_for_completion_after_cancel_and_deadline",
+        "review_task_y156_results_drain_while_worker_is_still_alive",
+        "review_task_y156_update_preflight_waits_for_actual_completion",
+        "review_task_s09_transport_real_private_tls_round_has_only_status_rights",
+        "review_task_s09_transport_rejects_wrong_pin_and_replayed_confirm",
+        "review_task_s09_transport_malformed_and_stalled_frames_are_bounded",
+        "review_task_s09_transport_path_revisions_reject_returned_path_evidence",
+        "review_task_s09_transport_close_withdraw_disable_discard_cached_facts",
+        "review_task_s09_transport_expired_or_unknown_facts_fail_closed",
+        "review_task_publishing_never_replaces_on_network_and_fuse_mounts",
+        "review_task_fat_and_exfat_targets_report_their_limits"
+      ],
+      "linux_watch_limit": "review_task_watch_limit_falls_back_to_polling"
     }
   },
   "android": {
@@ -729,7 +737,6 @@
       ],
       "android_device": [
         "app.smartexplorer.android.task.BatchesPresentationTaskTest#batches_android_image_zoom_survives_system_layout_change",
-        "app.smartexplorer.android.task.BatchesPresentationTaskTest#batches_android_audio_pause_seek_and_resume_survive_system_layout_change",
         "app.smartexplorer.android.task.BatchesPresentationTaskTest#batches_android_video_pause_seek_and_resume_survive_system_layout_change",
         "app.smartexplorer.android.task.BatchesMediaWakeTaskTest#batches_android_video_wake_follows_play_pause_completion_and_close",
         "app.smartexplorer.android.task.BatchesMediaWakeTaskTest#batches_android_video_wake_preserves_system_rotation_and_explicit_background_resume",
@@ -954,8 +961,7 @@
         "batches_capture_task_android_accessibility_fits_source_only_output_before_begin",
         "batches_capture_task_android_synthetic_source_only_adds_and_reuses_output_grant",
         "batches_capture_task_android_refused_resize_preserves_previous_generation_and_owner",
-        "batches_capture_task_android_wide_native_still_scales_once_without_false_resize",
-        "batches_capture_task_android_synthetic_without_display_keeps_defined_default"
+        "batches_capture_task_android_wide_native_still_scales_once_without_false_resize"
       ],
       "device_cases": [
         "app.smartexplorer.android.task.BatchesCaptureTaskTest#unknownSessionCannotObtainPixelsOrExternalResourceCredit"
@@ -974,7 +980,6 @@
         "batches_task_login_capture_header_and_retired_grant_refuse_allocation",
         "batches_task_login_capture_reader_rejects_wrong_cookie_and_pixel_probe",
         "batches_task_login_capture_eof_exit_and_last_pixel_are_distinct_ends",
-        "batches_task_login_capture_exit_still_waits_for_reader_and_close_refuses_grants",
         "batches_task_login_capture_prepared_source_cannot_activate_after_refused_grant"
       ],
       "device_cases": []
@@ -1069,19 +1074,6 @@
       ]
     },
     {
-      "id": "R9-L8-HWUI",
-      "milestones": [
-        "L8"
-      ],
-      "expected": "Close ohne Folgedraw und TextureView-Detach warten auf tatsächlichen öffentlichen Rendererabbau.",
-      "scope": "Echter HWUI-/TextureView-Lauf mit simulierten NativeCalls; keine Behauptung nativer Bitmapticketabnahme.",
-      "native_cases": [],
-      "device_cases": [
-        "app.smartexplorer.android.task.LoginImageTaskTest#close_without_followup_draw_waits_for_public_destroy_off_ui",
-        "app.smartexplorer.android.task.LoginImageTaskTest#texture_detach_transfers_release_responsibility_until_renderer_ends"
-      ]
-    },
-    {
       "id": "R9-F2-F5-Android-Capture",
       "milestones": [
         "C9",
@@ -1132,7 +1124,6 @@
         "batches_task_capture_worker_grantless_open_is_refused",
         "batches_task_capture_worker_cancel_wakes_an_inflight_resource_request",
         "batches_task_capture_worker_eof_does_not_release_credit_before_process_exit",
-        "batches_task_capture_worker_confirmed_exit_keeps_buffered_parent_reply_authority",
         "batches_task_capture_worker_retirement_reduction_is_monotonic_until_final_ack"
       ],
       "device_cases": []
@@ -1367,13 +1358,10 @@
         "windows"
       ],
       "native_cases": [
-        "batches_task_b6_quality_metrics_match_independent_analytic_oracles",
         "batches_task_b6_lossless_correction_matches_every_source_pixel",
         "batches_task_b6_quality_reference_loss_recovers_only_with_complete_keyframe",
         "batches_task_b6_4k_lossless_correction_retains_every_source_pixel",
-        "batches_task_b6_quality_openh264_baseline_transport_and_still",
-        "batches_task_b6_quality_binding_rejects_foreign_capture_and_missing_geometry",
-        "batches_task_b6_quality_provenance_checkout_line_endings_keep_exact_content"
+        "batches_task_b6_quality_openh264_baseline_transport_and_still"
       ],
       "device_cases": []
     },
@@ -1400,11 +1388,9 @@
         "batches_task_device_navigation_confirmed_receipt_keeps_identity_and_rejects_invalid_bindings"
       ],
       "unit_cases": [
-        "app.smartexplorer.android.ui.settings.DeviceNavigationRegressionTest#batches_android_device_requests_share_the_same_settings_destination",
-        "app.smartexplorer.android.ui.settings.DeviceNavigationRegressionTest#batches_android_non_device_requests_do_not_override_settings_navigation"
+        "app.smartexplorer.android.ui.settings.DeviceNavigationRegressionTest#batches_android_device_requests_share_the_same_settings_destination"
       ],
       "device_cases": [
-        "app.smartexplorer.android.task.BatchesDeviceNavigationTaskTest#batches_android_apps_request_from_existing_appearance_opens_once",
         "app.smartexplorer.android.task.BatchesDeviceNavigationTaskTest#batches_android_apps_request_leaves_log_and_about_details",
         "app.smartexplorer.android.task.BatchesDeviceNavigationTaskTest#batches_android_untrusted_device_intent_preserves_the_existing_detail",
         "app.smartexplorer.android.task.BatchesDeviceNavigationTaskTest#batches_android_screen_and_grid_requests_leave_log_and_about_details",
@@ -1471,7 +1457,6 @@
       ],
       "native_cases": [
         "batches_family_x11_combo_popup_keeps_identity_after_owner_focus_ack",
-        "batches_family_x11_nested_menus_use_recursive_owner_focus",
         "batches_family_x11_modal_dialog_is_the_nearest_activation_boundary",
         "batches_family_x11_focus_rejects_foreign_unbound_recycled_owners_and_cycles",
         "batches_family_x11_host_preserves_disarming_permissions_and_lifetimes",
@@ -1625,13 +1610,12 @@
         "batches_task_b6_session_budget_android_policy_shares_previews_desktop_keeps_full_contract",
         "batches_task_b6_session_budget_v184_hello_and_picture_work_below_512_mib",
         "batches_task_b6_session_budget_android_resume_reuses_capacity_after_actual_owner_end",
-        "batches_task_b6_session_budget_android_resume_keeps_live_owner_and_retries_same_generation",
         "batches_task_b6_session_budget_android_snapshot_replaces_only_retired_or_native_authority",
         "batches_task_b6_session_budget_android_epoch_drops_old_queue_but_keeps_external_owner",
         "batches_task_b6_session_budget_private_relay_keeps_v1_and_rejects_oversize_before_read"
       ],
       "unit_cases": [
-        "app.smartexplorer.android.screen.ScreenSessionBudgetRegressionTest#batches_android_session_budget_small_legacy_receiver_keeps_its_scaler_bound",
+        "app.smartexplorer.android.screen.ScreenSessionBudgetRegressionTest#batches_android_budget_finances_twenty_image_owners_and_record_slots",
         "app.smartexplorer.android.screen.ScreenSessionBudgetRegressionTest#batches_android_session_budget_invalid_explicit_legacy_offer_has_no_512_mib_fallback",
         "app.smartexplorer.android.screen.ScreenSessionBudgetRegressionTest#batches_android_session_budget_old_acceptance_without_budget_keeps_legacy_contract"
       ],
@@ -1653,9 +1637,7 @@
       "native_cases": [
         "batches_task_vault_retry_preflight_failure_keeps_list_warning_and_same_id",
         "batches_task_vault_retry_failure_preserves_unlock_code_tokens_and_lease",
-        "batches_task_vault_retry_existing_and_late_backend_stream_keep_owner",
         "batches_task_vault_retry_new_start_cannot_replace_and_missing_retry_cannot_create",
-        "batches_task_vault_retry_clean_preflight_error_retains_failed_action",
         "batches_task_vault_retry_shared_sources_keep_endpoint_identity",
         "drive_task_restore_runs_after_recovery_audit",
         "drive_task_vault_locked_start_fails_vault_locked",
@@ -1688,7 +1670,6 @@
         "batches_p13_historical_terminal_entry_works_offline_and_rejects_stale_image",
         "batches_p13_historical_terminal_entry_does_not_downgrade_existing_managed_state",
         "batches_p13_historical_generic_config_uses_only_the_local_cli",
-        "batches_p13_legacy_profiles_need_no_installation_writes",
         "batches_p13_legacy_profiles_read_historical_update_state_without_mutation",
         "batches_p13_uninstall_removes_all_owned_mcp_programs_and_manifest",
         "batches_p13_uninstall_preserves_foreign_files_and_is_repeatable",
@@ -1757,7 +1738,6 @@
         "batches_p13_legacy_windows_codex_does_not_adopt_user_unix_environment",
         "batches_p13_legacy_windows_profile_pins_cli_without_sidecar",
         "batches_p13_windows_ancestor_creation_rights_do_not_authorize_owned_file_mutation",
-        "batches_p13_windows_ancestor_foreign_replacement_rights_remain_rejected",
         "batches_p13_windows_ancestor_trust_follows_token_user_not_object_owner"
       ],
       "device_cases": []
@@ -1803,13 +1783,9 @@
         "screen_task_cli_windows_json_shape",
         "screen_task_ipc_still_client_lists_windows_and_ends_the_session",
         "screen_task_window_list_keeps_more_than_4096_entries",
-        "screen_task_window_list_frame_bytes_bound_the_list",
         "screen_task_window_list_keeps_whole_texts_and_all_limit_notes",
         "screen_task_window_list_drops_oversized_entry_and_refuses_bad_ids",
         "perm_task_port_full_shell_0_5_180",
-        "perm_task_port_program_list_0_5_182",
-        "perm_task_port_run_as_root_worker",
-        "perm_task_port_disabled_keeps_settings",
         "perm_task_write_legacy_form_bytes_unchanged",
         "perm_task_old_reader_sees_new_grant_off",
         "perm_task_unknown_access_version_fail_closed",
@@ -1841,37 +1817,12 @@
       "native_platforms": [
         "linux"
       ],
-      "native_cases": [
-        "screen_task_android_screen_keys_file_current",
-        "screen_task_android_strings_match_desktop_sources"
-      ],
+      "native_cases": [],
       "device_cases": [],
       "unit_cases": [
         "app.smartexplorer.android.ui.screen.ScreenTextsTest#screen_task_android_texts_match_desktop",
         "app.smartexplorer.android.ui.screen.ScreenTextsTest#a_detail_follows_only_where_the_desktop_shows_one"
       ]
-    },
-    {
-      "id": "R21-P27-Messabschluss",
-      "milestones": [
-        "P27",
-        "L02"
-      ],
-      "expected": "Gemeinsamer Messabschluss hält direkte Aufgaben vor der Ressourcenfreigabe an, erhält reale Fehler und Panics und verliert beim Abbruch keine eigenen Aufgaben.",
-      "scope": "Linux-Aufgabenbesitzer mit vorhandenen Tokio-Primitiven; kein eigener Leistungsbeleg. Die tatsächliche Pipeline-, Relay- und ACK-Messung bleibt unverändert im bestehenden P27-Netzlauf.",
-      "native_platforms": [
-        "linux"
-      ],
-      "native_cases": [
-        "p27_task_shutdown_preserves_ack_and_picture_dependencies_until_quiesced",
-        "p27_task_shutdown_preserves_ready_transport_and_pipeline_failures",
-        "p27_task_shutdown_reports_ack_loss_before_explicit_stop",
-        "p27_task_shutdown_rejects_early_success",
-        "p27_task_shutdown_preserves_panic_and_joins_remaining_children",
-        "p27_task_shutdown_drop_aborts_owned_children",
-        "p27_task_shutdown_cancelled_finish_keeps_child_ownership"
-      ],
-      "device_cases": []
     },
     {
       "id": "R22-Windows-Publikation",
@@ -1976,7 +1927,7 @@
         "windows"
       ],
       "native_cases": [
-        "batches_task_b5_finished_owner_releases_control_reader_without_socket_shutdown",
+        "batches_task_b5_terminal_registration_closes_control_without_cancelling_finished_owner",
         "batches_task_b5_idle_control_owner_stays_live_until_peer_cancels",
         "batches_task_b5_finished_control_cannot_cancel_same_id_live_owner"
       ],

@@ -6,14 +6,14 @@ Sub-commands (every expected value is derived from the repository itself):
   instrumentation  strict evaluation of one raw `am instrument -w -r` output
   unit-tests       strict evaluation of Gradle's JVM unit-test XML results
   coverage         api.md method coverage from the calls the instrumented tests recorded
-  release-lists    G7: release asset/commit lists of build.yml against release-publication.ps1
+  release-lists    G7: the release asset map and commit paths of release-publication.ps1 and the order
+                   in which the release scripts source their helpers
 
 Runs only on the remote CI runner (AGENTS.md: no local builds or test execution).
 """
 import argparse
 import json
 import re
-import shlex
 import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -213,23 +213,29 @@ def cmd_coverage(args) -> int:
     return 0
 
 
-def shell_tokens(block: str, version: str) -> list:
-    return [token.replace("$ver", version).replace("${ver}", version) for token in shlex.split(block.replace("\\\n", " "))]
+# Since 2026-11-02 the release assets are assembled by native/publish-release-assets.ps1 from the
+# one list in native/release-publication.ps1 (Get-PublicationReleaseAssetMap: 26 assets,
+# Get-PublicationReleaseCommitPaths: 33 paths); .github/workflows/build.yml no longer repeats
+# them, so the former cross-checks of its `files:`, `asset_mappings`, `allowed_release_change`,
+# feed-staging and Windows-staging lists are gone with those lists.
+EXPECTED_ASSETS = 26
+EXPECTED_COMMIT_PATHS = 33
 
 
 def cmd_release_lists(args) -> int:
     repo = Path(args.repo)
     data = json.loads(Path(args.plan).read_text(encoding="utf-8-sig"))
-    version = data["version"]
     assets = data["assets"]
     commit_paths = set(data["commitPaths"])
     problems = []
     local = {asset["local"] for asset in assets}
     names = {Path(asset["local"]).name for asset in assets}
-    if len(assets) != 20 or len(local) != 20 or len(names) != 20:
-        problems.append(f"Get-PublicationReleaseAssetMap: {len(assets)} Assets / {len(local)} Pfade / {len(names)} Namen statt 20")
-    if len(commit_paths) != 27:
-        problems.append(f"Get-PublicationReleaseCommitPaths: {len(commit_paths)} statt 27 Pfade")
+    published = {asset["published"] for asset in assets}
+    if len(assets) != EXPECTED_ASSETS or len(local) != EXPECTED_ASSETS or len(published) != EXPECTED_ASSETS:
+        problems.append(f"Get-PublicationReleaseAssetMap: {len(assets)} Assets / {len(local)} Pfade / "
+                        f"{len(published)} Namen statt {EXPECTED_ASSETS}")
+    if len(commit_paths) != EXPECTED_COMMIT_PATHS:
+        problems.append(f"Get-PublicationReleaseCommitPaths: {len(commit_paths)} statt {EXPECTED_COMMIT_PATHS} Pfade")
     missing_commit = sorted(p for p in local if p.startswith("release-native/") and p not in commit_paths)
     if missing_commit:
         problems.append(f"Assets ohne Commit-Pfad: {missing_commit}")
@@ -237,55 +243,13 @@ def cmd_release_lists(args) -> int:
         if required not in local or required not in commit_paths:
             problems.append(f"{required} fehlt in Asset-Map oder Commit-Pfaden")
 
-    workflow = (repo / ".github/workflows/build.yml").read_text(encoding="utf-8")
-    version_expr = "${{ needs.release-candidate.outputs.version }}"
-    files = re.search(r"\n(\s+)files: \|\n((?:\1\s+\S.*\n)+)", workflow)
-    if not files:
-        problems.append("build.yml: `files:`-Liste der Veröffentlichung nicht gefunden")
-    else:
-        published = [line.strip().replace(version_expr, version) for line in files.group(2).splitlines() if line.strip()]
-        published_names = {entry.removeprefix("native/out/") for entry in published}
-        if len(published) != 20 or published_names != names:
-            problems.append(f"build.yml files: {len(published)} Einträge; Abweichung {sorted(published_names ^ names)}")
-
-    mappings = re.findall(r"asset_mappings=\(\n(.*?)\n\s*\)", workflow, re.S)
-    if not mappings:
-        problems.append("build.yml: asset_mappings nicht gefunden")
-    for block in mappings:
-        pairs = [token.split("|", 1) for token in shell_tokens(block, version)]
-        sources = {pair[0] for pair in pairs}
-        targets = {Path(pair[1]).name for pair in pairs if len(pair) == 2}
-        if len(pairs) != 20 or sources != local or targets != names:
-            problems.append(f"build.yml asset_mappings: {len(pairs)} Einträge; Abweichung {sorted(sources ^ local)}")
-
-    allowed = re.findall(r"for path in \\\n(.*?); do\s*\n\s*allowed_release_change\[", workflow, re.S)
-    if not allowed:
-        problems.append("build.yml: allowed_release_change-Liste nicht gefunden")
-    for block in allowed:
-        paths = set(shell_tokens(block, version))
-        if paths != commit_paths:
-            problems.append(f"build.yml allowed_release_change: Abweichung {sorted(paths ^ commit_paths)}")
-
-    feed_assets = {Path(p).name for p in local if p.startswith("release-native/update-feed/")}
-    staged = re.findall(r"for asset in \\\n(.*?); do\s*\n\s*cp \"\.\./release-native/update-feed/\$asset\"", workflow, re.S)
-    if not staged:
-        problems.append("build.yml: Feed-Staging-Liste nicht gefunden")
-    for block in staged:
-        tokens = set(shell_tokens(block, version))
-        if tokens != feed_assets:
-            problems.append(f"build.yml Feed-Staging: Abweichung {sorted(tokens ^ feed_assets)}")
-
-    windows = re.findall(r'Source = "\.\\([^"]+)"; Staged = "\.\\release-candidate\\([^"]+)"', workflow)
-    windows_sources = {source.replace("\\", "/").replace("$version", version) for source, _ in windows}
-    if len(windows) != 20 or windows_sources != local:
-        problems.append(f"build.yml Windows-Staging: {len(windows)} Einträge; Abweichung {sorted(windows_sources ^ local)}")
-
-    # release-version.ps1 is dot-sourced the same way by the Android job and the wrapper: first
-    # release-publication.ps1, then release-version.ps1.
+    # release-version.ps1 is dot-sourced after release-publication.ps1 by the release workflow's jobs
+    # and by the former wrapper, which the local helper scripts still use.
+    release = (repo / ".github/workflows/release.yml").read_text(encoding="utf-8")
     wrapper = (repo / "native/publish-release-local.ps1").read_text(encoding="utf-8")
     sourcing = {
-        "build.yml": (workflow, r'(?m)^\s*\.\s+\(Join-Path \$scriptRoot "release-publication\.ps1"\)',
-                      r'(?m)^\s*\.\s+\(Join-Path \$scriptRoot "release-version\.ps1"\)'),
+        "release.yml": (release, r'(?m)^\s*\.\s+\(Join-Path \$scriptRoot "release-publication\.ps1"\)',
+                        r'(?m)^\s*\.\s+\(Join-Path \$scriptRoot "release-version\.ps1"\)'),
         "publish-release-local.ps1": (wrapper, r'(?m)^\s*\.\s+\$publicationHelper\s*$', r'(?m)^\s*\.\s+\$releaseVersionHelper\s*$'),
     }
     for label, (text, first_pattern, second_pattern) in sourcing.items():
@@ -295,10 +259,13 @@ def cmd_release_lists(args) -> int:
             problems.append(f"{label}: release-publication.ps1 muss vor release-version.ps1 dot-gesourct werden")
     if 'Join-Path $scriptRoot "release-publication.ps1"' not in wrapper or 'Join-Path $scriptRoot "release-version.ps1"' not in wrapper:
         problems.append("publish-release-local.ps1: Helfer-Pfade für release-publication.ps1/release-version.ps1 fehlen")
+    assembler = (repo / "native/publish-release-assets.ps1").read_text(encoding="utf-8")
+    if 'Join-Path $scriptRoot "release-publication.ps1"' not in assembler or "Get-PublicationReleaseAssetMap" not in assembler:
+        problems.append("publish-release-assets.ps1 nutzt Get-PublicationReleaseAssetMap aus release-publication.ps1 nicht")
     agents = (repo / "AGENTS.md").read_text(encoding="utf-8")
     if "smart-explorer-android.apk" not in agents:
         problems.append("AGENTS.md: Android-APK fehlt in der Liste der Release-Assets")
-    print(f"release lists: {len(assets)} Assets, {len(commit_paths)} Commit-Pfade geprüft")
+    print(f"release lists: {len(assets)} Assets, {len(commit_paths)} Commit-Pfade geprüft ({len(names)} Dateinamen)")
     if problems:
         print("\n".join(problems), file=sys.stderr)
         return 1

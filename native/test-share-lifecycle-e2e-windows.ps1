@@ -1054,7 +1054,7 @@ try {
     Assert-True (-not [string]::IsNullOrWhiteSpace($directCodeB)) "B identity did not emit a direct invite code"
 
     $configureA = Invoke-Client -ClientRoot $clientA -Arguments @(
-        "share", "configure", "--server", "127.0.0.1:$signalPort"
+        "share", "configure", "--server", "tcp://127.0.0.1:$signalPort", "--allow-plaintext"
     )
     Assert-Success $configureA "A configure"
 
@@ -1084,7 +1084,7 @@ try {
     } "offline relay queue without a peer receipt" | Out-Null
 
     $configureB = Invoke-Client -ClientRoot $clientB -Arguments @(
-        "share", "configure", "--server", "127.0.0.1:$signalPort"
+        "share", "configure", "--server", "tcp://127.0.0.1:$signalPort", "--allow-plaintext"
     )
     Assert-Success $configureB "B configure"
     $retry = Convert-CommandJson (Invoke-Client -ClientRoot $clientA -Arguments @(
@@ -1399,7 +1399,7 @@ try {
     )) "C identity"
     $directCodeC = [string]$identityC.direct_code
     Assert-Success (Invoke-Client -ClientRoot $clientC -Arguments @(
-        "share", "configure", "--server", "127.0.0.1:$signalPort"
+        "share", "configure", "--server", "tcp://127.0.0.1:$signalPort", "--allow-plaintext"
     )) "C configure"
     $rejectAdd = Convert-CommandJson (Invoke-Client -ClientRoot $clientA -Arguments @(
         "connections", "add-peer", "--code", $directCodeC, "--name", "RejectTarget", "--json"
@@ -1441,7 +1441,7 @@ try {
     )) "D identity"
     $directCodeD = [string]$identityD.direct_code
     Assert-Success (Invoke-Client -ClientRoot $clientD -Arguments @(
-        "share", "configure", "--server", "127.0.0.1:$signalPort"
+        "share", "configure", "--server", "tcp://127.0.0.1:$signalPort", "--allow-plaintext"
     )) "D configure"
     $pendingAdd = Convert-CommandJson (Invoke-Client -ClientRoot $clientA -Arguments @(
         "connections", "add-peer", "--code", $directCodeD, "--name", "TombstoneTarget", "--json"

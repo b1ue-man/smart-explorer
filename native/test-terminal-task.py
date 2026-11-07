@@ -72,11 +72,8 @@ if not WINDOWS:
     import fcntl
     import termios
 
-# The batch base (docs/plaene/2026-10-14-echtes-terminal/plan.md E17): HEAD at the end of
-# planning. The fmt stage does not diff against it (later commits of the delete batch must not
-# change what is checked); it checks exactly BATCH_RUST_FILES.
-ai.BATCH_BASE = "63733be530af9cfb26946a09c762e7d2f7abce9d"
-
+# The fmt stage checks exactly BATCH_RUST_FILES (docs/plaene/2026-10-14-echtes-terminal/plan.md E17); it
+# does not diff against a base commit.
 # Every Rust file this batch created or changed (milestones M2 to M8 and their test fixes).
 BATCH_RUST_FILES = (
     "native/crates/engine/src/share/core/exec_terminal.rs",
@@ -159,15 +156,16 @@ UNIT_FILTERS = ["terminal_task_", "shell_session_task_", "mcp_task_", "exec_prot
                 "cli::exec::", "exec_registry", "exec_grant_runtime", "exec_admission", "exec_job",
                 "exec_platform", "exec_terminal", "shell_session::", "cli::completions"]
 
-# Tests that must have passed on this host, per prefix. The counts are the test functions
-# of the source tree (`rg -n "fn terminal_task_"`): 82 terminal_task_ tests, of which 7
-# run on Linux only (exec_pty_tests), 12 on Unix only (the local-PTY module of
-# terminal_tests.rs) and 14 on Windows only (11 ConPTY tests, 3 console tests); so 68 on
-# Linux and 63 on Windows. shell_session_task_: 23, of which 6 are Unix only and 1 Windows
-# only (22 / 17). mcp_task_: 26 on both.
-EXPECTED_PASSED = {"terminal_task_": 63 if WINDOWS else 68,
-                   "shell_session_task_": 17 if WINDOWS else 22,
-                   "mcp_task_": 26}
+# Tests that must have passed on this host, per prefix. The counts are the `#[test]` functions of the
+# source tree, as of 2026-11-07: 79 terminal_task_ tests (82 until commit 6a6d3930 removed two and the
+# merge of 2026-11-07 turned the test of unusable resize frames into a row of
+# `terminal_task_resize_frame_becomes_a_client_resize_input`), of which 7 run on Linux only
+# (exec_pty_tests), 12 on Unix only (the local-PTY module of terminal_tests.rs) and 14 on Windows only
+# (11 ConPTY tests, 3 console tests); so 65 on Linux and 60 on Windows. shell_session_task_: 25, of which
+# 6 are Unix only and 1 Windows only (24 / 19). mcp_task_: 27 on both.
+EXPECTED_PASSED = {"terminal_task_": 60 if WINDOWS else 65,
+                   "shell_session_task_": 19 if WINDOWS else 24,
+                   "mcp_task_": 27}
 
 # Every terminal_task_ test by milestone; each must be among the passed tests.
 COMMON_TESTS = (
@@ -190,13 +188,10 @@ COMMON_TESTS = (
         "terminal_task_terminal_start_and_resizes_reach_a_host_with_the_feature",
         "terminal_task_resize_without_a_terminal_start_has_no_effect",
         "terminal_task_resize_frame_becomes_a_client_resize_input",
-        "terminal_task_unusable_or_malformed_resize_frames_are_refused",
         "terminal_task_existing_input_frames_keep_their_meaning",
     )),
     ("M5 SSH terminal channel", (
-        "terminal_task_modes_are_valid_rfc4254_opcodes",
         "terminal_task_request_values_are_checked_before_the_channel_opens",
-        "terminal_task_error_text_names_the_refused_pty_request",
     )),
     ("M6 terminal session core (all platforms)", (
         "terminal_task_start_lines_quote_and_encode_every_literal",
@@ -973,26 +968,20 @@ def stage_mcp(results, se_binary, work, log_root, fixture):
             ensure(word in help_text, f"`se shell --help` lacks {word}")
     results.check(stage, "empty sessions list, `se shell --list` and --help name the terminal options", basics)
 
-    def skill_text():
-        source = (ai.ROOT / "native" / "src" / "cli" / "plugin" / "assets" / "SKILL.md").read_text(encoding="utf-8")
-        text = source
-        if not WINDOWS:
-            # Linux has the claude CLI: the skill as `se plugin install claude` writes it.
-            installed = plain_client.se(se_binary, "plugin", "install", "claude", "--json", timeout=600,
-                                        log=logs / "plugin.log")
-            ensure(installed.returncode == 0, installed.stdout.decode() + installed.stderr.decode())
-            written = (plain_client.app_data / "ai-plugins" / "claude" / "smart-explorer" / "skills" / "smart-explorer"
-                       / "SKILL.md")
-            text = written.read_text(encoding="utf-8")
-            removed = plain_client.se(se_binary, "plugin", "uninstall", "claude", "--json", timeout=600,
-                                      log=logs / "plugin.log")
-            ensure(removed.returncode == 0, removed.stdout.decode() + removed.stderr.decode())
-        flat = " ".join(text.split())
-        for needle in ("se shell -T --attachable", "full terminal session", "agents cannot join it"):
-            ensure(needle in flat, f"the skill lacks {needle!r}")
-        ensure("## Priority" in text, "the skill lost its priority section")
-    results.check(stage, "the agent skill names terminal sessions that agents cannot join and `se shell -T --attachable`",
-                  skill_text)
+    def agent_text():
+        # Since the plugin lifecycle batch the skill (native/crates/cli/src/cli/plugin/assets/SKILL.md) is
+        # generic and defers to the running server; what an agent is told about terminal sessions is
+        # the description of the `sessions` tool.
+        session = ai.McpSession(se_binary, plain_client, "modern", logs, "terminal-catalog")
+        try:
+            tool = next(tool for tool in session.tools() if tool["name"] == "sessions")
+        finally:
+            ensure(session.close() == 0, "server exit code")
+        flat = " ".join(tool.get("description", "").split())
+        for needle in ("se shell -T --attachable", "kind terminal", "cannot be joined"):
+            ensure(needle in flat, f"the sessions tool lacks {needle!r}")
+    results.check(stage, "the sessions tool names terminal sessions that agents cannot join and `se shell -T --attachable`",
+                  agent_text)
     ai.stop_background_daemons([plain_client])
 
     if not fixture.start():

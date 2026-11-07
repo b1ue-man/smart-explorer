@@ -73,7 +73,7 @@ jobs:
           set -Eeuo pipefail
           sudo -n true
           sudo apt-get update
-          sudo apt-get install -y libegl1 libgl1 libxkbcommon0 libxkbcommon-x11-0 util-linux iproute2 ethtool xvfb xauth
+          sudo apt-get install -y libegl1 libgl1 libxkbcommon0 libxkbcommon-x11-0 util-linux iproute2 ethtool xvfb xauth socat sshfs openssh-sftp-server dosfstools exfatprogs exfat-fuse
       - uses: actions/cache/restore@v4
         id: outputs
         with:

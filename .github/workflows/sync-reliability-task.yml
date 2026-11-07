@@ -70,6 +70,8 @@ jobs:
         shell: bash
         timeout-minutes: 340
         env:
+          # C08 downloads the published v0.5.169 worker from its GitHub Release.
+          GH_TOKEN: ${{ github.token }}
           SE_DRIVE_TEST_CLIENT_ID: ${{ matrix.stage == 'linux' && secrets.SE_DRIVE_TEST_CLIENT_ID || '' }}
           SE_DRIVE_TEST_CLIENT_SECRET: ${{ matrix.stage == 'linux' && secrets.SE_DRIVE_TEST_CLIENT_SECRET || '' }}
           SE_DRIVE_TEST_REFRESH_TOKEN: ${{ matrix.stage == 'linux' && secrets.SE_DRIVE_TEST_REFRESH_TOKEN || '' }}
@@ -144,6 +146,8 @@ jobs:
         shell: bash
         timeout-minutes: 220
         env:
+          # C09 downloads the published v0.5.169 app from its GitHub Release.
+          GH_TOKEN: ${{ github.token }}
           ANDROID_KEYSTORE_FILE: ${{ runner.temp }}/sync-reliability.keystore
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}

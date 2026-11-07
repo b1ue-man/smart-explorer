@@ -3,29 +3,25 @@
 # (docs/superpowers/plans/2026-09-28-transfer-engine/). Run this one checked-in
 # entrypoint on the remote runner with an outer timeout of at least 30 minutes.
 #
-#   --check   narrow compile check while the batch is being built: the batch
-#             gates only (rustfmt of every changed file, clippy for the host and
-#             the Windows target over all targets; diagnostics on changed lines
-#             are reported). No tests run.
-#   (none)    the complete suite: gating batch gates, every milestone test
+#   (no option) the complete suite: every milestone test
 #             (`transfer_engine_task_`), the copy/paste safety tests, the tests
 #             of every module the batch touched and, on Linux, transfers
 #             against SFTP/FTP containers (plain and over a shaped link) and
-#             the Share Room end-to-end run with real binaries.
+#             the Share Room end-to-end run with real binaries. rustfmt and
+#             clippy are no part of it: build.yml gates them at every push (the
+#             gates on the lines since the batch's base commit were removed on
+#             2026-11-07, TODO TESTS-BEWERTUNG).
 set -Eeuo pipefail
 
 usage() {
-    echo "Usage: native/test-transfer-engine-task.sh [--check] [--bounded|--direct]" >&2
-    echo "  --check    batch gates only (compile, rustfmt, clippy on changed lines)" >&2
+    echo "Usage: native/test-transfer-engine-task.sh [--bounded|--direct]" >&2
     echo "  --bounded  use native/run-task-memory-bounded.sh (default for local users)" >&2
     echo "  --direct   rely on the remote runner's resource controls" >&2
 }
 
 execution_mode=bounded
-suite_mode=suite
 for argument in "$@"; do
     case "$argument" in
-        --check) suite_mode=check ;;
         --bounded) execution_mode=bounded ;;
         --direct) execution_mode=direct ;;
         *) usage; exit 2 ;;
@@ -56,7 +52,6 @@ suite_succeeded=false
 cleanup() {
     local status=$?
     if [[ "$suite_succeeded" == true ]]; then
-        rm -f "$suite_tmp/batch-ranges.txt" "$suite_tmp"/clippy-*.log
         rmdir "$suite_tmp" 2>/dev/null || true
     else
         echo "transfer engine task suite diagnostics: $suite_tmp" >&2
@@ -65,7 +60,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-for command_name in awk cargo comm git grep mktemp rustfmt sed sort tee tr uname; do
+for command_name in awk cargo comm grep mktemp sed sort tee tr uname; do
     command -v "$command_name" >/dev/null 2>&1 || {
         echo "$command_name is required" >&2
         exit 1
@@ -92,35 +87,12 @@ run_task() {
     fi
 }
 
-echo "transfer engine task suite: batch gates ($platform, $suite_mode)"
-# The crate as a whole carries older formatting and dead-code drift outside
-# this batch (docs/TODO.md, H1), so the gates cover exactly what this batch
-# touched: every changed file is format-checked on its own through rustfmt's
-# stdin mode, and clippy runs over all targets of the crate, but only
-# diagnostics on lines this batch changed fail. A compile error anywhere still
-# fails. The batch base is the last commit before the batch.
-batch_base=6535f767c08314e051e99b1c53ec634c6b8a9525
-if ! git -C "$repo_root" cat-file -e "${batch_base}^{commit}" 2>/dev/null; then
-    git -C "$repo_root" fetch --quiet --depth=1 origin "$batch_base"
-fi
-mapfile -t batch_files < <(
-    git -C "$repo_root" diff --name-only --diff-filter=AM "$batch_base" HEAD -- \
-        'native/crates/*/src/*.rs' 'native/src/*.rs' 'native/tests/*.rs'
-)
-if [[ "${#batch_files[@]}" -eq 0 ]]; then
-    echo "no batch source files found relative to $batch_base" >&2
-    exit 1
-fi
 # In the complete suite a failing stage is recorded and the next one still
 # runs, so one remote run reports every problem; the suite fails at its end.
-# The check mode stops at the first failure.
 failed_stages=()
 stage_failed() {
     failed_stages+=("$1")
     echo "transfer engine task suite: FAILED: $1" >&2
-    if [[ "$suite_mode" == check ]]; then
-        exit 1
-    fi
 }
 finish_suite() {
     if [[ "${#failed_stages[@]}" -ne 0 ]]; then
@@ -130,105 +102,6 @@ finish_suite() {
     suite_succeeded=true
     echo "$1"
 }
-
-format_failures=0
-for batch_file in "${batch_files[@]}"; do
-    format_diff="$(rustfmt --check --color never --edition 2021 < "$repo_root/$batch_file")"
-    if [[ -n "$format_diff" ]]; then
-        printf '%s\n' "$format_diff" | sed "s#<stdin>#$batch_file#"
-        format_failures=$((format_failures + 1))
-    fi
-done
-if [[ "$format_failures" -ne 0 ]]; then
-    stage_failed "rustfmt: $format_failures batch source files are not rustfmt-clean"
-else
-    echo "transfer engine task suite: ${#batch_files[@]} batch source files are rustfmt-clean"
-fi
-
-batch_ranges="$suite_tmp/batch-ranges.txt"
-: > "$batch_ranges"
-for batch_file in "${batch_files[@]}"; do
-    git -C "$repo_root" diff -U0 "$batch_base" HEAD -- "$batch_file" | awk -v file="${batch_file#native/}" '
-        /^@@ / {
-            split($3, plus, ",")
-            start = substr(plus[1], 2) + 0
-            count = (length(plus) > 1) ? plus[2] + 0 : 1
-            if (count > 0) {
-                print file, start, start + count - 1
-            }
-        }' >> "$batch_ranges"
-done
-batch_diagnostics() {
-    local log=$1
-    # Cargo prints Windows paths with backslashes; the ranges use slashes.
-    { tr '\\' '/' < "$log" | grep -E '^(src|tests)/[^:]+:[0-9]+:[0-9]+: (warning|error)' || true; } |
-        sort -u | awk -F: -v ranges="$batch_ranges" '
-        BEGIN {
-            while ((getline line < ranges) > 0) {
-                split(line, range, " ")
-                n++
-                range_file[n] = range[1]
-                range_start[n] = range[2]
-                range_end[n] = range[3]
-            }
-        }
-        {
-            for (i = 1; i <= n; i++) {
-                if ($1 == range_file[i] && $2 >= range_start[i] && $2 <= range_end[i]) {
-                    print
-                    break
-                }
-            }
-        }'
-}
-clippy_targets=(host)
-if [[ "$platform" == linux ]]; then
-    if ! rustup target list --installed 2>/dev/null | grep -q '^x86_64-pc-windows-gnu$'; then
-        echo "x86_64-pc-windows-gnu target is required on Linux" >&2
-        exit 1
-    fi
-    command -v x86_64-w64-mingw32-gcc >/dev/null 2>&1 || {
-        echo "x86_64-w64-mingw32-gcc is required on Linux" >&2
-        exit 1
-    }
-    clippy_targets+=(x86_64-pc-windows-gnu)
-fi
-for clippy_target in "${clippy_targets[@]}"; do
-    clippy_log="$suite_tmp/clippy-$clippy_target.log"
-    target_arguments=()
-    if [[ "$clippy_target" != host ]]; then
-        target_arguments=(--target "$clippy_target")
-    fi
-    if ! (
-        cd "$repo_root/native"
-        run_task cargo clippy --locked --workspace --exclude smart_explorer_android --exclude smart_explorer "${target_arguments[@]}" --all-targets \
-            --message-format short
-        run_task cargo clippy --locked -p smart_explorer "${target_arguments[@]}" --all-targets \
-            --message-format short
-    ) 2>&1 | tee "$clippy_log"; then
-        stage_failed "clippy ($clippy_target) did not complete"
-        continue
-    fi
-    batch_diagnostic_lines="$(batch_diagnostics "$clippy_log")"
-    if [[ -n "$batch_diagnostic_lines" ]]; then
-        printf '%s\n' "$batch_diagnostic_lines" >&2
-        if [[ "$suite_mode" == check ]]; then
-            # While the batch is built, stubs and not yet wired entry points
-            # are expected to be unused; the check reports them and goes on.
-            echo "clippy ($clippy_target): diagnostics on changed lines (reported, not gating in --check)" >&2
-            continue
-        fi
-        stage_failed "clippy ($clippy_target) reported diagnostics on lines this batch changed"
-        continue
-    fi
-    echo "transfer engine task suite: clippy ($clippy_target) is clean on the lines this batch changed"
-done
-
-if [[ "$suite_mode" == check ]]; then
-    suite_succeeded=true
-    echo "transfer engine task suite: batch gates passed (check)"
-    exit 0
-fi
 
 # ---------------------------------------------------------------------------
 # Milestone tests: every `transfer_engine_task_` test of the library. The
@@ -244,9 +117,19 @@ if ! (
     stage_failed "milestone tests"
 fi
 passed_line="$(grep -E '^test result: ok\. [0-9]+ passed; 0 failed' "$milestone_log" | head -n 1 || true)"
+# Only functions with a test attribute: the rows of a merged table test keep their old names as plain
+# functions and are no tests of their own.
 mapfile -t source_tests < <(
-    grep -rhoE 'fn transfer_engine_task_[A-Za-z0-9_]+' "$repo_root/native/src" "$repo_root/native/crates" |
-        sed 's/^fn //' | sort -u
+    find "$repo_root/native/src" "$repo_root/native/crates" -name '*.rs' -print0 |
+        xargs -0 awk '
+            FNR == 1 { for (i = 0; i < 6; i++) recent[i] = ""; n = 0 }
+            {
+                if (match($0, /fn transfer_engine_task_[A-Za-z0-9_]+/)) {
+                    name = substr($0, RSTART + 3, RLENGTH - 3)
+                    for (i = 0; i < 6; i++) if (recent[i] ~ /#\[(tokio::)?test/) { print name; break }
+                }
+                recent[n % 6] = $0; n++
+            }' | sort -u
 )
 mapfile -t compiled_tests < <(
     { grep -oE '^test [^ ]+ \.\.\. (ok|ignored|FAILED)' "$milestone_log" || true; } |

@@ -7,11 +7,21 @@ name: Crate split and shared task setup
 #                programs' tests with cargo-nextest, one process per test, a
 #                test running five minutes is ended and named
 #                (native/.config/nextest.toml)
+#                Then the crate tests that are #[ignore] because they need an
+#                environment a plain run lacks, each group with that environment
+#                (IGNORED_GROUPS in the script): isolated app data and the suite
+#                switches (direct opening, sync paths and links; Linux and Windows),
+#                the egui layout harness (Linux), real ACL, token and junction
+#                fixtures with the runner's administrator token (Windows); on
+#                Linux last the program test that needs a systemd manager
+#                (se_cli containment self-test)
 #   windows-gnu  link every test binary and program for x86_64-pc-windows-gnu
 #                with GNU ld (MinGW-w64 on Linux)
 #   android      compile and link the Android JNI library (arm64-v8a, x86_64);
 #                arm64-v8a also compiles the Kotlin app and runs its JVM unit tests
 #   agent        build the SSH-agent bundles the release embeds
+#   servers      the tests of the two packages outside the workspace (Linux):
+#                share-server (with tests/relay_startup.rs) and se-agent
 # Input part=compile-timings runs only the compile stage of `workspace` on Linux
 # and Windows (no test runs, no other job), with Cargo's timing report, one line
 # per finished unit and a resource line every 30 s, to measure the build time.
@@ -57,8 +67,10 @@ jobs:
     # Linux one test at a time (run 41488739503), and their single times add
     # up to 31 min on Windows (run 42308441438). A hanging program test is
     # ended after 5 min; a process a test leaves holding the output is ended
-    # 30 s after its command (native/test-crates-task.py).
-    timeout-minutes: ${{ inputs.part == 'compile-timings' && 75 || 130 }}
+    # 30 s after its command (native/test-crates-task.py). The ignored tests with
+    # their environment (21 tests per OS, plus one program test
+    # on Linux; no new compilation) add an estimated 10 min; not measured yet.
+    timeout-minutes: ${{ inputs.part == 'compile-timings' && 75 || 150 }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -109,7 +121,7 @@ jobs:
         run: nproc && free -h && df -h /
 
       - name: Every crate, every test
-        timeout-minutes: ${{ inputs.part == 'compile-timings' && 60 || 120 }}
+        timeout-minutes: ${{ inputs.part == 'compile-timings' && 60 || 140 }}
         env:
           PART: ${{ inputs.part == 'compile-timings' && 'timings' || 'workspace' }}
         run: python native/test-crates-task.py --part "$PART"
@@ -216,3 +228,47 @@ jobs:
       - name: SSH-agent bundles
         timeout-minutes: 30
         run: python3 native/test-crates-task.py --part agent
+
+  servers:
+    if: inputs.part == 'suite'
+    runs-on: ubuntu-24.04
+    # Not measured yet: two cold dependency builds (share-server with iroh-relay
+    # and rustls, se-agent) and about 100 tests one at a time; the Share server
+    # suites that ran them before allowed 40 min for the tests alone.
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.candidate_sha }}
+
+      - name: Bind the checkout to the requested candidate
+        shell: bash
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[a-fA-F0-9]{40}$ ]]
+          [[ "$(git rev-parse HEAD)" == "${CANDIDATE_SHA,,}" ]]
+
+      - name: Rust toolchain and dependency cache
+        uses: ./.github/actions/native-setup
+        with:
+          workspaces: |
+            share-server
+            se-agent
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Share server and SSH agent tests
+        timeout-minutes: 80
+        run: python3 native/test-crates-task.py --part servers
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: crates-task-servers
+          path: native/target/crates-task-logs
+          if-no-files-found: warn
+          retention-days: 7

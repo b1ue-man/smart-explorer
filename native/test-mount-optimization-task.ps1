@@ -183,8 +183,21 @@ function Invoke-CargoTests([string[]]$Arguments, [int]$Seconds, [string]$Label) 
 
 $build = Invoke-TaskProcess $cargo @('test', '--locked', '--workspace', '--exclude', 'smart_explorer_android', '--exclude', 'smart_explorer', '--lib', '--no-fail-fast', '--no-run') 5400 'test-build'
 if ($build.Code -ne 0) { throw "Test build failed: $($build.Error)" }
-$selected = Invoke-CargoTests @('mount_vault_task', '--list', '--include-ignored') 30 'selected-cases'
+# The drive gate lost its deadlines with 70946d7c (a queued transfer waits without a timer), so
+# the cases metadata_progress_extends_backlog_not_transfer_deadline and
+# metadata_gate_times_out_without_service_progress left the code without a successor, and
+# transfer_gate_times_out_instead_of_starving_the_drive became its opposite below.
+# cancelled_waiters_preserve_fifo_and_abort_releases_queue is split into
+# fifo_admission_drains_10000_without_overtaking and abort_releases_the_whole_queue (the order of
+# aborted waiters has no case of its own). framed_tcp_latency_diagnostic was removed in 6a6d3930.
+$gateWithoutDeadline = 'speed_task_drive_gate_waits_without_deadline'
+# #[ignore]d: it needs the official Dokany runtime installed above, the pinned DLL hash in
+# SMART_EXPLORER_DOKANY_DLL_SHA256 and the symlink privilege of this runner (Suite mount-optimization-task).
+$privateRuntimeCase = 'mount_optimization_task_private_runtime_selection_and_rejections'
+$selected = Invoke-CargoTests @('mount_vault_task', $gateWithoutDeadline, $privateRuntimeCase, '--list', '--include-ignored') 30 'selected-cases'
 if ($selected.Code -ne 0) { throw 'Could not enumerate the selected task cases.' }
+if (-not $selected.Output.Contains($gateWithoutDeadline)) { throw "Missing task acceptance case: $gateWithoutDeadline" }
+if (-not $selected.Output.Contains($privateRuntimeCase)) { throw "Missing task acceptance case: $privateRuntimeCase" }
 foreach ($required in @(
     'listing_name_and_collision_safety',
     'metadata_authority_and_revision',
@@ -207,12 +220,9 @@ foreach ($required in @(
     'rooted_refresh_crosses_daemon_ttl',
     'rooted_case_sensitive_stat_reuses_fresh_terminal_observation',
     'fifo_admission_drains_10000_without_overtaking',
-    'metadata_progress_extends_backlog_not_transfer_deadline',
-    'cancelled_waiters_preserve_fifo_and_abort_releases_queue',
+    'abort_releases_the_whole_queue',
     'metadata_waiter_has_priority_over_a_new_transfer',
-    'transfer_gate_times_out_instead_of_starving_the_drive',
-    'metadata_gate_times_out_without_service_progress',
-    'metadata_priority_is_a_bounded_burst',
+    'metadata_burst_lets_one_transfer_through_then_resumes',
     'agent_reaps_completed_capacity_before_new_admission',
     'entry_table_dense_slots_survive_10000_removals',
     'entry_table_replace_and_rename_keys_across_10000_identities',
@@ -239,7 +249,6 @@ foreach ($required in @(
     'preload_cooldown_survives_unretained_publication_and_rearms_exact_eviction',
     'daemon_fresh_unretained_image_retires_old_authority_but_errors_do_not',
     'daemon_unrelated_mutation_preserves_active_shared_flight',
-    'framed_tcp_latency_diagnostic',
     'all_frame_variants_keep_exact_protocol_bytes',
     'directory_above_50000_real_entries_roundtrips',
     'directory_minimum_record_guards_reject_malformed_frames',
@@ -263,10 +272,13 @@ foreach ($required in @(
 }
 # One filter, one invocation, one incremental library output throughout the loop.
 $run = Invoke-CargoTests @(
-    'mount_vault_task', '--include-ignored', '--nocapture', '--test-threads=1'
+    'mount_vault_task', $gateWithoutDeadline, $privateRuntimeCase, '--include-ignored', '--nocapture', '--test-threads=1'
 ) 2400 'mount-vault'
 Write-Host $run.Output
 if ($run.Code -ne 0) { throw "The Windows vault metadata task failed: $($run.Error)" }
+if ($run.Output -notmatch "test [^\r\n]*$privateRuntimeCase \.\.\. ok") {
+    throw "The private runtime case did not report a successful run: $privateRuntimeCase"
+}
 $null = Assert-TaskHash $dll '75600aba867acbdfdb85fcd142b524da769bdc611b855a760aeb0c6e2eaae17a'
 $null = Assert-TaskHash $driver '9549a20e63c22a2b068e635600b65f6b55d8be5122a6623997b1274a1a1f6235'
 $head = Invoke-TaskProcess (Get-Command git.exe -CommandType Application | Select-Object -First 1).Source @(

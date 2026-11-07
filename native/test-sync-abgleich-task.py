@@ -365,10 +365,9 @@ def gated_elsewhere(path, number):
 # server can show (an FTP server with XMD5, the shape of the key phases). Each must exist and, being named
 # `abgleich_task_`, passes with the rest of the prefix.
 EVIDENCE_TESTS = (
-    "abgleich_task_webdav_md5_comes_from_the_checksum_property_without_a_download",
     "abgleich_task_webdav_digest_comes_from_the_checksum_property_without_a_download",
-    "abgleich_task_ftp_md5_by_hash_command_without_a_data_connection",
-    "abgleich_task_ftp_md5_by_xmd5_command_takes_251_250_and_213",
+    "abgleich_task_ftp_hash_command_gives_the_digest_without_a_data_connection",
+    "abgleich_task_ftp_xsha256_command_gives_the_digest_without_a_data_connection",
     "abgleich_task_sftp_md5_flow_asks_the_server_and_checks_size_and_time",
     "abgleich_task_drive_digest_is_the_checksum_google_reports_not_a_download",
     "abgleich_task_keyed_walk_sends_only_what_changed_and_equals_the_full_walk",
@@ -1103,7 +1102,7 @@ def diff_text(a, b, prefix="", limit=14):
     return lines[:limit]
 
 
-# Plan C3 (V1, 7ca9b26f): the listings of an SSH agent and of a Share host carry the hidden flag; v0.5.189's
+# Plan C3 (V1, edd95d21): the listings of an SSH agent and of a Share host carry the hidden flag; v0.5.189's
 # never did (its agent listing set `hidden: false`, `agent/core/metadata.rs`), so `include_hidden = false`
 # did nothing on those sides. The candidate marks dot names hidden there as a local listing and SFTP do.
 HIDDEN_FIXED_WAYS = {"LA": "LS", "LH": "LL", "HH": "LL"}

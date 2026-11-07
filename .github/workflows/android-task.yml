@@ -1,10 +1,14 @@
 name: android-task
 
 # Single task-level suite of the Android APK batch
-# (docs/superpowers/plans/2026-09-25-android-apk/umsetzung.md, Gesamtablauf G1–G7).
+# (docs/superpowers/plans/2026-09-25-android-apk/umsetzung.md, Gesamtablauf G1–G7). Since
+# 2026-11-07 it is also the suite of the Android background batch (AND5: service after boot,
+# reachability in Doze, idle wake-ups; BackgroundReachTaskTest and BootPrepTaskTest in the
+# device job), whose own workflow android-background-task.yml ran the same jobs.
 # Dispatch it once for the exact pushed candidate SHA; it never publishes anything. Every job
 # calls exactly one sub-command of android/test-android-task.sh:
-#   host          G1 android_task_ tests, G2 desktop unchanged (Linux + Windows-GNU), G7 static
+#   host          G1 android_task_ tests, G2 desktop unchanged, G7 static (rustfmt and clippy:
+#                 build.yml at every push)
 #   desktop-bins  Linux `se` + `se-share-server` for the G5 Share check (artifact)
 #   android-build G3 Android tree, NDK/cargo-ndk, .so + 16 KB, debug/test APKs, JVM tests (artifact)
 #   device        G4/G5/G6 on an x86_64 emulator with SD card, SFTP/FTP containers, desktop Share
@@ -63,17 +67,7 @@ jobs:
       - name: Rust toolchain and dependency cache
         uses: ./.github/actions/native-setup
         with:
-          targets: x86_64-pc-windows-gnu
-          components: rustfmt, clippy
           workspaces: native
-
-      - name: Install the Windows cross C toolchain
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          sudo apt-get update
-          sudo apt-get install -y mingw-w64 jq
-          x86_64-w64-mingw32-gcc --version | head -n 1
 
       - name: Run the host part of the task suite (G1, G2, G7)
         shell: bash

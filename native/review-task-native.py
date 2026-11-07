@@ -3,6 +3,7 @@
 import argparse
 import difflib
 import hashlib
+import ipaddress
 import json
 import os
 from pathlib import Path
@@ -19,7 +20,7 @@ import xml.etree.ElementTree as ET
 from review_task_quality import quality_evidence
 
 ROOT = Path(__file__).resolve().parent.parent
-BASE = "bea312ea79731d913a7dd3e79de2f5404401208a"
+BASE = "c935b763203ead13f0fdf084c1b0df4e369266a0"
 MANIFEST = ROOT / "native/review-task-manifest.json"
 
 
@@ -284,6 +285,74 @@ def library_test_command(logs, env):
     return command
 
 
+def lan_facts(logs, env):
+    """The runner's real private IPv4 interface for the S09 transport tests (no loopback fallback);
+    the tests' fixture reads it from SE_REVIEW_LAN_IP, _IFINDEX and _IFNAME."""
+    if os.name == "nt":
+        values = json.loads(output(["powershell", "-NoProfile", "-Command",
+            "@((Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.AddressState -eq 'Preferred' }) | ForEach-Object { "
+            "[pscustomobject]@{ip=$_.IPAddress;index=$_.InterfaceIndex;name=$_.InterfaceAlias} }) | ConvertTo-Json -Compress"]))
+        if isinstance(values, dict):
+            values = [values]
+    else:
+        values = [{"ip": address["local"], "index": interface["ifindex"], "name": interface["ifname"]}
+            for interface in json.loads(output(["ip", "-j", "-4", "addr", "show", "up"]))
+            for address in interface.get("addr_info", []) if address.get("family") == "inet"]
+    choices = [value for value in values if any(ipaddress.ip_address(value["ip"]) in ipaddress.ip_network(net)
+        for net in ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"])
+        and not any(word in value["name"].lower() for word in ["docker", "veth", "loopback", "br-"])]
+    if not choices:
+        raise RuntimeError("The runner lacks a real private IPv4 interface for S09; no loopback fallback.")
+    facts = choices[0]
+    (logs / "lan-interface.json").write_text(json.dumps(facts, indent=2))
+    env.update(SE_REVIEW_LAN_IP=facts["ip"], SE_REVIEW_LAN_IFINDEX=str(facts["index"]), SE_REVIEW_LAN_IFNAME=facts["name"])
+
+
+def runtime_tests(command, logs, env):
+    """The ignored review_task_ tests that need what only this suite provides (manifest native.runtime):
+    the runner's real private LAN interface (S09 transport), isolated app data with the copy/paste switch
+    (Y156 exit gate of the GUI) and, on Linux, the prepared NFS-like/FAT32/exFAT mounts of
+    native/review-task-runtime.sh and, in a second run, a lowered inotify watch limit. Each case is
+    selected by its exact name and must report its own successful libtest line."""
+    plan = manifest()["native"]["runtime"]
+    key = "windows" if os.name == "nt" else "linux"
+    listing = logs / "runtime-available.txt"
+    run([*command, "--list", "--format", "terse"], listing, env, seconds=120, cwd=ROOT / "native")
+    available = [line.removesuffix(": test") for line in listing.read_text().splitlines() if line.endswith(": test")]
+
+    def exact(suffix):
+        found = [name for name in available if name.endswith("::" + suffix)]
+        if len(found) != 1:
+            raise RuntimeError("Missing or ambiguous runtime case: " + suffix)
+        return found[0]
+
+    def execute(label, arguments, names):
+        log = logs / (label + ".log")
+        run(arguments, log, env, seconds=3600, cwd=ROOT / "native")
+        result = log.read_text(errors="replace")
+        for name in names:
+            if f"test {name} ... ok" not in result:
+                raise RuntimeError("Missing successful runtime acceptance: " + name)
+        return result
+
+    selected = [exact(suffix) for suffix in plan[key]]
+    lan_facts(logs, env)
+    test_arguments = [*command, "--include-ignored", "--test-threads=1", "--exact"]
+    arguments = [*test_arguments, *selected]
+    if os.name != "nt":
+        arguments = ["bash", ROOT / "native/review-task-runtime.sh", *arguments]
+    result = execute("runtime-suite", arguments, selected)
+    limited = []
+    if os.name != "nt":
+        limited = [exact(plan["linux_watch_limit"])]
+        execute("runtime-watch-limit", ["bash", ROOT / "native/review-task-runtime.sh", "--watch-limit",
+            *test_arguments, *limited], limited)
+    (logs / "runtime-acceptance.json").write_text(json.dumps({"candidate": env["CANDIDATE_SHA"],
+        "manifest_sha256": sha(MANIFEST), "platform": key, "selected": [*selected, *limited],
+        "result": "passed"}, indent=2))
+    print(result[-8000:])
+
+
 def egui_glow_test_command(logs, env):
     command = ["cargo", "test", "--locked", "-p", "egui_glow", "--lib", "--"]
     run([*command[:-1], "--no-run"], logs / "egui-glow-test-build.log", env, seconds=10800, cwd=ROOT / "native")
@@ -523,6 +592,7 @@ def main():
             env["SE_SCREEN_TASK_WORKER"] = str(cli.resolve())
             stage("native-behavior", lambda: native_tests(fixture, logs, env))
         if fixture:
+            stage("runtime-behavior", lambda: runtime_tests(fixture, logs, env))
             stage("p27-network-behavior", lambda: p27_network_tests(logs, env))
         glow = stage("glow-scope-build", lambda: egui_glow_test_command(logs, env))
         if glow:

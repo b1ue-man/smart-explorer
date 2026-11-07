@@ -22,6 +22,17 @@ def _sha(path):
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
+def _released_asset(tag, name, folder):
+    """One asset of the GitHub release `tag`, downloaded into `folder` with gh (GH_TOKEN is set in the
+    job). The history rewrite of 2026-11-01 removed every build from the tags' trees, and the
+    published builds live only in the GitHub Release."""
+    folder.mkdir(parents=True, exist_ok=True)
+    repo = os.environ.get("GITHUB_REPOSITORY", "b1ue-man/smart-explorer")
+    subprocess.run(["gh", "release", "download", tag, "-R", repo, "-p", name, "-D", str(folder), "--clobber"],
+                   cwd=ROOT, check=True, timeout=900)
+    return folder / name
+
+
 def _wait(label, check, seconds=150):
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
@@ -434,10 +445,9 @@ def _run_fixture(candidate_cli, env, fixture):
     previous.parent.mkdir()
     current.parent.mkdir()
     shutil.copy2(candidate_cli, current)
-    blob = f"{OLD_TAG}:release-native/update-feed/{name}"
-    with previous.open("wb") as stream:
-        subprocess.run(["git", "show", blob], cwd=ROOT, stdout=stream, check=True, timeout=120)
-    sidecar = subprocess.check_output(["git", "show", blob + ".sha256"], cwd=ROOT, text=True, timeout=30).split()[0]
+    downloads = work / "release-download"
+    shutil.copy2(_released_asset(OLD_TAG, name, downloads), previous)
+    sidecar = _released_asset(OLD_TAG, name + ".sha256", downloads).read_text(encoding="utf-8").split()[0].lower()
     if _sha(previous) != sidecar:
         raise RuntimeError("C08 historical payload differs from its published SHA-256")
     if os.name != "nt":

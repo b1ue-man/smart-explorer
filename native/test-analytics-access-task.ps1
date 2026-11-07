@@ -95,26 +95,39 @@ function Invoke-CargoTests([string[]]$Arguments, [int]$Seconds, [string]$Label) 
 }
 $build = Invoke-TaskProcess $cargo @('test', '--locked', '--workspace', '--exclude', 'smart_explorer_android', '--exclude', 'smart_explorer', '--lib', '--no-fail-fast', '--no-run') 5400 'test-build'
 if ($build.Code -ne 0) { throw "Test build failed: $($build.Error)" }
-$selected = Invoke-CargoTests @('analytics_access_task', '--list', '--include-ignored') 30 'selected-cases'
+# Four names of this suite's earlier case list left the code between 2026-09-19 and 2026-10-03
+# (docs/TODO.md SUITES-ALT). Three have a successor with another prefix; those run by their exact
+# names next to the analytics_access_task filter. invalid_startup_cannot_spawn_or_restart_a_scan
+# has none (the startup admission was reduced to the exact read protocol) and is dropped.
+$successors = @(
+    'search_recursive_access_task_helper_admits_exact_read_protocol_only',
+    'search_recursive_access_task_declined_or_failed_consent_keeps_current_results',
+    'search_recursive_access_task_authenticated_helper_reuses_read_handles_in_parent'
+)
+$filters = @('analytics_access_task') + $successors
+$selected = Invoke-CargoTests (@($filters) + @('--list', '--include-ignored')) 30 'selected-cases'
 if ($selected.Code -ne 0) { throw 'Could not enumerate the selected task cases.' }
 foreach ($required in @(
     'sizes_and_counts', 'missing_local_root_is_failed_not_empty_success',
     'backend_child_error_is_partial_and_root_error_is_failed', 'existing_budget_stops_honestly',
     'diagnostics_keep_denial_identity_when_report_is_full', 'cancellation_never_becomes_partial_success',
-    'exact_startup_admission', 'report_lists_each_retained_path_and_omissions',
+    'report_lists_each_retained_path_and_omissions',
     'new_scan_resets_prompt_without_canceling_consented_launch',
     'remote_access_never_requests_local_privileges',
-    'treemap_origin_change_invalidates_geometry', 'invalid_startup_cannot_spawn_or_restart_a_scan',
+    'treemap_origin_change_invalidates_geometry',
     'first_entry_error_preserves_readable_sibling',
     'automatic_query_fallback_preserves_access_denial',
     'sdk_layout_and_native_names', 'directory_decoder_rejects_malformed_records',
-    'full_record_fallback_and_reparse_classification', 'uac_arguments_and_canceled_consent',
-    'startup_binds_current_image_hash', 'real_denied_directory_locked_files_and_unchanged_acl',
+    'full_record_fallback_and_reparse_classification',
+    'real_denied_directory_locked_files_and_unchanged_acl',
     'restricted_identity_never_falls_back_to_process_authority', 'redirect_children_are_traversal_boundaries'
 )) {
     if (-not $selected.Output.Contains("analytics_access_task_$required")) { throw "Missing task acceptance case: $required" }
 }
-$result = Invoke-CargoTests @('analytics_access_task', '--include-ignored', '--nocapture', '--test-threads=1') 1200 'analytics-access'
+foreach ($required in $successors) {
+    if (-not $selected.Output.Contains($required)) { throw "Missing task acceptance case: $required" }
+}
+$result = Invoke-CargoTests (@($filters) + @('--include-ignored', '--nocapture', '--test-threads=1')) 1200 'analytics-access'
 Write-Host $result.Output
 if ($result.Code -ne 0) { throw "Storage-access task failed: $($result.Error)" }
 [ordered]@{

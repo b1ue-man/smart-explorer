@@ -188,7 +188,7 @@ kill -0 "$server_pid"
 
 identity_c="$(run_client "$client_c" share identity --json)"
 device_name="$(jq -er '.device_name' <<<"$identity_c")"
-run_client "$client_c" share configure --server "127.0.0.1:$signal_port" >/dev/null
+run_client "$client_c" share configure --server "tcp://127.0.0.1:$signal_port" --allow-plaintext >/dev/null
 wait_connected "$client_c"
 
 # Without a terminal and without --pin/--pin-stdin there is no PIN to use.
@@ -257,7 +257,7 @@ run_client "$client_c" share discoverable --pin "" --json >/dev/null 2>"$root/em
 grep -Fq "trivial to guess" "$root/empty-pin.err"
 run_client "$client_c" share worker stop >/dev/null
 # `worker stop` also turns Auto-Connect off; configuring starts it again.
-run_client "$client_c" share configure --server "127.0.0.1:$signal_port" >/dev/null
+run_client "$client_c" share configure --server "tcp://127.0.0.1:$signal_port" --allow-plaintext >/dev/null
 wait_connected "$client_c"
 jq -e '.offers == []' >/dev/null <<<"$(run_client "$client_c" share discoverable list --json)"
 

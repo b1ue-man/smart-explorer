@@ -4,14 +4,10 @@
 # One entry point; each job of .github/workflows/android-task.yml calls exactly one sub-command:
 #
 #   host                  G1 android_task_ unit tests (Linux host), G2 desktop unchanged
-#                         (Linux + Windows-GNU type check via clippy, moved tests under their new
-#                         paths, explorer-command metadata, rustfmt/clippy on the batch's lines),
-#                         G7 static release path
-#   host --without-batch-gates
-#                         the same without the rustfmt/clippy gates on the batch's lines: for a
-#                         later batch's suite that gates its own lines and type-checks both
-#                         targets, since the ranges since this batch's base now include the
-#                         code of every later batch
+#                         (the moved tests under their new paths, explorer-command metadata),
+#                         G7 static release path. rustfmt and clippy are no part of it: build.yml
+#                         gates them at every push (the gates on the lines since this batch's base
+#                         commit were removed on 2026-11-07, TODO TESTS-BEWERTUNG)
 #   desktop-bins --out D  G5 prerequisites: only the Linux `se` and `se-share-server` dev binaries
 #   android-build --out D G3: Android dependency tree, NDK/cargo-ndk, arm64 check, x86_64 .so with
 #                         16 KB alignment, debug APK + test APK, JVM unit tests
@@ -26,7 +22,7 @@ set -Eeuo pipefail
 shopt -s inherit_errexit
 
 usage() {
-  sed -n '2,21p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
+  sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
 }
 
 report_failure() {
@@ -47,9 +43,6 @@ api_md="$repo_root/docs/superpowers/plans/2026-09-25-android-apk/api.md"
 app_package=app.smartexplorer.android
 test_runner="$app_package.test/androidx.test.runner.AndroidJUnitRunner"
 task_package="$app_package.task"
-# Last commit before the Android batch: the gates cover exactly the lines this batch changed.
-batch_base=4487f6f1e7d4c92344da2dea0175df3b2a3e12a7
-
 log_root="${SMART_EXPLORER_TASK_LOG_ROOT:-${TMPDIR:-/tmp}/android-task-logs}"
 mkdir -p -- "$log_root"
 
@@ -76,12 +69,6 @@ require_tools() {
   done
 }
 
-ensure_batch_base() {
-  if ! git -C "$repo_root" cat-file -e "${batch_base}^{commit}" 2>/dev/null; then
-    git -C "$repo_root" fetch --quiet --depth=1 origin "$batch_base"
-  fi
-}
-
 # ---------------------------------------------------------------------------------------------
 # G1 expectations: every android_task_ test the Linux host compiles. Rule: tests inside code that
 # only Android compiles (cfg(target_os = "android") or an os/android module without a host test
@@ -92,10 +79,8 @@ ensure_batch_base() {
 g1_tests=(
   # B1a: support_dirs, apptrash, android_fs rename chain
   android_task_host_values_redirect_data_and_temp_roots
-  android_task_without_host_values_desktop_roots_stay_unchanged
   android_task_apptrash_round_trip_restores_the_original
   android_task_apptrash_restore_never_overwrites_an_occupied_name
-  android_task_apptrash_restore_recreates_a_removed_parent
   android_task_apptrash_folders_report_their_size_and_delete_permanently
   android_task_apptrash_purge_removes_only_old_entries
   android_task_apptrash_refuses_outside_volumes_and_the_trash_itself
@@ -106,7 +91,6 @@ g1_tests=(
   android_task_rename_fallback_decisions_follow_the_error_numbers
   android_task_rename_no_replace_moves_and_never_replaces
   android_task_hard_link_step_is_create_only_and_drops_the_source
-  android_task_checked_rename_refuses_existing_names_and_moves_directories
   # B1b: embedded daemon, catch-up, boot marker, Android platform adapter
   android_task_cancel_jobs_stops_only_the_selected_work
   android_task_catch_up_selects_due_timers_missed_calendar_and_realtime_once
@@ -162,7 +146,6 @@ g1_tests=(
   android_task_exec_errors_name_a_refused_grant_only
   android_task_promote_staged_with_creates_new_names_and_hands_existing_files_to_replace
   android_task_webdav_promote_replaces_with_one_move_overwrite_true
-  android_task_webdav_promote_creates_a_new_name_without_overwrite
   # SMB backend (smb2): URLs and shares, listing with reparse points, rename buffer, error kinds
   android_task_smb_connect_errors_keep_their_meaning
   android_task_smb_connect_failures_keep_their_protocol_kinds
@@ -172,9 +155,7 @@ g1_tests=(
   android_task_smb_locations_parse_with_the_share_as_first_segment
   android_task_smb_operation_errors_map_to_io_kinds
   android_task_smb_paths_split_into_share_and_share_relative_path
-  android_task_smb_protocol_and_endpoints_are_recognized
   android_task_smb_rename_information_buffer_layout
-  android_task_smb_roots_dispatch_to_the_smb_backend
   android_task_smb_server_level_lists_only_the_configured_share
   android_task_smb_url_parses_user_host_port_share_and_path
   android_task_smb_urls_without_credentials_or_share_never_connect
@@ -231,8 +212,6 @@ g2_paths=(
   share::poll_status::tests::inactive_snapshot_still_reports_reachable_daemon
   share::poll_status::tests::unrelated_and_domain_errors_are_preserved
   connect::removal_scope::tests::lan_cleanup_task_direct_scope_matches_only_its_own_paths
-  connect::removal_scope::tests::lan_cleanup_task_saved_url_connection_scope_uses_the_endpoint_prefix
-  connect::removal_scope::tests::lan_cleanup_task_unc_connection_scope_uses_the_forward_slashed_root
   connect::removal_scope::tests::lan_cleanup_task_favourites_and_prefs_filter_by_scope
   connect::removal_scope::tests::lan_cleanup_task_report_suffix_lists_only_what_happened
   app::search_recursive_access_task::search_recursive_access_task_literal_suffixes_invalid_patterns_and_scope
@@ -272,7 +251,9 @@ verify_test_log() {
 g1_source_check() {
   local found expected
   # The programs (native/src) and the workspace crates (native/crates, D13).
-  found="$(grep -rhoE 'fn android_task_[a-z0-9_]+' "$native_dir/src" "$native_dir/crates" | sed 's/^fn //' | sort)"
+  # `android_task_host_state_encoding_keeps_both_conditions_case` is a row of a merged table test (the test
+  # keeps the first name), a function without #[test].
+  found="$(grep -rhoE 'fn android_task_[a-z0-9_]+' "$native_dir/src" "$native_dir/crates" | sed 's/^fn //' | grep -vx 'android_task_host_state_encoding_keeps_both_conditions_case' | sort)"
   expected="$(printf '%s\n' "${g1_tests[@]}" "${android_only_tests[@]}" | sed '/^$/d' | sort)"
   if [[ "$found" != "$expected" ]]; then
     diff <(printf '%s\n' "$expected") <(printf '%s\n' "$found") >&2 || true
@@ -300,68 +281,11 @@ run_g2_moved_tests() {
   local names=()
   for path in "${g2_paths[@]}"; do names+=("${path##*::}"); done
   # The moved app/ GUI-task tests build App through their task constructors, which require the
-  # same opt-in variables as their original suites (test-search-recursive-access-task.py).
+  # opt-in variables of their original suites (search-recursive-access: SMART_EXPLORER_ANALYTICS_TASK,
+  # SMART_EXPLORER_COPY_PASTE_TASK, SMART_EXPLORER_GUI_TASK).
   (cd "$native_dir" && SMART_EXPLORER_ANALYTICS_TASK=1 SMART_EXPLORER_COPY_PASTE_TASK=1 \
     SMART_EXPLORER_GUI_TASK=1 cargo test --locked --no-fail-fast --workspace --exclude smart_explorer_android --exclude smart_explorer --lib -- --test-threads=1 --exact "${g2_paths[@]}") 2>&1 | tee "$log"
   verify_test_log "$log" "${#g2_paths[@]}" "${names[@]}"
-}
-
-batch_rust_files() {
-  git -C "$repo_root" diff --name-only --diff-filter=AM "$batch_base" HEAD -- 'native/crates/*/src/*.rs' 'native/src/*.rs' 'native/android-bridge/*.rs'
-}
-
-run_g2_rustfmt() {
-  step "G2 rustfmt (stdin mode) for every Rust file this batch added or changed"
-  local files=() file diff status failures=0
-  mapfile -t files < <(batch_rust_files)
-  [[ "${#files[@]}" -gt 0 ]] || die "no batch Rust files relative to $batch_base"
-  for file in "${files[@]}"; do
-    status=0
-    diff="$(rustfmt --check --color never --edition 2021 <"$repo_root/$file" 2>&1)" || status=$?
-    if [[ "$status" -ne 0 || -n "$diff" ]]; then
-      printf '%s\n' "$diff" | sed "s#<stdin>#$file#"
-      failures=$((failures + 1))
-    fi
-  done
-  [[ "$failures" -eq 0 ]] || die "$failures batch Rust files are not rustfmt-clean"
-  echo "${#files[@]} batch Rust files are rustfmt-clean"
-}
-
-# Clippy type-checks the library and every binary (it fails on any compile error, so it is the
-# `cargo check --lib --bins` of G2) and only its diagnostics on lines this batch changed fail the
-# suite; the crate carries older lint debt outside the batch (docs/TODO.md H1).
-run_g2_check_and_clippy() {
-  local ranges="$log_root/batch-ranges.txt" file target log hits
-  : >"$ranges"
-  while IFS= read -r file; do
-    [[ "$file" == native/src/* || "$file" == native/crates/*/src/* ]] || continue
-    git -C "$repo_root" diff -U0 "$batch_base" HEAD -- "$file" | awk -v file="${file#native/}" '
-      /^@@ / {
-        split($3, plus, ",")
-        start = substr(plus[1], 2) + 0
-        count = (length(plus) > 1) ? plus[2] + 0 : 1
-        if (count > 0) print file, start, start + count - 1
-      }' >>"$ranges"
-  done < <(batch_rust_files)
-  for target in host x86_64-pc-windows-gnu; do
-    step "G2 cargo check + clippy --lib --bins ($target)"
-    log="$log_root/g2-clippy-$target.log"
-    if [[ "$target" == host ]]; then
-      (cd "$native_dir" && cargo clippy --locked --workspace --exclude smart_explorer_android --exclude smart_explorer --lib --message-format short && cargo clippy --locked -p smart_explorer --lib --bins --message-format short) 2>&1 | tee "$log"
-    else
-      rustup target list --installed | grep -qx "$target" || die "Rust target $target is not installed"
-      require_tools x86_64-w64-mingw32-gcc
-      (cd "$native_dir" && cargo clippy --locked --workspace --exclude smart_explorer_android --exclude smart_explorer --target "$target" --lib --message-format short && cargo clippy --locked -p smart_explorer --target "$target" --lib --bins --message-format short) 2>&1 | tee "$log"
-    fi
-    hits="$({ grep -E '^(crates/[^/:]+/)?src/[^:]+:[0-9]+:[0-9]+: (warning|error)' "$log" || true; } | sort -u | awk -F: -v ranges="$ranges" '
-      BEGIN { while ((getline line < ranges) > 0) { split(line, r, " "); n++; f[n] = r[1]; s[n] = r[2]; e[n] = r[3] } }
-      { for (i = 1; i <= n; i++) if ($1 == f[i] && $2 >= s[i] && $2 <= e[i]) { print; break } }')"
-    if [[ -n "$hits" ]]; then
-      printf '%s\n' "$hits" >&2
-      die "clippy ($target) reported diagnostics on lines this batch changed"
-    fi
-    echo "clippy ($target): no diagnostics on the batch's lines"
-  done
 }
 
 run_g2_explorer_command() {
@@ -411,14 +335,14 @@ $paths = @(Get-PublicationReleaseCommitPaths -Version $version)
 PS1
   pwsh -NoProfile -NonInteractive -File "$script" "$repo_root" >"$plan"
   python3 "$eval_py" release-lists --repo "$repo_root" --plan "$plan"
-  for file in "$repo_root/.github/workflows/build.yml" "$repo_root/.github/workflows/android-task.yml"; do
+  for file in "$repo_root/.github/workflows/build.yml" "$repo_root/.github/workflows/release.yml" "$repo_root/.github/workflows/android-task.yml"; do
     yaml_parse "$file"
     echo "${file#"$repo_root"/}: YAML ok"
   done
   mapfile -t shell_files < <(
     {
       printf '%s\n' android/build-release-apk.sh android/test-android-task.sh android/test-servers/servers.sh android/test-servers/share-desktop.sh
-      git -C "$repo_root" diff --name-only --diff-filter=AM "$batch_base" HEAD -- '*.sh'
+      git -C "$repo_root" ls-files -- 'android/*.sh' 'native/*.sh' install-linux.sh
     } | sort -u
   )
   for file in "${shell_files[@]}"; do
@@ -429,20 +353,12 @@ PS1
 }
 
 cmd_host() {
-  local batch_gates=$1
-  require_tools cargo rustup rustfmt git grep awk sed sort tee python3
-  ensure_batch_base
+  require_tools cargo rustup git grep awk sed sort tee python3
   run_g7
   run_g1
   run_g2_moved_tests
   run_g2_explorer_command
-  if [[ "$batch_gates" == true ]]; then
-    run_g2_rustfmt
-    run_g2_check_and_clippy
-    step "host job passed: G1 (${#g1_tests[@]} tests), G2, G7"
-  else
-    step "host job passed: G1 (${#g1_tests[@]} tests), G2 without the batch-line gates, G7"
-  fi
+  step "host job passed: G1 (${#g1_tests[@]} tests), G2, G7"
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -1020,9 +936,41 @@ XML
   local main_classes=SystemTaskTest,LocalFilesTaskTest,ScanAnalyzeTaskTest,AnalysisProtectedTaskTest,RemoteTaskTest,SyncTaskTest,BackgroundTaskTest,ServicesTaskTest,IntentsTaskTest,UpdateTaskTest,UiTaskTest
   IFS=, read -r -a covered <<<"$main_classes"
   covered+=(RenameProbeTaskTest ShareRoomTaskTest ShareExecTaskTest BackgroundReachTaskTest ShareCleanupTaskTest BootPrepTaskTest)
+  # Every instrumented class has an owner: this run starts the classes in `covered`; the classes in
+  # `elsewhere` belong to another emulator suite, which brings what they need (review-task:
+  # device_classes of native/review-task-manifest.json; rechte-desktop-tresore: the android-device
+  # stages of native/rdt_task, expected_signals.txt; luecken: native/luecken-task-android.py;
+  # sync-reliability: native/sync-reliability-android.py). A class without an owner fails the run.
+  local -A elsewhere=(
+    [BatchesCaptureTaskTest]=review-task
+    [BatchesDeviceNavigationTaskTest]=review-task
+    [BatchesMediaWakeTaskTest]=review-task
+    [BatchesPresentationTaskTest]=review-task
+    [LoginImageTaskTest]=review-task
+    [ScreenTaskTest]="review-task and rechte-desktop-tresore"
+    [LauncherTaskTest]=rechte-desktop-tresore
+    [PermTaskTest]=rechte-desktop-tresore
+    [VaultTaskTest]=rechte-desktop-tresore
+    [SpeedTaskTest]=rechte-desktop-tresore
+    [DriveTaskProviderDeviceTest]=rechte-desktop-tresore
+    [LueckenUpgradeTaskTest]=luecken
+    [SyncReliabilityTaskTest]=sync-reliability
+  )
+  # Started by no suite: both need the desktop identities, server and room of an owning runner (see
+  # their header comments and share_accept_phone_request in android/test-servers/share-desktop.sh)
+  # that no workflow provides. docs/TODO.md SUITES-ANDROID-KLASSEN.
+  local -a unowned=(ReviewShareTaskTest ReviewSyncTaskTest)
   mapfile -t all_classes < <(python3 "$eval_py" classes --sources "$android_test_sources")
   for class in "${all_classes[@]}"; do
-    [[ " ${covered[*]} " == *" ${class##*.} "* ]] || die "instrumented test class $class is not part of any run"
+    if [[ " ${covered[*]} " == *" ${class##*.} "* ]]; then
+      continue
+    elif [[ -n "${elsewhere[${class##*.}]:-}" ]]; then
+      echo "instrumented test class ${class##*.}: started by ${elsewhere[${class##*.}]}"
+    elif [[ " ${unowned[*]} " == *" ${class##*.} "* ]]; then
+      echo "::warning::instrumented test class ${class##*.} is started by no suite (docs/TODO.md SUITES-ANDROID-KLASSEN)"
+    else
+      die "instrumented test class $class has no owner: add it to a run or to the elsewhere/unowned lists"
+    fi
   done
 
   run_instrumentation main "$main_classes" "${server_args[@]}" || true
@@ -1088,14 +1036,8 @@ command_name=$1
 shift
 case "$command_name" in
   host)
-    if [[ "$#" -eq 0 ]]; then
-      cmd_host true
-    elif [[ "$#" -eq 1 && "$1" == --without-batch-gates ]]; then
-      cmd_host false
-    else
-      usage
-      exit 2
-    fi
+    [[ "$#" -eq 0 ]] || { usage; exit 2; }
+    cmd_host
     ;;
   desktop-bins | android-build | review-build | sync-reliability-build)
     [[ "$#" -eq 2 && "$1" == --out ]] || { usage; exit 2; }

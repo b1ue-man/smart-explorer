@@ -1,5 +1,14 @@
 #!/usr/bin/env bash
-# Linux runtime fixtures owned by the single RV1 suite. No build commands here.
+# Linux runtime fixtures owned by the single RV1 suite (native/review-task-native.py,
+# runtime_tests). No build commands here. Two modes; the rest of the command line is
+# the test command to run:
+#   review-task-runtime.sh COMMAND...
+#       mounts a FAT32 and an exFAT loop image and an sshfs mount (NFS/FUSE stand-in) for this
+#       user, exports SE_REVIEW_FAT_DIR, SE_REVIEW_EXFAT_DIR and SE_REVIEW_NOREPLACE_DIR and
+#       runs COMMAND with them.
+#   review-task-runtime.sh --watch-limit COMMAND...
+#       lowers fs.inotify.max_user_watches to 16 (the real ENOSPC boundary of a 129-directory
+#       fixture) for the run of COMMAND and restores it afterwards.
 set -Eeuo pipefail
 [[ "${GITHUB_ACTIONS:-}" == true || "${SMART_EXPLORER_REMOTE_RUNNER:-}" == 1 ]] || exit 2
 runtime="$(mktemp -d "$SMART_EXPLORER_TASK_LOG_ROOT/runtime.XXXXXX")"
@@ -34,6 +43,19 @@ trap cleanup EXIT
 trap 'exit 143' TERM
 trap 'exit 130' INT
 sudo -n true
+if [[ ${1:-} == --watch-limit ]]; then
+  shift
+  [[ $# -gt 0 ]] || { echo 'Missing test command.' >&2; exit 2; }
+  watch_limit_original="$(sysctl -n fs.inotify.max_user_watches)"
+  [[ "$watch_limit_original" =~ ^[0-9]+$ ]] || exit 2
+  printf 'watch_limit_original=%s\n' "$watch_limit_original" >"$runtime/values.txt"
+  # The fixture creates 129 directories; 16 forces the real ENOSPC boundary.
+  timeout 30 sudo -n sysctl -w fs.inotify.max_user_watches=16
+  [[ "$(sysctl -n fs.inotify.max_user_watches)" == 16 ]] || exit 2
+  "$@"
+  exit
+fi
+[[ $# -gt 0 ]] || { echo 'Missing test command.' >&2; exit 2; }
 for tool in losetup mkfs.fat mkfs.exfat mount mount.exfat-fuse umount sshfs fusermount3 socat udevadm sysctl; do
   command -v "$tool" >/dev/null || { echo "Missing runtime tool: $tool" >&2; exit 1; }
 done
@@ -82,20 +104,5 @@ timeout 45 sshfs -o "directport=$port" "127.0.0.1:$runtime/remote" "$runtime/fus
 mountpoint -q "$runtime/fuse"
 export SE_REVIEW_NOREPLACE_DIR="$runtime/fuse"
 printf 'fat=%s\nexfat=%s\nfuse=%s\nsftp_port=%s\n' "$SE_REVIEW_FAT_DIR" "$SE_REVIEW_EXFAT_DIR" "$SE_REVIEW_NOREPLACE_DIR" "$port" >"$runtime/values.txt"
-# The existing watch-limit case needs a different real kernel resource setting.
-# Partition its execution inside this one entrypoint; every selected case still
-# must produce its normal successful libtest line in the combined suite log.
-watch_limit_case=${SE_REVIEW_WATCH_LIMIT_CASE:?Missing discovered watch-limit case}
-if "$@" --skip "$watch_limit_case"; then normal_status=0; else normal_status=$?; fi
-watch_limit_original="$(sysctl -n fs.inotify.max_user_watches)"
-[[ "$watch_limit_original" =~ ^[0-9]+$ ]] || exit 2
-printf 'watch_limit_original=%s\n' "$watch_limit_original" >>"$runtime/values.txt"
-# The fixture creates 129 directories; 16 forces the real ENOSPC boundary.
-timeout 30 sudo -n sysctl -w fs.inotify.max_user_watches=16
-[[ "$(sysctl -n fs.inotify.max_user_watches)" == 16 ]] || exit 2
-if "$1" --include-ignored --test-threads=1 --exact "$watch_limit_case"; then
-  limit_status=0
-else
-  limit_status=$?
-fi
-((normal_status == 0 && limit_status == 0))
+# The command's exit status is the script's: the EXIT trap unmounts and detaches.
+"$@"

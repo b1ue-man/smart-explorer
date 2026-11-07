@@ -58,8 +58,8 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.sha }}
-          # The fmt stage diffs the batch against its base commit and the update
-          # stage reads the published `se` 0.5.180 from that commit's update feed.
+          # The update stage reads the published `se` 0.5.180 from the update feed of
+          # that commit (TODO: the feed is no longer in Git, see TESTS-BEWERTUNG).
           fetch-depth: 0
           persist-credentials: false
 
@@ -75,7 +75,6 @@ jobs:
       - name: Rust toolchain and dependency cache
         uses: ./.github/actions/native-setup
         with:
-          components: rustfmt
           workspaces: |
             native
             share-server

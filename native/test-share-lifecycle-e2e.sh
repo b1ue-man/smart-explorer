@@ -352,29 +352,35 @@ verify_release_transaction_scripts() {
       Remove-Item -LiteralPath $fixture -Recurse -Force -ErrorAction SilentlyContinue
     }
     $assets = @(Get-PublicationReleaseAssetMap -RepoRoot $root -Version $currentVersion)
-    if ($assets.Count -ne 20) {
-      throw "Current release candidate does not map exactly 20 assets"
+    if ($assets.Count -ne 26) {
+      throw "Current release candidate does not map exactly 26 assets"
     }
-    # 0.5.162 is the last release published before the Android APK joined the
-    # asset set; only that committed candidate may lack the two Android files.
-    $preAndroidRelease = [version]$currentVersion -le [version]"0.5.162"
-    foreach ($asset in $assets) {
-      if ($preAndroidRelease -and $asset.PublishedName -like "smart-explorer-android.apk*") {
-        continue
+    # The installer is named by the asset map: "Smart Explorer Setup <version>.exe" in release-native,
+    # published as "Smart.Explorer.Setup.<version>.exe".
+    $installerAsset = @($assets | Where-Object { $_.PublishedName -eq "Smart.Explorer.Setup.$currentVersion.exe" })
+    if ($installerAsset.Count -ne 1 -or
+        $installerAsset[0].LocalPath -ne (Join-Path $root "release-native/Smart Explorer Setup $currentVersion.exe")) {
+      throw "The release asset map does not name the installer Smart Explorer Setup $currentVersion.exe"
+    }
+    # Built payloads are no part of the repository since the history rewrite of 2026-11-01. Their bytes
+    # are checked on every publication by release.yml (native/publish-release-assets.ps1: sidecars,
+    # installer payloads, sizes and SHA-256) and here only when a local complete-release stage holds them.
+    if (Test-Path -LiteralPath $installerAsset[0].LocalPath -PathType Leaf) {
+      foreach ($asset in $assets) {
+        Assert-PublicationNonEmptyFile $asset.LocalPath
       }
-      Assert-PublicationNonEmptyFile $asset.LocalPath
-    }
-    Assert-PublicationInstallerPayloads `
-      -RepoRoot $root `
-      -Installer (Join-Path $root "release-native/Smart Explorer Setup $currentVersion.exe") `
-      -Feed (Join-Path $root "release-native/update-feed")
-    foreach ($payload in @(
-      "smart_explorer.exe", "smart_explorer_updater.exe", "se.exe",
-      "smart_explorer", "smart_explorer_updater", "se"
-    )) {
-      $null = Assert-PublicationHashSidecar `
-        -Feed (Join-Path $root "release-native/update-feed") `
-        -PayloadName $payload
+      Assert-PublicationInstallerPayloads `
+        -RepoRoot $root `
+        -Installer $installerAsset[0].LocalPath `
+        -Feed (Join-Path $root "release-native/update-feed")
+      foreach ($payload in @(
+        "smart_explorer.exe", "smart_explorer_updater.exe", "se.exe",
+        "smart_explorer", "smart_explorer_updater", "se"
+      )) {
+        $null = Assert-PublicationHashSidecar `
+          -Feed (Join-Path $root "release-native/update-feed") `
+          -PayloadName $payload
+      }
     }
     $lockText = Get-Content -LiteralPath (Join-Path $root "native/Cargo.lock") -Raw
     $lockPattern = [regex]::new(
@@ -973,7 +979,10 @@ working_signal="127.0.0.1:$signal_port"
 dead_signal="127.0.0.1:$dead_signal_port"
 working_relay="http://127.0.0.1:$relay_port"
 dead_relay="http://127.0.0.1:$dead_relay_port"
-fallback_signal_config="$dead_signal,$working_signal"
+# The test server speaks plaintext: an address entered without a scheme means TLS (wss://), so every
+# address is entered as tcp:// together with --allow-plaintext.
+working_signal_config="tcp://$working_signal"
+fallback_signal_config="tcp://$dead_signal,tcp://$working_signal"
 "$server_bin" "127.0.0.1:$signal_port" >"$server_log" 2>&1 &
 server_pid=$!
 sleep 0.5
@@ -984,7 +993,7 @@ direct_code_b="$(jq -er '.direct_code' <<<"$identity_b")"
 
 # Queue while the target is offline. The requester must report relay state,
 # never peer receipt, until B durably receives the signed envelope.
-run_client "$client_a" share configure --server "$fallback_signal_config" >/dev/null
+run_client "$client_a" share configure --server "$fallback_signal_config" --allow-plaintext >/dev/null
 stop_daemon "$client_a"
 run_client "$client_a" share status --json >/dev/null
 wait_relay_route "$client_a" "$working_relay" >/dev/null
@@ -1009,7 +1018,7 @@ wait_request_state "$client_a" "$request_id" '.relay.outcome == "target_offline"
 shown="$(run_client "$client_a" share request show --json)"
 jq -e --arg id "$request_id" '.request_id == $id' >/dev/null <<<"$shown"
 
-run_client "$client_b" share configure --server "$working_signal" >/dev/null
+run_client "$client_b" share configure --server "$working_signal_config" --allow-plaintext >/dev/null
 stop_daemon "$client_b"
 run_client "$client_b" share status --json >/dev/null
 wait_relay_route "$client_b" "$working_relay" >/dev/null
@@ -1079,7 +1088,7 @@ stop_daemon "$client_a"
 profile_a="$(single_client_file "$client_a" share_profiles.json)"
 server_config_a="$(single_client_file "$client_a" share_server.txt)"
 cp "$profile_a" "$root/profile-a-before-route-recovery.json"
-printf '%s' "$dead_signal" >"$server_config_a"
+printf '%s' "tcp://$dead_signal" >"$server_config_a"
 printf '%s' "$working_relay" >"$client_a/relay-url"
 
 rewrite_direct_presence "$profile_a" "$contact_id" "$dead_relay" 1
@@ -1335,7 +1344,7 @@ jq -e 'all(.[]; .kind != "direct")' >/dev/null <<<"$after_remove"
 # state.
 identity_c="$(run_client "$client_c" share identity --json)"
 direct_code_c="$(jq -er '.direct_code' <<<"$identity_c")"
-run_client "$client_c" share configure --server "$working_signal" >/dev/null
+run_client "$client_c" share configure --server "$working_signal_config" --allow-plaintext >/dev/null
 stop_daemon "$client_c"
 run_client "$client_c" share status --json >/dev/null
 wait_relay_route "$client_c" "$working_relay" >/dev/null
@@ -1356,7 +1365,7 @@ run_client "$client_a" connections remove-peer >/dev/null
 # restarts prove the local dismissal tombstone remains durable and hidden.
 identity_d="$(run_client "$client_d" share identity --json)"
 direct_code_d="$(jq -er '.direct_code' <<<"$identity_d")"
-run_client "$client_d" share configure --server "$working_signal" >/dev/null
+run_client "$client_d" share configure --server "$working_signal_config" --allow-plaintext >/dev/null
 stop_daemon "$client_d"
 run_client "$client_d" share status --json >/dev/null
 wait_relay_route "$client_d" "$working_relay" >/dev/null

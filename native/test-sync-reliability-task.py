@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""One candidate-bound remote sync acceptance entrypoint; never a release build."""
+"""One candidate-bound remote sync acceptance entrypoint; never a release build.
+
+Since 2026-11-07 case C08 also holds the Windows startup regression of 0.5.170 (the former
+startup-regression suite): its behavior cases are in INTEGRATIONS/WINDOWS_INTEGRATIONS below and
+the published-worker handoff of v0.5.169 is the `published-worker-update` stage. The published
+builds of v0.5.169 (worker, Android app) are downloaded from its GitHub Release with gh (GH_TOKEN)."""
 import argparse
 from collections import Counter
 import contextlib
@@ -14,7 +19,7 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parent.parent
-BASE = "3d70c5df48d26408fc168167b00586d519174d53"
+BASE = "a78f4d1c7dbc00094583deec2748eada5b64d6fb"
 CASES = {
     "C01": {"meaning": "Notebook exact names and complete tree", "prefix": "sync_reliability_task_notebook_"},
     "C02": {"meaning": "duplicate and literal names with exact identities", "prefix": "sync_reliability_task_names_"},
@@ -32,7 +37,6 @@ CASES = {
 # protected-tree and startup contracts.
 INTEGRATIONS = {"C04": [
     "webdav::core_impl::connection_tests::mutation_redirect_is_not_followed_or_reported_as_success",
-    "webdav::core_impl::connection_tests::put_redirect_is_terminal_and_never_followed",
     "webdav::transfer_engine_task_tests::transfer_engine_task_webdav_folders_take_one_mkcol",
     "webdav::transfer_engine_task_tests::transfer_engine_task_webdav_mutations_reuse_pooled_connections",
     "webdav::transfer_engine_task_tests::transfer_engine_task_webdav_overload_is_congestion_with_retry_after",
@@ -76,11 +80,14 @@ INTEGRATIONS = {"C04": [
     "local_access::directory_handle_tests::review_task_directory_handles_create_private_children_without_replacement",
     "local_access::directory_handle_tests::review_task_private_handle_hardening_refuses_hardlinked_records",
 ]}
+# The Windows startup regression cases of the former startup-regression suite (0.5.170: denied
+# worker handoff, inaccessible saved jobs). Two of them moved from the core crate to the engine
+# crate in D13 (the repair runs the syncjobs, cloud and daemon layers above local_access).
 WINDOWS_INTEGRATIONS = {
-    "C08": ["local_access::platform::directory_handle::create::private_security::startup_regression_task_tests::" + name
-            for name in ("startup_regression_task_repairs_existing_jobs_cloud_and_control_writes",
-                         "startup_regression_task_new_ordinary_children_retain_owner_access",
-                         "startup_regression_task_only_effective_user_or_default_owner_is_accepted")],
+    "C08": ["local_access::platform::directory_handle::create::private_security::startup_regression_task_tests::"
+            "startup_regression_task_only_effective_user_or_default_owner_is_accepted",
+            "daemon::startup_regression_task_access_tests::startup_regression_task_repairs_existing_jobs_cloud_and_control_writes",
+            "daemon::startup_regression_task_access_tests::startup_regression_task_new_ordinary_children_retain_owner_access"],
 }
 
 
@@ -192,8 +199,8 @@ def native_stage(args, env, source, logs, shared):
     stage("source-format", lambda: shared.format_patch(logs, env, source))
     cache = ROOT / ".review-task-cache"
     binary = stage("native-host", lambda: shared.library_test_command(logs, env))
-    cli = stage("development-cli", lambda: shared.artifact("native", "se", "bin", cache, logs, env))
-    server = stage("development-share-server", lambda: shared.artifact("share-server", "se-share-server", "bin", cache, logs, env))
+    cli = stage("development-cli", lambda: shared.artifact("native", "se", cache, logs, env))
+    server = stage("development-share-server", lambda: shared.artifact("share-server", "se-share-server", cache, logs, env))
     if args.out and cli and server:
         binaries = {"se.exe" if os.name == "nt" else "se": cli}
         if server:

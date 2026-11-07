@@ -5,8 +5,7 @@ Plan and expected results: docs/plaene/2026-10-12-links-in-se/plan.md (D).
 Builds only the development `se` and the library test binary of this host (no
 release build), then checks every milestone once:
 
-  fmt     rustfmt of the batch's Rust files (stdin mode, no crate-wide debt)
-  build   `se` plus the lib tests; compiler warnings inside new batch files fail
+  build   `se` plus the lib tests
   unit    `links_task_` tests and the directly affected `cli::` tests
   local   a local tree with a file link, a directory link, a dangling link and a
           loop link (Linux: symlinks and a FIFO; Windows: junctions and, where
@@ -41,12 +40,9 @@ NATIVE = Path(__file__).resolve().parent
 _spec = importlib.util.spec_from_file_location("ai_plugin_task", NATIVE / "test-ai-plugin-task.py")
 ai = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(ai)
-# The shared fmt/build helpers read these module globals.
-ai.BATCH_BASE = "1476fb9ec1828b2c66d95b1bf6d4cec13cca0595"
-ai.NEW_FILE_PREFIXES = ("src/cli/entry_kind.rs", "src/cli/search.rs", "src/cli/link_paths.rs",
-                        "src/cli/private_file.rs", "src/cli/links_task_", "src/cli/tree_plan.rs",
-                        "src/cli/tree_remove.rs", "src/cli/tree_ops.rs", "src/cli/transfer.rs",
-                        "src/cli/ops.rs", "src/cli/mcp/file_tools.rs", "src/cli/mcp/file_write.rs")
+# rustfmt and clippy are no part of this suite: build.yml gates them at every push (the stages "fmt since
+# the batch's base commit" and "no compiler warning in the files the batch created" were removed on
+# 2026-11-07, TODO TESTS-BEWERTUNG).
 WINDOWS = ai.WINDOWS
 ensure = ai.ensure
 Client = ai.Client
@@ -466,7 +462,6 @@ def main():
     log_root = Path(args.log_root)
     log_root.mkdir(parents=True, exist_ok=True)
     results = ai.Results(log_root)
-    ai.stage_fmt(results, log_root)
     built, _ = ai.stage_build(results, log_root)
     stage_unit(results, log_root)
     se_binary = ai.NATIVE / "target" / "debug" / ("se.exe" if WINDOWS else "se")

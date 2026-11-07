@@ -14,11 +14,6 @@ holder, ``appwidget grantbind``, notification listener, work profile and private
             (U35, assumption A30): ``-e launcher_replace_phase before``, then ``adb install -r`` of the same
             app APK, then ``-e launcher_replace_phase after``. Further phased methods of U40 are added here
             when U40 hands them over.
-``helper_apk_args``  ``launcher_task_package_removed_clears_items`` needs a small app with a launcher activity
-            (``-e launcher_helper_apk <path on the device> -e launcher_helper_package <package>``). The suite
-            passes them only when the artifact ``rdt-apks`` contains ``launcher-helper.apk`` and
-            ``launcher-helper.package`` (one line: the package name); otherwise the test reports "nicht
-            ausgeführt" itself (assumption failure).
 ``se-pair``   the Share pair of D 682 (runner ↔ emulator) comes from ``android/test-servers/share-desktop.sh``
             (``up``, ``args``, ``down``), the same helper the RV1 device run uses; its arguments are
             ``seShareServer``, ``seRoomCode``, ``seDesktopDevice``, ``seDesktopDirectCode`` and the room file.
@@ -34,9 +29,6 @@ from pathlib import Path
 
 HOME_ROLE = "android.app.role.HOME"
 REPLACE = "launcher_task_survives_package_replace"
-HELPER_APK = "launcher-helper.apk"
-HELPER_PACKAGE = "launcher-helper.package"
-DEVICE_TMP = "/data/local/tmp"
 
 # method -> list of steps (kind, [(arg, value), ...]); values may name an observation as "{pid}" or "{tile}".
 #   run                  one instrumentation run of the method with these arguments
@@ -92,24 +84,12 @@ def parse_holder(output: str) -> str | None:
     return None
 
 
-def helper_apk(apks_dir: Path | None) -> tuple[Path, str] | None:
-    """(local APK, package name) of the helper app, when the artifact carries it."""
-    if not apks_dir or not apks_dir.is_dir():
-        return None
-    apk = next(iter(sorted(apks_dir.rglob(HELPER_APK))), None)
-    package_file = next(iter(sorted(apks_dir.rglob(HELPER_PACKAGE))), None)
-    if apk is None or package_file is None:
-        return None
-    package = package_file.read_text(encoding="utf-8").strip()
-    return (apk, package) if package else None
-
-
 def app_apk(apks_dir: Path | None) -> Path | None:
     """The app APK the device job installed (same order as ``common.Device.setup``)."""
     if not apks_dir or not apks_dir.is_dir():
         return None
     apks = [apk for apk in sorted(apks_dir.rglob("*.apk"))
-            if "androidtest" not in apk.name.lower() and apk.name != HELPER_APK]
+            if "androidtest" not in apk.name.lower()]
     apks.sort(key=lambda apk: (0 if "debug" in apk.name.lower() else 1,
                                0 if ("x86_64" in apk.name or "universal" in apk.name) else 1, apk.name))
     return apks[0] if apks else None

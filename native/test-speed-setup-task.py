@@ -24,8 +24,8 @@ Jobs (--job):
               same runner) runs the same selection, and the failure counts
               against the batch only when v0.5.188 passes that test or does not
               have it; tests that
-              need another suite's environment (ENV_SKIPS) are reported as
-              not run here;
+              need another suite's environment (OTHER_SUITES, #[ignore]) are
+              reported as ignored here;
               (Windows) the FAT32/exFAT paste with `--nocapture`;
               RDP clients: A4 sdl-freerdp3 first (Linux, Xvfb), A5 the native
               client owns its connection (xfreerdp3 / mstsc), V2 another
@@ -143,21 +143,18 @@ AFFECTED = ("transfer::", "host::", "copy::", "vfs::", "sync::", "bisync::", "sy
 # The daemon's Windows analysis bridge needs the Windows remote suite's own
 # switch and isolated profile (as in test-transfer-engine-task.sh).
 UNIT_SKIPS = ("windows_analysis_task_tests",)
-# Tests of the affected modules that need an environment only another suite
-# builds. They are skipped here and reported as "not run here" with that
-# environment, never counted as passed (run 40774661103 showed each of them
-# panicking on the missing variable).
-_MANIFEST = "SE_SYNC_PROVIDER_MANIFEST, the real protocol fixtures of test-sync-reliability-task.py"
-ENV_SKIPS = (
-    ("sync_reliability_task_options_share_private_versions_restore_restart_and_noop", _MANIFEST),
-    ("sync_reliability_task_provider_matrix", _MANIFEST),
-    ("sync_reliability_task_old_jobs_crossremote_runs_normal_saved_connection_and_drive", _MANIFEST),
-    ("sync_reliability_task_provider_ftps_both_writers_confirm_bytes_after_tls_close", _MANIFEST),
-    ("sync_reliability_task_live_drive_notebook_ids_refresh_restart_backups_and_noop",
-     "SE_DRIVE_TEST_CLIENT_ID, the live Drive account of test-sync-reliability-task.py"),
-    ("review_task_s09_transport_", "SE_REVIEW_LAN_IP of review-task-native.py"),
-    ("batches_p13_linux_installed_cli_retirement_reexecs_only_with_its_bound_root",
-     "SE_SCREEN_TASK_WORKER, a candidate se binary (mcp_launcher, selected only through the filter `cli::`)"),
+# Tests of the affected modules that need an environment only another suite builds. They are
+# #[ignore = "<need>; Suite <name>"], so this run does not start them; it names them as
+# "ignored here" with the suite that does, and never counts them as passed (run 40774661103
+# showed each of them panicking on the missing variable before they were ignored).
+OTHER_SUITES = (
+    ("sync_reliability_task_options_share_private_versions_restore_restart_and_noop", "sync-reliability-task"),
+    ("sync_reliability_task_provider_matrix", "sync-reliability-task"),
+    ("sync_reliability_task_old_jobs_crossremote_runs_normal_saved_connection_and_drive", "sync-reliability-task"),
+    ("sync_reliability_task_provider_ftps_both_writers_confirm_bytes_after_tls_close", "sync-reliability-task"),
+    ("sync_reliability_task_live_drive_notebook_ids_refresh_restart_backups_and_noop", "sync-reliability-task"),
+    ("review_task_s09_transport_", "review-task"),
+    ("batches_p13_linux_installed_cli_retirement_reexecs_only_with_its_bound_root", "review-task"),
 )
 # Prepared-runner tests (ignored by default), per platform.
 RDP_CLIENT_TESTS = {
@@ -669,16 +666,16 @@ def stage_unit(results, log_root, executable, env):
     ensure_listed = bool(listed)
     results.record("unit", "library test list", ensure_listed, "" if ensure_listed else "empty --list output")
     filters = [*PREFIXES, *MOVED, *AFFECTED]
-    skipped = [*UNIT_SKIPS, *(name for name, _ in ENV_SKIPS)]
+    skipped = list(UNIT_SKIPS)
     skips = [argument for name in skipped for argument in ("--skip", name)]
     ran = run([*executable, "--test-threads=1", *skips, *filters], cwd=NATIVE, env=env, timeout=4 * 3600,
               log=log_root / "unit.log")
     outcomes = test_outcomes(ran.output)
     summary = [line for line in ran.output.splitlines() if line.startswith("test result:")]
-    for name, needs in ENV_SKIPS:
+    for name, suite in OTHER_SUITES:
         matching = [test for test in listed if name in leaf(test) and any(f in test for f in filters)]
         if matching:
-            results.record("unit", f"not run here ({len(matching)} test(s) `{name}`): needs {needs}", True)
+            results.record("unit", f"ignored here ({len(matching)} test(s) `{name}`): runs in Suite {suite}", True)
     # A failure of the directly affected modules counts against this batch
     # only when v0.5.188 passes the same test (`stage_baseline`); the batch's
     # own prefixes must pass in every case (checks below).
@@ -756,14 +753,15 @@ def stage_baseline(results, log_root, env, failed, selection):
 def stage_removable(results, log_root, executable, env):
     if not os.environ.get("SE_TASK_REMOVABLE_ROOTS"):
         return
-    # The unit stage already pasted into the same roots (prefix
-    # `removable_media_task_`); the case expects empty volumes.
+    # The case is #[ignore] (it needs these volumes): this stage starts it on purpose, and it
+    # expects empty volumes.
     for root in filter(None, os.environ["SE_TASK_REMOVABLE_ROOTS"].split(";")):
         for entry in Path(root).iterdir():
             if entry.name.upper() in ("SYSTEM VOLUME INFORMATION", "$RECYCLE.BIN"):
                 continue
             remove(entry)
-    ran = run([*executable, "--test-threads=1", "--nocapture", "removable_media_task_"], cwd=NATIVE, env=env,
+    ran = run([*executable, "--test-threads=1", "--nocapture", "--include-ignored", "removable_media_task_"],
+              cwd=NATIVE, env=env,
               timeout=3600, log=log_root / "removable.log")
     results.record("removable", "paste into the roots and a folder of FAT32 and exFAT",
                    ran.ok and "removable media roots checked: 2" in ran.output,
@@ -1199,8 +1197,8 @@ class Bins:
 
 
 def build_baseline(ledger, work, bins):
-    """The released se of BASELINE_TAG: its release asset, checked against the published .sha256
-    (the same assets as native/test-ideal-task.py). The old version is not built from source here."""
+    """The released se of BASELINE_TAG: its release asset, checked against the published .sha256.
+    The old version is not built from source here."""
     log = ledger.log_root / "build-baseline.log"
     folder = Path(work) / "baseline-release"
     folder.mkdir(parents=True, exist_ok=True)

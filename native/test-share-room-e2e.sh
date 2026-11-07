@@ -247,7 +247,8 @@ device_c="$(jq -er '.device_id' <<<"$identity_c")"
 device_d="$(jq -er '.device_id' <<<"$identity_d")"
 [[ -n "$device_c" && -n "$device_d" && "$device_c" != "$device_d" ]]
 for client in "$client_c" "$client_d"; do
-  run_client "$client" share configure --server "$working_signal" >/dev/null
+  # The test server speaks plaintext; an address without a scheme means TLS (wss://).
+  run_client "$client" share configure --server "tcp://$working_signal" --allow-plaintext >/dev/null
   stop_daemon "$client"
   run_client "$client" share status --json >/dev/null
   wait_relay_route "$client" "$working_relay" >/dev/null

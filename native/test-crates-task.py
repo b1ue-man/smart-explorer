@@ -11,7 +11,25 @@ Parts:
              core/storage/transfer/engine, the GUI, the CLI, the mobile
              facade and the programs compile and link (every port has its
              provider, the lower crates' own tests their stand-ins) and that
-             the tests that moved between crates still pass.
+             the tests that moved between crates still pass. Then the crate
+             tests that are #[ignore] because they need an environment a
+             plain run lacks, each group with that environment and on the OS
+             its former suite used (IGNORED_GROUPS below): isolated app data
+             and the suite switches (direct opening, sync paths and links;
+             both OS), the egui layout harness with its visuals folder
+             (Linux), real ACL, token and junction fixtures with the administrator
+             token and SeBackupPrivilege (Windows). On Linux the program
+             test that needs a systemd manager (se_cli, containment
+             self-test) runs last. Tests that need another suite's
+             resources (live servers, Google account, the candidate se,
+             mounts, the runner's LAN interface, GPU, codec files, Media
+             Foundation, Dokany) are #[ignore = "<need>; Suite <name>"] and
+             run in that suite (sync-reliability-task, review-task,
+             mount-optimization-task), not here.
+  servers    (Linux) the tests of the two packages outside the workspace: the
+             Share signaling/relay server (share-server, with its
+             tests/relay_startup.rs) and the SSH agent (se-agent, its
+             confined-process tests).
   windows-gnu  on Linux with MinGW-w64: compile and link every test binary and
              program for x86_64-pc-windows-gnu with GNU ld, whose archive
              order is the one a port provider above its accessor depends on
@@ -45,8 +63,10 @@ import json
 import os
 import platform
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -245,7 +265,10 @@ def end_processes(processes):
             continue
 
 
-def run(title, command, cwd=NATIVE, env=None, cargo_json=False):
+def run(title, command, cwd=NATIVE, env=None, cargo_json=False, expect=()):
+    """Runs one command. `expect` names tests that must each be reported as passed
+    exactly once (`test <path>::<name> ... ok`): a test that was renamed or lost
+    its cfg then fails here instead of silently shrinking the selection."""
     summary(f"### {title}\n`{' '.join(command)}`")
     stream = Stream(title)
     stop = threading.Event()
@@ -300,7 +323,14 @@ def run(title, command, cwd=NATIVE, env=None, cargo_json=False):
     if returncode != 0:
         tail = failures[-80:] or lines[-60:]
         summary("```\n" + "\n".join(tail) + "\n```")
-    return returncode == 0
+    unreported = []
+    for name in expect:
+        passed = [line for line in lines if re.match(r"^test (.*::)?" + re.escape(name) + r" \.\.\. ok\b", line)]
+        if len(passed) != 1:
+            unreported.append(f"{name} ({len(passed)} times)")
+    if unreported:
+        summary("expected to pass exactly once, but not reported so: " + ", ".join(unreported))
+    return returncode == 0 and not unreported
 
 
 def compile_stage():
@@ -329,6 +359,11 @@ def keep_junit(name):
 
 
 def part_workspace():
+    # The test register (docs/tests/register.tsv) names every test with the requirement it
+    # protects and its suite; a test without a row or a row without a test fails here. It reads
+    # source text only, so Linux runs it once for both OS.
+    registered = WINDOWS or run("Test register", [sys.executable, str(ROOT / "native" / "test-register.py")],
+                                cwd=ROOT)
     crates_built, programs_built = compile_stage()
     # The crates' tests run as their binaries were written for: each binary in
     # one process, one test after the other, as build.yml runs them. They keep
@@ -348,32 +383,195 @@ def part_workspace():
     # The local loopback fixtures of the copy/paste and Windows-remote tests
     # refuse to start unless their switch is set; they need nothing else.
     env = dict(os.environ, SMART_EXPLORER_COPY_PASTE_TASK="1", SMART_EXPLORER_WINDOWS_REMOTE_TASK="1")
-    # Tests that need resources only their own suites provide: real protocol
-    # servers (SE_SYNC_PROVIDER_MANIFEST), a live Google account
-    # (SE_DRIVE_TEST_CLIENT_ID), a candidate se binary installed by the
-    # remote runner (batches P13 retirement) and the network namespace with
-    # exactly one private interface of the review suite (S09 LAN-link
-    # transport: on a runner with several private interfaces the product
-    # refuses with "LAN-Link hat kein eindeutiges privates Interface").
-    skips = ["sync_reliability_task_provider", "sync_reliability_task_options_share_private_versions",
-             "sync_reliability_task_old_jobs_crossremote", "sync_reliability_task_live_",
-             "batches_p13_linux_installed_cli_retirement_reexecs_only_with_its_bound_root",
-             "batches_p13_linux_retirement_handoff_cannot_select_a_foreign_installation",
-             "review_task_s09_transport_close_withdraw_disable_discard_cached_facts",
-             "review_task_s09_transport_expired_or_unknown_facts_fail_closed",
-             "review_task_s09_transport_path_revisions_reject_returned_path_evidence",
-             "review_task_s09_transport_real_private_tls_round_has_only_status_rights",
-             "review_task_s09_transport_rejects_wrong_pin_and_replayed_confirm",
-             "review_task_s09_transport_malformed_and_stalled_frames_are_bounded"]
-    summary("Not run here, they need their suite's resources: " + ", ".join(f"`{name}`" for name in skips))
-    skip_args = [arg for name in skips for arg in ("--skip", name)]
+    # Tests that need resources only their own suites provide (live servers, a Google account,
+    # the candidate se, the runner's mounts and LAN interface, a GPU, codec files, Media
+    # Foundation, Dokany) are #[ignore = "<need>; Suite <name>"]: a plain run does not start
+    # them, and their suite does (sync-reliability-task, review-task, mount-optimization-task).
     # A test binary that did not compile is not run; its compile log above is the result.
     ok = crates_built and run("Tests of every crate",
-                              ["cargo", "test", "--locked", *CRATES, "--no-fail-fast", "--", *threads, *skip_args],
+                              ["cargo", "test", "--locked", *CRATES, "--no-fail-fast", "--", *threads],
                               env=env)
     ok = (programs_built and run("Programs and their integration tests",
                                  [*nextest, "-p", "smart_explorer"])) and ok
     keep_junit("programs-and-their-integration-tests")
+    # The #[ignore] tests that need their own environment reuse the crates' test binaries.
+    ok = (crates_built and part_ignored(env)) and ok
+    ok = (programs_built and part_programs_ignored()) and ok
+    return ok and registered
+
+
+def part_programs_ignored():
+    """The program test that needs a Linux host with a systemd manager and cgroup v2: the real
+    containment self-test of `se --share-exec-platform-self-test` (native/tests/se_cli/process.rs).
+    It is #[ignore] so that a host without the manager cannot pass it without checking; here a
+    missing manager fails it. Linux only; the Windows twin (Job Object) needs nothing and runs
+    with the other program tests."""
+    if WINDOWS:
+        return True
+    name = "real_systemd_cgroup_exec_provider_contains_and_drains_processes"
+    return run("Programs: containment on a systemd host (ignored test)",
+               ["cargo", "test", "--locked", "-p", "smart_explorer", "--test", "se_cli", "--no-fail-fast", "--",
+                "--test-threads=1", "--ignored", name], expect=[name])
+
+
+# Crate tests that are #[ignore] because they need an environment a plain run does not
+# provide. They belonged to suites of their own (direct-open, sync-paths, gui-design,
+# search-recursive-access, removed 2026-11-07) and run here with that environment, on the
+# OS their suite used. Each name is a substring filter that must select exactly one
+# ignored test and that test must pass (`run(expect=...)`). `profile` gives the run
+# its own app-data folders (the App constructors of the tests read them, the real
+# profile of the runner stays untouched); `drop` removes variables from the environment.
+IGNORED_GROUPS = [
+    {   # Direct opening and reconnect: the GUI's remote-edit recovery (app::remote_open) and the
+        # daemon/Share reconnect without replay (share::direct_open_task_tests); Linux and Windows.
+        "title": "Direct opening and reconnect (ignored tests, isolated app data)",
+        "os": ("Linux", "Windows"),
+        "set": {"SMART_EXPLORER_COPY_PASTE_TASK": "1"},
+        "namespace": "direct_open_",  # + the first 12 characters of the candidate (Windows resource names)
+        "profile": True,
+        "drop": ("SE_SHARE_RELAY_URL", "SE_SHARE_RELAY_ONLY"),
+        "tests": [
+            "direct_open_task_pending_download_is_neither_edit_nor_recovery",
+            "direct_open_task_parallel_download_and_atomic_save_do_not_block_new_open",
+            "direct_open_task_new_missing_payload_and_failed_manifest_never_become_editing",
+            "direct_open_task_recovery_rejects_escaped_and_nonregular_editor_paths",
+            "direct_open_task_failed_and_disconnected_workers_remove_only_their_downloads",
+            "direct_open_task_atomic_save_waits_for_stability_then_saves_back",
+            "direct_open_task_manifest_failure_suppresses_upload_and_preserves_edit",
+            "direct_open_task_save_conflict_and_failed_revision_check_preserve_remote",
+            "direct_open_task_real_direct_and_room_reconnect_through_daemon_without_replay",
+            "direct_open_task_reconnect_cannot_bypass_revoked_direct_access",
+        ],
+    },
+    {   # Sync setups of every backend pair keep their locators and baselines; links and junctions
+        # stay protected omissions (AGENTS.md, "preserve existing behavior"); Linux and Windows.
+        "title": "Sync paths and links (ignored tests, isolated app data)",
+        "os": ("Linux", "Windows"),
+        "set": {"SMART_EXPLORER_COPY_PASTE_TASK": "1", "SMART_EXPLORER_ANALYTICS_TASK": "1"},
+        "profile": True,
+        "drop": ("SE_SHARE_RELAY_URL", "SE_SHARE_RELAY_ONLY"),
+        "tests": [
+            "sync_paths_task_all_backend_pairs_transfer_changes_and_keep_baselines_separate",
+            "sync_paths_task_picker_setup_and_quick_actions_retain_remote_provenance",
+            "sync_paths_task_split_same_paths_on_different_remotes_and_uncached_metadata",
+            "sync_paths_task_saved_local_job_uses_worker_resolution_and_preserves_old_behavior",
+            "sync_paths_task_real_share_cross_peer_sync_and_local_roundtrip",
+            "sync_links_task_saved_job_and_gui_retain_partial_result_notice",
+            "sync_links_task_cross_remote_contract_protects_counterpart_subtree",
+        ],
+    },
+    {   # The egui harness renders the real GUI headless in light and dark mode at the minimum and
+        # the desktop window size and writes one JSON mesh dump per view into the visuals folder
+        # (uploaded with the logs); Linux only, as its former suite ran.
+        "title": "GUI layout harness (ignored tests, visuals folder)",
+        "os": ("Linux",),
+        "set": {"SMART_EXPLORER_GUI_TASK": "1"},
+        "visuals": "SMART_EXPLORER_GUI_VISUALS",
+        "profile": True,
+        "tests": [
+            "gui_design_task_workspace_layout_selection_filters_and_split",
+            "gui_design_task_settings_persistence_shortcut_guard_and_dialogs",
+            "gui_design_task_start_page_and_chart_visuals",
+            "gui_design_task_drive_failure_reaches_readable_report_and_complete_clipboard",
+        ],
+    },
+    {   # Real ACL, impersonation token and junction fixtures, and the authenticated read helper as a
+        # child process: they need the administrator token and SeBackupPrivilege (checked first);
+        # Windows only.
+        "title": "Windows access fixtures (ignored tests, administrator token)",
+        "os": ("Windows",),
+        "set": {"SMART_EXPLORER_ANALYTICS_TASK": "1", "SMART_EXPLORER_COPY_PASTE_TASK": "1"},
+        "needs_backup_privilege": True,
+        "profile": True,
+        "tests": [
+            "analytics_access_task_real_denied_directory_locked_files_and_unchanged_acl",
+            "analytics_access_task_restricted_identity_never_falls_back_to_process_authority",
+            "analytics_access_task_redirect_children_are_traversal_boundaries",
+            "search_recursive_access_task_authenticated_helper_reuses_read_handles_in_parent",
+        ],
+    },
+]
+
+
+def candidate_sha():
+    probe = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                           text=True)
+    return probe.stdout.strip()
+
+
+def backup_privilege_problem():
+    """None when this process has the administrator token and SeBackupPrivilege, else the reason."""
+    import ctypes
+
+    if not ctypes.windll.shell32.IsUserAnAdmin():
+        return "the real ACL fixtures need the runner's administrator token"
+    privileges = subprocess.run(["whoami", "/priv", "/fo", "csv"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                text=True, errors="replace").stdout
+    if "SeBackupPrivilege" not in privileges:
+        return "the runner's token lacks SeBackupPrivilege"
+    return None
+
+
+def run_ignored_group(group, env):
+    title = group["title"]
+    problem = backup_privilege_problem() if group.get("needs_backup_privilege") and WINDOWS else None
+    if problem:
+        summary(f"### {title}\nnot run: {problem}")
+        return False
+    scratch = Path(tempfile.mkdtemp(prefix="crates-task-ignored-"))
+    try:
+        local = dict(env, RUST_BACKTRACE="1", **group["set"])
+        for name in group.get("drop", ()):
+            local.pop(name, None)
+        if group.get("namespace"):
+            local["SMART_EXPLORER_E2E_TEST_NAMESPACE"] = group["namespace"] + candidate_sha()[:12]
+        if group.get("profile"):
+            profile = scratch / "profile"
+            local.update(APPDATA=str(profile / "roaming"), LOCALAPPDATA=str(profile / "local"),
+                         XDG_CONFIG_HOME=str(profile / "config"), XDG_DATA_HOME=str(profile / "data"))
+            for name in ("APPDATA", "LOCALAPPDATA", "XDG_CONFIG_HOME", "XDG_DATA_HOME"):
+                Path(local[name]).mkdir(parents=True, exist_ok=True)
+        if group.get("visuals"):
+            visuals = NATIVE / "target" / "crates-task-logs" / "gui-visuals"
+            visuals.mkdir(parents=True, exist_ok=True)
+            local[group["visuals"]] = str(visuals)
+        return run(title,
+                   ["cargo", "test", "--locked", *CRATES, "--lib", "--no-fail-fast", "--",
+                    "--test-threads=1", "--ignored", *group["tests"]],
+                   env=local, expect=group["tests"])
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
+def part_ignored(env):
+    ok = True
+    groups = [group for group in IGNORED_GROUPS if platform.system() in group["os"]]
+    summary("Run with their environment (#[ignore] tests of former suites): "
+            + ", ".join(f"`{name}`" for group in groups for name in group["tests"]))
+    for group in groups:
+        ok = run_ignored_group(group, env) and ok
+    return ok
+
+
+def part_servers():
+    """The packages outside the workspace, each with its own manifest and lock. One test at a
+    time, as their former suites ran them (idle keepalive, relay ping and startup tests use
+    process-wide timers and ports)."""
+    one_at_a_time = ["--no-fail-fast", "--", "--test-threads=1"]
+    ok = run("Share server: unit tests and tests/relay_startup.rs",
+             ["cargo", "test", "--locked", "--manifest-path", "share-server/Cargo.toml", *one_at_a_time], cwd=ROOT,
+             expect=["share_remote_task_server_and_native_discovery_wire_fixture",
+                     "share_remote_task_server_discovery_lease_renewal_and_complete_lifecycle",
+                     "share_remote_task_server_discovery_rejections_cancel_and_expiry",
+                     "explicit_relay_disable_still_starts_signaling",
+                     "invalid_expected_relay_configuration_exits_nonzero"])
+    # Only the integration test file: the unit tests the agent binary and that file compile from the
+    # shared protocol source are the storage crate's own tests, which `workspace` runs.
+    ok = run("SSH agent: confined-process tests",
+             ["cargo", "test", "--locked", "--manifest-path", "se-agent/Cargo.toml", "--test", "remote_drive_task",
+              "--no-fail-fast", "--", "--test-threads=1", "remote_drive_task_agent_"], cwd=ROOT,
+             expect=["remote_drive_task_agent_root_is_kernel_confined_and_write_new_is_exclusive",
+                     "remote_drive_task_agent_rejects_a_symlinked_root_before_serving"]) and ok
     return ok
 
 
@@ -425,6 +623,9 @@ def part_android(abi):
         ok &= run("Kotlin compile and JVM unit tests of the Android app",
                   ["sh", "./gradlew", "--no-daemon", "--console=plain", "--stacktrace", "--continue",
                    ":app:compileDebugKotlin", ":app:testDebugUnitTest",
+                   # The instrumentation sources compile here too; their tests need a device and
+                   # run in android-task, review-task and rechte-desktop-tresore-task.
+                   ":app:compileDebugAndroidTestKotlin",
                    f"-PrustlsVerifierMaven={maven}"], cwd=ROOT / "android")
     return ok
 
@@ -438,12 +639,13 @@ def main():
     # piped output with the ANSI code page and fail on the first character outside it.
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     parser = argparse.ArgumentParser()
-    parser.add_argument("--part", required=True, choices=["workspace", "timings", "windows-gnu", "android", "agent"])
+    parser.add_argument("--part", required=True,
+                        choices=["workspace", "timings", "windows-gnu", "android", "agent", "servers"])
     parser.add_argument("--abi", choices=["arm64-v8a", "x86_64"], default="arm64-v8a")
     args = parser.parse_args()
     summary(f"## crates-task: {args.part} ({platform.system()})")
     parts = {"workspace": part_workspace, "timings": part_timings, "windows-gnu": part_windows_gnu,
-             "android": lambda: part_android(args.abi), "agent": part_agent}
+             "android": lambda: part_android(args.abi), "agent": part_agent, "servers": part_servers}
     ok = parts[args.part]()
     summary("**passed**" if ok else "**failed**")
     sys.exit(0 if ok else 1)

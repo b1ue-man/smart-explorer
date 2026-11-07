@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import signal
 import sys
 import subprocess
@@ -84,11 +85,19 @@ def build(logs: Path, out: Path, env: dict, candidate_sha: str) -> dict:
     task_env = dict(env, CANDIDATE_SHA=candidate_sha, SMART_EXPLORER_TASK_LOG_ROOT=str(logs))
     _RUNTIME.run(["bash", ROOT / "android/test-android-task.sh", "sync-reliability-build", "--out", out],
                  logs / "android-build.log", task_env, seconds=7200)
-    old = command(["git", "show", "v0.5.169:release-native/update-feed/smart-explorer-android.apk"], env, binary=True)
-    expected = command(["git", "show", "v0.5.169:release-native/update-feed/smart-explorer-android.apk.sha256"], env).split()[0]
-    (out / "old-release.apk").write_bytes(old)
+    # The tags no longer carry builds (history rewrite of 2026-11-01); the published APK and its hash
+    # come from the GitHub Release (gh with GH_TOKEN, set in the job).
+    download = out / "release-download"
+    download.mkdir(parents=True, exist_ok=True)
+    repo = env.get("GITHUB_REPOSITORY", "b1ue-man/smart-explorer")
+    for asset in ("smart-explorer-android.apk", "smart-explorer-android.apk.sha256"):
+        command(["gh", "release", "download", "v0.5.169", "-R", repo, "-p", asset, "-D", download, "--clobber"],
+                env, timeout=900)
+    expected = (download / "smart-explorer-android.apk.sha256").read_text(encoding="utf-8").split()[0].lower()
+    (out / "old-release.apk").write_bytes((download / "smart-explorer-android.apk").read_bytes())
+    shutil.rmtree(download)
     if sha(out / "old-release.apk") != expected:
-        raise RuntimeError("Published v0.5.169 APK differs from its immutable tag sidecar")
+        raise RuntimeError("Published v0.5.169 APK differs from the SHA-256 published with its release")
     record = {"candidate": candidate_sha, "old_tag": "v0.5.169", "certificates": certificates(out, env, logs),
               "artifacts": {p.name: sha(p) for p in out.glob("*.apk")}}
     (out / "provenance.json").write_text(json.dumps(record, indent=2))

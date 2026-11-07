@@ -6,9 +6,8 @@ Stages (``STAGES``):
                            (``LayoutModelTest``, ``GridGeometryTest``, ``LauncherSearchTest``, ``WidgetPreviewTest``,
                            ``launcher_task_*`` JVM methods ...).
   launcher-android-device  android-device (API 36): every ``launcher_task_`` instrumentation method of the list,
-                           phased methods with their host steps (``native/launcher-task-android.py`` ``PHASES``),
-                           the helper app for ``launcher_task_package_removed_clears_items`` when the artifact
-                           carries it; at the end the image's HOME role holder is restored.
+                           phased methods with their host steps (``native/launcher-task-android.py`` ``PHASES``);
+                           at the end the image's HOME role holder is restored.
   launcher-android-api30   android-device-api30: the same for the API 30 entries.
 
 ``run_instr_methods`` runs instrumentation entries method by method (``-e class a.B#m1,a.B#m2``) instead of
@@ -194,26 +193,6 @@ def fixture_se_pair(fixtures: common.StageFixtures, name: str) -> tuple[bool, st
     return True, "Share-Paar: " + ", ".join(key for key, _ in args)
 
 
-def method_args(ctx: common.JobContext) -> dict[str, list[tuple[str, str]]]:
-    """Per-method instrumentation arguments the host provides (helper app of DSK-M10)."""
-    cached = ctx.state.get("launcher_method_args")
-    if cached is not None:
-        return cached
-    result: dict[str, list[tuple[str, str]]] = {}
-    found = tool().helper_apk(Path(ctx.args.apks) if ctx.args.apks else None)
-    if found and ctx.device is not None:
-        apk, package = found
-        target = f"{tool().DEVICE_TMP}/{tool().HELPER_APK}"
-        pushed = ctx.device.adb_run("push", apk, target, timeout=300)
-        if pushed.ok:
-            result["launcher_task_package_removed_clears_items"] = [("launcher_helper_apk", target),
-                                                                    ("launcher_helper_package", package)]
-        else:
-            ctx.log_line("device-setup", f"launcher: adb push {apk.name}: {pushed.describe()}")
-    ctx.state["launcher_method_args"] = result
-    return result
-
-
 def run_instr_methods(ctx: common.JobContext, stage: str, entries: list) -> None:
     """Instrumentation entries of a stage, method by method; non-instrumentation entries via run_entries."""
     other = [entry for entry in entries if entry.kind != "instr"]
@@ -221,7 +200,6 @@ def run_instr_methods(ctx: common.JobContext, stage: str, entries: list) -> None
         screen.run_entries(ctx, stage, other)
     plain: dict[tuple, list[tuple]] = {}
     phased: list[tuple] = []
-    extra = method_args(ctx) if ctx.device is not None else {}
     for entry in entries:
         if entry.kind != "instr" or ctx.recorded(entry.name):
             continue
@@ -240,7 +218,7 @@ def run_instr_methods(ctx: common.JobContext, stage: str, entries: list) -> None
         if not ready:
             ctx.record(entry.name, stage, NOT_RUN, why)
             continue
-        args = ctx.fixtures.args_for(entry.fixtures) + extra.get(entry.name, [])
+        args = ctx.fixtures.args_for(entry.fixtures)
         if method and method in tool().PHASES:
             phased.append((entry, fqn, args))
         else:

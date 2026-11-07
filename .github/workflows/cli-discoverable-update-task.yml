@@ -2,7 +2,8 @@ name: cli-discoverable-update-task
 
 # Single task-level suite for `se share discoverable` and `se update`.
 # Dispatch it once for the exact pushed candidate SHA after implementation
-# ends; it never publishes anything.
+# ends; it never publishes anything. rustfmt and clippy are no part of it: build.yml gates them
+# at every push.
 on:
   workflow_dispatch:
     inputs:
@@ -33,8 +34,6 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-          # The rustfmt/clippy gates diff against the batch base commit.
-          fetch-depth: 0
 
       - name: Bind the run to the exact candidate
         shell: bash
@@ -64,19 +63,9 @@ jobs:
       - name: Rust toolchain and dependency cache
         uses: ./.github/actions/native-setup
         with:
-          targets: x86_64-pc-windows-gnu
-          components: rustfmt, clippy
           workspaces: |
             native
             share-server
-
-      - name: Install the Windows cross C toolchain for the target gate
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          sudo apt-get update
-          sudo apt-get install -y mingw-w64
-          x86_64-w64-mingw32-gcc --version | head -n 1
 
       - name: Run the single task-level suite
         shell: bash
