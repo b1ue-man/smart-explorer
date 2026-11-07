@@ -35,9 +35,11 @@ getrandom = "0.2"
 lz4_flex = { version = "0.14", default-features = false, features = ["std", "safe-encode", "safe-decode"] }
 
 # The integration test (tests/remote_drive_task.rs) compiles the shared agent_proto
-# with cfg(test), and with it the protocol's own test modules, which use tempfile.
+# with cfg(test), and with it the protocol's own test modules, which use tempfile and
+# globset (the walk filter takes the regexes globset makes of the app's globs).
 [dev-dependencies]
 tempfile = "3"
+globset = "0.4"
 
 [target.'cfg(unix)'.dependencies]
 # Atomic no-replace promotion uses renameat2(RENAME_NOREPLACE) on Linux.
