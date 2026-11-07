@@ -91,7 +91,7 @@ pub(super) struct Session<'a> {
 /// How a session ended: the reason and the `ERROR` the viewer gets first.
 type Ending = (EndReason, Option<ScreenWireError>);
 
-/// The ending of a session whose viewer can no longer be written to.
+/// The ending of a session whose connection was lost.
 const LOST: Ending = (EndReason::ConnectionLost, None);
 
 impl<'a> Session<'a> {
@@ -171,13 +171,14 @@ impl<'a> Session<'a> {
                     Some(Ok(frame)) => {
                         heard = crate::share::route_protocol::active_now();
                         if self.on_frame(frame).await.is_err() {
-                            break LOST;
+                            break self.unwritable();
                         }
                     }
                 },
                 (fallback, result) = self.metadata.next() => {
                     if self.metadata_reply(fallback, result).await.is_err() {
-                        break ((*stop.borrow()).unwrap_or(EndReason::ConnectionLost), None);
+                        let signalled = *stop.borrow();
+                        break signalled.map_or_else(|| self.unwritable(), |reason| (reason, None));
                     }
                     self.metadata.advance(self.context, self.principal);
                 }
@@ -206,7 +207,7 @@ impl<'a> Session<'a> {
                     // Its pings (every 5 s) keep the silence check above
                     // fed; showing again resumes this at the next second.
                     if self.visible && self.second().await.is_err() {
-                        break LOST;
+                        break self.unwritable();
                     }
                 }
             }
@@ -314,7 +315,7 @@ impl<'a> Session<'a> {
                     min_frame_id: floor,
                 };
                 if self.frame(HostFrame::VisibilityAck(ack)).await.is_err() {
-                    return Some(LOST);
+                    return Some(self.unwritable());
                 }
                 if !self.visible
                     && self
@@ -322,7 +323,7 @@ impl<'a> Session<'a> {
                         .await
                         .is_err()
                 {
-                    return Some(LOST);
+                    return Some(self.unwritable());
                 }
             }
         }
@@ -344,7 +345,7 @@ impl<'a> Session<'a> {
                         .await
                         .is_err()
                     {
-                        return Some(LOST);
+                        return Some(self.unwritable());
                     }
                 }
                 None
@@ -382,7 +383,7 @@ impl<'a> Session<'a> {
             self.report(next.unwrap_or(self.state), notice.as_deref())
                 .await
                 .err()
-                .map(|_| LOST)
+                .map(|_| self.unwritable())
         } else {
             None
         }
@@ -411,6 +412,17 @@ impl<'a> Session<'a> {
                 Some(failure.error.to_string()),
             )),
         )
+    }
+
+    /// The ending of a session whose viewer could not be written to. A viewer
+    /// that closes its session closes the connection, and a write racing that
+    /// close fails: the session then ended because the viewer closed it, not
+    /// because the connection was lost.
+    fn unwritable(&self) -> Ending {
+        match self.connection.close_reason() {
+            Some(ConnectionError::ApplicationClosed(_)) => (EndReason::ViewerClosed, None),
+            _ => LOST,
+        }
     }
 
     async fn finish(mut self, (reason, error): Ending) {
