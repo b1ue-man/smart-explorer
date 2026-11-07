@@ -250,7 +250,9 @@ Release; no build is committed to Git (plan `docs/plaene/2026-11-01-idealzustand
 
 1. Push the finished batch to `main`, then dispatch the workflow with the full `main` SHA:
    `source_sha=<sha>`, `dry_run=false` (a dry run builds and verifies everything into a draft under
-   the tag `dryrun-vX.Y.Z-<run id>` and deletes it again; no commit, tag or visible release).
+   the tag `dryrun-vX.Y.Z-<run id>` and deletes it again; no commit, tag or visible release). Before any build starts, the
+   job `plan` requires the repository secret `SE_UPDATE_SIGNING_KEY` (step „Require the release
+   signing key“); without it the run stops there, before the first build, commit, tag or upload.
 2. Jobs: `plan` (Tagged/Bump/Resume plan of `native/release-version.ps1`, exact source binding),
    `prepare` (version, embedded SSH-agent bundles, license notices), then in parallel three
    `windows-build` runners (`native/publish-update.ps1 -Stage Build -Programs …`: app and MCP
@@ -265,7 +267,8 @@ Release; no build is committed to Git (plan `docs/plaene/2026-11-01-idealzustand
    `android` (`--prebuilt-libs …`: Gradle, signing, verification), all from the files of `prepare`,
    finally `publish`
    (`native/publish-release-assets.ps1`).
-3. `publish` assembles the 26 assets, checks every `.sha256` sidecar, the installer's embedded
+3. `publish` assembles the 26 build assets, signs the release manifest (`release-manifest` and
+   `release-manifest.sig`, see „Release signature“ below; 28 assets in total), checks every `.sha256` sidecar, the installer's embedded
    payloads and `se.exe --version`, commits only `native/Cargo.toml`, `native/Cargo.lock`,
    `native/agent-bin/*` and `third-party/rust-crates/THIRD-PARTY-LICENSES.txt`, pushes `main`
    fast-forward and the tag, uploads into a draft, compares every uploaded size and SHA-256 digest
@@ -280,7 +283,43 @@ updater, on a runner that also compiled the shared dependencies 1.6 times slower
 packing, Linux 13.1 (desktop app) and 17.9 (static programs) plus 1.1 for staging, Android 11.3 and
 11.5 per ABI plus 6.4 for the APK; publish verified all 26 assets in the draft.
 
+### Release signature (since 2026-11-07)
+
+Every release from the workflow carries two assets beyond the 26 build assets:
+
+- `release-manifest`: UTF-8 text with LF line ends. Line 1 is `smart-explorer-release-manifest 1`,
+  line 2 is `version X.Y.Z`, and each following line is `<sha256> <size> <name>` for one build
+  asset, in ascending byte order of the names. The manifest names every build asset and no
+  other file.
+- `release-manifest.sig`: the Ed25519 signature (RFC 8032, pure, no pre-hash) over the exact bytes
+  of the manifest, as 128 lowercase hex digits and one LF.
+
+The desktop app, `se update` and the update helper verify the signature against the public key
+compiled into the program before they stage anything, then check each payload's size and SHA-256
+against the signed values. The check and its consequences are described in the README under
+„Signierte Updates“.
+
+The signing key is the repository secret `SE_UPDATE_SIGNING_KEY` (PEM, Ed25519). Only the publish
+step of `.github/workflows/release.yml` reads it, in that step's environment; the step checks the
+signature against the public key before the release commit, the tag and the upload. A key that
+does not match stops the release there. The key is not stored in the repository, in artifacts or in
+logs. Replacing the key makes the new releases unverifiable for installed versions that carry the
+old public key; those versions refuse the update (fail closed) and must be updated by hand, so a
+key change is a deliberate act.
+
+Releases published before this contract have no manifest. An installation of the new code asks
+for confirmation for each such update (`unsigned_release`). A plain `http://` feed without a
+manifest also needs confirmation for each update (`unsigned_http_feed`). A feed with a manifest
+but an invalid or missing signature is never installed, not even after confirmation.
+
+The Android APK update is outside this check: the Android package installer verifies the APK's
+signing certificate against the installed app, and the update checks the APK's `.sha256` sidecar.
+
 ## Cut a release
+
+Historical note: the wrapper described below (`native\publish-release-local.ps1`) no longer makes
+releases (see AGENTS.md). Its counts (26 publication assets) refer to that retired wrapper; the
+current release path is `.github/workflows/release.yml`, described above.
 
 ### Task suites since 2026-11-07
 
@@ -940,6 +979,39 @@ intended protected configuration records. Use the already provisioned machine
 identity to preserve the machine pin. This is a separate administrative
 transaction; the per-user app updater does not replace these services.
 
+An installed gateway whose `gateway-network.json` stores `use_default_relays: true`
+(written by an earlier `se login provision`) binds no relays. The gateway reads no
+user profile, so it keeps direct paths only until its network file is replaced.
+To refresh only the network configuration, run on the machine whose `se` profile
+holds the configured Share server:
+
+`se login provision-network DIRECTORY [--json]`
+
+`DIRECTORY` must be a new directory that is outside the active installation and
+the gateway state; the command writes only `DIRECTORY/gateway-network.json`. It
+creates no machine identity, policy or target. The command reads the stored
+server address `share_server.txt` from the data home of the account that runs it
+(Linux: `$XDG_DATA_HOME`, otherwise `$HOME/.local/share`, then `smart_explorer/`),
+and a set `SE_SHARE_RELAY_URL` overrides its relays. It requires root on Linux and
+an elevated administrator on Windows. Without a configured server the file holds
+no relays, so the gateway keeps direct paths. The JSON output (compact with
+`--json`) contains `network_file`, `network`, `installed: false`, `linux_update`
+and `windows_update`.
+
+Then repeat the platform's install command with the current release image, its
+approved SHA-256, its exact version, the policy file that belongs to the installed
+machine identity, and the new network file. Linux passes the installed
+`machine-key.json` as the 6th argument and the new file as the 7th; Windows omits
+`-MachineIdentityFile`, so the installed key stays in use:
+
+`bash ./install-login-service.sh install RELEASE_IMAGE APPROVED_HASH RELEASE_VERSION BUNDLE/policy.json /var/lib/smart-explorer-login-gateway/machine-key.json DIRECTORY/gateway-network.json`
+
+`.\install-login-service.ps1 -Action Install -Image RELEASE_EXE -ExpectedSha256 APPROVED_HASH -Version RELEASE_VERSION -PolicyFile BUNDLE/policy.json -NetworkFile DIRECTORY/gateway-network.json`
+
+The machine pin and the grants do not change. The only change to the network
+configuration is the relays of the configured Share server. Without this step
+the installed gateway keeps direct paths only.
+
 To remove the services, run `.\install-login-service.ps1 -Action Uninstall` in
 elevated PowerShell or `bash ./install-login-service.sh uninstall` as root.
 Uninstall stops and removes the managed service registrations. It retains the
@@ -960,7 +1032,7 @@ same release transaction as the desktop builds: the update feed and the GitHub
 Release carry `smart-explorer-android.apk` plus its `sha256sum`-format sidecar,
 whose introduction raised the publication set from 18 to 20 assets. The two
 desktop MCP launchers and their sidecars brought the contract to 24; the Windows
-and Linux login administration scripts bring the current contract to 26.
+and Linux login administration scripts bring the build contract to 26; with the signed manifest pair the published set is 28 (since 2026-11-07).
 Distribution is sideload
 only (GitHub Release and in-app update); there is no Google Play listing.
 
@@ -1244,8 +1316,8 @@ the manifest's `source_commit` equals the release-candidate commit's sole
 parent; and the GitHub Release is visible with the Windows/Linux app, updater,
 `se` and MCP-launcher payloads and hashes, the Android APK and its hash, installer,
 `install-linux.sh`, `install-login-service.ps1`, `install-login-service.sh`,
-context-menu DLL, both share-server payloads, and
-`version.txt`.
+context-menu DLL, both share-server payloads, `version.txt`, and (since 2026-11-07) the signed
+`release-manifest` and `release-manifest.sig`.
 
 ### Troubleshooting: socket access denied
 

@@ -234,3 +234,17 @@ Quellstand 2026-10-26; gemeinsame Remote-Suite und Veröffentlichung stehen aus.
 Für Medienorientierung gelten ausschließlich die Android-Systemeinstellungen;
 Smart Explorer bietet dafür keine konkurrierende Apppräferenz. Der vollständige
 Vorschauvertrag steht in [medien.md](medien.md).
+
+## Stand 2026-11-07: Update-Signatur
+
+- Jedes Release des Feeds trägt `release-manifest` und `release-manifest.sig`. Die App und `se update` prüfen
+  die Ed25519-Signatur, bevor sie etwas bereitstellen, und danach Größe und SHA-256 jedes Programms.
+- **Unsigniertes Update** (Desktop-Dialog, Schaltflächen „Abbrechen“ und „Trotzdem laden“): erscheint bei einem
+  Release ohne Manifest (Projektfeed, Altversion) und bei einem `http://`-Feed ohne Manifest. Die Zustimmung gilt
+  nur für diese eine Version. Der Dialog „Update bereit“ zeigt bei unsignierten Versionen den Hinweis „Unsigniert: …“.
+- **Terminal:** `se update --allow-unsigned` erlaubt genau das Update dieses Aufrufs. `se update` zeigt die Zeile
+  `signature` (`verified`, `unsigned_feed`, `unsigned_release`, `unsigned_http_feed`); im JSON-Ausgabefeld
+  `signature`.
+- Eine ungültige oder fehlende Signatur wird nie installiert, auch nicht nach Zustimmung.
+- Eigene Ordner- oder `https://`-Feeds ohne Manifest bleiben nutzbar und zeigen „unsigniert“.
+- Android: Das APK-Update prüft das Signaturzertifikat des Pakets und die `.sha256`-Datei, nicht das Manifest.

@@ -349,3 +349,22 @@ Quellstand 2026-11-06, nicht gebaut, keine Suite ausgeführt. Befunde und Plan: 
 | Android-Host ohne „Zugriff auf alle Dateien“ (R10) | – | – | Abschnitt „Zugriff“: Hinweis und „Zugriff auf alle Dateien erlauben …“, sobald das Telefon Ordner freigibt (`share.access` → `storageAccess`, `sharesFolders`) | `N/mobile/src/mobile/os/shared/domains/share_access_notices.rs` |
 
 Grenzen: Der Kontakt des abgelehnten Geräts zeigt den Grund in der Karte „Zugriff“ und in `routes.access`, nicht in `DirectContact.last_error` (die Übernahme von Worker-Ereignissen in die Profile liegt im Dienst, `ipc_host_relation_events.rs`). Die Schleife des Verbindungsdialogs auf Android sucht nur bei sichtbarer App (`ShareConnectDialog.kt`, `repeatOnLifecycle(STARTED)`).
+
+## Stand 2026-11-07: Freigaben, Altanfragen, Code-Erneuerung, Routen
+
+- **Grund einer abgelehnten Sitzung (R3):** Gegenstellen ohne Beziehung und ohne gültigen Nachweis
+  erhalten die generische Meldung „Share-Anmeldung nicht autorisiert“ ohne Klasse und ohne Hostnamen.
+  Ihr Versuch erscheint nicht im Ablehnungsbuch des Hosts. Die Klassen- und Namensangabe gilt nur für
+  Gegenstellen mit einer Beziehung.
+- **Route anzeigen:** Ist ein Direktpfad verloren und ein validiertes Relay vorhanden, zeigt der Routenzustand
+  `relay_fallback` mit „Direktpfad verloren; Relay als Rückfall, Direktweg wird weiter geprüft“. Der Zustand
+  `relay_fallback` und die Bezeichnung „über Relay (Rückfall)“ bestehen unverändert. Neue Wire-Werte gibt es nicht.
+- **Altanfragen:** Ist die Liste voll (24 Einträge), wird zuerst der älteste unbeantwortete Eintrag entfernt.
+  Gibt es keinen, verschwindet der älteste abgelehnte oder widerrufene Eintrag, dessen Sperre weiter gilt.
+  Die Sperre des Geräts bleibt bestehen. Nutzerablehnungen ohne Sperre im Grant bleiben stehen.
+- **Direkt-Code neu erzeugen und Entfernen:** Die Freigaben bleiben bestehen. Während eines Übergangs zeigen
+  CLI, Desktop, MCP und Android denselben Stand: „Code wird erneuert, n Geräte stehen aus“ (englisch in CLI und
+  MCP: „Direct code is being renewed, n devices pending“), mit Zusatz für Geräte mit älterer Version und
+  Namensliste. Höchstens vier Übergänge laufen gleichzeitig; eine weitere Erneuerung wartet.
+  Die bisherigen Texte „Freigaben pausieren, bis sie erneut bestätigt sind; ihr Exec wird ausgeschaltet“ gelten nicht mehr.
+- **Dienste und Räume:** siehe `fernzugriff.md`, Abschnitt „Stand 2026-11-07: Maschinenanmeldung, Dienste, Räume“.

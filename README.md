@@ -489,7 +489,9 @@ versucht zuerst einen direkten Gerätepfad. Falls der nicht erreichbar ist, kann
 der mitgelieferte **`se-share-server`** (Linux + Windows, in
 [`release-native/share-server/`](release-native/share-server)) verschlüsselte
 Transportpakete weiterleiten; er erhält keine Relation-Secrets oder
-Dateisystemdaten im Klartext. **Share-Server** in der Werkzeugleiste (bei schmalen Fenstern unter **»**) öffnet das Fenster **Geräte & Freigaben** (Seiten siehe „Share-Einstellungen auf jeder Oberfläche“); Server unter **Einstellungen → Verbindungen**. Der frühere Noise/TCP-Entwurf steht historisch in
+Dateisystemdaten im Klartext. Er vermittelt Anwesenheit und Adressen (QUIC-Adressermittlung
+auf UDP 7842, siehe [`docs/SHARE_SERVER.md`](docs/SHARE_SERVER.md)), verwaltet keine Zugänge
+und führt keine Geräteliste. **Share-Server** in der Werkzeugleiste (bei schmalen Fenstern unter **»**) öffnet das Fenster **Geräte & Freigaben** (Seiten siehe „Share-Einstellungen auf jeder Oberfläche“); Server unter **Einstellungen → Verbindungen**. Der frühere Noise/TCP-Entwurf steht historisch in
 [`docs/SHARE_PLAN.md`](docs/SHARE_PLAN.md).
 
 In der Teilen-Ansicht lassen sich das eigene Direct-Gerät und vorhandene Räume
@@ -1070,9 +1072,12 @@ Befehlssitzungen laufen die Befehle nacheinander im gemeinsamen Zustand.
 **Lokales Netz ohne Server (Teilen → Netzwerk):** gekoppelte Geraete kuendigen ihre
 Iroh-Adresse per mDNS (`_se-share._udp`) an und finden sich damit auch ohne
 erreichbaren Share-Server — etwa ueber ein direktes Kabel oder ein isoliertes
-LAN. Es wird nur eine gehashte Kennung verbreitet; fremde Geraete werden
-gezaehlt, aber nie verbunden, da Node-Pin, Relation-Secret und Grant weiterhin
-gelten. Ist kein Share-Server konfiguriert, laeuft der Worker rein lokal. Der
+LAN. Verbreitet wird eine rotierende Kennung, abgeleitet aus dem Direkt-Geheimnis; seit
+2026-11-07 stehen die Adressen versiegelt in der Ankündigung, und nur Kontakte mit dem
+Geheimnis können sie öffnen. Solange ein Kontakt die versiegelte Form noch nicht liest,
+läuft zusätzlich die alte Klartext-Ankündigung (`docs/SHARE_SERVER.md`, Abschnitt
+„Local-Network Presence and Uplink Sharing“). Fremde Geraete werden gezaehlt, aber nie verbunden, da
+Node-Pin, Relation-Secret und Grant weiterhin gelten. Ist kein Share-Server konfiguriert, laeuft der Worker rein lokal. Der
 Netzwerk-Tab zeigt jede Netzwerkverbindung als „ohne Router (direkt)",
 „Internetzugang" oder „Netzwerk mit Router"; fehlt mDNS oder die
 Schnittstellenabfrage, steht dort „nicht verfuegbar: <Grund>". Optional teilt
@@ -1273,6 +1278,17 @@ antwortet.
   schließen. Unter Linux ohne grafische Sitzung (`DISPLAY`/`WAYLAND_DISPLAY` leer)
   lehnt `se update` das ab, bevor es etwas lädt, denn der Neustart der App würde
   dort scheitern.
+
+**Signierte Updates (seit 2026-11-07).** Jedes Release des GitHub-Feeds enthält `release-manifest`
+(Version und SHA-256 sowie Größe jedes Programms) und `release-manifest.sig` (Ed25519-Signatur). Die
+App und `se update` prüfen die Signatur gegen den im Programm eingebauten öffentlichen Schlüssel,
+bevor sie etwas bereitstellen; danach prüfen sie Größe und SHA-256 jedes Programms gegen das Manifest.
+Ohne gültige Signatur wird nichts installiert, auch nicht nach Bestätigung. Ältere Releases ohne
+Manifest sowie `http://`-Feeds ohne Manifest installieren nur nach ausdrücklicher Bestätigung für genau
+dieses Update (Dialog „Unsigniertes Update“ in der App, Schalter `--allow-unsigned` bei `se update`).
+Eigene Ordner- oder `https://`-Feeds ohne Manifest bleiben nutzbar und zeigen „unsigniert“. Die
+Android-App prüft ihr APK-Update über das Signaturzertifikat des Pakets und die `.sha256`-Datei, nicht
+über das Manifest.
 
 ## 🤖 Android: Installieren und Updates
 
@@ -1554,7 +1570,7 @@ Der vollständige Flow (bauen → Feed → GitHub-Release → Selbst-Update) ste
    baut unter Windows/WSL oder Linux alle Plattformartefakte, prüft die acht
    Desktop-Feed-Hashes, die eingebetteten App-/Updater-/`se`-/MCP-Starter-Bytes, den
    gebundenen Quell-Commit, APK-Version, -Hash und -Signaturzertifikat sowie
-   26 Release-Assets, committet und pusht den
+   26 Build-Assets (dieser Wrapper ist nicht mehr der Release-Weg, siehe `docs/RELEASING.md`), committet und pusht den
    exakten Kandidaten nach `main` und
    startet genau eine statische Exact-Byte-Publikation. Normalerweise geschieht
    das über einen unveränderlichen Tag; nur wenn dessen Push technisch abgelehnt

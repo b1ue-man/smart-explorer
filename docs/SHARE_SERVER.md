@@ -7,6 +7,13 @@ still authenticate each other and encrypt filesystem traffic end to end, so the
 relay sees routing metadata and ciphertext but not relation secrets, private
 keys, file names, file contents, or export configuration.
 
+The server does not manage access. It keeps no list of admitted devices, and a
+new device is admitted without an action on the server. Its roles are presence
+and address resolution, the relay fallback, and QUIC address discovery (QAD,
+see its own section below). Since 2026-11-07 (decision E19 in
+`docs/plaene/2026-11-07-sicherheit-direktweg/entscheidungen.md`) this is the whole
+server role; no release adds a list of allowed keys or accounts to it.
+
 ## Transports
 
 - New input `host[:port]` means TLS WebSocket (`wss://host:51820` when the port
@@ -32,6 +39,10 @@ relay's origin for a reverse proxy; without a path it tries the adjacent port
 and origin. TLS addresses derive HTTPS relays, including the server's pin;
 HTTP relay overrides and peer-advertised HTTP relays need the same plaintext
 permission. Both listeners must be reachable when relay fallback is needed.
+The machine sign-in (login gateway) uses only the relays of the server configured
+in the program, with that server's pins and plaintext rule; it never uses a public
+relay of a third party. Without a configured server it uses direct routes only
+(decision E14 of 2026-11-07, see `docs/plaene/2026-11-07-sicherheit-direktweg/entscheidungen.md`).
 
 Relay startup is fail-closed by default. An invalid relay bind, runtime setup
 failure, or occupied relay port makes `se-share-server` exit nonzero instead of
@@ -99,15 +110,55 @@ stored hash. New Room members see only the partition with the same proof.
 These proofs reveal neither the relation secret nor a way to derive it. Older
 clients can use unbound entries and participate in mixed rooms, but cannot
 take over proven bindings. Compatibility mode allows legacy watchers without
-proofs and legacy room members across partitions. Use `--require-key-login`
-or `SE_SHARE_REQUIRE_KEY_LOGIN=1` when every client must prove its key and
-relation access.
+proofs and legacy room members across partitions.
+
+Key login is the default since 2026-11-07 (decision E18 in
+`docs/plaene/2026-11-07-sicherheit-direktweg/entscheidungen.md`). The server refuses a
+client that does not negotiate `key_login_v1` with the registration error
+`KeyLoginRequired`. An operator who must still admit apps up to v0.5.169 starts
+the server with `--allow-legacy-clients` (or `SE_SHARE_ALLOW_LEGACY_CLIENTS=1`).
+That restores the compatibility mode described above. Without that switch such an
+app receives the text "this server requires key login; update Smart Explorer".
+`--require-key-login` (or `SE_SHARE_REQUIRE_KEY_LOGIN=1`) is still accepted and
+changes nothing. Given together with `--allow-legacy-clients`, startup fails
+because the two options exclude each other.
 
 `--state-file` keeps key bindings across restarts with atomic replacement and
 restrictive creation permissions on Unix. Full binding tables refuse new owners
 instead of expiring or evicting existing ones. Save failures refuse the new
 registration/publication. Without a state file ownership is memory-only and
 startup warns that restart protection is unavailable.
+
+## QUIC Address Discovery (QAD)
+
+A device behind NAT learns its public address from QAD. The Iroh client sends the
+probe to the relay host on UDP port 7842, the port every client uses without
+configuration. `se-share-server` answers it on the relay's IP at that port:
+
+- A relay bind of `0.0.0.0` makes QAD bind dual-stack `[::]:7842`; on a host without
+  IPv6 it falls back to `0.0.0.0:7842`. A fixed relay IP is used as it is.
+- `SE_IROH_QAD_BIND=<udp address>` chooses another address;
+  `SE_IROH_QAD_DISABLE=1` (or `true`) turns QAD off.
+- QAD needs TLS 1.3, so it exists only with `--tls-cert`/`--tls-key` (or the
+  `SE_SHARE_TLS_*` variables). A relay without TLS logs "QAD needs TLS" and runs
+  without QAD. Clients do not probe `http://` relays at all.
+- Behind a reverse proxy the proxy forwards TCP only, so QAD on UDP 7842 is not
+  served through it. The operator then
+  - opens UDP 7842 in the firewall and in any cloud security group to the server
+    (IPv4 and IPv6 when QAD is dual-stack), and
+  - gives `se-share-server` its own certificate for the relay's host name. The client
+    checks the QAD certificate against the host of the relay URL and against the
+    pins, as on the relay path.
+- A start failure (an occupied UDP port, an invalid `SE_IROH_QAD_BIND`) writes one
+  log line with the reason. Signaling and the relay keep running without QAD,
+  because QAD improves routes and protects nothing. The relay's own start stays
+  fail-closed as described above.
+- Limits: at most 1,024 QAD connections in total (2 × the relay's 512 connections)
+  and at most 128 per source, using the relay's source accounting. A new source
+  must first answer a QUIC Retry (address validation). Idle connections close after
+  35 seconds; a client keeps its connection with a 25-second keepalive. QAD opens no
+  streams and sends each sender only the address it observed for that sender.
+  Connections above a limit are refused.
 
 ## Temporary Discoverability and Background Pairing
 
@@ -164,7 +215,9 @@ Cancel and expiry terminate only the affected offer or exchange.
 The server allows four concurrent exchanges per offer, with at most one from
 each proven connector key (or source address for a legacy connector). Twelve
 starts per minute are counted per connector and offer, so one connector cannot
-consume another connector's attempt budget. Offers remain subject to the
+consume another connector's attempt budget. In addition (2026-11-07), each source
+address holds at most one active pairing per offer and may start 12 pairings per
+minute; the per-key limit applies on top of that. Offers remain subject to the
 server's global and per-client capacity limits. Legacy clients behind an
 explicitly trusted proxy count by connection, since the proxy already enforces
 original-client limits and its shared backend address is not an identity.
@@ -224,6 +277,20 @@ Startup limits are positive integer environment values:
 | `SE_SHARE_MAX_CLIENTS_PER_SOURCE` | 8 |
 | `SE_SHARE_MAX_CLIENTS_PER_NETWORK` | four times the source limit (32) |
 | `SE_SHARE_MAX_CLIENTS_PER_KEY` | 4 |
+| `SE_SHARE_MAX_HANDSHAKES` | 128 |
+| `SE_SHARE_MAX_HANDSHAKES_PER_SOURCE` | 4 |
+| `SE_SHARE_MAX_HANDSHAKES_PER_NETWORK` | four times the source limit (16) |
+
+Connections that have not registered yet use their own pool of handshake slots
+(`SE_SHARE_MAX_HANDSHAKES*`). When the pool is full, the server evicts the oldest
+waiting connection of that pool; a registered connection keeps its slot. A device
+key binds at most 64 device IDs and 4,096 Direct lookups (fixed limits, not
+configurable). New bindings from one source start with a burst of 512 and then
+continue at one per 10 seconds; the refusals read "too many new device bindings
+from this network; retry later", "too many device ids for this device key" and
+"too many key bindings for this device key". `--state-file` stores a new owner
+immediately and fail-closed; a renewed access hash is written at most every 60
+seconds, and a device sends its current hash again after each restart.
 
 Network limits apply to IPv6 `/56` groups. WebSocket output wakes its owner
 thread immediately through the I/O reactor instead of waiting for a polling
@@ -236,8 +303,9 @@ comma- or semicolon-separated proxy IPs (for example `127.0.0.1,::1`) to keep
 the global ceilings while delegating only the per-source worker, registration,
 and accept-rate buckets for those backend sockets. The proxy must then enforce
 equivalent connection, handshake, and request-rate limits per original client.
-Only list loopback/private proxy addresses under your control. The server does
-not trust spoofable forwarded-IP headers. Once this exemption is enabled, the
+Only list loopback/private proxy addresses under your control. `0.0.0.0` and `::`
+are refused at startup. A public relay bind listed there does not lift the relay's
+per-source limits. The server does not trust spoofable forwarded-IP headers. Once this exemption is enabled, the
 backend signaling listener must be reachable only from those proxies (normally
 by binding to loopback and/or firewalling the port); otherwise another host can
 connect directly and receive the proxy exemption.
@@ -492,8 +560,8 @@ each device page (**Geräte → Details**):
   zulassen** clears the record. CLI: `se share grants delete <selector>`,
   `se share grants removed [--readmit <device>]`.
 
-Removing a Direct contact (`Entfernen`, `se connections remove-peer`) runs one
-profile transaction that deletes the contact, its relation secret, the grant
+Removing a Direct contact (`Entfernen`, `se connections remove-peer`) also starts a
+code renewal, described in its own section below. It runs one profile transaction that deletes the contact, its relation secret, the grant
 for its remote device, tracked and legacy requests of that device (with replay
 tombstones while the bounded ledger has room) and writes the removed-device
 record; schema version 8 adds `removed_direct_peers`. Outside the profile the
@@ -566,13 +634,41 @@ automatically;
 if a normal rule fails, the app asks Windows for elevated firewall permission
 through UAC.
 
+## Code renewal after removing a Direct contact (2026-11-07)
+
+Removing a Direct contact or a device from the Direct grants renews this device's
+Direct code: a new lookup ID and a new direct secret. A removed peer that still
+holds the old code therefore cannot find the device again through it. The other
+accepted devices keep their access: the old lookup ID and secret stay valid for
+each accepted or reconfirm-pending grant until that device has taken the new data
+over an authenticated, pinned session and this device has stored its confirmation.
+A device that does not announce the renewal keeps working on the old data, and its
+entry stays marked as legacy. At most four renewals run at a time; a fifth waits
+for one to end. The state lives in `share_code_renewal.json`.
+
+During a transition the device publishes a second, reduced lookup ID (relay URL and
+node ID, no address list) next to the new one, within the existing limit of 64
+published Direct IDs per client. The server gets no new role: it sees one more lookup
+of the same device, keeps no list and manages no access. The desktop app,
+`se share status --json` (`code_renewal`), MCP and Android show how many devices
+still wait. "Code neu generieren" starts the same renewal without a removal.
+
 ## Local-Network Presence and Uplink Sharing
 
 Paired Direct devices can find each other without the signaling server. The
-worker announces `_se-share._udp.local.` over mDNS with TXT `v=1`,
-`id=<16 hex>` (the first 8 bytes of `SHA-256("se-lan-presence-v1|" + node
-id)`), `p4`/`p6` (bound Iroh UDP ports) and `up=0|1` (advisory "has own
-internet"). Sightings whose id matches an accepted contact's pinned node become
+worker announces `_se-share._udp.local.` over mDNS. Since 2026-11-07 the main
+announcement is sealed: instance `se3-<id>`, TXT `v=3`, a rotating `id` derived from
+the direct secret, the ports `p4`/`p6` (bound Iroh UDP ports), `up=0|1` (advisory
+"has own internet"), the epoch `e`, the expiry `x`, the 96-bit nonce `n` and the
+sealed payload in chunks `c0`..`c7`. The sealed payload holds the interface
+addresses (1 to 32) and the Ed25519 signature. Only a contact that holds the pinned
+direct secret can open it (ChaCha20-Poly1305, key derived from that secret, the
+public fields as associated data). The plain announcement `v=2` (instance
+`se-<id>`, signature `s` and all addresses `a0`..`a31` in clear text) is still sent
+in addition while at least one accepted contact in the audience has not yet been
+seen reading `v=3`. Older receivers see `se3-` as an unknown `v=1` sighting and drop
+it. A contact with a signed presence no longer matches a `v=1` hashed id.
+Sightings whose id matches an accepted contact's pinned node become
 `lan_candidates` on that contact (`ip:p4`, `[ip]:p6`, or `[fe80::x%<ifindex>]:p6`
 once per local interface for link-local IPv6) for `LAN_PRESENCE_TTL_SECS = 150`.
 Dialing merges them with a current server presence or synthesizes a presence

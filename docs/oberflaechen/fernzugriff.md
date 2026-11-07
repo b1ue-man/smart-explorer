@@ -10,7 +10,7 @@ vor. Die gemeinsame Remote-Suite und Veröffentlichung stehen aus. `N/` bedeutet
 
 | Fähigkeit | CLI und MCP | Desktop | Android und Bridge | Gemeinsame Grenze |
 |---|---|---|---|---|
-| Maschinenanmeldung | `se login status/provision/target/open/sessions/session/close` (`N/cli/src/cli/login.rs:10`); MCP `login` (`N/cli/src/cli/mcp/catalog.rs:203`) | Geräteseite → Maschinenanmeldung (`N/gui/src/app/core/share_login_ui.rs:13`), eigener bildgebundener Renderer `login_viewer.rs` | `LoginTargetDialog` und `LoginViewScreen` (`A/ui/share/ShareDialogHost.kt:107`); `login.viewOpen`, Status, Fokus, Presented, Input, SAS, Release, Close (`N/mobile/src/mobile/os/shared/domains/login_view.rs:26`) | Explizites öffentliches Maschinenziel, bestätigter Maschinenpin, administrativer Grant und SID/UID. Ein gewöhnlicher Gerätegrant erteilt diese Rechte nicht. |
+| Maschinenanmeldung | `se login status/provision/provision-network/target/open/sessions/session/close` (`N/cli/src/cli/login.rs:10`); MCP `login` (`N/cli/src/cli/mcp/catalog.rs:203`) | Geräteseite → Maschinenanmeldung (`N/gui/src/app/core/share_login_ui.rs:13`), eigener bildgebundener Renderer `login_viewer.rs` | `LoginTargetDialog` und `LoginViewScreen` (`A/ui/share/ShareDialogHost.kt:107`); `login.viewOpen`, Status, Fokus, Presented, Input, SAS, Release, Close (`N/mobile/src/mobile/os/shared/domains/login_view.rs:26`) | Explizites öffentliches Maschinenziel, bestätigter Maschinenpin, administrativer Grant und SID/UID. Ein gewöhnlicher Gerätegrant erteilt diese Rechte nicht. |
 | Lokale Dienste und TCP | `se tcp services/start/list/status/close` (`N/cli/src/cli/tcp.rs`); MCP `tcp_forward` mit `services` (`N/cli/src/cli/mcp/tcp_tool.rs`) | Geräteseite → „Dienste und TCP“ (`N/gui/src/app/core/share_tcp_ui.rs`): Dienste von selbst mit Adresse und „Öffnen“/„Adresse kopieren“; darunter „Weitere Weiterleitung“; se-Desktop-Kachel: Untermenü „Dienste“ | `TcpDialog`, `TcpApi`; `tcp.services`, `tcp.openService`, `tcp.*` (`N/mobile/src/mobile/os/shared/domains/tcp.rs`, `tcp_services.rs`) | Unter „Bildschirm steuern: Erlauben“ sind lokal lauschende Dienste freigegeben (nur Loopback: jedes Konto; Wildcard: nur Benutzerkonten; nie se-eigene Ports). Desktop bildet sie selbst auf `Geräteadresse:Port` ab (nur Programme desselben Kontos); Android öffnet je Dienst auf Tippen. Weitere Ziele brauchen das Recht „TCP-Weiterleitung“. Keine Bestätigung, keine feste Frist. |
 | Remote Desktop | `se rdp open <gerät> [--remote-app <alias>]`, `local-probe/probe/clients/list/status/close` (`N/cli/src/cli/rdp.rs`); MCP `rdp` (`N/cli/src/cli/mcp/rdp_tool.rs`) | Geräteseite → „Remote Desktop“: ein Knopf plus je RemoteApp ein Knopf (`N/gui/src/app/core/share_rdp_ui.rs`); se-Desktop-Kachelmenü; „Dieses Gerät“ zeigt den eigenen Stand (`share_rdp_this_device.rs`) | `RdpDialog` zeigt den Grund des fehlenden Android-RDP-Programms und den Stand des Geräts; `rdp.open` braucht nur `deviceId`/`publicKey` | „Bildschirm steuern: Erlauben“ genügt. se richtet den Host selbst ein, wählt Beziehung, Dienst, Client, Vertrauen; die Sitzung lebt, solange der Client läuft. Nur die authentifizierte Probe ist Hostbeleg. |
 | Installierte Anwendung starten | `se apps`, MCP `apps` (`N/cli/src/cli/mcp/catalog.rs:201`) | Gerätekatalog lädt von selbst (`N/gui/src/app/core/share_apps_ui.rs`); se-Desktop „Programme auf diesem Gerät …“ | `AppsDialog`, `apps.*` (`N/mobile/src/mobile/os/shared/domains/apps.rs`) | Katalogkennung, angemeldeter Hostnutzer und Sitzung. Unklarer Ausgang wird von se mit demselben Beleg geklärt; „Starten“ wartet so lange. Keine freie Shellausführung aus dem Appkatalog. |
@@ -109,8 +109,11 @@ zeigt die tatsächlich im Prozess besessenen RDP-Clients. Quellen:
   freigegebener Dienst bekommt dort erst auf „Öffnen“ einen lokalen Port, den
   jede App des Telefons erreicht, bis „Schließen“.
 - RDP-Hosts richtet se selbst ein (Windows: UAC einmal je Version und Auslöser,
-  keine Firewallregel; Linux: GNOME-Desktopfreigabe, KRdp oder xrdp nur auf
-  Loopback, Paketinstallation über Root-Dienst oder polkit). Bestehende
+  keine Firewallregel; Linux: GNOME-Desktopfreigabe, KRdp oder xrdp, Paketinstallation
+  über Root-Dienst oder polkit). Stand 2026-11-07: Die GNOME-Desktopfreigabe ist im lokalen
+  Netz erreichbar, solange ein Gerät „Bildschirm steuern“ darf; die Probe meldet das
+  (`evidence`, `diagnostics`). xrdp lauscht nur auf Loopback. Für KRdp ist die Bindeadresse
+  nicht belegt. Bestehende
   NLA-, TLS-, Firewall- und netzweite xrdp-Einstellungen ohne se-Marker
   bleiben. Die Host-/Clientbelege stehen im
   [RDP-Adaptervertrag](../../native/crates/engine/src/rdp/README.md).
@@ -127,3 +130,34 @@ Statische Befunde und Beweisgrenzen stehen in
 [Review B7](../plaene/2026-10-24-batches/review-b7.md) und
 [Review B8](../plaene/2026-10-24-batches/review-b8.md).
 Offene Produktarbeit wird ausschließlich in [TODO](../TODO.md) geführt.
+
+## Stand 2026-11-07: Maschinenanmeldung, Dienste, Räume
+
+- **Maschinenanmeldung:** Das Gateway nutzt nur die Relays des im Programm konfigurierten
+  Share-Servers (mit dessen Pins und Klartext-Regel). Ohne konfigurierten Server bleiben nur
+  Direktwege. Eine bestehende Einrichtung mit gespeichertem `use_default_relays: true` nutzt nach
+  dem Update nur Direktwege, bis der Betreiber die Netzdatei erneuert: `se login provision-network
+  VERZEICHNIS` (neues Verzeichnis; Root bzw. Administrator; schreibt nur `gateway-network.json`,
+  keine neue Maschinenidentität). Danach das Installationsskript mit dem vorhandenen
+  `machine-key.json` (Linux: 6. Argument; Windows: ohne `-MachineIdentityFile`) und der neuen Datei
+  (Linux: 7. Argument; Windows: `-NetworkFile`). Der Ablauf steht in
+  [RELEASING](../RELEASING.md#optional-login-services). Gegenstellen ohne
+  Freigabe erhalten `permission_missing` aus einem Budget von 8 und werden nach 1 s getrennt; ist
+  das Budget voll, werden Verbindungen ohne Hello getrennt.
+- **Automatisch gebundene Dienste und TCP:** Der Desktop bindet die Dienste aller Geräte bis zu
+  einem Budget, das aus dem Betriebssystem folgt. Linux: Der Desktop hebt beim ersten Anwenden
+  einer Dienstliste das weiche Limit `RLIMIT_NOFILE` auf das harte Limit an (höchstens
+  `fs.nr_open`) und erlaubt ein Viertel des danach geltenden weichen Limits, mindestens 256
+  Dienste aller Geräte gleichzeitig. Windows: keine globale Grenze. Android: Die Automatik bindet
+  nichts; ein Dienst öffnet sich beim Antippen, und das Budget wird dort nicht gelesen. Ein Gerät
+  liefert höchstens 512 Dienste (`MAX_SERVICES`). Erreicht der Desktop unter Linux das Budget `N`,
+  zeigt der Dienst ohne Adresse den Text „Nicht automatisch verbunden: höchstens N Dienste aller
+  Geräte gleichzeitig“; eine Schaltfläche „Öffnen“ auf dem Desktop gibt es nicht (offen in
+  [TODO](../TODO.md), SEC-DESKTOP-OEFFNEN).
+  Eingehende und eigene Tunnel haben je 64 Plätze. Ein Host prüft vor der
+  Namensauflösung und der Diensteliste, ob eine Regel oder das Steuerrecht das Ziel nennt.
+  Peers ohne Regel erhalten `Refused` mit dem bisherigen Text; bei erschöpftem Zielvorrat
+  erhalten sie `TCP tunnel admission exhausted`.
+- **Räume:** Höchstens 1.024 zugelassene Mitglieder je Raum. Erreicht ein Raum diese Zahl, verschwindet
+  das Mitglied mit dem ältesten letzten Kontakt, das keinen eigenen Zustand trägt (keine Freigabe,
+  keine Sperre, keine Warteanfrage). Es erscheint mit seiner nächsten gültigen Presence wieder.

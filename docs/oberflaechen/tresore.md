@@ -135,3 +135,13 @@ Se zeigt und akzeptiert keinen Wiederherstellungsschlüssel. Der Hinweis lautet:
 - Bildvergleich (`VAULT-COMPARE-IMAGE` in `docs/TODO.md`): auf dem Desktop nicht umgesetzt. `VAULT-COMPLETE-DRIVE-TARGET` (`docs/TODO.md`, Zustand later): Vervollständigung des Ziels `vault://<SITE>/` bei `se drive mount`.
 - Restlücken aus der Nachrecherche (Plan G) bleiben offen; Tresor-Jobs laufen auf Android nur über `vault.syncCreate`.
 - Tresor-Sync (Lesestand U20): Replikat-Ort mit Grund, feste und wählbare Felder der Jobs, Seeding-Regel, R2-Zurückstellung, R12 (kein leerer Knotenordner: die Regelstufe legt keinen an und entfernt einen geleerten auf der löschenden Seite, `N/engine/src/vault/core/sync_rules_dirs.rs`); K20 und K21 bleiben ohne bekannte Site zurückgehalten; eine Datei gleicher Größe in derselben Sekunde ohne Serverhash ist eine bekannte Lücke (Test belegt). Tresor-Jobs laufen über `vault::run_vault_job`.
+
+## Stand 2026-11-07: Freigabe von Tresoren
+
+- Ein **entsperrter** Tresor wird nicht über eine Freigabe weitergegeben. Dateioperationen gekoppelter
+  Geräte auf seinen Einhängepunkt (den Pfad, unter dem das Tresor-Laufwerk eingehängt ist) scheitern mit
+  `PermissionDenied`, auch Beobachtung (Watch) und Freigabewurzel. Eine Freigabe, die einen
+  entsperrten Tresor nennt, wird abgewiesen mit „Ein entsperrter Tresor wird nicht freigegeben: <Pfad>“.
+  Gilt für CLI `se share exports add`, Desktop-Freigabeseite, Android und MCP.
+- Ein **gesperrter** Tresor (verschlüsselter Container-Ordner) bleibt freigebbar, lesbar und
+  beschreibbar. Ein anderes Gerät öffnet ihn über die Freigabe und entsperrt ihn dort selbst.

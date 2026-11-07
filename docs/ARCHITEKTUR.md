@@ -15,9 +15,54 @@ Speicheranalyse – als Desktop-App (Windows, Linux; Rust + egui) und als Androi
 - Die Reihenfolge ist: gleiches LAN oder WLAN, dann die übrigen Direktwege, erst danach das Relay als sichtbar gekennzeichneter Rückfall.
 - Startbrücke (Z-R2, entschieden 2026-10-28 auf „entscheide selbst“ des Nutzers für „maximal möglicher Datentransferspeed von Anfang zu Ende“): Solange LAN- und Direktwege noch aufgebaut werden, dürfen Nutzdaten schon über einen geprüften Relay-Pfad laufen. Sie wechseln ohne Neustart auf den ersten zugelassenen LAN- oder Direktweg; danach trägt das Relay Nutzdaten nur noch als gekennzeichneter Rückfall. Routenzustand `relay_start`, Code `native/crates/engine/src/share/core/route_start.rs`.
 - Der Share-Server vermittelt nur Anwesenheit und Adressen.
+- Direktkandidaten (2026-11-07, Mobilfunk und mehrere Netze eingeschlossen): lokale Schnittstellen
+  (LAN, WLAN), die öffentliche Adresse aus der QUIC-Adressermittlung (QAD) am eigenen
+  `se-share-server` (UDP 7842, siehe `docs/SHARE_SERVER.md`, Abschnitt „QUIC Address Discovery“)
+  und der Portmapper des eigenen Routers (UPnP, PCP, NAT-PMP). Relays sind nur die des
+  konfigurierten Share-Servers.
 - Stand und Lücken: `docs/plaene/2026-10-22-fernzugriff-desktop/machbarkeit.md`, Abschnitt P28; Brettzeile `DIREKT-ZUERST`.
 
 **Langfristige Richtung:** Was auf einem Gerät möglich ist, soll auf allen verbundenen Geräten möglich werden. Die Ebenen und ihre Einordnung stehen in `docs/RICHTUNG.md`.
+
+## Sicherheitsregeln und Verbindungswege (Stand 2026-11-07)
+
+Diese Regeln gelten für alle Wege; die Entscheidungen E11 bis E20 stehen mit Nutzerwortlaut in
+`docs/plaene/2026-11-07-sicherheit-direktweg/entscheidungen.md`.
+
+- **Kein Drittanbieter-Server im Verbindungsweg (E14, E15).** Die Maschinenanmeldung nutzt die
+  Relays des konfigurierten Share-Servers mit dessen Pins und Klartext-Regel; ohne konfigurierten
+  Server nur Direktwege. Der DNS-Auflöser des Share-Endpunkts fragt nur die Systemkonfiguration
+  (`getaddrinfo` und die Systemnameserver), keine öffentlichen Rückfall-Resolver.
+  Außerhalb des Verbindungswegs bleiben: der Update-Feed auf GitHub, der Download des
+  OpenH264-Codecs bei Cisco (Lizenzbedingung des Codecs) und das vom Nutzer eingerichtete
+  Google-Drive-Backend.
+- **Server ohne Zugangsverwaltung (E18, E19).** Der Share-Server vermittelt Anwesenheit und
+  Adressen, führt keine Liste zugelassener Geräte und verwaltet keine Konten. Schlüsselanmeldung
+  ist der Standard; Apps bis v0.5.169 brauchen den Betreiberschalter `--allow-legacy-clients`.
+- **Code-Erneuerung ohne Kontaktverlust (E17).** Beim Entfernen eines Kontakts erneuert das Gerät
+  Lookup-ID und Geheimnis. Die alten Daten bleiben für jede berechtigte Freigabe gültig, bis das
+  Gegenüber die neuen über eine gepinnte, authentifizierte Sitzung übernommen hat; entfernte
+  Kontakte verlieren den Zugang sofort. Der Zustand liegt in `share_code_renewal.json`
+  (Zustandsautomat und Schnittstelle: Abschnitt „Code renewal after removing a Direct contact“ in
+  `docs/SHARE_SERVER.md`).
+- **Tresore (E11).** Ein entsperrter Tresor (Einhängepunkt eines Tresor-Laufwerks) wird nie über
+  eine Freigabe weitergegeben: Dateioperationen gekoppelter Geräte darauf scheitern mit
+  `PermissionDenied`, auch Beobachtung (Watch) und Freigabewurzel. Der gesperrte Tresor
+  (verschlüsselter Container-Ordner) bleibt freigebbar; ein anderes Gerät öffnet ihn über die
+  Freigabe und entsperrt ihn selbst.
+- **Update-Signatur (E12, E20).** Der Updater prüft vor jeder Bereitstellung eine Ed25519-Signatur
+  über ein Release-Manifest (Version; Name, Größe und SHA-256 jedes Assets) gegen den im Programm
+  eingebauten öffentlichen Schlüssel. Der eingebaute Feed stellt ohne gültige Signatur nichts
+  bereit; unsignierte Altversionen und `http://`-Feeds installieren nur nach Bestätigung je
+  Update. Der private Schlüssel ist das GitHub-Actions-Geheimnis `SE_UPDATE_SIGNING_KEY`.
+- **Eingehende Verbindungen vor der Anmeldung.** Der Iroh-Eingang sendet bei 32 oder mehr belegten
+  Handshake-Plätzen an nicht validierte direkte Absender einen Retry (Adressprüfung), lässt je Quelle
+  höchstens 16 gleichzeitige TLS-Handshakes zu und hält 16 Plätze für gepinnte Relay-Absender frei.
+- **Lokaler Daemon.** Der Worker beweist den Besitz des Daemon-Tokens (`ipc_proof`),
+  bevor ein Client den Token sendet. Ein fremder Prozess auf dem veröffentlichten Loopback-Port
+  erhält nur eine Nonce; der Client bricht mit `PermissionDenied` ab.
+- **Entdeckung im LAN.** Die Ankündigung `v=3` trägt die
+  Adressliste nur versiegelt; `v=2` bleibt nur, solange ein Kontakt `v=3` noch nicht gelesen hat.
 
 ## Einstiege
 | Aufgabe / Frage | Anfangen bei |
