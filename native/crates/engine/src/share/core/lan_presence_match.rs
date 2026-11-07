@@ -39,9 +39,16 @@ pub struct LanSighting {
     pub seen_at: i64,
 }
 
-/// The hashed id a contact's device would announce, from its pinned node
-/// (or its pinned key when the node pin is still empty).
+/// The hashed `v=1` id a contact's device would announce, from its pinned
+/// node (or its pinned key when the node pin is still empty). `None` once the
+/// contact delivered a signed presence (`relation.signed_presence`): such a
+/// device announces signed `v=2`/`v=3` records, and an unsigned `v=1` record
+/// with its id, which anybody knowing the node id can compute, is no longer
+/// attributed to it (no downgrade, r-entdeckung-4, same rule as B03).
 pub fn contact_lan_id(contact: &DirectContact) -> Option<String> {
+    if contact.relation.signed_presence {
+        return None;
+    }
     let node = if !contact.expected_node_id.trim().is_empty() {
         contact.expected_node_id.clone()
     } else {
@@ -362,3 +369,7 @@ mod tests {
         assert_eq!(merged.relay_url, "https://relay");
     }
 }
+
+#[cfg(test)]
+#[path = "lan_presence_match_task_tests.rs"]
+mod task_tests;

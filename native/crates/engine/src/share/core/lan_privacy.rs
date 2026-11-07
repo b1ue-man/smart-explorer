@@ -9,6 +9,10 @@ use sha2::Sha256;
 use super::core::{iroh_signature, verify_iroh_signature};
 use super::lan_presence_match::LanSighting;
 
+#[path = "lan_privacy_seal.rs"]
+mod seal;
+pub use seal::{open_proof, seal_proof, SealedLanProof, MAX_SEALED_BYTES, SEAL_NONCE_BYTES};
+
 pub const ID_EPOCH_SECS: i64 = 15 * 60;
 pub const PROOF_LIFETIME_SECS: i64 = 150;
 pub const MAX_ADDRESSES: usize = 32;
@@ -19,6 +23,11 @@ pub struct LanProof {
     pub expires_at: i64,
     pub addresses: Vec<IpAddr>,
     pub signature: String,
+    /// `v=3`: addresses and signature sealed under the announcer's Direct
+    /// secret. A received sealed proof carries empty `addresses` and
+    /// `signature` until `open_proof` restores them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sealed: Option<SealedLanProof>,
 }
 
 pub fn rotating_id(node: &str, secret: &[u8], epoch: i64) -> Option<String> {
@@ -50,6 +59,7 @@ pub fn make_proof(
         expires_at,
         addresses: sighting.addrs.clone(),
         signature: String::new(),
+        sealed: None,
     };
     proof.addresses.sort();
     proof.addresses.dedup();
@@ -86,6 +96,22 @@ pub fn verify_sighting(
         return false;
     }
     verify_iroh_signature(pinned_node, &payload(sighting, proof), &proof.signature)
+}
+
+/// Verifies a received proof of either format: a sealed (`v=3`) proof is
+/// opened with `secret` first, then the same signature check applies.
+pub fn verify_any_sighting(
+    sighting: &LanSighting,
+    proof: &LanProof,
+    pinned_node: &str,
+    secret: &[u8],
+    now: i64,
+) -> bool {
+    if proof.sealed.is_none() {
+        return verify_sighting(sighting, proof, pinned_node, secret, now);
+    }
+    open_proof(sighting, proof, secret)
+        .is_some_and(|opened| verify_sighting(sighting, &opened, pinned_node, secret, now))
 }
 
 fn payload(sighting: &LanSighting, proof: &LanProof) -> Vec<u8> {
@@ -151,3 +177,7 @@ mod tests {
         ));
     }
 }
+
+#[cfg(test)]
+#[path = "lan_privacy_task_tests.rs"]
+mod task_tests;

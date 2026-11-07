@@ -18,26 +18,36 @@ pub(super) fn peer_signature_seen(state: &ShareAuthState, presence: &PeerPresenc
     signature_seen(&state.seen_nonces, presence)
 }
 
-/// Handles one legacy signaling line; returns whether it was a pong. With
-/// `tracked_direct` negotiated, legacy decisions are dropped: they carry no
-/// signed decision and must not override verified ones (S30, S46).
+/// What one legacy signaling line was: a pong, and whether it produced a
+/// verified direct request or decision (the only lines that may keep the
+/// device awake, r-entdeckung-5/S52).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct ServerMsgOutcome {
+    pub pong: bool,
+    pub verified_activity: bool,
+}
+
+/// Handles one legacy signaling line. With `tracked_direct` negotiated,
+/// legacy decisions are dropped: they carry no signed decision and must not
+/// override verified ones (S30, S46).
 pub(super) fn handle_server_msg(
     line: &str,
     auth: &Arc<Mutex<ShareAuthState>>,
     events: &crossbeam_channel::Sender<ShareEvent>,
     tracked_direct: bool,
-) -> bool {
+) -> ServerMsgOutcome {
+    let mut outcome = ServerMsgOutcome::default();
     if line.is_empty() {
-        return false;
+        return outcome;
     }
     let message: SrvMsg = match serde_json::from_str(line) {
         Ok(message) => message,
         Err(error) => {
             let _ = events.send(ShareEvent::Error(format!("Server-Nachricht: {error}")));
-            return false;
+            return outcome;
         }
     };
-    let pong = matches!(message, SrvMsg::Pong);
+    outcome.pong = matches!(message, SrvMsg::Pong);
     match message {
         SrvMsg::HelloOk { .. } | SrvMsg::Pong => {}
         SrvMsg::DirectAvailable {
@@ -67,6 +77,7 @@ pub(super) fn handle_server_msg(
             presence,
         } => {
             if verify_local_direct_request(&lookup_id, &presence, auth) {
+                outcome.verified_activity = true;
                 let _ = events.send(ShareEvent::DirectAccessRequest {
                     lookup_id,
                     presence: presence.with_local_fingerprint(),
@@ -92,6 +103,7 @@ pub(super) fn handle_server_msg(
                 presence.as_ref(),
                 auth,
             ) {
+                outcome.verified_activity = true;
                 let _ = events.send(ShareEvent::DirectAccessAccepted {
                     lookup_id,
                     requester_device_id,
@@ -127,7 +139,7 @@ pub(super) fn handle_server_msg(
             let _ = events.send(ShareEvent::Error(format!("{scope}: {msg}")));
         }
     }
-    pong
+    outcome
 }
 
 /// The device signature a receiver demands: a valid one always passes, an
@@ -194,7 +206,7 @@ pub(super) fn verify_local_direct_request(
     {
         return false;
     }
-    if !remember_presence(&mut state.seen_nonces, replay_key, now, presence) {
+    if !remember_presence(&mut state, replay_key, now, presence) {
         return false;
     }
     if presence.is_signed() {
@@ -301,7 +313,7 @@ where
     {
         return false;
     }
-    if !remember_presence(&mut state.seen_nonces, replay_key, now, presence) {
+    if !remember_presence(&mut state, replay_key, now, presence) {
         return false;
     }
     if presence.is_signed() {
@@ -390,7 +402,7 @@ fn verify_direct_presence(
     {
         return false;
     }
-    if !remember_presence(&mut state.seen_nonces, replay_key, now, presence) {
+    if !remember_presence(&mut state, replay_key, now, presence) {
         return false;
     }
     if presence.is_signed() {
@@ -461,7 +473,7 @@ fn verify_room_presence(
     {
         return false;
     }
-    if !remember_presence(&mut state.seen_nonces, replay_key, now, presence) {
+    if !remember_presence(&mut state, replay_key, now, presence) {
         return false;
     }
     if presence.is_signed() && presence.device_id != state.identity.device_id {

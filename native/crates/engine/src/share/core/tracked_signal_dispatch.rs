@@ -84,8 +84,10 @@ pub(super) fn dispatch_server_line(
                 message,
                 TrackedDirectServerMsg::Request { .. } | TrackedDirectServerMsg::Decision { .. }
             );
-            handle_tracked_server_message(message, auth, events);
-            if activity {
+            // Only a verified request or decision keeps the device awake;
+            // a forged line costs no wake time (r-entdeckung-5, S52).
+            let verified = handle_tracked_server_message(message, auth, events);
+            if activity && verified {
                 // The host shows the request or decision without waiting
                 // for its next poll (A5).
                 configuration
@@ -105,13 +107,14 @@ pub(super) fn dispatch_server_line(
             if is_discovery_error(line) {
                 discovery.handle_server_discovery_error(events);
             }
-            if is_legacy_direct_activity(line) {
+            let outcome = handle_server_msg(line, auth, events, tracked_direct);
+            if outcome.verified_activity {
                 configuration
                     .iroh
                     .power()
                     .request_hold(SIGNAL_ACTIVITY_HOLD_MS);
             }
-            if handle_server_msg(line, auth, events, tracked_direct) {
+            if outcome.pong {
                 SignalDispatchOutcome::Pong
             } else {
                 SignalDispatchOutcome::Continue
@@ -124,17 +127,6 @@ pub(super) fn dispatch_server_line(
     }
 }
 
-fn is_legacy_direct_activity(line: &str) -> bool {
-    serde_json::from_str::<serde_json::Value>(line)
-        .ok()
-        .is_some_and(|value| {
-            matches!(
-                value.get("t").and_then(serde_json::Value::as_str),
-                Some("direct_access_request" | "direct_access_accepted")
-            )
-        })
-}
-
 fn is_discovery_error(line: &str) -> bool {
     serde_json::from_str::<serde_json::Value>(line)
         .ok()
@@ -144,19 +136,23 @@ fn is_discovery_error(line: &str) -> bool {
         })
 }
 
+/// Verifies and forwards one tracked-direct message; returns whether it was
+/// verified (and thus forwarded as a `DirectSignal`).
 pub(super) fn handle_tracked_server_message(
     message: TrackedDirectServerMsg,
     auth: &Arc<Mutex<ShareAuthState>>,
     events: &crossbeam_channel::Sender<ShareEvent>,
-) {
+) -> bool {
     match verified_event(message, auth, now_secs()) {
         Ok(event) => {
             let _ = events.send(ShareEvent::DirectSignal(event));
+            true
         }
         Err(error) => {
             let _ = events.send(ShareEvent::Error(format!(
                 "Tracked-Direct-Nachricht verworfen: {error}"
             )));
+            false
         }
     }
 }

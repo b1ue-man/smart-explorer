@@ -134,24 +134,42 @@ pub(super) fn queued_delivery(revision: u64) -> LegacyDirectDecisionDelivery {
 }
 
 impl ShareProfiles {
-    /// Frees one place in a full legacy inbox: the oldest request nobody
-    /// answered yet (pending or expired, no active authorization). A flood of
-    /// requests with the Direct code (S28) thus only displaces itself, never
-    /// decided history or authorized devices. Returns whether a place is free.
+    /// Frees one place in a full legacy inbox. First the oldest request
+    /// nobody answered yet (pending or expired, no active authorization): a
+    /// flood of requests with the Direct code (S28) displaces itself before
+    /// decided history. Then (E16, r-entdeckung-6) the oldest rejected or
+    /// revoked entry without active authorization whose refusal survives the
+    /// entry: an automatic one, or a user's whose key stays denied by an
+    /// `Ignored` grant or a removed-peer record. Authorized devices and a
+    /// user refusal held only by its entry are never displaced. Returns
+    /// whether a place is free.
     pub(super) fn evict_unanswered_legacy_request(&mut self) -> bool {
-        let Some(index) = self
-            .legacy_direct_requests
-            .iter()
-            .enumerate()
-            .filter(|(_, entry)| {
-                matches!(
-                    entry.decision,
-                    LegacyDirectDecisionState::Pending | LegacyDirectDecisionState::Expired
-                ) && !entry.authorization_active(self)
-            })
-            .min_by_key(|(_, entry)| entry.last_received_at)
-            .map(|(index, _)| index)
-        else {
+        fn oldest(
+            profiles: &ShareProfiles,
+            evictable: impl Fn(&LegacyDirectRequestEntry) -> bool,
+        ) -> Option<usize> {
+            profiles
+                .legacy_direct_requests
+                .iter()
+                .enumerate()
+                .filter(|(_, entry)| evictable(entry) && !entry.authorization_active(profiles))
+                .min_by_key(|(_, entry)| entry.last_received_at)
+                .map(|(index, _)| index)
+        }
+        let unanswered = |entry: &LegacyDirectRequestEntry| {
+            matches!(
+                entry.decision,
+                LegacyDirectDecisionState::Pending | LegacyDirectDecisionState::Expired
+            )
+        };
+        let refused = |entry: &LegacyDirectRequestEntry| {
+            matches!(
+                entry.decision,
+                LegacyDirectDecisionState::Rejected | LegacyDirectDecisionState::Revoked
+            ) && (entry.decision_source != Some(LegacyDirectDecisionSource::User)
+                || self.direct_key_denied(&entry.peer))
+        };
+        let Some(index) = oldest(self, unanswered).or_else(|| oldest(self, refused)) else {
             return false;
         };
         self.legacy_direct_requests.remove(index);

@@ -5,7 +5,7 @@ mod members;
 pub use members::apply_room_runtime;
 pub use members::{
     MemberUpsert, RoomMemberAdmission, RoomMemberFlags, RoomPolicy, RoomRuntime,
-    MAX_PENDING_ROOM_MEMBERS,
+    MAX_ADMITTED_ROOM_MEMBERS, MAX_PENDING_ROOM_MEMBERS,
 };
 
 pub const ROOM_RELATION_SECRET_BYTES: usize = 32;

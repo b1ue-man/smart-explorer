@@ -89,12 +89,7 @@ impl RoomMember {
 
     /// Whether this member authorizes an incoming room session of exactly
     /// this identity. The caller still checks the fingerprint and the proof.
-    pub fn authorizes_session(
-        &self,
-        device_id: &str,
-        public_key: &str,
-        node_id: &str,
-    ) -> bool {
+    pub fn authorizes_session(&self, device_id: &str, public_key: &str, node_id: &str) -> bool {
         self.is_admitted()
             && self.device_id == device_id
             && self.public_key == public_key
@@ -231,6 +226,8 @@ pub fn apply_room_runtime(rooms: &mut [RoomProfile], runtime: &[RoomRuntime]) ->
                     if added.relation.admission == RoomMemberAdmission::Pending {
                         added.blocked = true;
                         room.drop_oldest_pending_beyond(MAX_PENDING_ROOM_MEMBERS.saturating_sub(1));
+                    } else if !room.make_room_for_admitted_member() {
+                        continue;
                     }
                     room.members.push(added);
                     changed = true;
@@ -264,6 +261,12 @@ fn copy_member_runtime(known: &mut RoomMember, update: &RoomMember) -> bool {
 /// the room secret; the bound keeps the profile and its IPC snapshot small
 /// when such a member mints identities, and the newest ones stay visible.
 pub const MAX_PENDING_ROOM_MEMBERS: usize = 32;
+
+/// Admitted members kept per room (r-entdeckung-7). Every holder of the room
+/// secret may mint identities; at the bound the member seen longest ago that
+/// carries no state of its own (not blocked, no rights, no waiting follow-up)
+/// gives way and is admitted again by its next valid presence.
+pub const MAX_ADMITTED_ROOM_MEMBERS: usize = 1024;
 
 /// What a verified room presence did to the member list.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -310,6 +313,9 @@ impl RoomProfile {
         let pending = self.requires_member_confirmation();
         if pending {
             self.drop_oldest_pending_beyond(MAX_PENDING_ROOM_MEMBERS.saturating_sub(1));
+        } else if !self.make_room_for_admitted_member() {
+            // Only when every admitted member carries its own state.
+            return MemberUpsert::Refused;
         }
         self.members.push(RoomMember {
             device_id: presence.device_id.clone(),
@@ -338,6 +344,41 @@ impl RoomProfile {
         } else {
             MemberUpsert::Added
         }
+    }
+
+    /// Frees a place for one more admitted member at the bound; false when
+    /// every admitted member carries its own state and none may give way.
+    fn make_room_for_admitted_member(&mut self) -> bool {
+        let admitted =
+            |member: &RoomMember| member.relation.admission == RoomMemberAdmission::Admitted;
+        while self
+            .members
+            .iter()
+            .filter(|member| admitted(member))
+            .count()
+            >= MAX_ADMITTED_ROOM_MEMBERS
+        {
+            let follow_ups = &self.policy.member_follow_ups;
+            let Some(index) = self
+                .members
+                .iter()
+                .enumerate()
+                .filter(|(_, member)| {
+                    admitted(member)
+                        && !member.blocked
+                        && !member.exec.grants_any()
+                        && !follow_ups
+                            .iter()
+                            .any(|follow_up| follow_up.device_id == member.device_id)
+                })
+                .min_by_key(|(_, member)| member.last_seen.unwrap_or(i64::MIN))
+                .map(|(index, _)| index)
+            else {
+                return false;
+            };
+            self.members.remove(index);
+        }
+        true
     }
 
     fn drop_oldest_pending_beyond(&mut self, keep: usize) {
@@ -395,3 +436,7 @@ fn update_member(member: &mut RoomMember, presence: PeerPresence, now: i64) -> M
 fn same(left: &str, right: &str) -> bool {
     !left.is_empty() && left == right
 }
+
+#[cfg(test)]
+#[path = "room_relation_members_tests.rs"]
+mod tests;
