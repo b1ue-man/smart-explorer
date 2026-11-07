@@ -191,6 +191,9 @@ struct HookBackend<'a> {
     cancel_on_list: Option<&'a AtomicBool>,
     appearing_suffix: Option<&'a str>,
     appearance_checks: AtomicUsize,
+    /// A name whose listed size and time lag behind the file, as a folder
+    /// index that is not current yet reports them.
+    stale_listing: Option<&'a str>,
 }
 
 impl Backend for HookBackend<'_> {
@@ -208,7 +211,14 @@ impl Backend for HookBackend<'_> {
                 std::fs::write(appeared, b"appeared")?;
             }
         }
-        let entries = self.inner.list_dir(path)?;
+        let mut entries = self.inner.list_dir(path)?;
+        for entry in entries
+            .iter_mut()
+            .filter(|entry| Some(entry.name.as_str()) == self.stale_listing)
+        {
+            entry.size = 0;
+            entry.mtime_ms -= 2_000;
+        }
         if let Some(cancel) = self.cancel_on_list {
             cancel.store(true, Ordering::Release);
         }
@@ -262,6 +272,7 @@ fn mirror_cancel_during_preflight_deletes_nothing() {
         cancel_on_list: Some(&cancel),
         appearing_suffix: None,
         appearance_checks: AtomicUsize::new(0),
+        stale_listing: None,
     };
     let mut stats = SyncStats::default();
     let mut errors = Vec::new();
@@ -302,6 +313,7 @@ fn source_appearing_after_preflight_blocks_all_deletes() {
         cancel_on_list: None,
         appearing_suffix: Some("appears.txt"),
         appearance_checks: AtomicUsize::new(0),
+        stale_listing: None,
     };
     let cancel = AtomicBool::new(false);
     let mut stats = SyncStats::default();
@@ -334,6 +346,49 @@ fn source_appearing_after_preflight_blocks_all_deletes() {
         std::fs::read(destination_dir.join("other.txt")).unwrap(),
         b"y"
     );
+    std::fs::remove_dir_all(source_dir).ok();
+    std::fs::remove_dir_all(destination_dir).ok();
+}
+
+#[test]
+fn mirror_deletion_compares_with_the_file_not_a_stale_listing() {
+    let source_dir = tmp("stale_source");
+    let destination_dir = tmp("stale_destination");
+    std::fs::write(destination_dir.join("orphan.txt"), b"current").unwrap();
+    let source = LocalBackend::new(&fwd(&source_dir));
+    let destination = LocalBackend::new(&fwd(&destination_dir));
+    let hooked = HookBackend {
+        inner: &destination,
+        cancel_on_list: None,
+        appearing_suffix: None,
+        appearance_checks: AtomicUsize::new(0),
+        stale_listing: Some("orphan.txt"),
+    };
+    let cancel = AtomicBool::new(false);
+    let mut stats = SyncStats::default();
+    let mut errors = Vec::new();
+    // A dry run plans and revalidates every deletion like a real run.
+    super::super::sync_delete::delete_extras(
+        &source,
+        &fwd(&source_dir),
+        &hooked,
+        &fwd(&destination_dir),
+        true,
+        &cancel,
+        &mut stats,
+        &mut errors,
+        &mut crate::bisync::SyncOmissions::default(),
+    );
+    // Without the file's own metadata, revalidation refuses every deletion
+    // („…; nothing deleted“).
+    assert!(
+        errors
+            .iter()
+            .all(|(_, error)| !error.contains("nothing deleted")),
+        "{errors:?}"
+    );
+    assert_eq!(stats.deleted, 1, "the orphan passes revalidation");
+    assert!(destination_dir.join("orphan.txt").exists());
     std::fs::remove_dir_all(source_dir).ok();
     std::fs::remove_dir_all(destination_dir).ok();
 }
