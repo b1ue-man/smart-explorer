@@ -1,5 +1,9 @@
 # cargo-nextest settings of the task suites (native/test-crates-task.py, part
-# workspace). Every test runs in its own process.
+# workspace): the tests of the programs (package smart_explorer) run with
+# nextest, every test in its own process. The crates' tests run with cargo test
+# in one process per binary: they keep machine-wide state apart with
+# process-wide serial numbers and locks, which separate processes do not share
+# (crates-task run 42308441438).
 #
 # A test still running after one period is reported as SLOW; after five
 # periods it is ended and counted as failed. A hanging test then costs five
@@ -12,7 +16,10 @@
 slow-timeout = { period = "60s", terminate-after = 5 }
 fail-fast = false
 retries = 0
-status-level = "slow"
+# "leak" names, besides failed and slow tests, a test that leaves a process
+# running past its end (shown as LEAK); the suite ends such processes when
+# they keep its output open (test-crates-task.py, DRAIN_AFTER_EXIT).
+status-level = "leak"
 final-status-level = "fail"
 failure-output = "immediate-final"
 success-output = "never"

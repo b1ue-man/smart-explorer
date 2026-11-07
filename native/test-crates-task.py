@@ -147,6 +147,8 @@ class Stream:
     def write(self, line, keep=True):
         stamped = f"[{time.monotonic() - self.started:7.0f}s] {line}"
         with self.lock:
+            if self.handle.closed:  # an abandoned reader (see run) writes no more
+                return
             print(stamped, flush=True)
             self.handle.write(stamped + "\n")
             self.handle.flush()
@@ -154,7 +156,8 @@ class Stream:
                 self.lines.append(line)
 
     def close(self):
-        self.handle.close()
+        with self.lock:
+            self.handle.close()
 
 
 def sample_resources(stream, stop):
@@ -191,6 +194,57 @@ def cargo_message(stream, line):
         stream.write(f"build finished, success={message.get('success')}")
 
 
+# Seconds the output of a command may stay open after the command ended. A
+# process it started and left running inherited the pipe and keeps it open
+# (on Windows every inheritable handle passes to every child): crates-task run
+# 42308441438 waited 78 min, until the job limit, after the programs' tests
+# had ended in 11 s with one leaky test; run 41437549919 spent its 3:50 h the
+# same way. After this time the leftovers are named and ended.
+DRAIN_AFTER_EXIT = 30
+
+
+def leftover_processes():
+    """Processes still running from this build's target directory (test
+    binaries and the programs they started), as (pid, description)."""
+    target = str(NATIVE / "target")
+    found = []
+    if WINDOWS:
+        script = (f"$t = '{target}\\*'; Get-CimInstance Win32_Process | "
+                  "Where-Object { $_.ExecutablePath -like $t } | "
+                  "ForEach-Object { \"$($_.ProcessId)`t$($_.Name) $($_.CommandLine)\" }")
+        probe = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+                               stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
+                               text=True, encoding="utf-8", errors="replace", timeout=60)
+        for row in probe.stdout.splitlines():
+            pid, _, text = row.partition("\t")
+            if pid.strip().isdigit():
+                found.append((int(pid), text.strip()[:300]))
+        return found
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit() or int(entry.name) == os.getpid():
+            continue
+        try:
+            exe = os.readlink(entry / "exe")
+            if exe.startswith(target + "/"):
+                arguments = (entry / "cmdline").read_bytes().replace(b"\0", b" ").decode(errors="replace")
+                found.append((int(entry.name), arguments.strip()[:300]))
+        except OSError:
+            continue
+    return found
+
+
+def end_processes(processes):
+    for pid, _ in processes:
+        try:
+            if WINDOWS:
+                subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)], stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL, timeout=60)
+            else:
+                os.kill(pid, 9)
+        except (OSError, subprocess.SubprocessError):
+            continue
+
+
 def run(title, command, cwd=NATIVE, env=None, cargo_json=False):
     summary(f"### {title}\n`{' '.join(command)}`")
     stream = Stream(title)
@@ -198,14 +252,37 @@ def run(title, command, cwd=NATIVE, env=None, cargo_json=False):
     sampler = threading.Thread(target=sample_resources, args=(stream, stop), daemon=True)
     sampler.start()
     process = subprocess.Popen(command, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                               text=True, encoding="utf-8", errors="replace", bufsize=1)
-    for raw in process.stdout:
-        line = raw.rstrip("\n")
-        if cargo_json and line.startswith("{"):
-            cargo_message(stream, line)
-        else:
-            stream.write(line)
+                               stdin=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace",
+                               bufsize=1)
+
+    def pump():
+        for raw in process.stdout:
+            line = raw.rstrip("\n")
+            if cargo_json and line.startswith("{"):
+                cargo_message(stream, line)
+            else:
+                stream.write(line)
+
+    reader = threading.Thread(target=pump, daemon=True)
+    reader.start()
     returncode = process.wait()
+    reader.join(timeout=DRAIN_AFTER_EXIT)
+    if reader.is_alive():
+        try:
+            leftovers = leftover_processes()
+        except Exception as error:  # naming the leftovers must never end the suite
+            stream.write(f"[runner] listing the processes failed: {error!r}")
+            leftovers = []
+        stream.write(f"[runner] the command ended with exit code {returncode}, but {len(leftovers)} "
+                     f"process(es) it left running still hold its output; ending them:")
+        for pid, text in leftovers:
+            stream.write(f"[runner]   {pid} {text}")
+        summary(f"left running after the command (ended by the suite): "
+                + ("; ".join(text for _, text in leftovers) or "no process of the target directory found"))
+        end_processes(leftovers)
+        reader.join(timeout=DRAIN_AFTER_EXIT)
+        if reader.is_alive():
+            stream.write("[runner] the output is still open; going on without it")
     stop.set()
     sampler.join(timeout=RESOURCE_PERIOD)
     elapsed = time.monotonic() - stream.started
@@ -253,11 +330,16 @@ def keep_junit(name):
 
 def part_workspace():
     crates_built, programs_built = compile_stage()
-    # cargo-nextest runs every test in its own process with the limits of
-    # native/.config/nextest.toml: a test running five minutes is ended and
-    # named. The tests of the programs (package smart_explorer) run one at a
-    # time there (test group machine-wide); the crates' tests run in parallel
-    # processes.
+    # The crates' tests run as their binaries were written for: each binary in
+    # one process, one test after the other, as build.yml runs them. They keep
+    # machine-wide state apart with process-wide serial numbers and locks (the
+    # app data directory, HKCU, the volume's free space, the sync job folder);
+    # in nextest's one process per test those collided (run 42308441438: 14
+    # failures that one process does not have). The programs' tests run with
+    # cargo-nextest (native/.config/nextest.toml), one at a time: each in its
+    # own process, a test running five minutes is ended and named, and a test
+    # that leaves a process running is named as leaky.
+    threads = ["--test-threads=1"]
     nextest = ["cargo", "nextest", "run", "--locked", "--no-fail-fast"]
     # The crates' own tests build the layers with feature test-support (their
     # dev-dependencies); the programs and their integration tests build in a
@@ -281,15 +363,14 @@ def part_workspace():
              "review_task_s09_transport_expired_or_unknown_facts_fail_closed",
              "review_task_s09_transport_path_revisions_reject_returned_path_evidence",
              "review_task_s09_transport_real_private_tls_round_has_only_status_rights",
-             "review_task_s09_transport_rejects_wrong_pin_and_replayed_confirm"]
+             "review_task_s09_transport_rejects_wrong_pin_and_replayed_confirm",
+             "review_task_s09_transport_malformed_and_stalled_frames_are_bounded"]
     summary("Not run here, they need their suite's resources: " + ", ".join(f"`{name}`" for name in skips))
     skip_args = [arg for name in skips for arg in ("--skip", name)]
     # A test binary that did not compile is not run; its compile log above is the result.
-    ok = crates_built and run("Tests of every crate", [*nextest, *CRATES, "--", *skip_args], env=env)
-    keep_junit("tests-of-every-crate")
-    # nextest does not run doc tests; cargo test runs them (two in the core crate).
-    ok = (crates_built and run("Doc tests of every crate",
-                               ["cargo", "test", "--locked", *CRATES, "--doc", "--no-fail-fast"])) and ok
+    ok = crates_built and run("Tests of every crate",
+                              ["cargo", "test", "--locked", *CRATES, "--no-fail-fast", "--", *threads, *skip_args],
+                              env=env)
     ok = (programs_built and run("Programs and their integration tests",
                                  [*nextest, "-p", "smart_explorer"])) and ok
     keep_junit("programs-and-their-integration-tests")

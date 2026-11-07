@@ -2,9 +2,11 @@ name: Crate split and shared task setup
 
 # The task-level suite of the D13/D12 batch (docs/plaene/2026-11-01-idealzustand).
 # One entrypoint, native/test-crates-task.py:
-#   workspace    build every crate and target, run every test (Linux, Windows)
-#                with cargo-nextest: one process per test, a test running five
-#                minutes is ended and named (native/.config/nextest.toml)
+#   workspace    build every crate and target, run every test (Linux, Windows):
+#                the crates' tests with cargo test, one thread per binary; the
+#                programs' tests with cargo-nextest, one process per test, a
+#                test running five minutes is ended and named
+#                (native/.config/nextest.toml)
 #   windows-gnu  link every test binary and program for x86_64-pc-windows-gnu
 #                with GNU ld (MinGW-w64 on Linux)
 #   android      compile and link the Android JNI library (arm64-v8a, x86_64);
@@ -51,8 +53,11 @@ jobs:
         os: [ubuntu-24.04, windows-2025]
     runs-on: ${{ matrix.os }}
     # Measured (run 42290907758): compiling every test binary takes 28 min on
-    # Windows and 17 min on Linux; running the tests took 36 min on Linux one
-    # test at a time (run 41488739503). A hanging test is ended after 5 min.
+    # Windows and 17 min on Linux; running the crates' tests took 36 min on
+    # Linux one test at a time (run 41488739503), and their single times add
+    # up to 31 min on Windows (run 42308441438). A hanging program test is
+    # ended after 5 min; a process a test leaves holding the output is ended
+    # 30 s after its command (native/test-crates-task.py).
     timeout-minutes: ${{ inputs.part == 'compile-timings' && 75 || 130 }}
     steps:
       - uses: actions/checkout@v7
