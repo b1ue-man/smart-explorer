@@ -430,3 +430,68 @@ pub fn loopback_listen_ports_of_uid(uid: u32) -> io::Result<Vec<u16>> {
     ports.dedup();
     Ok(ports)
 }
+
+/// `RLIMIT_NOFILE` value as a number; `RLIM_INFINITY` is `u64::MAX` (any `rlim_t` width).
+fn limit_value(value: libc::rlim_t) -> u64 {
+    match value {
+        libc::RLIM_INFINITY => u64::MAX,
+        other => other as u64,
+    }
+}
+
+fn read_open_file_limit() -> Option<libc::rlimit> {
+    let mut limit = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    // SAFETY: getrlimit writes the provided live structure for this process.
+    let read = unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) };
+    (read == 0).then_some(limit)
+}
+
+/// The soft limit's new value: the hard limit, capped to the kernel ceiling
+/// `fs.nr_open` when the hard limit is `RLIM_INFINITY` or above it (without a
+/// readable ceiling such a limit leaves the soft limit as it is); never lower.
+pub(crate) fn open_file_raise_target(soft: u64, hard: u64, nr_open: Option<u64>) -> u64 {
+    let ceiling = if hard == u64::MAX || nr_open.is_some_and(|ceiling| hard > ceiling) {
+        nr_open
+    } else {
+        Some(hard)
+    };
+    ceiling.map_or(soft, |ceiling| ceiling.max(soft))
+}
+
+/// Raises the soft open-file limit to the hard limit (like the Go runtime
+/// since Go 1.19) and returns the soft limit now in force; `None` if unreadable.
+fn raise_open_file_limit() -> Option<u64> {
+    let before = read_open_file_limit()?;
+    let (soft, hard) = (limit_value(before.rlim_cur), limit_value(before.rlim_max));
+    let nr_open = std::fs::read_to_string("/proc/sys/fs/nr_open")
+        .ok()
+        .and_then(|text| text.trim().parse::<u64>().ok());
+    let target = open_file_raise_target(soft, hard, nr_open);
+    if target > soft {
+        let raised = libc::rlimit {
+            rlim_cur: libc::rlim_t::try_from(target).unwrap_or(libc::RLIM_INFINITY),
+            rlim_max: before.rlim_max,
+        };
+        // SAFETY: setrlimit only reads the live structure; a refusal keeps the
+        // previous limit, which the next read reports.
+        let _ = unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &raised) };
+    }
+    Some(read_open_file_limit().map_or(soft, |after| limit_value(after.rlim_cur)))
+}
+
+/// A quarter of the soft limit (the rest stays for connections, tunnels and
+/// files), at least 256 (the number G1 of the 2026-11-07 batch started with).
+pub(crate) fn budget_for_soft_limit(soft: u64) -> usize {
+    usize::try_from(soft / 4).unwrap_or(usize::MAX).max(256)
+}
+
+/// Listeners the desktop may bind without a tap, over all devices
+/// (r-entdeckung-9, D6): `Some(max(256, soft / 4))` after the first call
+/// raised the soft `RLIMIT_NOFILE`; fixed for the process. `None` = no limit.
+pub fn automatic_listener_budget() -> Option<usize> {
+    static BUDGET: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    Some(*BUDGET.get_or_init(|| budget_for_soft_limit(raise_open_file_limit().unwrap_or(0))))
+}

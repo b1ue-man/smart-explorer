@@ -1,14 +1,21 @@
 //! Select an actually connected target before freezing the tunnel's exact IP.
 use super::*;
 use crate::share::access_approval::{ApprovalOutcome, ApprovalSummary};
-use crate::share::access_authorize::request_for;
-use crate::share::access_constraints::{AccessRequest, NodeId, TcpDirection, TcpForwardRequest};
-use crate::share::access_grant::CapabilityDecision;
+use crate::share::access_authorize::{principal_grant, request_for};
+use crate::share::access_constraints::{
+    AccessRequest, NodeId, TcpDirection, TcpForwardRequest, TcpHost,
+};
+use crate::share::access_grant::{Capability, CapabilityDecision};
 use crate::share::access_revocation::AccessConfirmation;
 use crate::share::core::now_secs;
 use crate::share::relation_proof::ProvenPrincipal;
-use crate::share::tcp_forward::{TunnelRole, TunnelView};
+use crate::share::tcp_forward::{TcpDestination, TunnelRole, TunnelView};
 use crate::share::tcp_registry::TcpRegistration;
+
+/// The refusal a peer reads when no rule of its relation admits the target;
+/// the same text whether the name resolves or not (r-exec-2).
+pub(super) const TARGET_NOT_AUTHORIZED: &str =
+    "TCP target host, address, port or direction is not authorized in this relationship";
 
 pub(super) struct AdmittedTarget {
     pub(super) registration: TcpRegistration,
@@ -113,8 +120,44 @@ impl ShareIrohNode {
             });
         }
         Err(last_connect_error.unwrap_or_else(|| {
-            io::Error::new(io::ErrorKind::PermissionDenied,
-            "TCP target host, address, port or direction is not authorized in this relationship")
+            io::Error::new(io::ErrorKind::PermissionDenied, TARGET_NOT_AUTHORIZED)
+        }))
+    }
+
+    /// r-exec-2: whether a rule of the proven relation, or its right to steer
+    /// the screen, names `destination` (host, port, direction) before this
+    /// host resolves a name or lists its services. A superset of
+    /// `request_for` for each resolved IP, which still decides.
+    pub(super) fn names_tcp_destination(
+        &self,
+        principal: &ProvenPrincipal,
+        destination: &TcpDestination,
+    ) -> io::Result<bool> {
+        let state = self
+            .auth
+            .lock()
+            .map_err(|_| eio("Share authorization locked"))?;
+        let Some(grant) = principal_grant(&state, principal) else {
+            return Ok(false);
+        };
+        let access = grant.access_grant();
+        let now = now_secs();
+        if access.expired_at(now) {
+            return Ok(false);
+        }
+        if destination.host == TcpHost::Loopback
+            && crate::share::access_steering::steers(&access, now)
+        {
+            return Ok(true);
+        }
+        if access.decision(Capability::TcpForward) == CapabilityDecision::Off {
+            return Ok(false);
+        }
+        Ok(access.constraints.tcp_forward.iter().any(|rule| {
+            rule.initiator.as_str() == principal.node_id
+                && rule.direction == TcpDirection::PeerToHost
+                && rule.ports.contains(&destination.port)
+                && same_host(&rule.host, &destination.host)
         }))
     }
 
@@ -184,6 +227,19 @@ impl ShareIrohNode {
     }
 }
 
+/// The host of a rule names the requested host: the same kind and the same
+/// address or name, whatever the name resolves to.
+fn same_host(rule: &TcpHost, requested: &TcpHost) -> bool {
+    match (rule, requested) {
+        (TcpHost::Loopback, TcpHost::Loopback) => true,
+        (TcpHost::Ip { address }, TcpHost::Ip { address: wanted }) => address == wanted,
+        (TcpHost::Dns { name, .. }, TcpHost::Dns { name: wanted, .. }) => {
+            name.eq_ignore_ascii_case(wanted)
+        }
+        _ => false,
+    }
+}
+
 fn access_error(reason: AccessRevocation) -> io::Error {
     io::Error::new(
         io::ErrorKind::PermissionDenied,
@@ -203,3 +259,7 @@ fn retry_connect_error(error: &io::Error) -> bool {
             | io::ErrorKind::HostUnreachable
     )
 }
+
+#[cfg(test)]
+#[path = "node_tcp_target_tests.rs"]
+mod target_tests;

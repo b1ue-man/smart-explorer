@@ -24,6 +24,9 @@ use super::super::wire::{FsErrorKind, FsResponse, PeerHello};
 use super::denial::{denial_of, peer_denied, SessionDenial};
 
 const MAX_ENTRIES: usize = 64;
+/// Incoming entries of nodes no relation of this host pins (R-ZUGANG-03 d):
+/// they never push out the entries of devices this host knows.
+const MAX_UNPINNED: usize = 16;
 /// Pause after the n-th consecutive rejection (index n - 1, last repeats).
 const PAUSES: [Duration; 5] = [
     Duration::ZERO,
@@ -60,6 +63,8 @@ struct Incoming {
     count: u64,
     first_unix: i64,
     last_unix: i64,
+    /// A relation of this host pins `node_id` (grant, contact, room member).
+    pinned: bool,
 }
 
 #[derive(Default)]
@@ -213,13 +218,29 @@ pub(in crate::share) fn forget_outgoing_pauses(local_node: &str) {
     }
 }
 
-/// Records a hello this host rejected.
+/// Records a hello this host rejected, as from a node no relation pins.
+#[cfg(test)]
 pub(in crate::share) fn record_incoming(
     device_id: &str,
     public_key: &str,
     node_id: &str,
     relation_kind: &str,
     denial: SessionDenial,
+) {
+    record_incoming_from(device_id, public_key, node_id, relation_kind, denial, false);
+}
+
+/// Records a hello this host rejected. One row per TLS-bound node and
+/// relation kind (R-ZUGANG-03 b); the claimed device id and key are kept as
+/// last seen. Rows of nodes no relation pins (`pinned` false) hold at most
+/// `MAX_UNPINNED` places and give way among themselves (d).
+pub(in crate::share) fn record_incoming_from(
+    device_id: &str,
+    public_key: &str,
+    node_id: &str,
+    relation_kind: &str,
+    denial: SessionDenial,
+    pinned: bool,
 ) {
     let now = now_unix();
     let (device_id, public_key, node_id, relation_kind) = (
@@ -229,27 +250,37 @@ pub(in crate::share) fn record_incoming(
         truncated(relation_kind),
     );
     let mut book = book();
-    if let Some(entry) = book.incoming.iter_mut().find(|entry| {
-        entry.device_id == device_id
-            && entry.public_key == public_key
-            && entry.relation_kind == relation_kind
-    }) {
-        entry.node_id = node_id;
+    if let Some(entry) = book
+        .incoming
+        .iter_mut()
+        .find(|entry| entry.node_id == node_id && entry.relation_kind == relation_kind)
+    {
+        entry.device_id = device_id;
+        entry.public_key = public_key;
         entry.denial = denial;
+        entry.pinned = pinned;
         entry.count = entry.count.saturating_add(1);
         entry.last_unix = now;
         return;
     }
-    if book.incoming.len() >= MAX_ENTRIES {
-        let oldest = book
-            .incoming
-            .iter()
-            .enumerate()
-            .min_by_key(|(_, entry)| entry.last_unix)
-            .map(|(index, _)| index);
-        if let Some(oldest) = oldest {
-            book.incoming.remove(oldest);
-        }
+    let unpinned = book.incoming.iter().filter(|entry| !entry.pinned).count();
+    let full = book.incoming.len() >= MAX_ENTRIES;
+    if full || (!pinned && unpinned >= MAX_UNPINNED) {
+        // The oldest unpinned row gives way first; a pinned row only to
+        // another pinned one when no unpinned row is left.
+        let oldest = |only_unpinned: bool| {
+            book.incoming
+                .iter()
+                .enumerate()
+                .filter(|(_, entry)| !only_unpinned || !entry.pinned)
+                .min_by_key(|(_, entry)| entry.last_unix)
+                .map(|(index, _)| index)
+        };
+        let victim = oldest(true).or_else(|| pinned.then(|| oldest(false)).flatten());
+        let Some(index) = victim else {
+            return;
+        };
+        book.incoming.remove(index);
     }
     book.incoming.push(Incoming {
         device_id,
@@ -260,6 +291,7 @@ pub(in crate::share) fn record_incoming(
         count: 1,
         first_unix: now,
         last_unix: now,
+        pinned,
     });
 }
 
@@ -274,20 +306,22 @@ pub(in crate::share) fn host_rejection(
     error: &io::Error,
 ) -> (FsResponse, io::Error) {
     let denial = denial_of(error);
-    let (host_name, device) = match auth.lock() {
+    let (host_name, device, pinned) = match auth.lock() {
         Ok(state) => (
             state.identity.device_name.clone(),
-            known_name(&state, &hello.device_id),
+            known_name(&state, &hello.device_id, &hello.node_id),
+            pins_node(&state, &hello.node_id),
         ),
-        Err(_) => (String::new(), None),
+        Err(_) => (String::new(), None, false),
     };
     if let Some(denial) = denial {
-        record_incoming(
+        record_incoming_from(
             &hello.device_id,
             &hello.public_key,
             &hello.node_id,
             &hello.relation_kind,
             denial,
+            pinned,
         );
     }
     let msg = denial.map_or_else(
@@ -305,22 +339,70 @@ pub(in crate::share) fn host_rejection(
     )
 }
 
-/// The name this host knows a device by (its contact or grant).
-fn known_name(state: &ShareAuthState, device_id: &str) -> Option<String> {
-    state
-        .direct_contacts
-        .iter()
-        .find(|contact| contact.remote_device_id.as_deref() == Some(device_id))
+/// The name this host knows a device by (its contact, grant or room
+/// member), only from a relation that pins the TLS-bound `node_id` of the
+/// same device (R-ZUGANG-03 c): a claimed device id alone names nobody.
+pub(in crate::share) fn known_name(
+    state: &ShareAuthState,
+    device_id: &str,
+    node_id: &str,
+) -> Option<String> {
+    if node_id.is_empty() {
+        return None;
+    }
+    pinned_contact(state, device_id, node_id)
         .map(|contact| contact.display_name.clone())
         .or_else(|| {
             state
                 .direct_grants
                 .iter()
-                .find(|grant| grant.device_id == device_id)
+                .find(|grant| grant.device_id == device_id && grant.pins_node(node_id))
                 .map(|grant| grant.device_name.clone())
+        })
+        .or_else(|| {
+            state
+                .rooms
+                .iter()
+                .flat_map(|room| &room.members)
+                .find(|member| member.device_id == device_id && member.node_id == node_id)
+                .map(|member| member.device_name.clone())
         })
         .filter(|name| !name.trim().is_empty())
         .map(|name| truncated(&name))
+}
+
+/// This host's contact of the device `device_id` that pins `node_id`.
+pub(in crate::share) fn pinned_contact<'s>(
+    state: &'s ShareAuthState,
+    device_id: &str,
+    node_id: &str,
+) -> Option<&'s super::super::types::DirectContact> {
+    state.direct_contacts.iter().find(|contact| {
+        contact.remote_device_id.as_deref() == Some(device_id)
+            && !node_id.is_empty()
+            && (contact.expected_node_id == node_id
+                || (contact.expected_node_id.is_empty()
+                    && contact.remote_public_key.as_deref() == Some(node_id)))
+    })
+}
+
+/// Whether a relation of this host (grant, contact, room member) pins the
+/// node `node_id`.
+fn pins_node(state: &ShareAuthState, node_id: &str) -> bool {
+    !node_id.is_empty()
+        && (state
+            .direct_grants
+            .iter()
+            .any(|grant| grant.pins_node(node_id))
+            || state.direct_contacts.iter().any(|contact| {
+                contact.expected_node_id == node_id
+                    || (contact.expected_node_id.is_empty()
+                        && contact.remote_public_key.as_deref() == Some(node_id))
+            })
+            || state
+                .rooms
+                .iter()
+                .any(|room| room.members.iter().any(|member| member.node_id == node_id)))
 }
 
 /// The host now accepted a session of this identity.
@@ -409,3 +491,7 @@ pub(in crate::share) fn rows(local_node: &str) -> Vec<DenialRow> {
 #[cfg(test)]
 #[path = "peer_denials_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "peer_denials_task_tests.rs"]
+mod task_tests;

@@ -26,6 +26,7 @@ use crate::share::connection_rights::{
 };
 use crate::share::connection_rights_exec::changed_exec_grants;
 use crate::share::exec_follow_up::{pins_complete, FollowUpEffect};
+use crate::share::profile_edits::{export_roots, refuse_vault_exports};
 use crate::share::{DirectPeerIdentity, ShareProfiles, SharedRoot, DIRECT_EXPORT_SCOPE};
 
 /// A grant's Exec right changed between the check and the transaction.
@@ -95,6 +96,9 @@ pub fn plan_confirm(
         }
     }
     changed |= candidate.confirm_connection_rights(target, rights, now)?;
+    // E11: a folder in an unlocked vault is refused here, before the caller
+    // writes an Exec-grant journal entry for the same confirmation.
+    refuse_vault_exports(&export_roots(profiles), &candidate)?;
     *profiles = candidate;
     Ok(changed)
 }

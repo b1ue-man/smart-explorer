@@ -24,13 +24,19 @@ mod target;
 
 pub struct NodeTcp {
     pub registry: Arc<TcpRegistry>,
+    /// This host's own forwards (listener and channel role).
     pub slots: Arc<Semaphore>,
+    /// Tunnels peers open to this host (target role), taken only after the
+    /// relation is proven, so peers never block the host's own forwards
+    /// (r-exec-3). Each role keeps the former limit.
+    pub target_slots: Arc<Semaphore>,
 }
 impl NodeTcp {
     pub(super) fn new() -> Self {
         Self {
             registry: Arc::new(TcpRegistry::default()),
             slots: Arc::new(Semaphore::new(MAX_TCP_TUNNELS)),
+            target_slots: Arc::new(Semaphore::new(MAX_TCP_TUNNELS)),
         }
     }
 }
@@ -71,9 +77,6 @@ impl ShareIrohNode {
     ) -> io::Result<()> {
         let _close = CloseTcp(connection.clone());
         let _incoming = self.track_incoming(&connection)?;
-        let _slot = self.tcp.slots.clone().try_acquire_owned().map_err(|_| {
-            io::Error::new(io::ErrorKind::WouldBlock, "TCP tunnel admission exhausted")
-        })?;
         self.require_sharing_active()?;
         require_policy(&connection)?;
         // `/2` and `/1` are both registered (design 4.6); the ALPN fixes the
@@ -191,6 +194,13 @@ impl ShareIrohNode {
                 ));
             }
         };
+        // r-exec-3: a target place only for a proven relation; held for the
+        // whole tunnel.
+        let Ok(_slot) = self.tcp.target_slots.clone().try_acquire_owned() else {
+            let detail = "TCP tunnel admission exhausted";
+            refuse(&connection, &mut send, detail.into()).await;
+            return Err(io::Error::new(io::ErrorKind::WouldBlock, detail));
+        };
         self.bind_incoming_principal(
             &connection,
             PeerPrincipal::new(
@@ -207,6 +217,16 @@ impl ShareIrohNode {
             client.nonce.starts_with("rp1."),
         );
         drop(permit);
+        // r-exec-2: identity, relation and right before any effect; no name
+        // is resolved and no service listed for a relation without a rule
+        // (or steering right) for this destination.
+        if !self.names_tcp_destination(&principal, &client.request.destination)? {
+            refuse(&connection, &mut send, target::TARGET_NOT_AUTHORIZED.into()).await;
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                target::TARGET_NOT_AUTHORIZED,
+            ));
+        }
         refresh_exposed_ports(&client.request.destination).await;
         // DNS is resolved by this target host; the peer supplies no resolved
         // IP authority. Selection consults the exact stored relation only.
@@ -420,3 +440,7 @@ pub async fn cancelled_stop(cancelled: &mut watch::Receiver<bool>) {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "node_tcp_task_tests.rs"]
+mod task_tests;

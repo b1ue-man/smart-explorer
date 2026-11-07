@@ -8,9 +8,8 @@
 //! therefore opens a listener only on the person's tap (`AnyLocal`).
 use crate::share::device_address::device_loopback;
 use crate::share::loopback_services::LoopbackService;
-use crate::share::os_sockets;
 use crate::share::tcp_forward::{ListenerAdmission, TcpDestination, TcpStart, TunnelId};
-use crate::share::tcp_registry::{BoundProcess, OriginCheck};
+use crate::share::tcp_registry::OriginCheck;
 use crate::share::{PeerOpenTarget, ShareService};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -20,75 +19,9 @@ use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 
-/// The socket-owner facts of this OS behind the origin rules of design
-/// 2.7.1 (`Process`) and 4.4 (`SameAccount`).
-pub struct SocketOwnerCheck {
-    own: String,
-}
-impl SocketOwnerCheck {
-    pub fn new() -> Result<Self, String> {
-        let own = os_sockets::own_account()
-            .map_err(|error| format!("Eigenes Konto nicht ermittelbar: {error}"))?;
-        Ok(Self { own })
-    }
-}
-
-/// The UID of the active session on `seat0` (logind). A root background
-/// service (servers) accepts that person's processes besides its own UID
-/// (design 4.4). Only consulted when this service runs as UID 0, which
-/// exists on Linux alone; the file is absent everywhere else.
-fn active_seat_uid() -> Option<String> {
-    let text = std::fs::read_to_string("/run/systemd/seats/seat0").ok()?;
-    text.lines()
-        .find_map(|line| line.strip_prefix("ACTIVE_UID="))
-        .map(|uid| uid.trim().to_string())
-        .filter(|uid| !uid.is_empty() && uid.bytes().all(|byte| byte.is_ascii_digit()))
-}
-
-impl OriginCheck for SocketOwnerCheck {
-    fn same_account(&self, peer: SocketAddr, listener: SocketAddr) -> Result<(), String> {
-        let account = os_sockets::connection_account(peer, listener)
-            .map_err(|error| {
-                format!("Herkunft der Verbindung nicht ermittelbar ({error}); abgewiesen")
-            })?
-            .ok_or_else(|| "Herkunft der Verbindung nicht ermittelbar; abgewiesen".to_string())?;
-        let seat = (self.own == "0").then(active_seat_uid).flatten();
-        if account == self.own || seat.as_deref() == Some(account.as_str()) {
-            Ok(())
-        } else {
-            Err(format!(
-                "Verbindung eines anderen Kontos abgewiesen (Konto {account})"
-            ))
-        }
-    }
-
-    fn process(
-        &self,
-        peer: SocketAddr,
-        listener: SocketAddr,
-        bound: BoundProcess,
-    ) -> Result<(), String> {
-        // Only the bound process's own sockets are read (review R3): a flood
-        // of foreign connections costs no walk over every process.
-        let pid = bound.pid;
-        let owned = os_sockets::connection_owned_by(peer, listener, pid).map_err(|error| {
-            format!("Herkunft der Verbindung nicht ermittelbar ({error}); abgewiesen")
-        })?;
-        if !owned {
-            return Err(format!(
-                "Verbindung eines fremden Prozesses abgewiesen (nicht PID {pid})"
-            ));
-        }
-        let identity = os_sockets::process_identity(pid)
-            .map_err(|error| format!("Prozess {pid} nicht prüfbar ({error}); abgewiesen"))?;
-        if identity.started != bound.started {
-            return Err(format!(
-                "Verbindung eines fremden Prozesses abgewiesen (PID {pid}, anderer Prozessstart)"
-            ));
-        }
-        Ok(())
-    }
-}
+#[path = "auto_forward_origin.rs"]
+mod origin;
+pub use origin::SocketOwnerCheck;
 
 /// One host service as this device reaches it (design 4.3 „Anzeige“).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -211,6 +144,14 @@ pub fn apply(
 ) -> Result<(), String> {
     let address = device_loopback(device_id, public_key)
         .map_err(|error| format!("Geräteadresse nicht verfügbar: {error}"))?;
+    // Listeners bound without a tap, over all devices (r-entdeckung-9, D6):
+    // the budget comes from the OS adapter (`os_sockets::automatic_listener_budget`),
+    // a quarter of the open-file limit on Linux, none on Windows. Further
+    // services stay listed and are bound when places free up at a later feed
+    // update.
+    let budget = automatic()
+        .then(crate::share::os_sockets::automatic_listener_budget)
+        .flatten();
     let key = device_key(device_id, public_key);
     let mut all = devices();
     let stale = all.get(&key).is_some_and(|device| {
@@ -221,6 +162,11 @@ pub fn apply(
             stop_device(device);
         }
     }
+    let elsewhere: usize = all
+        .iter()
+        .filter(|(other, _)| **other != key)
+        .map(|(_, device)| running_mappings(device))
+        .sum();
     let device = all.entry(key).or_insert_with(|| Device {
         service: service.clone(),
         target: target.clone(),
@@ -241,6 +187,7 @@ pub fn apply(
             mapping.stop(Some(&device.service));
         }
     }
+    let mut running = elsewhere + running_mappings(device);
     for (port, entry) in listed {
         let mapping = device.mappings.entry(port).or_insert_with(|| Mapping {
             view: Arc::new(Mutex::new(MappedService {
@@ -257,6 +204,16 @@ pub fn apply(
         // A listener whose task ended (accept failure) starts again with
         // the next feed update: the event-driven retry of design 4.3.
         if automatic() && !mapping.running() {
+            if let Some(budget) = budget.filter(|budget| running >= *budget) {
+                mapping
+                    .view
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .last_error = Some(format!(
+                    "Nicht automatisch verbunden: höchstens {budget} Dienste aller Geräte gleichzeitig"
+                ));
+                continue;
+            }
             start(
                 &device.service,
                 &device.target,
@@ -264,9 +221,20 @@ pub fn apply(
                 port,
                 mapping,
             );
+            if mapping.running() {
+                running += 1;
+            }
         }
     }
     Ok(())
+}
+
+fn running_mappings(device: &Device) -> usize {
+    device
+        .mappings
+        .values()
+        .filter(|mapping| mapping.running())
+        .count()
 }
 
 /// Android tap „Öffnen“ (only the Android bridge calls it).

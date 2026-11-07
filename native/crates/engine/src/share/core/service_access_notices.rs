@@ -69,24 +69,18 @@ fn now_allowed(state: &ShareAuthState, row: &DenialRow) -> bool {
 }
 
 fn notice(state: &ShareAuthState, row: DenialRow) -> AccessNotice {
-    let contact = state
-        .direct_contacts
-        .iter()
-        .find(|contact| contact.remote_device_id.as_deref() == Some(row.device_id.as_str()));
-    let known_name = contact
-        .map(|contact| contact.display_name.clone())
-        .or_else(|| {
-            state
-                .direct_grants
-                .iter()
-                .find(|grant| grant.device_id == row.device_id)
-                .map(|grant| grant.device_name.clone())
-        })
-        .filter(|name| !name.trim().is_empty());
+    // R-ZUGANG-03 c: a contact and a name only from a relation that pins the
+    // TLS-bound node of the same device; a claimed device id names nobody.
+    let contact = peer_denials::pinned_contact(state, &row.device_id, &row.node_id);
+    let known_name = peer_denials::known_name(state, &row.device_id, &row.node_id);
     let device_name = row.device_name.clone().or(known_name);
-    let shown = device_name
-        .clone()
-        .unwrap_or_else(|| "Das andere Gerät".into());
+    let shown = device_name.clone().unwrap_or_else(|| {
+        if row.direction == "incoming" {
+            unknown_device(&row.node_id)
+        } else {
+            "Das andere Gerät".into()
+        }
+    });
     let (message, remedy) = if row.direction == "outgoing" {
         outgoing_text(row.denial, row.message.as_deref(), &shown)
     } else {
@@ -106,6 +100,17 @@ fn notice(state: &ShareAuthState, row: DenialRow) -> AccessNotice {
         count: row.count,
         last_at: row.last_unix,
         retry_in_secs: row.retry_in_secs.filter(|secs| *secs > 0),
+    }
+}
+
+/// An incoming device no relation of this host pins, named by the start of
+/// its TLS-bound node id.
+fn unknown_device(node_id: &str) -> String {
+    let short: String = node_id.chars().take(8).collect();
+    if short.is_empty() {
+        "Unbekanntes Gerät".into()
+    } else {
+        format!("Unbekanntes Gerät ({short}…)")
     }
 }
 
@@ -178,3 +183,7 @@ mod tests {
         assert_eq!(message, "PC hat die Anmeldung abgelehnt");
     }
 }
+
+#[cfg(test)]
+#[path = "service_access_notices_task_tests.rs"]
+mod task_tests;

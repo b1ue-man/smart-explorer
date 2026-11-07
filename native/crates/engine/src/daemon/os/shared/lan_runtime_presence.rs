@@ -102,12 +102,29 @@ impl LanRuntime {
             .collect();
         let mut seen_now: HashMap<String, (Vec<String>, bool)> = HashMap::new();
         let mut seen_hashes = Vec::new();
-        let mut authenticated_contacts = Vec::new();
+        // r-entdeckung-4 (runtime half): every sighting's verified contact
+        // first; a contact with a verified signed sighting now or earlier in
+        // this runtime is never matched by an unsigned `v=1` sighting.
+        let verified: Vec<_> = self
+            .sightings
+            .values()
+            .map(|sighting| {
+                let contact = self
+                    .proofs
+                    .get(&sighting.id)
+                    .and_then(|proof| self.authenticator.authenticate(sighting, proof, now));
+                (sighting, contact)
+            })
+            .collect();
+        let mut signed: std::collections::HashSet<String> =
+            self.authenticated_contacts.iter().cloned().collect();
+        signed.extend(verified.iter().filter_map(|(_, contact)| contact.clone()));
         let legacy_contacts: HashMap<_, _> = contacts
             .iter()
             .filter(|contact| {
                 contact.access_state == crate::share::DirectAccessState::Accepted
                     && contact.remote_device_id.is_some()
+                    && !signed.contains(&contact.id)
             })
             .filter_map(|contact| {
                 Some((
@@ -117,11 +134,7 @@ impl LanRuntime {
             })
             .collect();
         let mut unknown = 0usize;
-        for sighting in self.sightings.values() {
-            let authenticated = self
-                .proofs
-                .get(&sighting.id)
-                .and_then(|proof| self.authenticator.authenticate(sighting, proof, now));
+        for (sighting, authenticated) in verified {
             let matched = authenticated
                 .as_ref()
                 .map(|id| {
@@ -157,7 +170,6 @@ impl LanRuntime {
                             && matches!(&fact.pin.origin, lan_link_facts::PinOrigin::Contact { id, .. } if id == &contact_id))
                             .is_some_and(|fact| fact.peer_uplink);
                         seen_hashes.push(sighting.id.clone());
-                        authenticated_contacts.push(contact_id);
                     }
                 }
                 None => unknown += 1,
@@ -165,7 +177,14 @@ impl LanRuntime {
         }
         self.unknown_devices = unknown;
         self.reported_hashes = seen_hashes;
-        self.authenticated_contacts = authenticated_contacts;
+        // Kept for this runtime, only for contacts that still exist; cleared
+        // when presence is switched off (`lan_runtime.rs`).
+        let mut signed: Vec<String> = signed
+            .into_iter()
+            .filter(|id| contacts.iter().any(|contact| &contact.id == id))
+            .collect();
+        signed.sort();
+        self.authenticated_contacts = signed;
         let mut events = Vec::new();
         for (contact_id, (candidates, uplink)) in &seen_now {
             let unchanged =

@@ -6,6 +6,7 @@
 //! afterwards. The checks and their order are those of the Exec handshake.
 use crate::share::core::verify_hmac;
 use crate::share::exec_types::ExecPrincipal;
+use crate::share::identity::code_renewal_registry::retiring_secret;
 use crate::share::profiles::{fingerprint_matches, ShareProfiles};
 use crate::share::types::{DirectGrantState, ShareAuthState};
 
@@ -150,8 +151,14 @@ pub fn prove_relation(
 ) -> Result<ProvenPrincipal, RelationRejection> {
     validate_common(server, client, remote_node, state)?;
     let transcript = relation_transcript(server, client);
+    // E17: a lookup id that runs out after a Direct-code renewal stays valid
+    // for exactly the identities that still hold an accepted grant.
+    let retiring = (client.relation_kind == "direct"
+        && client.relation_id != state.identity.direct_lookup_id)
+        .then(|| retiring_secret(&state.identity.node_id, &client.relation_id))
+        .flatten();
     match client.relation_kind.as_str() {
-        "direct" if client.relation_id == state.identity.direct_lookup_id => {
+        "direct" if client.relation_id == state.identity.direct_lookup_id || retiring.is_some() => {
             if !state.direct_online {
                 return Err(RelationRejection::NotAuthorized);
             }
@@ -166,7 +173,13 @@ pub fn prove_relation(
                         && grant.state == DirectGrantState::Accepted
                 })
                 .ok_or(RelationRejection::Authentication)?;
-            if !verify_hmac(state.direct_secret.as_slice(), &transcript, &client.proof) {
+            // E17: the running-out secret first, then the current one (the
+            // order of `session_authorize.rs`).
+            let proven = retiring
+                .as_ref()
+                .is_some_and(|old| verify_hmac(old.as_slice(), &transcript, &client.proof))
+                || verify_hmac(state.direct_secret.as_slice(), &transcript, &client.proof);
+            if !proven {
                 return Err(RelationRejection::Authentication);
             }
             if !fingerprint_matches(&grant.public_key, &grant.fingerprint) {
@@ -202,7 +215,13 @@ pub fn prove_relation(
         }
         _ => return Err(RelationRejection::Authentication),
     }
-    Ok(ProvenPrincipal::from(client))
+    let mut principal = ProvenPrincipal::from(client);
+    if retiring.is_some() {
+        // E17: the same Direct relation of this host under its current lookup
+        // id, so grants, the Exec registry and revocations match it.
+        principal.relation_id = state.identity.direct_lookup_id.clone();
+    }
+    Ok(principal)
 }
 
 fn validate_common(

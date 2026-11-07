@@ -16,9 +16,12 @@
 //! Relay payload never fans out (`route_start.rs`): while the first
 //! connection runs over the relay no extra one is wanted or used, and an
 //! extra connection still in its relay start phase carries no transfer.
-use std::collections::HashMap;
+//! An extra connection is made in the background (r-weg-4, 2026-11-07): the
+//! transfer that asks for it never waits for its handshake and takes the
+//! first connection until the extra one is cached and off the relay.
+use std::collections::{HashMap, HashSet};
 use std::io;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use iroh::endpoint::Connection;
@@ -38,6 +41,9 @@ const LOSS_MIN_DATAGRAMS: u64 = 1000;
 /// Bytes per second (both directions) at which one connection's driver
 /// nears the rate of one core (estimate, Z-P6).
 const DRIVER_RATE: f64 = 250.0 * 1024.0 * 1024.0;
+/// Time a background build of one extra connection may take (handshake,
+/// hello, session proof and path admission).
+const BUILD_BUDGET: Duration = Duration::from_secs(20);
 
 #[derive(Default)]
 struct Bulk {
@@ -46,6 +52,8 @@ struct Bulk {
     wanted: usize,
     /// Round-robin position over the connections.
     next: usize,
+    /// Extra connections (by turn) being made in the background.
+    building: HashSet<usize>,
 }
 
 fn table() -> &'static Mutex<HashMap<String, Bulk>> {
@@ -79,13 +87,22 @@ fn sample(bulk: &mut Bulk, connection: &Connection, now: Instant) -> bool {
     lossy || rate >= DRIVER_RATE
 }
 
+/// The background build of extra connection `turn` under `key` ended.
+fn built(key: &str, turn: usize) {
+    if let Ok(mut table) = table().lock() {
+        if let Some(bulk) = table.get_mut(key) {
+            bulk.building.remove(&turn);
+        }
+    }
+}
+
 impl ShareIrohNode {
     /// A stream for one transfer to `endpoint`: on the first connection, or
     /// (when the host offers `bulk_connections_v1` and the first connection
     /// asks for it) on one of the extra ones in turn. An extra connection
     /// that cannot be made or used leaves the transfer on the first one.
     pub(in crate::share) fn open_transfer_stream_until(
-        &self,
+        self: &Arc<Self>,
         endpoint: &PeerEndpoint,
         identity: &ShareIdentity,
         deadline: Instant,
@@ -117,28 +134,62 @@ impl ShareIrohNode {
             return self.open_stream_until(endpoint, identity, deadline);
         }
         let extra = extra_key(&key, turn);
-        let opened = self
-            .extra_connection(endpoint, identity, deadline, &extra)
-            .and_then(|connection| {
-                if carries_relay(&connection) {
-                    // Still in its start phase while the first connection is
-                    // direct: this transfer stays direct; the extra one keeps
-                    // establishing its direct path for later turns.
-                    return Err(io::Error::new(
-                        io::ErrorKind::WouldBlock,
-                        "Zusatzverbindung noch über Relay",
-                    ));
-                }
-                let opened = self.open_on_connection(&extra, &connection, deadline, "bulk");
-                if opened.is_err() {
-                    // Nothing was sent yet: this connection is dropped.
-                    let _ = self.invalidate_outgoing_session(&extra, connection.stable_id());
-                }
-                opened
-            });
-        match opened {
+        let Some(connection) = self.healthy_cached_session(&extra)? else {
+            self.build_extra_in_background(endpoint, identity, &key, turn);
+            return self.open_stream_until(endpoint, identity, deadline);
+        };
+        if carries_relay(&connection) {
+            // Still in its start phase while the first connection is direct:
+            // this transfer stays direct; the extra one keeps establishing its
+            // direct path for later turns.
+            return self.open_stream_until(endpoint, identity, deadline);
+        }
+        match self.open_on_connection(&extra, &connection, deadline, "bulk") {
             Ok(opened) => Ok(opened),
-            Err(_) => self.open_stream_until(endpoint, identity, deadline),
+            Err(_) => {
+                // Nothing was sent yet: this connection is dropped.
+                let _ = self.invalidate_outgoing_session(&extra, connection.stable_id());
+                self.open_stream_until(endpoint, identity, deadline)
+            }
+        }
+    }
+
+    /// Starts making the extra connection `turn` of the peer under `key`
+    /// on its own thread, unless one is being made already. A failure only
+    /// leaves the transfers on the first connection; a later turn tries
+    /// again.
+    fn build_extra_in_background(
+        self: &Arc<Self>,
+        endpoint: &PeerEndpoint,
+        identity: &ShareIdentity,
+        key: &str,
+        turn: usize,
+    ) {
+        let started = match table().lock() {
+            Ok(mut table) => table
+                .entry(key.to_string())
+                .or_default()
+                .building
+                .insert(turn),
+            Err(_) => false,
+        };
+        if !started {
+            return;
+        }
+        let node = Arc::clone(self);
+        let endpoint = endpoint.clone();
+        let identity = identity.clone();
+        let owner = key.to_string();
+        let spawned = std::thread::Builder::new()
+            .name("se-bulk-connect".into())
+            .spawn(move || {
+                let extra = extra_key(&owner, turn);
+                let deadline = Instant::now() + BUILD_BUDGET;
+                let _ = node.extra_connection(&endpoint, &identity, deadline, &extra);
+                built(&owner, turn);
+            });
+        if spawned.is_err() {
+            built(key, turn);
         }
     }
 
@@ -174,5 +225,4 @@ impl ShareIrohNode {
 #[cfg(test)]
 mod tests {
     use super::*;
-
 }

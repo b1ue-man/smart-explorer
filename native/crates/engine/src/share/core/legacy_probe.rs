@@ -8,6 +8,7 @@ use super::core::{now_secs, presence_payload, verify_hmac};
 use super::direct_ledger::{DirectRelayOutcome, DirectRequestDirection, DirectRequestEntry};
 use super::direct_lifecycle::DirectDecisionState;
 use super::direct_protocol::DirectPeerIdentity;
+use super::identity::code_renewal_registry::retiring_secret;
 use super::identity::ShareIdentity;
 use super::profiles::{fingerprint_matches, ShareProfiles};
 use super::service::ShareService;
@@ -195,7 +196,7 @@ impl PendingLegacyProbe {
             || entry
                 .local_lookup_id
                 .as_deref()
-                .is_some_and(|lookup| lookup != self.identity.direct_lookup_id.as_str())
+                .is_some_and(|lookup| !own_lookup(&self.identity, lookup))
             || entry.request_receipt.is_some()
             || entry.decision.is_some()
             || entry.decision_receipt.is_some()
@@ -254,3 +255,14 @@ fn same_identity(left: &ShareIdentity, right: &ShareIdentity) -> bool {
         && left.direct_lookup_id == right.direct_lookup_id
         && left.direct_secret == right.direct_secret
 }
+
+/// E17: the current lookup id of `identity`, or one that runs out after a
+/// Direct-code renewal; an outgoing request sent before the renewal stays
+/// confirmable until the old data are dropped.
+pub(super) fn own_lookup(identity: &ShareIdentity, lookup: &str) -> bool {
+    lookup == identity.direct_lookup_id || retiring_secret(&identity.node_id, lookup).is_some()
+}
+
+#[cfg(test)]
+#[path = "legacy_probe_lookup_tests.rs"]
+mod lookup_tests;

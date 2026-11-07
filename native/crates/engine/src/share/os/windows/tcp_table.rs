@@ -315,3 +315,13 @@ pub fn listener_owned_by(port: u16, pid: u32) -> io::Result<bool> {
         .collect();
     Ok(!listening.is_empty() && listening.iter().all(|(_, _, owner)| *owner == pid))
 }
+
+/// How many listeners the desktop may bind without a tap, over all devices
+/// (r-entdeckung-9, D6 of 2026-11-07): `None`, no global limit. Windows has
+/// no descriptor table like Linux's `RLIMIT_NOFILE`; the Microsoft Winsock
+/// provider limits sockets only by available memory (Microsoft Learn,
+/// „Maximum Number of Sockets Supported“). Per device the feed already
+/// bounds the list to `loopback_services::MAX_SERVICES`.
+pub fn automatic_listener_budget() -> Option<usize> {
+    None
+}

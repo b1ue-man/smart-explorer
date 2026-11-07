@@ -11,6 +11,7 @@ use super::core::eio;
 use super::direct_ledger::{DirectRelayOutcome, DirectRequestDirection};
 use super::direct_lifecycle::DirectDecisionState;
 use super::io_deadline;
+use super::legacy_probe::own_lookup;
 use super::profiles::fingerprint_matches;
 use super::signal_presence::PresenceSignature;
 use super::types::{DirectAccessState, PeerEndpoint, PeerOpenTarget, ShareAuthState, ShareScope};
@@ -233,7 +234,7 @@ pub(super) fn is_legacy_direct(
         && !entry
             .local_lookup_id
             .as_deref()
-            .is_some_and(|lookup| lookup != state.identity.direct_lookup_id.as_str())
+            .is_some_and(|lookup| !own_lookup(&state.identity, lookup))
         && request.lookup_id == contact.lookup_id
         && request.requester.device_id == state.identity.device_id
         && request.requester.public_key == state.identity.public_key
