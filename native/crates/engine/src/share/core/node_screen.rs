@@ -311,6 +311,7 @@ impl ShareIrohNode {
             let reply = refuse(ScreenErrorCode::ScreenUnsupported);
             send_hello_reply(&mut send, &reply).await?;
             let _ = send.finish();
+            let _ = tokio::time::timeout(Duration::from_secs(2), connection.closed()).await;
             return Ok(());
         }
         let proven = match client.validate() {

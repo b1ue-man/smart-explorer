@@ -227,6 +227,19 @@ fn validate_common(
     Ok(())
 }
 
+/// What a device whose relation proof was refused reads (TCP tunnel, device
+/// commands): the possible reasons and the way to the grant, never which
+/// check failed or a secret. The peer already proved its key over TLS.
+pub fn refusal_message(host: &str) -> String {
+    let host = match host.trim() {
+        "" => "Das andere Gerät",
+        name => name,
+    };
+    format!(
+        "{host} lässt dieses Gerät nicht zu: dort nicht freigegeben, gesperrt, neu zu bestätigen oder Direktzugang ausgeschaltet. Auf {host} unter „Geräte & Freigaben“ dieses Gerät freigeben oder beide Geräte neu koppeln."
+    )
+}
+
 #[cfg(test)]
 #[path = "relation_proof_tests.rs"]
 mod tests;

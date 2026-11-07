@@ -11,7 +11,7 @@ use super::tcp_registry::TcpRegistry;
 use super::tcp_wire::{
     self, TcpClientHello, TcpDataOpen, TcpDataReply, TcpHelloReply, TcpServerHello,
 };
-use iroh::endpoint::{Connection, VarInt};
+use iroh::endpoint::{Connection, SendStream, VarInt};
 use std::{io, net::SocketAddr, sync::Arc, time::Duration};
 use tokio::{
     io::AsyncReadExt,
@@ -36,6 +36,16 @@ impl NodeTcp {
 }
 pub(super) fn stop_all(tcp: &NodeTcp) {
     tcp.registry.close_all();
+}
+
+/// Sends a refusal and lets the requester read it: dropping the last handle
+/// closes the connection at once, and a peer receiving CONNECTION_CLOSE may
+/// drop stream data its application has not read (noq `Connection::close`).
+async fn refuse(connection: &Connection, send: &mut SendStream, detail: String) {
+    let refusal = TcpHelloReply::Refused { detail };
+    let _ = tokio::time::timeout(Duration::from_secs(2), tcp_wire::send_json(send, &refusal)).await;
+    let _ = send.finish();
+    let _ = tokio::time::timeout(Duration::from_secs(2), connection.closed()).await;
 }
 
 /// Every exit closes the transport, including malformed setup, denied
@@ -144,36 +154,43 @@ impl ShareIrohNode {
                 "TCP-Anfrage wird von dieser Version nicht angenommen ({error}); Smart Explorer auf beiden Geräten aktualisieren"
             )));
         }
-        let principal = {
+        let (proven, host) = {
             let state = self
                 .auth
                 .lock()
                 .map_err(|_| eio("Share authorization locked"))?;
-            prove_relation(
+            let proven = prove_relation(
                 &server.relation(&client)?,
                 &client.relation(),
                 &remote,
                 &state,
-            )
-        }
-        .map_err(|rejection| {
-            if rejection.counts_as_failed_authentication() {
-                self.auth_penalties().record(
-                    &remote,
-                    super::auth_penalty::PenaltyKind::AuthFailure,
-                    std::time::Instant::now(),
-                );
+            );
+            (proven, state.identity.device_name.clone())
+        };
+        let principal = match proven {
+            Ok(principal) => principal,
+            Err(rejection) => {
+                if rejection.counts_as_failed_authentication() {
+                    self.auth_penalties().record(
+                        &remote,
+                        super::auth_penalty::PenaltyKind::AuthFailure,
+                        std::time::Instant::now(),
+                    );
+                }
+                super::exec_audit::record(super::exec_audit::AuditEvent::AuthRejected {
+                    remote_node: &remote,
+                    claimed_device: &client.device_id,
+                    reason: "tcp: relation authentication failed or relation inactive",
+                });
+                // The requester reads why instead of a lost connection.
+                let detail = super::relation_proof::refusal_message(&host);
+                refuse(&connection, &mut send, detail).await;
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "TCP relation authentication failed",
+                ));
             }
-            super::exec_audit::record(super::exec_audit::AuditEvent::AuthRejected {
-                remote_node: &remote,
-                claimed_device: &client.device_id,
-                reason: "tcp: relation authentication failed or relation inactive",
-            });
-            io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "TCP relation authentication failed",
-            )
-        })?;
+        };
         self.bind_incoming_principal(
             &connection,
             PeerPrincipal::new(
@@ -208,16 +225,7 @@ impl ShareIrohNode {
         } = match admission {
             Ok(admission) => admission,
             Err(error) => {
-                let refusal = TcpHelloReply::Refused {
-                    detail: error.to_string(),
-                };
-                let _ = tokio::time::timeout(
-                    Duration::from_secs(2),
-                    tcp_wire::send_json(&mut send, &refusal),
-                )
-                .await;
-                let _ = send.finish();
-                let _ = tokio::time::timeout(Duration::from_secs(2), connection.closed()).await;
+                refuse(&connection, &mut send, error.to_string()).await;
                 return Err(error);
             }
         };

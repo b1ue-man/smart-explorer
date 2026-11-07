@@ -254,12 +254,13 @@ fn remote_drive_task_iroh_mount_reconnects_without_losing_lease() {
     node_b.invalidate_sessions().unwrap();
     assert_eq!(backend.stat("/Gate/new.txt").unwrap().size, 17);
 
-    // A revoked grant ends the drive: the renewal is refused like a new
-    // connection.
+    // A revoked grant ends the drive: the new connection is refused, and the
+    // host's reason reaches the drive (R3) instead of a lost connection.
     auth_b.lock().unwrap().direct_grants[0].state = DirectGrantState::Ignored;
     node_b.invalidate_sessions().unwrap();
     let revoked = backend.stat("/Gate/new.txt").unwrap_err();
-    assert_eq!(revoked.kind(), io::ErrorKind::PermissionDenied);
+    assert_eq!(revoked.kind(), io::ErrorKind::PermissionDenied, "{revoked}");
+    assert!(revoked.to_string().contains("gesperrt"), "{revoked}");
 
     let _ = fs::remove_dir_all(root);
 }

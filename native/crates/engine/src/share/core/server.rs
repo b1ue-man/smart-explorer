@@ -31,6 +31,8 @@ mod batch_put;
 mod batch_status;
 #[path = "server_fs.rs"]
 mod fs_dispatch;
+#[path = "server_hello_refusal.rs"]
+mod hello_refusal;
 
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(20);
 
@@ -124,17 +126,8 @@ pub(super) async fn handle_connection(
         }
     };
     if hello.protocol_version != 3 {
-        super::route_protocol::run_until_active(
-            handshake_deadline,
-            "Session-Ablehnung Timeout",
-            send_ctrl(
-                &mut send,
-                &Ctrl::FsResp {
-                    resp: super::fs_error::message("Inkompatibles Share-Protokoll"),
-                },
-            ),
-        )
-        .await?;
+        let resp = super::fs_error::message("Inkompatibles Share-Protokoll");
+        hello_refusal::refuse_hello(&conn, &mut send, handshake_deadline, resp).await?;
         return Err(eio("Inkompatibles Share-Protokoll"));
     }
     let session = match authenticate_incoming_session(&hello, &remote_node, &node.auth) {
@@ -144,12 +137,7 @@ pub(super) async fn handle_connection(
             // R3: the reason class and the way to the grant, never a secret.
             let (resp, detail) =
                 super::session::peer_denials::host_rejection(&hello, &node.auth, &error);
-            super::route_protocol::run_until_active(
-                handshake_deadline,
-                "Session-Ablehnung Timeout",
-                send_ctrl(&mut send, &Ctrl::FsResp { resp }),
-            )
-            .await?;
+            hello_refusal::refuse_hello(&conn, &mut send, handshake_deadline, resp).await?;
             return Err(detail);
         }
     };

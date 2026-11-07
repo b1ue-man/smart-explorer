@@ -68,31 +68,47 @@ impl ShareIrohNode {
             error
         })?;
         client.validate()?;
-        let principal = {
+        let (proven, host) = {
             let state = self
                 .auth
                 .lock()
                 .map_err(|_| eio("authorization unavailable"))?;
-            prove_relation(
+            let proven = prove_relation(
                 &server.relation(&client)?,
                 &client.relation(),
                 &remote,
                 &state,
-            )
-        }
-        .map_err(|rejection| {
-            if rejection.counts_as_failed_authentication() {
-                self.auth_penalties().record(
-                    &remote,
-                    super::super::auth_penalty::PenaltyKind::AuthFailure,
-                    std::time::Instant::now(),
-                );
+            );
+            (proven, state.identity.device_name.clone())
+        };
+        let principal = match proven {
+            Ok(principal) => principal,
+            Err(rejection) => {
+                if rejection.counts_as_failed_authentication() {
+                    self.auth_penalties().record(
+                        &remote,
+                        super::super::auth_penalty::PenaltyKind::AuthFailure,
+                        std::time::Instant::now(),
+                    );
+                }
+                // The requester reads why instead of a lost connection; the
+                // wait lets it read before the connection goes (node_tcp.rs).
+                let reply = AppsReply::Refused {
+                    detail: super::super::relation_proof::refusal_message(&host),
+                };
+                let _ = tokio::time::timeout(
+                    Duration::from_secs(2),
+                    apps_wire::send(&mut send, &reply),
+                )
+                .await;
+                let _ = send.finish();
+                let _ = tokio::time::timeout(Duration::from_secs(2), connection.closed()).await;
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "device relation proof refused",
+                ));
             }
-            io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "device relation proof refused",
-            )
-        })?;
+        };
         self.bind_incoming_principal(
             &connection,
             PeerPrincipal::new(
