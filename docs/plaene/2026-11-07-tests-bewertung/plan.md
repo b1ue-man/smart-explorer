@@ -104,4 +104,4 @@ Reihenfolge: T1 → T2, T3, T5 parallel, getrennt nach Dateien → T4 → Gesamt
   - 42366382899 (`6018e8e8`), ein Fehler unter Linux, behoben:
     - FTP: Nach ABOR auf eine schon beendete Übertragung blieb die Antwort des Servers ungelesen, und die Verbindung meldete sich neu an; ein Bereich, der auf seine eigene Anmeldung wartete, übernahm sie, das ergab eine fünfte Anmeldung (Produkt, `b327f4ee`; Test der Sicherheitsrunde umbenannt, er deckt jetzt auch den Rückfall auf die Neuverbindung).
   - 42371819683 (`b327f4ee`): bestanden, alle sieben Jobs.
-- Nächster Schritt: Release.
+- 2026-11-07: Release [v0.5.195](https://github.com/b1ue-man/smart-explorer/releases/tag/v0.5.195) (Release-Lauf 42376415603, Quelle `b4cbb7bb`, Release-Commit `9d00dd8e`), 26 Assets; `releases/latest/download/version.txt` meldet 0.5.195.
