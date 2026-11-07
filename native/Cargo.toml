@@ -33,7 +33,7 @@ exclude = ["explorer-command"]
 # scripts set it here (native/release-version.ps1, first `version =` line of
 # this file) and in Cargo.lock; `env!("CARGO_PKG_VERSION")` in any crate reads it.
 [workspace.package]
-version = "0.5.193"
+version = "0.5.194"
 
 # P28: application frames require a validated path/policy generation before
 # serialization. Keep these three upstream pins together; provenance, API and
