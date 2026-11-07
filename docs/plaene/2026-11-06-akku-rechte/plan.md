@@ -111,4 +111,12 @@ Testen; `android/check-background-power.sh` bleibt das Messwerkzeug für den Nut
 
 - Umgesetzt und integriert (2026-11-06): A1–A16, F1–F10, R1–R10, A9, N5, dazu Tresor-Begrenzung ohne Rückfall
   (`eeebd71d`) und der Guardian-Fehler (`2114d411`). Opus-Gesamtreview: 11 Befunde behoben (`1adf6045`).
-- Übergabe Aufgaben 1–4 erledigt; Aufgabe 5 (ein `crates-task`-Lauf) folgt.
+- Übergabe Aufgaben 1–4 erledigt.
+- crates-task-Lauf 42308441438 auf `713daa34` (2026-11-06/07) war rot: Android, windows-gnu und agent grün; workspace Linux 8, Windows 16 Fehlschläge. Ursachen und Behebung:
+  - Der Windows-Programmschritt endete nach 11 s, dann wartete der Runner 78 min auf seine Ausgabe-Pipe. Ein zurückgelassener Prozess hielt sie offen; das ist auch die Ursache der 3:50 h aus Lauf 41437549919. Behoben in `cfd10487`.
+  - A10: Der Fingerabdruck der Worker-Eingaben enthielt die Zeit des App-Datenordners selbst (`f54b0b55`).
+  - Updater unter Windows: Der Start wartete nicht auf sein Token (`3597aeb5`).
+  - Vier Tests an die geltenden Verträge angepasst (`a73f694e`): R6-Lease, OAuth-Attrappe, gemeinsame HKCU-Sperre, Freigabe-Handle.
+  - Die Crate-Tests laufen wieder mit `cargo test`; die nextest-Umstellung steht als CRATES-PROZESS in `docs/TODO.md`.
+  - Den sechsten S09-Transporttest überspringt die Suite jetzt wie die anderen fünf.
+- Bestätigungslauf 42323515657 auf `cfd10487` läuft.
