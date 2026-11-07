@@ -396,3 +396,7 @@ impl LanRuntime {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "lan_runtime_task_tests.rs"]
+mod task_tests;

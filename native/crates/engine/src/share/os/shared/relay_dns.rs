@@ -3,27 +3,45 @@
 //! which follows the system's DNS servers, VPN rules and hosts file). Iroh's
 //! own resolver (`n0-dns-resolver` since Iroh 1.3, Smart Explorer 0.5.181)
 //! runs alongside and answers TXT queries and names the system does not know.
-//! Windows devices whose relay stayed unreachable while their signaling to
-//! the same host worked (2026-10-22) published no relay at all.
+//! It reads only the system's DNS configuration: its public fallback
+//! nameservers (Cloudflare, Google, Quad9) are switched off, so no DNS query
+//! goes to a public resolver that the system configuration does not name
+//! (decision E15, 2026-11-07). Windows devices whose relay stayed unreachable
+//! while their signaling to the same host worked (2026-10-22) published no
+//! relay at all.
 use std::future::Future;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::pin::Pin;
 use std::task::Poll;
 
-use iroh::dns::{BoxIter, DnsError, DnsResolver, Resolver, TxtRecordData, DNS_TIMEOUT};
+use iroh::dns::{
+    BoxIter, DnsError, DnsResolver, FallbackMode, Resolver, TxtRecordData, DNS_TIMEOUT,
+};
 
 type Lookup<T> = Pin<Box<dyn Future<Output = Result<BoxIter<T>, DnsError>> + Send + 'static>>;
 
 /// The resolver of the Share endpoint.
 pub(super) fn resolver() -> DnsResolver {
     DnsResolver::custom(SystemFirstResolver {
-        fallback: DnsResolver::new(),
+        fallback: system_only_resolver(),
     })
+}
+
+/// Iroh's own resolver with the system's DNS configuration as its only source.
+/// `FallbackMode::Never` removes the public fallback tier that Iroh's default
+/// resolver (`DnsResolver::new()`, mode `Deferred`) queries once the system
+/// nameservers fail. With no system nameserver, this resolver answers with an
+/// error; the system resolver (`getaddrinfo`) still answers first.
+fn system_only_resolver() -> DnsResolver {
+    DnsResolver::builder()
+        .with_system_defaults()
+        .with_fallback_mode(FallbackMode::Never)
+        .build()
 }
 
 #[derive(Clone, Debug)]
 struct SystemFirstResolver {
-    /// Iroh's own resolver.
+    /// Iroh's own resolver, reading the system DNS configuration only.
     fallback: DnsResolver,
 }
 
@@ -203,5 +221,96 @@ mod tests {
             .await;
             assert!(answer.unwrap().is_empty());
         });
+    }
+}
+
+/// Decision E15: Iroh's resolver of the Share endpoint reads the system's DNS
+/// configuration only. Linux only: it compares with `/etc/resolv.conf`.
+#[cfg(all(test, target_os = "linux"))]
+mod public_fallback_tests {
+    use super::system_only_resolver;
+    use iroh::dns::DNS_TIMEOUT;
+    use std::net::{IpAddr, SocketAddr};
+    use std::time::Duration;
+
+    /// The public resolvers of Iroh's default fallback tier: Cloudflare,
+    /// Google and Quad9, IPv4 and IPv6.
+    const PUBLIC_RESOLVERS: [&str; 12] = [
+        "1.1.1.1",
+        "1.0.0.1",
+        "8.8.8.8",
+        "8.8.4.4",
+        "9.9.9.9",
+        "149.112.112.112",
+        "2606:4700:4700::1111",
+        "2606:4700:4700::1001",
+        "2001:4860:4860::8888",
+        "2001:4860:4860::8844",
+        "2620:fe::fe",
+        "2620:fe::9",
+    ];
+
+    /// Every IP address `text` names, alone or as a socket address.
+    fn addresses_in(text: &str) -> Vec<IpAddr> {
+        text.split(|c: char| !(c.is_ascii_hexdigit() || c == '.' || c == ':'))
+            .filter_map(|token| {
+                token
+                    .parse::<IpAddr>()
+                    .ok()
+                    .or_else(|| token.parse::<SocketAddr>().ok().map(|addr| addr.ip()))
+            })
+            .collect()
+    }
+
+    /// The nameservers of the system configuration.
+    fn system_nameservers() -> Vec<IpAddr> {
+        let text = std::fs::read_to_string("/etc/resolv.conf").unwrap_or_default();
+        text.lines()
+            .filter_map(|line| line.trim().strip_prefix("nameserver"))
+            .filter_map(|rest| rest.split_whitespace().next())
+            .filter_map(|server| server.split('%').next()?.parse().ok())
+            .collect()
+    }
+
+    #[test]
+    fn system_only_resolver_has_no_public_fallback() {
+        // The reader finds addresses in the formats a Debug text uses.
+        let sample = "Nameserver { addr: 8.8.8.8:53, v6: [2606:4700:4700::1111]:53, 1.0.0.1 }";
+        let found = addresses_in(sample);
+        assert_eq!(found.len(), 3, "{found:?}");
+        assert!(found.contains(&"8.8.8.8".parse::<IpAddr>().expect("literal")));
+        assert!(found.contains(&"2606:4700:4700::1111".parse::<IpAddr>().expect("literal")));
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime");
+        let (outcome, described) = runtime.block_on(async {
+            let resolver = system_only_resolver();
+            // A name that never resolves (RFC 6761): nothing the system knows,
+            // and no public resolver to ask next.
+            let lookup = tokio::time::timeout(
+                DNS_TIMEOUT + Duration::from_secs(30),
+                resolver.lookup_ipv4("relay.invalid", DNS_TIMEOUT),
+            )
+            .await
+            .expect("lookup deadline");
+            (
+                lookup.map(|addrs| addrs.collect::<Vec<_>>()),
+                format!("{resolver:?}"),
+            )
+        });
+        assert!(outcome.is_err(), "relay.invalid resolved: {outcome:?}");
+        // Only an address that the system configuration itself names may appear.
+        let system = system_nameservers();
+        let public: Vec<IpAddr> = PUBLIC_RESOLVERS
+            .iter()
+            .map(|address| address.parse().expect("literal"))
+            .collect();
+        for address in addresses_in(&described) {
+            assert!(
+                !public.contains(&address) || system.contains(&address),
+                "public resolver {address} in {described}"
+            );
+        }
     }
 }

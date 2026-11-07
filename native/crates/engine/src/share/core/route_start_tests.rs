@@ -214,7 +214,173 @@ fn route_start_task_bridge_state_machine() {
     let direct = [path("direct", RouteClass::Direct, true)];
     assert!(start.choose(&direct, open).is_some());
     assert!(!start.bridge_open(open));
-    assert!(start.choose(&only_relay, open).is_none());
+    // r-weg-2: no LAN/direct path of the connection is validated or being
+    // validated any more, so the relay carries payload as the marked fallback
+    // before the direct phase ends.
+    let lost = start
+        .choose(&only_relay, open)
+        .map(|choice| (choice.phase, choice.reason));
+    assert_eq!(lost, Some((RoutePhase::RelayFallback, DIRECT_LOST_REASON)));
     let fallback = start.choose(&only_relay, done).map(|choice| choice.phase);
     assert_eq!(fallback, Some(RoutePhase::RelayFallback));
+    // A direct path that only re-proves itself keeps the bridge closed: the
+    // relay does not carry payload while the proof is pending.
+    let mut proving = StartPhase::default();
+    assert!(proving.choose(&direct, open).is_some());
+    let pending = [
+        path("direct", RouteClass::Direct, false),
+        path("relay", RouteClass::Relay, true),
+    ];
+    assert!(pending[0].validation_pending);
+    assert!(proving.choose(&pending, open).is_none());
+}
+
+/// A direct path that is neither validated nor being validated.
+fn vanished(key: &str) -> RouteCandidate {
+    let mut vanished = path(key, RouteClass::Direct, false);
+    vanished.validation_pending = false;
+    vanished
+}
+
+#[test]
+fn route_start_task_lost_direct_path_falls_back_to_relay_until_a_direct_path_returns() {
+    // E5: the admitted direct path is no longer validated or pending.
+    let mut policy = policy();
+    let mut paths = vec![
+        path("direct", RouteClass::Direct, true),
+        path("relay", RouteClass::Relay, true),
+    ];
+    assert_eq!(policy.observe(0, &paths, None), Some("direct".into()));
+    paths[0] = vanished("direct");
+    assert_eq!(policy.observe(10, &paths, None), relay());
+    let status = policy.status().clone();
+    assert_eq!(status.phase, RoutePhase::RelayFallback);
+    assert_eq!(status.class, Some(RouteClass::Relay));
+    assert!(status.application_allowed);
+    assert_eq!(status.reason, DIRECT_LOST_REASON);
+    assert_eq!(status.pause_epoch, 0, "the fallback never pauses payload");
+    assert_eq!(
+        progress_hint(&status),
+        Some("über Relay: die Bandbreite begrenzt der Relay-Server")
+    );
+    // E6: a direct path that is being validated again does not take the
+    // relay away from the transfer; only a validated one moves it back.
+    paths[0].validation_pending = true;
+    assert_eq!(policy.observe(20, &paths, None), relay());
+    assert_eq!(policy.status().phase, RoutePhase::RelayFallback);
+    assert!(policy.status().application_allowed);
+    paths[0].validated = true;
+    paths[0].validation_pending = false;
+    assert_eq!(policy.observe(30, &paths, None), Some("direct".into()));
+    assert_eq!(policy.status().phase, RoutePhase::Direct);
+    assert_eq!(policy.status().pause_epoch, 0);
+    // E5, second form: the direct path is gone from the connection's paths.
+    let mut policy = policy_after_direct();
+    assert_eq!(
+        policy.observe(10, &[path("relay", RouteClass::Relay, true)], None),
+        relay()
+    );
+    assert_eq!(policy.status().phase, RoutePhase::RelayFallback);
+    assert_eq!(policy.status().reason, DIRECT_LOST_REASON);
+    assert!(policy.status().application_allowed);
+    assert_eq!(policy.status().pause_epoch, 0);
+}
+
+/// A policy whose first observation chose a validated direct path.
+fn policy_after_direct() -> RoutePolicy {
+    let mut policy = policy();
+    let paths = [
+        path("direct", RouteClass::Direct, true),
+        path("relay", RouteClass::Relay, true),
+    ];
+    assert_eq!(policy.observe(0, &paths, None), Some("direct".into()));
+    policy
+}
+
+#[test]
+fn route_start_task_refused_relay_fallback_pauses_until_the_direct_path_proves_itself() {
+    // E8: the gate refuses the relay grant of the fallback; the relay is not
+    // allowed again while the direct path is merely being validated.
+    let mut policy = policy_after_direct();
+    let mut paths = vec![vanished("direct"), path("relay", RouteClass::Relay, true)];
+    assert_eq!(policy.observe(10, &paths, None), relay());
+    policy.gate_rejected();
+    assert_eq!(policy.status().phase, RoutePhase::Paused);
+    assert!(!policy.status().application_allowed);
+    assert_eq!(policy.status().pause_epoch, 1);
+    paths[0].validation_pending = true;
+    assert_eq!(policy.observe(15, &paths, None), None);
+    assert_eq!(policy.status().phase, RoutePhase::Paused);
+    assert!(!policy.status().application_allowed);
+    assert_eq!(policy.status().pause_epoch, 1, "one pause, one epoch");
+    paths[0].validated = true;
+    paths[0].validation_pending = false;
+    assert_eq!(policy.observe(16, &paths, None), Some("direct".into()));
+    assert_eq!(policy.status().phase, RoutePhase::Direct);
+}
+
+#[test]
+fn route_start_task_validated_lan_or_direct_path_never_yields_to_relay() {
+    // E9: for every state of the LAN and direct paths, at every time of the
+    // finite direct phase, and with or without an earlier loss, a validated
+    // LAN or direct path is the choice, never the relay.
+    #[derive(Clone, Copy)]
+    enum State {
+        Absent,
+        Pending,
+        Validated,
+    }
+    let make = |key: &str, class, state| match state {
+        State::Absent => None,
+        State::Pending => Some(path(key, class, false)),
+        State::Validated => Some(path(key, class, true)),
+    };
+    let states = [State::Absent, State::Pending, State::Validated];
+    for earlier_loss in [false, true] {
+        for lan in states {
+            for direct in states {
+                for now in [0u64, 10, 29, 30, 60, 89, 90, 500] {
+                    let mut policy = policy();
+                    if earlier_loss {
+                        assert_eq!(
+                            policy.observe(
+                                0,
+                                &[
+                                    path("direct", RouteClass::Direct, true),
+                                    path("relay", RouteClass::Relay, true)
+                                ],
+                                None
+                            ),
+                            Some("direct".into())
+                        );
+                        assert_eq!(
+                            policy.observe(1, &[path("relay", RouteClass::Relay, true)], None),
+                            relay()
+                        );
+                    }
+                    let mut paths: Vec<RouteCandidate> = [
+                        make("lan", RouteClass::Lan, lan),
+                        make("direct", RouteClass::Direct, direct),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    .collect();
+                    paths.push(path("relay", RouteClass::Relay, true));
+                    let chosen = policy.observe(now.max(1), &paths, None);
+                    let validated =
+                        matches!(lan, State::Validated) || matches!(direct, State::Validated);
+                    if validated {
+                        assert_ne!(chosen, relay(), "loss {earlier_loss}, now {now}");
+                        let expected = if matches!(lan, State::Validated) {
+                            "lan"
+                        } else {
+                            "direct"
+                        };
+                        assert_eq!(chosen, Some(expected.into()));
+                        assert_ne!(policy.status().class, Some(RouteClass::Relay));
+                    }
+                }
+            }
+        }
+    }
 }

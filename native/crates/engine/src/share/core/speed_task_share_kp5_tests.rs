@@ -2,7 +2,8 @@
 //! a withdrawn write right stops the running transfer at its next block and
 //! the next request (Z-H1); a single file goes as a packet of one and is
 //! published once (Z-P4); transfers use the extra connections of a host
-//! that offers them, each with its full handshake (Z-P6).
+//! that offers them, each with its full handshake (Z-P6), made in the
+//! background so the asking transfer does not wait (G14).
 use std::collections::HashSet;
 use std::fs;
 use std::io::{self, Read, Write};
@@ -96,12 +97,35 @@ fn speed_task_share_bulk_connections_carry_transfers() -> io::Result<()> {
     fixture.backend.stat("/A/bulk.bin")?;
     assert!(fixture.peer.bulk_offered());
     let endpoint = fixture.peer.current_endpoint()?;
+    // The connection every transfer uses until an extra one is ready.
+    let first = fixture
+        .peer
+        .transfer_stream(&endpoint, Instant::now() + Duration::from_secs(20))?
+        .generation;
     fixture.peer.node.want_bulk_connections(&endpoint, 2);
-    let mut connections = HashSet::new();
-    for _ in 0..6 {
+    // G14 (r-weg-4): the transfer that asks for the extra connections never
+    // waits for their handshake; it opens at once on the first connection.
+    let asked = Instant::now();
+    let opened = fixture
+        .peer
+        .transfer_stream(&endpoint, Instant::now() + Duration::from_secs(20))?;
+    let waited = asked.elapsed();
+    assert!(waited < Duration::from_secs(1), "waited {waited:?}");
+    assert_eq!(
+        opened.generation, first,
+        "the first call stays on the first connection"
+    );
+    drop(opened);
+    // The extra connections are made in the background and then carry
+    // transfers: within the deadline the streams use all three connections.
+    let mut connections = HashSet::from([first]);
+    let until = Instant::now() + Duration::from_secs(20);
+    while connections.len() < 3 && Instant::now() < until {
         let deadline = Instant::now() + Duration::from_secs(20);
         let opened = fixture.peer.transfer_stream(&endpoint, deadline)?;
         connections.insert(opened.generation);
+        drop(opened);
+        std::thread::sleep(Duration::from_millis(25));
     }
     // Each extra connection passed hello, proof and admission, or the
     // stream would have fallen back to the first one.

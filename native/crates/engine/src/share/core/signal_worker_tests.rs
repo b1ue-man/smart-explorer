@@ -34,6 +34,9 @@ mod fake_server;
 
 use self::fake_server::{tcp_pair, websocket_pair, FakeServer};
 
+#[path = "signal_worker_hold_tests.rs"]
+mod hold_tests;
+
 const OK: ProbeOutcome = ProbeOutcome {
     ok: true,
     reconnected: false,

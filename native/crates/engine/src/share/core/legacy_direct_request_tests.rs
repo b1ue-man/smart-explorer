@@ -7,6 +7,9 @@ use super::profile_persistence::ProfilePersistence;
 use super::profiles::{ProfileRevision, ShareProfiles};
 use super::types::{DirectGrant, DirectGrantState, PeerPresence};
 
+#[path = "legacy_direct_request_eviction_tests.rs"]
+mod eviction;
+
 #[test]
 fn verified_receive_survives_reload_and_new_nonce_updates_same_selector() {
     let identity = identity();

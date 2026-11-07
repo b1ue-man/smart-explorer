@@ -4,7 +4,7 @@
 //! persisting it is all or nothing and can be repeated, a concurrent grant
 //! change is refused, and daemons that know only version 2 refuse it.
 use super::super::{decode_entry, JournalPhase, CONFIRM_JOURNAL_VERSION, JOURNAL_VERSION};
-use super::{apply_persisted, confirm_entry, grant_steps, RightsStep};
+use super::{apply_persisted, confirm_entry, grant_steps, load_pending, RightsStep, ShareHost};
 use crate::share::access_grant::{Capability, CapabilityDecision};
 use crate::share::connection_rights::{ConnectionRights, FolderChoice, RightsPreset, RightsTarget};
 use crate::share::connection_rights_actions::plan_confirm;
@@ -232,4 +232,133 @@ fn abgleich_task_confirm_entries_are_refused_by_version_two_readers() {
     let plain_json = serde_json::to_value(&plain).unwrap();
     assert_eq!(plain_json["version"], JOURNAL_VERSION);
     assert!(plain_json.get("rights").is_none() && plain_json.get("more").is_none());
+}
+
+const VAULT_SITE: &str = "fedcba98765432100123456789abcdef";
+
+/// A vault drive published for as long as the value lives (the table is
+/// process-wide: a failing test must not leave its drive behind).
+struct Mounted(std::path::PathBuf);
+
+impl Mounted {
+    fn new(path: &str) -> Self {
+        let path = std::path::PathBuf::from(path);
+        crate::vault::publish_vault_mount(VAULT_SITE, &path);
+        Self(path)
+    }
+}
+
+impl Drop for Mounted {
+    fn drop(&mut self) {
+        crate::vault::withdraw_vault_mount(VAULT_SITE, &self.0);
+    }
+}
+
+/// The folder a vault drive shows and an ordinary folder beside it, as the
+/// menu's folder picker gives them (forward slashes).
+fn vault_folders() -> (tempfile::TempDir, String, String) {
+    let directory = tempfile::tempdir().unwrap();
+    let base = directory.path().canonicalize().unwrap();
+    std::fs::create_dir_all(base.join("T")).unwrap();
+    std::fs::create_dir_all(base.join("frei")).unwrap();
+    let text = |name: &str| base.join(name).to_string_lossy().replace('\\', "/");
+    let (vault, free) = (text("T"), text("frei"));
+    (directory, vault, free)
+}
+
+fn as_json(profiles: &ShareProfiles) -> serde_json::Value {
+    serde_json::to_value(profiles).unwrap()
+}
+
+/// G16 (E11): a folder picked in „Bestätigen“ that lies in an unlocked vault
+/// drive is refused while the confirmation is planned, before the Exec-grant
+/// journal gets an entry, and the profiles stay as they were.
+#[test]
+fn abgleich_task_confirm_refuses_a_folder_in_an_unlocked_vault_before_the_journal() {
+    let (profiles, target) = host_with_all();
+    let (_directory, vault, _free) = vault_folders();
+    let _mounted = Mounted::new(&vault);
+    let none = RightsPreset::None.rights();
+    let expected = format!("Ein entsperrter Tresor wird nicht freigegeben: {vault}");
+
+    for path in [vault.clone(), format!("{vault}/innen")] {
+        let mut desired = profiles.clone();
+        let added = [("Tresor".to_string(), path.clone())];
+        let error = plan_confirm(&mut desired, &target, &none, &added, 20).unwrap_err();
+        assert_eq!(error, expected.replace(&vault, &path));
+        assert_eq!(as_json(&desired), as_json(&profiles), "{path}");
+    }
+
+    // The worker plans first: the refusal comes back under its lock, the
+    // journal has no new entry and the profiles it holds are unchanged.
+    let host = ShareHost::new("9".repeat(32));
+    {
+        let mut state = host.state.lock().unwrap();
+        state.identity = Some(identity());
+        state.profiles = profiles.clone();
+    }
+    let pending = load_pending().unwrap();
+    let added = [("Tresor".to_string(), vault.clone())];
+    let error = host
+        .confirm_rights_reloaded(&target, &none, &added)
+        .err()
+        .expect("the confirmation is refused");
+    assert_eq!(error, expected);
+    assert_eq!(load_pending().unwrap(), pending, "no journal entry");
+    assert_eq!(
+        as_json(&host.state.lock().unwrap().profiles),
+        as_json(&profiles)
+    );
+}
+
+/// G16, preserved: a folder outside every vault drive is still added with the
+/// confirmation, and a folder stored before the drive appeared is no error.
+#[test]
+fn abgleich_task_confirm_keeps_ordinary_folders_and_folders_stored_before_the_drive() {
+    let (mut profiles, target) = host_with_all();
+    let (_directory, vault, free) = vault_folders();
+    profiles
+        .default_direct_exports
+        .roots
+        .push(SharedRoot::new_in_scope("Alt", &vault, DIRECT_EXPORT_SCOPE));
+    let _mounted = Mounted::new(&vault);
+
+    let chosen = ConnectionRights {
+        folders: FolderChoice::Selected {
+            paths: vec![free.clone()],
+            connections: false,
+        },
+        ..RightsPreset::All.rights()
+    };
+    let mut desired = profiles.clone();
+    let added = [("Frei".to_string(), free.clone())];
+    assert!(plan_confirm(&mut desired, &target, &chosen, &added, 20).unwrap());
+    let root = desired
+        .default_direct_exports
+        .roots
+        .iter()
+        .find(|root| root.path == free)
+        .expect("the ordinary folder is an export now");
+    assert_eq!(root.label, "Frei");
+    assert!(desired
+        .default_direct_exports
+        .roots
+        .iter()
+        .any(|root| root.path == vault));
+
+    // Naming the stored folder again adds nothing and is not refused.
+    let mut again = profiles.clone();
+    let stored = [("Alt".to_string(), vault.clone())];
+    plan_confirm(
+        &mut again,
+        &target,
+        &RightsPreset::None.rights(),
+        &stored,
+        30,
+    )
+    .unwrap();
+    assert_eq!(
+        again.default_direct_exports.roots,
+        profiles.default_direct_exports.roots
+    );
 }

@@ -8,7 +8,7 @@ use clap::Args;
 use serde::{Deserialize, Serialize};
 
 use crate::daemon::WorkerHandoff;
-use crate::updater::{FeedCheck, Installation, ReplacedCli};
+use crate::updater::{FeedCheck, Installation, ReplacedCli, UnsignedConsent, UnsignedFeed};
 
 /// The replaced `se` must answer within this time, including a worker handoff.
 const COMPLETION_TIMEOUT: Duration = Duration::from_secs(90);
@@ -44,6 +44,9 @@ app's update check and starts the hash-bound updater. It replaces all three
 after this command exits and then starts Smart Explorer, so close the app first;
 this needs a graphical session.
 
+A signed release must verify. An unsigned release of the project's feed or an
+unsigned http:// feed needs --allow-unsigned for this one update.
+
   se update --check --json
   se update
   se update --source https://github.com/OWNER/REPO
@@ -75,6 +78,12 @@ pub(super) struct UpdateArgs {
         help = "Save whether the desktop app looks for updates when it starts (the app's \"Beim Start nach Updates suchen\"); combine with --check to change nothing else"
     )]
     startup_check: Option<bool>,
+    #[arg(
+        long,
+        conflicts_with = "check",
+        help = "Install this one update although its release is not signed (a release published before signing, a plain http:// feed); asked again for every update"
+    )]
+    allow_unsigned: bool,
     #[arg(long, help = "Print machine-readable JSON")]
     json: bool,
     // Run by the previous `se` right after it replaced this file, with the
@@ -83,7 +92,7 @@ pub(super) struct UpdateArgs {
         long,
         hide = true,
         value_name = "VERSION",
-        conflicts_with_all = ["check", "reinstall", "source", "startup_check"]
+        conflicts_with_all = ["check", "reinstall", "source", "startup_check", "allow_unsigned"]
     )]
     complete_install: Option<String>,
 }
@@ -100,6 +109,7 @@ struct Installed {
     target: PathBuf,
     sha256: String,
     completed: CompletedInstall,
+    unsigned: Option<UnsignedFeed>,
 }
 
 struct Report<'a> {
@@ -137,11 +147,11 @@ pub(super) fn run(args: UpdateArgs) -> Result<i32, String> {
         } else {
             "up_to_date"
         };
-        print(&report, status, None, args.json)?;
+        print(&report, status, None, None, args.json)?;
         return Ok(0);
     }
     if !check.update_available && !args.reinstall {
-        print(&report, "up_to_date", None, args.json)?;
+        print(&report, "up_to_date", None, None, args.json)?;
         return Ok(0);
     }
     if crate::updater::is_newer(&check.current_version, &check.feed_version) {
@@ -150,24 +160,30 @@ pub(super) fn run(args: UpdateArgs) -> Result<i32, String> {
             "the feed offers {offered}, older than this se {running}; se update does not downgrade"
         ));
     }
+    // The consent covers exactly the version this run installs (E12).
+    let consent = match args.allow_unsigned {
+        true => UnsignedConsent::for_version(&check.feed_version),
+        false => UnsignedConsent::none(),
+    };
     match &installation {
         Installation::TerminalOnly { cli } => {
-            let installed = install_terminal_only(cli, &check.feed_version)?;
+            let installed = install_terminal_only(cli, &check.feed_version, &consent)?;
             let status = if check.update_available {
                 "updated"
             } else {
                 "reinstalled"
             };
-            print(&report, status, Some(&installed), args.json)?;
+            print(&report, status, Some(&installed), None, args.json)?;
         }
         Installation::Desktop { .. } => {
             if args.reinstall {
                 return Err(REINSTALL_DESKTOP.to_string());
             }
             crate::updater::desktop_update_possible()?;
-            let bundle = crate::updater::stage_update(&check.feed_version)?;
+            let bundle = crate::updater::stage_update(&check.feed_version, &consent)?;
             crate::updater::apply_staged_update_for(&bundle, &installation)?;
-            print(&report, "handed_to_updater", None, args.json)?;
+            let signed = Some(bundle.unsigned().map_or("verified", UnsignedFeed::code));
+            print(&report, "handed_to_updater", None, signed, args.json)?;
         }
     }
     Ok(0)
@@ -184,8 +200,13 @@ fn validate_source(source: &str) -> Result<&str, String> {
 
 /// Replaces the installed `se`, lets the new file prove that it starts and
 /// hands the worker over, and restores the previous file if it does not.
-fn install_terminal_only(cli: &Path, version: &str) -> Result<Installed, String> {
-    let replaced = crate::updater::replace_cli(cli, version)?;
+fn install_terminal_only(
+    cli: &Path,
+    version: &str,
+    consent: &UnsignedConsent,
+) -> Result<Installed, String> {
+    let replaced = crate::updater::replace_cli(cli, version, consent)?;
+    let unsigned = replaced.unsigned();
     // The exact verified bytes, checked again right before they are started.
     if let Err(error) = replaced.verify_installed() {
         return Err(restore(replaced, error));
@@ -210,6 +231,7 @@ fn install_terminal_only(cli: &Path, version: &str) -> Result<Installed, String>
         target,
         sha256,
         completed,
+        unsigned,
     })
 }
 
@@ -287,10 +309,15 @@ fn print(
     report: &Report<'_>,
     status: &str,
     installed: Option<&Installed>,
+    staged_signature: Option<&str>,
     json: bool,
 ) -> Result<(), String> {
     let check = report.check;
     let note = (status == "handed_to_updater").then_some(DESKTOP_NOTE);
+    // `None` when this run installed and staged nothing.
+    let signature = installed
+        .map(|installed| installed.unsigned.map_or("verified", UnsignedFeed::code))
+        .or(staged_signature);
     if json {
         let installed = installed.map(|installed| {
             serde_json::json!({
@@ -309,6 +336,7 @@ fn print(
             "installation": report.installation,
             "installed": installed,
             "note": note,
+            "signature": signature,
             "previous_update_error": report.previous_error,
             // The app's "Auto-Update pausiert (zurückgerollt auf v…)".
             "auto_update_paused_at": crate::updater::pinned_version(),
@@ -344,6 +372,9 @@ fn print(
             (None, Some(error)) => println!("worker\terror\t{}", clean(error)),
             (None, None) => println!("worker\tunknown"),
         }
+    }
+    if let Some(signature) = signature {
+        println!("signature\t{signature}");
     }
     if let Some(note) = note {
         println!("note\t{note}");
@@ -384,82 +415,5 @@ fn clean(value: &str) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use clap::{CommandFactory, Parser};
-
-    use super::{paused_line, validate_source, CompletedInstall};
-    use crate::cli::Cli;
-    use crate::daemon::WorkerHandoff;
-
-    fn parses(arguments: &str) -> bool {
-        Cli::try_parse_from(std::iter::once("se").chain(arguments.split_whitespace())).is_ok()
-    }
-
-    #[test]
-    fn cli_task_update_parses_check_reinstall_source_and_hidden_completion() {
-        for accepted in [
-            "update",
-            "update --check",
-            "update --check --json",
-            "update --reinstall --json",
-            "update --source /srv/feed --check",
-            "update --startup-check false --check --json",
-            "update --complete-install 1.2.3",
-        ] {
-            assert!(parses(accepted), "failed to parse {accepted:?}");
-        }
-        for rejected in [
-            "update --check --reinstall",
-            "update --complete-install",
-            "update --complete-install 1.2.3 --check",
-            "update --complete-install 1.2.3 --source /srv/feed",
-            "update --complete-install 1.2.3 --startup-check true",
-            "update --startup-check maybe",
-        ] {
-            assert!(!parses(rejected), "unexpectedly parsed {rejected:?}");
-        }
-        let mut command = Cli::command();
-        let help = command
-            .find_subcommand_mut("update")
-            .expect("update command")
-            .render_long_help()
-            .to_string();
-        assert!(help.contains("--check"));
-        assert!(help.contains("--reinstall"));
-        assert!(help.contains("~/.local/bin/se"));
-        assert!(!help.contains("complete-install"));
-    }
-
-    #[test]
-    fn cli_task_update_completion_answer_and_source_rules() {
-        let completed = CompletedInstall {
-            version: "1.2.3".into(),
-            worker: Some(WorkerHandoff::Replaced),
-            worker_error: None,
-        };
-        let answer = serde_json::to_string(&completed).unwrap();
-        assert_eq!(
-            answer,
-            r#"{"version":"1.2.3","worker":"replaced","worker_error":null}"#
-        );
-        let decoded: CompletedInstall = serde_json::from_str(&answer).unwrap();
-        assert_eq!(decoded, completed);
-
-        assert_eq!(
-            validate_source("  https://example.test/feed  ").unwrap(),
-            "https://example.test/feed"
-        );
-        assert!(validate_source("   ").is_err());
-        assert!(validate_source("a\nb").is_err());
-        assert!(validate_source(&"x".repeat(4097)).is_err());
-    }
-
-    #[test]
-    fn luecken_task_update_report_names_the_rollback_pause() {
-        assert_eq!(paused_line(None), None);
-        assert_eq!(
-            paused_line(Some("0.5.170")).as_deref(),
-            Some("auto_update\tpaused after a rollback to 0.5.170")
-        );
-    }
-}
+#[path = "update_tests.rs"]
+mod tests;

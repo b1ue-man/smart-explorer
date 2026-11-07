@@ -194,3 +194,7 @@ mod tests {
         assert_eq!(penalties.tracked(), 1);
     }
 }
+
+#[cfg(test)]
+#[path = "auth_flood_task_tests.rs"]
+mod flood_task_tests;

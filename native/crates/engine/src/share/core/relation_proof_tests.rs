@@ -2,6 +2,7 @@
 //! before, in the same order and with the same outcome classes, and its
 //! transcript for Exec is byte for byte the one of 0.5.182.
 use super::*;
+use crate::share::access_authorize::principal_grant;
 use crate::share::core::{hmac_proof, public_fingerprint};
 use crate::share::exec_auth::{
     authorize_client_hello_in, relation_client, relation_server, transcript, ExecRejection,
@@ -9,8 +10,11 @@ use crate::share::exec_auth::{
 use crate::share::exec_policy::ExecGrant;
 use crate::share::exec_protocol::{ExecClientHello, ExecServerHello};
 use crate::share::exec_types::{EXEC_CAPABILITY, EXEC_PROTOCOL_VERSION};
+use crate::share::identity::code_renewal::CodeRenewalStatus;
+use crate::share::identity::code_renewal_registry::{install, RetiringMaterial};
 use crate::share::identity::ShareIdentity;
 use crate::share::types::{DirectGrant, RoomMember, RoomMemberFlags, RoomPolicy, RoomProfile};
+use zeroize::Zeroizing;
 
 const NOW: i64 = 1_760_000_000;
 const SECRET: &[u8] = b"direct-secret";
@@ -310,4 +314,160 @@ fn perm_task_relation_proof_matches_exec_auth() {
         prove_relation(&screen, &relation_client(&hello), &client.node_id, &state),
         Err(RelationRejection::Authentication)
     );
+}
+
+const OLD_LOOKUP: &str = "lookup-retiring-g17";
+const OLD_SECRET: &[u8] = b"secret-of-the-retiring-lookup-id";
+
+/// The retiring lookup id (and its secret) of `host`, or none; takes it out
+/// again at the end of the test, also on a panic.
+struct RetiringView(String);
+
+impl RetiringView {
+    fn set(host: &ShareIdentity, retiring: bool) {
+        let materials = if retiring {
+            vec![RetiringMaterial {
+                lookup_id: OLD_LOOKUP.into(),
+                secret: Zeroizing::new(OLD_SECRET.to_vec()),
+                pending: Vec::new(),
+            }]
+        } else {
+            Vec::new()
+        };
+        install(
+            &host.node_id,
+            &host.direct_lookup_id,
+            materials,
+            Vec::new(),
+            CodeRenewalStatus::default(),
+        );
+    }
+}
+
+impl Drop for RetiringView {
+    fn drop(&mut self) {
+        install(
+            &self.0,
+            "",
+            Vec::new(),
+            Vec::new(),
+            CodeRenewalStatus::default(),
+        );
+    }
+}
+
+fn signed(
+    server: &ExecServerHello,
+    mut hello: ExecClientHello,
+    relation_id: &str,
+    secret: &[u8],
+) -> ExecClientHello {
+    hello.relation_id = relation_id.into();
+    hello.proof = hmac_proof(secret, &transcript(server, &hello));
+    hello
+}
+
+#[test]
+fn zugang_task_relation_proof_takes_the_retiring_lookup_id_like_the_file_session() {
+    let host = identity("host-g17", "Host", 71);
+    let client = identity("client-g17", "Client", 72);
+    let state = state(&host, &client);
+    let _reset = RetiringView(host.node_id.clone());
+    RetiringView::set(&host, true);
+    let current = host.direct_lookup_id.clone();
+    let node = client.node_id.clone();
+    let (server, current_hello) = hellos(&host, &client, &current);
+    let prove = |hello: &ExecClientHello, state: &ShareAuthState| {
+        prove_relation(
+            &relation_server(&server),
+            &relation_client(hello),
+            &node,
+            state,
+        )
+    };
+    let exec = |hello: &ExecClientHello, state: &ShareAuthState| {
+        authorize_client_hello_in(&server, hello, &node, state, NOW)
+    };
+
+    // The aim: a device that still holds the retiring lookup id and its
+    // secret gets the session of the current one, with the current id as its
+    // relation, so its grant, the Exec registry and revocations match it.
+    let on_current = prove(&current_hello, &state).expect("current lookup id");
+    assert_eq!(on_current.relation_id, current);
+    for (name, secret) in [("retiring secret", OLD_SECRET), ("current secret", SECRET)] {
+        let hello = signed(&server, current_hello.clone(), OLD_LOOKUP, secret);
+        let proven = prove(&hello, &state).unwrap_or_else(|error| panic!("{name}: {error:?}"));
+        assert_eq!(proven.relation_id, current, "{name}: relation of the proof");
+        assert_eq!(
+            proven, on_current,
+            "{name}: same principal as the current id"
+        );
+        assert!(principal_grant(&state, &proven).is_some(), "{name}: grant");
+        let peer = exec(&hello, &state).unwrap_or_else(|error| panic!("{name}: {error:?}"));
+        assert_eq!(
+            peer.principal.relation_id, current,
+            "{name}: Exec principal"
+        );
+        assert_eq!(peer.authorization.policy_revision, 4, "{name}: Exec policy");
+    }
+
+    // Everything else about the old id still fails like any other proof.
+    let wrong_proof = signed(&server, current_hello.clone(), OLD_LOOKUP, b"other");
+    let old_hello = signed(&server, current_hello.clone(), OLD_LOOKUP, OLD_SECRET);
+    let mut removed = state.clone();
+    removed.direct_grants.clear();
+    let mut offline = state.clone();
+    offline.direct_online = false;
+    let mut blocked = state.clone();
+    blocked.direct_grants[0].state = DirectGrantState::Ignored;
+    let mut room = old_hello.clone();
+    room.relation_kind = "room".into();
+    let mut contact = old_hello.clone();
+    contact.relation_kind = "contact".into();
+    let auth = RelationRejection::Authentication;
+    for (name, hello, state, expected) in [
+        ("wrong proof", &wrong_proof, &state, auth),
+        ("removed device", &old_hello, &removed, auth),
+        ("blocked device", &old_hello, &blocked, auth),
+        (
+            "Direct off",
+            &old_hello,
+            &offline,
+            RelationRejection::NotAuthorized,
+        ),
+        ("old id named as a room", &room, &state, auth),
+        ("old id named as a contact", &contact, &state, auth),
+    ] {
+        assert_eq!(prove(hello, state), Err(expected), "{name}: relation proof");
+        assert_eq!(
+            exec(hello, state).map(|_| ()),
+            Err(ExecRejection::from(expected)),
+            "{name}: Exec handshake"
+        );
+    }
+
+    // The old id has run out: its secret is gone from the registry.
+    RetiringView::set(&host, false);
+    for (name, hello) in [
+        ("retiring secret", &old_hello),
+        ("wrong proof", &wrong_proof),
+    ] {
+        assert_eq!(prove(hello, &state), Err(auth), "{name}: after the run-out");
+        assert_eq!(
+            exec(hello, &state).map(|_| ()),
+            Err(ExecRejection::Authentication)
+        );
+    }
+
+    // The current id with the current secret is unchanged, and a room is
+    // still judged by its own members.
+    let unchanged = prove(&current_hello, &state).expect("current lookup id");
+    assert_eq!(
+        unchanged,
+        ProvenPrincipal::from(&relation_client(&current_hello))
+    );
+    let mut unknown_room = current_hello.clone();
+    unknown_room.relation_kind = "room".into();
+    unknown_room.relation_id = "room-g17".into();
+    assert_eq!(prove(&unknown_room, &state), Err(auth));
 }

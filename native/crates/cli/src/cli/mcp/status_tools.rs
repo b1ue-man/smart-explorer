@@ -75,6 +75,9 @@ fn share_summary(status: &Value) -> Value {
         // device's exports and open rights are these two.
         "access_gaps": status["access_gaps"],
         "rights_pending": status["rights_pending"],
+        // E17 (plan M22): the Direct-code renewal and the devices it waits
+        // for, the same object as `se share status --json`; `null` without one.
+        "code_renewal": status["code_renewal"],
         "pending_requests": status["pending_requests"],
         "requests": count("requests"),
         "grants": count("grants"),
@@ -169,5 +172,33 @@ mod tests {
             share_summary(&json!({"worker": {"running": true}, "grants": [1, 2], "events": [1]}));
         assert_eq!(summary["grants"], 2);
         assert!(summary.get("events").is_none());
+    }
+
+    #[test]
+    fn code_renewal_surface_task_mcp_share_summary_carries_the_renewal_object() {
+        // E17 (code-oberflaechen co-mcp): `share.code_renewal` is the object of
+        // `se share status --json`; without a renewal it is null, and the other
+        // parts of the share summary stay as they are.
+        let status = json!({
+            "contacts": [{"id": "c1"}],
+            "routes": {"direct": 1},
+            "grants": [],
+            "code_renewal": {
+                "active": true,
+                "generation": 3,
+                "pending_devices": 2,
+                "pending_names": ["P", "Q"],
+                "summary": "Direct code is being renewed, 2 devices pending"
+            },
+        });
+        let summary = share_summary(&status);
+        assert_eq!(summary["code_renewal"], status["code_renewal"]);
+        assert_eq!(summary["contacts"], status["contacts"]);
+        assert_eq!(summary["routes"], status["routes"]);
+        assert_eq!(summary["grants"], 0);
+
+        let without = share_summary(&json!({"contacts": [], "routes": null, "grants": []}));
+        assert!(without.get("code_renewal").is_some());
+        assert!(without["code_renewal"].is_null());
     }
 }
