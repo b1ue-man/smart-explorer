@@ -65,14 +65,23 @@ pub fn complete_legacy_launcher(
     };
     let launcher_sha256 = boundary.check(None)?;
     let feed = boundary.feed();
+    // E12: a signed release binds the three payloads the earlier app staged
+    // and the launcher. Callers of this bridge predate the consent dialog,
+    // so an unsigned feed keeps the earlier sidecar-only check.
+    let trust = crate::updater::feed_trust::read_trust(&feed, request.version)?;
+    if let Some(manifest) = trust.manifest() {
+        boundary.check_signed(manifest)?;
+    }
     let mut staging = StagingGuard::new();
-    let payload = feed.fetch_launcher_exe(request.version)?.ok_or_else(|| {
-        format!(
-            "legacy_launcher_required: managed runtime {} requires a verified launcher from {}",
-            request.version,
-            feed.display()
-        )
-    })?;
+    let payload = feed
+        .fetch_launcher_exe(request.version, trust.manifest())?
+        .ok_or_else(|| {
+            format!(
+                "legacy_launcher_required: managed runtime {} requires a verified launcher from {}",
+                request.version,
+                feed.display()
+            )
+        })?;
     staging.track(&payload);
     if !payload.sha256().eq_ignore_ascii_case(&launcher_sha256) {
         return Err("legacy_launcher_feed_changed: launcher hash changed during download".into());
@@ -128,6 +137,29 @@ impl FeedBoundary {
             return Err("legacy_launcher_feed_changed: configured source changed".into());
         }
         Ok(actual)
+    }
+    /// The hashes the earlier app staged are the signed ones of the release.
+    fn check_signed(
+        &self,
+        manifest: &crate::updater::release_signature::ReleaseManifest,
+    ) -> Result<(), String> {
+        for (asset, expected) in [
+            (os::app_payload_spec().local_names, self.app_sha256.as_str()),
+            (os::cli_payload_spec().local_names, self.cli_sha256.as_str()),
+            (
+                os::updater_payload_spec().local_names,
+                self.helper_sha256.as_str(),
+            ),
+        ] {
+            let name = asset.first().copied().unwrap_or_default();
+            if manifest.bind(name, expected)?.is_none() {
+                return Err(format!(
+                    "legacy_launcher_release_mismatch: the signed release manifest of {} does not list {name}",
+                    self.version
+                ));
+            }
+        }
+        Ok(())
     }
     fn check_version(&self, feed: &Feed) -> Result<(), String> {
         let actual = feed.read_version()?;
@@ -187,3 +219,7 @@ fn validate_version(version: &str) -> Result<(), String> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "legacy_launcher_tests.rs"]
+mod tests;

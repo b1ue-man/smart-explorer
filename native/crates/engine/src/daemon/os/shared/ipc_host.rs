@@ -437,7 +437,9 @@ pub(super) fn end_tracked_offers(state: &mut ShareHostState) {
     }
 }
 
-fn load_share_server() -> Result<String, String> {
+/// The stored Share server address of this program (empty without one).
+/// Also read by login provisioning for the gateway relays (E14).
+pub(crate) fn load_share_server() -> Result<String, String> {
     let path = crate::support_dirs::app_data_file("share_server.txt");
     let metadata = match std::fs::symlink_metadata(&path) {
         Ok(metadata) => metadata,

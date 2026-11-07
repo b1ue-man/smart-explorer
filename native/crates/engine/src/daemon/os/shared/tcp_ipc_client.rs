@@ -21,7 +21,7 @@ fn connect(request: TcpIpcRequest, wait: Option<Duration>) -> Result<TcpStream, 
     let address = super::ipc_storage::read_ipc_addr()
         .ok_or_else(|| "Background worker IPC is not ready".to_string())?;
     let token = super::ipc_storage::read_token().map_err(|error| error.to_string())?;
-    let mut stream = TcpStream::connect_timeout(&address, Duration::from_secs(2))
+    let mut stream = crate::daemon::ipc_proof::connect(&address, Duration::from_secs(2))
         .map_err(|error| error.to_string())?;
     set_stream_timeout(&stream, wait);
     write_request(

@@ -1,20 +1,21 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use super::config::update_source_str;
 use super::core::{parse_sha256_file, parse_ver, staged_payload_path, verify_sha256};
 use super::os;
-use super::staging::stage_from_feed;
-use super::types::StagedUpdate;
+use super::release_signature::ReleaseManifest;
 use super::types::VerifiedPayload;
 
 #[path = "feed_launcher.rs"]
 mod launcher;
 #[path = "legacy_launcher.rs"]
 mod legacy_launcher;
+#[path = "feed_release.rs"]
+mod release;
 pub use legacy_launcher::{
     complete_legacy_launcher, CompletedLegacyLauncher, LegacyLauncherRequest,
 };
+pub use release::{download_update, download_version, list_remote_versions, RollbackDownload};
 
 const HTTP_TIMEOUT: Duration = Duration::from_secs(25);
 const UPDATE_USER_AGENT: &str = "smart-explorer-updater";
@@ -54,7 +55,13 @@ impl Feed {
 
     /// Stage the new app binary as a local file. Local feeds are copied too, so
     /// a detached helper can delete the staging file without touching the feed.
-    pub(super) fn fetch_exe(&self, version: &str) -> Result<VerifiedPayload, String> {
+    /// With a signed `manifest`, only assets it lists are fetched, the sidecar
+    /// must name the signed hash and the payload must have the signed size.
+    pub(super) fn fetch_exe(
+        &self,
+        version: &str,
+        manifest: Option<&ReleaseManifest>,
+    ) -> Result<VerifiedPayload, String> {
         let spec = os::app_payload_spec();
         self.fetch_payload(
             spec.local_names,
@@ -62,10 +69,15 @@ impl Feed {
             spec.hash_name,
             "update_download",
             version,
+            manifest,
         )
     }
 
-    pub(super) fn fetch_updater_exe(&self, version: &str) -> Result<VerifiedPayload, String> {
+    pub(super) fn fetch_updater_exe(
+        &self,
+        version: &str,
+        manifest: Option<&ReleaseManifest>,
+    ) -> Result<VerifiedPayload, String> {
         let spec = os::updater_payload_spec();
         self.fetch_payload(
             spec.local_names,
@@ -73,10 +85,15 @@ impl Feed {
             spec.hash_name,
             "updater_download",
             version,
+            manifest,
         )
     }
 
-    pub(super) fn fetch_cli_exe(&self, version: &str) -> Result<VerifiedPayload, String> {
+    pub(super) fn fetch_cli_exe(
+        &self,
+        version: &str,
+        manifest: Option<&ReleaseManifest>,
+    ) -> Result<VerifiedPayload, String> {
         let spec = os::cli_payload_spec();
         self.fetch_payload(
             spec.local_names,
@@ -84,6 +101,7 @@ impl Feed {
             spec.hash_name,
             "cli_download",
             version,
+            manifest,
         )
     }
 
@@ -94,19 +112,15 @@ impl Feed {
         hash_name: &str,
         temp_prefix: &str,
         version: &str,
+        manifest: Option<&ReleaseManifest>,
     ) -> Result<VerifiedPayload, String> {
         let hash = self.read_sha256_required(hash_name)?;
         let dest = staged_payload_path(temp_prefix, version, &hash);
         let _ = std::fs::remove_file(&dest);
         match self {
             Feed::Local(dir) => {
-                let source = local_names
-                    .iter()
-                    .map(|n| dir.join(n))
-                    .find(|p| p.exists())
-                    .ok_or_else(|| {
-                        format!("Keine Datei im Update-Feed {} gefunden", dir.display())
-                    })?;
+                let (source, size) = local_payload(dir, local_names, &hash, manifest)?;
+                check_local_size(&source, size)?;
                 std::fs::copy(&source, &dest).map_err(|e| {
                     format!(
                         "Update-Datei stagen ({} -> {}): {}",
@@ -120,9 +134,13 @@ impl Feed {
                 VerifiedPayload::new(dest, hash)
             }
             Feed::Http(base) => {
-                let mut last_err = String::new();
+                let mut last_err =
+                    format!("{hash_name}: keine Datei im signierten Release-Manifest");
                 for name in http_names {
-                    match http_download(&format!("{base}/{name}"), &dest) {
+                    let Some(size) = signed_size(manifest, name, &hash)? else {
+                        continue;
+                    };
+                    match http_download(&format!("{base}/{name}"), &dest, size) {
                         Ok(()) => {
                             verify_sha256(&dest, &hash)?;
                             os::mark_staged_executable(&dest)?;
@@ -248,6 +266,29 @@ fn http_get_string(url: &str) -> Result<String, String> {
         .map_err(|e| format!("HTTP-Antwort {}: {}", url, e))
 }
 
+/// The body of `url` up to `limit` bytes; `None` for 404.
+pub(super) fn http_get_bytes_optional_404(
+    url: &str,
+    limit: u64,
+) -> Result<Option<Vec<u8>>, String> {
+    use std::io::Read;
+    let resp = match ureq::get(url)
+        .set("User-Agent", UPDATE_USER_AGENT)
+        .timeout(HTTP_TIMEOUT)
+        .call()
+    {
+        Ok(resp) => resp,
+        Err(ureq::Error::Status(404, _)) => return Ok(None),
+        Err(e) => return Err(format_http_error(url, e)),
+    };
+    let mut bytes = Vec::new();
+    resp.into_reader()
+        .take(limit)
+        .read_to_end(&mut bytes)
+        .map_err(|e| format!("HTTP-Antwort {}: {}", url, e))?;
+    Ok(Some(bytes))
+}
+
 fn http_get_string_optional_404(url: &str) -> Result<Option<String>, String> {
     let resp = match ureq::get(url)
         .set("User-Agent", UPDATE_USER_AGENT)
@@ -263,7 +304,10 @@ fn http_get_string_optional_404(url: &str) -> Result<Option<String>, String> {
         .map_err(|e| format!("HTTP-Antwort {}: {}", url, e))
 }
 
-fn http_download(url: &str, dest: &Path) -> Result<(), String> {
+/// Downloads `url` to `dest`; `signed_size` (from the release manifest) is
+/// the exact length, otherwise the announced length or the free space bounds
+/// the download (r-lokal-4).
+fn http_download(url: &str, dest: &Path, signed_size: Option<u64>) -> Result<(), String> {
     let tmp = dest.with_extension(format!(
         "{}download",
         dest.extension()
@@ -277,10 +321,23 @@ fn http_download(url: &str, dest: &Path) -> Result<(), String> {
         .timeout(HTTP_TIMEOUT)
         .call()
         .map_err(|e| format_http_error(url, e))?;
+    // r-lokal-4: exactly the signed size; without manifest never more than
+    // announced, nor than the free space minus the app-data reserve when no
+    // length is announced.
+    let announced = resp
+        .header("Content-Length")
+        .and_then(|value| value.trim().parse::<u64>().ok());
+    let folder = tmp.parent().unwrap_or_else(|| Path::new("."));
+    let bound = match signed_size {
+        Some(size) => super::download_bound::DownloadBound::exact(size),
+        None => super::download_bound::DownloadBound::new(announced, folder),
+    };
     let mut reader = resp.into_reader();
     let mut file =
         std::fs::File::create(&tmp).map_err(|e| format!("Temp-Datei {}: {}", tmp.display(), e))?;
-    if let Err(e) = std::io::copy(&mut reader, &mut file) {
+    let copied =
+        super::download_bound::copy_bounded(&mut reader, &mut file, bound, &mut |_| {}, &|| false);
+    if let Err(e) = copied {
         let _ = std::fs::remove_file(&tmp);
         return Err(format!("Download {}: {}", url, e));
     }
@@ -340,131 +397,65 @@ pub(super) fn tag_to_version(name: &str) -> Option<String> {
     }
 }
 
-/// List previously-released versions from the GitHub feed's releases.
-pub fn list_remote_versions() -> Vec<String> {
-    let raw = match update_source_str() {
-        Some(s) => s,
-        None => return Vec::new(),
-    };
-    let (owner, repo) = match github_repo(&raw) {
-        Some(v) => v,
-        None => return Vec::new(),
-    };
-    let cur = env!("CARGO_PKG_VERSION");
-    let mut versions: Vec<String> = Vec::new();
-    for page in 1..=5u32 {
-        let url = format!(
-            "https://api.github.com/repos/{owner}/{repo}/releases?per_page=100&page={page}"
-        );
-        let body = match http_get_github_json(&url) {
-            Ok(s) => s,
-            Err(_) => break,
-        };
-        let arr: Vec<serde_json::Value> = match serde_json::from_str(&body) {
-            Ok(a) => a,
-            Err(_) => break,
-        };
-        let n = arr.len();
-        for release in &arr {
-            if release.get("draft").and_then(|v| v.as_bool()) == Some(true) {
-                continue;
-            }
-            let has_app_asset = release
-                .get("assets")
-                .and_then(|v| v.as_array())
-                .map(|assets| {
-                    assets.iter().any(|asset| {
-                        asset.get("name").and_then(|v| v.as_str()) == Some(app_release_asset_name())
-                    })
-                })
-                .unwrap_or(true);
-            if !has_app_asset {
-                continue;
-            }
-            if let Some(v) = release
-                .get("tag_name")
-                .and_then(|v| v.as_str())
-                .and_then(tag_to_version)
-            {
-                versions.push(v);
-            }
+/// The asset name a release lists for an HTTP path segment.
+fn asset_name(http_name: &str) -> String {
+    http_name.replace("%20", " ")
+}
+
+/// `Ok(None)`: skip `http_name`, the signed release does not list it.
+/// `Ok(Some(size))`: fetch it with that exact size (`None` without manifest).
+pub(super) fn signed_size(
+    manifest: Option<&ReleaseManifest>,
+    http_name: &str,
+    sidecar_sha256: &str,
+) -> Result<Option<Option<u64>>, String> {
+    match manifest {
+        None => Ok(Some(None)),
+        Some(manifest) => Ok(manifest
+            .bind(&asset_name(http_name), sidecar_sha256)?
+            .map(Some)),
+    }
+}
+
+/// The first present local payload (that the signed release lists, if any)
+/// and its signed size.
+pub(super) fn local_payload(
+    dir: &Path,
+    local_names: &[&str],
+    sidecar_sha256: &str,
+    manifest: Option<&ReleaseManifest>,
+) -> Result<(PathBuf, Option<u64>), String> {
+    for name in local_names {
+        let path = dir.join(name);
+        if !path.exists() {
+            continue;
         }
-        if n < 100 {
-            break;
+        if let Some(size) = signed_size(manifest, name, sidecar_sha256)? {
+            return Ok((path, size));
         }
     }
-    versions.retain(|v| v != cur);
-    versions.sort_by_key(|version| std::cmp::Reverse(parse_ver(version)));
-    versions.dedup();
-    versions
+    Err(match manifest {
+        None => format!("Keine Datei im Update-Feed {} gefunden", dir.display()),
+        Some(_) => format!(
+            "Keine im signierten Release-Manifest genannte Datei im Update-Feed {} gefunden",
+            dir.display()
+        ),
+    })
 }
 
-fn http_get_github_json(url: &str) -> Result<String, String> {
-    let resp = ureq::get(url)
-        .set("User-Agent", UPDATE_USER_AGENT)
-        .set("Accept", "application/vnd.github+json")
-        .timeout(HTTP_TIMEOUT)
-        .call()
-        .map_err(|e| format_http_error(url, e))?;
-    resp.into_string()
-        .map_err(|e| format!("HTTP-Antwort {}: {}", url, e))
-}
-
-/// Download a specific released version's binary to a temp file ready for
-/// `revert_to`/`swap_in`.
-pub fn download_version(version: &str) -> Result<PathBuf, String> {
-    let raw = update_source_str().ok_or("Keine Update-Quelle konfiguriert")?;
-    let (owner, repo) =
-        github_repo(&raw).ok_or("Frühere Versionen sind nur über einen GitHub-Feed abrufbar")?;
-    let spec = os::app_payload_spec();
-    let url = format!(
-        "https://github.com/{owner}/{repo}/releases/download/v{version}/{}",
-        app_release_asset_name()
-    );
-    let hash_url = format!(
-        "https://github.com/{owner}/{repo}/releases/download/v{version}/{}",
-        spec.hash_name
-    );
-    // Every published version keeps its assets in its GitHub release; the
-    // former `release/v*` branch feeds no longer carry binaries.
-    download_with_required_sha256(
-        &url,
-        &hash_url,
-        spec.hash_name,
-        "rollback_download",
-        version,
-    )
-}
-
-/// Download and durably stage all payloads for a specific GitHub release.
-/// This function never changes installed files or launches the updater.
-pub fn download_update(version: &str) -> Result<StagedUpdate, String> {
-    let raw = update_source_str().ok_or("Keine Update-Quelle konfiguriert")?;
-    let (owner, repo) =
-        github_repo(&raw).ok_or("Versionen sind nur ueber einen GitHub-Feed abrufbar")?;
-    let release = Feed::Http(format!(
-        "https://github.com/{owner}/{repo}/releases/download/v{version}"
-    ));
-    stage_from_feed(&release, version)
-}
-
-fn download_with_required_sha256(
-    url: &str,
-    hash_url: &str,
-    hash_name: &str,
-    temp_prefix: &str,
-    version: &str,
-) -> Result<PathBuf, String> {
-    let raw = match http_get_string(hash_url) {
-        Ok(raw) => raw,
-        Err(e) => {
-            return Err(format!("Pruefsumme laden: {}", e));
-        }
+/// A local payload must have its signed size before it is copied.
+pub(super) fn check_local_size(source: &Path, size: Option<u64>) -> Result<(), String> {
+    let Some(size) = size else {
+        return Ok(());
     };
-    let hash = parse_sha256_file(&raw, hash_name)?;
-    let dest = staged_payload_path(temp_prefix, version, &hash);
-    let _ = std::fs::remove_file(&dest);
-    http_download(url, &dest)?;
-    verify_sha256(&dest, &hash)?;
-    Ok(dest)
+    let actual = std::fs::metadata(source)
+        .map_err(|e| format!("Update-Datei {}: {e}", source.display()))?
+        .len();
+    if actual != size {
+        return Err(format!(
+            "update_signature_mismatch: {} has {actual} bytes, the signed release manifest names {size}",
+            source.display()
+        ));
+    }
+    Ok(())
 }

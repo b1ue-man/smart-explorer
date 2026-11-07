@@ -1,4 +1,3 @@
-use std::net::TcpStream;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -15,7 +14,7 @@ pub fn share_command(cmd: crate::share::ShareCmd) -> Result<ShareCommandReply, S
     ensure_worker_ready()?;
     let token = read_token().map_err(|error| format!("Background-Worker Token: {error}"))?;
     let addr = read_ipc_addr().ok_or_else(|| "Background-Worker IPC nicht bereit".to_string())?;
-    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(2))
+    let mut stream = crate::daemon::ipc_proof::connect(&addr, Duration::from_secs(2))
         .map_err(|error| format!("Background-Worker IPC: {error}"))?;
     set_stream_timeout(&stream, Some(Duration::from_secs(8)));
     write_request(&mut stream, &IpcRequest::ShareCommand { token, cmd })

@@ -16,7 +16,6 @@
 //! compares site IDs) and `gdrive:///<path>` below the drive's root. The
 //! mount path comes from `MountStatus::MountedAt` (Linux folder) or the
 //! letter of `Mounted`/`Conflict` (Windows).
-use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -114,11 +113,7 @@ pub fn path_on_drive(root: &Path, dialect: PathDialect, relative: &str) -> Optio
 }
 
 /// The path of `located` on `snapshot`'s drive, when it is mounted.
-pub fn drive_path(
-    snapshot: &MountSnapshot,
-    located: &Located,
-    site: &str,
-) -> Option<PathBuf> {
+pub fn drive_path(snapshot: &MountSnapshot, located: &Located, site: &str) -> Option<PathBuf> {
     let relative = relative_in(&snapshot.config.source, located, site)?;
     let (root, dialect) = mounted_root(&snapshot.status)?;
     path_on_drive(&root, dialect, &relative)
@@ -166,7 +161,7 @@ pub fn mount_path_for(location: &str) -> Result<Option<PathBuf>, String> {
     let Ok(token) = read_token() else {
         return Ok(None);
     };
-    let Ok(mut stream) = TcpStream::connect_timeout(&addr, Duration::from_secs(2)) else {
+    let Ok(mut stream) = crate::daemon::ipc_proof::connect(&addr, Duration::from_secs(2)) else {
         return Ok(None);
     };
     set_stream_timeout(&stream, Some(ASK_TIMEOUT));

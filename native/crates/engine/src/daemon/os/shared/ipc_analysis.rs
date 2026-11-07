@@ -30,7 +30,7 @@ pub(super) fn scan(
     let token = super::ipc_storage::read_token().map_err(io::Error::other)?;
     let address = super::ipc_storage::read_ipc_addr()
         .ok_or_else(|| io::Error::other("Analyse-Worker nicht erreichbar"))?;
-    let mut stream = TcpStream::connect_timeout(&address, Duration::from_secs(3))?;
+    let mut stream = crate::daemon::ipc_proof::connect(&address, Duration::from_secs(3))?;
     stream.set_write_timeout(Some(Duration::from_secs(60)))?;
     stream.set_nodelay(true)?;
     super::ipc_protocol::write_request(

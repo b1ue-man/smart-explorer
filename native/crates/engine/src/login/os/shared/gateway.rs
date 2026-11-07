@@ -40,6 +40,17 @@ const BROKER_IDLE: Duration = Duration::from_secs(5);
 // The existing Share endpoint permits 64 pending application handshakes. The
 // login broker deliberately admits one active console session at a time.
 const PENDING_HANDSHAKES: usize = 64;
+// r-lokal-6: a TLS slot is held only until the peer's identity is known; the
+// Share endpoint allows 3 s, a login over a relay from a mobile network may
+// need more round trips.
+const TLS_HANDSHAKE: Duration = Duration::from_secs(10);
+// Connections of granted peers after TLS; foreign keys never take these.
+const GRANTED_CONNECTIONS: usize = PENDING_HANDSHAKES;
+// Peers without a grant still get `permission_missing`, from this small
+// budget and within `DENIAL_TIME`; beyond it they are closed without a hello.
+const DENIAL_SLOTS: usize = 8;
+const DENIAL_TIME: Duration = Duration::from_secs(5);
+const DENIAL_LINGER: Duration = Duration::from_secs(1);
 #[derive(Clone)]
 struct Epoch {
     policy: Arc<Policy>,
@@ -103,7 +114,9 @@ async fn serve(
 ) -> io::Result<()> {
     let endpoint = transport::bind_machine(key, &options).await?;
     let (epochs, _) = watch::channel(initial);
-    let pending = Arc::new(Semaphore::new(PENDING_HANDSHAKES));
+    let admission = transport::GatewayAdmission::new(PENDING_HANDSHAKES);
+    let granted_slots = Arc::new(Semaphore::new(GRANTED_CONNECTIONS));
+    let denial_slots = Arc::new(Semaphore::new(DENIAL_SLOTS));
     let sessions = Arc::new(Semaphore::new(1));
     let mut children = JoinSet::new();
     let mut tick = tokio::time::interval(Duration::from_millis(200));
@@ -131,11 +144,17 @@ async fn serve(
                 Some(_) = children.join_next(), if !children.is_empty() => {},
                 incoming = endpoint.accept() => {
                     let Some(incoming) = incoming else { break; };
-                    let Ok(slot) = pending.clone().try_acquire_owned() else { incoming.refuse(); continue; };
+                    let policy = epochs.borrow().policy.clone();
+                    let Some((incoming, slot)) = admission.admit(incoming, move |id| holds_grant(&policy, id)) else { continue; };
                     let epochs = epochs.subscribe(); let sessions = sessions.clone(); let local = endpoint.id().to_string();
+                    let (granted_slots, denial_slots) = (granted_slots.clone(), denial_slots.clone());
                     children.spawn(async move {
-                        let _slot = slot;
-                        let connection = tokio::time::timeout(HANDSHAKE, incoming).await.map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "login TLS handshake timed out"))?.map_err(io::Error::other)?;
+                        let connected = tokio::time::timeout(TLS_HANDSHAKE, incoming).await;
+                        drop(slot);
+                        let connection = connected.map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "login TLS handshake timed out"))?.map_err(io::Error::other)?;
+                        let granted = holds_grant(&epochs.borrow().policy, &connection.remote_id().to_string());
+                        let pool = if granted { granted_slots } else { denial_slots };
+                        let Ok(_held) = pool.try_acquire_owned() else { transport::close(&connection); return Ok(()); };
                         handle(connection, local, epochs, sessions).await
                     });
                 }
@@ -148,6 +167,15 @@ async fn serve(
     endpoint.close().await;
     children.shutdown().await;
     result
+}
+/// Whether `remote` holds a current login grant with screen view.
+fn holds_grant(policy: &Policy, remote: &str) -> bool {
+    policy.grants.iter().any(|grant| {
+        grant.public_key == remote
+            && grant.rights.login
+            && grant.rights.screen_view
+            && now().is_ok_and(|now| now >= grant.not_before && now < grant.expires_at)
+    })
 }
 async fn guarded<T>(
     connection: &Connection,
@@ -175,14 +203,9 @@ async fn handle(
     }
     let remote = connection.remote_id().to_string();
     let initial = epochs.borrow_and_update().clone();
-    let authorized = initial.policy.grants.iter().any(|grant| {
-        grant.public_key == remote
-            && grant.rights.login
-            && grant.rights.screen_view
-            && now().is_ok_and(|now| now >= grant.not_before && now < grant.expires_at)
-    });
+    let authorized = holds_grant(&initial.policy, &remote);
     transport::monitor(&connection, local, true, Vec::new())?;
-    let deadline = Instant::now() + HANDSHAKE;
+    let deadline = Instant::now() + if authorized { HANDSHAKE } else { DENIAL_TIME };
     let (mut send, mut recv) = guarded(&connection, &mut epochs, HANDSHAKE, deadline, async {
         connection.open_bi().await.map_err(io::Error::other)
     })
@@ -208,7 +231,7 @@ async fn handle(
     )
     .await?;
     if !authorized {
-        let _ = tokio::time::timeout(BROKER_IDLE, connection.closed()).await;
+        let _ = tokio::time::timeout(DENIAL_LINGER, connection.closed()).await;
         return Ok(());
     }
     let hello: ClientHello = guarded(

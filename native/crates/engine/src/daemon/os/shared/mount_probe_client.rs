@@ -1,4 +1,3 @@
-use std::net::TcpStream;
 use std::time::Duration;
 
 use super::ipc_protocol::{
@@ -16,7 +15,7 @@ pub fn probe_share_mount_capabilities(
     super::ipc_client::ensure_worker_ready()?;
     let token = read_token().map_err(|error| format!("Background-Worker Token: {error}"))?;
     let addr = read_ipc_addr().ok_or_else(|| "Background-Worker IPC nicht bereit".to_string())?;
-    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(2))
+    let mut stream = crate::daemon::ipc_proof::connect(&addr, Duration::from_secs(2))
         .map_err(|error| format!("Background-Worker IPC: {error}"))?;
     // The daemon's peer probe includes its bounded 45-second transport/fallback
     // window. Keep a small IPC margin without leaving an unbounded UI worker.

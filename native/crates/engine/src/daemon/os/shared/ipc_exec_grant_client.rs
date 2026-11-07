@@ -1,4 +1,3 @@
-use std::net::TcpStream;
 use std::time::Duration;
 
 use super::super::ipc_protocol::{
@@ -16,7 +15,7 @@ pub fn mutate_exec_grant(
     super::ensure_worker_ready()?;
     let token = read_token().map_err(|error| format!("Background-Worker Token: {error}"))?;
     let addr = read_ipc_addr().ok_or_else(|| "Background-Worker IPC nicht bereit".to_string())?;
-    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(2))
+    let mut stream = crate::daemon::ipc_proof::connect(&addr, Duration::from_secs(2))
         .map_err(|error| format!("Background-Worker IPC: {error}"))?;
     set_stream_timeout(&stream, Some(Duration::from_secs(15)));
     write_request(

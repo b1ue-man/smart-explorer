@@ -8,10 +8,14 @@ mod cli_swap;
 mod config;
 #[path = "core/core.rs"]
 mod core;
+#[path = "os/shared/download_bound.rs"]
+mod download_bound;
 #[path = "os/shared/feed.rs"]
 mod feed;
 #[path = "os/shared/feed_files.rs"]
 mod feed_files;
+#[path = "os/shared/feed_trust.rs"]
+mod feed_trust;
 #[path = "os/shared/flow.rs"]
 mod flow;
 #[cfg(windows)]
@@ -20,6 +24,8 @@ mod os;
 #[cfg(any(target_os = "linux", target_os = "android"))]
 #[path = "os/linux_os.rs"]
 mod os;
+#[path = "os/shared/release_signature.rs"]
+mod release_signature;
 #[path = "os/shared/staging.rs"]
 mod staging;
 #[path = "os/shared/startup_ack.rs"]
@@ -43,23 +49,25 @@ pub use config::{
 pub use core::is_newer;
 pub use feed::{
     complete_legacy_launcher, download_update, download_version, list_remote_versions,
-    CompletedLegacyLauncher, LegacyLauncherRequest,
+    CompletedLegacyLauncher, LegacyLauncherRequest, RollbackDownload,
 };
 pub use feed_files::{
     download_feed_file, file_sha256, pinned_feed, read_feed_sha256, read_feed_version,
 };
-pub use flow::{check_async, update_to_latest_async};
+pub use feed_trust::{UnsignedConsent, UnsignedFeed};
+pub use flow::{check_async, check_feed, stage_confirmed_async, update_to_latest_async, FeedCheck};
 /// The `se` installed next to the running app (the desktop GUI runs it for
 /// `se plugin`).
 pub use os::installed_cli_path;
 pub use os::revert_to;
+#[cfg(any(test, feature = "test-support"))]
+pub use release_signature::{use_test_release_key, TestReleaseKey};
 pub use staging::{discard_staged_update, load_staged_update, verify_staged_update};
 pub use startup_ack::{
     acknowledge_update_startup, capture_update_startup_ack, update_startup_ack_pending,
 };
 pub use terminal::{
-    check_feed, desktop_update_possible, detect_installation, replace_cli, stage_update, FeedCheck,
-    Installation,
+    desktop_update_possible, detect_installation, replace_cli, stage_update, Installation,
 };
 pub use terminal::{lock_cli_for_integration, LegacyIntegrationGuard};
 pub use types::{StagedUpdate, UpdateMsg, VerifiedPayload};

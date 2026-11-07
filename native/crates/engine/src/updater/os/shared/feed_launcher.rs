@@ -1,16 +1,22 @@
 //! Optional legacy feed detection never bypasses a present launcher's hash.
 use super::{
-    format_http_error, os, parse_ver, Feed, VerifiedPayload, HTTP_TIMEOUT, UPDATE_USER_AGENT,
+    check_local_size, format_http_error, local_payload, os, parse_ver, signed_size, Feed,
+    ReleaseManifest, VerifiedPayload, HTTP_TIMEOUT, UPDATE_USER_AGENT,
 };
 
 impl Feed {
+    /// With a signed `manifest`, the launcher must be one of its assets
+    /// with the signed hash and size.
     pub(in crate::updater) fn fetch_launcher_exe(
         &self,
         version: &str,
+        manifest: Option<&ReleaseManifest>,
     ) -> Result<Option<VerifiedPayload>, String> {
         let spec = os::launcher_payload_spec();
         if let Some(hash) = self.read_sha256(spec.hash_name)? {
-            return self.fetch_launcher_bound(version, &hash).map(Some);
+            return self
+                .fetch_launcher_bound(version, &hash, manifest)
+                .map(Some);
         }
         // Old published bundles have neither file nor sidecar. A development
         // bundle with the same version may carry both; its verified runtime
@@ -27,7 +33,12 @@ impl Feed {
 
     /// A unique stage is owned before its first write, including hash/download
     /// failures. The historical bridge can additionally pin this sidecar.
-    fn fetch_launcher_bound(&self, version: &str, hash: &str) -> Result<VerifiedPayload, String> {
+    fn fetch_launcher_bound(
+        &self,
+        version: &str,
+        hash: &str,
+        manifest: Option<&ReleaseManifest>,
+    ) -> Result<VerifiedPayload, String> {
         use crate::updater::{
             core::{staged_payload_path, verify_sha256},
             staging::StagingGuard,
@@ -38,21 +49,24 @@ impl Feed {
         stage.track_path(&dest);
         match self {
             Feed::Local(root) => {
-                let source = spec
-                    .local_names
-                    .iter()
-                    .map(|name| root.join(name))
-                    .find(|path| path.exists())
-                    .ok_or_else(|| {
-                        format!("Keine MCP-Starterdatei im Feed {} gefunden", root.display())
+                let (source, size) = local_payload(root, spec.local_names, hash, manifest)
+                    .map_err(|error| match manifest {
+                        None => {
+                            format!("Keine MCP-Starterdatei im Feed {} gefunden", root.display())
+                        }
+                        Some(_) => format!("MCP-Starter: {error}"),
                     })?;
+                check_local_size(&source, size)?;
                 std::fs::copy(&source, &dest).map_err(|e| format!("MCP-Starter stagen: {e}"))?;
             }
             Feed::Http(base) => {
-                let mut failure = String::new();
+                let mut failure = "keine Datei im signierten Release-Manifest".to_string();
                 let mut downloaded = false;
                 for name in spec.http_names {
-                    match super::http_download(&format!("{base}/{name}"), &dest) {
+                    let Some(size) = signed_size(manifest, name, hash)? else {
+                        continue;
+                    };
+                    match super::http_download(&format!("{base}/{name}"), &dest, size) {
                         Ok(()) => {
                             downloaded = true;
                             break;

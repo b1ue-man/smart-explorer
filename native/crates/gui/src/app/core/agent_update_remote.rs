@@ -78,10 +78,8 @@ impl App {
                             "Remote-Agent ist aktiv, aber die Einstellung wurde nicht gespeichert: {error}"
                         ));
                     } else {
-                        self.notice = Some((
-                            "Remote-Agent aktiv".to_string(),
-                            std::time::Instant::now(),
-                        ));
+                        self.notice =
+                            Some(("Remote-Agent aktiv".to_string(), std::time::Instant::now()));
                     }
                     self.rescan();
                 }
@@ -166,6 +164,15 @@ impl App {
     }
 
     pub(in crate::app) fn start_version_download(&mut self, version: String) {
+        self.start_version_download_with(version, crate::updater::UnsignedConsent::none());
+    }
+
+    /// `consent` names the one unsigned release the user confirmed (E12).
+    pub(in crate::app) fn start_version_download_with(
+        &mut self,
+        version: String,
+        consent: crate::updater::UnsignedConsent,
+    ) {
         if self.rollback_rx.is_some() {
             return;
         }
@@ -174,7 +181,7 @@ impl App {
         let spawn = std::thread::Builder::new()
             .name("version-dl".into())
             .spawn(move || {
-                let r = crate::updater::download_version(&version).map(|p| (version, p));
+                let r = crate::updater::download_version(&version, &consent).map(|p| (version, p));
                 let _ = tx.send(r);
             });
         match spawn {
@@ -195,6 +202,15 @@ impl App {
     }
 
     pub(in crate::app) fn start_install_download(&mut self, version: String) {
+        self.start_install_download_with(version, crate::updater::UnsignedConsent::none());
+    }
+
+    /// `consent` names the one unsigned release the user confirmed (E12).
+    pub(in crate::app) fn start_install_download_with(
+        &mut self,
+        version: String,
+        consent: crate::updater::UnsignedConsent,
+    ) {
         if self.update_rx.is_some() {
             self.notice = Some((
                 "Eine Update-Prüfung läuft bereits…".to_string(),
@@ -207,8 +223,8 @@ impl App {
         let spawn = std::thread::Builder::new()
             .name("update-version-dl".into())
             .spawn(move || {
-                let message = match crate::updater::download_update(&version) {
-                    Ok(bundle) => crate::updater::UpdateMsg::Staged(bundle),
+                let message = match crate::updater::download_update(&version, &consent) {
+                    Ok(message) => message,
                     Err(error) => crate::updater::UpdateMsg::Error(error),
                 };
                 let _ = tx.send(message);
@@ -260,18 +276,28 @@ impl App {
             Some(Ok(res)) => {
                 self.rollback_rx = None;
                 match res {
-                    Ok((ver, exe)) => match crate::updater::revert_to(&exe, &ver) {
-                        Ok(cur) => {
-                            self.update_ready = Some(ReadyUpdate::InstalledRollback {
-                                version: ver,
-                                executable: cur,
+                    Ok((version, crate::updater::RollbackDownload::NeedsConsent(feed))) => {
+                        self.unsigned_update_prompt =
+                            Some(super::update_unsigned_ui::UnsignedUpdatePrompt {
+                                version,
+                                feed,
+                                rollback: true,
                             });
-                            self.show_update_dialog = true;
+                    }
+                    Ok((ver, crate::updater::RollbackDownload::Ready(exe))) => {
+                        match crate::updater::revert_to(&exe, &ver) {
+                            Ok(cur) => {
+                                self.update_ready = Some(ReadyUpdate::InstalledRollback {
+                                    version: ver,
+                                    executable: cur,
+                                });
+                                self.show_update_dialog = true;
+                            }
+                            Err(e) => {
+                                self.error_msg = Some(format!("Zurückrollen: {e}"));
+                            }
                         }
-                        Err(e) => {
-                            self.error_msg = Some(format!("Zurückrollen: {e}"));
-                        }
-                    },
+                    }
                     Err(e) => self.error_msg = Some(format!("Version laden: {e}")),
                 }
             }
@@ -309,7 +335,6 @@ impl App {
             }
         }
     }
-
 }
 
 fn persist_agent_preference(account: Option<&str>, enabled: bool) -> Option<String> {

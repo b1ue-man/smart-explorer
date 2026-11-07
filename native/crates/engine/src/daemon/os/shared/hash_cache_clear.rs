@@ -5,7 +5,6 @@
 //! so the clear of that process reaches it. The cache file and the memory of a
 //! process are cleared by `agent_proto::hash_cache::clear`.
 use std::io;
-use std::net::TcpStream;
 use std::path::Path;
 use std::time::Duration;
 
@@ -159,7 +158,7 @@ fn clear_worker() -> ClearStep {
         Ok(token) => token,
         Err(error) => return ClearStep::NotReached(format!("Token: {error}")),
     };
-    let mut stream = match TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT) {
+    let mut stream = match crate::daemon::ipc_proof::connect(&addr, CONNECT_TIMEOUT) {
         Ok(stream) => stream,
         Err(error) if error.kind() == io::ErrorKind::ConnectionRefused => {
             return ClearStep::NotRunning;

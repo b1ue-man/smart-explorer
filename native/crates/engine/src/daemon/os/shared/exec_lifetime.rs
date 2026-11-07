@@ -260,7 +260,9 @@ pub(super) fn connect_control(
     exec_id: crate::share::ExecId,
     control_token: String,
 ) -> io::Result<TcpStream> {
-    let mut control = TcpStream::connect_timeout(&address, Duration::from_secs(2))?;
+    // The worker must prove that it holds the token before the token is sent (r-lokal-1, L-B1).
+    let mut control =
+        crate::daemon::ipc_proof::connect_token(&address, Duration::from_secs(2), &token)?;
     control.set_read_timeout(Some(ATTACH_TIMEOUT))?;
     control.set_write_timeout(Some(ATTACH_TIMEOUT))?;
     write_request(

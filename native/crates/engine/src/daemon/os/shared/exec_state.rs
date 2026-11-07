@@ -302,7 +302,7 @@ fn request(
 ) -> Result<super::ipc_protocol::IpcResponse, String> {
     let addr = super::ipc_storage::read_ipc_addr()
         .ok_or_else(|| "Background-Worker IPC nicht bereit".to_string())?;
-    let mut stream = std::net::TcpStream::connect_timeout(&addr, Duration::from_secs(2))
+    let mut stream = crate::daemon::ipc_proof::connect(&addr, Duration::from_secs(2))
         .map_err(|error| format!("Background-Worker IPC: {error}"))?;
     super::ipc_protocol::set_stream_timeout(&stream, Some(Duration::from_secs(8)));
     super::ipc_protocol::write_request(&mut stream, &request).map_err(|error| error.to_string())?;

@@ -35,6 +35,10 @@ pub struct StagedUpdate {
     cli: VerifiedPayload,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     launcher: Option<VerifiedPayload>,
+    /// Why this bundle has no valid release signature (E12); absent for a
+    /// signed release and in manifests written before signing existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    unsigned: Option<super::feed_trust::UnsignedFeed>,
 }
 
 impl StagedUpdate {
@@ -55,7 +59,23 @@ impl StagedUpdate {
             helper,
             cli,
             launcher,
+            unsigned: None,
         })
+    }
+
+    /// Records that the bundle was staged without a valid release signature.
+    pub(super) fn with_unsigned(
+        mut self,
+        unsigned: Option<super::feed_trust::UnsignedFeed>,
+    ) -> Self {
+        self.unsigned = unsigned;
+        self
+    }
+
+    /// `Some` when the bundle was staged without a valid release signature
+    /// (after the user's consent, or from an unsigned own feed).
+    pub fn unsigned(&self) -> Option<super::feed_trust::UnsignedFeed> {
+        self.unsigned
     }
 
     pub(super) fn validate_schema(&self) -> Result<(), String> {
@@ -120,9 +140,20 @@ pub enum UpdateMsg {
     /// installed file or process has been changed; applying still needs
     /// explicit user consent.
     Staged(StagedUpdate),
+    /// The feed's newer release has no valid signature and needs the user's
+    /// explicit consent for this one update (E12): an older release of the
+    /// project's feed or a plain `http://` feed. Nothing was staged.
+    UnsignedConsentNeeded {
+        version: String,
+        feed: super::feed_trust::UnsignedFeed,
+    },
     /// Only sent for manual checks; automatic checks fail silently.
     Error(String),
     /// Automatic check failed; record it in the app error log without opening
     /// a modal during startup/offline use.
     BackgroundError(String),
 }
+
+#[cfg(test)]
+#[path = "staged_unsigned_tests.rs"]
+mod unsigned_tests;

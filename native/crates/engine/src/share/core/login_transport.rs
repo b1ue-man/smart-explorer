@@ -3,10 +3,13 @@
 //! existing ShareService; the machine key comes from the private gateway loader.
 pub use super::route_cancellation::RouteCancellation;
 pub use super::route_state::RouteStatus;
+#[path = "login_transport_admission.rs"]
+mod admission;
 use crate::login::core::gateway_types::{GatewayNetwork, GatewayTarget, LOGIN_ALPN};
+pub use admission::{GatewayAdmission, GatewayTlsSlot};
 use iroh::{
     endpoint::{ApplicationPathUpdate, Connection, VarInt},
-    Endpoint, EndpointAddr, RelayMode, RelayUrl, SecretKey, TransportAddr,
+    Endpoint, EndpointAddr, RelayUrl, SecretKey, TransportAddr,
 };
 use std::{
     future::Future,
@@ -22,6 +25,9 @@ pub struct LoginClientContext {
     pub runtime: tokio::runtime::Handle,
     pub peer_id: String,
     pub key: SecretKey,
+    /// Relays of the Share server configured on this device (E14): a target
+    /// that asks for "default relays" is reached through these, never n0.
+    pub relay_urls: Vec<RelayUrl>,
     pub _retainer: Arc<dyn Send + Sync>,
 }
 impl super::service::ShareService {
@@ -37,14 +43,19 @@ impl super::service::ShareService {
             runtime: self.iroh.rt.handle().clone(),
             peer_id: self.identity.device_id.clone(),
             key: self.identity.iroh_secret.clone(),
+            relay_urls: self.iroh.transport_options.relay_urls.clone(),
             _retainer: self.iroh.clone(),
         })
     }
 }
-fn relay_urls(options: &GatewayNetwork) -> io::Result<Vec<RelayUrl>> {
+/// Relay URLs for login options (E14). `use_default_relays` means "the
+/// relays of the Share server configured in the program": `configured` holds
+/// them (empty without a configured server, so only direct paths remain).
+/// The number0 relays are never used.
+fn relay_urls(options: &GatewayNetwork, configured: &[RelayUrl]) -> io::Result<Vec<RelayUrl>> {
     options.validate()?;
     if options.use_default_relays {
-        return Ok(RelayMode::Default.relay_map().urls::<Vec<RelayUrl>>());
+        return Ok(configured.to_vec());
     }
     options
         .relay_urls
@@ -52,13 +63,36 @@ fn relay_urls(options: &GatewayNetwork) -> io::Result<Vec<RelayUrl>> {
         .map(|url| url.parse().map_err(io::Error::other))
         .collect()
 }
+/// The relays the machine gateway binds and publishes. The gateway reads no
+/// user profile, so its configured server is the one provisioning wrote into
+/// `gateway-network.json` ([`configured_server_network`]); a stored
+/// `use_default_relays: true` without such relays leaves only direct paths.
+fn gateway_relays(options: &GatewayNetwork) -> io::Result<Vec<RelayUrl>> {
+    relay_urls(options, &[])
+}
+/// Network options for "the relays of the configured Share server" (E14):
+/// relays, certificate pins and plaintext rule of the stored server address
+/// `server`, resolved exactly like the Share endpoint does. Without a server
+/// the result has no relays (direct paths only). The field names of
+/// `gateway-network.json` stay; the result carries explicit relays.
+pub fn configured_server_network(server: &str) -> GatewayNetwork {
+    let options = super::transport_options::load(server);
+    GatewayNetwork {
+        format: crate::login::core::model::VERSION,
+        use_default_relays: false,
+        relay_urls: options
+            .relay_urls
+            .iter()
+            .take(16)
+            .map(ToString::to_string)
+            .collect(),
+        relay_pins: options.relay_pins.iter().take(16).copied().collect(),
+        allow_plaintext_relays: options.plaintext_relays,
+    }
+}
 pub async fn bind_machine(key: SecretKey, options: &GatewayNetwork) -> io::Result<Endpoint> {
-    let urls = relay_urls(options)?;
-    let mode = if urls.is_empty() {
-        RelayMode::Disabled
-    } else {
-        RelayMode::custom(urls)
-    };
+    let urls = gateway_relays(options)?;
+    let mode = super::endpoint_routes::relay_mode(&urls);
     let trust = super::endpoint_routes::NodeTransportOptions::new(Vec::new(), false)
         .with_server_trust(options.relay_pins.clone(), options.allow_plaintext_relays);
     let mut builder = Endpoint::builder(iroh::endpoint::presets::Minimal)
@@ -100,15 +134,16 @@ fn gateway_transport_config() -> iroh::endpoint::QuicTransportConfig {
         .send_window(windows.send)
         .build()
 }
-pub fn address(
-    machine: &str,
-    endpoint: &Endpoint,
-    options: &GatewayNetwork,
-) -> GatewayTarget {
+/// The distributed target names the relays the gateway itself uses (E14),
+/// so a caller never substitutes other relays for an explicit gateway.
+pub fn address(machine: &str, endpoint: &Endpoint, options: &GatewayNetwork) -> GatewayTarget {
     let address = endpoint.addr();
     let mut direct_addresses: Vec<_> = address.ip_addrs().copied().take(32).collect();
     direct_addresses.sort();
     direct_addresses.dedup();
+    // `use_default_relays: true` binds no relay at the gateway
+    // (`gateway_relays`); the target then says so instead of sending callers
+    // to relays where the gateway is not registered.
     let relay_urls = if options.use_default_relays {
         Vec::new()
     } else {
@@ -120,11 +155,13 @@ pub fn address(
         public_key: endpoint.id().to_string(),
         direct_addresses,
         relay_urls,
-        use_default_relays: options.use_default_relays,
+        use_default_relays: false,
         allow_plaintext_relays: options.allow_plaintext_relays,
     }
 }
-fn target_address(target: &GatewayTarget) -> io::Result<EndpointAddr> {
+/// A target with `use_default_relays: true` (also an older one) is reached
+/// through the relays of the caller's configured server (E14).
+fn target_address(target: &GatewayTarget, configured: &[RelayUrl]) -> io::Result<EndpointAddr> {
     target.validate()?;
     let id = target.public_key.parse().map_err(io::Error::other)?;
     let options = GatewayNetwork {
@@ -139,7 +176,11 @@ fn target_address(target: &GatewayTarget) -> io::Result<EndpointAddr> {
         .iter()
         .copied()
         .map(TransportAddr::Ip)
-        .chain(relay_urls(&options)?.into_iter().map(TransportAddr::Relay));
+        .chain(
+            relay_urls(&options, configured)?
+                .into_iter()
+                .map(TransportAddr::Relay),
+        );
     Ok(EndpointAddr::from_parts(id, addresses))
 }
 pub async fn connect(
@@ -158,7 +199,7 @@ pub async fn connect(
     let connection = tokio::select! {
         biased;
         error = cancelled(cancel) => return Err(error),
-        result = tokio::time::timeout_at(deadline.into(), context.endpoint.connect(target_address(target)?, LOGIN_ALPN)) =>
+        result = tokio::time::timeout_at(deadline.into(), context.endpoint.connect(target_address(target, &context.relay_urls)?, LOGIN_ALPN)) =>
             result.map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "login transport handshake timed out"))?.map_err(io::Error::other)?,
     };
     let close = Close(connection.clone());
@@ -242,3 +283,7 @@ pub async fn cancelled(cancel: &Arc<RouteCancellation>) -> io::Error {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "login_transport_tests.rs"]
+mod tests;

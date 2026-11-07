@@ -55,7 +55,7 @@ fn refusal(msg: String, code: Option<String>) -> String {
 fn connect() -> Result<TcpStream, String> {
     let addr = super::ipc_storage::read_ipc_addr()
         .ok_or_else(|| "Background-Worker IPC nicht bereit".to_string())?;
-    TcpStream::connect_timeout(&addr, Duration::from_secs(2))
+    crate::daemon::ipc_proof::connect(&addr, Duration::from_secs(2))
         .map_err(|error| format!("Background-Worker IPC: {error}"))
 }
 

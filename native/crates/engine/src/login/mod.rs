@@ -41,7 +41,9 @@ pub use core::gateway_types::{GatewayAccess, GatewayNetwork, GatewayReply, Gatew
 pub use core::viewer_guard::FrameToken;
 pub use os::shared::gateway_client::RemoteLoginClient;
 pub use os::shared::host_status::activity as host_activity;
-pub use os::shared::provision::{provision, ProvisionRequest, Provisioned};
+pub use os::shared::provision::{
+    provision, provision_network, ProvisionRequest, Provisioned, ProvisionedNetwork,
+};
 pub use os::shared::status::{installation_status, InstallationStatus};
 pub use os::shared::target::read_target_file;
 pub use os::shared::viewer::{ViewerFrame, ViewerSession, ViewerSnapshot};

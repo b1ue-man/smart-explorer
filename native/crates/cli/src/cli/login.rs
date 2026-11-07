@@ -12,6 +12,11 @@ use std::{
     path::{Path, PathBuf},
     time::Duration,
 };
+/// Update commands printed for an installed gateway. The Linux state directory
+/// is `state=` in native/install-login-service.sh (line 13). The Windows command
+/// omits `-MachineIdentityFile`, so the installed machine key stays in use.
+const LINUX_NETWORK_UPDATE: &str = "install-login-service.sh install RELEASE_IMAGE APPROVED_HASH RELEASE_VERSION POLICY_JSON /var/lib/smart-explorer-login-gateway/machine-key.json BUNDLE/gateway-network.json";
+const WINDOWS_NETWORK_UPDATE: &str = "install-login-service.ps1 -Image RELEASE_EXE -ExpectedSha256 APPROVED_HASH -Version RELEASE_VERSION -PolicyFile POLICY_JSON -NetworkFile BUNDLE/gateway-network.json";
 #[derive(Args)]
 pub(super) struct LoginArgs {
     #[command(subcommand)]
@@ -46,6 +51,12 @@ enum LoginCliCommand {
         grants_file: PathBuf,
         #[arg(long)]
         network_file: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Write only gateway-network.json with the relays of the configured Share server; keeps the installed machine identity.
+    ProvisionNetwork {
+        directory: PathBuf,
         #[arg(long)]
         json: bool,
     },
@@ -109,6 +120,15 @@ pub(super) fn run(args: LoginArgs) -> Result<i32, String> {
                 json!({"bundle":bundle,"installed":false,
                 "windows_install":"install-login-service.ps1 -Image RELEASE_EXE -ExpectedSha256 APPROVED_HASH -Version RELEASE_VERSION -PolicyFile BUNDLE/policy.json -MachineIdentityFile BUNDLE/machine-key.json -NetworkFile BUNDLE/gateway-network.json",
                 "linux_install":"install-login-service.sh install RELEASE_IMAGE APPROVED_HASH RELEASE_VERSION BUNDLE/policy.json BUNDLE/machine-key.json BUNDLE/gateway-network.json"}),
+            );
+        }
+        LoginCliCommand::ProvisionNetwork { directory, json } => {
+            let provisioned = crate::login::provision_network(directory).map_err(text)?;
+            output(
+                json,
+                json!({"network_file":provisioned.network_file,"network":provisioned.network,
+                "installed":false,"linux_update":LINUX_NETWORK_UPDATE,
+                "windows_update":WINDOWS_NETWORK_UPDATE}),
             );
         }
         LoginCliCommand::Open {
@@ -223,3 +243,7 @@ fn output(compact: bool, value: Value) {
 fn text(error: impl ToString) -> String {
     error.to_string()
 }
+
+#[cfg(test)]
+#[path = "login_tests.rs"]
+mod tests;

@@ -190,6 +190,8 @@ fn orphan_owner(name: &str, candidate: &str) -> Option<u32> {
 #[must_use = "commit or roll back the replaced se"]
 pub struct ReplacedCli {
     pub(super) mcp: Option<super::terminal::McpTerminalUpdate>,
+    /// Why the installed payload had no valid release signature (E12).
+    pub(super) unsigned: Option<super::feed_trust::UnsignedFeed>,
     target: PathBuf,
     backup: PathBuf,
     backup_sha256: String,
@@ -204,6 +206,11 @@ impl ReplacedCli {
 
     pub fn sha256(&self) -> &str {
         &self.sha256
+    }
+
+    /// `Some` when the installed `se` came without a valid release signature.
+    pub fn unsigned(&self) -> Option<super::feed_trust::UnsignedFeed> {
+        self.unsigned
     }
 
     pub fn backup(&self) -> &Path {
@@ -312,6 +319,7 @@ pub(super) fn install_cli_in_place(
     }
     Ok(ReplacedCli {
         mcp: None,
+        unsigned: None,
         target: target.to_path_buf(),
         backup,
         backup_sha256,

@@ -4,6 +4,7 @@ use std::path::Path;
 use super::config::{appdata_dir, staged_update_manifest_path};
 use super::core::{staged_sha256_from_path, verify_sha256};
 use super::feed::Feed;
+use super::feed_trust::{admitted_trust, FeedTrust, UnsignedConsent};
 use super::types::{StagedUpdate, VerifiedPayload};
 
 const STAGED_PREFIXES: [&str; 4] = [
@@ -49,16 +50,35 @@ impl Drop for StagingGuard {
     }
 }
 
-pub(super) fn stage_from_feed(feed: &Feed, version: &str) -> Result<StagedUpdate, String> {
+/// Stages `version` of `feed` behind the release signature (E12): an
+/// unsigned release that needs consent fails unless `consent` names it.
+pub(super) fn stage_from_feed(
+    feed: &Feed,
+    version: &str,
+    consent: &UnsignedConsent,
+) -> Result<StagedUpdate, String> {
     let feed = &feed.pinned(version);
+    let trust = admitted_trust(feed, version, consent)?;
+    stage_with_trust(feed, version, &trust)
+}
+
+/// Stages `version` of `feed` whose signature state `trust` the caller has
+/// read and admitted; a signed manifest binds every payload.
+pub(super) fn stage_with_trust(
+    feed: &Feed,
+    version: &str,
+    trust: &FeedTrust,
+) -> Result<StagedUpdate, String> {
+    let feed = &feed.pinned(version);
+    let manifest = trust.manifest();
     let mut guard = StagingGuard::new();
-    let app = feed.fetch_exe(version)?;
+    let app = feed.fetch_exe(version, manifest)?;
     guard.track(&app);
-    let helper = feed.fetch_updater_exe(version)?;
+    let helper = feed.fetch_updater_exe(version, manifest)?;
     guard.track(&helper);
-    let cli = feed.fetch_cli_exe(version)?;
+    let cli = feed.fetch_cli_exe(version, manifest)?;
     guard.track(&cli);
-    let launcher = feed.fetch_launcher_exe(version)?;
+    let launcher = feed.fetch_launcher_exe(version, manifest)?;
     if launcher.is_none()
         && crate::mcp_launcher::staged_runtime_managed(cli.path(), cli.sha256(), version)?
     {
@@ -70,7 +90,8 @@ pub(super) fn stage_from_feed(feed: &Feed, version: &str) -> Result<StagedUpdate
     if let Some(payload) = launcher.as_ref() {
         guard.track(payload);
     }
-    let bundle = StagedUpdate::new(version.to_string(), app, helper, cli, launcher)?;
+    let bundle = StagedUpdate::new(version.to_string(), app, helper, cli, launcher)?
+        .with_unsigned(trust.unsigned());
     persist_staged_update(&bundle)?;
     guard.disarm();
     Ok(bundle)

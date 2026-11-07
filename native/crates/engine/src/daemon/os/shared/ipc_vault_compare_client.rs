@@ -10,7 +10,6 @@
 #![allow(dead_code)] // CLI (VLT-M9), GUI (VLT-M10), Android (VLT-M11)
 
 use std::io;
-use std::net::TcpStream;
 use std::time::Duration;
 
 use super::ipc_protocol::{
@@ -83,7 +82,7 @@ fn exchange(
         }
     };
     let addr = read_ipc_addr().ok_or_else(|| gone(plain("Background-Worker IPC nicht bereit")))?;
-    let mut stream = TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT)
+    let mut stream = crate::daemon::ipc_proof::connect(&addr, CONNECT_TIMEOUT)
         .map_err(|error| gone(plain(format!("Background-Worker IPC: {error}"))))?;
     let token = read_token().map_err(|error| plain(format!("Background-Worker Token: {error}")))?;
     set_stream_timeout(&stream, Some(timeout));

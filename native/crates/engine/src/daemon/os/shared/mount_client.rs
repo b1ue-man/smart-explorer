@@ -131,7 +131,7 @@ fn mount_request(request: impl FnOnce(String) -> IpcRequest) -> Result<MountSnap
 fn authenticated_stream(timeout: Duration) -> Result<(TcpStream, String), String> {
     let token = read_token().map_err(|error| format!("Background-Worker Token: {error}"))?;
     let addr = read_ipc_addr().ok_or_else(|| "Background-Worker IPC nicht bereit".to_string())?;
-    let stream = TcpStream::connect_timeout(&addr, Duration::from_secs(2))
+    let stream = crate::daemon::ipc_proof::connect(&addr, Duration::from_secs(2))
         .map_err(|error| format!("Background-Worker IPC: {error}"))?;
     set_stream_timeout(&stream, Some(timeout));
     Ok((stream, token))

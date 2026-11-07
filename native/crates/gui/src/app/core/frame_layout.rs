@@ -86,6 +86,9 @@ impl App {
         if self.show_update_dialog && self.update_ready.is_some() {
             self.ui_update_dialog(ctx);
         }
+        if self.unsigned_update_prompt.is_some() {
+            self.ui_unsigned_update_dialog(ctx);
+        }
         if self.show_connect {
             self.ui_connect_dialog(ctx);
         }

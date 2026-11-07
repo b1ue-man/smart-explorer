@@ -8,6 +8,12 @@ const INSTALLED_UPDATER_EXE: &str = "Smart Explorer Updater.exe";
 const INSTALLED_CLI_EXE: &str = "se.exe";
 const SHARE_FIREWALL_RULE: &str = "Smart Explorer Share Peer Listener";
 
+/// Free bytes for this user in `folder`, the bound of a download without
+/// announced length (`download_bound.rs`).
+pub(super) fn available_space(folder: &Path) -> Option<u64> {
+    crate::host::platform::available_space_for_path(folder)
+}
+
 pub(super) fn create_startup_ack(path: &Path) -> std::io::Result<std::fs::File> {
     std::fs::OpenOptions::new()
         .write(true)

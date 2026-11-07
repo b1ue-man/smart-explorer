@@ -62,7 +62,7 @@ pub struct WorkerUnlocked {
 fn connect() -> Result<TcpStream, VaultIpcError> {
     let addr = read_ipc_addr()
         .ok_or_else(|| VaultIpcError::plain("Background-Worker IPC nicht bereit"))?;
-    TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT)
+    crate::daemon::ipc_proof::connect(&addr, CONNECT_TIMEOUT)
         .map_err(|error| VaultIpcError::plain(format!("Background-Worker IPC: {error}")))
 }
 
@@ -167,10 +167,7 @@ pub fn unlock_vault_saved(site: &str) -> Result<WorkerUnlocked, VaultIpcError> {
 
 /// Locks `site` or, with `None`, every site; returns the sites locked.
 /// Without a running worker nothing is unlocked: an empty list.
-pub fn lock_vaults(
-    site: Option<&str>,
-    keep_unsaved: bool,
-) -> Result<Vec<String>, VaultIpcError> {
+pub fn lock_vaults(site: Option<&str>, keep_unsaved: bool) -> Result<Vec<String>, VaultIpcError> {
     let Ok(stream) = connect() else {
         return Ok(Vec::new());
     };

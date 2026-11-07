@@ -107,8 +107,7 @@ fn hello_once(runtime: &RuntimeIdentity) -> Result<RuntimeHelloReply, String> {
 }
 fn connect(runtime: &RuntimeIdentity) -> Result<std::net::TcpStream, String> {
     if let Some(addr) = super::ipc_storage::read_ipc_addr() {
-        if let Ok(stream) = std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(700))
-        {
+        if let Ok(stream) = crate::daemon::ipc_proof::connect(&addr, Duration::from_millis(700)) {
             return Ok(stream);
         }
     }
@@ -116,8 +115,7 @@ fn connect(runtime: &RuntimeIdentity) -> Result<std::net::TcpStream, String> {
     let deadline = std::time::Instant::now() + Duration::from_secs(25);
     while std::time::Instant::now() < deadline {
         if let Some(addr) = super::ipc_storage::read_ipc_addr() {
-            if let Ok(stream) =
-                std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(200))
+            if let Ok(stream) = crate::daemon::ipc_proof::connect(&addr, Duration::from_millis(200))
             {
                 return Ok(stream);
             }

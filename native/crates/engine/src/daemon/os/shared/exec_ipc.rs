@@ -151,7 +151,7 @@ pub fn connect(
         .map_err(|error| format!("Background-Worker Token: {error}"))?;
     let addr = super::ipc_storage::read_ipc_addr()
         .ok_or_else(|| "Background-Worker IPC nicht bereit".to_string())?;
-    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(2))
+    let mut stream = crate::daemon::ipc_proof::connect(&addr, Duration::from_secs(2))
         .map_err(|error| format!("Background-Worker IPC: {error}"))?;
     set_stream_timeout(&stream, Some(Duration::from_secs(20)));
     write_request(

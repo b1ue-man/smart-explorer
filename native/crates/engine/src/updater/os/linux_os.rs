@@ -162,6 +162,23 @@ pub(super) fn mark_staged_executable(path: &Path) -> Result<(), String> {
     })
 }
 
+/// Free bytes for an unprivileged writer in `folder` (`statvfs`), the bound
+/// of a download without announced length (`download_bound.rs`).
+pub(super) fn available_space(folder: &Path) -> Option<u64> {
+    use std::os::unix::ffi::OsStrExt;
+    let path = std::ffi::CString::new(folder.as_os_str().as_bytes()).ok()?;
+    let mut stat = std::mem::MaybeUninit::<libc::statvfs>::uninit();
+    // SAFETY: `path` is NUL-terminated and `stat` is a valid out pointer.
+    if unsafe { libc::statvfs(path.as_ptr(), stat.as_mut_ptr()) } != 0 {
+        return None;
+    }
+    // SAFETY: statvfs returned 0, so it filled `stat`.
+    let stat = unsafe { stat.assume_init() };
+    let blocks: u64 = stat.f_bavail.try_into().ok()?;
+    let size: u64 = stat.f_frsize.try_into().ok()?;
+    Some(blocks.saturating_mul(size))
+}
+
 /// A running Linux executable is replaced by renaming a new file over its
 /// path; the running process keeps its old image.
 pub(super) fn cli_self_replacement() -> Result<(), String> {

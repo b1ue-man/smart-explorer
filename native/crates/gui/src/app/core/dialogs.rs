@@ -73,6 +73,15 @@ impl App {
                     ),
                 };
                 ui.label(message);
+                // E12: a bundle without valid release signature says so.
+                if let ReadyUpdate::Staged(bundle) = &ready {
+                    if let Some(unsigned) = bundle.unsigned() {
+                        ui.colored_label(
+                            theme::warning(ui),
+                            format!("Unsigniert: {}", unsigned.explanation()),
+                        );
+                    }
+                }
                 ui.colored_label(
                     theme::muted(ui),
                     "„Später“ behält ein gestagtes Update unverändert; beim nächsten Start wird erneut gefragt.",

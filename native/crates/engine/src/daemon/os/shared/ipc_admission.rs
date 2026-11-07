@@ -13,8 +13,13 @@
 //! A decoded capability the prelude refuses gets one explicit
 //! `IpcResponse::Err` (no token, no request field) instead of a silently
 //! dropped connection; malformed or empty prefixes are still dropped.
+//!
+//! A connection may first ask the worker to prove that it holds the daemon
+//! token (`ipc_proof.rs`, r-lokal-1): its proof line is consumed and answered
+//! here, once per connection, and the request line after it passes this
+//! prelude like any first line.
 use std::collections::VecDeque;
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 use std::net::{Shutdown, SocketAddr, TcpStream};
 use std::time::{Duration, Instant};
 
@@ -22,6 +27,7 @@ use serde::de::{IgnoredAny, MapAccess, Visitor};
 use serde::Deserializer as _;
 
 use super::ShareHost;
+use crate::daemon::ipc_proof::{self, ProofLine, MAX_PROOF_LINE};
 
 const MAX_PENDING: usize = 256;
 const PREFIX_BYTES: usize = 16 * 1024;
@@ -32,6 +38,8 @@ pub(super) const PRELUDE_WAIT: Duration = Duration::from_millis(10);
 struct Pending {
     stream: TcpStream,
     deadline: Instant,
+    /// The worker already answered this connection's proof request.
+    proved: bool,
 }
 
 #[derive(Default)]
@@ -54,19 +62,27 @@ impl AdmissionQueue {
         match inspect(&stream, |hint| authorized(hint, host, token)) {
             Ok(Some(Verdict::Admit)) => serve(stream),
             Ok(Some(Verdict::Refuse)) => refuse(stream),
-            Ok(None) => {
-                // Reclaim an unproven connection rather than reserve all
-                // capacity against newly arriving legitimate clients.
-                if self.pending.len() == MAX_PENDING {
-                    self.pending.pop_front();
+            Ok(Some(Verdict::Prove(length, nonce))) => {
+                if answer_proof(&stream, length, &nonce, token) {
+                    self.park(stream, true);
                 }
-                self.pending.push_back(Pending {
-                    stream,
-                    deadline: Instant::now() + PRELUDE_TIMEOUT,
-                });
             }
+            Ok(None) => self.park(stream, false),
             _ => {}
         }
+    }
+
+    fn park(&mut self, stream: TcpStream, proved: bool) {
+        // Reclaim an unproven connection rather than reserve all
+        // capacity against newly arriving legitimate clients.
+        if self.pending.len() == MAX_PENDING {
+            self.pending.pop_front();
+        }
+        self.pending.push_back(Pending {
+            stream,
+            deadline: Instant::now() + PRELUDE_TIMEOUT,
+            proved,
+        });
     }
 
     pub(super) fn poll(
@@ -86,6 +102,12 @@ impl AdmissionQueue {
             match inspect(&pending.stream, |hint| authorized(hint, host, token)) {
                 Ok(Some(Verdict::Admit)) => serve(pending.stream),
                 Ok(Some(Verdict::Refuse)) => refuse(pending.stream),
+                // One proof per connection; a second request is dropped.
+                Ok(Some(Verdict::Prove(length, nonce))) if !pending.proved => {
+                    if answer_proof(&pending.stream, length, &nonce, token) {
+                        self.park(pending.stream, true);
+                    }
+                }
                 Ok(None) => self.pending.push_back(pending),
                 _ => {}
             }
@@ -177,6 +199,8 @@ enum Verdict {
     Refuse,
     /// Empty or malformed prefix: dropped without an answer.
     Drop,
+    /// A complete proof request: its line length and nonce.
+    Prove(usize, [u8; 32]),
 }
 
 fn inspect(
@@ -190,11 +214,38 @@ fn inspect(
         Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Ok(None),
         Err(error) => return Err(error),
     };
+    match ipc_proof::parse_request(&bytes[..count]) {
+        ProofLine::Complete(length, nonce) => return Ok(Some(Verdict::Prove(length, nonce))),
+        ProofLine::Incomplete => return Ok(None),
+        ProofLine::Malformed => return Ok(Some(Verdict::Drop)),
+        ProofLine::NotProof => {}
+    }
     match decode_hint(&bytes[..count]) {
         Ok(hint) if authorize(&hint) => Ok(Some(Verdict::Admit)),
         Ok(_) => Ok(Some(Verdict::Refuse)),
         Err(error) if error.is_eof() && count < PREFIX_BYTES => Ok(None),
         Err(_) => Ok(Some(Verdict::Drop)),
+    }
+}
+
+/// Answers a proof request on the still nonblocking stream: consumes
+/// exactly its line (already received, so no wait) and writes the proof.
+/// `false`: the connection is dropped.
+fn answer_proof(stream: &TcpStream, length: usize, nonce: &[u8; 32], token: &str) -> bool {
+    let Ok(local) = stream.local_addr() else {
+        return false;
+    };
+    let mut line = [0u8; MAX_PROOF_LINE + 1];
+    let Some(line) = line.get_mut(..length) else {
+        return false;
+    };
+    let mut wire = stream;
+    if wire.read_exact(line).is_err() {
+        return false;
+    }
+    match ipc_proof::reply_line(token, nonce, &local) {
+        Ok(reply) => wire.write_all(&reply).is_ok(),
+        Err(_) => false,
     }
 }
 

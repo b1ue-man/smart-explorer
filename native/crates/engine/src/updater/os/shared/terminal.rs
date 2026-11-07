@@ -8,22 +8,13 @@ use super::cli_swap::{
     arm_interrupt_undo, install_cli_in_place, remove_orphans, ReplacedCli, UpdateLock,
 };
 use super::config::update_source_str;
-use super::core::parse_ver;
 use super::feed::classify_feed;
-use super::feed_files::read_feed_version;
+use super::feed_trust::{admitted_trust, UnsignedConsent};
 use super::os;
 use super::staging::{remove_staged_path, stage_from_feed};
 use super::types::StagedUpdate;
 
 const NO_SOURCE: &str = "no update source is configured";
-
-#[derive(Clone, Debug, Serialize)]
-pub struct FeedCheck {
-    pub source: String,
-    pub current_version: String,
-    pub feed_version: String,
-    pub update_available: bool,
-}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -41,23 +32,6 @@ impl Installation {
             Self::TerminalOnly { cli } | Self::Desktop { cli, .. } => cli,
         }
     }
-}
-
-/// The configured feed's version compared with this build; `None` without
-/// a configured update source.
-pub fn check_feed() -> Result<Option<FeedCheck>, String> {
-    let Some(source) = update_source_str() else {
-        return Ok(None);
-    };
-    let feed_version = read_feed_version(&source)?;
-    let current_version = env!("CARGO_PKG_VERSION").to_string();
-    let update_available = parse_ver(&feed_version) > parse_ver(&current_version);
-    Ok(Some(FeedCheck {
-        source,
-        current_version,
-        feed_version,
-        update_available,
-    }))
 }
 
 pub fn detect_installation() -> Result<Installation, String> {
@@ -113,26 +87,34 @@ pub fn desktop_update_possible() -> Result<(), String> {
 }
 
 /// Downloads and verifies app, helper and `se` for the desktop helper, the
-/// same staging the app's update check produces.
-pub fn stage_update(version: &str) -> Result<StagedUpdate, String> {
+/// same staging the app's update check produces. An unsigned release that
+/// needs consent (E12) is refused unless `consent` names `version`.
+pub fn stage_update(version: &str, consent: &UnsignedConsent) -> Result<StagedUpdate, String> {
     let source = update_source_str().ok_or(NO_SOURCE)?;
-    stage_from_feed(&classify_feed(&source), version)
+    stage_from_feed(&classify_feed(&source), version, consent)
 }
 
-/// Replaces the installed terminal-only `se` with the feed's `se` payload.
-pub fn replace_cli(cli: &Path, version: &str) -> Result<ReplacedCli, String> {
+/// Replaces the installed terminal-only `se` with the feed's `se` payload,
+/// behind the release signature like [`stage_update`].
+pub fn replace_cli(
+    cli: &Path,
+    version: &str,
+    consent: &UnsignedConsent,
+) -> Result<ReplacedCli, String> {
     os::cli_self_replacement()?;
     let lock = UpdateLock::acquire(cli)?;
     remove_orphans(cli);
     arm_interrupt_undo()?;
     let source = update_source_str().ok_or(NO_SOURCE)?;
     let feed = classify_feed(&source).pinned(version);
-    let payload = feed.fetch_cli_exe(version)?;
-    let launcher = feed.fetch_launcher_exe(version)?;
+    let trust = admitted_trust(&feed, version, consent)?;
+    let payload = feed.fetch_cli_exe(version, trust.manifest())?;
+    let launcher = feed.fetch_launcher_exe(version, trust.manifest())?;
     let mcp = McpTerminalUpdate::prepare(cli, version, &payload, launcher.as_ref())?;
     let replaced =
         install_cli_in_place(payload.path(), payload.sha256(), cli, lock).map(|mut replaced| {
             replaced.mcp = Some(mcp);
+            replaced.unsigned = trust.unsigned();
             replaced
         });
     remove_staged_path(payload.path());

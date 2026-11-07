@@ -8,7 +8,10 @@ use crate::login::{
     },
     os::platform,
 };
-use std::{io, path::PathBuf};
+use std::{
+    io,
+    path::{Path, PathBuf},
+};
 use zeroize::Zeroizing;
 pub struct ProvisionRequest {
     /// A new private administrative directory, outside active service state.
@@ -25,23 +28,43 @@ pub struct Provisioned {
     pub target_file: PathBuf,
     pub target: GatewayTarget,
 }
-pub fn provision(request: ProvisionRequest) -> io::Result<Provisioned> {
-    request.network.validate()?;
-    if request.grants.is_empty() {
-        return Err(denied(
-            "provisioning requires at least one explicit peer/user login grant",
-        ));
+/// `use_default_relays: true` means the relays of the Share server
+/// configured in this program (E14, never number0). The gateway service reads
+/// no user profile, so provisioning resolves them here into explicit relays,
+/// pins and plaintext rule; without a configured server only direct paths.
+fn resolve_network(network: GatewayNetwork) -> io::Result<GatewayNetwork> {
+    if !network.use_default_relays {
+        return Ok(network);
     }
+    let server = crate::daemon::load_share_server().map_err(io::Error::other)?;
+    let resolved = crate::share::login_transport::configured_server_network(&server);
+    resolved.validate()?;
+    Ok(resolved)
+}
+/// Refuses a directory that is, contains, or lies inside the active service
+/// installation or the gateway state. Shared by `provision` and `provision_network`.
+fn check_location(directory: &Path) -> io::Result<()> {
     let active = platform::paths()?;
     let state = platform::gateway_state_directory()?;
     if [&active.config, &active.releases, &state]
         .iter()
-        .any(|root| request.directory.starts_with(root) || root.starts_with(&request.directory))
+        .any(|root| directory.starts_with(root) || root.starts_with(directory))
     {
         return Err(denied(
             "offline provisioning must not overwrite or contain active service installation/state",
         ));
     }
+    Ok(())
+}
+pub fn provision(mut request: ProvisionRequest) -> io::Result<Provisioned> {
+    request.network.validate()?;
+    request.network = resolve_network(request.network)?;
+    if request.grants.is_empty() {
+        return Err(denied(
+            "provisioning requires at least one explicit peer/user login grant",
+        ));
+    }
+    check_location(&request.directory)?;
     let identity = MachineIdentity::generate()?;
     let policy = Policy {
         format: VERSION,
@@ -103,3 +126,36 @@ pub fn provision(request: ProvisionRequest) -> io::Result<Provisioned> {
         target,
     })
 }
+#[derive(serde::Serialize)]
+pub struct ProvisionedNetwork {
+    pub network_file: PathBuf,
+    pub network: GatewayNetwork,
+}
+/// Network refresh for an installed gateway (L-B2, E24): writes only
+/// `gateway-network.json` with the relays of the configured Share server. No
+/// machine identity, policy or target is created, so the installed ones stay.
+pub fn provision_network(directory: PathBuf) -> io::Result<ProvisionedNetwork> {
+    let network = resolve_network(GatewayNetwork {
+        format: VERSION,
+        use_default_relays: true,
+        relay_urls: Vec::new(),
+        relay_pins: Vec::new(),
+        allow_plaintext_relays: false,
+    })?;
+    check_location(&directory)?;
+    let bytes = serde_json::to_vec_pretty(&network).map_err(io::Error::other)?;
+    if bytes.len() > crate::login::core::gateway_types::MAX_NETWORK {
+        return Err(denied(
+            "provisioned network exceeds its installed record limit",
+        ));
+    }
+    platform::write_provision_bundle(&directory, &[("gateway-network.json", &bytes)])?;
+    Ok(ProvisionedNetwork {
+        network_file: directory.join("gateway-network.json"),
+        network,
+    })
+}
+
+#[cfg(test)]
+#[path = "provision_tests.rs"]
+mod tests;

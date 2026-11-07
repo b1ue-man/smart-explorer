@@ -6,7 +6,6 @@
 //! `root_path`, `letter`, `mount_point`, `revision`, `devices`) plus
 //! `pending`, the number of devices with changes that wait for a
 //! connection. Absent values are not written.
-use std::net::TcpStream;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -219,7 +218,7 @@ fn request(req: DriveIpcRequest, read_timeout: Duration) -> Result<DevicesStatus
     crate::daemon::ensure_worker_ready()?;
     let token = read_token().map_err(|error| format!("Background-Worker Token: {error}"))?;
     let addr = read_ipc_addr().ok_or_else(|| "Background-Worker IPC nicht bereit".to_string())?;
-    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(2))
+    let mut stream = crate::daemon::ipc_proof::connect(&addr, Duration::from_secs(2))
         .map_err(|error| format!("Background-Worker IPC: {error}"))?;
     set_stream_timeout(&stream, Some(read_timeout));
     write_request(&mut stream, &IpcRequest::Drive { token, req })

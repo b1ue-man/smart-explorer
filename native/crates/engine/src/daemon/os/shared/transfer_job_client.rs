@@ -158,7 +158,7 @@ fn ask(
     req: TransferIpcRequest,
     timeout: Duration,
 ) -> io::Result<(TcpStream, IpcResponse)> {
-    let mut stream = TcpStream::connect_timeout(&address, CONNECT)?;
+    let mut stream = crate::daemon::ipc_proof::connect_token(&address, CONNECT, token)?;
     set_stream_timeout(&stream, Some(timeout));
     let request = IpcRequest::Transfer {
         token: token.to_string(),
@@ -194,7 +194,7 @@ enum Start {
 
 fn start(address: SocketAddr, token: &str, job: JobWire) -> Start {
     let id = job.id.clone();
-    let mut stream = match TcpStream::connect_timeout(&address, CONNECT) {
+    let mut stream = match crate::daemon::ipc_proof::connect_token(&address, CONNECT, token) {
         Ok(stream) => stream,
         Err(_) => return Start::NotHere,
     };

@@ -1,5 +1,4 @@
 use std::io::{self, Read, Write};
-use std::net::TcpStream;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -33,7 +32,7 @@ pub fn exec_share(
     ensure_worker_ready()?;
     let token = read_token().map_err(|error| format!("Background-Worker Token: {error}"))?;
     let addr = read_ipc_addr().ok_or_else(|| "Background-Worker IPC nicht bereit".to_string())?;
-    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(2))
+    let mut stream = super::ipc_proof::connect(&addr, Duration::from_secs(2))
         .map_err(|error| format!("Background-Worker IPC: {error}"))?;
     let socket_timeout = Duration::from_millis(req.timeout_ms.saturating_add(60_000).max(60_000));
     set_stream_timeout(&stream, Some(socket_timeout));
@@ -50,7 +49,7 @@ pub fn refresh_share_worker_checked() -> Result<bool, String> {
     ensure_worker_ready()?;
     let token = read_token().map_err(|error| format!("Background-Worker Token: {error}"))?;
     let addr = read_ipc_addr().ok_or_else(|| "Background-Worker IPC nicht bereit".to_string())?;
-    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(2))
+    let mut stream = super::ipc_proof::connect(&addr, Duration::from_secs(2))
         .map_err(|error| format!("Background-Worker IPC: {error}"))?;
     set_stream_timeout(&stream, Some(Duration::from_secs(8)));
     write_request(&mut stream, &IpcRequest::RefreshShare { token })
@@ -95,7 +94,7 @@ fn share_snapshot_once(drain: bool) -> Result<ShareWorkerSnapshot, String> {
     ensure_worker_ready()?;
     let token = read_token().map_err(|error| format!("Background-Worker Token: {error}"))?;
     let addr = read_ipc_addr().ok_or_else(|| "Background-Worker IPC nicht bereit".to_string())?;
-    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(1))
+    let mut stream = super::ipc_proof::connect(&addr, Duration::from_secs(1))
         .map_err(|error| format!("Background-Worker IPC: {error}"))?;
     // A periodic refresh may briefly serialize credential/profile loading.
     // Polling runs off the UI thread, so allow the same bounded response window
@@ -268,8 +267,13 @@ fn probe_worker(timeout: Duration) -> WorkerProbe {
     let Some(addr) = read_ipc_addr() else {
         return WorkerProbe::Missing;
     };
-    let Ok(mut stream) = TcpStream::connect_timeout(&addr, timeout) else {
-        return WorkerProbe::Missing;
+    // r-lokal-1: the token goes only to a process that proved it holds it.
+    // A process that answers without the proof (also a worker from before
+    // the check) is replaced through the file handoff, never sent the token.
+    let mut stream = match super::ipc_proof::connect_with_token(&addr, timeout, &token) {
+        Ok(stream) => stream,
+        Err(super::ipc_proof::ProofFailure::Unproven) => return WorkerProbe::Stale,
+        Err(super::ipc_proof::ProofFailure::Unreachable(_)) => return WorkerProbe::Missing,
     };
     let _ = stream.set_read_timeout(Some(timeout));
     let _ = stream.set_write_timeout(Some(timeout));

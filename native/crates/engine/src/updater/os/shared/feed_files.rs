@@ -2,7 +2,7 @@
 //! package (the Android APK): the feed version, a `<name>.sha256` sidecar
 //! and a streamed, cancelable download with progress. A feed is a folder or
 //! an http(s) URL, classified exactly like the desktop updater's feed.
-use std::io::{Read, Write};
+use std::io::Read;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -15,7 +15,6 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(25);
 const READ_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_SIDECAR_BYTES: u64 = 64 * 1024;
 const USER_AGENT: &str = "smart-explorer-updater";
-const COPY_CHUNK: usize = 64 * 1024;
 
 fn agent() -> ureq::Agent {
     ureq::AgentBuilder::new()
@@ -85,27 +84,23 @@ pub fn download_feed_file(
     let result = (|| {
         let mut file = std::fs::File::create(&partial)
             .map_err(|error| format!("Download-Datei {}: {error}", partial.display()))?;
-        let mut buffer = vec![0u8; COPY_CHUNK];
-        let mut done = 0u64;
         progress(0, total);
-        loop {
-            if cancel.load(Ordering::Relaxed) {
-                return Err("Download abgebrochen".to_string());
-            }
-            let read = reader
-                .read(&mut buffer)
-                .map_err(|error| format!("Download {name}: {error}"))?;
-            if read == 0 {
-                break;
-            }
-            file.write_all(&buffer[..read])
-                .map_err(|error| format!("Download schreiben: {error}"))?;
-            done = done.saturating_add(read as u64);
-            progress(done, total);
-        }
-        if total.is_some_and(|total| total != done) {
-            return Err(format!("Download {name} unvollständig ({done} Bytes)"));
-        }
+        // r-lokal-4: the announced length, else the free space minus the
+        // app-data reserve, bounds the download.
+        let folder = partial.parent().unwrap_or_else(|| Path::new("."));
+        let bound = super::download_bound::DownloadBound::new(total, folder);
+        super::download_bound::copy_bounded(
+            &mut reader,
+            &mut file,
+            bound,
+            &mut |done| progress(done, total),
+            &|| cancel.load(Ordering::Relaxed),
+        )
+        .map_err(|error| match error.kind() {
+            std::io::ErrorKind::Interrupted => "Download abgebrochen".to_string(),
+            std::io::ErrorKind::UnexpectedEof => format!("Download {name} unvollständig: {error}"),
+            _ => format!("Download {name}: {error}"),
+        })?;
         file.sync_all()
             .map_err(|error| format!("Download sichern: {error}"))?;
         drop(file);

@@ -11,10 +11,7 @@ use crate::{
         PeerOpenTarget,
     },
 };
-use std::{
-    net::TcpStream,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
 pub fn apps_command(
     target: PeerOpenTarget,
@@ -26,8 +23,8 @@ pub fn apps_command(
     let address = super::ipc_storage::read_ipc_addr()
         .ok_or_else(|| "Background worker IPC is not ready".to_string())?;
     let token = super::ipc_storage::read_token().map_err(|e| e.to_string())?;
-    let mut stream =
-        TcpStream::connect_timeout(&address, Duration::from_secs(2)).map_err(|e| e.to_string())?;
+    let mut stream = crate::daemon::ipc_proof::connect(&address, Duration::from_secs(2))
+        .map_err(|e| e.to_string())?;
     let deadline = wait.and_then(|duration| Instant::now().checked_add(duration));
     if wait.is_some() && deadline.is_none() {
         return Err("Device-command wait is too large".into());
@@ -266,8 +263,8 @@ fn local(request: AppsIpcRequest) -> Result<AppsIpcReply, String> {
     let address =
         super::ipc_storage::read_ipc_addr().ok_or("Background worker IPC is not ready")?;
     let token = super::ipc_storage::read_token().map_err(|e| e.to_string())?;
-    let mut stream =
-        TcpStream::connect_timeout(&address, Duration::from_secs(2)).map_err(|e| e.to_string())?;
+    let mut stream = crate::daemon::ipc_proof::connect(&address, Duration::from_secs(2))
+        .map_err(|e| e.to_string())?;
     set_stream_timeout(&stream, Some(Duration::from_secs(30)));
     write_request(
         &mut stream,

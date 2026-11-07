@@ -111,6 +111,15 @@ impl App {
                     std::time::Instant::now(),
                 ));
             }
+            UpdateMsg::UnsignedConsentNeeded { version, feed } => {
+                // E12: nothing was downloaded; the user decides per update.
+                self.unsigned_update_prompt =
+                    Some(super::update_unsigned_ui::UnsignedUpdatePrompt {
+                        version,
+                        feed,
+                        rollback: false,
+                    });
+            }
             UpdateMsg::Error(e) => {
                 self.error_msg = Some(format!("Update: {}", e));
             }

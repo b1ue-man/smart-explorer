@@ -99,7 +99,9 @@ fn bridge(peer: BackendHandle) -> io::Result<Bridge> {
     ipc_storage::write_ipc_addr(address)?;
     let analysis_peer = peer.clone();
     let analysis = thread::spawn(move || {
-        let (stream, _) = listener.accept()?;
+        let (mut stream, _) = listener.accept()?;
+        // The client first asks for the worker's proof (`ipc_proof.rs`).
+        crate::daemon::ipc_proof::answer_for_test(&mut stream, &token)?;
         let mut line = String::new();
         std::io::BufReader::new(stream.try_clone()?).read_line(&mut line)?;
         let request: IpcRequest = serde_json::from_str(&line).map_err(io::Error::other)?;

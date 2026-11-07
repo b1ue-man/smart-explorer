@@ -15,7 +15,7 @@ fn connect(request: Request) -> Result<TcpStream, Error> {
     super::ipc_client::ensure_worker_ready().map_err(|_| Error::WorkerUnavailable)?;
     let token = super::ipc_storage::read_token().map_err(|_| Error::DaemonError)?;
     let address = super::ipc_storage::read_ipc_addr().ok_or(Error::WorkerUnavailable)?;
-    let mut stream = TcpStream::connect_timeout(&address, Duration::from_secs(2))
+    let mut stream = crate::daemon::ipc_proof::connect(&address, Duration::from_secs(2))
         .map_err(|_| Error::WorkerUnavailable)?;
     set_stream_timeout(&stream, Some(Duration::from_secs(150)));
     write_request(

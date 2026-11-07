@@ -201,6 +201,8 @@ mod settings_cloud;
 mod settings_ui;
 #[path = "core/settings_updates.rs"]
 mod settings_updates;
+#[path = "core/update_unsigned_ui.rs"]
+mod update_unsigned_ui;
 #[cfg(windows)]
 const OPEN_WITH_CHOOSER_SUPPORTED: bool = true;
 #[cfg(not(windows))]

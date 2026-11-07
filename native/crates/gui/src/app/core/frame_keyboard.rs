@@ -445,5 +445,6 @@ impl App {
             || self.picker.is_some()
             || self.rename_open.is_some()
             || (self.show_update_dialog && self.update_ready.is_some())
+            || self.unsigned_update_prompt.is_some()
     }
 }

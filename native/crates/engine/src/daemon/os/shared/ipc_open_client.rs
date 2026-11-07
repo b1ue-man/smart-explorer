@@ -106,7 +106,9 @@ fn open_attempt(
     target: &crate::share::PeerOpenTarget,
     answer_timeout: Duration,
 ) -> OpenAttempt {
-    let Ok(mut stream) = TcpStream::connect_timeout(&addr, Duration::from_secs(2)) else {
+    let Ok(mut stream) =
+        crate::daemon::ipc_proof::connect_token(&addr, Duration::from_secs(2), token)
+    else {
         return OpenAttempt::Unreachable;
     };
     set_stream_timeout(&stream, Some(answer_timeout));
@@ -169,7 +171,9 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         std::thread::spawn(move || {
-            let (stream, _) = listener.accept().unwrap();
+            let (mut stream, _) = listener.accept().unwrap();
+            // The client first asks for the worker's proof (`ipc_proof.rs`).
+            crate::daemon::ipc_proof::answer_for_test(&mut stream, "token").unwrap();
             let mut reader = BufReader::new(stream.try_clone().unwrap());
             let mut request = String::new();
             reader.read_line(&mut request).unwrap();

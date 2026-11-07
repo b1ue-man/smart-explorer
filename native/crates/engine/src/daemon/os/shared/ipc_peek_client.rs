@@ -188,7 +188,7 @@ fn connect_if_running(read_timeout: Duration) -> Result<Option<(TcpStream, Strin
     let Some(addr) = read_ipc_addr() else {
         return Ok(None);
     };
-    let Ok(stream) = TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT) else {
+    let Ok(stream) = crate::daemon::ipc_proof::connect(&addr, CONNECT_TIMEOUT) else {
         return Ok(None);
     };
     set_stream_timeout(&stream, Some(read_timeout));

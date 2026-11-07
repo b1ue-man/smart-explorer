@@ -184,7 +184,7 @@ fn request(request: AccessIpcRequest) -> Result<AccessIpcReply, String> {
         .map_err(|error| format!("Background-Worker Token: {error}"))?;
     let addr = crate::daemon::ipc_storage::read_ipc_addr()
         .ok_or_else(|| "Background-Worker IPC nicht bereit".to_string())?;
-    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(2))
+    let mut stream = crate::daemon::ipc_proof::connect(&addr, Duration::from_secs(2))
         .map_err(|error| format!("Background-Worker IPC: {error}"))?;
     set_stream_timeout(&stream, Some(ACCESS_TIMEOUT));
     write_request(&mut stream, &IpcRequest::Access { token, request })
@@ -212,10 +212,7 @@ pub fn access_approvals() -> Result<Vec<ApprovalView>, String> {
 }
 
 /// The host user's answer to exactly the request `approval_id`.
-pub fn decide_access_approval(
-    approval_id: &str,
-    decision: ApprovalDecision,
-) -> Result<(), String> {
+pub fn decide_access_approval(approval_id: &str, decision: ApprovalDecision) -> Result<(), String> {
     let approval_id = approval_id.to_string();
     match request(AccessIpcRequest::Decide {
         approval_id,
@@ -288,10 +285,7 @@ pub struct ExecNoticeWatch {
 
 impl ExecNoticeWatch {
     /// `changed` runs on the watch's thread for every new notice.
-    pub fn start(
-        exec_id: ExecId,
-        changed: impl FnMut(&ExecNoticeView) + Send + 'static,
-    ) -> Self {
+    pub fn start(exec_id: ExecId, changed: impl FnMut(&ExecNoticeView) + Send + 'static) -> Self {
         let latest = Arc::new(NoticeSlot::default());
         let slot = Arc::downgrade(&latest);
         let _ = std::thread::Builder::new()
