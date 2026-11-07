@@ -1,7 +1,7 @@
 use std::io;
 
 use iroh::endpoint::{ReadExactError, RecvStream, SendStream};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 
 use super::core::eio;
 use super::wire::{Ctrl, FsResponse};
@@ -177,12 +177,25 @@ fn parse_head(head: [u8; FRAME_HEAD], max_frame: usize) -> io::Result<(u8, usize
     Ok((head[4], n))
 }
 
+/// Capacity a frame payload gets before its first byte arrives: a whole
+/// content frame (one chunk, packed or not), so transfer streams still read
+/// every data frame into one buffer allocated once.
+const PAYLOAD_FIRST_RESERVE: usize = MAX_DATA_FRAME_LZ4;
+
 /// Exactly `len` payload bytes, read into uninitialized capacity: no
-/// `memset` of a buffer that is overwritten anyway.
-async fn read_payload(recv: &mut RecvStream, len: usize) -> io::Result<Vec<u8>> {
-    let mut payload = Vec::with_capacity(len);
+/// `memset` of a buffer that is overwritten anyway. The buffer grows with
+/// the bytes that actually arrived (review r-weg-1): a head that announces
+/// 16 MiB and then stalls costs `PAYLOAD_FIRST_RESERVE`, not 16 MiB, and a
+/// real large frame doubles its capacity at most up to `len`.
+async fn read_payload<R>(recv: &mut R, len: usize) -> io::Result<Vec<u8>>
+where
+    R: AsyncRead + Unpin,
+{
+    let mut payload = Vec::with_capacity(len.min(PAYLOAD_FIRST_RESERVE));
     while payload.len() < len {
-        let want = (len - payload.len()) as u64;
+        reserve_payload(&mut payload, len);
+        let room = payload.capacity() - payload.len();
+        let want = (len - payload.len()).min(room) as u64;
         let read = (&mut *recv)
             .take(want)
             .read_buf(&mut payload)
@@ -196,6 +209,17 @@ async fn read_payload(recv: &mut RecvStream, len: usize) -> io::Result<Vec<u8>> 
         }
     }
     Ok(payload)
+}
+
+/// Room for the next read of a payload of `len` bytes: a full buffer grows by
+/// its own capacity (at least `PAYLOAD_FIRST_RESERVE`), never beyond `len`.
+fn reserve_payload(payload: &mut Vec<u8>, len: usize) {
+    if payload.len() < payload.capacity() {
+        return;
+    }
+    let rest = len.saturating_sub(payload.len());
+    let step = payload.capacity().max(PAYLOAD_FIRST_RESERVE).min(rest);
+    payload.reserve_exact(step);
 }
 
 /// `read_exact_error` for the `AsyncRead` path: a lost connection keeps its
@@ -280,3 +304,7 @@ mod tests {
         assert!(commit.len() < MAX_DATA_FRAME);
     }
 }
+
+#[cfg(test)]
+#[path = "framing_tests.rs"]
+mod payload_tests;

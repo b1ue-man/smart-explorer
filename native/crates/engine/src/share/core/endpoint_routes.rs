@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use iroh::{Endpoint, EndpointAddr, RelayUrl, Watcher as _};
+use iroh::{Endpoint, EndpointAddr, RelayConfig, RelayMode, RelayUrl, Watcher as _};
 
 use super::types::ShareEvent;
 
@@ -57,6 +57,26 @@ impl NodeTransportOptions {
     #[allow(dead_code)]
     pub(super) fn accepts_relay_url(&self, url: &str) -> bool {
         super::server_address::relay_url_acceptable(url, self.plaintext_relays)
+    }
+}
+
+/// The relay mode of an endpoint for `relay_urls` (`Disabled` without any).
+/// A TLS relay also answers QUIC address discovery (QAD, UDP 7842 at the
+/// relay host), from which a device behind NAT learns its public address.
+/// QAD needs TLS, so a plain `http://` relay is used without a QAD probe.
+pub(super) fn relay_mode(relay_urls: &[RelayUrl]) -> RelayMode {
+    if relay_urls.is_empty() {
+        return RelayMode::Disabled;
+    }
+    RelayMode::Custom(relay_urls.iter().cloned().map(relay_config).collect())
+}
+
+/// One relay of [`relay_mode`]: QAD on the default port only over TLS.
+pub(super) fn relay_config(url: RelayUrl) -> RelayConfig {
+    if matches!(url.scheme(), "https" | "wss") {
+        RelayConfig::from(url)
+    } else {
+        RelayConfig::new(url, None)
     }
 }
 
@@ -212,3 +232,11 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "endpoint_routes_tests.rs"]
+mod relay_mode_tests;
+
+#[cfg(all(test, target_os = "linux"))]
+#[path = "qad_direct_task_tests.rs"]
+mod qad_direct_task_tests;

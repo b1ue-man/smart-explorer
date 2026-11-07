@@ -10,8 +10,11 @@
 //! in flight on the relay arrive or are recovered by QUIC loss detection on
 //! the admitted path. Once a LAN/direct path was admitted in this generation
 //! the start bridge closes: the relay carries payload again only as the marked
-//! fallback after the unchanged finite direct phase. A new network generation
-//! starts a new policy and therefore a new start phase.
+//! fallback, after the unchanged finite direct phase or once no LAN/direct
+//! path of the connection is validated or being validated any more (the
+//! admitted one was abandoned, review r-weg-2). A LAN/direct path that only
+//! re-proves itself pauses payload instead. A new network generation starts a
+//! new policy and therefore a new start phase.
 use std::time::{Duration, Instant};
 
 use iroh::endpoint::Connection;
@@ -26,6 +29,8 @@ const LOG_LIMIT: &str = "weitere Routewechsel werden nicht protokolliert";
 
 pub(super) const RELAY_START_REASON: &str =
     "Startphase: Nutzdaten über Relay, Direktweg wird aufgebaut; Wechsel ohne Neustart, sobald zugelassen";
+pub(super) const DIRECT_LOST_REASON: &str =
+    "Direktpfad verloren; Relay als Rückfall, Direktweg wird weiter geprüft";
 
 /// One chosen path with the phase and reason the route status shows.
 pub(super) struct Choice<'a> {
@@ -49,12 +54,31 @@ pub(super) struct StartPhase {
     non_relay_chosen: bool,
     /// The bridge closed in the current observation (undone if the gate refuses).
     closed_now: bool,
+    /// The relay carries payload as fallback because every LAN/direct path
+    /// of this generation was lost; it keeps doing so while a new one is
+    /// still being validated, until a LAN/direct path is chosen again.
+    relay_after_loss: bool,
+    /// `relay_after_loss` was set in the current observation (undone if the
+    /// gate refuses).
+    lost_now: bool,
 }
 
 impl StartPhase {
     /// Whether the relay may still carry payload as the start bridge.
     pub(super) fn bridge_open(&self, progress: Progress) -> bool {
         !progress.direct_done && !self.non_relay_chosen
+    }
+
+    /// Whether a LAN/direct path was chosen in this generation and none of
+    /// the connection's LAN/direct paths is validated or being validated any
+    /// more: the relay may carry payload as fallback before the direct phase
+    /// ends. Address hints are never validated nor pending, so they do not
+    /// hold payload back.
+    fn direct_lost(&self, paths: &[RouteCandidate]) -> bool {
+        self.non_relay_chosen
+            && !paths.iter().any(|path| {
+                path.class != RouteClass::Relay && (path.validated || path.validation_pending)
+            })
     }
 
     /// The best validated path: LAN, then direct, then relay (as start bridge
@@ -65,7 +89,9 @@ impl StartPhase {
         progress: Progress,
     ) -> Option<Choice<'a>> {
         self.closed_now = false;
+        self.lost_now = false;
         let bridge = self.bridge_open(progress);
+        let lost = self.relay_after_loss || self.direct_lost(paths);
         let rank = |class| match class {
             RouteClass::Lan => 0,
             RouteClass::Direct => 1,
@@ -77,7 +103,7 @@ impl StartPhase {
                 path.validated
                     && match path.class {
                         RouteClass::Lan | RouteClass::Direct => true,
-                        RouteClass::Relay => progress.direct_done || bridge,
+                        RouteClass::Relay => progress.direct_done || bridge || lost,
                     }
             })
             .min_by_key(|p| {
@@ -88,9 +114,15 @@ impl StartPhase {
                     p.key.clone(),
                 )
             })?;
-        if path.class != RouteClass::Relay && !self.non_relay_chosen {
-            self.non_relay_chosen = true;
-            self.closed_now = true;
+        if path.class != RouteClass::Relay {
+            self.relay_after_loss = false;
+            if !self.non_relay_chosen {
+                self.non_relay_chosen = true;
+                self.closed_now = true;
+            }
+        } else if !bridge && !progress.direct_done && !self.relay_after_loss {
+            self.relay_after_loss = true;
+            self.lost_now = true;
         }
         let (phase, reason) = match path.class {
             RouteClass::Lan => {
@@ -102,8 +134,9 @@ impl StartPhase {
             RouteClass::Direct => {
                 (RoutePhase::Direct, "Validierter Direktpfad; LANkandidaten werden weiter geprüft")
             }
+            RouteClass::Relay if bridge => (RoutePhase::RelayStart, RELAY_START_REASON),
             RouteClass::Relay if !progress.direct_done => {
-                (RoutePhase::RelayStart, RELAY_START_REASON)
+                (RoutePhase::RelayFallback, DIRECT_LOST_REASON)
             }
             RouteClass::Relay if progress.expired => (
                 RoutePhase::RelayFallback,
@@ -122,11 +155,16 @@ impl StartPhase {
     }
 
     /// The QUIC gate refused the path chosen in this observation: a refused
-    /// first LAN/direct choice does not close the bridge.
+    /// first LAN/direct choice does not close the bridge, and a refused relay
+    /// fallback after a loss does not keep the relay allowed.
     pub(super) fn rejected(&mut self) {
         if self.closed_now {
             self.non_relay_chosen = false;
             self.closed_now = false;
+        }
+        if self.lost_now {
+            self.relay_after_loss = false;
+            self.lost_now = false;
         }
     }
 }
