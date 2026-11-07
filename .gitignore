@@ -66,3 +66,7 @@ release-native/smart_explorer_command.dll
 # Standalone se-agent crate build artifacts (the built binaries are committed
 # under native/agent-bin/, not these).
 /se-agent/target/
+
+# Python byte code of the suite helpers (native/*.py, native/rdt_task)
+__pycache__/
+*.pyc
