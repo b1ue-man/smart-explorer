@@ -205,7 +205,7 @@ start_server() {
   for attempt in $(seq 0 15); do
     candidate=$((30000 + (( $$ + attempt * 97) % 15000)))
     log="$root/share-server-$candidate.log"
-    "$server_bin" "127.0.0.1:$candidate" >"$log" 2>&1 &
+    "$server_bin" "127.0.0.1:$candidate" --allow-legacy-clients >"$log" 2>&1 &
     server_pid=$!
     sleep 0.5
     if kill -0 "$server_pid" 2>/dev/null; then

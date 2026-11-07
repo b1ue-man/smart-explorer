@@ -1,3 +1,6 @@
+// Smart Explorer patch (2026-11-07): address validation (Retry) and bounded
+// QAD admission, server idle timeout and no panic on a failed connection task.
+// See `vendor/SMART_EXPLORER_QAD_LIMITS.md`.
 //! Create a QUIC server that accepts connections
 //! for QUIC address discovery.
 use std::{net::SocketAddr, sync::Arc};
@@ -14,6 +17,301 @@ pub const QUIC_ADDR_DISC_CLOSE_CODE: VarInt = VarInt::from_u32(1);
 pub const QUIC_ADDR_DISC_CLOSE_REASON: &[u8] = b"finished";
 
 #[cfg(feature = "server")]
+pub use self::limits::{QadServerLimits, set_server_limits};
+
+/// Smart Explorer patch: admission limits of the QUIC address discovery server.
+#[cfg(feature = "server")]
+mod limits {
+    use std::{
+        collections::HashMap,
+        net::{IpAddr, Ipv4Addr},
+        num::NonZeroUsize,
+        sync::{Arc, Mutex},
+        time::{Duration, Instant},
+    };
+
+    use lru::LruCache;
+
+    /// Bounds memory even when an attacker rotates through many source prefixes.
+    const SOURCE_BUCKET_CAPACITY: usize = 4096;
+
+    static SERVER_LIMITS: Mutex<Option<QadServerLimits>> = Mutex::new(None);
+
+    /// Resource limits of the QUIC address discovery server.
+    ///
+    /// Every field left at `None` keeps the upstream behaviour: no limit.
+    #[derive(Clone, Copy, Debug, Default, PartialEq)]
+    #[non_exhaustive]
+    pub struct QadServerLimits {
+        /// Most connections held at the same time.
+        pub max_connections: Option<usize>,
+        /// Most connections held at the same time from one source (an IPv4
+        /// address or an IPv6 /64 prefix).
+        pub max_connections_per_source: Option<usize>,
+        /// Accepted new connections per second over all sources.
+        pub accepts_per_second: Option<f64>,
+        /// Burst of the global accept rate (default: the rate rounded up).
+        pub accept_burst: Option<usize>,
+        /// Accepted new connections per second from one source.
+        pub accepts_per_second_per_source: Option<f64>,
+        /// Burst of the per-source accept rate (default: the rate rounded up).
+        pub accept_burst_per_source: Option<usize>,
+        /// Idle timeout the server offers; the connection uses the smaller of
+        /// both sides.
+        pub idle_timeout: Option<Duration>,
+    }
+
+    /// Sets the limits that every QUIC address discovery server spawned
+    /// afterwards in this process applies. Servers already running keep the
+    /// limits they started with.
+    pub fn set_server_limits(limits: QadServerLimits) {
+        *SERVER_LIMITS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(limits);
+    }
+
+    pub(super) fn current_limits() -> QadServerLimits {
+        let limits: Option<QadServerLimits> = *SERVER_LIMITS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        limits.unwrap_or_default()
+    }
+
+    /// Normalized source: IPv4 address (also when IPv4-mapped) or IPv6 /64.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+    enum Source {
+        V4(Ipv4Addr),
+        V6Prefix64(u64),
+    }
+
+    impl Source {
+        fn from_ip(ip: IpAddr) -> Self {
+            match ip {
+                IpAddr::V4(ip) => Self::V4(ip),
+                IpAddr::V6(ip) => match ip.to_ipv4_mapped() {
+                    Some(ip) => Self::V4(ip),
+                    None => Self::V6Prefix64((u128::from(ip) >> 64) as u64),
+                },
+            }
+        }
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    struct RateSpec {
+        tokens_per_second: f64,
+        burst: f64,
+    }
+
+    impl RateSpec {
+        fn from_options(
+            scope: &str,
+            rate: Option<f64>,
+            burst: Option<usize>,
+        ) -> Result<Option<Self>, String> {
+            let Some(tokens_per_second) = rate else {
+                return Ok(None);
+            };
+            if !tokens_per_second.is_finite() || tokens_per_second <= 0.0 {
+                return Err(format!(
+                    "{scope} QAD accept rate must be a positive finite number"
+                ));
+            }
+            let burst = burst.unwrap_or_else(|| tokens_per_second.ceil() as usize);
+            if burst == 0 {
+                return Err(format!(
+                    "{scope} QAD accept burst must be greater than zero"
+                ));
+            }
+            Ok(Some(Self {
+                tokens_per_second,
+                burst: burst as f64,
+            }))
+        }
+    }
+
+    #[derive(Debug)]
+    struct TokenBucket {
+        spec: RateSpec,
+        tokens: f64,
+        updated_at: Instant,
+    }
+
+    impl TokenBucket {
+        fn new(spec: RateSpec, now: Instant) -> Self {
+            Self {
+                spec,
+                tokens: spec.burst,
+                updated_at: now,
+            }
+        }
+
+        fn refill(&mut self, now: Instant) {
+            let elapsed = now.saturating_duration_since(self.updated_at);
+            self.tokens = (self.tokens + elapsed.as_secs_f64() * self.spec.tokens_per_second)
+                .min(self.spec.burst);
+            self.updated_at = now;
+        }
+
+        fn has_token(&self) -> bool {
+            self.tokens >= 1.0
+        }
+    }
+
+    #[derive(Debug)]
+    struct State {
+        total: usize,
+        by_source: HashMap<Source, usize>,
+        global_rate: Option<TokenBucket>,
+        source_rate: Option<(RateSpec, LruCache<Source, TokenBucket>)>,
+    }
+
+    #[derive(Debug)]
+    struct Inner {
+        max_total: Option<usize>,
+        max_per_source: Option<usize>,
+        state: Mutex<State>,
+    }
+
+    /// Why an incoming connection was refused.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(super) enum Refusal {
+        Rate,
+        Capacity,
+    }
+
+    /// Admission control of the accept loop: rate first, then held connections.
+    #[derive(Debug)]
+    pub(super) struct Admission {
+        inner: Arc<Inner>,
+    }
+
+    impl Admission {
+        pub(super) fn new(limits: &QadServerLimits) -> Result<Self, String> {
+            Self::new_at(limits, Instant::now())
+        }
+
+        /// [`Self::new`] at a given time (tests of this patch inject the clock).
+        pub(super) fn new_at(limits: &QadServerLimits, now: Instant) -> Result<Self, String> {
+            let global =
+                RateSpec::from_options("global", limits.accepts_per_second, limits.accept_burst)?;
+            let source = RateSpec::from_options(
+                "per-source",
+                limits.accepts_per_second_per_source,
+                limits.accept_burst_per_source,
+            )?;
+            let capacity = NonZeroUsize::new(SOURCE_BUCKET_CAPACITY)
+                .ok_or_else(|| "QAD source bucket capacity must be non-zero".to_string())?;
+            Ok(Self {
+                inner: Arc::new(Inner {
+                    max_total: limits.max_connections,
+                    max_per_source: limits.max_connections_per_source,
+                    state: Mutex::new(State {
+                        total: 0,
+                        by_source: HashMap::new(),
+                        global_rate: global.map(|spec| TokenBucket::new(spec, now)),
+                        source_rate: source.map(|spec| (spec, LruCache::new(capacity))),
+                    }),
+                }),
+            })
+        }
+
+        /// Admits one incoming connection from `ip`; the permit holds its
+        /// place until dropped.
+        pub(super) fn try_admit(&self, ip: IpAddr) -> Result<Permit, Refusal> {
+            self.try_admit_at(ip, Instant::now())
+        }
+
+        /// [`Self::try_admit`] at a given time.
+        pub(super) fn try_admit_at(&self, ip: IpAddr, now: Instant) -> Result<Permit, Refusal> {
+            let source = Source::from_ip(ip);
+            let mut state = self
+                .inner
+                .state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let State {
+                total,
+                by_source,
+                global_rate,
+                source_rate,
+            } = &mut *state;
+            let held_by_source = by_source.get(&source).copied().unwrap_or(0);
+            if let Some(global) = global_rate.as_mut() {
+                global.refill(now);
+                if !global.has_token() {
+                    return Err(Refusal::Rate);
+                }
+            }
+            let mut source_bucket = None;
+            if let Some((spec, buckets)) = source_rate.as_mut() {
+                let spec = *spec;
+                let bucket = buckets.get_or_insert_mut(source, || TokenBucket::new(spec, now));
+                bucket.refill(now);
+                if !bucket.has_token() {
+                    return Err(Refusal::Rate);
+                }
+                source_bucket = Some(bucket);
+            }
+            let full = self.inner.max_total.is_some_and(|max| *total >= max)
+                || self
+                    .inner
+                    .max_per_source
+                    .is_some_and(|max| held_by_source >= max);
+            let (Some(next_total), Some(next_by_source), false) =
+                (total.checked_add(1), held_by_source.checked_add(1), full)
+            else {
+                return Err(Refusal::Capacity);
+            };
+            if let Some(bucket) = source_bucket {
+                bucket.tokens -= 1.0;
+            }
+            if let Some(global) = global_rate.as_mut() {
+                global.tokens -= 1.0;
+            }
+            *total = next_total;
+            by_source.insert(source, next_by_source);
+            Ok(Permit {
+                inner: self.inner.clone(),
+                source,
+            })
+        }
+
+        /// Connections held right now (read by `qad_testing`).
+        pub(super) fn held(&self) -> usize {
+            self.inner
+                .state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .total
+        }
+    }
+
+    /// One admitted connection; dropping it frees its place.
+    #[derive(Debug)]
+    pub(super) struct Permit {
+        inner: Arc<Inner>,
+        source: Source,
+    }
+
+    impl Drop for Permit {
+        fn drop(&mut self) {
+            let mut state = self
+                .inner
+                .state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            state.total = state.total.saturating_sub(1);
+            if let Some(held) = state.by_source.get_mut(&self.source) {
+                *held = held.saturating_sub(1);
+                if *held == 0 {
+                    state.by_source.remove(&self.source);
+                }
+            }
+        }
+    }
+}
+
+#[cfg(feature = "server")]
 pub(crate) mod server {
     use n0_error::e;
     use noq::{
@@ -22,9 +320,9 @@ pub(crate) mod server {
     };
     use tokio::task::JoinSet;
     use tokio_util::{sync::CancellationToken, task::AbortOnDropHandle};
-    use tracing::{Instrument, debug, info, info_span};
+    use tracing::{Instrument, debug, info, info_span, warn};
 
-    use super::*;
+    use super::{limits::Admission, *};
     use crate::server::Metrics;
 
     pub(crate) struct QuicServer {
@@ -45,7 +343,8 @@ pub(crate) mod server {
             #[error(std_err, from)]
             source: NoInitialCipherSuite,
         },
-        #[error("Unable to spawn a QUIC endpoint server")]
+        // Smart Explorer patch: the message names the socket error.
+        #[error("Unable to spawn a QUIC endpoint server: {source}")]
         EndpointServer {
             #[error(std_err)]
             source: std::io::Error,
@@ -55,6 +354,9 @@ pub(crate) mod server {
             #[error(std_err)]
             source: std::io::Error,
         },
+        /// Smart Explorer patch: the limits set by `set_server_limits` are invalid.
+        #[error("Invalid QAD limits: {details}")]
+        InvalidLimits { details: String },
     }
 
     impl QuicServer {
@@ -90,15 +392,26 @@ pub(crate) mod server {
         /// be converted to a [`QuicServerConfig`], usually because it does not support
         /// TLS 1.3, a [`NoInitialCipherSuite`] will occur.
         ///
-        /// # Panics
-        /// If there is a panic during a connection, it will be propagated
-        /// up here. Any other errors in a connection will be logged as a
-        ///  warning.
+        /// A panic during a connection ends only that connection and is logged
+        /// as a warning (Smart Explorer patch); the limits set by
+        /// [`super::set_server_limits`] bound admission before the handshake,
+        /// and only for senders whose address a stateless Retry validated.
         pub(crate) fn spawn(
             bind_addr: SocketAddr,
             mut server_config: rustls::ServerConfig,
             metrics: Arc<Metrics>,
         ) -> Result<Self, QuicSpawnError> {
+            let limits = super::limits::current_limits();
+            let admission = Admission::new(&limits)
+                .map_err(|details| e!(QuicSpawnError::InvalidLimits { details }))?;
+            let idle_timeout = match limits.idle_timeout {
+                Some(timeout) => Some(noq::IdleTimeout::try_from(timeout).map_err(|_| {
+                    e!(QuicSpawnError::InvalidLimits {
+                        details: format!("QAD idle timeout {timeout:?} is out of range"),
+                    })
+                })?),
+                None => None,
+            };
             server_config.alpn_protocols = vec![crate::quic::ALPN_QUIC_ADDR_DISC.to_vec()];
             let server_config = QuicServerConfig::try_from(server_config)?;
             let mut server_config = noq::ServerConfig::with_crypto(Arc::new(server_config));
@@ -109,6 +422,9 @@ pub(crate) mod server {
                 .max_concurrent_bidi_streams(0_u8.into())
                 // enable sending quic address discovery frames
                 .send_observed_address_reports(true);
+            if idle_timeout.is_some() {
+                transport_config.max_idle_timeout(idle_timeout);
+            }
 
             let endpoint = noq::Endpoint::server(server_config, bind_addr)
                 .map_err(|err| e!(QuicSpawnError::EndpointServer, err))?;
@@ -134,18 +450,44 @@ pub(crate) mod server {
                             Some(res) = set.join_next() => {
                                 if let Err(err) = res {
                                     if err.is_panic() {
-                                        panic!("quic task panicked: {err:#?}");
+                                        // Smart Explorer patch: one failed connection
+                                        // must not end the whole service.
+                                        warn!("quic task panicked: {err:#?}");
                                     } else {
                                         debug!("quic task cancelled: {err:#?}");
                                     }
                                 }
                             }
                             res = endpoint.accept() => match res {
+                                Some(incoming) if !incoming.remote_address_validated() => {
+                                    // Smart Explorer patch: a stateless Retry first proves
+                                    // that the sender receives at its source address, so
+                                    // spoofed senders hold no place and no rate token.
+                                    let remote_addr = incoming.remote_address();
+                                    if let Err(error) = incoming.retry() {
+                                        debug!(%remote_addr, "QAD retry not allowed; ignoring");
+                                        error.into_incoming().ignore();
+                                    }
+                                }
                                 Some(incoming) => {
-                                     let remote_addr = incoming.remote_address();
-                                     set.spawn(
-                                         handle_connection(incoming, metrics.clone()).instrument(info_span!("qad-conn", %remote_addr))
-                                     );                                }
+                                    let remote_addr = incoming.remote_address();
+                                    match admission.try_admit(remote_addr.ip()) {
+                                        Ok(permit) => {
+                                            let metrics = metrics.clone();
+                                            set.spawn(
+                                                async move {
+                                                    let _permit = permit;
+                                                    handle_connection(incoming, metrics).await
+                                                }
+                                                .instrument(info_span!("qad-conn", %remote_addr)),
+                                            );
+                                        }
+                                        Err(refusal) => {
+                                            debug!(%remote_addr, ?refusal, "QAD connection refused by limits");
+                                            incoming.refuse();
+                                        }
+                                    }
+                                }
                                 None => {
                                     debug!("endpoint closed");
                                     break;
@@ -360,6 +702,131 @@ impl QuicClient {
         let connecting = self.ep.connect_with(config, server_addr, host);
         let conn = connecting?.await?;
         Ok(conn)
+    }
+}
+
+/// Smart Explorer patch: test support for the QAD admission limits and the QAD
+/// client. Not part of the upstream API. It wraps the existing types and changes
+/// no limit, no admission path, no retry and no server behaviour.
+#[cfg(feature = "server")]
+#[doc(hidden)]
+pub mod qad_testing {
+    use std::{
+        net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
+        time::{Duration, Instant},
+    };
+
+    use n0_future::StreamExt;
+
+    use super::limits::{Admission, Permit, Refusal};
+
+    /// Admission of the QAD accept loop, with the same checks as at server start.
+    #[derive(Debug)]
+    pub struct TestAdmission {
+        inner: Admission,
+    }
+
+    impl TestAdmission {
+        /// Builds the admission for `limits`; invalid limits are an error.
+        pub fn new(limits: super::QadServerLimits) -> Result<Self, String> {
+            Admission::new(&limits).map(|inner| Self { inner })
+        }
+
+        /// Admits one connection from `source` at `now`. The error text is
+        /// `"rate"` or `"capacity"`.
+        pub fn try_admit_at(
+            &self,
+            source: IpAddr,
+            now: Instant,
+        ) -> Result<TestPermit, &'static str> {
+            self.inner
+                .try_admit_at(source, now)
+                .map(|permit| TestPermit { _permit: permit })
+                .map_err(|refusal| match refusal {
+                    Refusal::Rate => "rate",
+                    Refusal::Capacity => "capacity",
+                })
+        }
+
+        /// Connections held right now.
+        pub fn held(&self) -> usize {
+            self.inner.held()
+        }
+    }
+
+    /// One admitted connection; dropping it frees its place.
+    #[derive(Debug)]
+    pub struct TestPermit {
+        _permit: Permit,
+    }
+
+    /// A QAD client connection made by [`probe`].
+    pub struct QadProbe {
+        endpoint: noq::Endpoint,
+        connection: noq::Connection,
+    }
+
+    impl QadProbe {
+        /// The address the server observed for this connection, or `None` when
+        /// none arrives within `timeout`.
+        pub async fn observed(&self, timeout: Duration) -> Option<SocketAddr> {
+            let mut addresses = self.connection.observed_external_addr();
+            n0_future::time::timeout(timeout, addresses.next())
+                .await
+                .ok()
+                .flatten()
+        }
+
+        /// The local address of the client socket.
+        pub fn local_addr(&self) -> Option<SocketAddr> {
+            self.endpoint.local_addr().ok()
+        }
+
+        /// The reason the connection closed, or `None` while it is open.
+        pub fn close_reason(&self) -> Option<String> {
+            self.connection
+                .close_reason()
+                .map(|reason| reason.to_string())
+        }
+
+        /// Closes the connection and waits until the endpoint is idle, so the
+        /// server has received the close frame when this returns.
+        pub async fn close(self) {
+            self.connection.close(
+                super::QUIC_ADDR_DISC_CLOSE_CODE,
+                super::QUIC_ADDR_DISC_CLOSE_REASON,
+            );
+            self.endpoint.wait_idle().await;
+        }
+    }
+
+    /// Connects a QAD client from the loopback address of the server's address
+    /// family to `server`, verifying the certificate for `server_name`.
+    pub async fn probe(
+        server: SocketAddr,
+        server_name: &str,
+        client_config: rustls::ClientConfig,
+    ) -> Result<QadProbe, String> {
+        let local = match server {
+            SocketAddr::V4(_) => IpAddr::V4(Ipv4Addr::LOCALHOST),
+            SocketAddr::V6(_) => IpAddr::V6(Ipv6Addr::LOCALHOST),
+        };
+        let endpoint = noq::Endpoint::client(SocketAddr::new(local, 0))
+            .map_err(|error| format!("cannot create the QAD client endpoint: {error}"))?;
+        let client = super::QuicClient::new(endpoint.clone(), client_config);
+        let connection = client
+            .create_conn(server, server_name)
+            .await
+            .map_err(|error| error.to_string())?;
+        Ok(QadProbe {
+            endpoint,
+            connection,
+        })
+    }
+
+    /// Restores the process-wide QAD limits to none (`QadServerLimits::default()`).
+    pub fn reset_server_limits() {
+        super::set_server_limits(super::QadServerLimits::default());
     }
 }
 

@@ -71,6 +71,57 @@ impl AcceptRateLimiter {
     }
 }
 
+/// New device/lookup bindings per source (R-SERVER-02): keys cost nothing,
+/// so the permanent binding tables are filled at most this fast per source.
+const NEW_BINDINGS_PER_SECOND_PER_SOURCE: f64 = 0.1;
+const NEW_BINDING_BURST_PER_SOURCE: f64 = 512.0;
+
+/// Token buckets for new key bindings, by source; the externally limited
+/// proxy bucket has none (its proxy limits the original clients).
+pub(super) struct NewBindingRateLimiter {
+    by_source: LruCache<SourceKey, TokenBucket>,
+}
+
+impl Default for NewBindingRateLimiter {
+    fn default() -> Self {
+        Self {
+            by_source: LruCache::new(BINDING_SOURCE_CACHE_CAPACITY),
+        }
+    }
+}
+
+const BINDING_SOURCE_CACHE_CAPACITY: NonZeroUsize =
+    match NonZeroUsize::new(ACCEPT_SOURCE_CACHE_CAPACITY) {
+        Some(capacity) => capacity,
+        None => NonZeroUsize::MIN,
+    };
+
+impl NewBindingRateLimiter {
+    /// Takes one token of `source` for a new binding.
+    pub(super) fn try_take(&mut self, source: SourceKey) -> bool {
+        self.try_take_at(source, Instant::now())
+    }
+
+    pub(super) fn try_take_at(&mut self, source: SourceKey, now: Instant) -> bool {
+        if !source.has_internal_source_limit() {
+            return true;
+        }
+        let bucket = self.by_source.get_or_insert_mut(source, || {
+            TokenBucket::new(
+                NEW_BINDINGS_PER_SECOND_PER_SOURCE,
+                NEW_BINDING_BURST_PER_SOURCE,
+                now,
+            )
+        });
+        bucket.refill(now);
+        if !bucket.can_consume(1.0) {
+            return false;
+        }
+        bucket.consume(1.0);
+        true
+    }
+}
+
 pub(super) struct InboundRateLimiter {
     messages: TokenBucket,
     bytes: TokenBucket,
@@ -234,3 +285,7 @@ mod tests {
         assert!(bytes.try_consume_at(1, started + Duration::from_secs(1)));
     }
 }
+
+#[cfg(test)]
+#[path = "rate_limits_tests.rs"]
+mod rate_limits_tests;

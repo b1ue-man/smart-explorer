@@ -310,6 +310,8 @@ fn finish_registration(
             return Ok(None);
         }
     };
+    // Registered: the connection leaves the handshake pool (R-SERVER-04).
+    super::handshake_slots::release_current();
     send(
         writer,
         &Out::HelloOk {

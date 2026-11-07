@@ -4,8 +4,9 @@
 //! watcher that logged in with a key must show a proof with that hash. Room
 //! members are partitioned by the hash of their proof: they only see members
 //! of the same partition. Clients without key login (older versions) have no
-//! partition and stay visible to everyone, so mixed rooms keep working;
-//! `--require-key-login` removes them altogether.
+//! partition and stay visible to everyone, so mixed rooms keep working; they
+//! exist only with `--allow-legacy-clients`, because the server requires key
+//! login by default (E18).
 
 use super::login::{hex_decode, sha256};
 

@@ -119,6 +119,7 @@ pub(super) fn publish(
             return Err(RetainError::Limit("published directs"));
         }
         let key = client.identity.proven().map(ToString::to_string);
+        let source = client.source;
         if let Some(bound) = state.bindings.lookup_key(lookup) {
             if key.as_deref() != Some(bound) {
                 return Err(RetainError::Bound("lookup"));
@@ -128,6 +129,12 @@ pub(super) fn publish(
             let hash = access_hash
                 .filter(|hash| crate::access::parse_hash(hash).is_some())
                 .ok_or(RetainError::Denied("relation access hash"))?;
+            // Only a new lookup binding takes a token of the source (R-SERVER-02).
+            if state.bindings.is_new_lookup(lookup) && !state.binding_rate.try_take(source) {
+                return Err(RetainError::Limit(
+                    "new key bindings from this network; retry later",
+                ));
+            }
             match state.bindings.bind_lookup(
                 lookup,
                 &key,
@@ -136,7 +143,10 @@ pub(super) fn publish(
             ) {
                 BindOutcome::Conflict => return Err(RetainError::Bound("lookup")),
                 BindOutcome::Full => return Err(RetainError::Limit("key bindings")),
-                _ => {}
+                BindOutcome::KeyFull => {
+                    return Err(RetainError::Limit("key bindings for this device key"))
+                }
+                BindOutcome::Bound | BindOutcome::Confirmed => {}
             }
             if state.persist_bindings().is_err() {
                 return Err(RetainError::Denied("persistent key state"));

@@ -7,6 +7,13 @@
 //!
 //! Bindings live in memory and, with `--state-file`, in a JSON file that a
 //! restart reads back; without it the first proven key after a restart wins.
+//!
+//! Keys cost nothing, so one key binds at most [`MAX_DEVICES_PER_KEY`] device
+//! ids and [`MAX_LOOKUPS_PER_KEY`] lookups, and new bindings per source are
+//! rate limited by the caller (R-SERVER-02). An owner change is written at
+//! once; a renewed access hash of an existing lookup at most once per
+//! [`ACCESS_SAVE_INTERVAL_SECS`], because the owner sends its current hash
+//! again with every publication after a restart (R-SERVER-03).
 
 use std::collections::HashMap;
 use std::io::{self, Read, Write};
@@ -16,6 +23,15 @@ use serde::{Deserialize, Serialize};
 
 /// Entries per kind; a full table refuses new bindings without forgetting owners.
 pub(super) const MAX_BINDINGS: usize = 200_000;
+/// Device ids one key may bind: the app keeps one id per key, and a lost
+/// identity file with a kept keyring key or several profiles of one account
+/// add a new id each (`native/crates/engine/src/share/core/identity.rs`).
+pub(super) const MAX_DEVICES_PER_KEY: usize = 64;
+/// Lookups one key may bind: one per Direct code renewal of a device;
+/// 64 times the concurrent cap `MAX_PUBLISHED_DIRECTS_PER_CLIENT`.
+pub(super) const MAX_LOOKUPS_PER_KEY: usize = 4_096;
+/// Least interval between two saves caused only by renewed access hashes.
+pub(super) const ACCESS_SAVE_INTERVAL_SECS: i64 = 60;
 const MAX_STATE_BYTES: u64 = 256 * 1024 * 1024;
 const STATE_VERSION: u32 = 1;
 
@@ -27,8 +43,30 @@ pub(super) struct Bindings {
     devices: HashMap<String, Binding>,
     #[serde(default)]
     lookups: HashMap<String, Binding>,
+    /// An owner was added (written by the next save).
     #[serde(skip)]
     dirty: bool,
+    /// Only access hashes changed (written at most every 60 s).
+    #[serde(skip)]
+    access_dirty: bool,
+    /// Unix seconds of the last successful save of this process.
+    #[serde(skip)]
+    saved_at: Option<i64>,
+    /// Bindings per key, rebuilt on load.
+    #[serde(skip)]
+    per_key: HashMap<String, KeyCounts>,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct KeyCounts {
+    devices: usize,
+    lookups: usize,
+}
+
+#[derive(Clone, Copy)]
+enum Kind {
+    Device,
+    Lookup,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -50,7 +88,10 @@ pub(super) enum BindOutcome {
     Confirmed,
     /// The entry belongs to another key.
     Conflict,
+    /// The table holds [`MAX_BINDINGS`] entries.
     Full,
+    /// The key already holds its maximum of entries of this kind.
+    KeyFull,
 }
 
 impl Bindings {
@@ -60,15 +101,18 @@ impl Bindings {
             .map(|binding| binding.key.as_str())
     }
 
+    /// Whether binding `device_id` would add a new entry.
+    pub(super) fn is_new_device(&self, device_id: &str) -> bool {
+        !self.devices.contains_key(device_id)
+    }
+
     pub(super) fn bind_device(&mut self, device_id: &str, key: &str, now: i64) -> BindOutcome {
-        bind(
-            &mut self.devices,
-            &mut self.dirty,
-            device_id,
-            key,
-            None,
-            now,
-        )
+        self.bind(Kind::Device, device_id, key, None, now)
+    }
+
+    /// Whether binding `lookup_id` would add a new entry.
+    pub(super) fn is_new_lookup(&self, lookup_id: &str) -> bool {
+        !self.lookups.contains_key(lookup_id)
     }
 
     pub(super) fn lookup_key(&self, lookup_id: &str) -> Option<&str> {
@@ -93,24 +137,95 @@ impl Bindings {
         access: Option<String>,
         now: i64,
     ) -> BindOutcome {
-        bind(
-            &mut self.lookups,
-            &mut self.dirty,
-            lookup_id,
-            key,
-            access,
-            now,
-        )
+        self.bind(Kind::Lookup, lookup_id, key, access, now)
     }
 
     /// A copy to save when something changed since the last call.
+    #[cfg(test)]
     pub(super) fn take_dirty(&mut self) -> Option<Self> {
-        if !std::mem::take(&mut self.dirty) {
+        let owners = std::mem::take(&mut self.dirty);
+        if !std::mem::take(&mut self.access_dirty) && !owners {
             return None;
         }
         let mut snapshot = self.clone();
         snapshot.version = STATE_VERSION;
         Some(snapshot)
+    }
+
+    /// Saves without a copy when an owner was added, or when only access
+    /// hashes changed and the last save is [`ACCESS_SAVE_INTERVAL_SECS`] ago.
+    /// A failed save keeps the pending changes for the next call.
+    pub(super) fn save_pending(&mut self, path: &Path, now: i64) -> io::Result<()> {
+        let access_due = self.access_dirty
+            && self
+                .saved_at
+                .is_none_or(|at| now.saturating_sub(at) >= ACCESS_SAVE_INTERVAL_SECS);
+        if !self.dirty && !access_due {
+            return Ok(());
+        }
+        self.version = STATE_VERSION;
+        self.save(path)?;
+        self.dirty = false;
+        self.access_dirty = false;
+        self.saved_at = Some(now);
+        Ok(())
+    }
+
+    fn bind(
+        &mut self,
+        kind: Kind,
+        id: &str,
+        key: &str,
+        access: Option<String>,
+        now: i64,
+    ) -> BindOutcome {
+        let (map, per_key_cap) = match kind {
+            Kind::Device => (&mut self.devices, MAX_DEVICES_PER_KEY),
+            Kind::Lookup => (&mut self.lookups, MAX_LOOKUPS_PER_KEY),
+        };
+        if let Some(binding) = map.get_mut(id) {
+            if binding.key != key {
+                return BindOutcome::Conflict;
+            }
+            if access.is_some() && binding.access != access {
+                binding.access = access;
+                self.access_dirty = true;
+            }
+            binding.seen = now;
+            return BindOutcome::Confirmed;
+        }
+        if map.len() >= MAX_BINDINGS {
+            return BindOutcome::Full;
+        }
+        let counts = self.per_key.get(key).copied().unwrap_or_default();
+        if counts.of(kind) >= per_key_cap {
+            return BindOutcome::KeyFull;
+        }
+        map.insert(
+            id.to_string(),
+            Binding {
+                key: key.to_string(),
+                access,
+                seen: now,
+            },
+        );
+        *self
+            .per_key
+            .entry(key.to_string())
+            .or_default()
+            .of_mut(kind) += 1;
+        self.dirty = true;
+        BindOutcome::Bound
+    }
+
+    fn rebuild_key_counts(&mut self) {
+        let mut per_key: HashMap<String, KeyCounts> = HashMap::new();
+        for (kind, map) in [(Kind::Device, &self.devices), (Kind::Lookup, &self.lookups)] {
+            for binding in map.values() {
+                *per_key.entry(binding.key.clone()).or_default().of_mut(kind) += 1;
+            }
+        }
+        self.per_key = per_key;
     }
 
     /// Reads a state file; a missing file is an empty state.
@@ -136,8 +251,12 @@ impl Bindings {
             return Err("unsupported version or oversized binding state".into());
         }
         // Ownership never expires: ageing or pressure must not enable a takeover.
+        // Entries above the per-key caps that an older server wrote stay bound;
+        // they only block further new bindings of that key.
         let _ = now;
         bindings.dirty = false;
+        bindings.access_dirty = false;
+        bindings.rebuild_key_counts();
         Ok(bindings)
     }
 
@@ -177,38 +296,20 @@ impl Bindings {
     }
 }
 
-fn bind(
-    map: &mut HashMap<String, Binding>,
-    dirty: &mut bool,
-    id: &str,
-    key: &str,
-    access: Option<String>,
-    now: i64,
-) -> BindOutcome {
-    if let Some(binding) = map.get_mut(id) {
-        if binding.key != key {
-            return BindOutcome::Conflict;
+impl KeyCounts {
+    fn of(self, kind: Kind) -> usize {
+        match kind {
+            Kind::Device => self.devices,
+            Kind::Lookup => self.lookups,
         }
-        if access.is_some() && binding.access != access {
-            binding.access = access;
-            *dirty = true;
+    }
+
+    fn of_mut(&mut self, kind: Kind) -> &mut usize {
+        match kind {
+            Kind::Device => &mut self.devices,
+            Kind::Lookup => &mut self.lookups,
         }
-        binding.seen = now;
-        return BindOutcome::Confirmed;
     }
-    if map.len() >= MAX_BINDINGS {
-        return BindOutcome::Full;
-    }
-    map.insert(
-        id.to_string(),
-        Binding {
-            key: key.to_string(),
-            access,
-            seen: now,
-        },
-    );
-    *dirty = true;
-    BindOutcome::Bound
 }
 
 #[cfg(test)]
@@ -261,3 +362,7 @@ mod tests {
             .is_none());
     }
 }
+
+#[cfg(test)]
+#[path = "bindings_tests.rs"]
+mod bindings_tests;

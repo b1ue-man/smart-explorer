@@ -13,6 +13,8 @@ use std::net::{Shutdown, TcpListener};
 use std::sync::{Arc, Mutex};
 
 mod access;
+#[cfg(test)]
+mod binding_rate_state_tests;
 mod bindings;
 mod config;
 mod direct_messages;
@@ -20,6 +22,7 @@ mod direct_presence;
 mod direct_validation;
 mod discovery;
 mod discovery_state;
+mod handshake_slots;
 mod hello_session;
 mod idle;
 mod idle_outbox;
@@ -34,7 +37,11 @@ mod login;
 mod main_tests;
 #[cfg(test)]
 mod mixed_version_tests;
+#[cfg(test)]
+mod pairing_source_tests;
 mod protocol;
+#[cfg(test)]
+mod proxy_trust_tests;
 mod rate_limits;
 mod registration_guard;
 mod relay;
@@ -65,6 +72,7 @@ mod transport_cleanup_tests;
 mod websocket_read_limit;
 mod websocket_socket;
 mod writer;
+use handshake_slots::HandshakeSlots;
 use idle::SignalTiming;
 use limits::{ConnectionLimiter, SourceClassifier};
 use protocol::{In, Out, PeerPresence};
@@ -145,7 +153,7 @@ fn main() {
             plaintext_fallback: options.allow_plaintext
                 || relay_address.is_some_and(|addr| addr.ip().is_loopback()),
             trusted_proxy: relay_address
-                .is_some_and(|addr| source_classifier.is_trusted_ip(addr.ip())),
+                .is_some_and(|addr| trusted_relay_proxy(&source_classifier, addr)),
             admissions: relay_admissions,
         },
     ) {
@@ -171,8 +179,14 @@ fn main() {
         },
         keepalive.secs()
     );
+    if options.require_key_login {
+        eprintln!("se-share-server: key login required; --allow-legacy-clients admits apps up to v0.5.169");
+    } else {
+        eprintln!("se-share-server: compatibility mode (--allow-legacy-clients): clients without key login are admitted and can see presences without relation proofs");
+    }
     let timing = SignalTiming::new(keepalive);
     let connections = ConnectionLimiter::from_limits(&options.limits);
+    let handshakes = HandshakeSlots::from_limits(&options.limits);
     let allow_plaintext = options.allow_plaintext || options.bind.ip().is_loopback();
     let mut accept_rate = AcceptRateLimiter::new();
     for conn in listener.incoming() {
@@ -195,6 +209,12 @@ fn main() {
             let _ = stream.shutdown(Shutdown::Both);
             continue;
         }
+        // Until its registration the connection also holds a handshake place;
+        // a full handshake scope closes its oldest waiting connection (R-SERVER-04).
+        let Some(handshake) = handshakes.try_acquire(source, &stream) else {
+            let _ = stream.shutdown(Shutdown::Both);
+            continue;
+        };
         let state = state.clone();
         let timing = timing.clone();
         let tls = tls.clone();
@@ -203,7 +223,9 @@ fn main() {
             .spawn(move || {
                 // Idle connections keep this permit like any other connection.
                 let _permit = permit;
+                handshake_slots::hold(handshake);
                 let _ = handle_with_security(stream, state, source, &timing, tls, allow_plaintext);
+                handshake_slots::release_current();
             });
     }
 }
@@ -211,6 +233,33 @@ fn main() {
 fn fatal(error: &str) -> ! {
     eprintln!("se-share-server: {error}");
     std::process::exit(1);
+}
+
+/// The relay sees no peer address per connection, so its bind address stands
+/// for the proxy: trusted only when listed and loopback or private (R-SERVER-06).
+fn trusted_relay_proxy(classifier: &SourceClassifier, relay: std::net::SocketAddr) -> bool {
+    if !classifier.is_trusted_ip(relay.ip()) {
+        return false;
+    }
+    if is_local_proxy_address(relay.ip()) {
+        return true;
+    }
+    eprintln!(
+        "se-share-server: SE_SHARE_TRUSTED_PROXY_IPS lists {}, a public relay bind; relay per-source limits stay on",
+        relay.ip()
+    );
+    false
+}
+
+/// Loopback, IPv4 private (RFC 1918) or IPv6 unique local (`fc00::/7`).
+fn is_local_proxy_address(address: std::net::IpAddr) -> bool {
+    match address {
+        std::net::IpAddr::V4(address) => address.is_loopback() || address.is_private(),
+        std::net::IpAddr::V6(address) => match address.to_ipv4_mapped() {
+            Some(mapped) => mapped.is_loopback() || mapped.is_private(),
+            None => address.is_loopback() || (address.segments()[0] & 0xfe00) == 0xfc00,
+        },
+    }
 }
 
 fn trusted_proxy_sources_from_env() -> Result<SourceClassifier, String> {

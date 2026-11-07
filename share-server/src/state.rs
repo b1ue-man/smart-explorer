@@ -6,6 +6,7 @@ use iroh_base::PublicKey;
 use super::bindings::{BindOutcome, Bindings};
 use super::discovery_state::unix_seconds;
 use super::limits::{validate_identifier, ServerLimits, SourceKey};
+use super::rate_limits::NewBindingRateLimiter;
 use super::relay_access::RelayAdmissions;
 use super::{send, Out, PeerPresence, Writer};
 
@@ -54,11 +55,16 @@ impl ClientIdentity {
     }
 }
 
-/// Server-wide settings the handlers read (FC4).
+/// Server-wide settings the handlers read (FC4). The server sets them from
+/// `config::Options`, where key login is required unless the operator gives
+/// `--allow-legacy-clients` (E18). `Default` keeps the compatibility mode for
+/// the unit tests that model older clients; they set `require_key_login`
+/// where they test the refusal.
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct ServerPolicy {
     pub(super) limits: ServerLimits,
-    /// Older clients without key login are refused (`--require-key-login`).
+    /// Older clients without key login are refused (the default of the
+    /// server; off only with `--allow-legacy-clients`).
     pub(super) require_key_login: bool,
 }
 
@@ -81,21 +87,19 @@ pub(super) struct State {
     pub(super) watch_access: HashMap<(u64, String), [u8; 32]>,
     /// Partition of a room member, by (room id, device id).
     pub(super) room_access: HashMap<(String, String), [u8; 32]>,
+    /// New device/lookup bindings per source (R-SERVER-02).
+    pub(super) binding_rate: NewBindingRateLimiter,
 }
 
 impl State {
     /// Called while the state lock serializes owner changes and their disk order.
+    /// Saves without copying the tables, and only when something is due
+    /// (`Bindings::save_pending`, R-SERVER-03).
     pub(super) fn persist_bindings(&mut self) -> std::io::Result<()> {
         let Some(path) = &self.binding_path else {
             return Ok(());
         };
-        let mut candidate = self.bindings.clone();
-        if candidate.take_dirty().is_none() {
-            return Ok(());
-        }
-        candidate.save(path)?;
-        self.bindings = candidate;
-        Ok(())
+        self.bindings.save_pending(path, unix_seconds())
     }
 }
 
@@ -112,6 +116,10 @@ pub(super) enum RegistrationError {
     /// The server accepts only clients that log in with their key.
     KeyLoginRequired,
     BindingStateUnavailable,
+    /// The proven key already bound its maximum of device ids.
+    KeyDevicesFull,
+    /// Too many new device bindings from this source; retry later.
+    BindingRateLimited,
 }
 
 impl RegistrationError {
@@ -126,7 +134,14 @@ impl RegistrationError {
             Self::BindingStateUnavailable => {
                 "cannot persist device key binding; check server state file"
             }
-            Self::KeyLoginRequired => "this server requires key login; update Smart Explorer",
+            Self::KeyLoginRequired => {
+                "this server requires key login; update Smart Explorer \
+                 (the operator can admit older apps with --allow-legacy-clients)"
+            }
+            Self::KeyDevicesFull => "too many device ids for this device key",
+            Self::BindingRateLimited => {
+                "too many new device bindings from this network; retry later"
+            }
         }
     }
 }
@@ -214,12 +229,26 @@ fn try_register_locked(
     let limits = state.policy.limits;
     match identity.proven() {
         Some(key) => {
+            let key_text = key.to_string();
+            // Only a new entry takes a token; a bound one (own or another key's) does not.
+            if state.bindings.is_new_device(device_id) && !state.binding_rate.try_take(source) {
+                return (
+                    Registration::Failed(RegistrationError::BindingRateLimited),
+                    Vec::new(),
+                );
+            }
             let bound = state
                 .bindings
-                .bind_device(device_id, &key.to_string(), unix_seconds());
+                .bind_device(device_id, &key_text, unix_seconds());
             if bound == BindOutcome::Conflict {
                 return (
                     Registration::Failed(RegistrationError::DeviceBound),
+                    Vec::new(),
+                );
+            }
+            if bound == BindOutcome::KeyFull {
+                return (
+                    Registration::Failed(RegistrationError::KeyDevicesFull),
                     Vec::new(),
                 );
             }

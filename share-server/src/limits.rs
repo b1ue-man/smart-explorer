@@ -97,6 +97,11 @@ impl SourceClassifier {
             let address = token
                 .parse::<IpAddr>()
                 .map_err(|error| format!("invalid trusted proxy IP {token}: {error}"))?;
+            if address.is_unspecified() {
+                return Err(format!(
+                    "trusted proxy IP {token} is unspecified; list the exact proxy address"
+                ));
+            }
             externally_limited_proxies.insert(canonical_ip(address));
         }
         Ok(Self {
@@ -243,6 +248,10 @@ pub(super) struct ServerLimits {
     pub(super) max_clients_per_source: usize,
     pub(super) max_clients_per_network: usize,
     pub(super) max_clients_per_key: usize,
+    /// Connections before their registration (R-SERVER-04).
+    pub(super) max_handshakes: usize,
+    pub(super) max_handshakes_per_source: usize,
+    pub(super) max_handshakes_per_network: usize,
 }
 
 impl Default for ServerLimits {
@@ -255,6 +264,10 @@ impl Default for ServerLimits {
             max_clients_per_source: MAX_REGISTERED_CLIENTS_PER_SOURCE,
             max_clients_per_network: MAX_REGISTERED_CLIENTS_PER_SOURCE * NETWORK_CAP_FACTOR,
             max_clients_per_key: MAX_REGISTERED_CLIENTS_PER_KEY,
+            max_handshakes: super::handshake_slots::MAX_HANDSHAKES,
+            max_handshakes_per_source: super::handshake_slots::MAX_HANDSHAKES_PER_SOURCE,
+            max_handshakes_per_network: super::handshake_slots::MAX_HANDSHAKES_PER_SOURCE
+                * NETWORK_CAP_FACTOR,
         }
     }
 }

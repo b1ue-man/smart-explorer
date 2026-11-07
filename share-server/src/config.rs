@@ -6,11 +6,15 @@ use std::path::PathBuf;
 use crate::limits::ServerLimits;
 
 pub(super) const HELP: &str = "se-share-server [IP:PORT] [--tls-cert CERT.pem --tls-key KEY.pem]\n\
-    [--allow-plaintext] [--require-key-login] [--state-file FILE]\n\
+    [--allow-plaintext] [--allow-legacy-clients] [--require-key-login] [--state-file FILE]\n\
     TLS files: SE_SHARE_TLS_CERT / SE_SHARE_TLS_KEY. Plaintext: SE_SHARE_ALLOW_PLAINTEXT=1.\n\
     Bind: SE_SHARE_BIND (default 0.0.0.0:51820). Loopback permits a TLS reverse proxy.\n\
-    Bindings: SE_SHARE_STATE_FILE. Key login: SE_SHARE_REQUIRE_KEY_LOGIN=1.\n\
+    Bindings: SE_SHARE_STATE_FILE.\n\
+    Key login is required by default; --require-key-login (SE_SHARE_REQUIRE_KEY_LOGIN=1)\n\
+    is accepted and changes nothing. --allow-legacy-clients (SE_SHARE_ALLOW_LEGACY_CLIENTS=1)\n\
+    also admits apps up to v0.5.169 without key login (compatibility mode).\n\
     Limits: SE_SHARE_MAX_CONNECTIONS[_PER_SOURCE|_PER_NETWORK],\n\
+    SE_SHARE_MAX_HANDSHAKES[_PER_SOURCE|_PER_NETWORK],\n\
     SE_SHARE_MAX_CLIENTS[_PER_SOURCE|_PER_NETWORK|_PER_KEY].";
 
 pub(super) struct Options {
@@ -18,6 +22,8 @@ pub(super) struct Options {
     pub(super) cert: Option<PathBuf>,
     pub(super) key: Option<PathBuf>,
     pub(super) allow_plaintext: bool,
+    /// Clients without key login are refused unless `--allow-legacy-clients`
+    /// is given (E18: key login is the default).
     pub(super) require_key_login: bool,
     pub(super) state_file: Option<PathBuf>,
     pub(super) limits: ServerLimits,
@@ -46,9 +52,14 @@ impl Options {
         let mut state_file = env("SE_SHARE_STATE_FILE")?;
         let mut allow_plaintext =
             flag(env("SE_SHARE_ALLOW_PLAINTEXT")?, "SE_SHARE_ALLOW_PLAINTEXT")?;
+        // Still accepted; key login is the default anyway (E18).
         let mut require_key_login = flag(
             env("SE_SHARE_REQUIRE_KEY_LOGIN")?,
             "SE_SHARE_REQUIRE_KEY_LOGIN",
+        )?;
+        let mut allow_legacy_clients = flag(
+            env("SE_SHARE_ALLOW_LEGACY_CLIENTS")?,
+            "SE_SHARE_ALLOW_LEGACY_CLIENTS",
         )?;
         let mut positional = false;
         let mut args = args.into_iter();
@@ -56,6 +67,7 @@ impl Options {
             match arg.as_str() {
                 "--allow-plaintext" => allow_plaintext = true,
                 "--require-key-login" => require_key_login = true,
+                "--allow-legacy-clients" => allow_legacy_clients = true,
                 "--tls-cert" => cert = Some(value(&mut args, &arg)?),
                 "--tls-key" => key = Some(value(&mut args, &arg)?),
                 "--state-file" => state_file = Some(value(&mut args, &arg)?),
@@ -65,6 +77,11 @@ impl Options {
                 }
                 _ => return Err(format!("unknown argument {arg}; use --help")),
             }
+        }
+        if require_key_login && allow_legacy_clients {
+            return Err("--require-key-login (SE_SHARE_REQUIRE_KEY_LOGIN=1) and \
+                --allow-legacy-clients (SE_SHARE_ALLOW_LEGACY_CLIENTS=1) exclude each other"
+                .into());
         }
         let bind = bind
             .parse::<SocketAddr>()
@@ -115,12 +132,25 @@ impl Options {
             "SE_SHARE_MAX_CLIENTS_PER_KEY",
             limits.max_clients_per_key,
         )?;
+        limits.max_handshakes = limit(&env, "SE_SHARE_MAX_HANDSHAKES", limits.max_handshakes)?;
+        limits.max_handshakes_per_source = limit(
+            &env,
+            "SE_SHARE_MAX_HANDSHAKES_PER_SOURCE",
+            limits.max_handshakes_per_source,
+        )?;
+        limits.max_handshakes_per_network = limit(
+            &env,
+            "SE_SHARE_MAX_HANDSHAKES_PER_NETWORK",
+            limits
+                .max_handshakes_per_source
+                .saturating_mul(crate::limits::NETWORK_CAP_FACTOR),
+        )?;
         Ok(Some(Self {
             bind,
             cert: cert.map(PathBuf::from),
             key: key.map(PathBuf::from),
             allow_plaintext,
-            require_key_login,
+            require_key_login: !allow_legacy_clients,
             state_file: state_file.map(PathBuf::from),
             limits,
         }))
@@ -237,3 +267,7 @@ mod tests {
         assert!(parse(&[], &[("SE_SHARE_MAX_CONNECTIONS", "-1")]).is_err());
     }
 }
+
+#[cfg(test)]
+#[path = "config_tests.rs"]
+mod config_tests;

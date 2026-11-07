@@ -6,10 +6,15 @@ use std::{
     time::Duration,
 };
 
-use iroh_relay::server::{CertConfig, ClientPingSchedule, ClientRateLimit, RelayConfig, TlsConfig};
+use iroh_relay::server::{
+    CertConfig, ClientPingSchedule, ClientRateLimit, QuicConfig, RelayConfig, TlsConfig,
+};
 
 use super::idle::Keepalive;
 use super::relay_access::{RelayAccess, RelayAdmissions};
+
+#[path = "relay_qad.rs"]
+mod relay_qad;
 
 const RELAY_MAX_ACTIVE_CONNECTIONS: usize = 512;
 const RELAY_MAX_CONNECTIONS_PER_ENDPOINT: usize = 4;
@@ -35,6 +40,7 @@ pub(super) struct RelayGuard {
 }
 
 /// How the relay runs (FC4, B20).
+#[derive(Clone)]
 pub(super) struct RelayOptions {
     pub(super) keepalive: Keepalive,
     /// HTTPS with the signaling certificate; `None` serves plain HTTP.
@@ -125,22 +131,55 @@ fn start_at(address: SocketAddr, options: RelayOptions) -> Result<RelayGuard, Re
         .build()
         .map_err(RelayStartError::Runtime)?;
     let tls = options.tls.is_some();
-    let server = runtime
-        .block_on(async {
+    let qad = match relay_qad::plan_from_env(address, tls) {
+        relay_qad::QadPlan::Listen(qad_address) => match relay_qad::config_or_ipv4(qad_address) {
+            Ok(planned) => Some(planned),
+            Err(reason) => {
+                eprintln!("se-share-server: {reason}");
+                None
+            }
+        },
+        relay_qad::QadPlan::Off(reason) => {
+            eprintln!("se-share-server: {reason}");
+            None
+        }
+    };
+    let spawn = |quic: Option<QuicConfig>| {
+        runtime.block_on(async {
             let mut config = iroh_relay::server::ServerConfig::default();
-            config.relay = Some(relay_config(address, options));
+            config.relay = Some(relay_config(address, options.clone()));
+            config.quic = quic;
             iroh_relay::server::Server::spawn(config).await
         })
-        .map_err(|error| RelayStartError::Server {
-            address,
-            details: error.to_string(),
-        })?;
+    };
+    // A failed QAD start leaves the relay running without QAD (plan E5);
+    // every other relay start error stays fatal.
+    let started = match qad {
+        Some((qad_address, quic)) => match spawn(Some(quic)) {
+            Err(error) => match relay_qad::failure(&error, qad_address) {
+                Some(reason) => {
+                    eprintln!("se-share-server: {reason}");
+                    relay_qad::restart_without_qad(|| spawn(None), std::thread::sleep)
+                }
+                None => Err(error),
+            },
+            started => started,
+        },
+        None => spawn(None),
+    };
+    let server = started.map_err(|error| RelayStartError::Server {
+        address,
+        details: error.to_string(),
+    })?;
     let relay_url = match (tls, server.https_addr(), server.http_addr()) {
         (true, Some(https), _) => format!("https://{https}"),
         (_, _, Some(http)) => format!("http://{http}"),
         _ => format!("http://{address}"),
     };
     eprintln!("se-share-server iroh relay listening on {relay_url}");
+    if let Some(qad_address) = server.quic_addr() {
+        eprintln!("{}", relay_qad::listening_line(qad_address));
+    }
     Ok(RelayGuard {
         _runtime: runtime,
         _server: server,

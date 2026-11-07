@@ -31,7 +31,7 @@ pub(super) struct DiscoveryOffer {
     pub(super) owner_id: u64,
     pub(super) advertisement: DiscoveryAdvertisement,
     pub(super) deadline: Instant,
-    recent_starts: VecDeque<(PairingPrincipal, Instant)>,
+    recent_starts: VecDeque<(PairingPrincipal, Option<super::limits::SourceKey>, Instant)>,
 }
 
 impl DiscoveryOffer {
@@ -58,6 +58,17 @@ enum PairingPrincipal {
     ProxiedConnection(u64),
 }
 
+/// The source of a connector besides its key: keys cost nothing, so one
+/// source holds at most one pairing per offer and its share of starts
+/// (R-SERVER-07). The proxy bucket has none (its proxy limits clients).
+fn pairing_source(state: &State, id: u64) -> Option<super::limits::SourceKey> {
+    state
+        .clients
+        .get(&id)
+        .map(|client| client.source)
+        .filter(|source| source.has_internal_source_limit())
+}
+
 fn pairing_principal(state: &State, id: u64) -> Option<PairingPrincipal> {
     let client = state.clients.get(&id)?;
     Some(match client.identity.proven() {
@@ -74,6 +85,7 @@ pub(super) struct DiscoveryExchange {
     pub(super) publisher_id: u64,
     pub(super) connector_id: u64,
     principal: PairingPrincipal,
+    source: Option<super::limits::SourceKey>,
     deadline: Instant,
     next_step: PairingStep,
     packet_count: u16,
@@ -120,11 +132,11 @@ pub(super) fn prepare_exchange_locked(
         return Err("client pairing exchange limit reached");
     }
     let principal = pairing_principal(state, connector_id).ok_or("pairing connector is offline")?;
-    if state
-        .discovery_exchanges
-        .values()
-        .any(|exchange| exchange.discovery_id == discovery_id && exchange.principal == principal)
-    {
+    let source = pairing_source(state, connector_id);
+    if state.discovery_exchanges.values().any(|exchange| {
+        exchange.discovery_id == discovery_id
+            && (exchange.principal == principal || (source.is_some() && exchange.source == source))
+    }) {
         return Err("connector already pairing with this offer");
     }
     let Some(offer) = state.discovery_offers.get(discovery_id) else {
@@ -161,21 +173,23 @@ pub(super) fn prepare_exchange_locked(
     while offer
         .recent_starts
         .front()
-        .is_some_and(|(_, started)| now.saturating_duration_since(*started) >= ATTEMPT_WINDOW)
+        .is_some_and(|(_, _, started)| now.saturating_duration_since(*started) >= ATTEMPT_WINDOW)
     {
         offer.recent_starts.pop_front();
     }
     if offer
         .recent_starts
         .iter()
-        .filter(|(who, _)| *who == principal)
+        .filter(|(who, from, _)| *who == principal || (source.is_some() && *from == source))
         .count()
         >= MAX_STARTS_PER_CONNECTOR_WINDOW
         || offer.recent_starts.len() >= MAX_RETAINED_STARTS
     {
         return Err("discovery offer pairing attempt rate exceeded");
     }
-    offer.recent_starts.push_back((principal.clone(), now));
+    offer
+        .recent_starts
+        .push_back((principal.clone(), source, now));
     state.discovery_exchanges.insert(
         exchange_id.to_string(),
         DiscoveryExchange {
@@ -183,6 +197,7 @@ pub(super) fn prepare_exchange_locked(
             publisher_id,
             connector_id,
             principal,
+            source,
             deadline: offer_deadline.min(now + MAX_EXCHANGE_LIFETIME),
             next_step: PairingStep::PublisherKe2,
             packet_count: 1,
