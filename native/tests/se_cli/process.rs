@@ -99,7 +99,7 @@ fn sync_daemon_text_in_a_normal_argument_is_not_hijacked() {
 
 #[cfg(target_os = "linux")]
 #[test]
-#[ignore = "needs a Linux host with a systemd manager and cgroup v2 (and the system bus for a non-root user); Suite crates-task"]
+#[ignore = "needs a Linux host with a systemd manager and cgroup v2 (as root also the system bus); Suite crates-task"]
 fn real_systemd_cgroup_exec_provider_contains_and_drains_processes() {
     let systemd_host = std::path::Path::new("/run/systemd/system").is_dir()
         && std::path::Path::new("/sys/fs/cgroup/cgroup.controllers").is_file()

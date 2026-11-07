@@ -164,12 +164,18 @@ fn worker_job_task_cancel_reaches_the_running_job() {
 
 #[test]
 fn worker_job_task_job_with_crash_log_outlives_a_crashed_client() {
-    let cases: [fn(); 2] = [
-        worker_job_task_job_with_crash_log_outlives_a_crashed_client_case,
-        worker_job_task_job_without_crash_log_ends_with_its_client,
+    let cases: [(&str, fn()); 2] = [
+        (
+            "worker_job_task_job_with_crash_log_outlives_a_crashed_client",
+            worker_job_task_job_with_crash_log_outlives_a_crashed_client_case,
+        ),
+        (
+            "worker_job_task_job_without_crash_log_ends_with_its_client",
+            worker_job_task_job_without_crash_log_ends_with_its_client,
+        ),
     ];
-    for case in cases {
-        case();
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
     }
 }
 

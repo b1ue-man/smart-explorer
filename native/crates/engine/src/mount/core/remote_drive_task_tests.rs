@@ -156,6 +156,27 @@ fn remote_drive_task_lazy_writable_handle_commits_on_flush() -> io::Result<()> {
 
 #[test]
 fn remote_drive_task_obsidian_save_cycle_commits_long_short_and_empty_files() -> io::Result<()> {
+    type Row = (&'static str, fn() -> io::Result<()>);
+    let cases: [Row; 2] = [
+        (
+            "remote_drive_task_obsidian_save_cycle_commits_long_short_and_empty_files",
+            remote_drive_task_obsidian_save_cycle_commits_long_short_and_empty_files_case,
+        ),
+        (
+            "remote_drive_task_atomic_replace_detaches_the_old_open_destination",
+            remote_drive_task_atomic_replace_detaches_the_old_open_destination,
+        ),
+    ];
+    for (case, check) in cases {
+        std::panic::catch_unwind(check)
+            .unwrap_or_else(|_| panic!("{case}"))
+            .map_err(|error| io::Error::new(error.kind(), format!("{case}: {error}")))?;
+    }
+    Ok(())
+}
+
+fn remote_drive_task_obsidian_save_cycle_commits_long_short_and_empty_files_case() -> io::Result<()>
+{
     let fixture = Fixture::new("obsidian-save-cycle")?;
     let note = fixture.remote.join("note.md");
     std::fs::write(&note, b"seed")?;
@@ -169,6 +190,41 @@ fn remote_drive_task_obsidian_save_cycle_commits_long_short_and_empty_files() ->
         assert_eq!(std::fs::read(&note)?, expected);
     }
 
+    assert!(engine.dirty_entries()?.is_empty());
+    Ok(())
+}
+
+fn remote_drive_task_atomic_replace_detaches_the_old_open_destination() -> io::Result<()> {
+    let fixture = Fixture::new("obsidian-atomic-replace")?;
+    let note = fixture.remote.join("note.md");
+    let temporary_note = fixture.remote.join("note.md.tmp");
+    std::fs::write(&note, b"old destination")?;
+    let engine = fixture.engine()?;
+
+    let old_destination = engine.open_file(r"\note.md", writable_existing())?;
+    let replacement = engine.open_file(
+        r"\note.md.tmp",
+        OpenFileOptions {
+            writable: true,
+            disposition: OpenDisposition::CreateNew,
+        },
+    )?;
+    assert_eq!(engine.write(replacement, 0, b"new complete note")?, 17);
+    assert_eq!(engine.flush(replacement)?, FlushOutcome::Committed);
+    engine.close(replacement)?;
+
+    assert_eq!(
+        engine.rename_with_shared_destination(r"\note.md.tmp", r"\note.md", true, true)?,
+        RenameOutcome::Complete
+    );
+    assert_eq!(std::fs::read(&note)?, b"new complete note");
+    assert!(!temporary_note.exists());
+
+    engine.truncate(old_destination, 0)?;
+    assert_eq!(engine.write(old_destination, 0, b"stale old handle")?, 16);
+    assert_eq!(engine.flush(old_destination)?, FlushOutcome::NoChanges);
+    engine.close(old_destination)?;
+    assert_eq!(std::fs::read(&note)?, b"new complete note");
     assert!(engine.dirty_entries()?.is_empty());
     Ok(())
 }

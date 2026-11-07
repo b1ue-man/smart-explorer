@@ -192,13 +192,22 @@ fn targets() -> [PeerOpenTarget; 2] {
 
 #[test]
 fn sync_reliability_task_old_jobs_ipc_literal_child_is_finite_without_worker_rpc() {
-    let cases: [fn(); 3] = [
-        sync_reliability_task_old_jobs_ipc_literal_child_is_finite_without_worker_rpc_case,
-        sync_reliability_task_old_jobs_ipc_archive_policy_is_finite_without_worker_rpc,
-        sync_reliability_task_old_jobs_ipc_previous_identity_is_finite_and_unproven,
+    let cases: [(&str, fn()); 3] = [
+        (
+            "sync_reliability_task_old_jobs_ipc_literal_child_is_finite_without_worker_rpc",
+            sync_reliability_task_old_jobs_ipc_literal_child_is_finite_without_worker_rpc_case,
+        ),
+        (
+            "sync_reliability_task_old_jobs_ipc_archive_policy_is_finite_without_worker_rpc",
+            sync_reliability_task_old_jobs_ipc_archive_policy_is_finite_without_worker_rpc,
+        ),
+        (
+            "sync_reliability_task_old_jobs_ipc_previous_identity_is_finite_and_unproven",
+            sync_reliability_task_old_jobs_ipc_previous_identity_is_finite_and_unproven,
+        ),
     ];
-    for case in cases {
-        case();
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
     }
 }
 

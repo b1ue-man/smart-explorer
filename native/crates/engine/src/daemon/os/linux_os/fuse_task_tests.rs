@@ -119,12 +119,21 @@ fn drive_task_fuse_sftp_container_rw() -> io::Result<()> {
 #[test]
 #[ignore = "FUSE task stage linux-root: drive-fuse (SMART_EXPLORER_FUSE_TASK=1); Suite rechte-desktop-tresore-task"]
 fn drive_task_fuse_editor_save_rename_over() -> io::Result<()> {
-    let cases: [fn() -> io::Result<()>; 2] = [
-        drive_task_fuse_editor_save_rename_over_case,
-        drive_task_fuse_gio_replace_stays_atomic,
+    type Row = (&'static str, fn() -> io::Result<()>);
+    let cases: [Row; 2] = [
+        (
+            "drive_task_fuse_editor_save_rename_over",
+            drive_task_fuse_editor_save_rename_over_case,
+        ),
+        (
+            "drive_task_fuse_gio_replace_stays_atomic",
+            drive_task_fuse_gio_replace_stays_atomic,
+        ),
     ];
-    for case in cases {
-        case()?;
+    for (case, check) in cases {
+        std::panic::catch_unwind(check)
+            .unwrap_or_else(|_| panic!("{case}"))
+            .map_err(|error| io::Error::new(error.kind(), format!("{case}: {error}")))?;
     }
     Ok(())
 }

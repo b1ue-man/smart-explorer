@@ -247,12 +247,18 @@ mod android_capture_restart;
 
 #[test]
 fn batches_task_b6_session_budget_android_resume_reuses_capacity_after_actual_owner_end() {
-    let cases: [fn(); 2] = [
-        batches_task_b6_session_budget_android_resume_reuses_capacity_after_actual_owner_end_case,
-        batches_task_b6_session_budget_android_resume_keeps_live_owner_and_retries_same_generation,
+    let cases: [(&str, fn()); 2] = [
+        (
+            "batches_task_b6_session_budget_android_resume_reuses_capacity_after_actual_owner_end",
+            batches_task_b6_session_budget_android_resume_reuses_capacity_after_actual_owner_end_case,
+        ),
+        (
+            "batches_task_b6_session_budget_android_resume_keeps_live_owner_and_retries_same_generation",
+            batches_task_b6_session_budget_android_resume_keeps_live_owner_and_retries_same_generation,
+        ),
     ];
-    for case in cases {
-        case();
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
     }
 }
 

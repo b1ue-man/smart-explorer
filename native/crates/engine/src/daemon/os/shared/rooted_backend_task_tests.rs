@@ -125,12 +125,18 @@ impl Fixture {
 
 #[test]
 fn remote_drive_task_enforced_root_rejects_unverified_backend() {
-    let cases: [fn(); 2] = [
-        remote_drive_task_enforced_root_rejects_unverified_backend_case,
-        remote_drive_task_trusted_root_accepts_unverified_backend,
+    let cases: [(&str, fn()); 2] = [
+        (
+            "remote_drive_task_enforced_root_rejects_unverified_backend",
+            remote_drive_task_enforced_root_rejects_unverified_backend_case,
+        ),
+        (
+            "remote_drive_task_trusted_root_accepts_unverified_backend",
+            remote_drive_task_trusted_root_accepts_unverified_backend,
+        ),
     ];
-    for case in cases {
-        case();
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
     }
 }
 
@@ -201,12 +207,18 @@ fn remote_drive_task_rooted_backend_consumes_one_combined_capability_snapshot() 
 
 #[test]
 fn remote_drive_task_enforced_reads_reuse_resolution_but_keep_final_stat_live() {
-    let cases: [fn(); 2] = [
-        remote_drive_task_enforced_reads_reuse_resolution_but_keep_final_stat_live_case,
-        remote_drive_task_trusted_reads_cache_case_resolution_but_revalidate_root,
+    let cases: [(&str, fn()); 2] = [
+        (
+            "remote_drive_task_enforced_reads_reuse_resolution_but_keep_final_stat_live",
+            remote_drive_task_enforced_reads_reuse_resolution_but_keep_final_stat_live_case,
+        ),
+        (
+            "remote_drive_task_trusted_reads_cache_case_resolution_but_revalidate_root",
+            remote_drive_task_trusted_reads_cache_case_resolution_but_revalidate_root,
+        ),
     ];
-    for case in cases {
-        case();
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
     }
 }
 

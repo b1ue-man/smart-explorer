@@ -6,12 +6,18 @@ use std::time::Duration;
 
 #[test]
 fn remote_drive_task_worker_shutdown_waits_for_running_writer() {
-    let cases: [fn(); 2] = [
-        remote_drive_task_worker_shutdown_waits_for_running_writer_case,
-        shutdown_joins_completed_cleanup,
+    let cases: [(&str, fn()); 2] = [
+        (
+            "remote_drive_task_worker_shutdown_waits_for_running_writer",
+            remote_drive_task_worker_shutdown_waits_for_running_writer_case,
+        ),
+        (
+            "shutdown_joins_completed_cleanup",
+            shutdown_joins_completed_cleanup,
+        ),
     ];
-    for case in cases {
-        case();
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
     }
 }
 

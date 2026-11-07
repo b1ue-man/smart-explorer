@@ -145,12 +145,18 @@ fn abgleich_task_cancel_rights_keep_account_and_end_and_turn_every_decision_off(
 
 #[test]
 fn abgleich_task_narrowing_change_is_masked_for_the_worker_but_a_widening_is_not() {
-    let cases: [fn(); 2] = [
-        abgleich_task_narrowing_change_is_masked_for_the_worker_but_a_widening_is_not_case,
-        abgleich_task_a_change_that_narrows_one_right_and_widens_another_is_both,
+    let cases: [(&str, fn()); 2] = [
+        (
+            "abgleich_task_narrowing_change_is_masked_for_the_worker_but_a_widening_is_not",
+            abgleich_task_narrowing_change_is_masked_for_the_worker_but_a_widening_is_not_case,
+        ),
+        (
+            "abgleich_task_a_change_that_narrows_one_right_and_widens_another_is_both",
+            abgleich_task_a_change_that_narrows_one_right_and_widens_another_is_both,
+        ),
     ];
-    for case in cases {
-        case();
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
     }
 }
 

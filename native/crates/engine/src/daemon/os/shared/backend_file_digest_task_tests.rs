@@ -254,12 +254,18 @@ fn screen_metadata_runtime_task_rooted_backend_keeps_inner_none() {
 
 #[test]
 fn screen_metadata_runtime_task_worker_answers_file_digest_and_keeps_folder_walks() {
-    let cases: [fn(); 2] = [
-        screen_metadata_runtime_task_worker_answers_file_digest_and_keeps_folder_walks_case,
-        screen_metadata_runtime_task_worker_serves_one_file_digest_from_local_backend,
+    let cases: [(&str, fn()); 2] = [
+        (
+            "screen_metadata_runtime_task_worker_answers_file_digest_and_keeps_folder_walks",
+            screen_metadata_runtime_task_worker_answers_file_digest_and_keeps_folder_walks_case,
+        ),
+        (
+            "screen_metadata_runtime_task_worker_serves_one_file_digest_from_local_backend",
+            screen_metadata_runtime_task_worker_serves_one_file_digest_from_local_backend,
+        ),
     ];
-    for case in cases {
-        case();
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
     }
 }
 

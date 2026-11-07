@@ -34,6 +34,54 @@ fn ordered_ids(schedule: &ResetSchedule) -> Vec<u64> {
 
 #[test]
 fn mount_vault_task_reset_schedule_unlinks_and_clamps_deadlines() {
+    let cases: [(&str, fn()); 2] = [
+        (
+            "mount_vault_task_reset_schedule_unlinks_and_clamps_deadlines",
+            mount_vault_task_reset_schedule_unlinks_and_clamps_deadlines_case,
+        ),
+        (
+            "mount_vault_task_reset_schedule_ten_thousand_rearm_and_drain",
+            mount_vault_task_reset_schedule_ten_thousand_rearm_and_drain,
+        ),
+    ];
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
+    }
+}
+
+fn mount_vault_task_reset_schedule_ten_thousand_rearm_and_drain() {
+    let mut schedule = ResetSchedule::default();
+    let base = Instant::now();
+    let expected = (1..=10_000u64).collect::<Vec<_>>();
+    for &id in &expected {
+        assert_eq!(
+            schedule.arm(id, base + Duration::from_micros(id)).unwrap(),
+            id == 1
+        );
+    }
+    assert_eq!(ordered_ids(&schedule), expected);
+    for &id in &expected {
+        let (front, old_deadline) = schedule.front().unwrap();
+        assert_eq!(front, id);
+        assert!(schedule.remove(id));
+        assert!(!schedule
+            .arm(
+                id,
+                base + Duration::from_secs(60) + Duration::from_micros(id)
+            )
+            .unwrap());
+        assert!(schedule.pending[&id].deadline > old_deadline);
+    }
+    assert_eq!(ordered_ids(&schedule), expected);
+    for &id in expected.iter().rev() {
+        schedule.remove(id);
+    }
+    assert!(ordered_ids(&schedule).is_empty());
+    assert!(schedule.front().is_none());
+    assert!(schedule.pending.capacity() <= 32);
+}
+
+fn mount_vault_task_reset_schedule_unlinks_and_clamps_deadlines_case() {
     let mut schedule = ResetSchedule::default();
     let base = Instant::now();
     for id in [11, 22, 33, 44, 55] {

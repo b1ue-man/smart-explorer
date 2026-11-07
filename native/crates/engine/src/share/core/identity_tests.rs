@@ -171,12 +171,18 @@ fn stale_rename_preserves_a_newer_direct_code_rotation() {
 
 #[test]
 fn healthy_identity_refuses_repair_without_mutation() {
-    let cases: [fn(); 2] = [
-        healthy_identity_refuses_repair_without_mutation_case,
-        repair_preflight_refuses_a_healthy_identity_without_mutation,
+    let cases: [(&str, fn()); 2] = [
+        (
+            "healthy_identity_refuses_repair_without_mutation",
+            healthy_identity_refuses_repair_without_mutation_case,
+        ),
+        (
+            "repair_preflight_refuses_a_healthy_identity_without_mutation",
+            repair_preflight_refuses_a_healthy_identity_without_mutation,
+        ),
     ];
-    for case in cases {
-        case();
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
     }
 }
 

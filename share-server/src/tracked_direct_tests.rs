@@ -113,15 +113,15 @@ fn offline_request_gets_correlated_relay_ack_without_peer_receipt_claim() {
 
 #[test]
 fn oversized_tracked_envelopes_are_rejected_without_forward_or_ack() {
-    // Rows: an oversized tracked envelope or legacy field, sent by the
-    // requester (device 1) or the target (device 2). The sender gets the error
-    // and the other device receives nothing. Each row has its own routed state.
-    let cases: [(
-        &str,
-        Option<&str>,
+    // Rows: an oversized tracked envelope or legacy field from the requester (1) or the
+    // target (2). The sender gets the error, the other device nothing; each row has its state.
+    type Row = (
+        &'static str,
+        Option<&'static str>,
         u64,
         fn(&Arc<Mutex<State>>, &super::Writer),
-    ); 6] = [
+    );
+    let cases: [Row; 6] = [
         (
             "tracked request",
             Some("lookup"),
@@ -194,14 +194,14 @@ fn oversized_tracked_envelopes_are_rejected_without_forward_or_ack() {
     ];
     for (case, lookup, sender_id, send) in cases {
         let (state, requester_rx, target_rx) = routed_state("requester", "target", lookup);
-        let sender = state.lock().unwrap().clients[&sender_id].writer.clone();
+        let sender = state.lock().expect(case).clients[&sender_id].writer.clone();
         send(&state, &sender);
         let (sender_rx, other_rx) = if sender_id == 1 {
             (&requester_rx, &target_rx)
         } else {
             (&target_rx, &requester_rx)
         };
-        assert_error(sender_rx.recv().unwrap());
+        assert_error(case, sender_rx.recv().expect(case));
         assert!(other_rx.try_recv().is_err(), "{case}");
     }
 }
@@ -319,13 +319,13 @@ fn assert_ack(message: Out, route: DirectRoute, outcome: DirectRouteOutcome) {
     }
 }
 
-fn assert_error(message: Out) {
+fn assert_error(case: &str, message: Out) {
     match message {
         Out::Error { scope, msg } => {
-            assert_eq!(scope, "direct");
-            assert!(msg.len() < 128);
+            assert_eq!(scope, "direct", "{case}");
+            assert!(msg.len() < 128, "{case}");
         }
-        _ => panic!("invalid envelope was not rejected with a bounded error"),
+        _ => panic!("{case}: invalid envelope was not rejected with a bounded error"),
     }
 }
 

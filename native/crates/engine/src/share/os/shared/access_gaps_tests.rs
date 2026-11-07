@@ -43,12 +43,18 @@ fn grant(device: &str, state: DirectGrantState) -> DirectGrant {
 
 #[test]
 fn rechte_task_one_way_contact_and_suspended_grant_are_gaps() {
-    let cases: [fn(); 2] = [
-        rechte_task_one_way_contact_and_suspended_grant_are_gaps_case,
-        rechte_task_pending_contact_is_no_gap,
+    let cases: [(&str, fn()); 2] = [
+        (
+            "rechte_task_one_way_contact_and_suspended_grant_are_gaps",
+            rechte_task_one_way_contact_and_suspended_grant_are_gaps_case,
+        ),
+        (
+            "rechte_task_pending_contact_is_no_gap",
+            rechte_task_pending_contact_is_no_gap,
+        ),
     ];
-    for case in cases {
-        case();
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
     }
 }
 

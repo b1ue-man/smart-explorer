@@ -71,12 +71,18 @@ fn trickle_progress_cannot_extend_the_absolute_local_write_deadline() {
 
 #[test]
 fn terminal_task_resize_frame_becomes_a_client_resize_input() {
-    let cases: [fn(); 2] = [
-        terminal_task_resize_frame_becomes_a_client_resize_input_case,
-        terminal_task_unusable_or_malformed_resize_frames_are_refused,
+    let cases: [(&str, fn()); 2] = [
+        (
+            "terminal_task_resize_frame_becomes_a_client_resize_input",
+            terminal_task_resize_frame_becomes_a_client_resize_input_case,
+        ),
+        (
+            "terminal_task_unusable_or_malformed_resize_frames_are_refused",
+            terminal_task_unusable_or_malformed_resize_frames_are_refused,
+        ),
     ];
-    for case in cases {
-        case();
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
     }
 }
 

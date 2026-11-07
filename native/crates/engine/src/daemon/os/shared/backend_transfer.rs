@@ -267,12 +267,18 @@ mod tests {
 
     #[test]
     fn destination_ancestors_accept_canonical_windows_absolute_paths() {
-        let cases: [fn(); 2] = [
-            destination_ancestors_accept_canonical_windows_absolute_paths_case,
-            destination_ancestors_keep_rejecting_ambiguous_backslashes,
+        let cases: [(&str, fn()); 2] = [
+            (
+                "destination_ancestors_accept_canonical_windows_absolute_paths",
+                destination_ancestors_accept_canonical_windows_absolute_paths_case,
+            ),
+            (
+                "destination_ancestors_keep_rejecting_ambiguous_backslashes",
+                destination_ancestors_keep_rejecting_ambiguous_backslashes,
+            ),
         ];
-        for case in cases {
-            case();
+        for (case, check) in cases {
+            std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
         }
     }
 
@@ -341,12 +347,18 @@ mod tests {
 
     #[test]
     fn disconnect_preserves_existing_destination_and_removes_stage() {
-        let cases: [fn(); 2] = [
-            disconnect_preserves_existing_destination_and_removes_stage_case,
-            cancellation_preserves_existing_destination_and_removes_stage,
+        let cases: [(&str, fn()); 2] = [
+            (
+                "disconnect_preserves_existing_destination_and_removes_stage",
+                disconnect_preserves_existing_destination_and_removes_stage_case,
+            ),
+            (
+                "cancellation_preserves_existing_destination_and_removes_stage",
+                cancellation_preserves_existing_destination_and_removes_stage,
+            ),
         ];
-        for case in cases {
-            case();
+        for (case, check) in cases {
+            std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
         }
     }
 

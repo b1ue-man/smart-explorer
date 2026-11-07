@@ -67,7 +67,14 @@ mod tests {
         // Text rows: the text starts with `prefix`, contains every `present`
         // fragment and no `absent` fragment. The app-key-file row explains
         // what the key file protects.
-        let texts: [(&str, StoreStatus, &str, &[&str], &[&str]); 2] = [
+        type Row = (
+            &'static str,
+            StoreStatus,
+            &'static str,
+            &'static [&'static str],
+            &'static [&'static str],
+        );
+        let texts: [Row; 2] = [
             (
                 "systemd-creds-user",
                 StoreStatus {
@@ -93,7 +100,7 @@ mod tests {
             ),
         ];
         for (case, status, prefix, present, absent) in texts {
-            let text = describe(status).unwrap();
+            let text = describe(status).expect(case);
             assert!(text.starts_with(prefix), "{case}: {text}");
             for fragment in present {
                 assert!(text.contains(fragment), "{case}: {text}");
@@ -118,7 +125,7 @@ mod tests {
             ],
         )];
         for (case, status, fragments) in locked {
-            let error = describe(status).unwrap_err();
+            let error = describe(status).expect_err(case);
             for fragment in fragments {
                 assert!(error.contains(fragment), "{case}: {error}");
             }

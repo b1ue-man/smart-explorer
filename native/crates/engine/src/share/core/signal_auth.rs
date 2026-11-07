@@ -1,8 +1,6 @@
 //! Verification of signaling messages before they reach the daemon: relation
 //! HMAC, device signature with downgrade protection (B03), node binding (S17)
 //! and replay protection until expiry (S16).
-#[cfg(any(test, feature = "test-support"))]
-use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 use super::core::{now_secs, presence_payload, verify_hmac};
@@ -13,8 +11,6 @@ use super::wire::SrvMsg;
 
 #[path = "signal_auth_replay.rs"]
 mod replay;
-#[cfg(any(test, feature = "test-support"))]
-pub(super) use replay::remember_replay;
 use replay::{remember_presence, replay_key, signature_seen};
 
 /// A probe must preserve the immediate, cross-relation downgrade marker too.
@@ -476,9 +472,4 @@ fn verify_room_presence(
         }
     }
     true
-}
-
-#[cfg(any(test, feature = "test-support"))]
-pub(super) fn remember_nonce(seen: &mut HashSet<String>, key: String) {
-    remember_replay(seen, key, now_secs());
 }

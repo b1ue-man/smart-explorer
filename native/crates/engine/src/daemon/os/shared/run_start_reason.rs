@@ -251,12 +251,18 @@ mod tests {
 
     #[test]
     fn drive_task_drive_restore_no_jobs_without_sync_autostart() {
-        let cases: [fn(); 2] = [
-            drive_task_drive_restore_no_jobs_without_sync_autostart_case,
-            drive_task_drive_restore_no_jobs_when_sync_entry_disabled_by_system,
+        let cases: [(&str, fn()); 2] = [
+            (
+                "drive_task_drive_restore_no_jobs_without_sync_autostart",
+                drive_task_drive_restore_no_jobs_without_sync_autostart_case,
+            ),
+            (
+                "drive_task_drive_restore_no_jobs_when_sync_entry_disabled_by_system",
+                drive_task_drive_restore_no_jobs_when_sync_entry_disabled_by_system,
+            ),
         ];
-        for case in cases {
-            case();
+        for (case, check) in cases {
+            std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
         }
     }
 

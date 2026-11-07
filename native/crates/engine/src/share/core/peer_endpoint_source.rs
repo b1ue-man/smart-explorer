@@ -217,12 +217,18 @@ mod tests {
 
     #[test]
     fn windows_remote_task_live_routes_follow_lan_renewal_and_keep_pins() {
-        let cases: [fn(); 2] = [
-            remote_drive_task_live_endpoint_refreshes_routes_but_not_identity,
-            windows_remote_task_live_routes_follow_lan_renewal_and_keep_pins_case,
+        let cases: [(&str, fn()); 2] = [
+            (
+                "remote_drive_task_live_endpoint_refreshes_routes_but_not_identity",
+                remote_drive_task_live_endpoint_refreshes_routes_but_not_identity,
+            ),
+            (
+                "windows_remote_task_live_routes_follow_lan_renewal_and_keep_pins",
+                windows_remote_task_live_routes_follow_lan_renewal_and_keep_pins_case,
+            ),
         ];
-        for case in cases {
-            case();
+        for (case, check) in cases {
+            std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
         }
     }
 

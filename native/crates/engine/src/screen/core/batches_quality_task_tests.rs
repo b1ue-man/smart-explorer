@@ -18,12 +18,18 @@ fn policy() -> QualityPolicy {
 
 #[test]
 fn batches_task_b6_full_preview_full_preserves_requested_quality() {
-    let cases: [fn(); 2] = [
-        batches_task_b6_full_preview_full_preserves_requested_quality_case,
-        batches_task_b6_coalesced_modes_keep_each_requested_rate,
+    let cases: [(&str, fn()); 2] = [
+        (
+            "batches_task_b6_full_preview_full_preserves_requested_quality",
+            batches_task_b6_full_preview_full_preserves_requested_quality_case,
+        ),
+        (
+            "batches_task_b6_coalesced_modes_keep_each_requested_rate",
+            batches_task_b6_coalesced_modes_keep_each_requested_rate,
+        ),
     ];
-    for case in cases {
-        case();
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
     }
 }
 

@@ -408,12 +408,18 @@ fn perm_task_ask_always_sets_allow_keeps_session() {
 
 #[test]
 fn perm_task_ask_deny_returns_approval_denied() {
-    let cases: [fn(); 2] = [
-        perm_task_ask_deny_returns_approval_denied_case,
-        perm_task_ask_client_cancel_withdraws_prompt,
+    let cases: [(&str, fn()); 2] = [
+        (
+            "perm_task_ask_deny_returns_approval_denied",
+            perm_task_ask_deny_returns_approval_denied_case,
+        ),
+        (
+            "perm_task_ask_client_cancel_withdraws_prompt",
+            perm_task_ask_client_cancel_withdraws_prompt,
+        ),
     ];
-    for case in cases {
-        case();
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
     }
 }
 

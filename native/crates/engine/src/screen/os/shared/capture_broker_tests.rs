@@ -47,12 +47,18 @@ fn funded() -> (Arc<SessionAdmission>, Arc<CaptureBroker>, u64) {
 
 #[test]
 fn batches_task_capture_worker_eof_does_not_release_credit_before_process_exit() {
-    let cases: [fn(); 2] = [
-        batches_task_capture_worker_eof_does_not_release_credit_before_process_exit_case,
-        batches_task_capture_worker_confirmed_exit_keeps_buffered_parent_reply_authority,
+    let cases: [(&str, fn()); 2] = [
+        (
+            "batches_task_capture_worker_eof_does_not_release_credit_before_process_exit",
+            batches_task_capture_worker_eof_does_not_release_credit_before_process_exit_case,
+        ),
+        (
+            "batches_task_capture_worker_confirmed_exit_keeps_buffered_parent_reply_authority",
+            batches_task_capture_worker_confirmed_exit_keeps_buffered_parent_reply_authority,
+        ),
     ];
-    for case in cases {
-        case();
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
     }
 }
 

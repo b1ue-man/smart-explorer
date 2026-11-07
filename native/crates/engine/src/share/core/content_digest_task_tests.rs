@@ -57,12 +57,21 @@ fn screen_metadata_runtime_task_share_file_walk_returns_one_item() -> io::Result
 
 #[test]
 fn screen_metadata_runtime_task_share_content_digest_comes_from_the_host() -> io::Result<()> {
-    let cases: [fn() -> io::Result<()>; 2] = [
-        screen_metadata_runtime_task_share_content_digest_comes_from_the_host_case,
-        abgleich_task_share_content_md5_comes_from_the_host,
+    type Row = (&'static str, fn() -> io::Result<()>);
+    let cases: [Row; 2] = [
+        (
+            "screen_metadata_runtime_task_share_content_digest_comes_from_the_host",
+            screen_metadata_runtime_task_share_content_digest_comes_from_the_host_case,
+        ),
+        (
+            "abgleich_task_share_content_md5_comes_from_the_host",
+            abgleich_task_share_content_md5_comes_from_the_host,
+        ),
     ];
-    for case in cases {
-        case()?;
+    for (case, check) in cases {
+        std::panic::catch_unwind(check)
+            .unwrap_or_else(|_| panic!("{case}"))
+            .map_err(|error| io::Error::new(error.kind(), format!("{case}: {error}")))?;
     }
     Ok(())
 }

@@ -150,7 +150,7 @@ fn drive_task_windows_unmapped_error_is_io_device_not_access_denied() -> io::Res
         "an unmapped error still reads as Access denied"
     );
     // Case "host unreachable": an unreachable host is reported as Win32 1232, not as Access denied.
-    {
+    fn host_unreachable() -> io::Result<()> {
         let host = MountedHost::start(FailingBackend::new(), MountMode::ReadOnly)?;
         let seen = read_error(&host.root().join("unreachable.txt"))?;
         let readable = std::fs::read(host.root().join("fine.txt"));
@@ -159,7 +159,10 @@ fn drive_task_windows_unmapped_error_is_io_device_not_access_denied() -> io::Res
         assert_eq!(result, Ok(HostExit::Stopped), "unreachable host");
         assert_eq!(readable?, b"fine", "unreachable host");
         assert_eq!(seen, Some(1232), "unreachable host");
+        Ok(())
     }
+    host_unreachable()
+        .map_err(|error| io::Error::new(error.kind(), format!("host unreachable: {error}")))?;
     Ok(())
 }
 

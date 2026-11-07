@@ -4,12 +4,18 @@ use super::{decode_entry, drive_steps, should_fail_closed, JournalPhase, StepPro
 
 #[test]
 fn enable_is_persisted_before_runtime_apply_and_ack_clear() {
-    let cases: [fn(); 2] = [
-        enable_is_persisted_before_runtime_apply_and_ack_clear_case,
-        enable_apply_failure_leaves_a_retryable_pending_apply,
+    let cases: [(&str, fn()); 2] = [
+        (
+            "enable_is_persisted_before_runtime_apply_and_ack_clear",
+            enable_is_persisted_before_runtime_apply_and_ack_clear_case,
+        ),
+        (
+            "enable_apply_failure_leaves_a_retryable_pending_apply",
+            enable_apply_failure_leaves_a_retryable_pending_apply,
+        ),
     ];
-    for case in cases {
-        case();
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
     }
 }
 
@@ -73,12 +79,18 @@ fn enable_apply_failure_leaves_a_retryable_pending_apply() {
 
 #[test]
 fn deny_is_applied_before_persistence_and_ack_clear() {
-    let cases: [fn(); 2] = [
-        deny_is_applied_before_persistence_and_ack_clear_case,
-        deny_persist_failure_never_clears_the_deny_tombstone,
+    let cases: [(&str, fn()); 2] = [
+        (
+            "deny_is_applied_before_persistence_and_ack_clear",
+            deny_is_applied_before_persistence_and_ack_clear_case,
+        ),
+        (
+            "deny_persist_failure_never_clears_the_deny_tombstone",
+            deny_persist_failure_never_clears_the_deny_tombstone,
+        ),
     ];
-    for case in cases {
-        case();
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
     }
 }
 

@@ -98,13 +98,22 @@ fn second_request() -> SignedDirectRequest {
 
 #[test]
 fn abgleich_task_readmitted_ledger_device_waits_without_its_old_rights() {
-    let cases: [fn(); 3] = [
-        abgleich_task_readmitted_ledger_device_waits_without_its_old_rights_case,
-        abgleich_task_readmitted_legacy_device_takes_the_code_rights,
-        abgleich_task_readmitted_legacy_device_waits_without_its_old_rights,
+    let cases: [(&str, fn()); 3] = [
+        (
+            "abgleich_task_readmitted_ledger_device_waits_without_its_old_rights",
+            abgleich_task_readmitted_ledger_device_waits_without_its_old_rights_case,
+        ),
+        (
+            "abgleich_task_readmitted_legacy_device_takes_the_code_rights",
+            abgleich_task_readmitted_legacy_device_takes_the_code_rights,
+        ),
+        (
+            "abgleich_task_readmitted_legacy_device_waits_without_its_old_rights",
+            abgleich_task_readmitted_legacy_device_waits_without_its_old_rights,
+        ),
     ];
-    for case in cases {
-        case();
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
     }
 }
 

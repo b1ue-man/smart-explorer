@@ -144,12 +144,18 @@ fn batches_task_b5_control_owner_cancels_full_stdin_without_acquiring_stdin_mute
 
 #[test]
 fn batches_task_b5_terminal_registration_closes_control_without_cancelling_finished_owner() {
-    let cases: [fn(); 2] = [
-        batches_task_b5_terminal_registration_closes_control_without_cancelling_finished_owner_case,
-        batches_task_b5_finished_owner_releases_control_reader_without_socket_shutdown,
+    let cases: [(&str, fn()); 2] = [
+        (
+            "batches_task_b5_terminal_registration_closes_control_without_cancelling_finished_owner",
+            batches_task_b5_terminal_registration_closes_control_without_cancelling_finished_owner_case,
+        ),
+        (
+            "batches_task_b5_finished_owner_releases_control_reader_without_socket_shutdown",
+            batches_task_b5_finished_owner_releases_control_reader_without_socket_shutdown,
+        ),
     ];
-    for case in cases {
-        case();
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
     }
 }
 

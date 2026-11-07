@@ -29,14 +29,26 @@ fn domain_rejects_legacy_forwarding_for_non_request_envelopes() {
 
 #[test]
 fn persisted_ledger_rejects_overlong_timestamps_in_every_signed_envelope() {
-    let cases: [fn(); 4] = [
-        persisted_ledger_rejects_overlong_timestamps_in_every_signed_envelope_case,
-        persisted_ledger_rejects_impossible_legacy_forwarding_state,
-        persisted_ledger_rejects_overlong_tombstone_request,
-        profile_load_fails_closed_with_actionable_lifetime_corruption,
+    let cases: [(&str, fn()); 4] = [
+        (
+            "persisted_ledger_rejects_overlong_timestamps_in_every_signed_envelope",
+            persisted_ledger_rejects_overlong_timestamps_in_every_signed_envelope_case,
+        ),
+        (
+            "persisted_ledger_rejects_impossible_legacy_forwarding_state",
+            persisted_ledger_rejects_impossible_legacy_forwarding_state,
+        ),
+        (
+            "persisted_ledger_rejects_overlong_tombstone_request",
+            persisted_ledger_rejects_overlong_tombstone_request,
+        ),
+        (
+            "profile_load_fails_closed_with_actionable_lifetime_corruption",
+            profile_load_fails_closed_with_actionable_lifetime_corruption,
+        ),
     ];
-    for case in cases {
-        case();
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
     }
 }
 

@@ -13,10 +13,7 @@ use crate::vfs::{BackendHandle, VfsMeta};
 use std::{
     collections::HashSet,
     io,
-    sync::{
-        atomic::{AtomicUsize, Ordering},
-        Arc, Condvar, Mutex,
-    },
+    sync::{Condvar, Mutex},
     time::{Duration, Instant},
 };
 

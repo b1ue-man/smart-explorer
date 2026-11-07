@@ -46,12 +46,18 @@ fn perm_task_open_requests_have_no_device_or_host_limit() {
 
 #[test]
 fn perm_task_ask_start_beside_three_running_jobs_of_the_device() {
-    let cases: [fn(); 2] = [
-        perm_task_ask_start_beside_three_running_jobs_of_the_device_case,
-        perm_task_screen_request_beside_running_jobs,
+    let cases: [(&str, fn()); 2] = [
+        (
+            "perm_task_ask_start_beside_three_running_jobs_of_the_device",
+            perm_task_ask_start_beside_three_running_jobs_of_the_device_case,
+        ),
+        (
+            "perm_task_screen_request_beside_running_jobs",
+            perm_task_screen_request_beside_running_jobs,
+        ),
     ];
-    for case in cases {
-        case();
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
     }
 }
 

@@ -34,6 +34,11 @@ getrandom = "0.2"
 # codec only, without the frame format and its checksum crate.
 lz4_flex = { version = "0.14", default-features = false, features = ["std", "safe-encode", "safe-decode"] }
 
+# The integration test (tests/remote_drive_task.rs) compiles the shared agent_proto
+# with cfg(test), and with it the protocol's own test modules, which use tempfile.
+[dev-dependencies]
+tempfile = "3"
+
 [target.'cfg(unix)'.dependencies]
 # Atomic no-replace promotion uses renameat2(RENAME_NOREPLACE) on Linux.
 libc = "0.2"

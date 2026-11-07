@@ -6,12 +6,18 @@ const REQUEST_ID: &str = "123e4567-e89b-42d3-a456-426614174000";
 
 #[test]
 fn maximum_lifetime_and_clock_skew_are_accepted_for_every_envelope() {
-    let cases: [fn(); 2] = [
-        maximum_lifetime_and_clock_skew_are_accepted_for_every_envelope_case,
-        windows_direct_task_receipts_accept_clocks_within_the_skew,
+    let cases: [(&str, fn()); 2] = [
+        (
+            "maximum_lifetime_and_clock_skew_are_accepted_for_every_envelope",
+            maximum_lifetime_and_clock_skew_are_accepted_for_every_envelope_case,
+        ),
+        (
+            "windows_direct_task_receipts_accept_clocks_within_the_skew",
+            windows_direct_task_receipts_accept_clocks_within_the_skew,
+        ),
     ];
-    for case in cases {
-        case();
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
     }
 }
 
@@ -149,12 +155,18 @@ fn windows_direct_task_receipts_accept_clocks_within_the_skew() {
 
 #[test]
 fn overlong_and_i64_max_envelopes_fail_before_authentication() {
-    let cases: [fn(); 2] = [
-        overlong_and_i64_max_envelopes_fail_before_authentication_case,
-        timestamps_beyond_clock_skew_fail_for_every_envelope,
+    let cases: [(&str, fn()); 2] = [
+        (
+            "overlong_and_i64_max_envelopes_fail_before_authentication",
+            overlong_and_i64_max_envelopes_fail_before_authentication_case,
+        ),
+        (
+            "timestamps_beyond_clock_skew_fail_for_every_envelope",
+            timestamps_beyond_clock_skew_fail_for_every_envelope,
+        ),
     ];
-    for case in cases {
-        case();
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
     }
 }
 

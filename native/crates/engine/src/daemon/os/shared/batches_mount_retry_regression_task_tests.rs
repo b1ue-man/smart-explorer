@@ -52,12 +52,18 @@ fn restart(
 
 #[test]
 fn batches_task_vault_retry_preflight_failure_keeps_list_warning_and_same_id() {
-    let cases: [fn(); 2] = [
-        batches_task_vault_retry_preflight_failure_keeps_list_warning_and_same_id_case,
-        batches_task_vault_retry_clean_preflight_error_retains_failed_action,
+    let cases: [(&str, fn()); 2] = [
+        (
+            "batches_task_vault_retry_preflight_failure_keeps_list_warning_and_same_id",
+            batches_task_vault_retry_preflight_failure_keeps_list_warning_and_same_id_case,
+        ),
+        (
+            "batches_task_vault_retry_clean_preflight_error_retains_failed_action",
+            batches_task_vault_retry_clean_preflight_error_retains_failed_action,
+        ),
     ];
-    for case in cases {
-        case();
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
     }
 }
 
@@ -144,12 +150,18 @@ fn batches_task_vault_retry_clean_preflight_error_retains_failed_action() {
 
 #[test]
 fn batches_task_vault_retry_failure_preserves_unlock_code_tokens_and_lease() {
-    let cases: [fn(); 2] = [
-        batches_task_vault_retry_failure_preserves_unlock_code_tokens_and_lease_case,
-        batches_task_vault_retry_existing_and_late_backend_stream_keep_owner,
+    let cases: [(&str, fn()); 2] = [
+        (
+            "batches_task_vault_retry_failure_preserves_unlock_code_tokens_and_lease",
+            batches_task_vault_retry_failure_preserves_unlock_code_tokens_and_lease_case,
+        ),
+        (
+            "batches_task_vault_retry_existing_and_late_backend_stream_keep_owner",
+            batches_task_vault_retry_existing_and_late_backend_stream_keep_owner,
+        ),
     ];
-    for case in cases {
-        case();
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
     }
 }
 

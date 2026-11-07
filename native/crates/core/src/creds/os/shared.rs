@@ -405,7 +405,8 @@ mod tests {
         // that same reader. Each rejects the malformed file with InvalidData
         // and leaves its bytes unchanged.
         let valid = serialize(&sample_pw());
-        let cases: [(&str, String, fn(&Path, &str) -> std::io::Result<()>); 2] = [
+        type Row = (&'static str, String, fn(&Path, &str) -> std::io::Result<()>);
+        let cases: [Row; 2] = [
             (
                 "update",
                 "not-a-valid-connection".to_string(),
@@ -418,14 +419,14 @@ mod tests {
             ),
         ];
         for (case, content, operation) in cases {
-            let directory = tempfile::tempdir().unwrap();
+            let directory = tempfile::tempdir().expect(case);
             let p = directory.path().join("connections.txt");
-            std::fs::write(&p, &content).unwrap();
+            std::fs::write(&p, &content).expect(case);
 
-            let error = operation(&p, &sample_pw().account()).unwrap_err();
+            let error = operation(&p, &sample_pw().account()).expect_err(case);
 
             assert_eq!(error.kind(), std::io::ErrorKind::InvalidData, "{case}");
-            assert_eq!(std::fs::read_to_string(&p).unwrap(), content, "{case}");
+            assert_eq!(std::fs::read_to_string(&p).expect(case), content, "{case}");
         }
     }
 }

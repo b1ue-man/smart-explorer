@@ -271,19 +271,19 @@ fn tcp_hello_has_an_absolute_pre_registration_deadline() {
         let state = Arc::new(Mutex::new(State::default()));
         let server_state = state.clone();
         let server = std::thread::spawn(move || {
-            let (stream, _) = listener.accept().unwrap();
+            let (stream, _) = listener.accept().expect(case);
             handle_with_timeout(stream, server_state, Duration::from_millis(150))
         });
 
-        let client = TcpStream::connect(address).unwrap();
+        let client = TcpStream::connect(address).expect(case);
         let dripper = std::thread::spawn(move || drip_slowloris(client, prefix, fill));
         let started = Instant::now();
-        let error = server.join().unwrap().unwrap_err();
+        let error = server.join().expect(case).expect_err(case);
         let elapsed = started.elapsed();
         assert_eq!(error.kind(), ErrorKind::TimedOut, "{case}: {error}");
         assert!(elapsed >= Duration::from_millis(100), "{case}");
         assert!(elapsed < Duration::from_secs(1), "{case}");
-        dripper.join().unwrap();
+        dripper.join().expect(case);
         assert!(lock_state(&state).clients.is_empty(), "{case}");
     }
 }

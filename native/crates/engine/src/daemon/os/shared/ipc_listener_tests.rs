@@ -45,12 +45,18 @@ fn spawn_accept_loop(
 #[cfg(any(target_os = "linux", target_os = "android"))]
 #[test]
 fn android_background_task_ipc_listener_blocks_and_stops_on_shutdown() {
-    let cases: [fn(); 2] = [
-        android_background_task_ipc_listener_blocks_and_stops_on_shutdown_case,
-        android_background_task_ipc_listener_honours_stop_control_within_wait,
+    let cases: [(&str, fn()); 2] = [
+        (
+            "android_background_task_ipc_listener_blocks_and_stops_on_shutdown",
+            android_background_task_ipc_listener_blocks_and_stops_on_shutdown_case,
+        ),
+        (
+            "android_background_task_ipc_listener_honours_stop_control_within_wait",
+            android_background_task_ipc_listener_honours_stop_control_within_wait,
+        ),
     ];
-    for case in cases {
-        case();
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
     }
 }
 

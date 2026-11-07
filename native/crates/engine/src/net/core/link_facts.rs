@@ -145,16 +145,34 @@ mod tests {
 
     #[test]
     fn lan_cleanup_task_apipa_without_gateway_is_router_less() {
-        let cases: [fn(); 6] = [
-            lan_cleanup_task_apipa_without_gateway_is_router_less_case,
-            lan_cleanup_task_a_link_with_a_paired_peer_never_counts_as_uplink,
-            lan_cleanup_task_dhcp_lease_without_gateway_is_routed,
-            lan_cleanup_task_gateway_is_uplink_unless_platform_denies_internet,
-            lan_cleanup_task_shared_and_inactive_links,
-            lan_cleanup_task_static_addresses_without_gateway_are_router_less_too,
+        let cases: [(&str, fn()); 6] = [
+            (
+                "lan_cleanup_task_apipa_without_gateway_is_router_less",
+                lan_cleanup_task_apipa_without_gateway_is_router_less_case,
+            ),
+            (
+                "lan_cleanup_task_a_link_with_a_paired_peer_never_counts_as_uplink",
+                lan_cleanup_task_a_link_with_a_paired_peer_never_counts_as_uplink,
+            ),
+            (
+                "lan_cleanup_task_dhcp_lease_without_gateway_is_routed",
+                lan_cleanup_task_dhcp_lease_without_gateway_is_routed,
+            ),
+            (
+                "lan_cleanup_task_gateway_is_uplink_unless_platform_denies_internet",
+                lan_cleanup_task_gateway_is_uplink_unless_platform_denies_internet,
+            ),
+            (
+                "lan_cleanup_task_shared_and_inactive_links",
+                lan_cleanup_task_shared_and_inactive_links,
+            ),
+            (
+                "lan_cleanup_task_static_addresses_without_gateway_are_router_less_too",
+                lan_cleanup_task_static_addresses_without_gateway_are_router_less_too,
+            ),
         ];
-        for case in cases {
-            case();
+        for (case, check) in cases {
+            std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
         }
     }
 

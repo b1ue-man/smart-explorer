@@ -58,12 +58,21 @@ fn tree(fixture: &CopyPastePeerFixture) -> io::Result<()> {
 
 #[test]
 fn abgleich_task_share_host_walk_meta_entries_match_the_listing() -> io::Result<()> {
-    let cases: [fn() -> io::Result<()>; 2] = [
-        abgleich_task_share_host_walk_meta_entries_match_the_listing_case,
-        abgleich_task_share_host_walk_without_meta_keeps_the_former_items,
+    type Row = (&'static str, fn() -> io::Result<()>);
+    let cases: [Row; 2] = [
+        (
+            "abgleich_task_share_host_walk_meta_entries_match_the_listing",
+            abgleich_task_share_host_walk_meta_entries_match_the_listing_case,
+        ),
+        (
+            "abgleich_task_share_host_walk_without_meta_keeps_the_former_items",
+            abgleich_task_share_host_walk_without_meta_keeps_the_former_items,
+        ),
     ];
-    for case in cases {
-        case()?;
+    for (case, check) in cases {
+        std::panic::catch_unwind(check)
+            .unwrap_or_else(|_| panic!("{case}"))
+            .map_err(|error| io::Error::new(error.kind(), format!("{case}: {error}")))?;
     }
     Ok(())
 }

@@ -206,12 +206,18 @@ mod tests {
 
     #[test]
     fn cli_task_offer_book_tracks_prepared_published_and_stopped() {
-        let cases: [fn(); 2] = [
-            cli_task_offer_book_tracks_prepared_published_and_stopped_case,
-            cli_task_offer_book_ends_all_and_bounds_recent_ends,
+        let cases: [(&str, fn()); 2] = [
+            (
+                "cli_task_offer_book_tracks_prepared_published_and_stopped",
+                cli_task_offer_book_tracks_prepared_published_and_stopped_case,
+            ),
+            (
+                "cli_task_offer_book_ends_all_and_bounds_recent_ends",
+                cli_task_offer_book_ends_all_and_bounds_recent_ends,
+            ),
         ];
-        for case in cases {
-            case();
+        for (case, check) in cases {
+            std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
         }
     }
 

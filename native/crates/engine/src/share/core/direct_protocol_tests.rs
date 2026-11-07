@@ -4,10 +4,10 @@ use super::direct_protocol::{
     SignedDirectDecision, SignedDirectDecisionReceipt, SignedDirectRequest,
     SignedDirectRequestReceipt,
 };
-use super::wire::{
-    DirectRoute, DirectRouteOutcome, TrackedDirectClientMsg, TrackedDirectServerMsg,
-    TRACKED_DIRECT_CAPABILITY,
-};
+use super::wire::{TrackedDirectClientMsg, TrackedDirectServerMsg};
+
+#[path = "direct_protocol_wire_case.rs"]
+mod wire_case;
 
 const RELATION_SECRET: [u8; 32] = [0x55; 32];
 const REQUEST_ID: &str = "123e4567-e89b-42d3-a456-426614174000";
@@ -134,12 +134,18 @@ fn request_receipt_decision_and_decision_receipt_verify_end_to_end() {
 
 #[test]
 fn every_request_field_is_bound_by_hmac_and_requester_signature() {
-    let cases: [fn(); 2] = [
-        every_request_field_is_bound_by_hmac_and_requester_signature_case,
-        optional_message_presence_is_bound_without_ambiguity,
+    let cases: [(&str, fn()); 2] = [
+        (
+            "every_request_field_is_bound_by_hmac_and_requester_signature",
+            every_request_field_is_bound_by_hmac_and_requester_signature_case,
+        ),
+        (
+            "optional_message_presence_is_bound_without_ambiguity",
+            optional_message_presence_is_bound_without_ambiguity,
+        ),
     ];
-    for case in cases {
-        case();
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
     }
 }
 
@@ -200,12 +206,18 @@ fn optional_message_presence_is_bound_without_ambiguity() {
 
 #[test]
 fn decision_and_revision_are_cryptographically_bound() {
-    let cases: [fn(); 2] = [
-        decision_and_revision_are_cryptographically_bound_case,
-        receipts_reject_wrong_request_or_decision_digest,
+    let cases: [(&str, fn()); 2] = [
+        (
+            "decision_and_revision_are_cryptographically_bound",
+            decision_and_revision_are_cryptographically_bound_case,
+        ),
+        (
+            "receipts_reject_wrong_request_or_decision_digest",
+            receipts_reject_wrong_request_or_decision_digest,
+        ),
     ];
-    for case in cases {
-        case();
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
     }
 }
 
@@ -349,12 +361,18 @@ fn expiry_and_signer_mismatch_fail_closed() {
 
 #[test]
 fn every_tracked_wire_payload_uses_the_coordinated_tag() {
-    let cases: [fn(); 2] = [
-        every_tracked_wire_payload_uses_the_coordinated_tag_case,
-        tracked_wire_tags_match_server_schema,
+    let cases: [(&str, fn()); 2] = [
+        (
+            "every_tracked_wire_payload_uses_the_coordinated_tag",
+            every_tracked_wire_payload_uses_the_coordinated_tag_case,
+        ),
+        (
+            "tracked_wire_tags_match_server_schema",
+            wire_case::tracked_wire_tags_match_server_schema,
+        ),
     ];
-    for case in cases {
-        case();
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
     }
 }
 
@@ -447,50 +465,4 @@ fn every_tracked_wire_payload_uses_the_coordinated_tag_case() {
     for (message, expected) in server {
         assert_eq!(serde_json::to_value(message).unwrap()["t"], expected);
     }
-}
-
-fn tracked_wire_tags_match_server_schema() {
-    assert_eq!(TRACKED_DIRECT_CAPABILITY, "tracked_direct_v1");
-    let request = request();
-    let encoded = serde_json::to_value(TrackedDirectClientMsg::Request {
-        request: Box::new(request.clone()),
-        legacy_presence: None,
-    })
-    .unwrap();
-    assert_eq!(encoded["t"], "submit_direct_request");
-    assert_eq!(encoded["request"]["request_id"], REQUEST_ID);
-    assert!(encoded["request"]["target"]["device_id"]
-        .as_str()
-        .unwrap()
-        .is_empty());
-
-    let ack = serde_json::json!({
-        "t": "direct_route_ack",
-        "request_id": REQUEST_ID,
-        "route": "decision_receipt",
-        "outcome": "target_offline"
-    });
-    assert_eq!(
-        serde_json::from_value::<TrackedDirectServerMsg>(ack).unwrap(),
-        TrackedDirectServerMsg::RouteAck {
-            request_id: request.request_id,
-            route: DirectRoute::DecisionReceipt,
-            outcome: DirectRouteOutcome::TargetOffline,
-        }
-    );
-
-    let legacy_ack = serde_json::json!({
-        "t": "direct_route_ack",
-        "request_id": REQUEST_ID,
-        "route": "request",
-        "outcome": "legacy_forwarded"
-    });
-    assert!(matches!(
-        serde_json::from_value::<TrackedDirectServerMsg>(legacy_ack).unwrap(),
-        TrackedDirectServerMsg::RouteAck {
-            route: DirectRoute::Request,
-            outcome: DirectRouteOutcome::LegacyForwarded,
-            ..
-        }
-    ));
 }

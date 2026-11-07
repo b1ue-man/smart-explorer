@@ -1,7 +1,8 @@
 //! G3-08b task tests against the loopback Drive: a new file in an existing
-//! folder takes one write request (`open_write_absent`), and a name another
-//! client takes at the same moment is never shared: the own object goes to
-//! the trash by its exact ID and the writer reports `AlreadyExists`.
+//! folder takes one write request (`open_write_absent`), and a name that is
+//! already taken is never shared: the own object is withdrawn, nothing of the
+//! writer stays reserved or cached under the name, and the writer reports
+//! `AlreadyExists`.
 use super::api::FOLDER_MIME;
 use super::task_drive::{count, drive_server, multipart, FakeDrive};
 use super::task_http::{Request, Server};
@@ -50,6 +51,7 @@ fn speed_task_drive_absent_file_takes_one_write_request() {
     let named = drive.named("target", "neu.txt");
     assert_eq!(named.len(), 1);
     assert_eq!(named[0]["id"], metadata["id"]);
+    assert_eq!(drive.children("target").len(), 1, "nothing else was left");
     // The name was listed to prove it leads to the new ID alone.
     assert!(count(&requests, "GET", "/drive/v3/files") >= 1);
     let id = metadata["id"].as_str().unwrap();
@@ -87,4 +89,16 @@ fn speed_task_drive_absent_taken_before_create_is_never_shared() {
     assert_eq!(named.len(), 1);
     assert_eq!(named[0]["id"], "old-id");
     assert_eq!(drive.bytes("old-id"), b"old");
+    // Nothing of the writer stays reserved or cached under the name.
+    let requests = server.requests();
+    let create = requests
+        .iter()
+        .find(|request| request.method == "POST")
+        .expect("one create went out");
+    let own = multipart(create).0["id"].as_str().unwrap().to_string();
+    assert!(backend.pending_upload_ids_guard().unwrap().is_empty());
+    assert_ne!(
+        backend.cached_id("Ziel/alt.txt").unwrap().as_deref(),
+        Some(own.as_str())
+    );
 }

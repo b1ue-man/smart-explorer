@@ -367,7 +367,8 @@ mod tests {
             .position(|arg| arg == "--staged-sha256")
             .unwrap();
         legacy.drain(index..=index + 1);
-        let cases: [(&str, Vec<String>, fn(&[String]) -> bool); 3] = [
+        type Row = (&'static str, Vec<String>, fn(&[String]) -> bool);
+        let cases: [Row; 3] = [
             ("malformed staged hash", malformed, |raw: &[String]| {
                 ApplyArgs::parse(raw).is_err()
             }),
@@ -420,7 +421,8 @@ mod tests {
             "c".repeat(64),
             "--elevated".into(),
         ]);
-        let cases: [(&str, Vec<String>, fn(&[String]) -> bool); 2] = [
+        type Row = (&'static str, Vec<String>, fn(&[String]) -> bool);
+        let cases: [Row; 2] = [
             ("current protocol", current, |raw: &[String]| {
                 ApplyArgs::parse(raw).is_err()
             }),

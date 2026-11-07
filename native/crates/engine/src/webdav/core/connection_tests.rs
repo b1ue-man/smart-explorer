@@ -142,7 +142,10 @@ fn propfind_retries_when_body_drops_after_headers() {
                     .set_read_timeout(Some(Duration::from_secs(3)))
                     .unwrap();
                 let mut reader = BufReader::new(stream.try_clone().unwrap());
-                assert!(read_request(&mut reader).starts_with("PROPFIND "));
+                assert!(
+                    read_request(&mut reader).starts_with("PROPFIND "),
+                    "body blackhole"
+                );
                 server_requests.fetch_add(1, Ordering::SeqCst);
                 write!(
                     stream,
@@ -221,14 +224,20 @@ fn propfind_reconnects_after_ambiguous_stale_pool_close() {
                 .set_read_timeout(Some(Duration::from_secs(3)))
                 .unwrap();
             let mut first_reader = BufReader::new(first.try_clone().unwrap());
-            assert!(read_request(&mut first_reader).starts_with("GET "));
+            assert!(
+                read_request(&mut first_reader).starts_with("GET "),
+                "GET after a stale pool"
+            );
             server_requests.fetch_add(1, Ordering::SeqCst);
             respond_ok(&mut first, b"prime");
 
             // The request reached the server, but no response body reached the
             // caller. GET can therefore be established once more on a fresh
             // connection without duplicating a mutation or delivered bytes.
-            assert!(read_request(&mut first_reader).starts_with("GET "));
+            assert!(
+                read_request(&mut first_reader).starts_with("GET "),
+                "GET after a stale pool"
+            );
             server_requests.fetch_add(1, Ordering::SeqCst);
             let _ = first.shutdown(Shutdown::Both);
 
@@ -237,7 +246,10 @@ fn propfind_reconnects_after_ambiguous_stale_pool_close() {
                 .set_read_timeout(Some(Duration::from_secs(3)))
                 .unwrap();
             let mut replacement_reader = BufReader::new(replacement.try_clone().unwrap());
-            assert!(read_request(&mut replacement_reader).starts_with("GET "));
+            assert!(
+                read_request(&mut replacement_reader).starts_with("GET "),
+                "GET after a stale pool"
+            );
             server_requests.fetch_add(1, Ordering::SeqCst);
             respond_ok(&mut replacement, b"payload");
         });
@@ -336,7 +348,10 @@ fn mutation_redirect_is_not_followed_or_reported_as_success() {
                 .set_read_timeout(Some(Duration::from_secs(3)))
                 .unwrap();
             let mut reader = BufReader::new(stream.try_clone().unwrap());
-            assert!(read_request(&mut reader).starts_with("PUT "));
+            assert!(
+                read_request(&mut reader).starts_with("PUT "),
+                "PUT redirect"
+            );
             write!(
                 stream,
                 "HTTP/1.1 302 Found\r\nLocation: /canonical\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"

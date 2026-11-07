@@ -55,12 +55,18 @@ fn transfer_engine_task_batch_status_follows_one_commit() {
 
 #[test]
 fn transfer_engine_task_batch_status_bounds_each_principal() {
-    let cases: [fn(); 2] = [
-        transfer_engine_task_batch_status_bounds_each_principal_case,
-        transfer_engine_task_batch_status_bounds_all_records,
+    let cases: [(&str, fn()); 2] = [
+        (
+            "transfer_engine_task_batch_status_bounds_each_principal",
+            transfer_engine_task_batch_status_bounds_each_principal_case,
+        ),
+        (
+            "transfer_engine_task_batch_status_bounds_all_records",
+            transfer_engine_task_batch_status_bounds_all_records,
+        ),
     ];
-    for case in cases {
-        case();
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
     }
 }
 
@@ -151,12 +157,18 @@ fn speed_task_batch_status_unconfirmed_outcomes_never_refuse_a_new_batch() {
 
 #[test]
 fn transfer_engine_task_batch_status_counts_every_record() {
-    let cases: [fn(); 2] = [
-        transfer_engine_task_batch_status_counts_every_record_case,
-        transfer_engine_task_batch_status_evicts_oldest_outcome_text,
+    let cases: [(&str, fn()); 2] = [
+        (
+            "transfer_engine_task_batch_status_counts_every_record",
+            transfer_engine_task_batch_status_counts_every_record_case,
+        ),
+        (
+            "transfer_engine_task_batch_status_evicts_oldest_outcome_text",
+            transfer_engine_task_batch_status_evicts_oldest_outcome_text,
+        ),
     ];
-    for case in cases {
-        case();
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
     }
 }
 

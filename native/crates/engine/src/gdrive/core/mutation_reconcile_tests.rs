@@ -180,7 +180,7 @@ fn rename_commit_then_drop_reconciles_exact_id_without_replaying_patch() {
             .unwrap();
         backend.listed_guard().unwrap().insert(String::new());
         backend.rename_serialized("old.txt", "new.txt").unwrap();
-        let methods = server.join().unwrap();
+        let methods = server.join().expect("rename: loopback Drive");
 
         let count = methods.iter().filter(|method| *method == "PATCH").count();
         assert_eq!(count, 1, "rename");
@@ -225,7 +225,7 @@ fn rename_commit_then_drop_reconciles_exact_id_without_replaying_patch() {
             .unwrap();
         backend.listed_guard().unwrap().insert(String::new());
         backend.trash_path_id("gone.txt", "file-id").unwrap();
-        let methods = server.join().unwrap();
+        let methods = server.join().expect("trash: loopback Drive");
 
         let count = methods.iter().filter(|method| *method == "PATCH").count();
         assert_eq!(count, 1, "trash");
@@ -324,7 +324,7 @@ fn folder_create_commit_then_drop_uses_reserved_id_and_updates_parent_snapshot()
         backend.listed_guard().unwrap().insert(String::new());
         let created = backend.ensure_dir("folder").unwrap();
         assert_eq!(created, "folder-id", "folder create");
-        let methods = server.join().unwrap();
+        let methods = server.join().expect("folder create: loopback Drive");
 
         let count = methods.iter().filter(|method| *method == "POST").count();
         assert_eq!(count, 1, "folder create");
@@ -409,7 +409,7 @@ fn folder_create_commit_then_drop_uses_reserved_id_and_updates_parent_snapshot()
             backend.pending_folder_create("folder").unwrap().is_none(),
             "ambiguous retry"
         );
-        let requests = server.join().unwrap();
+        let requests = server.join().expect("ambiguous retry: loopback Drive");
         assert_eq!(
             requests
                 .iter()

@@ -111,14 +111,26 @@ fn persisted_record_round_trips_all_orthogonal_states() {
 
 #[test]
 fn delivery_reducer_is_monotonic_idempotent_and_order_independent() {
-    let cases: [fn(); 4] = [
-        delivery_reducer_is_monotonic_idempotent_and_order_independent_case,
-        decision_delivery_is_revision_scoped_and_order_independent,
-        expiry_and_failure_are_terminal_and_timestamp_checked,
-        reducer_rejects_events_for_another_request,
+    let cases: [(&str, fn()); 4] = [
+        (
+            "delivery_reducer_is_monotonic_idempotent_and_order_independent",
+            delivery_reducer_is_monotonic_idempotent_and_order_independent_case,
+        ),
+        (
+            "decision_delivery_is_revision_scoped_and_order_independent",
+            decision_delivery_is_revision_scoped_and_order_independent,
+        ),
+        (
+            "expiry_and_failure_are_terminal_and_timestamp_checked",
+            expiry_and_failure_are_terminal_and_timestamp_checked,
+        ),
+        (
+            "reducer_rejects_events_for_another_request",
+            reducer_rejects_events_for_another_request,
+        ),
     ];
-    for case in cases {
-        case();
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
     }
 }
 
@@ -228,12 +240,18 @@ fn reducer_rejects_events_for_another_request() {
 
 #[test]
 fn accepted_decision_can_only_advance_to_higher_revision_revoke() {
-    let cases: [fn(); 2] = [
-        accepted_decision_can_only_advance_to_higher_revision_revoke_case,
-        out_of_order_revoke_converges_without_resurrecting_acceptance,
+    let cases: [(&str, fn()); 2] = [
+        (
+            "accepted_decision_can_only_advance_to_higher_revision_revoke",
+            accepted_decision_can_only_advance_to_higher_revision_revoke_case,
+        ),
+        (
+            "out_of_order_revoke_converges_without_resurrecting_acceptance",
+            out_of_order_revoke_converges_without_resurrecting_acceptance,
+        ),
     ];
-    for case in cases {
-        case();
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
     }
 }
 

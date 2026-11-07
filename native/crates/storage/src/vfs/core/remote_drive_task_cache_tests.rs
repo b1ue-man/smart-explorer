@@ -197,7 +197,8 @@ impl Drop for DropCommitWriter {
 
 #[test]
 fn remote_drive_task_writer_drop_invalidates_a_listing_loaded_while_open() -> io::Result<()> {
-    let cases: [(&str, fn() -> std::io::Result<()>); 2] = [
+    type Row = (&'static str, fn() -> std::io::Result<()>);
+    let cases: [Row; 2] = [
         (
             "remote_drive_task_writer_drop_invalidates_a_listing_loaded_while_open",
             || -> std::io::Result<()> {
@@ -252,6 +253,7 @@ fn remote_drive_task_writer_drop_invalidates_a_listing_loaded_while_open() -> io
             .unwrap_or_else(|_| panic!("{case}"))
             .unwrap_or_else(|error| panic!("{case}: {error}"));
     }
+    Ok(())
 }
 
 #[derive(Default)]

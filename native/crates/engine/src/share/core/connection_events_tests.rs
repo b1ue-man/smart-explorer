@@ -4,12 +4,18 @@ use super::*;
 
 #[test]
 fn unique_external_error_flood_is_fixed_memory_and_coalesced() {
-    let cases: [fn(); 2] = [
-        unique_external_error_flood_is_fixed_memory_and_coalesced_case,
-        report_window_emits_a_summary_and_leaves_room_for_recovery_events,
+    let cases: [(&str, fn()); 2] = [
+        (
+            "unique_external_error_flood_is_fixed_memory_and_coalesced",
+            unique_external_error_flood_is_fixed_memory_and_coalesced_case,
+        ),
+        (
+            "report_window_emits_a_summary_and_leaves_room_for_recovery_events",
+            report_window_emits_a_summary_and_leaves_room_for_recovery_events,
+        ),
     ];
-    for case in cases {
-        case();
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
     }
 }
 

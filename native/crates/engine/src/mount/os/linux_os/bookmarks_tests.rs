@@ -254,7 +254,10 @@ fn drive_task_glib_display_rule_path() {
             !fixture.targets.gtk.exists(),
             "no GTK bookmark for a drive GLib shows by itself"
         );
-        assert!(text(&fixture.targets.kde).contains(&uri_of(&inside)));
+        assert!(
+            text(&fixture.targets.kde).contains(&uri_of(&inside)),
+            "KDE place inside the rule"
+        );
         // Outside the rule: hidden folder and runtime folder.
         add_in(&fixture.targets, &entry("two", &hidden, "Versteckt")).expect("add hidden");
         add_in(&fixture.targets, &entry("three", &outside, "A")).expect("add outside");

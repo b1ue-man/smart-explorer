@@ -86,12 +86,18 @@ fn still(value: u8) -> Vec<u8> {
 }
 #[test]
 fn batches_capture_task_android_pending_metadata_cannot_allocate() {
-    let cases: [fn(); 2] = [
-        batches_capture_task_android_pending_metadata_cannot_allocate_case,
-        batches_capture_task_android_synthetic_without_display_keeps_defined_default,
+    let cases: [(&str, fn()); 2] = [
+        (
+            "batches_capture_task_android_pending_metadata_cannot_allocate",
+            batches_capture_task_android_pending_metadata_cannot_allocate_case,
+        ),
+        (
+            "batches_capture_task_android_synthetic_without_display_keeps_defined_default",
+            batches_capture_task_android_synthetic_without_display_keeps_defined_default,
+        ),
     ];
-    for case in cases {
-        case();
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
     }
 }
 

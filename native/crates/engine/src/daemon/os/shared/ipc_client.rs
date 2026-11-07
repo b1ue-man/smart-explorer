@@ -397,13 +397,22 @@ mod tests {
 
     #[test]
     fn replacement_rejects_the_retiring_generation_but_accepts_another_successor() {
-        let cases: [fn(); 3] = [
-            replacement_rejects_the_retiring_generation_but_accepts_another_successor_case,
-            fresh_concurrent_launch_accepts_the_winning_generation,
-            replacement_accepts_its_requested_generation,
+        let cases: [(&str, fn()); 3] = [
+            (
+                "replacement_rejects_the_retiring_generation_but_accepts_another_successor",
+                replacement_rejects_the_retiring_generation_but_accepts_another_successor_case,
+            ),
+            (
+                "fresh_concurrent_launch_accepts_the_winning_generation",
+                fresh_concurrent_launch_accepts_the_winning_generation,
+            ),
+            (
+                "replacement_accepts_its_requested_generation",
+                replacement_accepts_its_requested_generation,
+            ),
         ];
-        for case in cases {
-            case();
+        for (case, check) in cases {
+            std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
         }
     }
 

@@ -17,7 +17,7 @@ impl Drop for Process {
 }
 
 #[test]
-#[ignore = "child endpoint, launched only by the task's authenticated IPC fixture"]
+#[ignore = "child endpoint, launched only by the task's authenticated IPC fixture; Suite crates-task"]
 fn read_helper_process_fixture() {
     assert_eq!(
         std::env::var("SMART_EXPLORER_READ_HELPER_CHILD").as_deref(),

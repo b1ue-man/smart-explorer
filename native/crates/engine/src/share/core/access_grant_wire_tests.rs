@@ -68,14 +68,26 @@ fn change(capabilities: &[(Capability, CapabilityDecision)]) -> AccessGrantChang
 
 #[test]
 fn perm_task_port_full_shell_0_5_180() {
-    let cases: [fn(); 4] = [
-        perm_task_port_full_shell_0_5_180_case,
-        perm_task_port_disabled_keeps_settings,
-        perm_task_port_program_list_0_5_182,
-        perm_task_port_run_as_root_worker,
+    let cases: [(&str, fn()); 4] = [
+        (
+            "perm_task_port_full_shell_0_5_180",
+            perm_task_port_full_shell_0_5_180_case,
+        ),
+        (
+            "perm_task_port_disabled_keeps_settings",
+            perm_task_port_disabled_keeps_settings,
+        ),
+        (
+            "perm_task_port_program_list_0_5_182",
+            perm_task_port_program_list_0_5_182,
+        ),
+        (
+            "perm_task_port_run_as_root_worker",
+            perm_task_port_run_as_root_worker,
+        ),
     ];
-    for case in cases {
-        case();
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
     }
 }
 

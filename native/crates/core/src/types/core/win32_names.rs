@@ -192,8 +192,8 @@ mod tests {
                 assert_eq!(win32_name_issue(name), expected, "{case}: {name:?}");
             }
         }
-        assert!(!is_win32_device_name("com10"));
-        assert!(!is_win32_device_name("nul_x"));
+        assert!(!is_win32_device_name("com10"), "ordinary name: com10");
+        assert!(!is_win32_device_name("nul_x"), "ordinary name: nul_x");
     }
 
     #[test]

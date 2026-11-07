@@ -64,12 +64,18 @@ mod tests {
 
     #[test]
     fn backend_walk_budget_rejects_excessive_depth() {
-        let cases: [fn(); 2] = [
-            backend_walk_budget_rejects_excessive_depth_case,
-            review_task_streaming_walks_leave_the_entry_limit_to_the_client,
+        let cases: [(&str, fn()); 2] = [
+            (
+                "backend_walk_budget_rejects_excessive_depth",
+                backend_walk_budget_rejects_excessive_depth_case,
+            ),
+            (
+                "review_task_streaming_walks_leave_the_entry_limit_to_the_client",
+                review_task_streaming_walks_leave_the_entry_limit_to_the_client,
+            ),
         ];
-        for case in cases {
-            case();
+        for (case, check) in cases {
+            std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
         }
     }
 

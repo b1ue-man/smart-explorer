@@ -273,12 +273,12 @@ fn partial_replace_state_with_missing_target_restores_verified_backup() {
         ("intact pending", false, true),
         ("corrupt pending", true, false),
     ] {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tempfile::tempdir().expect(case);
         let staged = dir.path().join("staged");
         let target = dir.path().join("target");
-        std::fs::write(&staged, b"new").unwrap();
-        std::fs::write(&target, b"old").unwrap();
-        let hash = sha256_file(&staged).unwrap();
+        std::fs::write(&staged, b"new").expect(case);
+        std::fs::write(&target, b"old").expect(case);
+        let hash = sha256_file(&staged).expect(case);
         let mut transaction = replace_transaction(&[Replacement {
             label: "App",
             staged: &staged,
@@ -286,21 +286,21 @@ fn partial_replace_state_with_missing_target_restores_verified_backup() {
             sha256: &hash,
             expected_target_sha256: None,
         }])
-        .unwrap();
+        .expect(case);
         let pending = transaction.prepared[0].pending.clone();
-        std::fs::remove_file(&target).unwrap();
+        std::fs::remove_file(&target).expect(case);
         if corrupt_pending {
-            std::fs::write(&pending, b"corrupt-pending").unwrap();
+            std::fs::write(&pending, b"corrupt-pending").expect(case);
         }
 
         let outcome = replace_platform::recover_failed_install(&transaction.prepared[0]);
 
         assert_eq!(outcome.is_ok(), succeeds, "{case}: {outcome:?}");
-        assert_eq!(std::fs::read(&target).unwrap(), b"old", "{case}");
+        assert_eq!(std::fs::read(&target).expect(case), b"old", "{case}");
         if corrupt_pending {
-            std::fs::remove_file(pending).unwrap();
+            std::fs::remove_file(pending).expect(case);
         }
-        transaction.rollback().unwrap();
+        transaction.rollback().expect(case);
     }
 }
 

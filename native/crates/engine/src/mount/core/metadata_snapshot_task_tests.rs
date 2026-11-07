@@ -9,6 +9,34 @@ use std::sync::{Arc, Barrier, Mutex};
 
 #[test]
 fn remote_drive_task_cached_enumerations_share_one_immutable_snapshot() -> io::Result<()> {
+    type Row = (&'static str, fn() -> io::Result<()>);
+    let cases: [Row; 4] = [
+        (
+            "remote_drive_task_cached_enumerations_share_one_immutable_snapshot",
+            remote_drive_task_cached_enumerations_share_one_immutable_snapshot_case,
+        ),
+        (
+            "remote_drive_task_global_snapshot_admission_uses_bytes_not_count_limits",
+            remote_drive_task_global_snapshot_admission_uses_bytes_not_count_limits,
+        ),
+        (
+            "remote_drive_task_one_cached_directory_cannot_amplify_memory_without_bound",
+            remote_drive_task_one_cached_directory_cannot_amplify_memory_without_bound,
+        ),
+        (
+            "remote_drive_task_refresh_prioritizes_recently_accessed_directory",
+            remote_drive_task_refresh_prioritizes_recently_accessed_directory,
+        ),
+    ];
+    for (case, check) in cases {
+        std::panic::catch_unwind(check)
+            .unwrap_or_else(|_| panic!("{case}"))
+            .map_err(|error| io::Error::new(error.kind(), format!("{case}: {error}")))?;
+    }
+    Ok(())
+}
+
+fn remote_drive_task_cached_enumerations_share_one_immutable_snapshot_case() -> io::Result<()> {
     let cache = MetadataCache::new("/", true);
     let entries: Arc<[VfsMeta]> = vec![file("note.md", 12)].into();
     assert!(cache.install_directory("/", directory("/"), Arc::clone(&entries), 0)?);
@@ -186,6 +214,81 @@ fn remote_drive_task_older_parent_fetch_cannot_resurrect_removed_child() -> io::
     assert_eq!(backend.list_calls.load(Ordering::SeqCst), 2);
     let error = engine.stat_cached(r"\removed.txt").unwrap_err();
     assert_eq!(error.kind(), io::ErrorKind::NotFound);
+    Ok(())
+}
+
+fn remote_drive_task_global_snapshot_admission_uses_bytes_not_count_limits() -> io::Result<()> {
+    let cache = MetadataCache::new("/", true);
+    assert!(cache.install_directory(
+        "/",
+        directory("/"),
+        (0..4_200)
+            .map(|index| directory(&format!("directory-{index:04}")))
+            .collect::<Vec<_>>()
+            .into(),
+        0
+    )?);
+    let entries: Arc<[VfsMeta]> = (0..16)
+        .map(|index| file(&format!("file-{index:02}.txt"), index))
+        .collect::<Vec<_>>()
+        .into();
+    for index in 0..4_200 {
+        assert!(cache.install_directory(
+            &format!("/directory-{index:04}"),
+            directory(&format!("directory-{index:04}")),
+            Arc::clone(&entries),
+            1,
+        )?);
+    }
+
+    let (directories, entries, bytes) = cache.usage()?;
+    assert_eq!(directories, 4_201);
+    assert!(entries > 50_000);
+    assert!(bytes <= 128 * 1024 * 1024);
+    assert!(
+        cache.directory("/")?.is_some(),
+        "all these snapshots fit the byte budget"
+    );
+    Ok(())
+}
+
+fn remote_drive_task_one_cached_directory_cannot_amplify_memory_without_bound() -> io::Result<()> {
+    let cache = MetadataCache::new("/", true);
+    // Retained capacity matters even when a string's visible length is small.
+    let mut oversized_name = String::with_capacity(128 * 1024 * 1024 + 1);
+    oversized_name.push('x');
+    assert!(!cache.install_directory(
+        "/",
+        directory("/"),
+        vec![VfsMeta {
+            name: oversized_name,
+            size: 1,
+            ..VfsMeta::default()
+        }]
+        .into(),
+        0,
+    )?);
+    assert_eq!(cache.usage()?, (0, 0, 0));
+    Ok(())
+}
+
+fn remote_drive_task_refresh_prioritizes_recently_accessed_directory() -> io::Result<()> {
+    let cache = MetadataCache::new("/", true);
+    assert!(cache.install_directory(
+        "/",
+        directory("/"),
+        vec![directory("Alpha"), directory("Beta"), directory("Gamma")].into(),
+        0,
+    )?);
+    assert!(cache.install_directory("/Alpha", directory("Alpha"), Vec::new().into(), 1)?);
+    assert!(cache.install_directory("/Beta", directory("Beta"), Vec::new().into(), 1)?);
+    assert!(cache.install_directory("/Gamma", directory("Gamma"), Vec::new().into(), 1)?);
+    assert!(cache.directory("/Beta")?.is_some());
+    assert_eq!(
+        cache.refresh_targets(3, true)?,
+        // Root + fairness reservation + most recently demanded snapshot.
+        vec![("/".into(), 0), ("/Alpha".into(), 1), ("/Beta".into(), 1)]
+    );
     Ok(())
 }
 

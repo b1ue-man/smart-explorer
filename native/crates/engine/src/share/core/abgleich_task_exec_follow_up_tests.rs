@@ -103,13 +103,22 @@ pub(super) fn journal_step(profiles: &mut ShareProfiles, at: i64) -> ExecGrantMu
 
 #[test]
 fn abgleich_task_follow_up_code_rights_reach_the_grant_only_through_the_journal() {
-    let cases: [fn(); 3] = [
-        abgleich_task_follow_up_code_rights_reach_the_grant_only_through_the_journal_case,
-        abgleich_task_follow_up_readmitted_device_regains_exec_only_through_the_journal,
-        abgleich_task_follow_up_signed_acceptance_with_code_rights,
+    let cases: [(&str, fn()); 3] = [
+        (
+            "abgleich_task_follow_up_code_rights_reach_the_grant_only_through_the_journal",
+            abgleich_task_follow_up_code_rights_reach_the_grant_only_through_the_journal_case,
+        ),
+        (
+            "abgleich_task_follow_up_readmitted_device_regains_exec_only_through_the_journal",
+            abgleich_task_follow_up_readmitted_device_regains_exec_only_through_the_journal,
+        ),
+        (
+            "abgleich_task_follow_up_signed_acceptance_with_code_rights",
+            abgleich_task_follow_up_signed_acceptance_with_code_rights,
+        ),
     ];
-    for case in cases {
-        case();
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
     }
 }
 

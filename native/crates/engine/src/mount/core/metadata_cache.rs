@@ -42,9 +42,6 @@ pub(super) use crate::mount::metadata_batch::run_metadata_batch;
 pub use changes::MetadataChange;
 use support::*;
 
-// Kept only as a historical threshold for regression fixtures, not admission.
-#[cfg(any(test, feature = "test-support"))]
-pub(super) const MAX_CACHED_ENTRIES: usize = 50_000;
 const MAX_CACHED_BYTES: usize = 128 * 1024 * 1024;
 const MAX_CACHED_DIRECTORY_BYTES: usize = MAX_CACHED_BYTES;
 const SNAPSHOT_RETRY_DELAY: Duration = Duration::from_secs(5 * 60);
@@ -302,16 +299,6 @@ impl MetadataCache {
         let Some(cached) = state.directories.get(&self.key(parent)) else { return Ok(None); };
         Ok((!cached.comparison_only && cached.listing_expires_at <= Instant::now())
             .then(|| (cached.path.clone(), cached.depth)))
-    }
-
-    pub(super) fn generation(&self) -> io::Result<u64> {
-        Ok(self.lock_state()?.generation)
-    }
-
-    pub(super) fn note_external_observation(&self) -> io::Result<()> {
-        let mut state = self.lock_state()?;
-        state.generation = state.generation.saturating_add(1);
-        Ok(())
     }
 
     pub(super) fn note_path_observation(&self, path: &str) -> io::Result<()> {

@@ -86,12 +86,18 @@ fn tree_snapshot(status: MountStatus) -> MountSnapshot {
 
 #[test]
 fn drive_task_devices_status_json_shape() {
-    let cases: [fn(); 2] = [
-        drive_task_devices_status_json_shape_case,
-        devices_task_status_states_and_paths,
+    let cases: [(&str, fn()); 2] = [
+        (
+            "drive_task_devices_status_json_shape",
+            drive_task_devices_status_json_shape_case,
+        ),
+        (
+            "devices_task_status_states_and_paths",
+            devices_task_status_states_and_paths,
+        ),
     ];
-    for case in cases {
-        case();
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
     }
 }
 

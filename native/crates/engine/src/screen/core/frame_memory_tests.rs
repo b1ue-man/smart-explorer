@@ -32,12 +32,18 @@ fn batches_task_b6_memory_promises_share_capacity_and_survive_own_allocations() 
 }
 #[test]
 fn batches_task_b6_unknown_commit_address_or_small_heap_cannot_enlarge() {
-    let cases: [fn(); 2] = [
-        batches_task_b6_unknown_commit_address_or_small_heap_cannot_enlarge_case,
-        batches_task_b6_small_android_offer_is_shared_instead_of_multiplied,
+    let cases: [(&str, fn()); 2] = [
+        (
+            "batches_task_b6_unknown_commit_address_or_small_heap_cannot_enlarge",
+            batches_task_b6_unknown_commit_address_or_small_heap_cannot_enlarge_case,
+        ),
+        (
+            "batches_task_b6_small_android_offer_is_shared_instead_of_multiplied",
+            batches_task_b6_small_android_offer_is_shared_instead_of_multiplied,
+        ),
     ];
-    for case in cases {
-        case();
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
     }
 }
 

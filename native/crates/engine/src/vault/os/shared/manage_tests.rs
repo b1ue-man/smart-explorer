@@ -13,8 +13,8 @@ use crate::vfs::LocalBackend;
 
 use super::backend_test_support::fwd;
 use super::manage::{
-    add_site, create_site, create_vault, detect_storage, jobs_using, recovery_key_info,
-    remove_site, update_settings, ManageError, SettingsChange, CREATE_RECOVERY_HINT,
+    add_site, create_site, create_vault, detect_storage, jobs_using, remove_site, update_settings,
+    ManageError, SettingsChange,
 };
 use super::password::{change_password, check_new_password, PasswordError};
 use super::registry_store::RegistryStore;

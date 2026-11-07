@@ -85,7 +85,7 @@ fn batches_p13_manifest_requires_exact_hash_path_and_closed_schema() {
             "runtime_manifest_duplicate_or_unimplemented_contract",
         ),
     ] {
-        assert_eq!(changed.validate("se").unwrap_err(), expected, "{case}");
+        assert_eq!(changed.validate("se").expect_err(case), expected, "{case}");
     }
 }
 

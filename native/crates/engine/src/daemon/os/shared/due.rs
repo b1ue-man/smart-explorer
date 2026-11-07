@@ -231,13 +231,22 @@ mod tests {
 
     #[test]
     fn review_task_failures_retry_with_backoff_and_wait_for_the_user() {
-        let cases: [fn(); 3] = [
-            review_task_failures_retry_with_backoff_and_wait_for_the_user_case,
-            review_task_outstanding_triggers_run_after_a_restart,
-            review_task_schedules_count_from_the_last_success,
+        let cases: [(&str, fn()); 3] = [
+            (
+                "review_task_failures_retry_with_backoff_and_wait_for_the_user",
+                review_task_failures_retry_with_backoff_and_wait_for_the_user_case,
+            ),
+            (
+                "review_task_outstanding_triggers_run_after_a_restart",
+                review_task_outstanding_triggers_run_after_a_restart,
+            ),
+            (
+                "review_task_schedules_count_from_the_last_success",
+                review_task_schedules_count_from_the_last_success,
+            ),
         ];
-        for case in cases {
-            case();
+        for (case, check) in cases {
+            std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
         }
     }
 
@@ -342,12 +351,18 @@ mod tests {
 
     #[test]
     fn battery_task_next_due_outside_the_active_window_is_the_next_window_start() {
-        let cases: [fn(); 2] = [
-            battery_task_next_due_outside_the_active_window_is_the_next_window_start_case,
-            battery_task_a_timer_time_outside_the_window_moves_to_the_window_start,
+        let cases: [(&str, fn()); 2] = [
+            (
+                "battery_task_next_due_outside_the_active_window_is_the_next_window_start",
+                battery_task_next_due_outside_the_active_window_is_the_next_window_start_case,
+            ),
+            (
+                "battery_task_a_timer_time_outside_the_window_moves_to_the_window_start",
+                battery_task_a_timer_time_outside_the_window_moves_to_the_window_start,
+            ),
         ];
-        for case in cases {
-            case();
+        for (case, check) in cases {
+            std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
         }
     }
 

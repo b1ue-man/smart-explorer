@@ -25,13 +25,22 @@ fn auth_failed(at: i64) -> JobState {
 
 #[test]
 fn sync_transparency_task_later_success_on_the_same_drive_account_is_evidence() {
-    let cases: [fn(); 3] = [
-        sync_transparency_task_later_success_on_the_same_drive_account_is_evidence_case,
-        sync_transparency_task_changed_credentials_allow_one_retry,
-        sync_transparency_task_only_login_failures_wait_for_evidence,
+    let cases: [(&str, fn()); 3] = [
+        (
+            "sync_transparency_task_later_success_on_the_same_drive_account_is_evidence",
+            sync_transparency_task_later_success_on_the_same_drive_account_is_evidence_case,
+        ),
+        (
+            "sync_transparency_task_changed_credentials_allow_one_retry",
+            sync_transparency_task_changed_credentials_allow_one_retry,
+        ),
+        (
+            "sync_transparency_task_only_login_failures_wait_for_evidence",
+            sync_transparency_task_only_login_failures_wait_for_evidence,
+        ),
     ];
-    for case in cases {
-        case();
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
     }
 }
 

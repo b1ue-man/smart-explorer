@@ -33,12 +33,18 @@ fn key(byte: u8) -> iroh::SecretKey {
 
 #[test]
 fn review_task_decision_delivery_accepts_clock_skew_in_both_directions() {
-    let cases: [fn(); 2] = [
-        review_task_decision_delivery_accepts_clock_skew_in_both_directions_case,
-        review_task_future_request_is_received_without_waiting_for_local_clock,
+    let cases: [(&str, fn()); 2] = [
+        (
+            "review_task_decision_delivery_accepts_clock_skew_in_both_directions",
+            review_task_decision_delivery_accepts_clock_skew_in_both_directions_case,
+        ),
+        (
+            "review_task_future_request_is_received_without_waiting_for_local_clock",
+            review_task_future_request_is_received_without_waiting_for_local_clock,
+        ),
     ];
-    for case in cases {
-        case();
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
     }
 }
 

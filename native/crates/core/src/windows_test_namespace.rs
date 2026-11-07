@@ -70,7 +70,7 @@ mod tests {
         ];
         for (case, namespace, expected) in cases {
             assert_eq!(
-                qualify("production", ".test.", namespace).unwrap(),
+                qualify("production", ".test.", namespace).expect(case),
                 expected,
                 "{case}"
             );

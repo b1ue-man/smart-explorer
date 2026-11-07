@@ -49,12 +49,18 @@ fn room_with(members: Vec<RoomMember>) -> RoomProfile {
 
 #[test]
 fn abgleich_task_follow_up_room_rights_reach_members_only_through_the_journal() {
-    let cases: [fn(); 2] = [
-        abgleich_task_follow_up_room_rights_reach_members_only_through_the_journal_case,
-        abgleich_task_follow_up_room_creation_without_members_and_cancel,
+    let cases: [(&str, fn()); 2] = [
+        (
+            "abgleich_task_follow_up_room_rights_reach_members_only_through_the_journal",
+            abgleich_task_follow_up_room_rights_reach_members_only_through_the_journal_case,
+        ),
+        (
+            "abgleich_task_follow_up_room_creation_without_members_and_cancel",
+            abgleich_task_follow_up_room_creation_without_members_and_cancel,
+        ),
     ];
-    for case in cases {
-        case();
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
     }
 }
 

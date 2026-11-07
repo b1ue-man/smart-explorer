@@ -7,7 +7,14 @@ fn middle_change_splits_into_three() {
     // with no lines on A. Each row checks the hunk pattern, the change blocks
     // and that the default choice (A) assembles the text of A.
     type Change = (&'static [&'static str], &'static [&'static str]);
-    let cases: [(&str, &str, &str, &[bool], &[Change]); 3] = [
+    type Row = (
+        &'static str,
+        &'static str,
+        &'static str,
+        &'static [bool],
+        &'static [Change],
+    );
+    let cases: [Row; 3] = [
         ("identical", "a\nb\nc", "a\nb\nc", &[true], &[]),
         (
             "middle change",
@@ -27,7 +34,7 @@ fn middle_change_splits_into_three() {
     let owned =
         |lines: &[&str]| -> Vec<String> { lines.iter().map(|line| line.to_string()).collect() };
     for (case, a, b, pattern, changes) in cases {
-        let h = diff(a, b).unwrap();
+        let h = diff(a, b).expect(case);
         let flags: Vec<bool> = h.iter().map(|hunk| hunk.equal).collect();
         assert_eq!(flags, pattern, "{case}");
         let found: Vec<(Vec<String>, Vec<String>)> = h

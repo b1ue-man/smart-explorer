@@ -342,7 +342,8 @@ mod tests {
     fn review_task_key_login_and_access_fields_are_optional_on_the_wire() {
         // Rows of incoming lines: each line parses to the variant and fields its
         // row names. Rows of outgoing values: each value serializes to its line.
-        let incoming: [(&str, &str, fn(&In) -> bool); 7] = [
+        type Row = (&'static str, &'static str, fn(&In) -> bool);
+        let incoming: [Row; 7] = [
             (
                 "set_idle with keepalive",
                 r#"{"t":"set_idle","idle":true,"keepalive_secs":90}"#,
@@ -417,7 +418,7 @@ mod tests {
             ),
         ];
         for (case, line, matches_row) in incoming {
-            let value: In = serde_json::from_str(line).unwrap();
+            let value: In = serde_json::from_str(line).expect(case);
             assert!(matches_row(&value), "{case}");
         }
 
@@ -440,7 +441,7 @@ mod tests {
             ),
         ];
         for (case, value, line) in outgoing {
-            assert_eq!(serde_json::to_string(&value).unwrap(), line, "{case}");
+            assert_eq!(serde_json::to_string(&value).expect(case), line, "{case}");
         }
     }
 }

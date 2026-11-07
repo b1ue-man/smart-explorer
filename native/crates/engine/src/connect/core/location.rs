@@ -355,10 +355,11 @@ mod vault_locator_tests {
         }
         let (protocol, user, host, port, path) =
             crate::connect::parse_remote_url("sftp://bob@example.com:2222/home/bob").unwrap();
-        assert_eq!(protocol, crate::creds::Protocol::Sftp);
+        assert_eq!(protocol, crate::creds::Protocol::Sftp, "sftp URL");
         assert_eq!(
             (user.as_str(), host.as_str(), port, path.as_str()),
-            ("bob", "example.com", 2222, "/home/bob")
+            ("bob", "example.com", 2222, "/home/bob"),
+            "sftp URL"
         );
         assert!(!crate::connect::is_remote_url("/home/anna"));
         assert!(!crate::vfs::is_remote_root(r"C:\Users"));
@@ -387,7 +388,8 @@ mod vault_locator_tests {
             crate::connect::parse_remote_url("SFTP://u@[::1]/Docs")
                 .unwrap()
                 .3,
-            22
+            22,
+            "SFTP default port"
         );
         for input in [
             "webdva://host/Docs",
@@ -408,25 +410,28 @@ mod vault_locator_tests {
         // SMB: protocol name, default port and endpoint recognition.
         assert_eq!(
             crate::creds::Protocol::parse("smb"),
-            Some(crate::creds::Protocol::Smb)
+            Some(crate::creds::Protocol::Smb),
+            "smb"
         );
-        assert_eq!(crate::creds::Protocol::Smb.as_str(), "smb");
-        assert_eq!(crate::creds::Protocol::Smb.default_port(), 445);
-        assert!(crate::creds::Protocol::Smb.is_url());
+        assert_eq!(crate::creds::Protocol::Smb.as_str(), "smb", "smb");
+        assert_eq!(crate::creds::Protocol::Smb.default_port(), 445, "smb");
+        assert!(crate::creds::Protocol::Smb.is_url(), "smb");
         let smb = "smb://FIRMA\\anna@nas:1445/daten/x";
-        assert!(crate::connect::is_remote_url(smb));
+        assert!(crate::connect::is_remote_url(smb), "smb");
         let (smb_protocol, smb_user, smb_host, smb_port, smb_path) =
             crate::connect::parse_remote_url(smb).unwrap();
-        assert_eq!(smb_protocol, crate::creds::Protocol::Smb);
+        assert_eq!(smb_protocol, crate::creds::Protocol::Smb, "smb");
         assert_eq!(
             (smb_user.as_str(), smb_host.as_str(), smb_port),
-            ("FIRMA\\anna", "nas", 1445)
+            ("FIRMA\\anna", "nas", 1445),
+            "smb"
         );
-        assert_eq!(smb_path, "/daten/x");
+        assert_eq!(smb_path, "/daten/x", "smb");
         crate::connect::validate_sync_endpoints(smb, "/storage/emulated/0/x").unwrap();
         assert!(
             crate::connect::validate_sync_endpoints(smb, "smb://FIRMA\\anna@nas:1445/daten")
-                .is_err()
+                .is_err(),
+            "smb"
         );
     }
 

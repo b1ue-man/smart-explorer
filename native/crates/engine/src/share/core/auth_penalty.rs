@@ -113,12 +113,18 @@ mod tests {
 
     #[test]
     fn luecken_task_three_failed_authentications_refuse_for_fifteen_seconds() {
-        let cases: [fn(); 2] = [
-            luecken_task_three_failed_authentications_refuse_for_fifteen_seconds_case,
-            luecken_task_penalties_are_capped_and_decay,
+        let cases: [(&str, fn()); 2] = [
+            (
+                "luecken_task_three_failed_authentications_refuse_for_fifteen_seconds",
+                luecken_task_three_failed_authentications_refuse_for_fifteen_seconds_case,
+            ),
+            (
+                "luecken_task_penalties_are_capped_and_decay",
+                luecken_task_penalties_are_capped_and_decay,
+            ),
         ];
-        for case in cases {
-            case();
+        for (case, check) in cases {
+            std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
         }
     }
 

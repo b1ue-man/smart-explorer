@@ -49,12 +49,18 @@ fn request() -> StartRequest {
 /// policy or an unadvertised service is refused.
 #[test]
 fn batches_rdp_requires_explicit_session_local_access_and_certificate_policy() {
-    let cases: [fn(); 2] = [
-        batches_rdp_requires_explicit_session_local_access_and_certificate_policy_case,
-        batches_rdp_missing_listener_tls_certificate_or_known_session_fails_closed,
+    let cases: [(&str, fn()); 2] = [
+        (
+            "batches_rdp_requires_explicit_session_local_access_and_certificate_policy",
+            batches_rdp_requires_explicit_session_local_access_and_certificate_policy_case,
+        ),
+        (
+            "batches_rdp_missing_listener_tls_certificate_or_known_session_fails_closed",
+            batches_rdp_missing_listener_tls_certificate_or_known_session_fails_closed,
+        ),
     ];
-    for case in cases {
-        case();
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
     }
 }
 

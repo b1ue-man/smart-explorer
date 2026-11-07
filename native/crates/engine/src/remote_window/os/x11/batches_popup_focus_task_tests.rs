@@ -10,12 +10,18 @@ use fixtures::*;
 
 #[test]
 fn batches_family_x11_combo_popup_keeps_identity_after_owner_focus_ack() {
-    let cases: [fn(); 2] = [
-        batches_family_x11_combo_popup_keeps_identity_after_owner_focus_ack_case,
-        batches_family_x11_nested_menus_use_recursive_owner_focus,
+    let cases: [(&str, fn()); 2] = [
+        (
+            "batches_family_x11_combo_popup_keeps_identity_after_owner_focus_ack",
+            batches_family_x11_combo_popup_keeps_identity_after_owner_focus_ack_case,
+        ),
+        (
+            "batches_family_x11_nested_menus_use_recursive_owner_focus",
+            batches_family_x11_nested_menus_use_recursive_owner_focus,
+        ),
     ];
-    for case in cases {
-        case();
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
     }
 }
 

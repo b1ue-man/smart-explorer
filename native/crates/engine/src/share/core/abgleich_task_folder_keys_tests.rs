@@ -74,12 +74,21 @@ fn runs(items: &[KeyedWalkItem]) -> Vec<String> {
 
 #[test]
 fn abgleich_task_share_host_keys_every_folder_as_the_client_computes_it() -> io::Result<()> {
-    let cases: [fn() -> io::Result<()>; 2] = [
-        abgleich_task_share_host_keys_every_folder_as_the_client_computes_it_case,
-        abgleich_task_share_host_answers_known_folders_with_one_mark,
+    type Row = (&'static str, fn() -> io::Result<()>);
+    let cases: [Row; 2] = [
+        (
+            "abgleich_task_share_host_keys_every_folder_as_the_client_computes_it",
+            abgleich_task_share_host_keys_every_folder_as_the_client_computes_it_case,
+        ),
+        (
+            "abgleich_task_share_host_answers_known_folders_with_one_mark",
+            abgleich_task_share_host_answers_known_folders_with_one_mark,
+        ),
     ];
-    for case in cases {
-        case()?;
+    for (case, check) in cases {
+        std::panic::catch_unwind(check)
+            .unwrap_or_else(|_| panic!("{case}"))
+            .map_err(|error| io::Error::new(error.kind(), format!("{case}: {error}")))?;
     }
     Ok(())
 }
@@ -154,12 +163,21 @@ fn abgleich_task_share_host_answers_known_folders_with_one_mark() -> io::Result<
 
 #[test]
 fn abgleich_task_share_host_without_keys_capability_is_not_asked() -> io::Result<()> {
-    let cases: [fn() -> io::Result<()>; 2] = [
-        abgleich_task_share_host_without_keys_capability_is_not_asked_case,
-        abgleich_task_share_host_without_meta_capability_is_not_asked,
+    type Row = (&'static str, fn() -> io::Result<()>);
+    let cases: [Row; 2] = [
+        (
+            "abgleich_task_share_host_without_keys_capability_is_not_asked",
+            abgleich_task_share_host_without_keys_capability_is_not_asked_case,
+        ),
+        (
+            "abgleich_task_share_host_without_meta_capability_is_not_asked",
+            abgleich_task_share_host_without_meta_capability_is_not_asked,
+        ),
     ];
-    for case in cases {
-        case()?;
+    for (case, check) in cases {
+        std::panic::catch_unwind(check)
+            .unwrap_or_else(|_| panic!("{case}"))
+            .map_err(|error| io::Error::new(error.kind(), format!("{case}: {error}")))?;
     }
     Ok(())
 }

@@ -213,7 +213,7 @@ mod tests {
             c.auth = auth.clone();
             let line = serialize(&c);
             assert!(line.contains(wire), "{case}: {line}");
-            let back = parse(&line).unwrap();
+            let back = parse(&line).expect(case);
             assert_eq!(back.protocol, protocol, "{case}");
             assert_eq!(back.host, "example.com", "{case}");
             assert_eq!(back.port, 2222, "{case}");

@@ -153,12 +153,18 @@ fn open(worker: &mut Worker) {
 
 #[test]
 fn screen_task_worker_maps_permission_denied_to_no_display() {
-    let cases: [fn(); 2] = [
-        screen_task_worker_maps_permission_denied_to_no_display_case,
-        screen_task_worker_keeps_other_capture_errors_as_capture_failed,
+    let cases: [(&str, fn()); 2] = [
+        (
+            "screen_task_worker_maps_permission_denied_to_no_display",
+            screen_task_worker_maps_permission_denied_to_no_display_case,
+        ),
+        (
+            "screen_task_worker_keeps_other_capture_errors_as_capture_failed",
+            screen_task_worker_keeps_other_capture_errors_as_capture_failed,
+        ),
     ];
-    for case in cases {
-        case();
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
     }
 }
 

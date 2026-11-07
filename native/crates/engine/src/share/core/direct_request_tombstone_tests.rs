@@ -162,12 +162,18 @@ fn deleted_outgoing_accept_still_applies_a_newer_signed_remote_revocation() {
 
 #[test]
 fn saturated_unexpired_tombstones_fail_before_removing_the_request() {
-    let cases: [fn(); 2] = [
-        saturated_unexpired_tombstones_fail_before_removing_the_request_case,
-        expired_tombstones_are_pruned_before_capacity_is_reused,
+    let cases: [(&str, fn()); 2] = [
+        (
+            "saturated_unexpired_tombstones_fail_before_removing_the_request",
+            saturated_unexpired_tombstones_fail_before_removing_the_request_case,
+        ),
+        (
+            "expired_tombstones_are_pruned_before_capacity_is_reused",
+            expired_tombstones_are_pruned_before_capacity_is_reused,
+        ),
     ];
-    for case in cases {
-        case();
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
     }
 }
 
@@ -212,12 +218,18 @@ fn expired_tombstones_are_pruned_before_capacity_is_reused() {
 
 #[test]
 fn deletion_has_no_half_persisted_snapshot() {
-    let cases: [fn(); 2] = [
-        deletion_has_no_half_persisted_snapshot_case,
-        failed_durable_commit_keeps_visible_entry_and_tombstone_absent,
+    let cases: [(&str, fn()); 2] = [
+        (
+            "deletion_has_no_half_persisted_snapshot",
+            deletion_has_no_half_persisted_snapshot_case,
+        ),
+        (
+            "failed_durable_commit_keeps_visible_entry_and_tombstone_absent",
+            failed_durable_commit_keeps_visible_entry_and_tombstone_absent,
+        ),
     ];
-    for case in cases {
-        case();
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
     }
 }
 

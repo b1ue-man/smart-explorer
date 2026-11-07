@@ -126,7 +126,7 @@ mod tests {
         assert!(!plan(Some(&old), &new, true).carry_secret);
         // Case "new entry": without a previous connection nothing else changes.
         assert_eq!(
-            plan(None, &new, false),
+            plan(None, &connection("nas", AuthKind::Password), false),
             EditPlan {
                 moved_from: None,
                 carry_secret: false,

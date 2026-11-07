@@ -35,12 +35,18 @@ fn abgleich_task_clear_is_complete_only_when_no_reached_process_failed() {
 
 #[test]
 fn abgleich_task_clear_summary_names_the_account_for_every_outcome() {
-    let cases: [fn(); 2] = [
-        abgleich_task_clear_summary_names_the_account_for_every_outcome_case,
-        abgleich_task_clear_json_names_each_step_and_its_reason,
+    let cases: [(&str, fn()); 2] = [
+        (
+            "abgleich_task_clear_summary_names_the_account_for_every_outcome",
+            abgleich_task_clear_summary_names_the_account_for_every_outcome_case,
+        ),
+        (
+            "abgleich_task_clear_json_names_each_step_and_its_reason",
+            abgleich_task_clear_json_names_each_step_and_its_reason,
+        ),
     ];
-    for case in cases {
-        case();
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
     }
 }
 

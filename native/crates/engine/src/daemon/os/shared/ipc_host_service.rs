@@ -343,12 +343,18 @@ mod tests {
 
     #[test]
     fn android_background_task_reload_gate_embedded_needs_change_or_safety_net() {
-        let cases: [fn(); 2] = [
-            android_background_task_reload_gate_embedded_needs_change_or_safety_net_case,
-            android_background_task_reload_gate_keeps_desktop_cadence,
+        let cases: [(&str, fn()); 2] = [
+            (
+                "android_background_task_reload_gate_embedded_needs_change_or_safety_net",
+                android_background_task_reload_gate_embedded_needs_change_or_safety_net_case,
+            ),
+            (
+                "android_background_task_reload_gate_keeps_desktop_cadence",
+                android_background_task_reload_gate_keeps_desktop_cadence,
+            ),
         ];
-        for case in cases {
-            case();
+        for (case, check) in cases {
+            std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
         }
     }
 
@@ -462,12 +468,18 @@ mod tests {
 
     #[test]
     fn explicit_stop_barrier_blocks_periodic_auto_connect_reload() {
-        let cases: [fn(); 2] = [
-            explicit_stop_barrier_blocks_periodic_auto_connect_reload_case,
-            lan_cleanup_task_lan_only_operation_needs_no_server,
+        let cases: [(&str, fn()); 2] = [
+            (
+                "explicit_stop_barrier_blocks_periodic_auto_connect_reload",
+                explicit_stop_barrier_blocks_periodic_auto_connect_reload_case,
+            ),
+            (
+                "lan_cleanup_task_lan_only_operation_needs_no_server",
+                lan_cleanup_task_lan_only_operation_needs_no_server,
+            ),
         ];
-        for case in cases {
-            case();
+        for (case, check) in cases {
+            std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
         }
     }
 

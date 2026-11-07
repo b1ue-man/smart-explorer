@@ -211,7 +211,7 @@ fn vault_task_mount_windows_dokany_e2e() -> io::Result<()> {
     assert_eq!(host.finish(), Ok(HostExit::Stopped));
     assert!(!holds(&cache, MARKER), "cleartext in the drive cache");
     // Case "drive letter read-write": files and folders written through the drive are read back, and cleartext stays out of the cache and the storage.
-    {
+    fn drive_letter_read_write() -> io::Result<()> {
         let vault = self::vault()?;
         let cache = vault.base.path().join("mount-cache");
         let id = MountId::new_random()?;
@@ -244,6 +244,10 @@ fn vault_task_mount_windows_dokany_e2e() -> io::Result<()> {
             !holds(Path::new(&vault.storage_root), MARKER),
             "cleartext in the vault storage"
         );
+        Ok(())
     }
+    drive_letter_read_write().map_err(|error| {
+        io::Error::new(error.kind(), format!("drive letter read-write: {error}"))
+    })?;
     Ok(())
 }

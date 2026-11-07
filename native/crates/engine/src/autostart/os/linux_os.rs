@@ -312,7 +312,7 @@ mod tests {
             ),
         ];
         for (case, executable) in rejected {
-            let error = super::write_entry(&entry, &executable).unwrap_err();
+            let error = super::write_entry(&entry, &executable).expect_err(case);
             assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput, "{case}");
             assert!(!entry.exists(), "{case}");
         }
@@ -415,8 +415,9 @@ mod tests {
             "enabled entry drops the stale executable"
         );
 
-        // Case "disabled entry": without an entry the refresh must not create one.
-        let disabled = dir.join("disabled.desktop");
+        // Case "disabled entry": without an entry (and without its folder) the
+        // refresh must not create one.
+        let disabled = dir.join("absent").join("daemon.desktop");
         super::refresh_enabled_entry(&disabled, &se).unwrap();
         assert!(!disabled.exists(), "disabled entry is not created");
 

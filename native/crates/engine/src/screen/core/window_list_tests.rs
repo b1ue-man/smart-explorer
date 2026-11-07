@@ -31,12 +31,18 @@ fn window(index: usize) -> WindowEntry {
 /// the frame holds them.
 #[test]
 fn screen_task_window_list_keeps_more_than_4096_entries() {
-    let cases: [fn(); 2] = [
-        screen_task_window_list_keeps_more_than_4096_entries_case,
-        screen_task_window_list_frame_bytes_bound_the_list,
+    let cases: [(&str, fn()); 2] = [
+        (
+            "screen_task_window_list_keeps_more_than_4096_entries",
+            screen_task_window_list_keeps_more_than_4096_entries_case,
+        ),
+        (
+            "screen_task_window_list_frame_bytes_bound_the_list",
+            screen_task_window_list_frame_bytes_bound_the_list,
+        ),
     ];
-    for case in cases {
-        case();
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
     }
 }
 

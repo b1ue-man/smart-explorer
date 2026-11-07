@@ -28,12 +28,18 @@ fn asking(device: Option<&str>, facts: &str) -> Asking {
 
 #[test]
 fn einrichtung_task_triggers_follow_the_marker_rules() {
-    let cases: [fn(); 2] = [
-        einrichtung_task_triggers_follow_the_marker_rules_case,
-        einrichtung_task_review_no_session_waits_for_changed_facts,
+    let cases: [(&str, fn()); 2] = [
+        (
+            "einrichtung_task_triggers_follow_the_marker_rules",
+            einrichtung_task_triggers_follow_the_marker_rules_case,
+        ),
+        (
+            "einrichtung_task_review_no_session_waits_for_changed_facts",
+            einrichtung_task_review_no_session_waits_for_changed_facts,
+        ),
     ];
-    for case in cases {
-        case();
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
     }
 }
 

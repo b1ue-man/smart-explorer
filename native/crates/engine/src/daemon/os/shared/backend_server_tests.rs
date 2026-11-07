@@ -12,12 +12,18 @@ use std::time::Duration;
 
 #[test]
 fn inbound_transfer_channel_is_bounded_and_disconnects_both_ends() {
-    let cases: [fn(); 2] = [
-        inbound_transfer_channel_is_bounded_and_disconnects_both_ends_case,
-        cancel_disconnects_a_blocked_transfer_receiver,
+    let cases: [(&str, fn()); 2] = [
+        (
+            "inbound_transfer_channel_is_bounded_and_disconnects_both_ends",
+            inbound_transfer_channel_is_bounded_and_disconnects_both_ends_case,
+        ),
+        (
+            "cancel_disconnects_a_blocked_transfer_receiver",
+            cancel_disconnects_a_blocked_transfer_receiver,
+        ),
     ];
-    for case in cases {
-        case();
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
     }
 }
 

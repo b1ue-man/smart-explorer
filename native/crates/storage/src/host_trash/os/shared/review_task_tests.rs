@@ -86,7 +86,8 @@ fn hop<T>(f: &Fixture, stage: &str, result: io::Result<T>) -> io::Result<T> {
 
 #[test]
 fn review_task_host_trash_intent_precedes_capture_and_survives_restart() -> io::Result<()> {
-    let cases: [(&str, fn() -> std::io::Result<()>); 2] = [
+    type Row = (&'static str, fn() -> std::io::Result<()>);
+    let cases: [Row; 2] = [
         (
             "review_task_host_trash_intent_precedes_capture_and_survives_restart",
             || -> std::io::Result<()> {
@@ -168,6 +169,7 @@ fn review_task_host_trash_intent_precedes_capture_and_survives_restart() -> io::
             .unwrap_or_else(|_| panic!("{case}"))
             .unwrap_or_else(|error| panic!("{case}: {error}"));
     }
+    Ok(())
 }
 
 #[test]
@@ -287,7 +289,8 @@ fn review_task_host_trash_link_source_and_invalid_slots_are_refused() -> io::Res
 #[test]
 fn review_task_host_trash_private_records_and_partial_intents_keep_other_entries() -> io::Result<()>
 {
-    let cases: [(&str, fn() -> std::io::Result<()>); 2] = [
+    type Row = (&'static str, fn() -> std::io::Result<()>);
+    let cases: [Row; 2] = [
         (
             "review_task_host_trash_private_records_and_partial_intents_keep_other_entries",
             || -> std::io::Result<()> {
@@ -352,6 +355,7 @@ fn review_task_host_trash_private_records_and_partial_intents_keep_other_entries
             .unwrap_or_else(|_| panic!("{case}"))
             .unwrap_or_else(|error| panic!("{case}: {error}"));
     }
+    Ok(())
 }
 
 #[test]

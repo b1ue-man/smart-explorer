@@ -49,12 +49,21 @@ fn assert_one_pair(report: &crate::analytics::DuplicateReport) {
 
 #[test]
 fn analysis_id_task_host_accepts_ids_of_released_clients() -> io::Result<()> {
-    let cases: [fn() -> io::Result<()>; 2] = [
-        analysis_id_task_host_accepts_ids_of_released_clients_case,
-        analysis_id_task_remote_analysis_and_duplicates_reach_the_host,
+    type Row = (&'static str, fn() -> io::Result<()>);
+    let cases: [Row; 2] = [
+        (
+            "analysis_id_task_host_accepts_ids_of_released_clients",
+            analysis_id_task_host_accepts_ids_of_released_clients_case,
+        ),
+        (
+            "analysis_id_task_remote_analysis_and_duplicates_reach_the_host",
+            analysis_id_task_remote_analysis_and_duplicates_reach_the_host,
+        ),
     ];
-    for case in cases {
-        case()?;
+    for (case, check) in cases {
+        std::panic::catch_unwind(check)
+            .unwrap_or_else(|_| panic!("{case}"))
+            .map_err(|error| io::Error::new(error.kind(), format!("{case}: {error}")))?;
     }
     Ok(())
 }

@@ -219,12 +219,18 @@ mod tests {
 
     #[test]
     fn android_task_host_state_encoding_keeps_both_conditions() {
-        let cases: [fn(); 2] = [
-            android_task_host_state_encoding_keeps_both_conditions_case,
-            android_background_task_defer_bit_is_independent_of_conditions,
+        let cases: [(&str, fn()); 2] = [
+            (
+                "android_task_host_state_encoding_keeps_both_conditions",
+                android_task_host_state_encoding_keeps_both_conditions_case,
+            ),
+            (
+                "android_background_task_defer_bit_is_independent_of_conditions",
+                android_background_task_defer_bit_is_independent_of_conditions,
+            ),
         ];
-        for case in cases {
-            case();
+        for (case, check) in cases {
+            std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
         }
     }
 

@@ -31,12 +31,18 @@ fn rights_event(offer_id: &str, rights: Option<ConnectionRights>) -> DiscoveryEv
 
 #[test]
 fn abgleich_task_offer_book_names_the_rights_of_a_running_offer() {
-    let cases: [fn(); 2] = [
-        abgleich_task_offer_book_names_the_rights_of_a_running_offer_case,
-        abgleich_task_offer_book_offer_without_rights_waits_and_other_offers_stay_apart,
+    let cases: [(&str, fn()); 2] = [
+        (
+            "abgleich_task_offer_book_names_the_rights_of_a_running_offer",
+            abgleich_task_offer_book_names_the_rights_of_a_running_offer_case,
+        ),
+        (
+            "abgleich_task_offer_book_offer_without_rights_waits_and_other_offers_stay_apart",
+            abgleich_task_offer_book_offer_without_rights_waits_and_other_offers_stay_apart,
+        ),
     ];
-    for case in cases {
-        case();
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
     }
 }
 

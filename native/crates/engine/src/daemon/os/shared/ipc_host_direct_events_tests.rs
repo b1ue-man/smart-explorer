@@ -73,12 +73,18 @@ fn repeated_transient_event_is_retained_only_once() {
 
 #[test]
 fn stale_group_is_discarded_while_current_generation_group_progresses() {
-    let cases: [fn(); 2] = [
-        stale_group_is_discarded_while_current_generation_group_progresses_case,
-        stale_generation_is_discarded_without_running_persistence,
+    let cases: [(&str, fn()); 2] = [
+        (
+            "stale_group_is_discarded_while_current_generation_group_progresses",
+            stale_group_is_discarded_while_current_generation_group_progresses_case,
+        ),
+        (
+            "stale_generation_is_discarded_without_running_persistence",
+            stale_generation_is_discarded_without_running_persistence,
+        ),
     ];
-    for case in cases {
-        case();
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
     }
 }
 

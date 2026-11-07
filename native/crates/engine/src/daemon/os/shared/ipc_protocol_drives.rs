@@ -221,13 +221,22 @@ mod tests {
 
     #[test]
     fn drive_requests_keep_their_wire_form() {
-        let cases: [fn(); 3] = [
-            drive_requests_keep_their_wire_form_case,
-            peek_requests_follow_the_drive_wire_form,
-            devices_wire_requests_keep_their_form,
+        let cases: [(&str, fn()); 3] = [
+            (
+                "drive_requests_keep_their_wire_form",
+                drive_requests_keep_their_wire_form_case,
+            ),
+            (
+                "peek_requests_follow_the_drive_wire_form",
+                peek_requests_follow_the_drive_wire_form,
+            ),
+            (
+                "devices_wire_requests_keep_their_form",
+                devices_wire_requests_keep_their_form,
+            ),
         ];
-        for case in cases {
-            case();
+        for (case, check) in cases {
+            std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
         }
     }
 

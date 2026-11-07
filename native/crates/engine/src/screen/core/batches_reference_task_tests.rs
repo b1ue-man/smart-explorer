@@ -3,12 +3,18 @@ use super::*;
 
 #[test]
 fn batches_task_b6_presentation_requires_sent_current_gop() {
-    let cases: [fn(); 2] = [
-        batches_task_b6_presentation_requires_sent_current_gop_case,
-        batches_task_b6_presentation_invalidation_requires_new_reference,
+    let cases: [(&str, fn()); 2] = [
+        (
+            "batches_task_b6_presentation_requires_sent_current_gop",
+            batches_task_b6_presentation_requires_sent_current_gop_case,
+        ),
+        (
+            "batches_task_b6_presentation_invalidation_requires_new_reference",
+            batches_task_b6_presentation_invalidation_requires_new_reference,
+        ),
     ];
-    for case in cases {
-        case();
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
     }
 }
 

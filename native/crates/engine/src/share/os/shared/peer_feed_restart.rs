@@ -136,14 +136,26 @@ mod tests {
 
     #[test]
     fn akku_task_low_power_holds_no_feed_connection_without_a_tunnel_in_use() {
-        let cases: [fn(); 4] = [
-            akku_task_low_power_holds_no_feed_connection_without_a_tunnel_in_use_case,
-            akku_task_lost_feed_backs_off_and_an_event_of_the_device_retries_at_once,
-            akku_task_refused_feed_waits_for_a_relation_change_of_that_device,
-            akku_task_running_feed_follows_a_changed_target_or_service,
+        let cases: [(&str, fn()); 4] = [
+            (
+                "akku_task_low_power_holds_no_feed_connection_without_a_tunnel_in_use",
+                akku_task_low_power_holds_no_feed_connection_without_a_tunnel_in_use_case,
+            ),
+            (
+                "akku_task_lost_feed_backs_off_and_an_event_of_the_device_retries_at_once",
+                akku_task_lost_feed_backs_off_and_an_event_of_the_device_retries_at_once,
+            ),
+            (
+                "akku_task_refused_feed_waits_for_a_relation_change_of_that_device",
+                akku_task_refused_feed_waits_for_a_relation_change_of_that_device,
+            ),
+            (
+                "akku_task_running_feed_follows_a_changed_target_or_service",
+                akku_task_running_feed_follows_a_changed_target_or_service,
+            ),
         ];
-        for case in cases {
-            case();
+        for (case, check) in cases {
+            std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
         }
     }
 

@@ -7,7 +7,7 @@ use crate::vfs::{Backend, BackendHandle, Scheme, VfsMeta, VfsResult};
 use std::collections::HashMap;
 use std::io::{self, Read, Write};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Barrier, Mutex};
 use std::time::Duration;
 
 struct MetadataBackend {
@@ -257,7 +257,7 @@ fn remote_drive_task_startup_walk_is_root_only_and_background_batches_are_bounde
         ]
     );
     // Case "background stop": a background preload stops between two targets.
-    {
+    fn background_stop() -> io::Result<()> {
         let temporary = tempfile::tempdir()?;
         let backend = MetadataBackend::wide_tree(12);
         let handle: BackendHandle = backend.clone();
@@ -287,7 +287,10 @@ fn remote_drive_task_startup_walk_is_root_only_and_background_batches_are_bounde
             1,
             "background stop between targets"
         );
+        Ok(())
     }
+    background_stop()
+        .map_err(|error| io::Error::new(error.kind(), format!("background stop: {error}")))?;
     Ok(())
 }
 
@@ -370,6 +373,27 @@ fn remote_drive_task_failed_refresh_keeps_last_complete_snapshot() -> io::Result
 #[test]
 fn remote_drive_task_cold_stat_avoids_listing_and_snapshot_supersedes_point_cache() -> io::Result<()>
 {
+    type Row = (&'static str, fn() -> io::Result<()>);
+    let cases: [Row; 2] = [
+        (
+            "remote_drive_task_cold_stat_avoids_listing_and_snapshot_supersedes_point_cache",
+            remote_drive_task_cold_stat_avoids_listing_and_snapshot_supersedes_point_cache_case,
+        ),
+        (
+            "remote_drive_task_concurrent_directory_misses_share_one_remote_load",
+            remote_drive_task_concurrent_directory_misses_share_one_remote_load,
+        ),
+    ];
+    for (case, check) in cases {
+        std::panic::catch_unwind(check)
+            .unwrap_or_else(|_| panic!("{case}"))
+            .map_err(|error| io::Error::new(error.kind(), format!("{case}: {error}")))?;
+    }
+    Ok(())
+}
+
+fn remote_drive_task_cold_stat_avoids_listing_and_snapshot_supersedes_point_cache_case(
+) -> io::Result<()> {
     let temporary = tempfile::tempdir()?;
     let backend = MetadataBackend::tree(Duration::ZERO);
     let handle: BackendHandle = backend.clone();
@@ -407,6 +431,38 @@ fn remote_drive_task_cold_stat_avoids_listing_and_snapshot_supersedes_point_cach
     assert_eq!(engine.stat_cached(r"\Alpha\note.md")?.size, 99);
     assert_eq!(backend.lists.load(Ordering::SeqCst), 1);
     assert_eq!(backend.stats.load(Ordering::SeqCst), 2);
+    Ok(())
+}
+
+fn remote_drive_task_concurrent_directory_misses_share_one_remote_load() -> io::Result<()> {
+    let temporary = tempfile::tempdir()?;
+    let backend = MetadataBackend::tree(Duration::from_millis(40));
+    let handle: BackendHandle = backend.clone();
+    let engine = Arc::new(MountEngine::open_host_cache(
+        MountRuntimeConfig::new(
+            MountId::parse("metadata-single-flight")?,
+            MountMode::ReadOnly,
+        )
+        .with_metadata_policy(MountMetadataPolicy::new(0)?),
+        handle,
+        temporary.path(),
+    )?);
+    let barrier = Arc::new(Barrier::new(3));
+    let mut workers = Vec::new();
+    for _ in 0..2 {
+        let engine = Arc::clone(&engine);
+        let barrier = Arc::clone(&barrier);
+        workers.push(std::thread::spawn(move || {
+            barrier.wait();
+            engine.list_dir(r"\").map(|entries| entries.len())
+        }));
+    }
+    barrier.wait();
+    for worker in workers {
+        assert_eq!(worker.join().unwrap()?, 3);
+    }
+    assert_eq!(backend.lists.load(Ordering::SeqCst), 1);
+    assert_eq!(backend.stats.load(Ordering::SeqCst), 1);
     Ok(())
 }
 

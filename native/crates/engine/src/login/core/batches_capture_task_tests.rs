@@ -181,12 +181,18 @@ fn batches_task_login_capture_reader_rejects_wrong_cookie_and_pixel_probe() {
 }
 #[test]
 fn batches_task_login_capture_eof_exit_and_last_pixel_are_distinct_ends() {
-    let cases: [fn(); 2] = [
-        batches_task_login_capture_eof_exit_and_last_pixel_are_distinct_ends_case,
-        batches_task_login_capture_exit_still_waits_for_reader_and_close_refuses_grants,
+    let cases: [(&str, fn()); 2] = [
+        (
+            "batches_task_login_capture_eof_exit_and_last_pixel_are_distinct_ends",
+            batches_task_login_capture_eof_exit_and_last_pixel_are_distinct_ends_case,
+        ),
+        (
+            "batches_task_login_capture_exit_still_waits_for_reader_and_close_refuses_grants",
+            batches_task_login_capture_exit_still_waits_for_reader_and_close_refuses_grants,
+        ),
     ];
-    for case in cases {
-        case();
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
     }
 }
 

@@ -412,12 +412,21 @@ mod task_tests {
     /// hold every transfer slot; a listing still enters at once.
     #[test]
     fn speed_task_drive_gate_keeps_a_slot_for_metadata_behind_streams() -> io::Result<()> {
-        let cases: [fn() -> io::Result<()>; 2] = [
-            speed_task_drive_gate_keeps_a_slot_for_metadata_behind_streams_case,
-            mount_vault_task_metadata_takes_the_slot_transfers_cannot,
+        type Row = (&'static str, fn() -> io::Result<()>);
+        let cases: [Row; 2] = [
+            (
+                "speed_task_drive_gate_keeps_a_slot_for_metadata_behind_streams",
+                speed_task_drive_gate_keeps_a_slot_for_metadata_behind_streams_case,
+            ),
+            (
+                "mount_vault_task_metadata_takes_the_slot_transfers_cannot",
+                mount_vault_task_metadata_takes_the_slot_transfers_cannot,
+            ),
         ];
-        for case in cases {
-            case()?;
+        for (case, check) in cases {
+            std::panic::catch_unwind(check)
+                .unwrap_or_else(|_| panic!("{case}"))
+                .map_err(|error| io::Error::new(error.kind(), format!("{case}: {error}")))?;
         }
         Ok(())
     }

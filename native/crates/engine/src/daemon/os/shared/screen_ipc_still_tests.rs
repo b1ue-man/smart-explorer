@@ -139,12 +139,18 @@ fn screen_task_ipc_still_client_lists_windows_and_ends_the_session() {
 
 #[test]
 fn screen_task_ipc_still_client_names_refusals_by_code() {
-    let cases: [fn(); 2] = [
-        screen_task_ipc_still_client_names_refusals_by_code_case,
-        screen_task_ipc_still_client_reports_a_paused_source,
+    let cases: [(&str, fn()); 2] = [
+        (
+            "screen_task_ipc_still_client_names_refusals_by_code",
+            screen_task_ipc_still_client_names_refusals_by_code_case,
+        ),
+        (
+            "screen_task_ipc_still_client_reports_a_paused_source",
+            screen_task_ipc_still_client_reports_a_paused_source,
+        ),
     ];
-    for case in cases {
-        case();
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
     }
 }
 

@@ -110,12 +110,18 @@ fn installed(outcome: Option<DiscoveryRelationOutcome>) {
 
 #[test]
 fn review_task_persisted_pairing_stays_reportable_after_malformed_commit() {
-    let cases: [fn(); 2] = [
-        review_task_persisted_pairing_stays_reportable_after_malformed_commit_case,
-        review_task_premature_completion_preserves_the_installed_pairing_outcome,
+    let cases: [(&str, fn()); 2] = [
+        (
+            "review_task_persisted_pairing_stays_reportable_after_malformed_commit",
+            review_task_persisted_pairing_stays_reportable_after_malformed_commit_case,
+        ),
+        (
+            "review_task_premature_completion_preserves_the_installed_pairing_outcome",
+            review_task_premature_completion_preserves_the_installed_pairing_outcome,
+        ),
     ];
-    for case in cases {
-        case();
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
     }
 }
 
@@ -157,12 +163,18 @@ fn review_task_premature_completion_preserves_the_installed_pairing_outcome() {
 
 #[test]
 fn review_task_empty_pin_is_rejected_by_publishing_and_connecting_ports() {
-    let cases: [fn(); 2] = [
-        review_task_empty_pin_is_rejected_by_publishing_and_connecting_ports_case,
-        review_task_empty_pin_is_rejected_at_the_crypto_port_boundary,
+    let cases: [(&str, fn()); 2] = [
+        (
+            "review_task_empty_pin_is_rejected_by_publishing_and_connecting_ports",
+            review_task_empty_pin_is_rejected_by_publishing_and_connecting_ports_case,
+        ),
+        (
+            "review_task_empty_pin_is_rejected_at_the_crypto_port_boundary",
+            review_task_empty_pin_is_rejected_at_the_crypto_port_boundary,
+        ),
     ];
-    for case in cases {
-        case();
+    for (case, check) in cases {
+        std::panic::catch_unwind(check).unwrap_or_else(|_| panic!("{case}"));
     }
 }
 

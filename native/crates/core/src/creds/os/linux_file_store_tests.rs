@@ -96,29 +96,29 @@ fn luecken_task_records_on_disk_contain_no_plaintext() {
         ("modes", "secret"),
     ] {
         let (root, store) = fixture();
-        store.set("account", secret).unwrap();
-        let record = fs::read(store.record_path("account")).unwrap();
+        store.set("account", secret).expect(case);
+        let record = fs::read(store.record_path("account")).expect(case);
         assert!(!contains(&record, secret.as_bytes()), "{case}");
         assert!(record.starts_with(b"SESEC02\0"), "{case}");
-        let descriptor = fs::read(store.directory.join("keyring-v2")).unwrap();
+        let descriptor = fs::read(store.directory.join("keyring-v2")).expect(case);
         assert!(!contains(&descriptor, secret.as_bytes()), "{case}");
         let key_file = root.path().join("secrets-v1.kek");
         assert_eq!(
-            fs::metadata(&key_file).unwrap().mode() & 0o7777,
+            fs::metadata(&key_file).expect(case).mode() & 0o7777,
             0o600,
             "{case}"
         );
-        let directory = fs::metadata(&store.directory).unwrap();
-        let lock = fs::metadata(store.directory.join("store.lock")).unwrap();
-        let record_meta = fs::metadata(store.record_path("account")).unwrap();
+        let directory = fs::metadata(&store.directory).expect(case);
+        let lock = fs::metadata(store.directory.join("store.lock")).expect(case);
+        let record_meta = fs::metadata(store.record_path("account")).expect(case);
         assert_eq!(directory.mode() & 0o7777, 0o700, "{case}");
         assert_eq!(lock.mode() & 0o7777, 0o600, "{case}");
         assert_eq!(record_meta.mode() & 0o7777, 0o600, "{case}");
         assert_eq!(lock.nlink(), 1, "{case}");
         assert_eq!(record_meta.nlink(), 1, "{case}");
-        let stage_free = fs::read_dir(&store.directory).unwrap().all(|entry| {
+        let stage_free = fs::read_dir(&store.directory).expect(case).all(|entry| {
             !entry
-                .unwrap()
+                .expect(case)
                 .file_name()
                 .to_string_lossy()
                 .starts_with(".stage-")
@@ -233,7 +233,8 @@ fn corruption_truncation_and_oversize_are_explicit_errors() {
     // Rows: a stored record damaged in one way. Reading it reports that damage
     // as an explicit error that names it. A version byte the store does not
     // know is rejected before any use.
-    let damages: [(&str, fn(&mut Vec<u8>), &str); 3] = [
+    type Row = (&'static str, fn(&mut Vec<u8>), &'static str);
+    let damages: [Row; 3] = [
         (
             "corrupt",
             |bytes: &mut Vec<u8>| {
@@ -250,12 +251,12 @@ fn corruption_truncation_and_oversize_are_explicit_errors() {
         ("version", |bytes: &mut Vec<u8>| bytes[8] = 9, "version"),
     ];
     for (account, damage, message) in damages {
-        store.set(account, "secret").unwrap();
+        store.set(account, "secret").expect(account);
         let path = store.record_path(account);
-        let mut bytes = fs::read(&path).unwrap();
+        let mut bytes = fs::read(&path).expect(account);
         damage(&mut bytes);
         write_private(&path, &bytes);
-        let error = store.get(account).unwrap_err();
+        let error = store.get(account).expect_err(account);
         assert!(error.contains(message), "{account}: {error}");
     }
 
