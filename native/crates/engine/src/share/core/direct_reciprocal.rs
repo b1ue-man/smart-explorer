@@ -72,6 +72,10 @@ impl Drop for DirectRelationMaterial {
 pub struct DirectReciprocalPeer {
     identity: DirectPeerIdentity,
     material: DirectRelationMaterial,
+    /// E17: offered by the authenticated peer itself in place of the data
+    /// this device holds for it (renewal); only the initiator of a kind-5
+    /// hello sets it (`direct_reciprocal_session.rs`).
+    renewal: bool,
 }
 
 impl DirectReciprocalPeer {
@@ -82,7 +86,11 @@ impl DirectReciprocalPeer {
         identity
             .validate()
             .map_err(DirectReciprocalError::InvalidIdentity)?;
-        Ok(Self { identity, material })
+        Ok(Self {
+            identity,
+            material,
+            renewal: false,
+        })
     }
 
     pub fn from_direct_code(
@@ -104,6 +112,7 @@ impl DirectReciprocalPeer {
         Ok(Self {
             identity,
             material: DirectRelationMaterial::new(lookup_id, secret)?,
+            renewal: false,
         })
     }
 
@@ -113,6 +122,16 @@ impl DirectReciprocalPeer {
 
     pub fn material(&self) -> &DirectRelationMaterial {
         &self.material
+    }
+
+    /// Whether the material replaces the data this device holds (E17).
+    pub fn is_renewal(&self) -> bool {
+        self.renewal
+    }
+
+    pub(super) fn into_renewal(mut self) -> Self {
+        self.renewal = true;
+        self
     }
 }
 
@@ -145,54 +164,8 @@ pub enum DirectReciprocalError {
     PolicyDenied(DirectReciprocalPolicyDenied),
 }
 
-impl fmt::Display for DirectReciprocalError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::InvalidIdentity(error) => {
-                write!(formatter, "invalid authenticated Direct peer: {error}")
-            }
-            Self::InvalidMaterial(error) => {
-                write!(formatter, "invalid Direct relation material: {error}")
-            }
-            Self::Conflict(DirectReciprocalConflict::ContactIdentity { device_id }) => {
-                write!(
-                    formatter,
-                    "Direct contact identity conflicts for device {device_id}"
-                )
-            }
-            Self::Conflict(DirectReciprocalConflict::GrantIdentity { device_id }) => {
-                write!(
-                    formatter,
-                    "Direct grant identity conflicts for device {device_id}"
-                )
-            }
-            Self::Conflict(DirectReciprocalConflict::RelationMaterial { device_id }) => {
-                write!(
-                    formatter,
-                    "Direct relation material conflicts for device {device_id}"
-                )
-            }
-            Self::PolicyDenied(DirectReciprocalPolicyDenied::ContactIgnored { device_id }) => {
-                write!(
-                    formatter,
-                    "Direct contact is explicitly ignored for device {device_id}"
-                )
-            }
-            Self::PolicyDenied(DirectReciprocalPolicyDenied::GrantIgnored { device_id }) => {
-                write!(
-                    formatter,
-                    "Direct grant is explicitly ignored for device {device_id}"
-                )
-            }
-            Self::PolicyDenied(DirectReciprocalPolicyDenied::PeerRemoved { device_id }) => {
-                write!(
-                    formatter,
-                    "Direct peer {device_id} was removed by the user; pair it again deliberately"
-                )
-            }
-        }
-    }
-}
+#[path = "direct_reciprocal_display.rs"]
+mod display;
 
 impl std::error::Error for DirectReciprocalError {}
 

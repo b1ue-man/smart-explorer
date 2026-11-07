@@ -17,9 +17,10 @@ use sha2::{Digest, Sha256};
 
 use crate::share::backend::ShareIrohNode;
 use crate::share::core::{eio, hex};
+use crate::share::identity::code_renewal_registry::{retiring_lookups, sync_published};
 use crate::share::profiles::ShareProfiles;
 use crate::share::signal_connection::{send_line, SignalConnection};
-use crate::share::signal_presence::build_presence;
+use crate::share::signal_presence::{build_presence, build_retiring_presence};
 use crate::share::types::{DirectAccessState, DirectContact, PeerPresence, ShareAuthState};
 use crate::share::wire::ClientMsg;
 
@@ -100,6 +101,7 @@ pub(in crate::share) fn publish_all(
             },
         )?;
     }
+    publish_retiring(stream, &state, iroh, proofs)?;
     for contact in state
         .direct_contacts
         .iter()
@@ -145,6 +147,41 @@ pub(in crate::share) fn publish_all(
                 },
             )?;
         }
+    }
+    Ok(())
+}
+
+/// E17: every lookup id that runs out after a Direct-code renewal keeps a
+/// presence without direct addresses (only relay URL and node id), so its
+/// holders that have not yet switched still find this device and switch on
+/// the next reciprocal exchange. Ids that ended are withdrawn from the server.
+fn publish_retiring(
+    stream: &mut SignalConnection,
+    state: &ShareAuthState,
+    iroh: &ShareIrohNode,
+    proofs: bool,
+) -> io::Result<()> {
+    let node_id = &state.identity.node_id;
+    let mut published = Vec::new();
+    if state.direct_online {
+        for (lookup_id, secret) in retiring_lookups(node_id) {
+            let presence = build_retiring_presence(&lookup_id, &state.identity, &secret, iroh)?;
+            let access_hash = proofs
+                .then(|| access_proof(&secret, "direct", &lookup_id))
+                .flatten()
+                .map(|proof| hex(&access_hash(&proof)));
+            send_line(
+                stream,
+                &AccessClientMsg::PublishDirect {
+                    presence: &presence,
+                    access_hash,
+                },
+            )?;
+            published.push(lookup_id);
+        }
+    }
+    for lookup_id in sync_published(node_id, &published) {
+        send_line(stream, &ClientMsg::UnpublishDirect { lookup_id })?;
     }
     Ok(())
 }

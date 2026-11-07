@@ -2,6 +2,7 @@ use super::direct_ledger::DirectRequestDirection;
 use super::direct_lifecycle::DirectDecisionState;
 use super::direct_protocol::DirectPeerIdentity;
 use super::direct_protocol::DirectRequestId;
+use super::identity::code_renewal_registry::is_retiring_lookup;
 use super::identity::IdentityRepairAction;
 use super::legacy_direct_request::{
     LegacyDirectDecisionDelivery, LegacyDirectDecisionSource, LegacyDirectDecisionState,
@@ -18,10 +19,14 @@ impl ShareProfiles {
         now: i64,
     ) -> Result<usize, String> {
         self.prune_legacy_tombstones(now);
+        // E17: a lookup id that runs out after a renewal is not stale; its
+        // grant holders keep their access until they took the new data.
+        let stale_lookup =
+            |lookup_id: &str| lookup_id != current_lookup_id && !is_retiring_lookup(lookup_id);
         let stale = self
             .legacy_direct_requests
             .iter()
-            .filter(|entry| entry.lookup_id != current_lookup_id)
+            .filter(|entry| stale_lookup(&entry.lookup_id))
             .cloned()
             .collect::<Vec<_>>();
         for entry in &stale {
@@ -37,7 +42,7 @@ impl ShareProfiles {
         // The identity transaction lock prevents an old event from committing
         // after rotation, so stale entries need no capacity-consuming tombstone.
         self.legacy_direct_requests
-            .retain(|entry| entry.lookup_id == current_lookup_id);
+            .retain(|entry| !stale_lookup(&entry.lookup_id));
         Ok(stale.len())
     }
 
@@ -115,11 +120,7 @@ impl ShareProfiles {
         changed
     }
 
-    pub fn mark_legacy_revoked_for_peer(
-        &mut self,
-        peer: &DirectPeerIdentity,
-        now: i64,
-    ) -> usize {
+    pub fn mark_legacy_revoked_for_peer(&mut self, peer: &DirectPeerIdentity, now: i64) -> usize {
         let mut changed = 0;
         for entry in &mut self.legacy_direct_requests {
             if (!peer.public_key.is_empty() && entry.peer.public_key == peer.public_key

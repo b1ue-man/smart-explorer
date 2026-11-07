@@ -33,6 +33,9 @@ pub(super) mod tcp;
 #[path = "transfer_job_wire.rs"]
 pub(super) mod transfer;
 
+#[path = "ipc_protocol_code_renewal.rs"]
+mod code_renewal;
+pub use self::code_renewal::CodeRenewalView;
 #[path = "ipc_protocol_mount_capabilities.rs"]
 mod mount_capabilities;
 pub(super) use mount_capabilities::{
@@ -52,8 +55,7 @@ pub struct ShareWorkerSnapshot {
     #[serde(default)]
     pub profile_revision: crate::share::ProfileRevision,
     #[serde(default)]
-    pub exec_grant_retry:
-        Option<super::ipc_host::exec_grant_journal::ExecGrantPersistResult>,
+    pub exec_grant_retry: Option<super::ipc_host::exec_grant_journal::ExecGrantPersistResult>,
     #[serde(default)]
     pub pending_direct_requests: Vec<crate::share::PeerPresence>,
     pub running: bool,
@@ -80,6 +82,10 @@ pub struct ShareWorkerSnapshot {
     /// Absent when reading a worker predating it.
     #[serde(default)]
     pub rdp_setup: Option<crate::rdp::host_setup::SetupStatus>,
+    /// E17: a running Direct-code renewal of this device (pending devices).
+    /// Absent without one and when reading a worker predating it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code_renewal: Option<CodeRenewalView>,
 }
 
 /// Result data of a Share command that the caller needs, returned over IPC

@@ -46,15 +46,24 @@ impl ShareIdentity {
         Self::repair_action_needed_with(default_name, &mut SystemIdentityPersistence)
     }
 
+    /// „Code neu generieren“: new Direct data through the renewal transition
+    /// (E17). Every grant keeps its state; the old data stay valid for the
+    /// grant holders until each confirmed the new ones, so no contact is
+    /// lost. `complete_pending_cleanup` afterwards finds no marker and only
+    /// reloads the profiles.
     pub fn regenerate_direct_code(&mut self) -> Result<DirectCodeRotation, String> {
         let _guard = identity_transaction_guard()
             .map_err(|error| format!("Share-Identitaet sperren: {error}"))?;
         let mut storage = SystemIdentityPersistence;
-        load_ready_identity(self.device_name.clone(), Some(default_home()), &mut storage)?;
-        // The durable marker written by this mutation is completed by the GUI
-        // while the worker remains stopped. A crash before that point is safe:
-        // every production identity load completes the same cleanup first.
-        self.regenerate_direct_code_with(&mut storage)
+        let current =
+            load_ready_identity(self.device_name.clone(), Some(default_home()), &mut storage)?;
+        let renewed =
+            code_renewal_store::renew_manually(Some(default_home()), current, &mut storage)?;
+        *self = renewed;
+        Ok(DirectCodeRotation {
+            code: self.direct_code(),
+            cleanup_warning: None,
+        })
     }
 
     pub fn complete_pending_cleanup(
@@ -101,8 +110,13 @@ fn load_ready_identity(
 ) -> Result<ShareIdentity, String> {
     let profiles_home = default_home.clone();
     let identity = load_or_replace_unpaired(default_name, storage, || unpaired(profiles_home))?;
-    finish_pending_cleanup_locked(default_home, &identity, storage)?;
-    Ok(identity)
+    finish_pending_cleanup_locked(default_home.clone(), &identity, storage)?;
+    // E17: renewal after a removal, finished generations, process view.
+    Ok(code_renewal_store::settle_on_load(
+        default_home,
+        identity,
+        storage,
+    ))
 }
 
 /// What a secret of the identity file is missing from the secure store
@@ -219,6 +233,9 @@ fn append_cleanup_warning(target: &mut Option<String>, warning: String) {
 #[cfg(test)]
 #[path = "identity_store_tests.rs"]
 mod generation_tests;
+
+#[path = "code_renewal_store.rs"]
+pub(in crate::share) mod code_renewal_store;
 
 struct SystemIdentityPersistence;
 

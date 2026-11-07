@@ -294,9 +294,17 @@ impl DirectReciprocalCoordinator {
             return Err(DirectRepairScheduleError::StaleGeneration);
         }
         let key = candidate.key.clone();
+        let renewal = candidate.endpoint.presence.announces_code_renewal();
         if let Some(task) = state.tasks.get_mut(&key) {
             if task.blocked {
-                return Ok(DirectRepairScheduleOutcome::Suppressed);
+                // E17: the host announced its Direct-code renewal after this
+                // epoch's exchange ended; one more exchange takes the new data.
+                if !renewal || task.renewal_seen {
+                    return Ok(DirectRepairScheduleOutcome::Suppressed);
+                }
+                task.blocked = false;
+                task.renewal_seen = true;
+                task.due = Some(Instant::now());
             }
             task.candidate = Some(candidate);
             self.shared.wake.notify_one();
@@ -307,7 +315,9 @@ impl DirectReciprocalCoordinator {
         }
         let epoch = state.next_epoch;
         state.next_epoch = state.next_epoch.wrapping_add(1).max(1);
-        state.tasks.insert(key, RepairTask::ready(epoch, candidate));
+        let mut task = RepairTask::ready(epoch, candidate);
+        task.renewal_seen = renewal;
+        state.tasks.insert(key, task);
         self.shared.wake.notify_one();
         Ok(DirectRepairScheduleOutcome::Queued)
     }
@@ -364,6 +374,8 @@ struct RepairTask {
     due: Option<Instant>,
     running: bool,
     blocked: bool,
+    /// The host's presence announced a renewal (E17) in this epoch.
+    renewal_seen: bool,
     transient_attempt: u32,
     unsupported_attempt: u32,
 }
@@ -376,6 +388,7 @@ impl RepairTask {
             due: Some(Instant::now()),
             running: false,
             blocked: false,
+            renewal_seen: false,
             transient_attempt: 0,
             unsupported_attempt: 0,
         }

@@ -16,13 +16,23 @@ const TRANSCRIPT_DOMAIN: &[u8] = b"smart-explorer/share/direct-reciprocal/v1/tra
 const MAX_ID_BYTES: usize = 256;
 const MAX_NAME_BYTES: usize = 1024;
 const RELATION_SECRET_BYTES: usize = 32;
+/// Message kinds: 1 Hello, 2 Offer, 3 Commit, 4 Complete, 5 Hello of a
+/// device that takes over renewed relation data (E17). Kind 5 has the body
+/// of kind 1; it is sent only to a host whose signed presence announced the
+/// renewal, so a host without it never receives it.
+const KIND_RENEWAL_HELLO: u8 = 5;
+
+#[path = "direct_reciprocal_wire_error.rs"]
+mod error;
+pub use error::DirectRepairWireError;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct DirectRepairId([u8; 16]);
 
 impl DirectRepairId {
     pub fn generate() -> Result<Self, DirectRepairWireError> {
-        let mut bytes = random_bytes::<16>().map_err(|_| DirectRepairWireError::EntropyUnavailable)?;
+        let mut bytes =
+            random_bytes::<16>().map_err(|_| DirectRepairWireError::EntropyUnavailable)?;
         bytes[6] = (bytes[6] & 0x0f) | 0x40;
         bytes[8] = (bytes[8] & 0x3f) | 0x80;
         Ok(Self(bytes))
@@ -127,6 +137,8 @@ pub struct DirectRepairHello {
     pub(super) repair_id: DirectRepairId,
     pub(super) identity: DirectPeerIdentity,
     pub(super) material: DirectRepairMaterial,
+    /// The initiator accepts renewed relation data in the offer (kind 5).
+    pub(super) accepts_renewal: bool,
 }
 
 impl DirectRepairHello {
@@ -234,7 +246,11 @@ fn decode_frame_inner(bytes: &[u8]) -> Result<DirectRepairMessage, DirectRepairW
     if bytes.len() < 4 {
         return Err(DirectRepairWireError::Truncated);
     }
-    let declared = u32::from_be_bytes(bytes[..4].try_into().map_err(|_| DirectRepairWireError::Truncated)?) as usize;
+    let declared = u32::from_be_bytes(
+        bytes[..4]
+            .try_into()
+            .map_err(|_| DirectRepairWireError::Truncated)?,
+    ) as usize;
     if declared == 0 || declared > MAX_DIRECT_REPAIR_FRAME {
         return Err(DirectRepairWireError::FrameTooLarge);
     }
@@ -246,7 +262,8 @@ fn decode_frame_inner(bytes: &[u8]) -> Result<DirectRepairMessage, DirectRepairW
         return Err(DirectRepairWireError::UnsupportedVersion);
     }
     let message = match reader.byte()? {
-        1 => DirectRepairMessage::Hello(decode_hello(&mut reader)?),
+        1 => DirectRepairMessage::Hello(decode_hello(&mut reader, false)?),
+        KIND_RENEWAL_HELLO => DirectRepairMessage::Hello(decode_hello(&mut reader, true)?),
         2 => DirectRepairMessage::Offer(decode_offer(&mut reader)?),
         3 => DirectRepairMessage::Commit(decode_commit(&mut reader)?),
         4 => DirectRepairMessage::Complete(decode_complete(&mut reader)?),
@@ -265,7 +282,12 @@ fn encode_header(kind: u8, out: &mut Vec<u8>) {
 }
 
 fn encode_hello(message: &DirectRepairHello, out: &mut Vec<u8>) {
-    encode_header(1, out);
+    let kind = if message.accepts_renewal {
+        KIND_RENEWAL_HELLO
+    } else {
+        1
+    };
+    encode_header(kind, out);
     out.extend_from_slice(message.repair_id.as_bytes());
     encode_identity(&message.identity, out);
     encode_material(&message.material, out);
@@ -319,11 +341,15 @@ fn encode_outcome(outcome: DirectRepairPersisted) -> u8 {
     }
 }
 
-fn decode_hello(reader: &mut Reader<'_>) -> Result<DirectRepairHello, DirectRepairWireError> {
+fn decode_hello(
+    reader: &mut Reader<'_>,
+    accepts_renewal: bool,
+) -> Result<DirectRepairHello, DirectRepairWireError> {
     Ok(DirectRepairHello {
         repair_id: DirectRepairId::from_bytes(reader.array()?)?,
         identity: decode_identity(reader)?,
         material: decode_material(reader)?,
+        accepts_renewal,
     })
 }
 
@@ -420,14 +446,12 @@ impl<'a> Reader<'a> {
             .get(self.offset..end)
             .ok_or(DirectRepairWireError::Truncated)?;
         self.offset = end;
-        value.try_into().map_err(|_| DirectRepairWireError::Truncated)
+        value
+            .try_into()
+            .map_err(|_| DirectRepairWireError::Truncated)
     }
 
-    fn string(
-        &mut self,
-        max: usize,
-        allow_empty: bool,
-    ) -> Result<String, DirectRepairWireError> {
+    fn string(&mut self, max: usize, allow_empty: bool) -> Result<String, DirectRepairWireError> {
         let len = u16::from_be_bytes(self.array()?) as usize;
         if len > max || (!allow_empty && len == 0) {
             return Err(DirectRepairWireError::InvalidField);
@@ -450,40 +474,3 @@ impl<'a> Reader<'a> {
         self.offset == self.bytes.len()
     }
 }
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DirectRepairWireError {
-    EntropyUnavailable,
-    InvalidRepairId,
-    FrameTooLarge,
-    InvalidLength,
-    Truncated,
-    UnsupportedVersion,
-    UnknownMessage,
-    InvalidIdentity,
-    InvalidMaterial,
-    InvalidOutcome,
-    InvalidField,
-    TrailingData,
-}
-
-impl fmt::Display for DirectRepairWireError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(match self {
-            Self::EntropyUnavailable => "secure repair id generation failed",
-            Self::InvalidRepairId => "invalid repair id",
-            Self::FrameTooLarge => "repair frame exceeds its fixed bound",
-            Self::InvalidLength => "invalid repair frame length",
-            Self::Truncated => "truncated repair frame",
-            Self::UnsupportedVersion => "unsupported repair wire version",
-            Self::UnknownMessage => "unknown repair message",
-            Self::InvalidIdentity => "invalid repair identity",
-            Self::InvalidMaterial => "invalid repair relation material",
-            Self::InvalidOutcome => "invalid repair persistence outcome",
-            Self::InvalidField => "invalid repair field",
-            Self::TrailingData => "repair frame contains trailing data",
-        })
-    }
-}
-
-impl std::error::Error for DirectRepairWireError {}

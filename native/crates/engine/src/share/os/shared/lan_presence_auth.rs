@@ -1,6 +1,10 @@
 //! Host-side credential snapshot for private, signed LAN announcements.
+use std::collections::HashSet;
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use super::identity::code_renewal_registry::retiring_lookups;
+use super::lan_presence::RetiringLanAnnouncement;
 use super::lan_privacy::{self, LanProof};
 use super::{
     DirectAccessState, DirectContact, LanAnnouncement, LanSighting, ShareIdentity, ShareProfiles,
@@ -25,6 +29,10 @@ pub struct LanAuthenticator {
     refreshed_at: Option<Instant>,
     own_node: Option<String>,
     ids: std::collections::HashMap<String, usize>,
+    /// Contacts whose own announcement arrived sealed (`v=3`) and verified:
+    /// they read `v=3`. While one audience contact is not among them, the
+    /// plain `v=2` record is announced next to the sealed one.
+    sealed_readers: Mutex<HashSet<String>>,
 }
 
 impl LanAuthenticator {
@@ -36,6 +44,7 @@ impl LanAuthenticator {
             refreshed_at: None,
             own_node: None,
             ids: std::collections::HashMap::new(),
+            sealed_readers: Mutex::new(HashSet::new()),
         }
     }
 
@@ -54,6 +63,9 @@ impl LanAuthenticator {
                 node(contact).map(|node| (contact.id.clone(), node, contact.lookup_id.clone()))
             })
             .collect();
+        if let Ok(mut readers) = self.sealed_readers.lock() {
+            readers.retain(|id| audience.iter().any(|(contact_id, _, _)| contact_id == id));
+        }
         if audience.is_empty() || own_node.is_none() {
             self.identity = None;
             self.principals.clear();
@@ -146,18 +158,27 @@ impl LanAuthenticator {
             uplink,
             seen_at: now,
         };
-        let proof = lan_privacy::make_proof(
+        let mut proof = lan_privacy::make_proof(
             &sighting,
             epoch,
             now.saturating_add(lan_privacy::PROOF_LIFETIME_SECS),
             &identity.iroh_secret,
         );
+        proof.sealed = lan_privacy::seal_proof(&sighting, &proof, &identity.direct_secret);
+        let all_read_sealed = self.sealed_readers.lock().is_ok_and(|readers| {
+            self.principals
+                .iter()
+                .all(|principal| readers.contains(&principal.contact_id))
+        });
+        let retiring = retiring_announcements(identity, &sighting, epoch, now);
         Some((
             LanAnnouncement {
                 hashed_id: id,
                 p4: sighting.p4,
                 p6: sighting.p6,
                 uplink,
+                plain_v2: proof.sealed.is_none() || !all_read_sealed,
+                retiring,
             },
             proof,
         ))
@@ -170,9 +191,53 @@ impl LanAuthenticator {
         now: i64,
     ) -> Option<String> {
         let principal = self.principals.get(*self.ids.get(&sighting.id)?)?;
-        lan_privacy::verify_sighting(sighting, proof, &principal.node, &principal.secret, now)
-            .then(|| principal.contact_id.clone())
+        if !lan_privacy::verify_any_sighting(
+            sighting,
+            proof,
+            &principal.node,
+            &principal.secret,
+            now,
+        ) {
+            return None;
+        }
+        if proof.sealed.is_some() {
+            if let Ok(mut readers) = self.sealed_readers.lock() {
+                readers.insert(principal.contact_id.clone());
+            }
+        }
+        Some(principal.contact_id.clone())
     }
+}
+
+/// E17: the same facts under the rotating id and seal of every lookup id
+/// that runs out after a Direct-code renewal.
+fn retiring_announcements(
+    identity: &ShareIdentity,
+    current: &LanSighting,
+    epoch: i64,
+    now: i64,
+) -> Vec<RetiringLanAnnouncement> {
+    retiring_lookups(&identity.node_id)
+        .into_iter()
+        .filter_map(|(_, secret)| {
+            let id = lan_privacy::rotating_id(&identity.node_id, &secret, epoch)?;
+            let sighting = LanSighting {
+                id: id.clone(),
+                ..current.clone()
+            };
+            let mut proof = lan_privacy::make_proof(
+                &sighting,
+                epoch,
+                now.saturating_add(lan_privacy::PROOF_LIFETIME_SECS),
+                &identity.iroh_secret,
+            );
+            proof.sealed = lan_privacy::seal_proof(&sighting, &proof, &secret);
+            Some(RetiringLanAnnouncement {
+                hashed_id: id,
+                proof,
+            })
+        })
+        .collect()
 }
 
 fn node(contact: &DirectContact) -> Option<String> {
@@ -185,3 +250,7 @@ fn node(contact: &DirectContact) -> Option<String> {
             .or_else(|| contact.accepted_public_key.clone())
     }
 }
+
+#[cfg(test)]
+#[path = "lan_presence_auth_task_tests.rs"]
+pub(crate) mod task_tests;

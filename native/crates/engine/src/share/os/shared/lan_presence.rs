@@ -11,10 +11,17 @@ use std::sync::Mutex;
 use crossbeam_channel::{bounded, Receiver, TrySendError};
 
 use super::lan_presence_match::{LanSighting, LAN_PRESENCE_VERSION};
-use super::lan_privacy::{LanProof, MAX_ADDRESSES};
+use super::lan_privacy::{LanProof, SealedLanProof, MAX_ADDRESSES, SEAL_NONCE_BYTES};
 
 const SERVICE: &str = "_se-share._udp.local.";
 const INSTANCE_PREFIX: &str = "se-";
+/// Instance of the sealed `v=3` record. Older receivers find no hashed id in
+/// this name and drop its 32-character id as an unknown `v=1` sighting.
+const SEALED_INSTANCE_PREFIX: &str = "se3-";
+/// TXT values stay under the DNS-SD 255-byte bound; the sealed advisory is
+/// split into at most this many base64url chunks `c0..`.
+const SEALED_CHUNK_CHARS: usize = 200;
+const MAX_SEALED_CHUNKS: usize = 8;
 
 /// Seconds between the mDNS daemon's checks of the network interfaces.
 ///
@@ -33,7 +40,19 @@ pub struct LanAnnouncement {
     pub p4: u16,
     pub p6: u16,
     pub uplink: bool,
+    /// Also announce the plain `v=2` record next to the sealed `v=3` one:
+    /// some audience contact has not yet shown that it reads `v=3`.
+    pub plain_v2: bool,
+    /// E17: the same announcement under each lookup id that runs out after
+    /// a Direct-code renewal (own rotating id and seal from its secret), so
+    /// holders that have not yet switched still find this device in the LAN.
+    pub retiring: Vec<RetiringLanAnnouncement>,
 }
+
+#[path = "lan_presence_retiring.rs"]
+mod retiring;
+pub use retiring::RetiringLanAnnouncement;
+use retiring::{same_proof, same_records};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LanEvent {
@@ -50,7 +69,7 @@ pub enum LanEvent {
 pub struct LanPresence {
     events: Receiver<LanEvent>,
     daemon: mdns_sd::ServiceDaemon,
-    announced: Mutex<Option<(String, LanAnnouncement, Option<LanProof>)>>,
+    announced: Mutex<Option<(Vec<String>, LanAnnouncement, Option<LanProof>)>>,
 }
 
 impl LanPresence {
@@ -125,49 +144,64 @@ impl LanPresence {
             .lock()
             .map_err(|_| "mDNS-Ankuendigung ist gesperrt".to_string())?;
         if guard.as_ref().is_some_and(|(_, current, previous)| {
-            current == announcement
+            same_records(current, announcement)
                 && match (previous, proof) {
-                    (Some(previous), Some(proof)) => {
-                        previous.epoch == proof.epoch
-                            && previous.addresses == proof.addresses
-                            && previous.expires_at > super::core::now_secs().saturating_add(60)
-                    }
+                    (Some(previous), Some(proof)) => same_proof(previous, proof),
                     (None, None) => true,
                     _ => false,
                 }
         }) {
             return Ok(());
         }
-        if let Some((fullname, _, _)) = guard.take() {
-            let _ = self.daemon.unregister(&fullname);
-        }
-        let instance = format!("{INSTANCE_PREFIX}{}", announcement.hashed_id);
-        let host = format!("{instance}.local.");
-        let mut properties: HashMap<String, String> = HashMap::from([
-            (
-                "v".to_string(),
-                if proof.is_some() {
-                    "2"
-                } else {
-                    LAN_PRESENCE_VERSION
-                }
-                .to_string(),
-            ),
-            ("id".to_string(), announcement.hashed_id.clone()),
-            ("p4".to_string(), announcement.p4.to_string()),
-            ("p6".to_string(), announcement.p6.to_string()),
-            ("up".to_string(), u8::from(announcement.uplink).to_string()),
-        ]);
-        if let Some(proof) = proof {
-            properties.insert("e".into(), proof.epoch.to_string());
-            properties.insert("x".into(), proof.expires_at.to_string());
-            properties.insert("s".into(), proof.signature.clone());
-            // Each TXT value remains under the DNS-SD 255-byte bound even
-            // when a host has many IPv6 addresses.
-            for (index, address) in proof.addresses.iter().take(MAX_ADDRESSES).enumerate() {
-                properties.insert(format!("a{index}"), address.to_string());
+        if let Some((fullnames, _, _)) = guard.take() {
+            for fullname in fullnames {
+                let _ = self.daemon.unregister(&fullname);
             }
         }
+        let mut records = Vec::new();
+        match proof {
+            None => records.push((INSTANCE_PREFIX, plain_properties(announcement, None))),
+            Some(proof) => {
+                if let Some(sealed) = &proof.sealed {
+                    records.push((
+                        SEALED_INSTANCE_PREFIX,
+                        sealed_properties(announcement, proof, sealed),
+                    ));
+                }
+                if announcement.plain_v2 || proof.sealed.is_none() {
+                    records.push((INSTANCE_PREFIX, plain_properties(announcement, Some(proof))));
+                }
+            }
+        }
+        let mut views = vec![announcement.clone(); records.len()];
+        if proof.is_some() {
+            retiring::append_records(announcement, &mut records, &mut views);
+        }
+        let mut fullnames = Vec::new();
+        for ((prefix, properties), view) in records.into_iter().zip(&views) {
+            match self.register(prefix, view, properties) {
+                Ok(fullname) => fullnames.push(fullname),
+                Err(error) => {
+                    // Never leave a record behind that no later call removes.
+                    for fullname in fullnames {
+                        let _ = self.daemon.unregister(&fullname);
+                    }
+                    return Err(error);
+                }
+            }
+        }
+        *guard = Some((fullnames, announcement.clone(), proof.cloned()));
+        Ok(())
+    }
+
+    fn register(
+        &self,
+        prefix: &str,
+        announcement: &LanAnnouncement,
+        properties: HashMap<String, String>,
+    ) -> Result<String, String> {
+        let instance = format!("{prefix}{}", announcement.hashed_id);
+        let host = format!("{instance}.local.");
         let port = if announcement.p4 != 0 {
             announcement.p4
         } else {
@@ -180,14 +214,15 @@ impl LanPresence {
         self.daemon
             .register(info)
             .map_err(|error| format!("mDNS-Ankuendigung fehlgeschlagen: {error}"))?;
-        *guard = Some((fullname, announcement.clone(), proof.cloned()));
-        Ok(())
+        Ok(fullname)
     }
 
     pub fn withdraw(&self) {
         if let Ok(mut guard) = self.announced.lock() {
-            if let Some((fullname, _, _)) = guard.take() {
-                let _ = self.daemon.unregister(&fullname);
+            if let Some((fullnames, _, _)) = guard.take() {
+                for fullname in fullnames {
+                    let _ = self.daemon.unregister(&fullname);
+                }
             }
         }
     }
@@ -215,6 +250,84 @@ fn configure_daemon(daemon: &mdns_sd::ServiceDaemon) -> Result<(), String> {
             mdns_sd::IfKind::LoopbackV6,
         ])
         .map_err(setup_error)
+}
+
+fn clear_properties(announcement: &LanAnnouncement, version: &str) -> HashMap<String, String> {
+    HashMap::from([
+        ("v".to_string(), version.to_string()),
+        ("id".to_string(), announcement.hashed_id.clone()),
+        ("p4".to_string(), announcement.p4.to_string()),
+        ("p6".to_string(), announcement.p6.to_string()),
+        ("up".to_string(), u8::from(announcement.uplink).to_string()),
+    ])
+}
+
+/// `v=1` without proof, `v=2` with the signature and the addresses in clear.
+fn plain_properties(
+    announcement: &LanAnnouncement,
+    proof: Option<&LanProof>,
+) -> HashMap<String, String> {
+    let version = if proof.is_some() {
+        "2"
+    } else {
+        LAN_PRESENCE_VERSION
+    };
+    let mut properties = clear_properties(announcement, version);
+    if let Some(proof) = proof {
+        properties.insert("e".into(), proof.epoch.to_string());
+        properties.insert("x".into(), proof.expires_at.to_string());
+        properties.insert("s".into(), proof.signature.clone());
+        // Each TXT value remains under the DNS-SD 255-byte bound even
+        // when a host has many IPv6 addresses.
+        for (index, address) in proof.addresses.iter().take(MAX_ADDRESSES).enumerate() {
+            properties.insert(format!("a{index}"), address.to_string());
+        }
+    }
+    properties
+}
+
+/// `v=3`: epoch and expiry in clear, addresses and signature only sealed.
+fn sealed_properties(
+    announcement: &LanAnnouncement,
+    proof: &LanProof,
+    sealed: &SealedLanProof,
+) -> HashMap<String, String> {
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+    let mut properties = clear_properties(announcement, "3");
+    properties.insert("e".into(), proof.epoch.to_string());
+    properties.insert("x".into(), proof.expires_at.to_string());
+    properties.insert("n".into(), URL_SAFE_NO_PAD.encode(sealed.nonce));
+    let encoded = URL_SAFE_NO_PAD.encode(&sealed.ciphertext);
+    for (index, chunk) in encoded.as_bytes().chunks(SEALED_CHUNK_CHARS).enumerate() {
+        properties.insert(
+            format!("c{index}"),
+            String::from_utf8_lossy(chunk).into_owned(),
+        );
+    }
+    properties
+}
+
+fn sealed_from(info: &mdns_sd::ResolvedService) -> Option<SealedLanProof> {
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+    let nonce = URL_SAFE_NO_PAD
+        .decode(info.get_property_val_str("n")?)
+        .ok()?;
+    let nonce: [u8; SEAL_NONCE_BYTES] = nonce.try_into().ok()?;
+    let mut encoded = String::new();
+    for index in 0..MAX_SEALED_CHUNKS {
+        let Some(chunk) = info.get_property_val_str(&format!("c{index}")) else {
+            break;
+        };
+        if chunk.len() > SEALED_CHUNK_CHARS {
+            return None;
+        }
+        encoded.push_str(chunk);
+    }
+    let ciphertext = URL_SAFE_NO_PAD.decode(encoded).ok()?;
+    if ciphertext.is_empty() || ciphertext.len() > super::lan_privacy::MAX_SEALED_BYTES {
+        return None;
+    }
+    Some(SealedLanProof { nonce, ciphertext })
 }
 
 fn sighting_from(info: &mdns_sd::ResolvedService) -> Option<LanSighting> {
@@ -258,11 +371,27 @@ fn sighting_from(info: &mdns_sd::ResolvedService) -> Option<LanSighting> {
 
 fn event_from(info: &mdns_sd::ResolvedService) -> Option<LanEvent> {
     let mut sighting = sighting_from(info)?;
-    if info.get_property_val_str("v") != Some("2") {
+    let version = info.get_property_val_str("v");
+    if !matches!(version, Some("2" | "3")) {
         return Some(LanEvent::Seen(sighting));
     }
     if sighting.id.len() != 32 {
         return None;
+    }
+    if version == Some("3") {
+        // The resolved addresses stay as received: the authenticator opens
+        // the seal and accepts the sighting only when every one of them is
+        // in the signed list, so an injected address never passes.
+        return Some(LanEvent::SeenAuthenticated {
+            proof: LanProof {
+                epoch: info.get_property_val_str("e")?.parse().ok()?,
+                expires_at: info.get_property_val_str("x")?.parse().ok()?,
+                addresses: Vec::new(),
+                signature: String::new(),
+                sealed: Some(sealed_from(info)?),
+            },
+            sighting,
+        });
     }
     let mut addresses = Vec::new();
     for index in 0..MAX_ADDRESSES {
@@ -286,13 +415,16 @@ fn event_from(info: &mdns_sd::ResolvedService) -> Option<LanEvent> {
             expires_at: info.get_property_val_str("x")?.parse().ok()?,
             addresses,
             signature: signature.to_string(),
+            sealed: None,
         },
     })
 }
 
 fn id_from_fullname(fullname: &str) -> Option<String> {
     let instance = fullname.split('.').next()?;
-    let id = instance.strip_prefix(INSTANCE_PREFIX)?;
+    let id = instance
+        .strip_prefix(SEALED_INSTANCE_PREFIX)
+        .or_else(|| instance.strip_prefix(INSTANCE_PREFIX))?;
     valid_id(id).then(|| id.to_string())
 }
 
@@ -331,3 +463,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "lan_presence_task_tests.rs"]
+mod task_tests;

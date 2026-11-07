@@ -159,6 +159,9 @@ pub fn persist_reciprocal_direct_peer_with(
     })?;
     let generated_account = direct_contact_secret_account(&generated_contact_id);
     let expected_secret = SecretString::encoded(peer.material().secret());
+    if peer.is_renewal() {
+        renew_contact_material(&default_home, peer, &expected_secret)?;
+    }
     let now = super::core::now_secs();
     let mut prepared = None;
 
@@ -273,6 +276,96 @@ pub fn persist_reciprocal_direct_peer_with(
     ))
 }
 
+/// E17: the authenticated peer renewed its Direct code and offered the new
+/// data itself (kind-5 hello). The existing contact keeps its id (stored
+/// Explorer locations and sync setups name it) and gets the new lookup id
+/// and secret. The credential changes first: a host in renewal accepts the
+/// new secret under the old lookup id too, so an interruption here heals
+/// with the next exchange. Without an accepted contact pinned to exactly
+/// this identity nothing changes and the ordinary transaction decides.
+fn renew_contact_material(
+    default_home: &Option<String>,
+    peer: &DirectReciprocalPeer,
+    expected_secret: &SecretString,
+) -> Result<(), DirectReciprocalPersistenceError> {
+    let profiles = ShareProfiles::load_checked(default_home.clone())
+        .map_err(DirectReciprocalPersistenceError::Persistence)?;
+    if profiles.removed_direct_peer(peer.identity()).is_some() {
+        return Ok(());
+    }
+    let Some(contact) = renewable_contact(&profiles, peer) else {
+        return Ok(());
+    };
+    let contact_id = contact.id.clone();
+    let lookup_id = peer.material().lookup_id().to_string();
+    let account = direct_contact_secret_account(&contact_id);
+    if !credential_matches(&account, expected_secret)
+        .map_err(DirectReciprocalPersistenceError::Persistence)?
+    {
+        let encoded = expected_secret
+            .expose()
+            .map_err(DirectReciprocalPersistenceError::Persistence)?;
+        crate::creds::set_secret(&account, encoded)
+            .map_err(DirectReciprocalPersistenceError::Persistence)?;
+        if !credential_matches(&account, expected_secret)
+            .map_err(DirectReciprocalPersistenceError::Persistence)?
+        {
+            return Err(DirectReciprocalPersistenceError::Persistence(
+                "renewed Direct secret was not retained".into(),
+            ));
+        }
+    }
+    ShareProfiles::mutate_persisted(default_home.clone(), |profiles| {
+        if !renewable_contact(profiles, peer).is_some_and(|contact| contact.id == contact_id) {
+            return Err("renewed Direct contact changed during persistence".to_string());
+        }
+        let index = profiles
+            .direct_contacts
+            .iter()
+            .position(|candidate| candidate.id == contact_id)
+            .ok_or_else(|| "renewed Direct contact disappeared".to_string())?;
+        let contact = &mut profiles.direct_contacts[index];
+        if contact.lookup_id != lookup_id {
+            contact.lookup_id = lookup_id.clone();
+            // The old presence names the retiring lookup id.
+            contact.presence = None;
+        }
+        Ok(())
+    })
+    .map(|_| ())
+    .map_err(DirectReciprocalPersistenceError::Persistence)
+}
+
+/// The accepted contact pinned to exactly this identity (device, key,
+/// fingerprint, node) whose relation data differ from the offered ones.
+fn renewable_contact<'a>(
+    profiles: &'a ShareProfiles,
+    peer: &DirectReciprocalPeer,
+) -> Option<&'a crate::share::types::DirectContact> {
+    let identity = peer.identity();
+    let mut matching = profiles
+        .direct_contacts
+        .iter()
+        .filter(|contact| contact.remote_device_id.as_deref() == Some(identity.device_id.as_str()));
+    let contact = matching.next()?;
+    if matching.next().is_some() {
+        return None;
+    }
+    let key_pinned = [
+        contact.remote_public_key.as_deref(),
+        contact.accepted_public_key.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .all(|key| key == identity.public_key);
+    (contact.access_state == crate::share::types::DirectAccessState::Accepted
+        && contact.expected_fingerprint == identity.fingerprint
+        && (contact.expected_node_id.is_empty() || contact.expected_node_id == identity.node_id)
+        && key_pinned
+        && contact.lookup_id != peer.material().lookup_id())
+    .then_some(contact)
+}
+
 fn evaluate_candidate(
     profiles: &ShareProfiles,
     peer: &DirectReciprocalPeer,
@@ -355,3 +448,7 @@ fn cleanup_before_error(
         )),
     }
 }
+
+#[cfg(test)]
+#[path = "direct_reciprocal_persistence_task_tests.rs"]
+mod task_tests;

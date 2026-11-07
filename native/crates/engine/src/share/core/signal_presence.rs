@@ -20,6 +20,10 @@ use super::types::PeerPresence;
 /// split is unambiguous.
 const SIGNATURE_MARKER: &str = ".ps1.";
 const SIGNATURE_DOMAIN: &[u8] = b"smart-explorer/share/presence-signature/v1";
+/// Signed nonce prefix of a retiring lookup id's presence. It keeps `rp1.`
+/// (route policy) for older peers; with the 91 bytes of the signature the
+/// nonce stays at 115 bytes, below the 126 of old servers.
+const RENEWAL_NONCE_PREFIX: &str = "rp1.cr1.";
 
 /// What the device signature of a presence proves.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -39,6 +43,14 @@ impl PeerPresence {
     pub fn supports_route_policy(&self) -> bool {
         self.signature_state() == PresenceSignature::Valid && self.nonce.starts_with("rp1.")
     }
+    /// E17: signed by the device and published under a lookup id that runs
+    /// out after a Direct-code renewal (`build_retiring_presence`). A holder
+    /// of that id asks for the new data on its next reciprocal exchange.
+    pub fn announces_code_renewal(&self) -> bool {
+        self.nonce.starts_with(RENEWAL_NONCE_PREFIX)
+            && self.signature_state() == PresenceSignature::Valid
+    }
+
     /// Whether the nonce carries a device signature (not whether it verifies).
     pub fn is_signed(&self) -> bool {
         self.nonce.contains(SIGNATURE_MARKER)
@@ -75,11 +87,7 @@ impl PeerPresence {
     /// New legacy answers bind both unsigned envelope fields into the signed
     /// nonce. Unsigned old peers retain the pending-only compatibility path;
     /// a signed ordinary presence never authorizes an accept/reject envelope.
-    pub fn matches_legacy_decision(
-        &self,
-        requester_device_id: &str,
-        accepted: bool,
-    ) -> bool {
+    pub fn matches_legacy_decision(&self, requester_device_id: &str, accepted: bool) -> bool {
         let Some((context, _)) = self.nonce.split_once(SIGNATURE_MARKER) else {
             return true;
         };
@@ -139,6 +147,29 @@ pub(super) fn build_presence(
     build_presence_with_nonce(kind, relation_id, identity, secret, iroh, random)
 }
 
+/// E17: the presence of a retiring lookup id carries only the relay URL and
+/// the node id, both known to every former holder of the code; no direct
+/// address. Its HMAC uses the retiring secret, so holders that have not yet
+/// switched still verify it.
+pub(super) fn build_retiring_presence(
+    relation_id: &str,
+    identity: &ShareIdentity,
+    secret: &[u8],
+    iroh: &ShareIrohNode,
+) -> io::Result<PeerPresence> {
+    let random = format!("{RENEWAL_NONCE_PREFIX}{}", random_token(12).map_err(eio)?);
+    let relay_url = iroh.published_routes().relay_url;
+    Ok(sign_presence(
+        "direct",
+        relation_id,
+        identity,
+        secret,
+        relay_url,
+        Vec::new(),
+        random,
+    ))
+}
+
 /// Sign a legacy decision through the existing opaque nonce field. The
 /// recipient digest, decision and 48-bit random salt use 35 bytes; Ed25519's
 /// marker/signature add 91, staying at 126 bytes for old server nonce limits.
@@ -180,6 +211,26 @@ fn build_presence_with_nonce(
     // Sign one coherent Iroh address snapshot so relay and direct routes can
     // never come from different network revisions.
     let routes = iroh.published_routes();
+    Ok(sign_presence(
+        kind,
+        relation_id,
+        identity,
+        secret,
+        routes.relay_url,
+        routes.candidates,
+        random,
+    ))
+}
+
+fn sign_presence(
+    kind: &str,
+    relation_id: &str,
+    identity: &ShareIdentity,
+    secret: &[u8],
+    relay_url: String,
+    candidates: Vec<String>,
+    random: String,
+) -> PeerPresence {
     let mut presence = PeerPresence {
         kind: kind.to_string(),
         relation_id: relation_id.to_string(),
@@ -188,8 +239,8 @@ fn build_presence_with_nonce(
         public_key: identity.public_key.clone(),
         fingerprint: identity.fingerprint.clone(),
         node_id: identity.node_id.clone(),
-        relay_url: routes.relay_url,
-        candidates: routes.candidates,
+        relay_url,
+        candidates,
         expires_at: now_secs() + 300,
         nonce: String::new(),
         proof: String::new(),
@@ -211,9 +262,13 @@ fn build_presence_with_nonce(
         &presence.nonce,
     );
     presence.proof = hmac_proof(secret, &payload);
-    Ok(presence)
+    presence
 }
 
 #[cfg(test)]
 #[path = "signal_presence_task_tests.rs"]
 mod task_tests;
+
+#[cfg(test)]
+#[path = "signal_presence_flood_task_tests.rs"]
+mod flood_task_tests;

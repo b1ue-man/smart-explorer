@@ -32,6 +32,8 @@ pub fn shared_direct_repair_store(
 #[path = "direct_reciprocal_outgoing_gate.rs"]
 mod outgoing_gate;
 pub(super) use outgoing_gate::OutgoingRepairPersistGate;
+#[path = "direct_reciprocal_renewal.rs"]
+mod renewal;
 
 /// Keeps admission and configuration exclusion live inside an uncancellable
 /// `spawn_blocking` persistence call even if its async exchange times out.
@@ -82,12 +84,29 @@ pub(super) async fn run_outgoing(
     store: SharedDirectRepairStore,
     gate: OutgoingRepairPersistGate,
 ) -> DirectReciprocalTransportResult {
-    let (state, hello) = match DirectRepairInitiator::begin(
-        authorized.local_identity,
-        &authorized.local_material,
-        authorized.session,
-        authorized.expected_remote_material,
-    ) {
+    // E17: a waiting peer receives the retiring data it holds; a host that
+    // announced its renewal is asked for its renewed data (kind 5).
+    let local_node = authorized.local_identity.node_id.clone();
+    let current_lookup_id = authorized.local_material.lookup_id().to_string();
+    let peer = gate.endpoint.presence.clone();
+    let (local_material, sends_current) =
+        renewal::outgoing_material(&local_node, &peer, authorized.local_material);
+    let begun = if renewal::asks_for_renewal(&peer) {
+        DirectRepairInitiator::begin_renewal(
+            authorized.local_identity,
+            &local_material,
+            authorized.session,
+            authorized.expected_remote_material,
+        )
+    } else {
+        DirectRepairInitiator::begin(
+            authorized.local_identity,
+            &local_material,
+            authorized.session,
+            authorized.expected_remote_material,
+        )
+    };
+    let (state, hello) = match begun {
         Ok(value) => value,
         Err(error) => return classify_session_error(error),
     };
@@ -142,6 +161,17 @@ pub(super) async fn run_outgoing(
     if wait_for_ack(&mut send).await.is_err() {
         return DirectReciprocalTransportResult::Transient;
     }
+    // The receiver stored the current data before its offer; retiring data
+    // sent to a waiting peer confirm nothing.
+    if sends_current {
+        renewal::record_outcome(
+            &local_node,
+            (&peer.device_id, &peer.public_key, &peer.node_id),
+            true,
+            &current_lookup_id,
+            &current_lookup_id,
+        );
+    }
     if complete.receiver_persisted == DirectRepairPersisted::AlreadyComplete
         && complete.initiator_persisted == DirectRepairPersisted::AlreadyComplete
     {
@@ -158,6 +188,8 @@ pub(super) async fn serve_incoming(
     store: SharedDirectRepairStore,
     gate: RepairPersistGate,
 ) -> io::Result<DirectReciprocalTransportResult> {
+    let local_node = authorized.local_identity.node_id.clone();
+    let current_lookup_id = authorized.local_material.lookup_id().to_string();
     let receiver = DirectRepairReceiver::new(
         authorized.local_identity,
         authorized.local_material,
@@ -165,6 +197,8 @@ pub(super) async fn serve_incoming(
         authorized.expected_remote_material,
     )
     .map_err(session_io_error)?;
+    let session = gate.session.clone();
+    let receiver = renewal::with_retiring(receiver, &local_node, &session);
     let hello = match recv_message(&mut recv).await {
         Ok(DirectRepairMessage::Hello(hello)) => hello,
         Ok(_) | Err(RepairReadError::Protocol | RepairReadError::LegacyControl) => {
@@ -173,6 +207,7 @@ pub(super) async fn serve_incoming(
         Err(RepairReadError::Stream) => return Err(stream_io_error()),
     };
     let state = receiver.accept_hello(hello).map_err(session_io_error)?;
+    let offers_current = state.offers_current();
     let (state, offer) = persist_receiver(state, store, gate)
         .await
         .map_err(session_io_error)?;
@@ -187,6 +222,14 @@ pub(super) async fn serve_incoming(
         Err(RepairReadError::Stream) => return Err(stream_io_error()),
     };
     let (complete, message) = state.accept_commit(commit).map_err(session_io_error)?;
+    // The initiator commits only after storing the offered data durably.
+    renewal::record_outcome(
+        &local_node,
+        session.peer_pins(),
+        offers_current,
+        &current_lookup_id,
+        session.direct_relation_id().unwrap_or_default(),
+    );
     send_message(&mut send, DirectRepairMessage::Complete(message))
         .await
         .map_err(|_| stream_io_error())?;

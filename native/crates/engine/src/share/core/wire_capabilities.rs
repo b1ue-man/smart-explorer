@@ -80,6 +80,12 @@ pub struct FsHostFeatures {
     /// progress and cancel.
     #[serde(default, skip_serializing_if = "is_false")]
     pub remove_tree_v1: bool,
+    /// E17: Direct-code renewal without losing a contact. The host keeps a
+    /// retiring lookup id valid for its grant holders, announces it with a
+    /// signed presence (`rp1.cr1.`) and answers a reciprocal hello of kind 5
+    /// with its renewed data (`direct_reciprocal_wire.rs`).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub code_renewal_v1: bool,
 }
 
 impl FsHostFeatures {
@@ -106,6 +112,7 @@ impl FsHostFeatures {
             literal_children_v1: true,
             reversible_replace_v1: true,
             remove_tree_v1: true,
+            code_renewal_v1: true,
         }
     }
 
@@ -136,6 +143,7 @@ impl FsHostFeatures {
             (self.literal_children_v1, "literal_children_v1"),
             (self.reversible_replace_v1, "reversible_replace_v1"),
             (self.remove_tree_v1, "remove_tree_v1"),
+            (self.code_renewal_v1, "code_renewal_v1"),
         ]
         .into_iter()
         .filter_map(|(offered, name)| offered.then_some(name))

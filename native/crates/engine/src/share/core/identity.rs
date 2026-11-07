@@ -11,6 +11,21 @@ const SECRET_BYTES: usize = 32;
 #[path = "identity_repair.rs"]
 mod repair;
 pub use repair::{IdentityRepair, IdentityRepairAction};
+#[path = "identity_secrets.rs"]
+mod secrets;
+use secrets::{
+    cleanup_secret, decode_secret, load_optional_secret, load_required_secret,
+    save_secret_verified, with_cleanup,
+};
+// Direct-code renewal without losing a contact (E17).
+#[path = "code_renewal_state.rs"]
+pub mod code_renewal;
+#[path = "code_renewal_profiles.rs"]
+mod code_renewal_profiles;
+#[path = "code_renewal_registry.rs"]
+pub mod code_renewal_registry;
+#[path = "identity_renewal.rs"]
+mod renewal;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct IdentityDisk {
@@ -193,6 +208,10 @@ impl ShareIdentity {
         )
     }
 
+    /// The former rotation (all grants to „neu bestätigen“). Production uses
+    /// the renewal transition (`identity_store.rs` `regenerate_direct_code`);
+    /// this stays for the tests of the cleanup marker and the repair path.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(super) fn regenerate_direct_code_with(
         &mut self,
         storage: &mut impl IdentityPersistence,
@@ -203,6 +222,7 @@ impl ShareIdentity {
         Ok(outcome)
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     fn rotate_loaded_direct_code_with(
         &mut self,
         storage: &mut impl IdentityPersistence,
@@ -375,68 +395,6 @@ fn allocate_direct_secret(
     Err("Kein freier Speicherplatz fuer einen neuen Direkt-Code gefunden".into())
 }
 
-fn save_secret_verified(
-    storage: &mut impl IdentityPersistence,
-    account: &str,
-    secret: &[u8; SECRET_BYTES],
-    label: &str,
-) -> Result<(), String> {
-    let result = storage
-        .save_secret(account, &b64(secret))
-        .map_err(|error| format!("{label} speichern: {error}"))
-        .and_then(|()| match load_optional_secret(storage, account, label)? {
-            Some(stored) if stored == *secret => Ok(()),
-            Some(_) => Err(format!("{label} wurde mit anderen Bytes gespeichert")),
-            None => Err(format!("{label} wurde nicht im sicheren Speicher behalten")),
-        });
-    if let Err(error) = result {
-        let cleanup = cleanup_secret(storage, account, label)
-            .into_iter()
-            .collect();
-        return Err(with_cleanup(error, cleanup));
-    }
-    Ok(())
-}
-
-fn cleanup_secret(
-    storage: &mut impl IdentityPersistence,
-    account: &str,
-    label: &str,
-) -> Option<String> {
-    storage
-        .delete_secret(account)
-        .err()
-        .map(|error| format!("{label}: {error}"))
-}
-
-fn load_required_secret(
-    storage: &mut impl IdentityPersistence,
-    account: &str,
-    label: &str,
-) -> Result<[u8; SECRET_BYTES], String> {
-    load_optional_secret(storage, account, label)?
-        .ok_or_else(|| format!("{label} fehlt im sicheren Speicher"))
-}
-
-fn load_optional_secret(
-    storage: &mut impl IdentityPersistence,
-    account: &str,
-    label: &str,
-) -> Result<Option<[u8; SECRET_BYTES]>, String> {
-    storage
-        .load_secret(account)
-        .map_err(|error| format!("{label} lesen: {error}"))?
-        .map(|raw| decode_secret(&raw, label))
-        .transpose()
-}
-
-fn decode_secret(raw: &str, label: &str) -> Result<[u8; SECRET_BYTES], String> {
-    b64_decode(raw)
-        .map_err(|error| format!("{label} ist ungueltig: {error}"))?
-        .try_into()
-        .map_err(|_| format!("{label} hat nicht {SECRET_BYTES} Bytes"))
-}
-
 fn validate_disk(disk: &IdentityDisk) -> Result<(), String> {
     if disk.device_id.trim().is_empty()
         || disk.direct_lookup_id.trim().is_empty()
@@ -473,17 +431,6 @@ fn load_disk(storage: &mut impl IdentityPersistence) -> Result<Option<IdentityDi
             Ok(disk)
         })
         .transpose()
-}
-
-fn with_cleanup(error: String, cleanup: Vec<String>) -> String {
-    if cleanup.is_empty() {
-        error
-    } else {
-        format!(
-            "{error}; Bereinigung fehlgeschlagen: {}",
-            cleanup.join(", ")
-        )
-    }
 }
 
 pub(super) trait IdentityPersistence {

@@ -2,12 +2,13 @@ use std::io;
 use std::sync::Arc;
 use std::time::Duration;
 
-use iroh::endpoint::{Connection, VarInt};
+use iroh::endpoint::{Connection, IncomingAddr, VarInt};
 
 use super::connection_events::ConnectionErrorKind;
 use super::core::eio;
 use super::exec_protocol::EXEC_ALPN;
-use super::handshake_limits::ApplicationHandshakePermit;
+use super::handshake_limits::{ApplicationHandshakePermit, TlsAdmission, TlsSource};
+use super::identity::code_renewal_registry::is_withdrawn;
 use super::node::{ShareIrohNode, ALPN};
 use crate::screen::core::wire::SCREEN_ALPN;
 
@@ -20,9 +21,33 @@ impl ShareIrohNode {
                     incoming.refuse();
                     continue;
                 }
-                let permit = match node.handshake_slots.clone().try_acquire_owned() {
-                    Ok(permit) => permit,
-                    Err(_) => {
+                // R-ZUGANG-01: per-source cap, Retry under load, reserve
+                // for pinned relay senders (`handshake_limits_tls.rs`).
+                let addr = incoming.remote_addr();
+                let pinned = match &addr {
+                    IncomingAddr::Relay { endpoint_id, .. } => {
+                        node.known_endpoint(&endpoint_id.to_string())
+                    }
+                    _ => false,
+                };
+                // E17: Iroh hands every peer that completes TLS this device's
+                // direct addresses (ADD_ADDRESS) before the app can refuse it.
+                // A device the user removed, named by the relay, gets no TLS.
+                if !pinned && relay_names_withdrawn(&addr) {
+                    incoming.refuse();
+                    continue;
+                }
+                let source = TlsSource::of(&addr);
+                let validated = incoming.remote_addr_validated();
+                let permit = match node.handshake_slots.admit(source, validated, pinned) {
+                    TlsAdmission::Slot(permit) => permit,
+                    TlsAdmission::Retry => {
+                        if let Err(error) = incoming.retry() {
+                            error.into_incoming().refuse();
+                        }
+                        continue;
+                    }
+                    TlsAdmission::Refuse => {
                         incoming.refuse();
                         continue;
                     }
@@ -43,6 +68,11 @@ impl ShareIrohNode {
                     let remote = connection.remote_id().to_string();
                     let known = node.known_endpoint(&remote);
                     if connection.alpn() == super::lan_link_wire::LAN_LINK_ALPN && !known {
+                        refuse(&connection);
+                        return;
+                    }
+                    // A removed device that came in directly: close at once.
+                    if !known && is_withdrawn(&remote) {
                         refuse(&connection);
                         return;
                     }
@@ -126,7 +156,26 @@ impl ShareIrohNode {
                                     );
                                     dispatch.await
                                 }
-                                Err(error) => { refuse(&connection); Err(error) }
+                                Err(error) => {
+                                    // R-ZUGANG-04: a hello that never came is
+                                    // OpenSSH's "noauth" penalty; the handler
+                                    // that books it was dropped with the
+                                    // deadline. Same rule as the refusal above.
+                                    if error.kind() == io::ErrorKind::TimedOut
+                                        && super::auth_penalty::refusal_applies(
+                                            exec || screen || tcp || apps,
+                                            known,
+                                        )
+                                    {
+                                        node.auth_penalties().record(
+                                            &connection.remote_id().to_string(),
+                                            super::auth_penalty::PenaltyKind::NoAuthentication,
+                                            std::time::Instant::now(),
+                                        );
+                                    }
+                                    refuse(&connection);
+                                    Err(error)
+                                }
                             }
                         }
                     };
@@ -169,6 +218,15 @@ impl ShareIrohNode {
     }
 }
 
+/// The relay names the sender of an incoming connection; Iroh's relay
+/// protocol authenticates that id with the sender's key.
+fn relay_names_withdrawn(addr: &IncomingAddr) -> bool {
+    match addr {
+        IncomingAddr::Relay { endpoint_id, .. } => is_withdrawn(&endpoint_id.to_string()),
+        _ => false,
+    }
+}
+
 // Unknown application peers cannot hold the 20 s window reserved for pinned
 // identities. Separate pools preserve that capacity under untrusted load.
 const UNKNOWN_HANDSHAKE: Duration = Duration::from_secs(3);
@@ -197,3 +255,7 @@ async fn dispatch_connection(
         _ => Err(eio("Unbekanntes Share-Protokoll")),
     }
 }
+
+#[cfg(test)]
+#[path = "node_accept_withdrawn_tests.rs"]
+mod withdrawn_tests;

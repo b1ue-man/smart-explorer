@@ -25,6 +25,7 @@ use std::sync::{Arc, Mutex};
 use zeroize::Zeroizing;
 
 use super::super::core::{eio, verify_hmac};
+use super::super::identity::code_renewal_registry::retiring_secret;
 use super::super::profiles::{fingerprint_matches, ShareProfiles};
 use super::super::relation_rights::SessionAuthorization;
 use super::super::types::{DirectGrant, DirectGrantState, RoomProfile, ShareAuthState};
@@ -156,50 +157,20 @@ impl IncomingSession {
 
     fn granted<'s>(&self, state: &'s ShareAuthState) -> io::Result<Granted<'s>> {
         let hello = &self.hello;
+        // E17: a lookup id that runs out after a Direct-code renewal stays
+        // valid for exactly the identities that still hold a grant.
+        let retiring = (hello.relation_kind == "direct"
+            && hello.relation_id != state.identity.direct_lookup_id)
+            .then(|| retiring_secret(&state.identity.node_id, &hello.relation_id))
+            .flatten();
         match hello.relation_kind.as_str() {
-            "direct" if hello.relation_id == state.identity.direct_lookup_id => {
-                if !state.direct_online {
-                    return Err(denied(
-                        SessionDenial::Offline,
-                        "Direktverbindung ist offline",
-                    ));
-                }
-                let grant = state
-                    .direct_grants
-                    .iter()
-                    .find(|g| {
-                        g.authorizes_session(&hello.device_id, &hello.public_key, &hello.node_id)
-                    })
-                    .ok_or_else(|| {
-                        denied(
-                            direct_denial(state, hello),
-                            "Direktfreigabe nicht akzeptiert",
-                        )
-                    })?;
-                let inputs = ProofInputs {
-                    local_device_id: &state.identity.device_id,
-                    local_node_id: &state.identity.node_id,
-                    public_key: &grant.public_key,
-                    fingerprint: &grant.fingerprint,
-                    key: KeyRef::Direct(&state.direct_secret),
-                };
-                if !self.memo.verified(&inputs) {
-                    if !fingerprint_matches(&grant.public_key, &grant.fingerprint) {
-                        return Err(denied(
-                            SessionDenial::Identity,
-                            "Direktfreigabe hat ungueltigen Fingerprint",
-                        ));
-                    }
-                    let payload = self.payload("direct", state);
-                    if !verify_hmac(&state.direct_secret, &payload, &hello.session_proof) {
-                        return Err(denied(
-                            SessionDenial::Authentication,
-                            "Session-Proof ungueltig",
-                        ));
-                    }
-                    self.memo.remember(&inputs);
-                }
-                Ok(Granted::Direct(grant))
+            "direct"
+                if hello.relation_id == state.identity.direct_lookup_id || retiring.is_some() =>
+            {
+                Ok(Granted::Direct(self.granted_direct(
+                    state,
+                    retiring.as_ref().map(|secret| secret.as_slice()),
+                )?))
             }
             "room" => {
                 let room = state
@@ -263,6 +234,62 @@ impl IncomingSession {
         }
     }
 
+    /// The Direct grant of this hello. With `retiring`, the proof may use
+    /// the retiring secret or the current one: a peer that stored the new
+    /// secret but not yet the new lookup id (interrupted renewal) still
+    /// passes and completes its renewal.
+    fn granted_direct<'s>(
+        &self,
+        state: &'s ShareAuthState,
+        retiring: Option<&[u8]>,
+    ) -> io::Result<&'s DirectGrant> {
+        let hello = &self.hello;
+        if !state.direct_online {
+            return Err(denied(
+                SessionDenial::Offline,
+                "Direktverbindung ist offline",
+            ));
+        }
+        let grant = state
+            .direct_grants
+            .iter()
+            .find(|g| g.authorizes_session(&hello.device_id, &hello.public_key, &hello.node_id))
+            .ok_or_else(|| {
+                denied(
+                    direct_denial(state, hello),
+                    "Direktfreigabe nicht akzeptiert",
+                )
+            })?;
+        let keys: [Option<&[u8]>; 2] = match retiring {
+            Some(old) => [Some(old), Some(state.direct_secret.as_slice())],
+            None => [Some(state.direct_secret.as_slice()), None],
+        };
+        if keys
+            .into_iter()
+            .flatten()
+            .any(|key| self.memo.verified(&direct_inputs(state, grant, key)))
+        {
+            return Ok(grant);
+        }
+        if !fingerprint_matches(&grant.public_key, &grant.fingerprint) {
+            return Err(denied(
+                SessionDenial::Identity,
+                "Direktfreigabe hat ungueltigen Fingerprint",
+            ));
+        }
+        let payload = self.payload("direct", state);
+        for key in keys.into_iter().flatten() {
+            if verify_hmac(key, &payload, &hello.session_proof) {
+                self.memo.remember(&direct_inputs(state, grant, key));
+                return Ok(grant);
+            }
+        }
+        Err(denied(
+            SessionDenial::Authentication,
+            "Session-Proof ungueltig",
+        ))
+    }
+
     fn payload(&self, kind: &str, state: &ShareAuthState) -> String {
         let hello = &self.hello;
         session_payload(
@@ -276,9 +303,39 @@ impl IncomingSession {
         )
     }
 
+    /// E17: the lookup id a Direct hello named (renewal bookkeeping of the
+    /// reciprocal stream, `direct_reciprocal_renewal.rs`).
+    pub(in crate::share) fn direct_relation_id(&self) -> Option<&str> {
+        (self.hello.relation_kind == "direct").then_some(self.hello.relation_id.as_str())
+    }
+
+    /// `(device_id, public_key, node_id)` of this session; the node id is
+    /// the TLS-verified one (`authenticate_incoming_session`).
+    pub(in crate::share) fn peer_pins(&self) -> (&str, &str, &str) {
+        (
+            &self.hello.device_id,
+            &self.hello.public_key,
+            &self.hello.node_id,
+        )
+    }
+
     #[cfg(any(test, feature = "test-support"))]
     pub(in crate::share) fn memo_is_empty(&self) -> bool {
         self.memo.is_empty()
+    }
+}
+
+fn direct_inputs<'a>(
+    state: &'a ShareAuthState,
+    grant: &'a DirectGrant,
+    key: &'a [u8],
+) -> ProofInputs<'a> {
+    ProofInputs {
+        local_device_id: &state.identity.device_id,
+        local_node_id: &state.identity.node_id,
+        public_key: &grant.public_key,
+        fingerprint: &grant.fingerprint,
+        key: KeyRef::Direct(key),
     }
 }
 

@@ -4,6 +4,7 @@ use sha2::{Digest, Sha256};
 use super::core::{hex, presence_payload, public_fingerprint, verify_hmac};
 use super::direct_ledger::DirectRequestDirection;
 use super::direct_protocol::DirectPeerIdentity;
+use super::identity::code_renewal_registry::retiring_secret;
 use super::identity::ShareIdentity;
 use super::profiles::ShareProfiles;
 use super::types::{DirectAccessState, DirectGrantState, PeerPresence};
@@ -157,10 +158,18 @@ impl LegacyDirectRequestEntry {
         self.verify_evidence(identity)
     }
 
+    /// Whether the stored evidence still authenticates: with the current
+    /// Direct secret, or while a renewal runs (E17) with the secret of the
+    /// retiring lookup id it names, so requests and their history of grant
+    /// holders survive until that id ends (`forget_retired_direct_lookup`).
     pub fn verify_evidence(&self, identity: &ShareIdentity) -> Result<(), String> {
-        if self.lookup_id != identity.direct_lookup_id {
-            return Err("legacy request belongs to a different local direct identity".into());
-        }
+        let secret = if self.lookup_id == identity.direct_lookup_id {
+            zeroize::Zeroizing::new(identity.direct_secret())
+        } else {
+            retiring_secret(&identity.node_id, &self.lookup_id).ok_or_else(|| {
+                "legacy request belongs to a different local direct identity".to_string()
+            })?
+        };
         let presence = self.presence();
         super::legacy_direct_request_validation::validate_presence(
             &self.lookup_id,
@@ -178,7 +187,7 @@ impl LegacyDirectRequestEntry {
             presence.expires_at,
             &presence.nonce,
         );
-        if !verify_hmac(&identity.direct_secret(), &payload, &presence.proof) {
+        if !verify_hmac(&secret, &payload, &presence.proof) {
             return Err(format!(
                 "legacy request authentication no longer verifies: {}",
                 self.selector
@@ -203,11 +212,7 @@ impl ShareProfiles {
     /// Authentication proves secret possession; it does not erase an ignored
     /// contact or a user's retained rejection/revocation history. A blocked
     /// grant denies its key, not only its self-chosen device id (S19).
-    pub fn direct_auto_accept_denied(
-        &self,
-        lookup_id: &str,
-        peer: &DirectPeerIdentity,
-    ) -> bool {
+    pub fn direct_auto_accept_denied(&self, lookup_id: &str, peer: &DirectPeerIdentity) -> bool {
         let ignored_grant = self.direct_key_denied(peer);
         let ignored_contact = self.direct_contacts.iter().any(|contact| {
             contact.access_state == DirectAccessState::Ignored

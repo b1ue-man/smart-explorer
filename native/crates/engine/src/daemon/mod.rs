@@ -90,12 +90,15 @@ pub use hash_cache_clear::clear_hash_cache;
 mod ipc_client;
 #[path = "os/shared/ipc_host.rs"]
 mod ipc_host;
+pub(crate) use ipc_host::load_share_server;
 #[path = "os/shared/ipc_host_commands.rs"]
 mod ipc_host_commands;
 #[path = "os/shared/ipc_host_events.rs"]
 mod ipc_host_events;
 #[path = "os/shared/ipc_listener.rs"]
 mod ipc_listener;
+#[path = "os/shared/ipc_proof.rs"]
+mod ipc_proof;
 #[path = "os/shared/ipc_protocol.rs"]
 mod ipc_protocol;
 #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -311,6 +314,8 @@ pub use ipc::{
 pub use ipc_client::vault_status_peek;
 pub use ipc_client::{drive_devices_peek, drive_devices_watch_peek, share_worker_peek};
 pub use ipc_protocol::screen::StreamRequest;
+#[allow(unused_imports)] // E17 surfaces: CLI/MCP, desktop GUI, Android bridge
+pub use ipc_protocol::CodeRenewalView;
 pub use ipc_protocol::ExecNoticeView;
 #[allow(unused_imports)] // U26 (CLI), U29 (GUI), U31 (Android)
 pub use ipc_protocol::{CompareHead, CompareItemWire, CompareSideWire, ResolveFailure};

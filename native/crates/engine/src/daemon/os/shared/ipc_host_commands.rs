@@ -7,7 +7,7 @@ use crate::share::{
 };
 
 use super::ipc_host::{stop::stop_locked, ui_events, ShareHost, ShareHostState};
-use super::ipc_protocol::{ShareCommandReply, ShareWorkerSnapshot};
+use super::ipc_protocol::{CodeRenewalView, ShareCommandReply, ShareWorkerSnapshot};
 
 impl ShareHost {
     pub(super) fn send_command(&self, cmd: ShareCmd) -> Result<ShareCommandReply, String> {
@@ -156,6 +156,7 @@ fn state_snapshot(state: &mut ShareHostState, drain: bool, now: i64) -> ShareWor
         discovery_offers: state.discovery_offers.offers(now),
         peer_feeds: crate::share::peer_feed::views(),
         rdp_setup: Some(crate::rdp::host_setup::status()),
+        code_renewal: state.identity.as_ref().and_then(CodeRenewalView::of),
     }
 }
 
