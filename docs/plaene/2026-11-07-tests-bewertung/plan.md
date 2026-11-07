@@ -63,7 +63,7 @@ Reihenfolge: T1 → T2, T3, T5 parallel, getrennt nach Dateien → T4 → Gesamt
     - 31 Tests sind neu `#[ignore]` mit Bedarf und Suite, und 286 bestehende Gründe nennen jetzt ihre Suite.
     - `crates-task` braucht keine `skips`-Liste mehr.
   - T4:
-    - `docs/tests/register.tsv` verzeichnet 5 430 Tests: 5 282 behalten, 148 unklar. Unter den unklaren sind 113 Messfälle aus `macro_rules!`-Makros, die Review B gefunden hat; die Registerprüfung liest diese Makros jetzt mit.
+    - `docs/tests/register.tsv` verzeichnete 5 430 Tests: 5 282 behalten, 148 unklar (seit dem Regressionstest des Schnellspiegels, `bfedc70a`, 5 431 und 5 283 behalten). Unter den unklaren sind 113 Messfälle aus `macro_rules!`-Makros, die Review B gefunden hat; die Registerprüfung liest diese Makros jetzt mit.
     - Eine Suite fehlt nur bei den 8 Tests der zwei Instrumentierungsklassen ohne Läufer (TODO SUITES-ANDROID-KLASSEN).
     - `native/test-register.py` prüft das Register in `crates-task`.
   - T5:
@@ -93,4 +93,15 @@ Reihenfolge: T1 → T2, T3, T5 parallel, getrennt nach Dateien → T4 → Gesamt
     - die Makro-Tests im Register.
   - Offen geblieben und danach behoben: se-agent braucht `tempfile` als Dev-Abhängigkeit, der Lock wird auf dem Runner aufgelöst (`lock-refresh.yml`).
   - Wiederhergestellt: `screen_task_android_screen_keys_file_current`. Er liest keinen Quelltext. Er vergleicht die Schlüsselliste aus den Android-Testressourcen mit den Rust-Enums, also einen Vertrag zwischen beiden Seiten, den der Kotlin-Test `ScreenTextsTest` voraussetzt.
-- Nächster Schritt: ein Lauf von `crates-task`.
+- 2026-11-07, Läufe von `crates-task` (alle registrierten Tests erstmals zusammen):
+  - 42356828421 (`9b881aa9`), vier Fehler, behoben:
+    - Bildschirmfreigabe: Ein Schreibfehler beim Schließen durch den Betrachter endete als `connection_lost` statt `viewer_closed` (Produkt, `ca94b6cb`).
+    - Laufwerk: Das Leeren beim Aushängen wartete nicht auf laufende Uploads (Produkt, `967c2034`).
+    - Zwei Oberflächen-Harness-Tests passten nicht mehr zur App: Seite „Darstellung“, Drive-Wurzelabfrage (Tests, `209e3c9d`).
+  - 42361964538 (`d6b6f826`), zwei Fehler unter Windows, behoben:
+    - Schnellspiegel: Eine veraltete NTFS-Verzeichnisabfrage verhinderte jede Löschung; die Beobachtung kommt jetzt aus `stat` (Produkt, `bfedc70a`, neuer Test `mirror_deletion_compares_with_the_file_not_a_stale_listing`).
+    - Bisync-Abbruchtest: Seite B war schneller als der 50-ms-Wächter (Test, `6018e8e8`).
+  - 42366382899 (`6018e8e8`), ein Fehler unter Linux, behoben:
+    - FTP: Nach ABOR auf eine schon beendete Übertragung blieb die Antwort des Servers ungelesen, und die Verbindung meldete sich neu an; ein Bereich, der auf seine eigene Anmeldung wartete, übernahm sie, das ergab eine fünfte Anmeldung (Produkt, `b327f4ee`; Test der Sicherheitsrunde umbenannt, er deckt jetzt auch den Rückfall auf die Neuverbindung).
+  - 42371819683 (`b327f4ee`): bestanden, alle sieben Jobs.
+- Nächster Schritt: Release.
