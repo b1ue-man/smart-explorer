@@ -13,7 +13,7 @@ use std::time::Instant;
 
 use crate::support::{
     assert_exit_code, assert_success, collect_bounded, contains_case_insensitive, run,
-    spawn_captured, stderr, stdout, Sandbox,
+    spawn_captured, stderr, stdout, Sandbox, WorkerStopGuard,
 };
 #[cfg(target_os = "linux")]
 use crate::support::{assert_output_omits, run_bounded, run_with_stdin_bounded};
@@ -22,7 +22,12 @@ use crate::support::{assert_output_omits, run_bounded, run_with_stdin_bounded};
 fn peer_removal_accepts_only_values_emitted_by_prior_cli_commands() {
     let source = Sandbox::new("peer-selector-source");
     let target = Sandbox::new("peer-selector-target");
-    let identity = run(source.command().args(["share", "identity", "--json"]));
+    // `remove-peer` refreshes the Share worker, which starts one per sandbox.
+    let _source_worker = WorkerStopGuard { sandbox: &source };
+    let _target_worker = WorkerStopGuard { sandbox: &target };
+    let identity = run(source
+        .worker_command()
+        .args(["share", "identity", "--json"]));
     assert_success(&identity);
     let identity: serde_json::Value =
         serde_json::from_slice(&identity.stdout).expect("identity JSON must parse");
@@ -32,7 +37,7 @@ fn peer_removal_accepts_only_values_emitted_by_prior_cli_commands() {
         .to_string();
 
     for field in ["selector", "account", "fingerprint"] {
-        let added = run(target.command().args([
+        let added = run(target.worker_command().args([
             "connections",
             "add-peer",
             "--code",
@@ -40,7 +45,9 @@ fn peer_removal_accepts_only_values_emitted_by_prior_cli_commands() {
             "--no-request",
         ]));
         assert_success(&added);
-        let listed = run(target.command().args(["connections", "list", "--json"]));
+        let listed = run(target
+            .worker_command()
+            .args(["connections", "list", "--json"]));
         assert_success(&listed);
         let rows: serde_json::Value =
             serde_json::from_slice(&listed.stdout).expect("connections JSON must parse");
@@ -54,12 +61,12 @@ fn peer_removal_accepts_only_values_emitted_by_prior_cli_commands() {
             .to_string();
 
         let removed = run(target
-            .command()
+            .worker_command()
             .args(["connections", "remove-peer", &selector]));
         assert_success(&removed);
     }
 
-    let added = run(target.command().args([
+    let added = run(target.worker_command().args([
         "connections",
         "add-peer",
         "--code",
@@ -67,9 +74,11 @@ fn peer_removal_accepts_only_values_emitted_by_prior_cli_commands() {
         "--no-request",
     ]));
     assert_success(&added);
-    let removed = run(target.command().args(["connections", "remove-peer"]));
+    let removed = run(target.worker_command().args(["connections", "remove-peer"]));
     assert_success(&removed);
-    let final_list = run(target.command().args(["connections", "list", "--json"]));
+    let final_list = run(target
+        .worker_command()
+        .args(["connections", "list", "--json"]));
     assert_success(&final_list);
     let rows: serde_json::Value =
         serde_json::from_slice(&final_list.stdout).expect("final connections JSON must parse");

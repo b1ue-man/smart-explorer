@@ -75,9 +75,55 @@ impl Sandbox {
     }
 }
 
+impl Sandbox {
+    /// A command whose background worker stays inside this sandbox. On Linux
+    /// the worker's single-instance lock lives in `XDG_RUNTIME_DIR`, which
+    /// `command` removes; without it every sandbox shares the user's lock, and
+    /// a worker of another sandbox keeps this one from ever becoming ready.
+    pub(crate) fn worker_command(&self) -> Command {
+        #[allow(unused_mut)]
+        let mut command = self.command();
+        #[cfg(target_os = "linux")]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let runtime = self.root.join("runtime");
+            match fs::create_dir(&runtime) {
+                Ok(()) => fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700))
+                    .expect("secure the sandbox runtime directory"),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(error) => panic!("create the sandbox runtime directory: {error}"),
+            }
+            command.env("XDG_RUNTIME_DIR", runtime);
+        }
+        command
+    }
+}
+
 impl Drop for Sandbox {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.root);
+    }
+}
+
+/// Stops the background worker a test started in `sandbox` through its stop
+/// marker and waits until its heartbeat is gone, so no worker outlives the
+/// test (and, on Windows, holds the test runner's output pipe it inherited).
+pub(crate) struct WorkerStopGuard<'a> {
+    pub(crate) sandbox: &'a Sandbox,
+}
+
+impl Drop for WorkerStopGuard<'_> {
+    fn drop(&mut self) {
+        let stop = self.sandbox.app_data_path("sync/daemon.stop");
+        if let Some(parent) = stop.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        let _ = fs::write(&stop, b"stop");
+        let heartbeat = self.sandbox.app_data_path("sync/daemon.heartbeat");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while heartbeat.exists() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(50));
+        }
     }
 }
 

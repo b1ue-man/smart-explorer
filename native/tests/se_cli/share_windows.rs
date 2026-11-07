@@ -1,15 +1,13 @@
-use std::fs;
-use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use crate::support::{assert_success, run_bounded, stderr, Sandbox};
+use crate::support::{assert_success, run_bounded, stderr, Sandbox, WorkerStopGuard};
 
 const TEST_NAMESPACE: &str = "standalone_cli";
 
 #[test]
 fn windows_terminal_identity_and_worker_status_are_standalone() {
     let sandbox = Sandbox::new("share-windows-standalone");
-    let _daemon = DaemonStopGuard { sandbox: &sandbox };
+    let _daemon = WorkerStopGuard { sandbox: &sandbox };
 
     let first = identity(&sandbox);
     let second = identity(&sandbox);
@@ -66,26 +64,4 @@ fn identity(sandbox: &Sandbox) -> serde_json::Value {
     assert_success(&result.output);
     assert!(result.output.stderr.is_empty());
     serde_json::from_slice(&result.output.stdout).expect("Share identity must be JSON")
-}
-
-fn stop_daemon(sandbox: &Sandbox) {
-    let stop = sandbox.app_data_path("sync/daemon.stop");
-    fs::create_dir_all(stop.parent().expect("daemon stop parent"))
-        .expect("create daemon control directory");
-    fs::write(&stop, b"stop").expect("write daemon stop marker");
-    let heartbeat = sandbox.app_data_path("sync/daemon.heartbeat");
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while heartbeat.exists() && Instant::now() < deadline {
-        thread::sleep(Duration::from_millis(50));
-    }
-}
-
-struct DaemonStopGuard<'a> {
-    sandbox: &'a Sandbox,
-}
-
-impl Drop for DaemonStopGuard<'_> {
-    fn drop(&mut self) {
-        stop_daemon(self.sandbox);
-    }
 }
