@@ -85,8 +85,10 @@ impl MountEngine {
     }
 
     /// At unmount: no new background work; every queued upload, retries
-    /// included, is tried once more now, and running ones end. What still
-    /// fails stays `Dirty` in the journal for the next mount or Retry.
+    /// included, is tried once more now, running ones end, and an entry a
+    /// running upload hands back (its file changed meanwhile) is uploaded
+    /// with its newest content. What still fails stays `Dirty` in the
+    /// journal for the next mount or Retry.
     pub fn finish_write_back(&self) {
         let queue = self.write_back.queue();
         queue.close();
@@ -94,7 +96,6 @@ impl MountEngine {
             let outcome = self.upload_once(&entry);
             queue.done(&entry, outcome);
         }
-        queue.wait_idle();
     }
 
     /// Pending background uploads; `None` without write-back.

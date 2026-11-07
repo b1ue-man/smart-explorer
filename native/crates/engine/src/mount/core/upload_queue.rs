@@ -289,26 +289,24 @@ impl UploadQueue {
         self.work.notify_all();
     }
 
-    /// After `close`: every entry still waiting, retries included, at once.
+    /// After `close`: the next entry still waiting, retries included, at
+    /// once; `None` once nothing waits and no upload runs. An upload that
+    /// still runs may hand its entry back (its file changed or was closed
+    /// again meanwhile): that newer content is taken too, so this waits for
+    /// running uploads before it reports that nothing is left.
     pub(super) fn take_for_drain(&self) -> Option<Arc<Entry>> {
         let mut state = self.state.lock().ok()?;
-        if let Some(entry) = state.pending.pop_front() {
-            return Some(state.take(entry));
-        }
-        let (_, entry) = state.delayed.pop()?;
-        Some(state.take(entry))
-    }
-
-    /// Waits until no upload runs any more.
-    pub(super) fn wait_idle(&self) {
-        let Ok(mut state) = self.state.lock() else {
-            return;
-        };
-        while !state.active.is_empty() {
-            state = match self.idle.wait(state) {
-                Ok(state) => state,
-                Err(_) => return,
-            };
+        loop {
+            if let Some(entry) = state.pending.pop_front() {
+                return Some(state.take(entry));
+            }
+            if let Some((_, entry)) = state.delayed.pop() {
+                return Some(state.take(entry));
+            }
+            if state.active.is_empty() {
+                return None;
+            }
+            state = self.idle.wait(state).ok()?;
         }
     }
 
