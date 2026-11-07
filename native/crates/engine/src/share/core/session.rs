@@ -18,6 +18,8 @@ use super::wire::PeerHello;
 mod authorize;
 #[path = "session_denial.rs"]
 pub(super) mod denial;
+#[path = "session_denial_gate.rs"]
+mod denial_gate;
 #[path = "peer_denials.rs"]
 pub(super) mod peer_denials;
 #[path = "session_root_notice.rs"]
@@ -132,7 +134,11 @@ pub(super) fn authenticate_incoming_session(
         hello: hello.clone(),
         memo: Arc::default(),
     };
-    session.authorize(auth)?;
+    // R-ZUGANG-02: only a peer this host relates to learns the class and
+    // this host's name (`session_denial_gate.rs`).
+    if let Err(error) = session.authorize(auth) {
+        return Err(denial_gate::scoped(error, hello, auth));
+    }
     Ok(session)
 }
 

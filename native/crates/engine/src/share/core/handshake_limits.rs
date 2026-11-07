@@ -4,6 +4,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::Notify;
 
+#[path = "handshake_limits_tls.rs"]
+mod tls;
+pub(super) use tls::{TlsAdmission, TlsHandshakeSlots, TlsSource};
+
 #[derive(Clone)]
 pub(super) struct HandshakeAdmission {
     known: Arc<super::fair_admission::Pool<String>>,

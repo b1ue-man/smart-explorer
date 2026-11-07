@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 use iroh::endpoint::{presets, Connection};
-use iroh::{Endpoint, RelayMode};
+use iroh::Endpoint;
 use tokio::sync::Semaphore;
 
 use super::connection_events::{ConnectionErrorKind, ConnectionEventReporter};
@@ -64,7 +64,8 @@ pub struct ShareIrohNode {
     pub(super) tcp: super::node_tcp::NodeTcp,
     pub(super) apps: Arc<super::node_apps::NodeApps>,
     pub(super) access: super::node_access::NodeAccess,
-    pub(super) handshake_slots: Arc<Semaphore>,
+    /// Pre-identity TLS handshake slots (`handshake_limits_tls.rs`).
+    pub(super) handshake_slots: Arc<super::handshake_limits::TlsHandshakeSlots>,
     auth_penalties: super::auth_penalty::AuthPenalties,
     pub(super) direct_repair_slots: Arc<Semaphore>,
     pub(super) runtime_transition_slot: Arc<Semaphore>,
@@ -147,11 +148,7 @@ impl ShareIrohNode {
         );
         let transport_options = super::transport_options::load(server);
         let relay_configured = !transport_options.relay_urls.is_empty();
-        let relay_mode = if relay_configured {
-            RelayMode::custom(transport_options.relay_urls.clone())
-        } else {
-            RelayMode::Disabled
-        };
+        let relay_mode = super::endpoint_routes::relay_mode(&transport_options.relay_urls);
         // The ring provider of `presets::Minimal` plus the hybrid
         // post-quantum group X25519MLKEM768 in front (pq_kx.rs).
         let mut builder = Endpoint::builder(presets::Minimal)
@@ -209,7 +206,9 @@ impl ShareIrohNode {
             tcp: super::node_tcp::NodeTcp::new(),
             apps: Arc::new(super::node_apps::NodeApps::new()),
             access: super::node_access::NodeAccess::new(),
-            handshake_slots: Arc::new(Semaphore::new(MAX_PENDING_APPLICATION_HANDSHAKES)),
+            handshake_slots: super::handshake_limits::TlsHandshakeSlots::new(
+                MAX_PENDING_APPLICATION_HANDSHAKES,
+            ),
             auth_penalties: super::auth_penalty::AuthPenalties::default(),
             direct_repair_slots: Arc::new(Semaphore::new(MAX_CONCURRENT_DIRECT_REPAIRS)),
             runtime_transition_slot: Arc::new(Semaphore::new(RUNTIME_TRANSITION_PERMITS as usize)),
