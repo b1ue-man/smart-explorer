@@ -116,7 +116,10 @@ fn needs_attempt(state: &ShareHostState) -> bool {
 const NOT_INPUTS: &[&str] = &["share-routes"];
 
 /// Fingerprint of the Share inputs: the app data directory's direct entries
-/// (name, kind, size, modification time) except `NOT_INPUTS`.
+/// (name, kind, size, modification time) except `NOT_INPUTS`. The
+/// directory's own time is no input: it changes whenever an entry is added,
+/// so creating `NOT_INPUTS` would reload the worker once while data flows;
+/// added, removed and replaced entries show in the names and their times.
 /// `share_server.txt` is one of them and the exec-grant journal lives in its
 /// `sync` folder, whose time changes with every atomic replacement there.
 pub(super) fn input_fingerprint() -> u64 {
@@ -125,7 +128,6 @@ pub(super) fn input_fingerprint() -> u64 {
 
 fn directory_fingerprint(directory: &std::path::Path) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    hash_entry(&mut hasher, directory);
     match std::fs::read_dir(directory) {
         Ok(entries) => {
             let mut names: Vec<std::ffi::OsString> = entries
