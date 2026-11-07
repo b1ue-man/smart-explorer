@@ -89,6 +89,36 @@ pub(super) fn probe(report: &mut HostProbe) {
         }
         report.services.push(found);
     }
+    note_network_reach(report);
+}
+
+/// Evidence on a GNOME desktop sharing that se set up and that listens now.
+pub(super) const NETWORK_REACH_EVIDENCE: &str = "GNOME desktop sharing set up by se listens on every network interface while a device may steer this screen: GNOME offers no loopback binding, so devices in the local network reach its RDP login directly; se itself connects through the authenticated tunnel";
+/// The same fact for the person, in the report's diagnostics that every
+/// surface showing this device's Remote Desktop state lists.
+pub(super) const NETWORK_REACH_NOTE: &str = "Remote Desktop dieses Geräts ist im lokalen Netz erreichbar, solange ein Gerät „Bildschirm steuern: Erlauben“ hat: die von se eingerichtete GNOME-Desktopfreigabe kennt keine Bindung an Loopback. se selbst verbindet über den geschützten Tunnel.";
+
+/// Marks each GNOME desktop sharing whose credentials se manages and whose
+/// listener the probe proved: it is reachable beyond loopback (review
+/// r-exec-1). A sharing without a proved listener or one the person set up
+/// themselves gets no note; the diagnostics line appears once.
+pub(super) fn note_network_reach(report: &mut HostProbe) {
+    let mut reachable = false;
+    for service in &mut report.services {
+        if service.kind == HostKind::Gnome
+            && service.managed_credentials
+            && service.running
+            && service.port.is_some()
+        {
+            if !service.evidence.iter().any(|e| e == NETWORK_REACH_EVIDENCE) {
+                service.evidence.push(NETWORK_REACH_EVIDENCE.into());
+            }
+            reachable = true;
+        }
+    }
+    if reachable && !report.diagnostics.iter().any(|d| d == NETWORK_REACH_NOTE) {
+        report.diagnostics.push(NETWORK_REACH_NOTE.into());
+    }
 }
 fn apply_status(found: &mut HostService, status: &str, unit: &inventory::Unit) {
     let mut rdp = false;
@@ -328,3 +358,7 @@ pub fn rotate_credential(device_id: &str) -> Result<(), String> {
     let username = managed_username(device_id);
     set_credentials(&username, &password).map_err(|state| state.text())
 }
+
+#[cfg(test)]
+#[path = "gnome_reach_tests.rs"]
+mod gnome_reach_tests;
