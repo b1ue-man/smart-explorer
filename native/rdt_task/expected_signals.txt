@@ -447,7 +447,6 @@ screen_task_grid_switch_reuses_connection                     linux-core:unit  p
 screen_task_viewer_ask_tile_has_no_preview                    linux-core:unit  pfad=app::screen_modules::screen_viewer_tests::screen_task_viewer_ask_tile_has_no_preview  quelle=B378,SCR-M7
 screen_task_viewer_decode_gop_switch                          linux-core:unit  pfad=app::screen_modules::screen_viewer_tests::screen_task_viewer_decode_gop_switch  quelle=B378,SCR-M7
 screen_task_viewer_releases_all_on_disable                    linux-core:unit  pfad=app::screen_modules::screen_viewer_tests::screen_task_viewer_releases_all_on_disable  quelle=B378,SCR-M7
-screen_task_viewer_yuv_shader_matches_cpu                     linux-desktop:screen-x11  fixture=gpu-adapter  pfad=app::screen_modules::screen_wgpu_yuv::tests::screen_task_viewer_yuv_shader_matches_cpu  quelle=B378,SCR-M7
 screen_task_gui_tab_rows                                      linux-core:unit  pfad=app::screen_modules::share_screen_tab_ui::tests::screen_task_gui_tab_rows  quelle=B318,U10
 screen_task_completions_screen                                linux-core:unit  pfad=cli::completions_screen::tests::screen_task_completions_screen  quelle=B318,U10
 screen_task_mcp_screen_input_shape                            linux-core:unit  pfad=cli::mcp::screen_tool::tests::screen_task_mcp_screen_input_shape  quelle=B342,U16
@@ -477,7 +476,6 @@ screen_task_authorize_stop_ends_the_wait                      linux-core:unit,wi
 screen_task_catalog_rows_only_with_graphical_session          linux-core:unit,windows-core:unit  pfad=screen::core::catalog_entries::tests::screen_task_catalog_rows_only_with_graphical_session  quelle=B306,SCR-M1-Code
 screen_task_input_key_names_and_pointer_positions             linux-core:unit,windows-core:unit  pfad=screen::core::input_model::tests::screen_task_input_key_names_and_pointer_positions  quelle=B306,SCR-M1-Code
 screen_task_input_release_on_end                              linux-core:unit,windows-core:unit  pfad=screen::core::input_model::tests::screen_task_input_release_on_end  quelle=B306,SCR-M1-Code
-screen_task_android_has_no_openh264                           linux-core:unit,windows-core:unit  pfad=screen::core::licenses::tests::screen_task_android_has_no_openh264  quelle=B306,SCR-M1-Code
 screen_task_cisco_license_verbatim                            linux-core:unit,windows-core:unit  pfad=screen::core::licenses::tests::screen_task_cisco_license_verbatim  quelle=B306,SCR-M1-Code
 screen_task_metrics_latency_rates_and_clock                   linux-core:unit,windows-core:unit  pfad=screen::core::metrics::tests::screen_task_metrics_latency_rates_and_clock  quelle=B306,SCR-M1-Code
 screen_task_metrics_static_psnr                               linux-core:unit,windows-core:unit  pfad=screen::core::metrics::tests::screen_task_metrics_static_psnr  quelle=B306,SCR-M1-Code
@@ -516,7 +514,6 @@ screen_task_windows_synthetic_source_still_works              windows-screen:scr
 screen_task_windows_wgc_snapshot_matches                      windows-screen:screen-windows  ignored threads=1 fixture=interactive-desktop  pfad=screen::os::capture_tests::screen_task_windows_wgc_snapshot_matches  quelle=B342,U16
 screen_task_windows_window_list_has_test_window               windows-screen:screen-windows  ignored threads=1 fixture=interactive-desktop  pfad=screen::os::capture_tests::screen_task_windows_window_list_has_test_window  quelle=B342,U16
 screen_task_codec_inventory_without_mf                        linux-core:unit,windows-screen:screen-windows  pfad=screen::os::codec_inventory::tests::screen_task_codec_inventory_without_mf  quelle=B330,U13
-screen_task_negotiate_cb_high_for_openh264_viewer             linux-core:unit  pfad=screen::os::codec_inventory::tests::screen_task_negotiate_cb_high_for_openh264_viewer  quelle=B330,U13
 screen_task_app_units_parse                                   linux-core:unit  pfad=screen::os::host_backend::tests::screen_task_app_units_parse  quelle=B354,U19
 screen_task_limits_consent_each_session_without_token         linux-core:unit  pfad=screen::os::host_backend::tests::screen_task_limits_consent_each_session_without_token  quelle=B354,U19
 screen_task_linux_without_pipewire_starts                     linux-core:unit  pfad=screen::os::host_backend::tests::screen_task_linux_without_pipewire_starts  quelle=B354,U19
@@ -530,7 +527,6 @@ screen_task_worker_keeps_other_capture_errors_as_capture_failed  linux-core:unit
 screen_task_worker_maps_permission_denied_to_no_display       linux-core:unit  pfad=screen::os::host_worker_main::tests::screen_task_worker_maps_permission_denied_to_no_display  quelle=B354,U19
 screen_task_indicator_needs_the_desktop_app                   linux-core:unit  pfad=screen::os::indicator::tests::screen_task_indicator_needs_the_desktop_app  quelle=B318,U10
 screen_task_windows_integrity_query_failure_blocks            windows-screen:screen-windows  pfad=screen::os::input_integrity::tests::screen_task_windows_integrity_query_failure_blocks  quelle=B366,SEC-P5
-screen_task_control_exclusive                                 linux-core:unit  pfad=screen::os::input_keys::tests::screen_task_control_exclusive  quelle=B366,SEC-P5
 screen_task_input_keys_tables_and_no_ctrl_alt_del             linux-core:unit  pfad=screen::os::input_keys::tests::screen_task_input_keys_tables_and_no_ctrl_alt_del  quelle=B366,SEC-P5
 screen_task_keys_released_on_disconnect                       linux-core:unit  pfad=screen::os::input_keys::tests::screen_task_keys_released_on_disconnect  quelle=B366,SEC-P5
 screen_task_windows_elevated_blocked_reported                 windows-screen:screen-windows  ignored threads=1 fixture=interactive-desktop,elevated-window  pfad=screen::os::input_send::tests::screen_task_windows_elevated_blocked_reported  quelle=B366,SEC-P5,NR-N7
@@ -550,7 +546,6 @@ screen_task_wayland_portal_bench                              linux-wayland:scre
 screen_task_wayland_remote_session_without_pipewire_asks_nothing  linux-core:unit  pfad=screen::os::portal_session::tests::screen_task_wayland_remote_session_without_pipewire_asks_nothing  quelle=B354,U19
 screen_task_wayland_token_replaced_after_start                linux-wayland:screen-wayland  ignored threads=1 fixture=wayland-portal  pfad=screen::os::portal_session::tests::screen_task_wayland_token_replaced_after_start  quelle=B354,U19
 screen_task_windows_window_filter_alt_tab_rule                windows-screen:screen-windows  pfad=screen::os::window_list::tests::screen_task_windows_window_filter_alt_tab_rule  quelle=B342,U16
-screen_task_windows_interop_factories_only                    linux-core:unit,windows-screen:screen-windows  pfad=screen::os::windows_static_tests::screen_task_windows_interop_factories_only  quelle=B342,U16,D3-prepare-static
 screen_task_x11_bench_real_capture                            linux-desktop:screen-x11  ignored threads=1 fixture=xvfb env=SE_SCREEN_TASK_X11=1  pfad=screen::os::x11_capture::tests::screen_task_x11_bench_real_capture  quelle=B354,U19
 screen_task_x11_snapshot_matches                              linux-desktop:screen-x11  ignored threads=1 fixture=xvfb env=SE_SCREEN_TASK_X11=1  pfad=screen::os::x11_capture::tests::screen_task_x11_snapshot_matches  quelle=B354,U19
 screen_task_x11_window_list_ewmh_and_querytree                linux-desktop:screen-x11  ignored threads=1 fixture=xvfb env=SE_SCREEN_TASK_X11=1  pfad=screen::os::x11_capture::tests::screen_task_x11_window_list_ewmh_and_querytree  quelle=B354,U19
@@ -594,10 +589,7 @@ desktop_task_stale_stop_marker_ignored_at_start               linux-desktop:gui-
 desktop_task_cli_json_shapes                                  linux-core:unit,windows-core:unit  pfad=cli::desktop::json_tests::desktop_task_cli_json_shapes  quelle=D562,U15
 desktop_task_cli_completion_lists_desktop                     linux-core:unit,windows-core:unit  pfad=cli::desktop::tests::desktop_task_cli_completion_lists_desktop  quelle=D562,U15
 desktop_task_cli_parse                                        linux-core:unit,windows-core:unit  pfad=cli::desktop::tests::desktop_task_cli_parse  quelle=D562,U15
-desktop_task_mcp_instructions_within_limit                    linux-core:unit,windows-core:unit  pfad=cli::desktop::tests::desktop_task_mcp_instructions_within_limit  quelle=D562,U15
-desktop_task_mcp_status_has_desktop                           linux-core:unit,windows-core:unit  pfad=cli::desktop::tests::desktop_task_mcp_status_has_desktop  quelle=D562,U15
 desktop_task_update_stop_rule_matches_mcp                     linux-core:unit,windows-core:unit  pfad=daemon::update_stop::tests::desktop_task_update_stop_rule_matches_mcp  quelle=D544,U03,F1-F2
-desktop_task_updater_helper_unchanged                         linux-core:unit,windows-core:unit  pfad=daemon::update_stop::tests::desktop_task_updater_helper_unchanged  quelle=D544,U03,F1-F2
 desktop_task_layout_has_no_vault_paths                        linux-core:unit,windows-core:unit  pfad=desktop::core::layout_tests::desktop_task_layout_has_no_vault_paths  quelle=D532,DSK-M1
 desktop_task_layout_monitor_removed_adopted_by_primary        linux-core:unit,windows-core:unit  pfad=desktop::core::layout_tests::desktop_task_layout_monitor_removed_adopted_by_primary  quelle=D532,DSK-M1
 desktop_task_layout_per_monitor_new_items_on_primary          linux-core:unit,windows-core:unit  pfad=desktop::core::layout_tests::desktop_task_layout_per_monitor_new_items_on_primary  quelle=D532,DSK-M1
@@ -647,7 +639,6 @@ desktop_task_layer_no_buildtime_wayland_link                  linux-wayland:desk
 desktop_task_layer_no_gpu_exits_one                           linux-wayland:desktop-linux-wayland  ignored threads=1 env=SE_DESKTOP_TASK_WAYLAND=1 env=SE_DESKTOP_TASK_GUI={gui}  pfad=desktop::os::platform::layer_shell::layer_task_tests::desktop_task_layer_no_gpu_exits_one  quelle=D610,U37
 desktop_task_layer_shell_bottom_surface                       linux-wayland:desktop-linux-wayland  ignored threads=1 env=SE_DESKTOP_TASK_WAYLAND=1 env=SE_DESKTOP_TASK_GUI={gui}  pfad=desktop::os::platform::layer_shell::layer_task_tests::desktop_task_layer_shell_bottom_surface  quelle=D610,U37
 desktop_task_layer_shell_two_outputs                          linux-wayland:desktop-linux-wayland  ignored threads=1 env=SE_DESKTOP_TASK_WAYLAND=1 env=SE_DESKTOP_TASK_GUI={gui}  pfad=desktop::os::platform::layer_shell::layer_task_tests::desktop_task_layer_shell_two_outputs  quelle=D610,U37
-desktop_task_lock_only_expected_additions                     linux-wayland:desktop-linux-wayland  ignored threads=1 env=SE_DESKTOP_TASK_WAYLAND=1 env=SE_DESKTOP_TASK_GUI={gui}  pfad=desktop::os::platform::layer_shell::layer_task_tests::desktop_task_lock_only_expected_additions  quelle=D610,U37
 desktop_task_layer_cross_output_drop_uses_global_point        linux-core:unit  pfad=desktop::os::platform::layer_shell::layer_tests::desktop_task_layer_cross_output_drop_uses_global_point  quelle=D610,U37
 desktop_task_layer_keysym_table                               linux-core:unit  pfad=desktop::os::platform::layer_shell::layer_tests::desktop_task_layer_keysym_table  quelle=D610,U37
 desktop_task_layer_namespace_by_desktop                       linux-core:unit  pfad=desktop::os::platform::layer_shell::layer_tests::desktop_task_layer_namespace_by_desktop  quelle=D610,U37
@@ -678,7 +669,6 @@ desktop_task_x11_monitors_two_screens                         linux-desktop:desk
 desktop_task_x11_no_ewmh_unavailable                          linux-desktop:desktop-linux-x11  ignored threads=1 env=SE_DESKTOP_TASK_X11=1 env=SE_DESKTOP_TASK_GUI={gui} env=TMPDIR={tmp} env=TMP={tmp} env=TEMP={tmp}  pfad=desktop::os::platform::x11_surface::tests::desktop_task_x11_no_ewmh_unavailable  quelle=D598,U34
 desktop_task_x11_window_type_desktop                          linux-desktop:desktop-linux-x11  ignored threads=1 env=SE_DESKTOP_TASK_X11=1 env=SE_DESKTOP_TASK_GUI={gui} env=TMPDIR={tmp} env=TMP={tmp} env=TEMP={tmp}  pfad=desktop::os::platform::x11_surface::tests::desktop_task_x11_window_type_desktop  quelle=D598,U34
 desktop_task_context_menu_unchanged                           linux-core:unit,windows-core:unit  pfad=desktop::os::preserve_tests::desktop_task_context_menu_unchanged  quelle=D562,U15,F4-F11
-desktop_task_release_assets_unchanged                         linux-core:unit,windows-core:unit  pfad=desktop::os::preserve_tests::desktop_task_release_assets_unchanged  quelle=D562,U15,F4-F11
 desktop_task_share_navigation_unchanged                       linux-core:unit,windows-core:unit  pfad=desktop::os::preserve_tests::desktop_task_share_navigation_unchanged  quelle=D562,U15,F4-F11
 desktop_task_sync_autostart_untouched                         linux-core:unit,windows-core:unit  pfad=desktop::os::preserve_tests::desktop_task_sync_autostart_untouched  quelle=D562,U15,F4-F11
 desktop_task_connect_starts_worker                            linux-desktop:desktop-linux-x11,windows-desktop:desktop-windows  ignored threads=1 env=SMART_EXPLORER_DESKTOP_TASK=1 env=SE_DESKTOP_TASK_GUI={gui} env=SE_DESKTOP_TEST_HEADLESS=1 env=TMPDIR={tmp} env=TMP={tmp} env=TEMP={tmp}  pfad=desktop::os::process_task_tests::desktop_task_connect_starts_worker  quelle=D562,U15
@@ -1156,7 +1146,6 @@ speed_task_agent_stage_belongs_to_the_opening_connection_and_goes_with_it  linux
 speed_task_agent_stage_finish_requires_full_coverage          linux-core:unit  pfad=agent_proto::range_lz4_tests::speed_task_agent_stage_finish_requires_full_coverage  quelle=E13,Code
 speed_task_agent_stage_open_creates_an_exclusive_sparse_stage  linux-core:unit  pfad=agent_proto::range_lz4_tests::speed_task_agent_stage_open_creates_an_exclusive_sparse_stage  quelle=E13,Code
 speed_task_agent_stage_table_is_limited_by_the_credit_request_limit  linux-core:unit  pfad=agent_proto::range_lz4_tests::speed_task_agent_stage_table_is_limited_by_the_credit_request_limit  quelle=E13,Code
-speed_task_agent_unknown_frame_tag_is_an_error                linux-core:unit  pfad=agent_proto::range_lz4_tests::speed_task_agent_unknown_frame_tag_is_an_error  quelle=E13,Code
 speed_task_agent_write_at_rejects_overlap_and_out_of_range    linux-core:unit  pfad=agent_proto::range_lz4_tests::speed_task_agent_write_at_rejects_overlap_and_out_of_range  quelle=E13,Code
 speed_task_range_stage_closing_removes_only_unfinished_stages  linux-core:unit  pfad=agent_proto::range_stage::tests::speed_task_range_stage_closing_removes_only_unfinished_stages  quelle=E13,Code
 speed_task_range_stage_data_lands_at_its_offsets              linux-core:unit  pfad=agent_proto::range_stage::tests::speed_task_range_stage_data_lands_at_its_offsets  quelle=E13,Code
@@ -1402,7 +1391,6 @@ speed_task_priority_only_lowers                               linux-core:unit  p
 speed_task_sensor_unix_reads_what_it_can_and_nothing_else     linux-core:unit  pfad=host::platform::tests::speed_task_sensor_unix_reads_what_it_can_and_nothing_else  quelle=E13,Code
 speed_task_write_all_at_positions_data                        windows-core:unit  pfad=host::platform::tests::speed_task_write_all_at_positions_data  quelle=E13,Code
 speed_task_write_all_at_positions_data                        linux-core:unit  pfad=host::platform::tests::speed_task_write_all_at_positions_data  quelle=E13,Code
-speed_task_stream_block_equals_the_engine_copy_buffer         linux-core:unit  pfad=transfer::read_pipeline::stream_block_tests::speed_task_stream_block_equals_the_engine_copy_buffer  quelle=E13,Code
 speed_task_segments_last_range_takes_remainder_below_min      linux-core:unit  pfad=transfer::segments_tests::speed_task_segments_last_range_takes_remainder_below_min  quelle=E13,Code
 speed_task_segments_ledger_claims_in_order                    linux-core:unit  pfad=transfer::segments_tests::speed_task_segments_ledger_claims_in_order  quelle=E13,Code
 speed_task_segments_prefix_is_smallest_inflight_start         linux-core:unit  pfad=transfer::segments_tests::speed_task_segments_prefix_is_smallest_inflight_start  quelle=E13,Code
@@ -1477,8 +1465,6 @@ speed_task_share_stats_kernel_udp_counters_parse_by_column_name linux-core:unit 
 speed_task_share_stats_cpu_time_reads_names_with_spaces_and_brackets linux-core:unit  pfad=share::quic_stats_tests::speed_task_share_stats_cpu_time_reads_names_with_spaces_and_brackets  quelle=E13,Code
 speed_task_share_stats_busiest_threads_are_ranked_by_cpu_since_the_start linux-core:unit  pfad=share::quic_stats_tests::speed_task_share_stats_busiest_threads_are_ranked_by_cpu_since_the_start  quelle=E13,Code
 speed_task_share_stats_file_makes_room_before_it_exceeds_the_limit linux-core:unit  pfad=share::quic_stats_tests::speed_task_share_stats_file_makes_room_before_it_exceeds_the_limit  quelle=E13,Code
-speed_task_ftp_kinds_listing_skips_the_per_file_probes         linux-core:unit  pfad=ftp::speed_task_ftp_tests::speed_task_ftp_kinds_listing_skips_the_per_file_probes  quelle=E13,Code
-speed_task_ftp_exact_listing_keeps_the_per_file_probes         linux-core:unit  pfad=ftp::speed_task_ftp_tests::speed_task_ftp_exact_listing_keeps_the_per_file_probes  quelle=E13,Code
 speed_task_ftp_new_connection_takes_over_the_feat_answer       linux-core:unit  pfad=ftp::speed_task_ftp_tests::speed_task_ftp_new_connection_takes_over_the_feat_answer  quelle=E13,Code
 speed_task_ftp_inherited_feat_answer_saves_the_request         linux-core:unit  pfad=ftp::speed_task_ftp_tests::speed_task_ftp_inherited_feat_answer_saves_the_request  quelle=E13,Code
 speed_task_ftp_publish_without_mlst_probes_no_other_file       linux-core:unit  pfad=ftp::speed_task_ftp_tests::speed_task_ftp_publish_without_mlst_probes_no_other_file  quelle=E13,Code

@@ -30,7 +30,7 @@ from .common import FAILED, NATIVE, NOT_RUN, PASSED, REPO, WINDOWS
 
 SHARE_EXEC_INVENTORY = REPO / "docs" / "oberflaechen" / "share-exec.md"
 INVENTORY_INDEX = REPO / "docs" / "oberflaechen" / "INDEX.md"
-TERMINAL_TRANSPORTS = NATIVE / "src" / "cli" / "shell_session" / "terminal_transports.rs"
+TERMINAL_TRANSPORTS = NATIVE / "crates" / "cli" / "src" / "cli" / "shell_session" / "terminal_transports.rs"
 START_LINE_TEST = "fn shell_session_task_share_session_needs_one_start_line"
 RUST_STRING = r'"((?:[^"\\]|\\.)*)"'
 DIALECT_MARKER = "SE_DIALECT_x_"

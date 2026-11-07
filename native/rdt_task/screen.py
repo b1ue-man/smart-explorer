@@ -61,7 +61,7 @@ from pathlib import Path
 from . import common
 from .common import FAILED, LINUX, NATIVE, NOT_RUN, PASSED, REPO, WINDOWS
 
-PINS_FILE = NATIVE / "src" / "screen" / "os" / "native_ffi" / "openh264_pins.rs"
+PINS_FILE = NATIVE / "crates" / "engine" / "src" / "screen" / "os" / "native_ffi" / "openh264_pins.rs"
 CISCO_LICENSE = REPO / "third-party" / "openh264" / "BINARY_LICENSE.txt"
 INSTALL_LINUX = REPO / "install-linux.sh"
 SCREEN_DOC = REPO / "docs" / "oberflaechen" / "bildschirm.md"
