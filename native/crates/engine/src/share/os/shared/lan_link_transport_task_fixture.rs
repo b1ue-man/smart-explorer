@@ -7,6 +7,7 @@ use super::super::super::types::{
 use super::super::*;
 use super::{wait_until, OBSERVE};
 use crate::net::InterfaceFacts;
+use crate::share::handshake_limits::TlsSource;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use tokio::task::JoinHandle;
 
@@ -172,9 +173,12 @@ fn fixture_auth(identity: ShareIdentity) -> ShareAuthState {
     }
 }
 
+/// The first value counts taken TLS handshake slots, the others free permits; both directions must match the baseline.
 fn permits(node: &ShareIrohNode) -> (usize, usize, usize) {
     (
-        node.handshake_slots.available_permits(),
+        node.handshake_slots
+            .held(&TlsSource::Other(String::new()))
+            .0,
         node.direct_repair_slots.available_permits(),
         node.runtime_transition_slot.available_permits(),
     )
