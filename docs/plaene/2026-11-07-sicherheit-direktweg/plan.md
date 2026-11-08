@@ -392,3 +392,34 @@ Zuordnung: F1 → f-entdeckung-4; F2 → suite-4-server; Plandokument dieser Erg
 
 ### E3.6 Fragen an den Nutzer
 Keine neue Frage.
+
+## Ergänzung 4 (2026-11-08)
+
+Ausgangslage: Fehlerursache F1 aus dem Remote-Suite-Lauf 42428751187 auf Commit aaf46d7b (Kompilierfehler in der Engine-Crate). Bewertung in E4.1; Entscheidung E34; Meilensteine M35 und M36; Pakete suite-5-zugang und plandoku-5.
+
+### E4.1 Bewertung
+- F1 bestätigt: Kompilierfehler E0599 in `native/crates/engine/src/share/os/shared/lan_link_transport_task_fixture.rs` Zeile 177 (Funktion `permits`). Der Aufruf `node.handshake_slots.available_permits()` existiert nicht, weil das Feld `handshake_slots` seit Commit e5bb16d5 vom Typ `Arc<TlsHandshakeSlots>` ist (`native/crates/engine/src/share/core/node.rs` Zeile 68). `TlsHandshakeSlots` in `native/crates/engine/src/share/core/handshake_limits_tls.rs` (Zeilen 91 bis 161) hat keine Methode `available_permits`; die Testmethode `held` (Zeilen 155 bis 160) liefert die belegten Plätze. Dieser Aufruf steht als einzige Stelle unter `native/crates/engine/src`.
+- Im Lauf tritt genau dieser Fehlercode auf, in den Jobs windows-gnu, workspace (windows-2025) und workspace (ubuntu-24.04). Ein Infrastrukturfehler liegt im Eingang nicht vor. Warnungen (etwa `fetch_update`, unbenutzte Importe) sind keine Fehlerursache dieser Ergänzung.
+
+### E4.2 Entscheidungen (Ergänzung zu Abschnitt 5, 11.3, E1.2, E2.2 und E3.2)
+- E34 (F1): `permits` liest als ersten Wert die insgesamt belegten TLS-Handshake-Plätze über `held(&TlsSource::Other(String::new())).0`. Nur die Gesamtzahl wird gelesen; die Quelle ist dafür beliebig, und `held` verändert keinen Zustand. Der Vergleich mit dem Ausgangswert in `assert_status_only` prüft weiter, dass ein Status-Austausch keinen Handshake-Platz behält. `TlsSource` wird aus `crate::share::handshake_limits` importiert, wie in `native/crates/engine/src/share/core/login_transport_admission.rs` Zeile 12. Die Fixture liegt unter `crate::share` und unter `#[cfg(test)]`; dadurch sind `TlsSource` und `held` erreichbar. Verworfen: eine neue `#[cfg(test)]`-Methode in `handshake_limits_tls.rs` (zweite Datei, gleicher Nutzen); das Streichen des ersten Tupelwerts (die Prüfung, dass der Status-Weg keinen Handshake-Platz behält, ginge verloren).
+- Annahme: Das gemischte Tupel (erster Wert belegt, zweiter und dritter Wert frei) ist für den Gleichheitsvergleich mit dem Ausgangswert gleichwertig; ein Kommentar im Testcode macht das sichtbar.
+- Kein Registerpaket: Testnamen und Testdateien ändern sich nicht; `docs/tests/register.tsv` bleibt gültig.
+
+### E4.3 Meilensteine (Ergänzung zu Abschnitt 6, 11.4, E1.3, E2.3 und E3.3)
+- M35 (suite-5-zugang): `smart_explorer_engine` (Testbinärdatei der Bibliothek) kompiliert ohne E0599. Die S09-Prüfung „Status belegt keinen Platz“ vergleicht die belegten TLS-Handshake-Plätze, die freien Reparaturplätze und die freien Übergangsplätze mit dem Ausgangswert. Ob die Tests der Engine-Crate bestehen, zeigt erst der nächste Lauf derselben Suite.
+- M36 (plandoku-5): `docs/plaene/2026-11-07-sicherheit-direktweg/plan.md` trägt den Abschnitt Ergänzung 4.
+
+### E4.4 Sicherheit (Ergänzung zu Abschnitt 8, 11.5, E1.4, E2.4 und E3.4)
+- Keine Eigenschaft aus Abschnitt 8, 11.5, E1.4, E2.4 und E3.4 wird geschwächt. E34 ändert nur Testcode. Die Regeln der TLS-Handshake-Plätze (ein Viertel je Quelle, Wiederholung ab der Hälfte, Reserve für gepinnte Relay-Sender) bleiben unverändert.
+
+### E4.5 Pakete (Ergänzung zu Abschnitt 9, 11.7, E1.5, E2.5 und E3.5)
+| Paket | Rolle | abhängig von |
+|---|---|---|
+| suite-5-zugang | umsetzung | – |
+| plandoku-5 | umsetzung | – |
+
+Zuordnung: F1 → suite-5-zugang; Plandokument dieser Ergänzung → plandoku-5. Die beiden Pakete ändern keine gemeinsame Datei und laufen parallel.
+
+### E4.6 Fragen an den Nutzer
+Keine neue Frage.
