@@ -45,7 +45,7 @@ fn seal_key(secret: &[u8], aad: &[u8]) -> Option<Zeroizing<[u8; 32]>> {
     if secret.len() != 32 {
         return None;
     }
-    let mut mac = Hmac::<Sha256>::new_from_slice(secret).ok()?;
+    let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(secret).ok()?;
     mac.update(aad);
     let mut key = Zeroizing::new([0u8; 32]);
     key.copy_from_slice(&mac.finalize().into_bytes());
