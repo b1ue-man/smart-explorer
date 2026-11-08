@@ -356,3 +356,39 @@ Parallele Pakete haben keine gemeinsame änderbare Datei: suite-3-erneuerung än
 
 ### E2.6 Fragen an den Nutzer
 Keine neue Frage.
+
+## Ergänzung 3 (2026-11-07)
+
+Ausgangslage: Fehlerursachen F1 und F2 aus dem Remote-Suite-Lauf 42425595186 auf Commit 4bc43f14 (Kompilierfehler in der Engine-Crate und drei fehlgeschlagene QAD-Tests). Bewertung je Fehlerursache mit Datei und Stelle in E3.1; Entscheidungen E32 und E33; Meilensteine M32 bis M34; Pakete f-entdeckung-4 und suite-4-server sowie das Plandokument dieser Ergänzung.
+
+### E3.1 Bewertung
+- F1 bestätigt: Kompilierfehler E0034 in `native/crates/engine/src/share/core/lan_privacy_seal.rs` Zeile 48 (Funktion `seal_key`, Aufruf `Hmac::<Sha256>::new_from_slice(secret)`). Ursache: Die Datei importiert `KeyInit` aus `chacha20poly1305` (Zeile 11) und `Mac` aus `hmac` (Zeile 13). Beide Traits bieten `new_from_slice` für `Hmac<Sha256>` an, weil beide Crates denselben `crypto-common` nutzen; der unqualifizierte Aufruf ist daher mehrdeutig. Die Engine-Crate bricht damit ab. Die Crates darüber (`gui`, `cli`, Programme, `android-bridge`) sind im Lauf nicht kompiliert worden.
+- Die Schwesterdateien `native/crates/engine/src/share/core/lan_privacy.rs` Zeile 37 und `native/crates/engine/src/share/core/signal_publish.rs` Zeile 58 rufen `new_from_slice` ohne `KeyInit` im Geltungsbereich auf und sind vom Fehler nicht betroffen. Dateien unter `native`, `share-server` und `android-bridge`, die `new_from_slice`, `KeyInit` und `Mac` zugleich enthalten: Die übrigen mit beiden Traits im Geltungsbereich (`native/crates/core/src/cryptomator/core/content_chunks.rs`, `vault_config.rs`) rufen bereits vollqualifiziert `<… as KeyInit>::new_from_slice` auf.
+- F2 bestätigt, Testfehler und kein Produktfehler: In `share-server/src/relay_qad_tests.rs` Zeilen 131 bis 138 (Funktion `block_on_within`) wertet `runtime.block_on(tokio::time::timeout(TEST_LIMIT, future))` das `timeout(..)` vor `block_on` aus. `tokio::time::timeout` legt dabei sofort den Zeitgeber an, der eine laufende Runtime braucht; ohne Runtime bricht er mit „no reactor running“ ab. Betroffen sind genau die drei Tests `qad_limits_end_to_end` (`share-server/src/relay_qad_limits_tests.rs` Zeile 282), `qad_reports_the_clients_own_socket_address` (`relay_qad_tests.rs` Zeile 362) und `qad_restart_retries_only_bind_errors` (`relay_qad_tests.rs` ab Zeile 281, über `bind_failure` Zeile 264 und `quic_failure` Zeile 273). Die Feature `time` von `tokio` ist in `share-server/Cargo.toml` Zeile 28 aktiv.
+- Infrastrukturfehler: keiner im Eingang. Die Warnungen zu `fetch_update` sind keine Fehler, werden ohne `-D warnings` nur gemeldet und haben kein Paket; belegt ist die Fundstelle `native/crates/engine/src/share/os/shared/route_monitor.rs` Zeile 58, die vollständige Fundstellenliste ist unbekannt.
+
+### E3.2 Entscheidungen (Ergänzung zu Abschnitt 5, 11.3, E1.2 und E2.2)
+- E32 (F1): Der Aufruf wird vollqualifiziert auf `<Hmac<Sha256> as Mac>::new_from_slice(secret)` festgelegt. Verhalten und Fehlerfall (`None`) bleiben unverändert. Verworfen: `KeyInit` aus dem Import entfernen und `ChaCha20Poly1305::new` an zwei Stellen vollqualifizieren (drei geänderte Zeilen statt einer, gleicher Nutzen). Annahme A4: die Version von `hmac` in `native/Cargo.toml` bietet `Mac::new_from_slice` mit `Result<Self, InvalidLength>`; die Umsetzung prüft das am Quelltext der Abhängigkeit. Ist A4 falsch, wird `<Hmac<Sha256> as KeyInit>::new_from_slice` verwendet, wie in `native/crates/core/src/cryptomator/core/content_chunks.rs` Zeile 85.
+- E33 (F2): Der Timeout entsteht in einem async-Block, den `block_on` ausführt, so dass der Zeitgeber innerhalb der Runtime angelegt wird. Verworfen: `runtime.enter()` vor dem Aufruf (zusätzlicher Wächter ohne Nutzen); Entfernen der Zeitgrenze (Tests könnten unbegrenzt hängen). Geändert wird nur Testcode.
+- Kein Registerpaket: keine Testdatei und kein Testname ändert sich; `docs/tests/register.tsv` bleibt gültig.
+
+### E3.3 Meilensteine (Ergänzung zu Abschnitt 6, 11.4, E1.3 und E2.3)
+- M32 (f-entdeckung-4): `smart_explorer_engine` kompiliert ohne E0034; die LAN-Versiegelung `v=3` bleibt unverändert.
+- M33 (suite-4-server): Die drei Tests `qad_limits_end_to_end`, `qad_reports_the_clients_own_socket_address` und `qad_restart_retries_only_bind_errors` laufen ohne Panik „no reactor running“. Offen: ob sie inhaltlich bestehen; das zeigt erst der nächste Lauf derselben Suite.
+- M34 (plandoku-4): `docs/plaene/2026-11-07-sicherheit-direktweg/plan.md` trägt Ergänzung 3.
+- Offen nach F1: Die Rust-Tests der Jobs windows-gnu, workspace (ubuntu-24.04 und windows-2025) und android (arm64-v8a und x86_64) sind im Lauf nicht ausgeführt worden, und die Crates oberhalb der Engine sind nicht kompiliert worden. Ob sie weitere Fehler enthalten, ist unbekannt; das zeigt erst der nächste Lauf derselben Suite.
+
+### E3.4 Sicherheit (Ergänzung zu Abschnitt 8, 11.5, E1.4 und E2.4)
+- Keine Eigenschaft aus Abschnitt 8, 11.5, E1.4 und E2.4 wird geschwächt: E32 ändert nur die Auflösung des Trait-Aufrufs; Schlüsselableitung (HMAC-SHA256 über Domäne, Lookup-ID, Epoche und Ablauf) und Ablehnung falscher Schlüssellängen bleiben. E33 ändert nur Testcode.
+
+### E3.5 Pakete (Ergänzung zu Abschnitt 9, 11.7, E1.5 und E2.5)
+| Paket | Rolle | abhängig von |
+|---|---|---|
+| f-entdeckung-4 | umsetzung | – |
+| suite-4-server | umsetzung | – |
+| plandoku-4 | umsetzung | – |
+
+Zuordnung: F1 → f-entdeckung-4; F2 → suite-4-server; Plandokument dieser Ergänzung → plandoku-4. Die drei Pakete ändern keine gemeinsame Datei und laufen parallel.
+
+### E3.6 Fragen an den Nutzer
+Keine neue Frage.
