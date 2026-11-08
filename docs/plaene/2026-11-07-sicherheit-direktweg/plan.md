@@ -466,3 +466,15 @@ Zuordnung: F1, F2, F3, F4 und der Testteil von F5 → suite-6-tests; Produktteil
 
 ### E5.6 Fragen an den Nutzer
 Keine neue Frage.
+
+## Stand (2026-11-08)
+
+- Version: 0.5.196 (`native/Cargo.toml`, Zeile 36, Wert `version = "0.5.196"`; Tag `v0.5.196` zeigt auf `29cd6ea8`).
+- Release-Commit: `29cd6ea8` „Release Smart Explorer v0.5.196“ auf `main`; Vorgänger `c189077e`.
+- Remote-Task-Suite: Lauf `42439947911` auf `c189077e`, alle sieben Jobs erfolgreich. Vorher fehlgeschlagen: `42425595186`, `42428751187`, `42432482161`.
+- Release-Lauf: `42444153827` von `.github/workflows/release.yml`, erfolgreich.
+- GitHub Release `v0.5.196` mit 28 Assets, darunter neu `release-manifest` und `release-manifest.sig`; `releases/latest/download/version.txt` antwortet `0.5.196`.
+- Release-Signatur (M24, E20): Release-Lauf `42444153827` erfolgreich, also war `SE_UPDATE_SIGNING_KEY` gesetzt (der Schritt „Require the release signing key“ in `.github/workflows/release.yml` bricht sonst vor jedem Bau ab; Hinweis in E2.1); die Signatur des veröffentlichten `release-manifest` ist am 2026-11-08 mit dem ins Programm eingebauten öffentlichen Ed25519-Schlüssel geprüft: gültig.
+- Mit Lauf `42439947911` bestanden sind die Prüfpunkte, die laut den Ergänzungen erst der nächste Suite-Lauf zeigt: M33 (QAD-Tests inhaltlich), „Offen nach F1“ in Ergänzung 3 (Tests der Jobs windows-gnu, workspace und android), M35 (Tests der Engine-Crate), M37 und M38. Annahme A9 (Ergänzung 5) bleibt Annahme: Der erfolgreiche Lauf zeigt nicht, woher der Abbruch im Lauf `42432482161` kam.
+- Offen nach dem Release: die Teile, die nur echte Geräte und Netze belegen; sie stehen in `docs/TODO.md` (unter anderem `SEC-ENTDECK-CODE-MESSUNG`, `SEC-DNS-ANDROID`, `SEC-UNBELEGT-VERSCHIEDEN`, `SEC-UNBELEGT-LAN-ENTDECK`).
+- Die Befunde und Entscheidungen der Ergänzungen 1 bis 5 bleiben unverändert.
