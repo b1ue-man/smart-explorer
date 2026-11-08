@@ -423,3 +423,46 @@ Zuordnung: F1 → suite-5-zugang; Plandokument dieser Ergänzung → plandoku-5.
 
 ### E4.6 Fragen an den Nutzer
 Keine neue Frage.
+
+## Ergänzung 5 (2026-11-08)
+
+Eingang: CI-Auswertung des Remote-Suite-Laufs 42432482161 auf Commit 165955d9; fehlgeschlagen sind nur workspace (ubuntu-24.04) und workspace (windows-2025), jeweils im Schritt „Every crate, every test“. Pfadkürzel: `DOS` = `native/crates/engine/src/daemon/os/shared`, `SOS` = `native/crates/engine/src/share/os/shared`, `TS` = `native/crates/transfer/src/sync/os/shared`, `GC` = `native/crates/gui/src/app/core`. Bewertung je Fehlerstelle mit Datei und Stelle, Entscheidungen E35 bis E40, Annahmen A8 bis A10 und offene Punkte: siehe E5.1 bis E5.6.
+
+### E5.1 Bewertung
+- Fehlende Joblogs (agent, servers, android arm64-v8a, android x86_64): nachgeholt. Alle vier Jobs sind erfolgreich und melden jeweils ein bestandenes Testergebnis. Keine Fehlerstelle.
+- F1 bestätigt (beide workspace-Jobs): Der Hilfsthread von `worker_job_task_progress_cancel_and_end_travel_over_ipc` (`DOS/transfer_job_client_tests.rs` Zeilen 149–155) beantwortet den IPC-Besitznachweis nicht, den `ask` (`DOS/transfer_job_client.rs` Zeile 161) seit fc0b80c1 (Paket f-lokal) über `ipc_proof::connect_token` zuerst sendet. Testcode.
+- F2 und F3 bestätigt (nur windows-2025): Ein Windows-Host beobachtet keine lokale Freigabewurzel. `SOS/host_watch.rs` nutzt nur `watch_confined`, das ohne `watch_path` mit Unsupported endet (`native/crates/transfer/src/watch/os/shared/service.rs` Zeilen 148–153); unter Windows ist `watch_path` immer None (`native/crates/core/src/local_access/os/windows/directory_handle.rs` Zeilen 71–73). Vorbestehend (f0d22e17/02215055); die Suite-Tests aus 5eb6d963 setzen eine Beobachtung voraus. Testcode; die Produktlücke wird als offener Punkt geführt (E40).
+- F4 bestätigt (nur windows-2025): `GC/update_unsigned_ui_tests.rs` Zeile 126 sucht `"\n    }\n"` im per `include_str!` eingebundenen Quelltext, den der Windows-Checkout mit CRLF tragen kann (`.gitattributes` enthält keine Regel für `*.rs`). Testcode.
+- F5 (nur windows-2025): Der Abbruchgrund in `result.errors` steht in keinem Log, weil der Test ihn nicht ausgibt. Diese Angabe bleibt fehlend. An der Quelle bestimmt und bestätigt: Die Revalidierung in `TS/sync_delete.rs` (Zeile 117) vergleicht auch Verzeichnis-Kandidaten mit `current` einschließlich `mtime_ms`; deren Beobachtung stammt aus der Ordnerauflistung, weil `observe` seit bfedc70a nur für Dateien per `stat` läuft (Zeile 85). Unter Windows kommt diese Zeit aus dem Index des Elternordners, `stat` aus dem Verzeichnis selbst. Weicht sie ab, bricht die Löschung mit „nothing deleted“ ab. Vorbestehend; kein Paket dieser Ergänzung hat die Dateien vorher geändert.
+- Annahmen: A8: Der Runner checkt mit `core.autocrlf=true` aus. Im Log nicht belegt; E37 ist ohne diese Annahme korrekt. A9: Der Abbruch aus F5 in diesem Lauf stammt von der Verzeichnis-Revalidierung. Kein Gegenbeleg, kein Laufbeleg. A10: NTFS führt die Zeit eines Unterverzeichnisses im Index des Elternordners nicht sofort nach (dieselbe Einschränkung, die bfedc70a für Dateien nennt). Ohne Webbeleg.
+- Kein vorübergehender Infrastrukturfehler im Eingang.
+
+### E5.2 Entscheidungen (Ergänzung zu Abschnitt 5, 11.3, E1.2, E2.2, E3.2 und E4.2)
+- E35 (F1): Der Test beantwortet den Nachweis nach `control.accept()` mit `crate::daemon::ipc_proof::answer_for_test(&mut cancel, "token")`, wie `DOS/ipc_open_client.rs` Zeile 176.
+- E36 (F2, F3): Beide Tests bleiben auf allen Plattformen. Unter Windows prüfen sie `ErrorKind::Unsupported` statt einer Beobachtung; die PermissionDenied-Abweisungen in und auf dem Tresor-Laufwerk bleiben auf allen Plattformen geprüft. Verworfen: `#[cfg(not(windows))]` am Test, weil unter Windows dann keine Prüfung mehr stattfände.
+- E37 (F4): Der Test sucht in `FRAME_KEYBOARD.replace("\r\n", "\n")`. Verworfen: eine `.gitattributes`-Regel, weil sie das Checkout-Verhalten einer Produktdatei für einen Test ändern würde.
+- E38 (F5, Produkt): `observe` beobachtet jeden Kandidaten, auch Verzeichnisse, per `stat` und lehnt ab, wenn sich die Art geändert hat oder ein Link oder eine Sonderdatei vorliegt; die Revalidierung vergleicht dann `stat` mit `stat`. Kein Vergleich wird gelockert. Verworfen: Verzeichnisse in der Revalidierung über `current_directory` prüfen, weil dabei Größe und Zeit wegfielen.
+- E39 (F5, Test): `delete_extra_removes_orphans` gibt `result.errors` und `result.stats` in jeder Assertion aus. `mirror_deletion_compares_with_the_file_not_a_stale_listing` erhält einen zweiten Fall mit veralteter Auflistung des Verzeichnisses `gone` (Trockenlauf, `stats.deleted == 2`, keine „nothing deleted“-Meldung). Die Registerzeile nennt Dateien und Ordner; Testnamen bleiben.
+- E40 (Produktlücke): `docs/TODO.md` führt die vorbestehende Lücke „Windows-Host beobachtet keine lokale Freigabe“ als offenen Punkt `WIN-SHARE-WATCH`. Keine Produktänderung in dieser Ergänzung.
+
+### E5.3 Meilensteine (Ergänzung zu Abschnitt 6, 11.4, E1.3, E2.3, E3.3 und E4.3)
+- M37 (suite-6-tests): F1 besteht in beiden workspace-Jobs; F2, F3 und F4 bestehen unter windows-2025; `delete_extra_removes_orphans` zeigt bei einem Fehlschlag den Abbruchgrund; beide Fälle von `mirror_deletion_compares_with_the_file_not_a_stale_listing` bestehen auf allen Plattformen (Fall 2 zusammen mit M38).
+- M38 (f-spiegel-6): Die Spiegel-Löschung beobachtet Verzeichnisse per `stat`; ein verwaistes Verzeichnis mit veralteter Auflistungszeit wird gelöscht; jede Änderung nach der Beobachtung bricht weiter ohne Löschung ab.
+- M39 (doku-6): `docs/TODO.md` trägt `WIN-SHARE-WATCH`.
+- M40 (plandoku-6): `docs/plaene/2026-11-07-sicherheit-direktweg/plan.md` trägt Ergänzung 5.
+
+### E5.4 Sicherheit (Ergänzung zu Abschnitt 8, 11.5, E1.4, E2.4, E3.4 und E4.4)
+- Keine Eigenschaft aus Abschnitt 8, 11.5, E1.4, E2.4, E3.4 und E4.4 wird geschwächt. E35, E36, E37 und E39 ändern nur Testcode; die IPC-Besitzprüfung bleibt unverändert. E38 wechselt im Spiegel-Löschpfad nur die Quelle der Beobachtung zu `stat`; alle Vergleichsfelder, der Abbruch ohne Löschung, die leere Auflistung vor `remove_dir`, die Versionierung und der Ausschluss von Links und Sonderdateien bleiben erhalten. E40 ist Dokumentation.
+
+### E5.5 Pakete (Ergänzung zu Abschnitt 9, 11.7, E1.5, E2.5, E3.5 und E4.5)
+| Paket | Rolle | abhängig von |
+|---|---|---|
+| suite-6-tests | umsetzung | – |
+| f-spiegel-6 | umsetzung | – |
+| doku-6 | umsetzung | – |
+| plandoku-6 | umsetzung | – |
+
+Zuordnung: F1, F2, F3, F4 und der Testteil von F5 → suite-6-tests; Produktteil von F5 → f-spiegel-6; Produktlücke Windows-Beobachtung → doku-6; Plandokument → plandoku-6. Änderbare Projektdateien: suite-6-tests `DOS/transfer_job_client_tests.rs`, `SOS/host_watch_task_tests.rs`, `GC/update_unsigned_ui_tests.rs`, `TS/sync_tests.rs` und eine Zeile in `docs/tests/register.tsv`; f-spiegel-6 `TS/sync_delete.rs`; doku-6 `docs/TODO.md`; plandoku-6 `docs/plaene/2026-11-07-sicherheit-direktweg/plan.md`. Keine gemeinsame änderbare Datei, daher alle vier Pakete in einer Welle.
+
+### E5.6 Fragen an den Nutzer
+Keine neue Frage.
