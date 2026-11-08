@@ -82,7 +82,7 @@ pub(super) fn delete_extras_scoped(
                 !present.contains(keys.key(&entry.rel).as_ref()) && !omissions.protects(&entry.rel)
             })
             .collect::<Vec<_>>();
-        for entry in candidates.iter_mut().filter(|entry| !entry.meta.is_dir) {
+        for entry in candidates.iter_mut() {
             observe(destination, entry)?;
         }
         Ok(candidates)
@@ -246,13 +246,16 @@ pub(super) fn delete_extras_scoped(
         }
     }
 }
-/// A file's observation is its own metadata, read once after the walk: a
-/// listing can lag behind the file (NTFS answers a directory query from the
-/// folder's index, which on a loaded system is not always current), and the
-/// deletion boundary below compares every later read with this observation.
+/// A candidate's observation, file or directory, is its own metadata, read
+/// once after the walk: a listing can lag behind the entry (NTFS answers a
+/// directory query from the parent folder's index, which on a loaded system
+/// is not always current, also for a subdirectory's time), and the
+/// revalidation below compares every later read with this observation. The
+/// deletion loop then checks a directory by its identity and an empty
+/// listing (`current_directory`), a file again by this whole observation.
 fn observe(backend: &dyn Backend, entry: &mut Entry) -> io::Result<()> {
     let actual = backend.stat(&entry.path)?;
-    if actual.is_dir || actual.is_symlink || actual.special {
+    if actual.is_dir != entry.meta.is_dir || actual.is_symlink || actual.special {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "mirror target changed since observation",
