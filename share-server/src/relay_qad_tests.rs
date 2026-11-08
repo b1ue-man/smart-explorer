@@ -133,7 +133,7 @@ fn block_on_within<F: std::future::Future>(
     future: F,
 ) -> F::Output {
     runtime
-        .block_on(tokio::time::timeout(TEST_LIMIT, future))
+        .block_on(async move { tokio::time::timeout(TEST_LIMIT, future).await })
         .expect("the test exceeded its time limit")
 }
 
