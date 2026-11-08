@@ -61,10 +61,11 @@ fn delete_extra_removes_orphans() {
         tx,
     );
     let result = wait(&rx);
-    assert!(dst.join("keep.txt").exists());
-    assert!(!dst.join("orphan.txt").exists());
-    assert!(!dst.join("gone/z.txt").exists());
-    assert!(result.stats.deleted >= 2);
+    let detail = format!("errors {:?}, stats {:?}", result.errors, result.stats);
+    assert!(dst.join("keep.txt").exists(), "{detail}");
+    assert!(!dst.join("orphan.txt").exists(), "{detail}");
+    assert!(!dst.join("gone/z.txt").exists(), "{detail}");
+    assert!(result.stats.deleted >= 2, "{detail}");
 
     std::fs::remove_dir_all(src).ok();
     std::fs::remove_dir_all(dst).ok();
@@ -352,45 +353,55 @@ fn source_appearing_after_preflight_blocks_all_deletes() {
 
 #[test]
 fn mirror_deletion_compares_with_the_file_not_a_stale_listing() {
-    let source_dir = tmp("stale_source");
-    let destination_dir = tmp("stale_destination");
-    std::fs::write(destination_dir.join("orphan.txt"), b"current").unwrap();
-    let source = LocalBackend::new(&fwd(&source_dir));
-    let destination = LocalBackend::new(&fwd(&destination_dir));
-    let hooked = HookBackend {
-        inner: &destination,
-        cancel_on_list: None,
-        appearing_suffix: None,
-        appearance_checks: AtomicUsize::new(0),
-        stale_listing: Some("orphan.txt"),
-    };
-    let cancel = AtomicBool::new(false);
-    let mut stats = SyncStats::default();
-    let mut errors = Vec::new();
-    // A dry run plans and revalidates every deletion like a real run.
-    super::super::sync_delete::delete_extras(
-        &source,
-        &fwd(&source_dir),
-        &hooked,
-        &fwd(&destination_dir),
-        true,
-        &cancel,
-        &mut stats,
-        &mut errors,
-        &mut crate::bisync::SyncOmissions::default(),
-    );
-    // Without the file's own metadata, revalidation refuses every deletion
-    // („…; nothing deleted“).
-    assert!(
-        errors
-            .iter()
-            .all(|(_, error)| !error.contains("nothing deleted")),
-        "{errors:?}"
-    );
-    assert_eq!(stats.deleted, 1, "the orphan passes revalidation");
-    assert!(destination_dir.join("orphan.txt").exists());
-    std::fs::remove_dir_all(source_dir).ok();
-    std::fs::remove_dir_all(destination_dir).ok();
+    // The folder case passes only with the product change of f-spiegel-6: a
+    // folder is observed by its own metadata, because NTFS can answer a
+    // subfolder's time from the parent folder's index, which can be older.
+    for (case, stale, kept, deleted) in [
+        ("file", "orphan.txt", "orphan.txt", 1),
+        ("folder", "gone", "gone/z.txt", 2),
+    ] {
+        let source_dir = tmp(&format!("stale_source_{case}"));
+        let destination_dir = tmp(&format!("stale_destination_{case}"));
+        let kept_path = destination_dir.join(kept);
+        std::fs::create_dir_all(kept_path.parent().unwrap()).unwrap();
+        std::fs::write(&kept_path, b"current").unwrap();
+        let source = LocalBackend::new(&fwd(&source_dir));
+        let destination = LocalBackend::new(&fwd(&destination_dir));
+        let hooked = HookBackend {
+            inner: &destination,
+            cancel_on_list: None,
+            appearing_suffix: None,
+            appearance_checks: AtomicUsize::new(0),
+            stale_listing: Some(stale),
+        };
+        let cancel = AtomicBool::new(false);
+        let mut stats = SyncStats::default();
+        let mut errors = Vec::new();
+        // A dry run plans and revalidates every deletion like a real run.
+        super::super::sync_delete::delete_extras(
+            &source,
+            &fwd(&source_dir),
+            &hooked,
+            &fwd(&destination_dir),
+            true,
+            &cancel,
+            &mut stats,
+            &mut errors,
+            &mut crate::bisync::SyncOmissions::default(),
+        );
+        // Without the entry's own metadata, revalidation refuses every deletion
+        // („…; nothing deleted“).
+        assert!(
+            errors
+                .iter()
+                .all(|(_, error)| !error.contains("nothing deleted")),
+            "{case}: {errors:?}"
+        );
+        assert_eq!(stats.deleted, deleted, "{case}: the planned deletions pass");
+        assert!(kept_path.exists(), "{case}");
+        std::fs::remove_dir_all(source_dir).ok();
+        std::fs::remove_dir_all(destination_dir).ok();
+    }
 }
 
 #[cfg(unix)]
