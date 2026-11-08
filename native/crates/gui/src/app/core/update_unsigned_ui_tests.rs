@@ -119,10 +119,12 @@ fn lokal_task_confirming_while_a_check_runs_starts_no_second_check() {
 /// `frame_keyboard.rs`, so the test reads its source.
 #[test]
 fn lokal_task_open_question_blocks_the_explorer_shortcuts() {
-    let start = FRAME_KEYBOARD
+    // A Windows checkout can carry CRLF line ends: the search works on LF text.
+    let source = FRAME_KEYBOARD.replace("\r\n", "\n");
+    let start = source
         .find("fn blocks_explorer_shortcuts(")
         .expect("the function exists");
-    let body = &FRAME_KEYBOARD[start..];
+    let body = &source[start..];
     let body = &body[..body.find("\n    }\n").expect("the function ends")];
     assert!(
         body.contains("self.unsigned_update_prompt.is_some()"),

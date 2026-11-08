@@ -148,6 +148,8 @@ fn worker_job_task_progress_cancel_and_end_travel_over_ipc() {
         );
         // The cancel arrives on its own connection.
         let (mut cancel, _) = control.accept().expect("cancel connection");
+        // The client first proves that this worker answers (ipc_proof).
+        crate::daemon::ipc_proof::answer_for_test(&mut cancel, "token").expect("ipc proof");
         let mut line = String::new();
         BufReader::new(cancel.try_clone().expect("clone"))
             .read_line(&mut line)
