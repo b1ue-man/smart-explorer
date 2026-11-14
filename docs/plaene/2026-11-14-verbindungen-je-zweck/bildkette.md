@@ -505,6 +505,37 @@ Jede gewählte Technik steht als Ergebnisanforderung **B-xx** (Eigenschaft des f
 | Frame Pacing (Moonlight) | entfällt | 4.8 |
 | FEC-Anteil (Sunshine) | entfällt als Einstellung; automatisch, falls `plan.md` B1 gebaut wird | — |
 
+### 4.10a Auswahl zur Laufzeit statt Messbedingung (Entscheidung 2026-11-14)
+
+Nutzer 2026-11-14: „tests sind etwas dass du erst machst wenn du dir sicher bist dass du die optimale umsetzung hast. ich will keine blinde testerei, basierend auf recherche, wie es andere machen, hast du den optimalen weg um bilder zu bekommen, zu verarbeiten, zu senden, zu empfangen und an zu zeigen? oder wenn es hardware abhängig ist, die üblichen optimalen wege die den optimalen gesamtweg ermitteln und ergeben können?“
+
+Eigene Folgerung: Kein Paket hängt mehr an einer Messung der Suite. Jede Stelle, an der 4.2 bis 4.9 „bedingt … wenn MB… zeigt“ sagt, gilt in dieser Fassung. Wo der beste Weg vom Gerät abhängt, baut se die üblichen Wege der Referenzen und wählt beim Öffnen einer Sitzung aus dem, was das Gerät meldet; Messungen (5.3) bestätigen das fertige Ergebnis.
+
+| Stelle | bisher | jetzt |
+|---|---|---|
+| B-22 NVENC/AMF direkt unter Windows (BK12) | bedingt an MB3 | gewählt, Welle C. Grund: Sunshine nutzt die Herstellerschnittstellen direkt (R01 `nvenc_base.cpp`, R10, R11); nur sie bieten Referenzinvalidierung und die Latenzoptionen sicher. |
+| B-25 Software-AV1 unter Linux | bedingt an MB3 auf dem CI-Runner | gewählt als Stufe der Rangfolge; ob ein Gerät sie für eine Größe und Bildrate tragen kann, entscheidet die Kodierzeit, die das Gerät beim ersten Öffnen selbst misst (B-02), nicht ein CI-Rechner. |
+| B-37 Teil 2 dekodierte Textur ohne Rücklesen in die Anzeige (BK9) | bedingt an MB4 | gewählt. Grund: Moonlight zeigt die dekodierte D3D11-/VA-API-Fläche ohne CPU-Kopie (R03). Rückfall auf den Plane-Pfad, wenn das Grafik-Backend des Fensters die Fläche nicht importiert. |
+| B-14 Vergleich „unverändert“ unter X11 | „MB3 entscheidet“ | gewählt: Vergleich auf der Kopie für den Kodierer; XDamage meldet geänderte Rechtecke, wo die Erweiterung vorhanden ist, und erspart den Vergleich ganz (Verfahren wie Dirty-Rechtecke der Desktop Duplication, R15 A2). |
+| BK10 Wayland-Eingabe über EIS | bedingt an MB6 | gewählt: `ConnectToEIS`, wo das Portal es anbietet (ein Kanal statt eines D-Bus-Aufrufs je Ereignis); sonst der heutige Weg. |
+| B-34 LAN-Hochratencodec nach PyroWave (BK11) | bedingt an MB3/MB4 | verworfen für diesen Batch. Grund: keine der Referenzen Sunshine, Parsec, Shadow, Steam, RustDesk nutzt einen solchen Codec; sie erreichen ihre Werte mit Hardware-H.264/HEVC/AV1. Neubewertung nur, wenn nach BK2a/BK4 der Hardwarekodierer selbst die Grenze einer LAN-Sitzung ist. |
+
+**Rangfolge je Sitzung (wird beim Öffnen aus den Meldungen beider Geräte bestimmt, B-30 gilt für die Codecs):**
+
+| Station | Rangfolge (erste verfügbare Stufe gilt) | Woraus das Gerät die Stufe erkennt |
+|---|---|---|
+| Aufnahme Windows | Desktop Duplication (Monitor) → Windows Graphics Capture (Fenster, Rückfall) | Öffnen der Duplikation; `DXGI_ERROR_UNSUPPORTED` |
+| Aufnahme Linux | PipeWire DMA-BUF → PipeWire SHM (Wayland); XShm mit XDamage → XShm (X11) | angebotene Modifier des Portals; Erweiterungsliste des X-Servers |
+| Aufnahme Android | MediaProjection auf die Kodiererfläche | einziger Weg |
+| Umwandlung | auf der GPU der Aufnahme → CPU mit allen Kernen | ob der gewählte Kodierer Texturen bzw. DMA-BUF annimmt |
+| Kodierer | Herstellerschnittstelle der Aufnahme-GPU (NVENC, AMF; VA-API für Intel/AMD unter Linux; MediaCodec) → Betriebssystemkodierer in Hardware (MF) → Software (OpenH264 nach Zustimmung, SVT-AV1) → Kacheln | Laden der Treiberbibliothek, Aufzählung der Kodierer, Öffnen mit der Sitzungsgröße |
+| Bildrate | Minimum aus Bildwiederholrate des Betrachters, Bildrate der Quelle, gemessener Kodier- und Dekodierzeit dieser Sitzung | Monitormodus; Laufzeitmessung je Sitzung (B-02) |
+| Bitrate | Hochlauf bis zum ersten Rückstau der Leitung, danach Regelung; Obergrenze aus Kodierer und Dekodierer | QUIC-Statistik und `FRAME_ACK` der Sitzung |
+| Dekodierer | Hardware des Anzeigegeräts (D3D11VA, VA-API, MediaCodec) → Software (dav1d, OpenH264, MF) | Aufzählung und Öffnen mit dem Profil des Stroms |
+| Anzeige | dekodierte Fläche direkt → Plane-Upload; im Vollbild mit „Niedrigste Latenz“ ohne V-Sync | Import der Fläche im Grafik-Backend des Fensters |
+
+Scheitert eine Stufe beim Öffnen oder im Betrieb, gilt für den Rest der Sitzung die nächste; `se screen sessions --json` und die Statistik nennen die benutzte Stufe je Station.
+
 ### 4.11 Garantien und Verträge
 
 - Verschlüsselung, Rechteprüfung, Routenregeln unverändert (`plan.md` C8).
@@ -527,7 +558,8 @@ Die Pakete BK0 bis BK10 gehören zum laufenden Auftrag (Nutzervorgaben 1 bis 5 v
 | B | BK1, BK2b, BK5w, BK7a, BK8a | BK0 |
 | C | BK2a, BK3, BK4, BK6 | BK1 (BK3), BK2b (BK2a) |
 | D | BK7b, BK8b, BK9, BK10 | BK6 (BK7b), BK4 (BK8b), BK5w (BK9) |
-| E (bedingt) | BK11, BK12 | Messungen der Suite |
+| C (seit 4.10a) | BK12 | BK2a |
+| entfällt (4.10a) | BK11 | — |
 
 Prüfung „parallele Pakete teilen keine änderbaren Dateien“: Tabelle 5.4.
 
@@ -666,6 +698,24 @@ Eigener Planabschnitt vor Umsetzung, wenn die Bedingung erfüllt ist.
 | MB8 Datenrate | höchste dauerhafte Rate ohne Verzögerungsanstieg | Loopback (Softwaregrenze der Kette) | LAN |
 
 Messweg am Gerät ohne Handgriff des Nutzers: Der Manager startet `se screen bench GERÄT --source QUELLE --seconds 30 --json` (BK0) von einem gekoppelten Gerät aus gegen das Zielgerät über die bestehende Kopplung; die Rechte „Bildschirm ansehen“ muss das Zielgerät bereits erlauben [A: für die Geräte des Nutzers gesetzt]. Android als Betrachter misst die App-Statistik (`ScreenSessionState`); als Gastgeber über `se screen bench` vom Desktop.
+
+### 5.3a Vormessung vom 2026-11-14 (v0.5.196, vor BK0)
+
+Gemessen mit `se screen bench` des veröffentlichten Builds v0.5.196 auf einem Linux-x86_64-Rechner mit 4 virtuellen Kernen, Testbild, Codec `tiles` (H.264 war auf dem Rechner nicht installiert). „Lokal“ = `--local` (Kodierer und Dekodierer ohne Netz). „Sitzung“ = zwei Geräteprofile desselben Rechners, über einen eigenen Share-Server gekoppelt, Weg `direct` über Loopback.
+
+| Größe, verlangte Bildrate | Lokal: Bilder/s, Latenz p50, Datenrate | Sitzung: Bilder/s, Latenz p50, Datenrate |
+|---|---|---|
+| 1920×1080, 30 | 30,2; 7,2 ms; 7,6 Mbit/s | 30,1; 13,8 ms; 7,6 Mbit/s |
+| 1920×1080, 60 | 60,2; 6,9 ms; 15,1 Mbit/s | 60,1; 13,6 ms; 15,3 Mbit/s |
+| 2560×1440, 30 | 30,2; 11,7 ms; 16,3 Mbit/s | 29,4; 25,0 ms; 16,0 Mbit/s |
+| 3840×2160, 30 | 30,4; 23,1 ms; 17,8 Mbit/s | 9,5; 53,2 ms; 5,7 Mbit/s (40 s lang: 9,8; 54,0 ms; 5,7 Mbit/s) |
+| 3840×2160, 60 | 44,4; 21,3 ms; 25,9 Mbit/s | 11,3; 51,4 ms; 6,7 Mbit/s |
+
+Befunde:
+- Bei 3840×2160 liefert die Sitzung 9,5 bis 11,3 Bilder/s, obwohl derselbe Rechner lokal 30 bzw. 44 kodiert und dekodiert und rohes QUIC über Loopback 226 bis 310 MiB/s trägt (Messung M1 des Suite-Laufs 43625439732, Windows). Die Grenze ist die Regelung, nicht Kodierer oder Netz: `quality_for` (`native/crates/engine/src/screen/core/rate_control.rs`) setzt Bildrate = Ziel-Bitrate / (Pixel × 0,05 bit); bei 6 Mbit/s Startwert und 8,29 Mio. Pixeln sind das höchstens 14 Bilder/s. Das ist G2 (B-02).
+- Das Ziel wächst in 40 s nicht über den Startwert (mittlere Datenrate 5,7 Mbit/s, Höchstwert 6,9 Mbit/s). Ursache im Code: `grow` begrenzt das neue Ziel auf 1,25 × empfangene Rate, und die empfangene Rate ist durch das Ziel selbst begrenzt (die Quelle ist anwendungsbegrenzt); eine als Überlast gewertete Messung setzt das Ziel auf 0,85 × empfangene Rate. Das Ziel kann so die Leitung nie finden. Das ist G4/G5 (B-05) und verlangt in BK1 zusätzlich: Solange der Sender anwendungsbegrenzt ist und der Transport keinen Rückstau zeigt, begrenzt die empfangene Rate das Ziel nicht.
+- Die im Suite-Lauf 43625439732 gedruckten 2,6 bis 4,7 s Station `network` bei 3840×2160 (Messung M6, Variante `paar`) stammen aus dem Messaufbau: Die Gastgeberschleife des Tests kodierte auf dem asynchronen Arbeiter und erreichte bei 35,6 ms Bild- und Kodierzeit je 33,3 ms Takt nie ihren Wartepunkt; der Verbindungstreiber kam nicht zum Zug. Die echte Sitzung desselben Builds misst 53 ms. Der Test kodiert seit dem 2026-11-14 außerhalb des Arbeiters.
+- Nicht gemessen: H.264, Windows, Android, echte Aufnahme statt Testbild, ein Weg über ein Netz (BK0, 5.3).
 
 ### 5.4 Prüfung der Dateien paralleler Pakete
 
