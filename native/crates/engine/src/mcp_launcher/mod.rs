@@ -25,8 +25,11 @@ mod launcher;
 mod os;
 #[path = "os/shared/provision.rs"]
 mod provision;
+#[path = "os/shared/relay.rs"]
+mod relay;
 #[path = "os/shared/transaction.rs"]
 mod transaction;
+pub use relay::relayed;
 
 #[path = "os/shared/child.rs"]
 mod child;
@@ -37,9 +40,9 @@ pub use admission::{
     admit_cli_process, current_runtime, current_starter, generator_operation, migration_entry,
     operation, operation_for_contract, OperationGuard, ProcessAdmission,
 };
-pub use core::lifecycle::{RuntimeHello, RuntimeHelloReply};
+pub use core::lifecycle::{RuntimeHello, RuntimeHelloReply, DAEMON_OUTSIDE_INSTALLATION};
 pub use core::manifest::{Manifest, RuntimeContract, IPC_CONTRACT, STATE_CONTRACT};
-pub use installation::{Installation, RuntimeIdentity};
+pub use installation::{profile_refresh_deferred, Installation, RuntimeIdentity};
 pub use launcher::{
     is_maintenance, launch, launch_from_installed, refresh_current_profile, run_launcher,
     spawn_generation_child, start_current_daemon, LifecycleWatch,
@@ -62,10 +65,7 @@ pub fn legacy_profile_image(path: &std::path::Path) -> Result<std::fs::File, Str
 pub fn legacy_update_image(path: &std::path::Path) -> Result<Option<std::fs::File>, String> {
     os::legacy_update_image(path)
 }
-pub fn same_image_file(
-    file: &std::fs::File,
-    path: &std::path::Path,
-) -> Result<bool, String> {
+pub fn same_image_file(file: &std::fs::File, path: &std::path::Path) -> Result<bool, String> {
     os::same_image_file(file, path)
 }
 

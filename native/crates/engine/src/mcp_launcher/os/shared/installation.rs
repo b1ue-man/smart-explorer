@@ -71,6 +71,39 @@ impl Installation {
         }
         Ok(None)
     }
+    /// The installation a daemon answers a runtime for. A daemon started from
+    /// an installation answers only for that one. A daemon whose image lies
+    /// outside every installation (an app copy beside no `mcp/` directory)
+    /// answers for the root the authenticated runtime names, after the same
+    /// tree and identity checks `load` applies; without a root it asks for one.
+    pub fn for_daemon(
+        image: Result<Option<Self>, String>,
+        installation_id: &str,
+        named_root: Option<&str>,
+    ) -> Result<Self, String> {
+        let installation = match (image?, named_root) {
+            (Some(own), _) => own,
+            (None, Some(root)) => {
+                let root = Path::new(root);
+                // A runtime names the canonical root of its own image.
+                if !root.is_absolute() {
+                    return Err("runtime_installation_root_invalid".into());
+                }
+                // As `for_image` refuses an installation that is being removed.
+                if root.join("mcp/uninstall.v1.json").exists() {
+                    return Err("installation_uninstall_in_progress".into());
+                }
+                Self::load(root)?
+            }
+            (None, None) => {
+                return Err(crate::mcp_launcher::DAEMON_OUTSIDE_INSTALLATION.into());
+            }
+        };
+        if installation.manifest.installation_id != installation_id {
+            return Err("runtime_installation_id_mismatch".into());
+        }
+        Ok(installation)
+    }
     pub fn launcher_path(&self) -> PathBuf {
         self.root
             .join("mcp/launchers")
@@ -307,6 +340,40 @@ impl RuntimeIdentity {
             false,
         )
     }
+}
+/// An elevated helper never writes another account's agent profiles. An
+/// elevated helper updating an installation its own account owns (root
+/// updating root's installation on Linux) is that account and refreshes them:
+/// deferring would leave its hosts on a starter the new generation no longer
+/// admits, and no MCP start through that starter reaches the deferred refresh.
+/// The refresh writes below the home directory of the environment, so that
+/// directory (and each override of it the agent hosts read) must belong to
+/// the same account: root started with another account's home stays deferred.
+pub fn profile_refresh_deferred(root: &Path, elevated: bool) -> bool {
+    elevated && !refresh_stays_in_own_account(root, &profile_homes())
+}
+/// The directories the profile refresh of this process writes below: the home
+/// directory (`None`: the environment names none) and the overrides the
+/// profile writers and the agent hosts' own programs read.
+fn profile_homes() -> Vec<Option<PathBuf>> {
+    let mut homes = vec![crate::support_dirs::home_dir()];
+    for key in ["CODEX_HOME", "CLAUDE_CONFIG_DIR", "XDG_DATA_HOME"] {
+        if let Some(named) = std::env::var_os(key).filter(|value| !value.is_empty()) {
+            homes.push(Some(PathBuf::from(named)));
+        }
+    }
+    homes
+}
+/// Whether the installation and every directory of `homes` exist and belong
+/// to the account this process runs as.
+pub(in crate::mcp_launcher) fn refresh_stays_in_own_account(
+    root: &Path,
+    homes: &[Option<PathBuf>],
+) -> bool {
+    os::owned_by_caller(root)
+        && homes
+            .iter()
+            .all(|home| home.as_deref().is_some_and(os::owned_by_caller))
 }
 pub fn hash_bytes(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))

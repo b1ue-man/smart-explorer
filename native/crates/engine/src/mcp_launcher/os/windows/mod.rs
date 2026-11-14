@@ -157,6 +157,11 @@ pub(in crate::mcp_launcher) fn legacy_update_image(_path: &Path) -> Result<Optio
     // Its test-only swap helper retains the existing namespace-lock behavior.
     Ok(None)
 }
+/// An elevated Windows token cannot be told apart from another account's
+/// administrator here; the profile refresh of an elevated helper stays deferred.
+pub(in crate::mcp_launcher) fn owned_by_caller(_path: &Path) -> bool {
+    false
+}
 pub(in crate::mcp_launcher) fn same_image_file(file: &File, path: &Path) -> Result<bool, String> {
     use windows_sys::Win32::Storage::FileSystem::{
         GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
@@ -301,10 +306,15 @@ pub(in crate::mcp_launcher) fn uninstall_programs_idle(root: &Path) -> Result<Ve
     Ok(Vec::new())
 }
 
-pub(in crate::mcp_launcher) fn retirement_root() -> Result<Option<crate::mcp_launcher::installation::RetirementRoot>, String> {
+pub(in crate::mcp_launcher) fn retirement_root(
+) -> Result<Option<crate::mcp_launcher::installation::RetirementRoot>, String> {
     Ok(None)
 }
-pub(in crate::mcp_launcher) fn retirement_handoff(_root: &Path, _hash: &str, _snapshot: &str) -> Result<(), String> {
+pub(in crate::mcp_launcher) fn retirement_handoff(
+    _root: &Path,
+    _hash: &str,
+    _snapshot: &str,
+) -> Result<(), String> {
     // Windows retains its existing installed-CLI and process/sharing policy.
     Ok(())
 }

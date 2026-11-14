@@ -8,17 +8,31 @@ use crate::mcp_launcher::{
 use std::time::Duration;
 
 pub(super) fn reply(hello: &RuntimeHello, generation: &str) -> RuntimeHelloReply {
-    let accepted = Installation::current()
-        .and_then(|i| i.ok_or("runtime_installation_missing".into()))
-        .map(|installation| {
-            hello.installation_id == installation.manifest.installation_id
-                && installation.manifest.permits(&RuntimeContract {
-                    runtime_sha256: hello.runtime_sha256.clone(),
-                    ipc_contract_id: hello.ipc_contract_id.clone(),
-                    shared_state_contract_id: hello.shared_state_contract_id.clone(),
-                })
+    reply_for(Installation::current(), hello, generation)
+}
+
+/// `image` is the installation of the daemon's own image (`Installation::current`).
+pub(super) fn reply_for(
+    image: Result<Option<Installation>, String>,
+    hello: &RuntimeHello,
+    generation: &str,
+) -> RuntimeHelloReply {
+    let admitted = Installation::for_daemon(
+        image,
+        &hello.installation_id,
+        hello.installation_root.as_deref(),
+    )
+    .map(|installation| {
+        installation.manifest.permits(&RuntimeContract {
+            runtime_sha256: hello.runtime_sha256.clone(),
+            ipc_contract_id: hello.ipc_contract_id.clone(),
+            shared_state_contract_id: hello.shared_state_contract_id.clone(),
         })
-        .unwrap_or(false);
+    });
+    let accepted = admitted.as_ref().is_ok_and(|permitted| *permitted);
+    let outside = admitted
+        .as_ref()
+        .is_err_and(|error| error == crate::mcp_launcher::DAEMON_OUTSIDE_INSTALLATION);
     RuntimeHelloReply {
         accepted,
         daemon_generation: generation.into(),
@@ -32,7 +46,13 @@ pub(super) fn reply(hello: &RuntimeHello, generation: &str) -> RuntimeHelloReply
         } else {
             crate::mcp_launcher::STATE_CONTRACT.into()
         },
-        error_code: (!accepted).then(|| "reconnect_required".into()),
+        error_code: (!accepted).then(|| {
+            if outside {
+                crate::mcp_launcher::DAEMON_OUTSIDE_INSTALLATION.into()
+            } else {
+                "reconnect_required".into()
+            }
+        }),
     }
 }
 
@@ -49,9 +69,16 @@ pub(super) fn ready_reply(
     answer
 }
 pub fn client(runtime: &RuntimeIdentity) -> Result<RuntimeHelloReply, String> {
+    negotiate(runtime).map(|(answer, _)| answer)
+}
+
+/// The accepted answer and the root the daemon needed (`Some` only for a
+/// daemon outside every installation). Every bound request repeats that root.
+fn negotiate(runtime: &RuntimeIdentity) -> Result<(RuntimeHelloReply, Option<String>), String> {
     let deadline = std::time::Instant::now() + Duration::from_secs(25);
+    let mut root = None;
     loop {
-        let answer = hello_once(runtime)?;
+        let answer = hello_once(runtime, root.clone())?;
         if answer.error_code.as_deref() == Some("daemon_starting")
             && std::time::Instant::now() < deadline
         {
@@ -59,7 +86,14 @@ pub fn client(runtime: &RuntimeIdentity) -> Result<RuntimeHelloReply, String> {
             continue;
         }
         if answer.accepted {
-            return Ok(answer);
+            return Ok((answer, root));
+        }
+        if root.is_none()
+            && answer.error_code.as_deref()
+                == Some(crate::mcp_launcher::DAEMON_OUTSIDE_INSTALLATION)
+        {
+            root = Some(installation_root(runtime));
+            continue;
         }
         return Err(format!(
             "reconnect_required: {}",
@@ -70,7 +104,13 @@ pub fn client(runtime: &RuntimeIdentity) -> Result<RuntimeHelloReply, String> {
         ));
     }
 }
-fn hello_once(runtime: &RuntimeIdentity) -> Result<RuntimeHelloReply, String> {
+fn installation_root(runtime: &RuntimeIdentity) -> String {
+    runtime.installation.root.to_string_lossy().into_owned()
+}
+fn hello_once(
+    runtime: &RuntimeIdentity,
+    installation_root: Option<String>,
+) -> Result<RuntimeHelloReply, String> {
     let mut stream = connect(runtime)?;
     let token =
         super::ipc_storage::read_token().map_err(|e| format!("runtime_hello_token: {e}"))?;
@@ -86,6 +126,7 @@ fn hello_once(runtime: &RuntimeIdentity) -> Result<RuntimeHelloReply, String> {
                 runtime_sha256: runtime.contract.runtime_sha256.clone(),
                 ipc_contract_id: runtime.contract.ipc_contract_id.clone(),
                 shared_state_contract_id: runtime.contract.shared_state_contract_id.clone(),
+                installation_root,
             },
         },
     )
@@ -138,7 +179,7 @@ pub(super) fn encode_request(request: &IpcRequest) -> std::io::Result<String> {
     let Some(runtime) = crate::mcp_launcher::current_runtime() else {
         return serde_json::to_string(request).map_err(std::io::Error::other);
     };
-    let accepted = client(&runtime).map_err(std::io::Error::other)?;
+    let (accepted, installation_root) = negotiate(&runtime).map_err(std::io::Error::other)?;
     #[derive(serde::Serialize)]
     struct Bound<'a> {
         t: &'static str,
@@ -155,6 +196,7 @@ pub(super) fn encode_request(request: &IpcRequest) -> std::io::Result<String> {
             runtime_sha256: runtime.contract.runtime_sha256,
             ipc_contract_id: runtime.contract.ipc_contract_id,
             shared_state_contract_id: runtime.contract.shared_state_contract_id,
+            installation_root,
         },
         daemon_generation: accepted.daemon_generation,
         request,
@@ -233,7 +275,15 @@ pub(super) fn request_lease(
         ipc_contract_id: hello.ipc_contract_id.clone(),
         shared_state_contract_id: hello.shared_state_contract_id.clone(),
     };
-    crate::mcp_launcher::operation_for_contract(&hello.installation_id, &contract)
-        .map(Some)
-        .map_err(std::io::Error::other)
+    crate::mcp_launcher::operation_for_contract(
+        &hello.installation_id,
+        &contract,
+        hello.installation_root.as_deref(),
+    )
+    .map(Some)
+    .map_err(std::io::Error::other)
 }
+
+#[cfg(test)]
+#[path = "plugin_task_runtime_hello_tests.rs"]
+mod plugin_task_runtime_hello_tests;

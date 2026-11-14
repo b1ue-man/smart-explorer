@@ -29,6 +29,9 @@ pub fn current_runtime() -> Option<RuntimeIdentity> {
 /// child locks are acknowledged before the parent's admission is released.
 pub fn admit_cli_process() -> Result<ProcessAdmission, String> {
     crate::mcp_launcher::generator::capture_entry();
+    // Reads the relay mark of a runtime once and removes it before this
+    // process starts another one (worker, job, agent host).
+    let _ = crate::mcp_launcher::relay::relayed();
     let image = std::env::current_exe().map_err(|e| e.to_string())?;
     if image
         .parent()
@@ -251,11 +254,10 @@ fn admit_maintenance() -> Result<ProcessAdmission, String> {
 pub fn operation_for_contract(
     installation_id: &str,
     contract: &crate::mcp_launcher::RuntimeContract,
+    named_root: Option<&str>,
 ) -> Result<std::sync::Arc<OperationGuard>, String> {
-    let installation = Installation::current()?.ok_or("runtime_installation_missing")?;
-    if installation.manifest.installation_id != installation_id {
-        return Err("runtime_installation_id_mismatch".into());
-    }
+    let installation =
+        Installation::for_daemon(Installation::current(), installation_id, named_root)?;
     let executable = installation
         .root
         .join("mcp/runtimes")

@@ -1,6 +1,7 @@
 pub mod capability;
 pub mod lifecycle;
 pub mod manifest;
+pub mod relay;
 
 pub mod catalog;
 

@@ -4,12 +4,12 @@ use std::io::{Read, Seek, SeekFrom};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::Path;
-#[path = "spawn.rs"]
-mod spawn;
 #[path = "process_inventory.rs"]
 mod process_inventory;
 #[path = "retirement.rs"]
 mod retirement;
+#[path = "spawn.rs"]
+mod spawn;
 pub(in crate::mcp_launcher) use process_inventory::{processes_for, removal_image_guard};
 pub(in crate::mcp_launcher) use retirement::{retirement_handoff, retirement_root};
 pub(in crate::mcp_launcher) use spawn::*;
@@ -17,7 +17,10 @@ pub(in crate::mcp_launcher) use spawn::*;
 pub(in crate::mcp_launcher) const CLI_NAME: &str = "se";
 pub(in crate::mcp_launcher) const LAUNCHER_NAME: &str = "se-mcp-launcher";
 #[cfg(any(test, feature = "test-support"))]
-pub(in crate::mcp_launcher) fn create_test_directory_link(source: &Path, target: &Path) -> std::io::Result<()> {
+pub(in crate::mcp_launcher) fn create_test_directory_link(
+    source: &Path,
+    target: &Path,
+) -> std::io::Result<()> {
     std::os::unix::fs::symlink(source, target)
 }
 pub(in crate::mcp_launcher) fn uninstall_programs_idle(root: &Path) -> Result<Vec<File>, String> {
@@ -163,6 +166,10 @@ pub(in crate::mcp_launcher) fn legacy_update_image(path: &Path) -> Result<Option
         Ok(_) => {}
     }
     lock(path, true).map(Some)
+}
+/// The installation directory belongs to the account this process runs as.
+pub(in crate::mcp_launcher) fn owned_by_caller(path: &Path) -> bool {
+    std::fs::metadata(path).is_ok_and(|meta| meta.uid() == unsafe { libc::geteuid() })
 }
 pub(in crate::mcp_launcher) fn same_image_file(file: &File, path: &Path) -> Result<bool, String> {
     let held = file.metadata().map_err(|e| e.to_string())?;

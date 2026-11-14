@@ -125,7 +125,16 @@ pub struct RuntimeHello {
     pub runtime_sha256: String,
     pub ipc_contract_id: String,
     pub shared_state_contract_id: String,
+    /// Sent only after a daemon outside every installation answered
+    /// `daemon_outside_installation`; omitted otherwise, so the wire form for
+    /// a daemon of the installation stays the pre-0.5.197 one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub installation_root: Option<String>,
 }
+
+/// Answer of a daemon whose own image belongs to no installation and whose
+/// Hello named none. The runtime then repeats Hello with its root.
+pub const DAEMON_OUTSIDE_INSTALLATION: &str = "daemon_outside_installation";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

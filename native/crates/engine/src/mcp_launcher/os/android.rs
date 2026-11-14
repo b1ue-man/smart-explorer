@@ -30,6 +30,9 @@ pub(in crate::mcp_launcher) fn legacy_profile_image(_path: &Path) -> Result<File
 pub(in crate::mcp_launcher) fn legacy_update_image(_path: &Path) -> Result<Option<File>, String> {
     Ok(None)
 }
+pub(in crate::mcp_launcher) fn owned_by_caller(_path: &Path) -> bool {
+    false
+}
 pub(in crate::mcp_launcher) fn same_image_file(_file: &File, _path: &Path) -> Result<bool, String> {
     unsupported()
 }
@@ -54,10 +57,15 @@ pub(in crate::mcp_launcher) fn processes_for(_path: &Path) -> Result<Vec<Process
 pub(in crate::mcp_launcher) fn uninstall_programs_idle(_root: &Path) -> Result<Vec<File>, String> {
     unsupported()
 }
-pub(in crate::mcp_launcher) fn retirement_root() -> Result<Option<crate::mcp_launcher::installation::RetirementRoot>, String> {
+pub(in crate::mcp_launcher) fn retirement_root(
+) -> Result<Option<crate::mcp_launcher::installation::RetirementRoot>, String> {
     unsupported()
 }
-pub(in crate::mcp_launcher) fn retirement_handoff(_root: &Path, _hash: &str, _snapshot: &str) -> Result<(), String> {
+pub(in crate::mcp_launcher) fn retirement_handoff(
+    _root: &Path,
+    _hash: &str,
+    _snapshot: &str,
+) -> Result<(), String> {
     unsupported()
 }
 pub(in crate::mcp_launcher) fn removal_image_guard(_path: &Path) -> Result<Option<File>, String> {
@@ -91,6 +99,12 @@ pub(in crate::mcp_launcher) fn spawn_current_daemon(
     _command: Command,
     _image: File,
 ) -> Result<(), String> {
+    unsupported()
+}
+pub(in crate::mcp_launcher) fn spawn_relayed(
+    _command: Command,
+    _image: File,
+) -> Result<GenerationChild, String> {
     unsupported()
 }
 pub(in crate::mcp_launcher) fn spawn_installation_probe(

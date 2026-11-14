@@ -45,17 +45,29 @@ pub fn run_launcher() -> Result<i32, String> {
         .join("mcp/launchers")
         .join(hash)
         .join(os::LAUNCHER_NAME);
-    if image != expected
-        || !installation
-            .manifest
-            .allowed_launcher_hashes
-            .iter()
-            .any(|allowed| allowed == hash)
-    {
+    if image != expected {
         return Err("launcher_revoked_or_migration_required".into());
     }
+    let allowed = installation
+        .manifest
+        .allowed_launcher_hashes
+        .iter()
+        .any(|allowed| allowed == hash);
     let _own_image = os::open_verified(&installation.root, &image, hash)?;
-    launch(&installation)
+    // The relay's child and the one-time migration entry start their runtime
+    // themselves; only an admitted launcher may do that.
+    if crate::mcp_launcher::relay::relayed() || std::env::var_os("SE_MCP_MIGRATION_ENTRY").is_some()
+    {
+        if !allowed {
+            return Err("launcher_revoked_or_migration_required".into());
+        }
+        return launch(&installation);
+    }
+    // The launcher an agent host started holds that connection. It never
+    // starts a runtime itself, so an earlier registered launcher whose hash
+    // a later generation no longer admits still reaches the confirmed one.
+    drop(_own_image);
+    crate::mcp_launcher::relay::run(&installation.root)
 }
 
 pub fn launch(installation: &Installation) -> Result<i32, String> {
@@ -94,6 +106,11 @@ pub fn launch(installation: &Installation) -> Result<i32, String> {
     command
         .arg("mcp")
         .env("SE_MCP_STARTER_SHA256", starter_hash);
+    // `relayed` removed the mark from this process's environment; the runtime
+    // of a relayed session gets it by name and removes it again at admission.
+    if crate::mcp_launcher::relay::relayed() {
+        command.env(crate::mcp_launcher::relay::RELAY_CHILD_ENV, "1");
+    }
     // Keep parent lifetime admission until the child acquired its own locks.
     let mut child = os::spawn_verified(command, image, true, false, false)?;
     drop(control);

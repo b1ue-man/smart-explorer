@@ -32,7 +32,18 @@ struct SeServer {
 impl ServerHandler for SeServer {
     fn get_info(&self) -> ServerConfig {
         let instructions = match crate::mcp_launcher::current_runtime() {
-            Some(runtime) => format!("{}\nThis process uses immutable runtime {} of installation {} (generation {}). Its tool catalog stays fixed until this MCP process ends. New capabilities require the host to start a new MCP process.", catalog::INSTRUCTIONS, runtime.contract.runtime_sha256, runtime.installation.manifest.installation_id, runtime.installation.manifest.generation),
+            Some(runtime) => format!(
+                "{}\nThis process uses immutable runtime {} of installation {} (generation {}). {}",
+                catalog::INSTRUCTIONS,
+                runtime.contract.runtime_sha256,
+                runtime.installation.manifest.installation_id,
+                runtime.installation.manifest.generation,
+                if crate::mcp_launcher::relayed() {
+                    "After a Smart Explorer update the launcher keeps this connection, starts the updated runtime and announces a changed tool list; a call that was running at that moment returns an error and is not repeated."
+                } else {
+                    "Its tool catalog stays fixed until this MCP process ends. New capabilities require the host to start a new MCP process."
+                }
+            ),
             None => catalog::INSTRUCTIONS.to_string(),
         };
         let instructions = if crate::mcp_launcher::migration_entry() {
@@ -40,12 +51,17 @@ impl ServerHandler for SeServer {
         } else {
             instructions
         };
-        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
-            .with_server_info(
-                Implementation::new("smart-explorer", env!("CARGO_PKG_VERSION"))
-                    .with_title("Smart Explorer"),
-            )
-            .with_instructions(instructions)
+        ServerConfig::new(
+            ServerCapabilities::builder()
+                .enable_tools()
+                .enable_tool_list_changed()
+                .build(),
+        )
+        .with_server_info(
+            Implementation::new("smart-explorer", env!("CARGO_PKG_VERSION"))
+                .with_title("Smart Explorer"),
+        )
+        .with_instructions(instructions)
     }
 
     async fn list_tools(
@@ -271,7 +287,12 @@ pub(super) fn serve() -> Result<i32, String> {
                 .map_err(|error| format!("MCP session failed: {error}")),
             () = stop.wait(watch_session, lifecycle) => {
                 eprintln!(
-                    "se mcp: Smart Explorer is being updated; this session ends now. Reconnect the MCP server after the update."
+                    "{}",
+                    if crate::mcp_launcher::relayed() {
+                        "se mcp: Smart Explorer is being updated; this runtime ends and the launcher continues the connection with the updated one."
+                    } else {
+                        "se mcp: Smart Explorer is being updated; this session ends now. Reconnect the MCP server after the update."
+                    }
                 );
                 Ok(())
             }

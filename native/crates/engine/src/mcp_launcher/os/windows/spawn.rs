@@ -427,6 +427,14 @@ pub(in crate::mcp_launcher) fn spawn_current_daemon(
     Ok(())
 }
 
+/// The relay's child launcher: verified image, piped stdin, stdout and stderr,
+/// no admission channel (the child launcher admits its runtime itself).
+pub(in crate::mcp_launcher) fn spawn_relayed(
+    command: Command,
+    image: File,
+) -> Result<GenerationChild, String> {
+    spawn_impl(command, image, false, true, true, false)
+}
 pub(in crate::mcp_launcher) fn spawn_installation_probe(
     command: Command,
     image: File,

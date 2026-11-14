@@ -31,9 +31,10 @@ smart-explorer@smart-explorer`. Codex: a format-preserving MCP entry and a skill
 ~/.agents/skills/smart-explorer. Both hosts use the verified installation
 launcher when this installation has a managed runtime. Historical terminal-only
 updates keep their absolute local se entry usable offline until a managed update
-provides the launcher. New managed MCP processes select its confirmed runtime generation; an
-existing compatible process retains its catalog. Use the host's documented
-MCP restart action to load new capabilities.
+provides the launcher. New managed MCP processes select its confirmed runtime generation. The
+launcher a host started keeps that connection across a Smart Explorer update:
+it starts the updated runtime itself and announces the changed tool list; a
+call running at that moment returns an error and is not repeated.
 
 Examples:
   se plugin install

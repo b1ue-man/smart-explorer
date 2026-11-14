@@ -4,10 +4,13 @@
 mod batches_lifecycle_task_tests;
 #[path = "garbage_collection.rs"]
 mod garbage_collection;
-pub use garbage_collection::garbage_collect;
+#[cfg(all(test, any(windows, target_os = "linux")))]
+#[path = "plugin_task_installation_tests.rs"]
+mod plugin_task_installation_tests;
 use crate::mcp_launcher::core::lifecycle::{InstallationTarget, Phase, UpdateState};
 use crate::mcp_launcher::installation::{atomic_bytes, atomic_json, hash_bytes};
 use crate::mcp_launcher::{os, Installation, Manifest};
+pub use garbage_collection::garbage_collect;
 use std::fs::File;
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -357,7 +360,6 @@ pub fn stop_marker_is_owned(root: &Path, marker: &Path) -> Result<bool, String> 
             && state.legacy_stop.as_ref() == os::stop_identity(marker).ok().as_ref()
     }))
 }
-
 
 pub fn stop_marker_identity(
     marker: &Path,

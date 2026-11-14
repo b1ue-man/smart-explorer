@@ -134,7 +134,7 @@ pub(super) fn run(raw: &[String]) -> Result<(), String> {
     super::apply_update(args).map_err(|e| e.message)?;
     println!(
         "{}",
-        serde_json::json!({"version":version,"status":"installed","completion":if install_mode==InstallMode::GuiAck {"gui_startup_ack"}else{"verified_installation"},"gui_started":install_mode==InstallMode::GuiAck,"user_mcp_started":false,"profile_refresh":if is_elevated_context() {"deferred_original_user_start"}else{"attempted_with_verified_installed_generator"},"note":if install_mode==InstallMode::GuiAck {"The normal app startup was acknowledged."}else{"Installed payload hashes and CLI product version were verified. No GUI or user MCP process was started; the next user start negotiates its daemon contract."}})
+        serde_json::json!({"version":version,"status":"installed","completion":if install_mode==InstallMode::GuiAck {"gui_startup_ack"}else{"verified_installation"},"gui_started":install_mode==InstallMode::GuiAck,"user_mcp_started":false,"profile_refresh":if profile_refresh_deferred(&root) {"deferred_original_user_start"}else{"attempted_with_verified_installed_generator"},"note":if install_mode==InstallMode::GuiAck {"The normal app startup was acknowledged."}else{"Installed payload hashes and CLI product version were verified. No GUI or user MCP process was started; the next user start negotiates its daemon contract."}})
     );
     Ok(())
 }
@@ -202,15 +202,19 @@ pub(super) fn verify_completion(args: &ApplyArgs) -> Result<(), String> {
     }
 }
 
-/// A machine installer never writes a user's profiles from its admin token.
+/// A machine installer never writes another account's profiles from its admin
+/// token (`smart_explorer::mcp_launcher::profile_refresh_deferred`).
+pub(super) fn profile_refresh_deferred(root: &std::path::Path) -> bool {
+    smart_explorer::mcp_launcher::profile_refresh_deferred(root, is_elevated_context())
+}
 pub(super) fn refresh_after_commit(args: &ApplyArgs) {
-    if is_elevated_context() {
-        super::logging::append_log("MCP profile refresh deferred to the next original-user MCP start: elevated installer context");
-        return;
-    }
     let Some(root) = args.cli_target.parent() else {
         return;
     };
+    if profile_refresh_deferred(root) {
+        super::logging::append_log("MCP profile refresh deferred to the next original-user MCP start: elevated installer context");
+        return;
+    }
     if root.join("mcp/current.v1.json").exists() {
         if let Err(error) = smart_explorer::mcp_launcher::refresh_installed_profile(root) {
             super::logging::append_log(&format!(
