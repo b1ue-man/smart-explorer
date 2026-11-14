@@ -5,6 +5,12 @@ pub use super::route_cancellation::RouteCancellation;
 pub use super::route_state::RouteStatus;
 #[path = "login_transport_admission.rs"]
 mod admission;
+#[path = "node_sessions_login_target.rs"]
+mod session_fetch;
+#[path = "login_target_store.rs"]
+pub mod target_store;
+#[path = "login_target_wire.rs"]
+pub mod target_wire;
 use crate::login::core::gateway_types::{GatewayNetwork, GatewayTarget, LOGIN_ALPN};
 pub use admission::{GatewayAdmission, GatewayTlsSlot};
 use iroh::{
@@ -17,6 +23,11 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
+pub use target_store::{
+    choose_open, login_state, LoginSwitch, LoginTargetBook, LookupError, OpenChoice,
+    PairedLoginTarget, SwitchAction, ViewerSurface,
+};
+pub use target_wire::{LoginTargetMessage, SessionPeer, WithdrawReason, LOGIN_TARGET_FEATURE};
 
 /// Opaque lifetime retainer for the existing user endpoint and its runtime.
 /// Constructed only from ShareService; never creates a second user endpoint.
@@ -106,7 +117,16 @@ pub async fn bind_machine(key: SecretKey, options: &GatewayNetwork) -> io::Resul
     if let Some(config) = trust.ca_tls_config() {
         builder = builder.ca_tls_config(config);
     }
-    builder.bind().await.map_err(io::Error::other)
+    let endpoint = builder.bind().await.map_err(io::Error::other)?;
+    // Two candidates on one host start without QAD (`relay_mode`).
+    let deferred = super::endpoint_routes::deferred_qad(&urls);
+    if !deferred.is_empty() {
+        tokio::spawn(super::endpoint_routes::grant_qad_to_home_relay(
+            endpoint.clone(),
+            deferred,
+        ));
+    }
+    Ok(endpoint)
 }
 fn gateway_transport_config() -> iroh::endpoint::QuicTransportConfig {
     use super::keepalive;
@@ -284,6 +304,171 @@ pub async fn cancelled(cancel: &Arc<RouteCancellation>) -> io::Error {
     }
 }
 
+/// Host side of `login_target_v1` (E22) for the device the Share session
+/// authenticated: `broker` is `crate::login::self_setup::broker_view()` of
+/// this host. Steering is checked here again, at the moment of the answer.
+pub fn host_login_target(
+    host_device_id: &str,
+    device_id: &str,
+    public_key: &str,
+    broker: io::Result<crate::login::core::self_grants::SelfReply>,
+) -> LoginTargetMessage {
+    let steering = crate::share::access_steering::steering_device(device_id, public_key);
+    let broker = broker.ok().filter(|reply| reply.state == "ok");
+    target_wire::host_message(&target_wire::HostFacts {
+        host_device_id,
+        device_id,
+        steering,
+        account: broker.as_ref().map(|reply| reply.account.as_str()),
+        own_grants: broker
+            .as_ref()
+            .map_or(&[][..], |reply| reply.own_grants.as_slice()),
+        target: broker.as_ref().and_then(|reply| reply.target.as_ref()),
+    })
+}
+
+/// Host side of `FsRequest::LoginTarget` (E43) for the device the asking
+/// session authenticated. Every authenticated peer may ask; only a device
+/// that steers this screen now makes the host ask its login broker, and
+/// every other device gets a withdrawal without target. The answer stays
+/// within `MAX_NETWORK` bytes (S2).
+pub(in crate::share) fn host_login_answer(
+    auth: &std::sync::Mutex<super::types::ShareAuthState>,
+    device_id: &str,
+    public_key: &str,
+) -> io::Result<LoginTargetMessage> {
+    let host = auth
+        .lock()
+        .map_err(|_| io::Error::other("Share-State gesperrt"))?
+        .identity
+        .device_id
+        .clone();
+    let broker = if crate::share::access_steering::steering_device(device_id, public_key) {
+        crate::login::self_setup::broker_view()
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "no steering right",
+        ))
+    };
+    let message = host_login_target(&host, device_id, public_key, broker);
+    message.encode()?;
+    Ok(message)
+}
+
+/// Viewer side: whether a host's features let the viewer ask for its
+/// login target; an older host never gets the request.
+pub(in crate::share) fn asks_login_target(features: &super::wire::FsHostFeatures) -> bool {
+    features.login_target_v1
+}
+
+/// Viewer side: the host's message in its answer to `LoginTarget`, checked
+/// for format and size before it takes effect.
+pub(in crate::share) fn login_answer(
+    response: super::wire::FsResponse,
+) -> io::Result<LoginTargetMessage> {
+    match response {
+        super::wire::FsResponse::LoginTarget { message } => {
+            message.encode()?;
+            Ok(message)
+        }
+        super::wire::FsResponse::Err { msg, .. } => Err(io::Error::other(msg)),
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "unerwartete Antwort auf die Anmeldeziel-Abfrage",
+        )),
+    }
+}
+
+/// Viewer side: the device whose paired login target goes with a removed
+/// Direct contact (its recorded device, else its last presence).
+pub(in crate::share) fn removed_contact_device(
+    remote_device_id: Option<&str>,
+    presence: Option<&super::types::PeerPresence>,
+) -> Option<String> {
+    remote_device_id
+        .filter(|device| !device.is_empty())
+        .or_else(|| presence.map(|presence| presence.device_id.as_str()))
+        .filter(|device| !device.is_empty())
+        .map(str::to_string)
+}
+
+/// Viewer side: applies the host's answer from the pinned session `peer`.
+/// A refused message changes nothing and fails with `PermissionDenied`.
+pub fn viewer_login_target(
+    peer: &SessionPeer,
+    message: &LoginTargetMessage,
+) -> io::Result<target_store::Change> {
+    let now = crate::share::core_now_secs().max(0) as u64;
+    target_store::update(|book| match book.apply(peer, message, now) {
+        Ok(change) => (Ok(change), change != target_store::Change::Unchanged),
+        Err(refusal) => (Err(refusal), false),
+    })?
+    .map_err(|refusal| io::Error::new(io::ErrorKind::PermissionDenied, refusal.key()))
+}
+
+/// Viewer side: the pinned session's host does not offer `login_target_v1`.
+pub fn viewer_login_target_unsupported(peer: &SessionPeer) -> io::Result<bool> {
+    let now = crate::share::core_now_secs().max(0) as u64;
+    target_store::update(|book| {
+        let changed = book.note_legacy(peer, now);
+        (changed, changed)
+    })
+}
+
+/// Viewer side: the contact `device_id` was removed or re-paired.
+pub fn viewer_forget_login_target(device_id: &str) -> io::Result<bool> {
+    target_store::update(|book| {
+        let changed = book.forget(device_id);
+        (changed, changed)
+    })
+}
+
+/// The paired target `selector` names (CLI, MCP, Bridge).
+pub fn paired_login_target(selector: &str) -> Result<PairedLoginTarget, LookupError> {
+    target_store::load().map_err(store_error)?.resolve(selector)
+}
+
+/// The paired target of exactly this device and Share key (device pages).
+pub fn paired_login_target_bound(device_id: &str, public_key: &str) -> Option<PairedLoginTarget> {
+    target_store::load()
+        .ok()?
+        .bound(device_id, public_key)
+        .cloned()
+}
+
+/// The form of „Anmeldung öffnen“ for `selector` (see [`choose_open`]).
+pub fn login_open_choice(
+    selector: &str,
+    acknowledged: bool,
+    file_exists: bool,
+) -> Result<OpenChoice, LookupError> {
+    if acknowledged {
+        return Ok(OpenChoice::File);
+    }
+    let book = target_store::load().map_err(store_error)?;
+    choose_open(&book, selector, acknowledged, file_exists)
+}
+
+fn store_error(error: io::Error) -> LookupError {
+    LookupError {
+        code: "login_target_store",
+        message: format!("Anmeldeziele nicht lesbar: {error}"),
+    }
+}
+
 #[cfg(test)]
 #[path = "login_transport_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "login_target_task_tests.rs"]
+mod target_task_tests;
+
+#[cfg(test)]
+#[path = "login_ziel_weg_task_tests.rs"]
+mod ziel_weg_task_tests;
+
+#[cfg(test)]
+#[path = "login_ziel_knoten_task_tests.rs"]
+mod ziel_knoten_task_tests;

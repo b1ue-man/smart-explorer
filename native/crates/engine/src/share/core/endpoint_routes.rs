@@ -64,20 +64,122 @@ impl NodeTransportOptions {
 /// A TLS relay also answers QUIC address discovery (QAD, UDP 7842 at the
 /// relay host), from which a device behind NAT learns its public address.
 /// QAD needs TLS, so a plain `http://` relay is used without a QAD probe.
+///
+/// The QAD service answers for its host, not for one relay URL. A server
+/// address without a path offers two TLS candidates on one host, its next port
+/// (the relay of `se-share-server`) and its origin (a reverse proxy)
+/// (`SignalEndpoint::relay_urls`). Iroh takes the candidate with the lowest
+/// probe latency of any kind as home relay and ends a full net report as soon
+/// as QAD answered often enough (`net_report`), so with QAD for both the
+/// signaling port `https://host:51820/`, which serves no relay, became this
+/// device's home relay and published relay address again and again; peers
+/// could not reach the device meanwhile (report 2026-11-14). Such candidates
+/// therefore start without QAD: their HTTPS probe decides, which only a real
+/// relay answers, and [`grant_qad_to_home_relay`] gives QAD to the one that
+/// became the connected home relay. A host with one TLS candidate keeps QAD
+/// from the start.
 pub(super) fn relay_mode(relay_urls: &[RelayUrl]) -> RelayMode {
     if relay_urls.is_empty() {
         return RelayMode::Disabled;
     }
-    RelayMode::Custom(relay_urls.iter().cloned().map(relay_config).collect())
+    let deferred = deferred_qad(relay_urls);
+    let mut configs: Vec<RelayConfig> = Vec::new();
+    for url in distinct(relay_urls) {
+        configs.push(if deferred.contains(url) {
+            RelayConfig::new(url.clone(), None)
+        } else {
+            relay_config(url.clone())
+        });
+    }
+    RelayMode::Custom(configs.into_iter().collect())
+}
+
+/// The TLS candidates of [`relay_mode`] that share their host with another
+/// TLS candidate: they start without QAD.
+pub(super) fn deferred_qad(relay_urls: &[RelayUrl]) -> Vec<RelayUrl> {
+    let tls: Vec<RelayUrl> = distinct(relay_urls)
+        .into_iter()
+        .filter(|url| asks_qad(url))
+        .cloned()
+        .collect();
+    tls.iter()
+        .filter(|url| tls.iter().filter(|other| same_host(url, other)).count() > 1)
+        .cloned()
+        .collect()
+}
+
+/// Gives QAD to the deferred candidate (see [`deferred_qad`]) that became the
+/// connected home relay of `endpoint`, once; other candidates stay without.
+/// Ends without a change when the endpoint closes first or its home relay is
+/// not deferred.
+pub(super) async fn grant_qad_to_home_relay(endpoint: Endpoint, deferred: Vec<RelayUrl>) {
+    grant_qad_to_home_relay_with(endpoint, deferred, relay_config).await;
+}
+
+/// [`grant_qad_to_home_relay`] with the relay configuration that carries QAD
+/// (tests point it at the QUIC port of a test relay).
+pub(super) async fn grant_qad_to_home_relay_with(
+    endpoint: Endpoint,
+    deferred: Vec<RelayUrl>,
+    with_qad: impl Fn(RelayUrl) -> RelayConfig,
+) {
+    if deferred.is_empty() {
+        return;
+    }
+    let mut watcher = endpoint.home_relay_status();
+    let connected_home = async move {
+        loop {
+            let home = watcher
+                .get()
+                .iter()
+                .find(|status| status.is_connected())
+                .map(|status| status.url().clone());
+            if home.is_some() {
+                return home;
+            }
+            watcher.updated().await.ok()?;
+        }
+    };
+    let home = tokio::select! {
+        _ = endpoint.closed() => None,
+        home = connected_home => home,
+    };
+    if let Some(home) = home.filter(|home| deferred.contains(home)) {
+        endpoint
+            .insert_relay(home.clone(), Arc::new(with_qad(home)))
+            .await;
+    }
+}
+
+/// Each URL once, in the given order.
+fn distinct(relay_urls: &[RelayUrl]) -> Vec<&RelayUrl> {
+    let mut seen: Vec<&RelayUrl> = Vec::new();
+    for url in relay_urls {
+        if !seen.contains(&url) {
+            seen.push(url);
+        }
+    }
+    seen
+}
+
+fn same_host(left: &RelayUrl, right: &RelayUrl) -> bool {
+    left.host_str()
+        .unwrap_or_default()
+        .eq_ignore_ascii_case(right.host_str().unwrap_or_default())
 }
 
 /// One relay of [`relay_mode`]: QAD on the default port only over TLS.
 pub(super) fn relay_config(url: RelayUrl) -> RelayConfig {
-    if matches!(url.scheme(), "https" | "wss") {
+    if asks_qad(&url) {
         RelayConfig::from(url)
     } else {
         RelayConfig::new(url, None)
     }
+}
+
+/// QAD needs TLS: only an `https`/`wss` relay is asked.
+fn asks_qad(url: &RelayUrl) -> bool {
+    matches!(url.scheme(), "https" | "wss")
 }
 
 #[derive(Clone, Debug)]
@@ -108,6 +210,11 @@ impl EndpointRoutes {
                 watcher_revision.fetch_add(1, Ordering::Release);
             }
         });
+
+        let deferred = deferred_qad(relay_urls);
+        if !deferred.is_empty() {
+            runtime.spawn(grant_qad_to_home_relay(endpoint.clone(), deferred));
+        }
 
         if !relay_urls.is_empty() {
             let online_endpoint = endpoint.clone();
@@ -240,3 +347,7 @@ mod relay_mode_tests;
 #[cfg(all(test, target_os = "linux"))]
 #[path = "qad_direct_task_tests.rs"]
 mod qad_direct_task_tests;
+
+#[cfg(test)]
+#[path = "verbindungen_abbruch_relay_task_tests.rs"]
+mod verbindungen_abbruch_relay_task_tests;
