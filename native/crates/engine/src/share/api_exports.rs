@@ -100,6 +100,8 @@ pub use self::removed_direct_peers::{
     ForgottenDirectPeer, PairingOrigin, RemovedDirectPeer, MAX_REMOVED_DIRECT_PEERS,
 };
 pub use self::service::ShareService;
+/// Who starts a file-system operation on a Share device (E4, 2026-11-14).
+pub use self::keepalive::metadata_presence::OperationOrigin;
 pub use self::transport_options::migrate_server_file;
 pub use self::types::{
     DirectAccessState, DirectContact, DirectGrant, DirectGrantState, DirectRelationFlags,

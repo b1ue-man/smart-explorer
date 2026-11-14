@@ -26,7 +26,7 @@
 //! Cubic, `bbr3` for measurements, `keepalive.rs`).
 use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicU8, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 #[cfg(any(test, feature = "test-support"))]
 use iroh::endpoint::AckFrequencyConfig;
@@ -34,9 +34,10 @@ use iroh::endpoint::{
     ConnectError, ConnectOptions, Connection, ControllerFactory, Incoming, QuicTransportConfig,
     SendStream, ServerConfig, ServerConfigBuilder,
 };
-use iroh::{Endpoint, EndpointAddr};
+use iroh::{Endpoint, EndpointAddr, EndpointId};
 
 use super::interactive_presence;
+use super::metadata_presence::{self, PeerActivity};
 use super::yield_controller::{Engagement, YieldingFactory, DEFAULT_TARGET};
 
 /// What one connection is for.
@@ -139,17 +140,45 @@ pub(crate) fn accepted_alpns() -> Vec<Vec<u8>> {
 
 /// The purpose slot of one connection: set when the connection is made
 /// (outgoing) or bound after the handshake (incoming). Unbound, the
-/// controller does not yield.
+/// controller does not yield. It also carries the metadata activity of the
+/// connection's device (`metadata_presence.rs`), bound the same way.
 #[derive(Debug, Default)]
-pub(crate) struct PurposeSlot(AtomicU8);
+pub(crate) struct PurposeSlot(AtomicU8, OnceLock<Arc<PeerActivity>>);
 
 impl PurposeSlot {
     pub(crate) fn new(purpose: Option<TransportPurpose>) -> Self {
-        Self(AtomicU8::new(purpose.map_or(0, |purpose| purpose as u8)))
+        Self(
+            AtomicU8::new(purpose.map_or(0, |purpose| purpose as u8)),
+            OnceLock::new(),
+        )
     }
 
     pub(crate) fn purpose(&self) -> Option<TransportPurpose> {
         TransportPurpose::from_code(self.0.load(Ordering::Acquire))
+    }
+
+    /// Binds the device `peer` of the process register; the first binding
+    /// stays (a connection has one remote device).
+    pub(crate) fn bind_peer(&self, peer: EndpointId) {
+        self.bind_activity(metadata_presence::global().activity(peer));
+    }
+
+    /// Binds `activity` (of the process register, or of a test's own).
+    pub(crate) fn bind_activity(&self, activity: Arc<PeerActivity>) {
+        let _ = self.1.set(activity);
+    }
+
+    /// The metadata activity of the connection's device, once bound.
+    pub(crate) fn peer_activity(&self) -> Option<&PeerActivity> {
+        self.1.get().map(Arc::as_ref)
+    }
+
+    /// Everything an accepted connection binds after its handshake: the
+    /// purpose of its negotiated ALPN and its remote device. The accept loop
+    /// of the node and the measurements call this one function.
+    pub(crate) fn bind_accepted(&self, connection: &Connection) {
+        self.bind_alpn(connection.alpn());
+        self.bind_peer(connection.remote_id());
     }
 
     /// Binds the purpose of the negotiated `alpn`; an unknown ALPN leaves
@@ -220,7 +249,16 @@ fn profile(
 
 /// The transport configuration of an outgoing connection for `purpose`.
 pub(crate) fn transport_config(purpose: TransportPurpose) -> QuicTransportConfig {
+    transport_config_to(purpose, None)
+}
+
+/// [`transport_config`] for a connection to `peer`, whose metadata presence
+/// the controller then follows.
+fn transport_config_to(purpose: TransportPurpose, peer: Option<EndpointId>) -> QuicTransportConfig {
     let slot = Arc::new(PurposeSlot::new(Some(purpose)));
+    if let Some(peer) = peer.filter(|_| purpose.yields()) {
+        slot.bind_peer(peer);
+    }
     profile(Some(purpose), controller_factory(slot, Some(purpose)))
 }
 
@@ -235,16 +273,18 @@ pub(crate) fn tcp_options() -> ConnectOptions {
 }
 
 /// `Endpoint::connect` with the profile of `purpose`: same result and
-/// errors, only the transport configuration differs.
+/// errors, only the transport configuration differs. The controller follows
+/// the metadata presence of the device `addr` names.
 pub(crate) async fn connect(
     endpoint: &Endpoint,
     addr: impl Into<EndpointAddr>,
     alpn: &[u8],
     purpose: TransportPurpose,
 ) -> Result<Connection, ConnectError> {
-    let connecting = endpoint
-        .connect_with_opts(addr, alpn, connect_options(purpose))
-        .await?;
+    let addr = addr.into();
+    let options =
+        ConnectOptions::new().with_transport_config(transport_config_to(purpose, Some(addr.id)));
+    let connecting = endpoint.connect_with_opts(addr, alpn, options).await?;
     Ok(connecting.await?)
 }
 

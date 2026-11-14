@@ -185,7 +185,7 @@ impl ShareHost {
             }
         }
         let (_, backend, _) = self
-            .open_share(target.clone())
+            .open_share(target.clone(), crate::share::OperationOrigin::Job)
             .map_err(|message| (message, "transfer_open_failed"))?;
         crate::transfer::remember_identity(&backend, namespace.clone(), state.clone());
         Ok(Some(backend))

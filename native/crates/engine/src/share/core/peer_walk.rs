@@ -3,9 +3,10 @@ use std::time::Duration;
 
 use iroh::endpoint::{RecvStream, SendStream};
 
-use super::backend::{send_ctrl, PeerBackend};
-use super::framing::{decode_resp, recv_resp_wire};
+use super::backend::PeerBackend;
+use super::framing::{decode_resp, recv_resp_wire, send_fs_ctrl};
 use super::io_deadline;
+use super::keepalive::metadata_presence::OperationOrigin;
 use super::walk_assembly::{invalid, TreeAssembler, WalkTotals};
 use super::wire::{Ctrl, FsRequest, FsResponse};
 
@@ -21,11 +22,21 @@ pub(super) fn walk_peer(
         return Err(interrupted());
     }
     let endpoint = backend.current_endpoint()?;
+    // A person's tree walk (such as a search) is presence until it ends (E4).
+    let _presence = backend.metadata_presence(&endpoint);
     let mut opened = backend.node.open_stream(&endpoint, &backend.identity)?;
     let lease = backend.mount_lease_token()?;
+    let origin = backend.origin;
     let result = backend.node.block_on_route(
         opened.generation,
-        receive_walk(&mut opened.send, &mut opened.recv, root, lease, on_progress),
+        receive_walk(
+            &mut opened.send,
+            &mut opened.recv,
+            root,
+            lease,
+            origin,
+            on_progress,
+        ),
     );
     if matches!(&result, Err(failure) if failure.invalidate_session) {
         let _ = backend
@@ -40,22 +51,18 @@ async fn receive_walk(
     recv: &mut RecvStream,
     root: &str,
     lease: Option<String>,
+    origin: OperationOrigin,
     on_progress: &(dyn Fn(u64, u64) -> bool + Sync),
 ) -> Result<crate::agent_proto::WireNode, PeerWalkFailure> {
-    io_deadline::run(
-        "peer tree request",
-        send_ctrl(
-            send,
-            &Ctrl::Fs {
-                req: FsRequest::WalkTree {
-                    path: root.to_string(),
-                },
-                lease,
-            },
-        ),
-    )
-    .await
-    .map_err(PeerWalkFailure::transport)?;
+    let ctrl = Ctrl::Fs {
+        req: FsRequest::WalkTree {
+            path: root.to_string(),
+        },
+        lease,
+    };
+    io_deadline::run("peer tree request", send_fs_ctrl(send, &ctrl, origin))
+        .await
+        .map_err(PeerWalkFailure::transport)?;
     let result = receive_responses(recv, on_progress).await;
     if result.is_err() {
         io_deadline::abort(send, recv);

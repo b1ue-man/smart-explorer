@@ -372,23 +372,23 @@ impl ShareHost {
     pub fn open_share(
         &self,
         target: crate::share::PeerOpenTarget,
+        origin: crate::share::OperationOrigin,
     ) -> Result<(String, crate::vfs::BackendHandle, crate::share::ShareStatus), String> {
         let deadline = Instant::now() + Duration::from_secs(45);
         loop {
             self.reload_now()?;
             self.drain_events();
-            let service = {
-                let state = self
-                    .state
-                    .lock()
-                    .map_err(|_| "Share-Worker gesperrt".to_string())?;
-                state.service.clone()
-            };
+            let service = self
+                .state
+                .lock()
+                .map_err(|_| "Share-Worker gesperrt".to_string())?
+                .service
+                .clone();
             let Some(service) = service else {
                 return Err("Share-Server ist nicht konfiguriert oder Auto-Connect ist aus".into());
             };
             service.cmd(crate::share::ShareCmd::Refresh)?;
-            match service.probe_backend_for_target(&target) {
+            match service.probe_backend_for_target(&target, origin) {
                 Ok(opened) => return Ok(opened),
                 Err(error) => {
                     // A rejection of the device is final (A9): no 45-s wait.

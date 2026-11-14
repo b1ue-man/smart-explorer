@@ -1,7 +1,9 @@
 //! "Cubic with yielding" (plan 2026-11-14 E2): the congestion controller of
 //! file connections. Without an interactive session in the process it is
 //! exactly its inner controller (Cubic, or what `SE_SHARE_QUIC_CC` names).
-//! While one runs (`interactive_presence.rs`), it limits its window so that
+//! While one runs (`interactive_presence.rs`), or a person's metadata
+//! operation to the connection's device runs or ended less than the hold
+//! time ago (`metadata_presence.rs`, `yield_engagement.rs`), it limits its window so that
 //! the queueing delay it measures stays at the target `T`, the way LEDBAT
 //! does (RFC 6817, retrieved 2026-11-14):
 //!
@@ -46,23 +48,20 @@
 //! `max_ack_delay`, 25 ms by default, as large as `T`) looked like queueing;
 //! queueing on the return path still counts (a known limit of M2).
 use std::any::Any;
-use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use noq_proto::congestion::{Controller, ControllerFactory, ControllerMetrics};
 use noq_proto::RttEstimator;
 
-use super::interactive_presence::InteractivePresence;
-use super::transport_purpose::PurposeSlot;
+use super::yield_delay::{network_delay, DelayTracker};
+pub(crate) use super::yield_engagement::Engagement;
+use super::yield_engagement::{hold_time, PeerHold};
 
 /// Queueing delay the window aims at while interactive sessions run. RFC
 /// 6817 §2.5 requires 100 ms or less; measurement M2 decides among 15, 25
 /// and 50 ms (estimate until then).
 pub(crate) const DEFAULT_TARGET: Duration = Duration::from_millis(25);
-const BASE_HISTORY: usize = 10;
-const BASE_INTERVAL: Duration = Duration::from_secs(60);
-const CURRENT_FILTER: usize = 4;
 /// RFC 6817 §2.5 `MIN_CWND` (2) and `ALLOWED_INCREASE` (1) as noq windows,
 /// in MSS. noq 1.3.0 starts a datagram only while `in_flight + MSS < window`
 /// (`path_congestion_check`): a window of n MSS carries n − 1 packets, so
@@ -71,66 +70,6 @@ const MIN_CWND: u64 = 2 + 1;
 const ALLOWED_INCREASE: u64 = 1 + 1;
 /// The largest multiplicative decrease per round trip (LEDBAT++ §4.2).
 const MAX_DECREASE: f64 = 0.5;
-
-/// The delay sample of one ACK frame: its round trip `latest` less the
-/// reported `ack_delay`, unless that falls below `min_rtt` (RFC 9002 §5.3).
-pub(crate) fn network_delay(latest: Duration, ack_delay: Duration, min_rtt: Duration) -> Duration {
-    if latest >= min_rtt.saturating_add(ack_delay) {
-        latest - ack_delay
-    } else {
-        latest
-    }
-}
-
-/// Base and current delay of one path (RFC 6817 §2.4.2).
-#[derive(Clone, Debug, Default)]
-pub(crate) struct DelayTracker {
-    /// One minimum per minute: (start of the minute, minimum).
-    base: VecDeque<(Instant, Duration)>,
-    /// Recent samples: (arrival, delay).
-    current: VecDeque<(Instant, Duration)>,
-}
-
-impl DelayTracker {
-    /// Records the delay `sample` seen at `now`; `round_trip` bounds the age
-    /// of the current samples.
-    pub(crate) fn record(&mut self, now: Instant, sample: Duration, round_trip: Duration) {
-        match self.base.back_mut() {
-            Some((start, minimum)) if now.saturating_duration_since(*start) < BASE_INTERVAL => {
-                *minimum = (*minimum).min(sample);
-            }
-            _ => {
-                self.base.push_back((now, sample));
-                while self.base.len() > BASE_HISTORY {
-                    self.base.pop_front();
-                }
-            }
-        }
-        self.current.push_back((now, sample));
-        while self.current.len() > CURRENT_FILTER {
-            self.current.pop_front();
-        }
-        while self.current.len() > 1
-            && self
-                .current
-                .front()
-                .is_some_and(|(at, _)| now.saturating_duration_since(*at) > round_trip)
-        {
-            self.current.pop_front();
-        }
-    }
-
-    /// The smallest delay of the history.
-    pub(crate) fn base_delay(&self) -> Option<Duration> {
-        self.base.iter().map(|(_, minimum)| *minimum).min()
-    }
-
-    /// Filtered current delay minus base delay.
-    pub(crate) fn queuing_delay(&self) -> Option<Duration> {
-        let current = self.current.iter().map(|(_, delay)| *delay).min()?;
-        Some(current.saturating_sub(self.base_delay()?))
-    }
-}
 
 /// The yielding window of one path, apart from the inner controller.
 #[derive(Clone, Debug)]
@@ -260,22 +199,6 @@ impl YieldWindow {
     }
 }
 
-/// Whether a controller yields now: its connection's purpose yields, the
-/// switch allows it and an interactive session runs.
-#[derive(Clone, Debug)]
-pub(crate) struct Engagement {
-    pub(crate) slot: Arc<PurposeSlot>,
-    pub(crate) presence: &'static InteractivePresence,
-    /// Off: plain inner controller ("vorher" of measurement M2).
-    pub(crate) enabled: bool,
-}
-
-impl Engagement {
-    fn engaged(&self) -> bool {
-        self.enabled && self.slot.yields() && self.presence.active()
-    }
-}
-
 /// The inner controller plus the yielding window.
 #[derive(Debug)]
 pub(crate) struct YieldingController {
@@ -287,6 +210,8 @@ pub(crate) struct YieldingController {
     /// Smallest round trip sample so far, ACK delay included (RFC 9002
     /// §5.2 `min_rtt`; the same samples as the connection's estimator).
     min_rtt: Option<Duration>,
+    /// The metadata presence of the connection's device (`yield_engagement.rs`).
+    peer: PeerHold,
 }
 
 impl YieldingController {
@@ -303,13 +228,32 @@ impl YieldingController {
             engagement,
             round_trip: Duration::from_millis(333),
             min_rtt: None,
+            peer: PeerHold::default(),
         }
+    }
+
+    /// Whether the window yields now (`Engagement::engaged`).
+    fn engaged(&self) -> bool {
+        self.engagement.engaged(self.peer.engaged())
+    }
+
+    /// Takes in the device's metadata presence at `now`, with the hold this
+    /// path needs now (`yield_engagement::hold_time`).
+    fn refresh_peer(&mut self, now: Instant) {
+        let hold = hold_time(
+            self.round_trip,
+            self.yielding.delays.base_delay(),
+            self.yielding.target,
+        );
+        self.peer
+            .refresh(self.engagement.peer_activity(), now, hold);
     }
 
     /// The part of `on_ack` that does not need an `RttEstimator` (tests).
     pub(crate) fn observe_ack(&mut self, now: Instant, bytes: u64, round_trip: Duration) {
         self.round_trip = round_trip;
-        let engaged = self.engagement.engaged();
+        self.refresh_peer(now);
+        let engaged = self.engaged();
         let inner = self.inner.window();
         self.yielding.on_ack(now, bytes, round_trip, inner, engaged);
     }
@@ -333,7 +277,7 @@ impl YieldingController {
     /// window did not allow, and a window grown on them would be released as
     /// one burst when the interactive session ends.
     fn holds_inner(&self) -> bool {
-        self.engagement.engaged() && self.yielding.window() < self.inner.window()
+        self.engaged() && self.yielding.window() < self.inner.window()
     }
 }
 
@@ -345,6 +289,7 @@ impl Clone for YieldingController {
             engagement: self.engagement.clone(),
             round_trip: self.round_trip,
             min_rtt: self.min_rtt,
+            peer: self.peer,
         }
     }
 }
@@ -400,7 +345,8 @@ impl Controller for YieldingController {
             app_limited || held,
             largest_packet_num_acked,
         );
-        let engaged = self.engagement.engaged();
+        self.refresh_peer(now);
+        let engaged = self.engaged();
         self.yielding.on_end_acks(in_flight, engaged, app_limited);
     }
 
@@ -421,7 +367,7 @@ impl Controller for YieldingController {
             lost_bytes,
             largest_lost_pn,
         );
-        if self.engagement.engaged() {
+        if self.engaged() {
             self.yielding.on_congestion(now, self.round_trip);
         }
     }
@@ -449,8 +395,7 @@ impl Controller for YieldingController {
     }
 
     fn window(&self) -> u64 {
-        self.yielding
-            .effective(self.inner.window(), self.engagement.engaged())
+        self.yielding.effective(self.inner.window(), self.engaged())
     }
 
     fn metrics(&self) -> ControllerMetrics {

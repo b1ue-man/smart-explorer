@@ -23,7 +23,7 @@ mod share_client;
 pub use share_client::{hand_off_running_worker, share_command, WorkerHandoff};
 #[path = "ipc_open_client.rs"]
 mod open_client;
-pub use open_client::open_share_backend;
+pub use open_client::{open_share_backend, open_share_backend_for};
 
 static WORKER_RESTART_LOCK: Mutex<()> = Mutex::new(());
 const WORKER_READY_TIMEOUT: Duration = Duration::from_secs(25);

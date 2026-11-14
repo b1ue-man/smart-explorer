@@ -51,7 +51,8 @@ BULK_SHARE = 0.95
 # quarter of Cubic's rate with the same picture (the review of the transport parts, N5; B1 of that review
 # left a window of 2 segments per round trip, below 1 %).
 YIELD_STARVATION_SHARE = 0.25
-# [P8] E4: list requests during a transfer at priority -1 must not be slower than at priority 0 (10 % noise).
+# [P8] E4: list requests during a transfer under the production mechanism (priority -1, yielding engaged by
+# metadata presence, decision of 2026-11-14) must not be slower than at priority 0 without yielding (10 % noise).
 PRIORITY_NOISE = 1.10
 # [Plan] C3 line 2: a list latency above 2 x RTT + 50 ms asks for a control connection of its own.
 CONTROL_EXTRA_MS = 50.0
@@ -384,17 +385,41 @@ def _constancy(view: _View, out: _Lines, key: str, shipped: int) -> None:
             regel="groesstes T, dessen Bildaufschlag und Uebertragung auf lan und wan bestehen")
 
 
+# The M3 sizes that explain a listing latency (decision of 2026-11-14 on E4): time until the request and
+# the reply were accepted into the send buffer (sender share), smoothed round trip of both sides (queue in
+# the link), packets lost in the window (recovery). Reported for both variants, never a threshold.
+# Per size: (field of the M3 line, name in the finding line before the variant, unit suffix).
+M3_EXPLAINING = (("annahme_anfrage_p95_ms", "annahme_anfrage_p95", "_ms"),
+                 ("annahme_antwort_p95_ms", "annahme_antwort_p95", "_ms"),
+                 ("srtt_client_ms", "srtt_client", "_ms"), ("srtt_host_ms", "srtt_host", "_ms"),
+                 ("verlust_client_pakete", "verlust_client", "_pakete"),
+                 ("verlust_host_pakete", "verlust_host", "_pakete"))
+
+
+def _m3_explaining(view: "_View", profile: str) -> dict:
+    """The explaining sizes of both M3 variants, e.g. `srtt_client_prio_ms=12.3`."""
+    fields = {}
+    for variant in ("vorher", "prio"):
+        for field, name, unit in M3_EXPLAINING:
+            value = view.value("M3", variant, field, profile)
+            fields[f"{name}_{variant}{unit}"] = _f(value) if unit == "_ms" else str(int(value))
+    return fields
+
+
 def _priority(view: _View, out: _Lines, key: str, rtts: dict) -> None:
+    """E4: "prio" is the production mechanism (transfer priority -1 plus the yielding controller, engaged by the
+    metadata presence each listing sets on both sides), "vorher" neither; the limit stays factor 1.1 [P8]."""
     for profile in ("lan", "wan"):
         before = view.value("M3", "vorher", "liste_p95_ms", profile)
         after = view.value("M3", "prio", "liste_p95_ms", profile)
+        explaining = _m3_explaining(view, profile)
         out.add("abnahme", "E4", ("bestanden", _yes(after <= before * PRIORITY_NOISE)), plattform=key,
                 profil=profile, liste_vorher_p95_ms=_f(before), liste_prio_p95_ms=_f(after),
                 liste_vorher_p50_ms=_f(view.value("M3", "vorher", "liste_p50_ms", profile)),
                 liste_prio_p50_ms=_f(view.value("M3", "prio", "liste_p50_ms", profile)),
                 bulk_vorher_mib_s=_f(view.value("M3", "vorher", "bulk_mib_s", profile)),
                 bulk_prio_mib_s=_f(view.value("M3", "prio", "bulk_mib_s", profile)),
-                grenze_faktor=PRIORITY_NOISE, grenze_quelle="P8")
+                grenze_faktor=PRIORITY_NOISE, grenze_quelle="P8", **explaining)
         limit = 2 * rtts[profile] + CONTROL_EXTRA_MS
         out.add("bedingung", "Steuerverbindung", ("erfuellt", _yes(after > limit)), plattform=key,
                 profil=profile, liste_prio_p95_ms=_f(after), grenze_ms=_f(limit), grenze_quelle="Plan",

@@ -125,20 +125,17 @@ impl ShareService {
         }
     }
 
+    /// Opens `target` for operations of `origin`: a person's (`User`) set
+    /// metadata presence, the job engine's (`Job`) never (E4, 2026-11-14).
     pub fn probe_backend_for_target(
         &self,
         target: &PeerOpenTarget,
+        origin: super::OperationOrigin,
     ) -> Result<(String, crate::vfs::BackendHandle, ShareStatus), String> {
         let endpoint = self.endpoint_for_target(target)?;
         let legacy_confirmed = super::legacy_probe::confirm_pending(self, target, &endpoint)?;
         let label = endpoint.label.clone();
-        let be = PeerBackend::new_live(
-            endpoint,
-            target.clone(),
-            self.auth.clone(),
-            self.identity.clone(),
-            self.iroh.clone(),
-        );
+        let be = self.live_backend(endpoint, target).with_origin(origin);
         if legacy_confirmed {
             be.current_endpoint().map_err(|error| error.to_string())?;
         } else {
@@ -163,13 +160,7 @@ impl ShareService {
         deadline: Instant,
     ) -> Result<crate::vfs::MountPathCapabilities, String> {
         let endpoint = self.endpoint_for_target(target)?;
-        let backend = PeerBackend::new_live(
-            endpoint,
-            target.clone(),
-            self.auth.clone(),
-            self.identity.clone(),
-            self.iroh.clone(),
-        );
+        let backend = self.live_backend(endpoint, target);
         backend
             .probe_mount_path_capabilities_until(root, deadline)
             .map_err(|error| error.to_string())
@@ -181,14 +172,19 @@ impl ShareService {
         req: super::types::ExecRequest,
     ) -> Result<super::types::ExecResult, String> {
         let endpoint = self.endpoint_for_target(target)?;
-        let be = PeerBackend::new_live(
+        let be = self.live_backend(endpoint, target);
+        be.exec(req).map_err(|e| e.to_string())
+    }
+
+    /// A backend that follows `target`'s current endpoint (job origin).
+    fn live_backend(&self, endpoint: PeerEndpoint, target: &PeerOpenTarget) -> PeerBackend {
+        PeerBackend::new_live(
             endpoint,
             target.clone(),
             self.auth.clone(),
             self.identity.clone(),
             self.iroh.clone(),
-        );
-        be.exec(req).map_err(|e| e.to_string())
+        )
     }
 
     pub fn start_exec_for_target(

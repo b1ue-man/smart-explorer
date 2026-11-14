@@ -6,7 +6,8 @@ impl App {
         let (tx, rx) = unbounded();
         let prefix = target.endpoint_prefix();
         let spawn = std::thread::Builder::new().name("picker-share".into()).spawn(move || {
-            let result = match crate::daemon::open_share_backend(target) {
+            let origin = crate::share::OperationOrigin::User; // a person browses (E4)
+            let result = match crate::daemon::open_share_backend_for(target, origin) {
                 Ok((_, backend, _)) => crate::connect::ConnectResult::Ok(crate::connect::Connected {
                     remote: Some(crate::connect::RemoteState {
                         backend, label: label.clone(), agent_version: None, zip_return: None,

@@ -375,7 +375,7 @@ pub fn open_share_in_process(
 ) -> Option<Result<(String, BackendHandle, crate::share::ShareStatus), String>> {
     let host = super::live::embedded_host()?;
     Some(
-        host.open_share(target.clone())
+        host.open_share(target.clone(), crate::share::OperationOrigin::Job)
             .map(|(label, backend, status)| {
                 let proxy =
                     super::ipc_client::share_backend_identity(label.clone(), target.clone());

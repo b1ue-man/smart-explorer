@@ -9,8 +9,9 @@ use super::backend_server::serve_backend;
 pub use super::ipc_client::mutate_exec_grant;
 pub use super::ipc_client::{
     drain_share_worker_events, ensure_worker_ready, exec_share, hand_off_running_worker,
-    open_share_backend, refresh_share_worker_checked, request_daemon_replacement,
-    send_share_command, share_command, share_worker_snapshot, WorkerHandoff,
+    open_share_backend, open_share_backend_for, refresh_share_worker_checked,
+    request_daemon_replacement, send_share_command, share_command, share_worker_snapshot,
+    WorkerHandoff,
 };
 pub use super::ipc_host::ShareHost;
 pub use super::ipc_listener::start_listener;
@@ -156,11 +157,12 @@ pub(super) fn handle_client(
             node_budget,
             ..
         } => super::ipc_analysis::serve(stream, root, node_budget, || {
-            host.open_share(target)
+            // The storage analysis walks a whole tree: never presence.
+            host.open_share(target, crate::share::OperationOrigin::Job)
                 .map(|(_, backend, _)| backend)
                 .map_err(io::Error::other)
         }),
-        IpcRequest::OpenShare { target, .. } => match host.open_share(target) {
+        IpcRequest::OpenShare { target, origin, .. } => match host.open_share(target, origin) {
             Ok((label, backend, status)) => {
                 write_response(&mut stream, &IpcResponse::OpenOk { label, status })?;
                 let read = stream.try_clone()?;

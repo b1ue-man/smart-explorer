@@ -6,6 +6,7 @@
 //! reused for the whole session instead of a new handshake per call.
 use crate::cli::target::{self, Target};
 use crate::creds::{Protocol, SavedConnection};
+use crate::share::OperationOrigin;
 use crate::vfs::BackendHandle;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -17,11 +18,22 @@ pub(super) struct Targets {
 }
 
 impl Targets {
+    /// A target of a file tool: a person (the agent's user) waits on it,
+    /// so a Share device's transfers yield to it (E4, 2026-11-14).
     pub(super) fn resolve(&self, spec: &str) -> Result<Target, String> {
+        self.resolve_for(spec, OperationOrigin::User)
+    }
+
+    /// A target for operations of `origin` (`Job` for `copy` and `move`).
+    pub(super) fn resolve_for(
+        &self,
+        spec: &str,
+        origin: OperationOrigin,
+    ) -> Result<Target, String> {
         let spec = spec.trim();
         require_absolute_local(spec)?;
         let open = |connection: &SavedConnection, path: &str| self.open(connection, path);
-        target::resolve_with(spec, Some(&open))
+        target::resolve_with(spec, Some(&open), origin)
     }
 
     /// The SSH login of a saved SFTP connection for remote commands, reused

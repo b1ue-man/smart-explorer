@@ -50,7 +50,9 @@ pub(super) fn resolve(config: &MountConfig, host: &ShareHost) -> Result<BackendH
             // Deliberately use the daemon-owned ShareHost directly. Going through
             // open_share_backend would create a loopback IPC proxy back into this
             // same process and would split transport fallback state in two.
-            host.open_share(target).map(|(_, backend, _)| backend)
+            // A drive serves a person's file manager: metadata presence (E4).
+            host.open_share(target, crate::share::OperationOrigin::User)
+                .map(|(_, backend, _)| backend)
         }
         // DRV-M6: the device tree reaches its devices through the host and
         // starts without a backend (`devices_mount.rs`); never asked for.

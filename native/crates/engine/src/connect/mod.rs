@@ -58,7 +58,7 @@ pub use location_prefs::{
 pub use persistence::build_saved;
 pub use poll_signal::{poll_subscription, PollNotice};
 pub use removal_scope::{location_key, CleanupReport, MountScope, RemovedEndpointScope};
-pub use resolution::resolve_endpoint;
+pub use resolution::{resolve_endpoint, resolve_endpoint_for};
 pub use ssh_session::open_saved_ssh;
 pub use types::{ConnectForm, ConnectResult, Connected, RemoteState};
 

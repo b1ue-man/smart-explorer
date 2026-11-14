@@ -4,6 +4,7 @@ use iroh::endpoint::{ReadExactError, RecvStream, SendStream};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 
 use super::core::eio;
+use super::keepalive::metadata_presence::{self, OperationOrigin};
 use super::wire::{Ctrl, FsResponse};
 
 #[path = "lz4_stream.rs"]
@@ -39,6 +40,30 @@ pub(super) async fn reply_err(send: &mut SendStream, error: io::Error) -> io::Re
 
 pub(super) async fn send_ctrl(send: &mut SendStream, ctrl: &Ctrl) -> io::Result<()> {
     send_tagged(send, TAG_CTRL, &serde_json::to_vec(ctrl).map_err(eio)?).await
+}
+
+/// A `Ctrl::Fs` request stating who started it (`metadata_presence.rs`): a
+/// `User` request carries `"origin":"user"`, which older hosts ignore.
+pub(super) async fn send_fs_ctrl(
+    send: &mut SendStream,
+    ctrl: &Ctrl,
+    origin: OperationOrigin,
+) -> io::Result<()> {
+    let payload = metadata_presence::fs_ctrl_payload(ctrl, origin).map_err(eio)?;
+    send_tagged(send, TAG_CTRL, &payload).await
+}
+
+/// [`recv_ctrl_limited`] with the origin the frame states (`job` without one).
+pub(super) async fn recv_ctrl_with_origin(
+    recv: &mut RecvStream,
+    max_frame: usize,
+) -> io::Result<(Ctrl, OperationOrigin)> {
+    let (tag, payload) = recv_tagged_limited(recv, max_frame).await?;
+    if tag != TAG_CTRL {
+        return Err(eio("Peer sendet keinen Steuerframe"));
+    }
+    let ctrl = serde_json::from_slice::<Ctrl>(&payload).map_err(eio)?;
+    Ok((ctrl, metadata_presence::origin_of(&payload)))
 }
 
 pub(super) async fn recv_ctrl(recv: &mut RecvStream) -> io::Result<Ctrl> {

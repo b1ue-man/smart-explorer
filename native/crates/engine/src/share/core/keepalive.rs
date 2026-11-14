@@ -11,6 +11,14 @@ pub(crate) mod interactive_presence;
 pub(crate) mod transport_purpose;
 #[path = "yield_controller.rs"]
 pub(crate) mod yield_controller;
+// Decision of 2026-11-14 on E4: a person's metadata operation is presence
+// per device; delay samples and engagement of the controller.
+#[path = "metadata_presence.rs"]
+pub(crate) mod metadata_presence;
+#[path = "yield_delay.rs"]
+pub(crate) mod yield_delay;
+#[path = "yield_engagement.rs"]
+pub(crate) mod yield_engagement;
 
 pub(super) const IROH_CONNECTION_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(5);
 pub(super) const IROH_PATH_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(5);

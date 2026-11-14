@@ -4,7 +4,18 @@ use std::sync::Arc;
 use crate::connect::location::{saved_location, EndpointSpec};
 use crate::vfs::BackendHandle;
 
+/// Opens `endpoint` for the job engine (sync, compare, scheduled jobs): a
+/// Share device opened here sets no metadata presence (E4, 2026-11-14).
 pub fn resolve_endpoint(endpoint: &str) -> Result<(BackendHandle, String), String> {
+    resolve_endpoint_for(endpoint, crate::share::OperationOrigin::Job)
+}
+
+/// [`resolve_endpoint`] for operations of `origin`; `User` (a person waits,
+/// such as `se ls`) lets a Share device's transfers yield to them.
+pub fn resolve_endpoint_for(
+    endpoint: &str,
+    origin: crate::share::OperationOrigin,
+) -> Result<(BackendHandle, String), String> {
     #[cfg(test)]
     if let Some(fixture) =
         crate::daemon::sync_reliability_task_old_jobs_tests::resolve_fixture(endpoint)
@@ -30,7 +41,7 @@ pub fn resolve_endpoint(endpoint: &str) -> Result<(BackendHandle, String), Strin
         }
         EndpointSpec::Drive(path) => super::connector::open_gdrive(&path),
         EndpointSpec::Peer(target, path) => {
-            let (_, backend, _) = crate::daemon::open_share_backend(target)?;
+            let (_, backend, _) = crate::daemon::open_share_backend_for(target, origin)?;
             Ok((backend, path))
         }
         EndpointSpec::Saved(endpoint) => {

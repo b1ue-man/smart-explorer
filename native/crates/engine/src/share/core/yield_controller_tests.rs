@@ -1,8 +1,9 @@
 //! P2 of plan `docs/plaene/2026-11-14-verbindungen-je-zweck` (E2): the
 //! yielding controller. Remote suite only (AGENTS.md).
 use super::*;
-use crate::share::keepalive::interactive_presence::InteractiveKind;
-use crate::share::keepalive::transport_purpose::TransportPurpose;
+use crate::share::keepalive::interactive_presence::{InteractiveKind, InteractivePresence};
+use crate::share::keepalive::transport_purpose::{PurposeSlot, TransportPurpose};
+use crate::share::keepalive::yield_delay::CURRENT_FILTER;
 
 const MTU: u16 = 1200;
 const MSS: u64 = MTU as u64;
@@ -379,4 +380,53 @@ fn verbindungen_task_yield_ack_delay_is_not_queueing() {
     let now = acks(&mut queued, start, 200, 10 * MS);
     acks_with(&mut queued, now, 2_000, 45 * MS, Duration::ZERO);
     assert!(queued.window() < inner / 4, "{}", queued.window());
+}
+
+/// Decision of 2026-11-14 on E4: a person's metadata operation to the
+/// connection's device engages the controller like a screen session, only
+/// for that device, and for the hold after the last operation.
+#[test]
+fn verbindungen_task_yield_follows_the_metadata_presence_of_its_device() {
+    use crate::share::keepalive::metadata_presence::{MetadataPresence, OperationOrigin};
+    let register: &'static MetadataPresence = Box::leak(Box::new(MetadataPresence::new()));
+    let device = iroh::SecretKey::from_bytes(&[11; 32]).public();
+    let other = iroh::SecretKey::from_bytes(&[12; 32]).public();
+    let inner = 400 * MSS;
+    let to = |peer| {
+        let slot = Arc::new(PurposeSlot::new(Some(TransportPurpose::Files)));
+        slot.bind_activity(register.activity(peer));
+        let engagement = Engagement {
+            slot,
+            presence: presence(),
+            enabled: true,
+        };
+        YieldingController::new(Box::new(Fixed(inner)), engagement, DEFAULT_TARGET, MTU)
+    };
+    let (mut to_device, mut to_other) = (to(device), to(other));
+    let start = Instant::now() + Duration::from_secs(1);
+    // Base delay 10 ms, then 100 ms: 90 ms queueing, above the 25 ms target.
+    let browsing = register.begin(device, OperationOrigin::User);
+    let mut last = start;
+    for c in [&mut to_device, &mut to_other] {
+        let now = acks(c, start, 200, 10 * MS);
+        last = acks(c, now, 2_000, 100 * MS);
+    }
+    assert!(to_device.window() < inner / 4, "{}", to_device.window());
+    assert_eq!(to_other.window(), inner, "another device does not yield");
+    // The operation ends; the hold (3 s here: 100 ms round trip, 10 ms base)
+    // counts from the last time the controller saw it running.
+    drop(browsing);
+    let now = acks(&mut to_device, last, 2_000, 100 * MS);
+    assert!(to_device.window() < inner / 4, "within the hold");
+    acks(&mut to_device, now + Duration::from_secs(1), 10, 100 * MS);
+    assert_eq!(to_device.window(), inner, "after the hold: inner window");
+    // The job engine sets no presence.
+    assert!(register.begin(device, OperationOrigin::Job).is_none());
+    acks(
+        &mut to_device,
+        now + Duration::from_secs(2),
+        2_000,
+        100 * MS,
+    );
+    assert_eq!(to_device.window(), inner);
 }

@@ -219,7 +219,8 @@ impl Link {
             .map_err(|error| format!("Annahme: {error}"))?
             .await
             .map_err(|error| format!("Annahme: {error:?}"))?;
-        slot.bind_alpn(connection.alpn());
+        // The same binding as the node's accept loop (`node_accept.rs`).
+        slot.bind_accepted(&connection);
         Ok(connection)
     }
 

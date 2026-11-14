@@ -12,6 +12,7 @@ use super::{close_pair, median, mib_s, read_count, text, write_until, Link, Task
 use crate::screen::core::gop_stream::now_us;
 use crate::screen::core::metrics::LatencySamples;
 use crate::share::keepalive::interactive_presence::{self, InteractiveKind};
+use crate::share::keepalive::metadata_presence::{self, OperationOrigin};
 use crate::share::keepalive::transport_purpose::{self, TransportPurpose};
 
 /// Time to let a case settle before it is counted (slow start, queues).
@@ -271,9 +272,19 @@ pub(crate) async fn constancy(case: ConstancyCase) -> Result<ConstancyResult, St
 }
 
 /// The peer of M3: answers listing requests (`L`) and swallows uploads (`U`).
-async fn browse_server(connection: Connection, uploaded: Arc<AtomicU64>) {
+/// A listing request sets the host's metadata presence for the asking
+/// device with the call the host makes for a request marked `user`
+/// (`server.rs`), and `replies` takes the time its reply needed to be
+/// accepted into the send buffer.
+async fn browse_server(
+    connection: Connection,
+    uploaded: Arc<AtomicU64>,
+    replies: Arc<Mutex<LatencySamples>>,
+) {
+    let asker = connection.remote_id();
     while let Ok((mut send, mut recv)) = connection.accept_bi().await {
         let uploaded = uploaded.clone();
+        let replies = replies.clone();
         tokio::spawn(async move {
             let mut tag = [0u8; 1];
             if recv.read_exact(&mut tag).await.is_err() {
@@ -288,9 +299,13 @@ async fn browse_server(connection: Connection, uploaded: Arc<AtomicU64>) {
                     if recv.read_exact(&mut request).await.is_err() {
                         return;
                     }
+                    let _presence = metadata_presence::begin(asker, OperationOrigin::User);
                     let reply = [0x4cu8; LIST_REPLY_BYTES];
-                    if send.write_all(&reply).await.is_ok() {
-                        let _ = send.finish();
+                    let started = Instant::now();
+                    if send.write_all(&reply).await.is_ok() && send.finish().is_ok() {
+                        if let Ok(mut samples) = replies.lock() {
+                            samples.record(micros(started.elapsed()));
+                        }
                     }
                 }
                 _ => {}
@@ -299,19 +314,40 @@ async fn browse_server(connection: Connection, uploaded: Arc<AtomicU64>) {
     }
 }
 
-/// One listing request: 8 bytes out, `LIST_REPLY_BYTES` back, on a new stream.
-async fn list_once(connection: &Connection) -> Result<(), String> {
+fn micros(duration: Duration) -> u64 {
+    u64::try_from(duration.as_micros()).unwrap_or(u64::MAX)
+}
+
+/// One listing request: 8 bytes out, `LIST_REPLY_BYTES` back, on a new
+/// stream, under the client's metadata presence for the host (the call
+/// `PeerBackend::metadata_presence` makes). Returns the time until the
+/// request was accepted into the send buffer.
+async fn list_once(connection: &Connection) -> Result<Duration, String> {
+    let _presence = metadata_presence::begin(connection.remote_id(), OperationOrigin::User);
+    let started = Instant::now();
     let (mut send, mut recv) = connection.open_bi().await.map_err(text)?;
     send.write_all(&[b'L']).await.map_err(text)?;
     send.write_all(&now_us().to_be_bytes())
         .await
         .map_err(text)?;
     send.finish().map_err(text)?;
+    let accepted = started.elapsed();
     let reply = recv.read_to_end(2 * LIST_REPLY_BYTES).await.map_err(text)?;
     if reply.len() != LIST_REPLY_BYTES {
         return Err(format!("Antwort mit {} Bytes", reply.len()));
     }
-    Ok(())
+    Ok(accepted)
+}
+
+/// The smoothed round trip of the selected path, read as
+/// `quic_stats_hub.rs` reads it.
+fn smoothed_rtt(connection: &Connection) -> Option<Duration> {
+    let paths = connection.paths();
+    let selected = paths
+        .iter()
+        .find(|path| path.is_selected())
+        .or_else(|| paths.iter().next());
+    selected.map(|path| path.stats().rtt)
 }
 
 pub(crate) struct BrowsingResult {
@@ -319,10 +355,31 @@ pub(crate) struct BrowsingResult {
     pub p50_ms: f64,
     pub p95_ms: f64,
     pub bulk_mib_s: f64,
+    /// p95 of the time until a request was accepted into the client's send
+    /// buffer, and the same for the host's reply.
+    pub request_accept_p95_ms: f64,
+    pub reply_accept_p95_ms: f64,
+    /// Median smoothed round trip after each request, client and host.
+    pub client_srtt_ms: f64,
+    pub host_srtt_ms: f64,
+    /// Packets each side lost in the counted window (`lost_packets`).
+    pub client_lost: u64,
+    pub host_lost: u64,
 }
 
-/// M3: listing latency on a file session connection while it transfers in both
-/// directions. The caller holds the switches (priority of transfer streams).
+fn p95(samples: &LatencySamples) -> f64 {
+    samples.summary().map_or(0.0, |summary| summary.p95_ms)
+}
+
+fn p50(samples: &LatencySamples) -> f64 {
+    samples.summary().map_or(0.0, |summary| summary.p50_ms)
+}
+
+/// M3: listing latency on a file session connection while it transfers in
+/// both directions. Every listing sets the metadata presence on both sides
+/// as the product does (`OperationOrigin::User`); the caller holds the
+/// switches (priority of transfer streams, yielding controller), so the
+/// presence has an effect only where yielding is on.
 pub(crate) async fn browsing() -> Result<BrowsingResult, String> {
     let link = Link::new().await?;
     let files = link
@@ -330,23 +387,41 @@ pub(crate) async fn browsing() -> Result<BrowsingResult, String> {
         .await?;
     let stop = Arc::new(AtomicBool::new(false));
     let (uploaded, downloaded) = (Arc::new(AtomicU64::new(0)), Arc::new(AtomicU64::new(0)));
+    let replies = Arc::new(Mutex::new(LatencySamples::default()));
     let mut tasks = Tasks::default();
-    tasks.spawn(browse_server(files.1.clone(), uploaded.clone()));
+    tasks.spawn(browse_server(
+        files.1.clone(),
+        uploaded.clone(),
+        replies.clone(),
+    ));
     tasks.spawn(bulk_writer(files.0.clone(), stop.clone(), Some(b'U')));
     tasks.spawn(bulk_writer(files.1.clone(), stop.clone(), None));
     tasks.spawn(bulk_reader(files.0.clone(), downloaded.clone()));
     tokio::time::sleep(SETTLE).await;
     let before = uploaded.load(Ordering::Relaxed) + downloaded.load(Ordering::Relaxed);
+    let lost_before = (files.0.stats().lost_packets, files.1.stats().lost_packets);
     let started = Instant::now();
     let mut samples = LatencySamples::default();
+    let mut accepted = LatencySamples::default();
+    let (mut client_srtt, mut host_srtt) = (LatencySamples::default(), LatencySamples::default());
     while started.elapsed() < WINDOW {
         let asked = Instant::now();
-        list_once(&files.0).await?;
-        samples.record(u64::try_from(asked.elapsed().as_micros()).unwrap_or(u64::MAX));
+        accepted.record(micros(list_once(&files.0).await?));
+        samples.record(micros(asked.elapsed()));
+        if let Some(rtt) = smoothed_rtt(&files.0) {
+            client_srtt.record(micros(rtt));
+        }
+        if let Some(rtt) = smoothed_rtt(&files.1) {
+            host_srtt.record(micros(rtt));
+        }
         tokio::time::sleep(LIST_INTERVAL).await;
     }
     let elapsed = started.elapsed();
     let after = uploaded.load(Ordering::Relaxed) + downloaded.load(Ordering::Relaxed);
+    let lost = (
+        files.0.stats().lost_packets.saturating_sub(lost_before.0),
+        files.1.stats().lost_packets.saturating_sub(lost_before.1),
+    );
     stop.store(true, Ordering::Release);
     drop(tasks);
     close_pair(&files);
@@ -357,10 +432,17 @@ pub(crate) async fn browsing() -> Result<BrowsingResult, String> {
     let summary = samples
         .summary()
         .ok_or_else(|| "keine Listenantwort".to_owned())?;
+    let reply_accept_p95_ms = replies.lock().map_or(0.0, |replies| p95(&replies));
     Ok(BrowsingResult {
         requests: samples.count(),
         p50_ms: summary.p50_ms,
         p95_ms: summary.p95_ms,
         bulk_mib_s: mib_s(after.saturating_sub(before), elapsed),
+        request_accept_p95_ms: p95(&accepted),
+        reply_accept_p95_ms,
+        client_srtt_ms: p50(&client_srtt),
+        host_srtt_ms: p50(&host_srtt),
+        client_lost: lost.0,
+        host_lost: lost.1,
     })
 }

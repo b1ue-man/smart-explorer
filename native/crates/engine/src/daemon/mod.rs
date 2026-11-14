@@ -308,9 +308,9 @@ pub use host_state::{
 pub use ipc::mutate_exec_grant;
 pub use ipc::{
     drain_share_worker_events, ensure_worker_ready, exec_share, hand_off_running_worker,
-    open_share_backend, refresh_share_worker_checked, request_daemon_replacement,
-    send_share_command, share_command, share_worker_snapshot, ShareCommandReply,
-    ShareWorkerSnapshot, WorkerHandoff,
+    open_share_backend, open_share_backend_for, refresh_share_worker_checked,
+    request_daemon_replacement, send_share_command, share_command, share_worker_snapshot,
+    ShareCommandReply, ShareWorkerSnapshot, WorkerHandoff,
 };
 pub use ipc_client::vault_status_peek;
 pub use ipc_client::{

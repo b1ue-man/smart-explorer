@@ -41,6 +41,8 @@ pub struct PeerBackend {
     pub(super) mount_lease: super::mount_lease_client::PeerMountLeaseClient,
     /// Transfer v1 capabilities of the host and this client's own stages.
     pub(super) transfer: peer_transfer::PeerTransferState,
+    /// Who uses this backend; a person's operations set metadata presence.
+    pub(super) origin: super::OperationOrigin,
 }
 
 impl PeerBackend {
@@ -55,6 +57,7 @@ impl PeerBackend {
             node,
             mount_lease: Default::default(),
             transfer: Default::default(),
+            origin: super::OperationOrigin::Job,
         }
     }
 
@@ -71,6 +74,7 @@ impl PeerBackend {
             node,
             mount_lease: Default::default(),
             transfer: Default::default(),
+            origin: super::OperationOrigin::Job,
         }
     }
 

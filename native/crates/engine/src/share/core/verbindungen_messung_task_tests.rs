@@ -201,9 +201,11 @@ fn verbindungen_messung_task_m2_bulk_rueckzug() -> Result<(), String> {
     constancy_case("bulk_rueckzug", yielding_to(25), TRANSFER_ALONE)
 }
 
-/// M3 with `switches` in force.
+/// M3 with `switches` in force. Both variants set the metadata presence of
+/// every listing as the product does; it acts only where yielding is on.
 fn browsing_case(variant: &str, switches: ProfileOverrides) -> Result<(), String> {
     let priority = switches.transfer_priority != Some(false);
+    let yielding = switches.yielding != Some(false);
     let _plan = hold(switches);
     let result = run_case(browsing())?;
     println!(
@@ -213,10 +215,23 @@ fn browsing_case(variant: &str, switches: ProfileOverrides) -> Result<(), String
             variant,
             vec![
                 field("prioritaet", u8::from(priority)),
+                field("rueckzug", u8::from(yielding)),
                 field("anfragen", result.requests),
                 field("liste_p50_ms", one_decimal(result.p50_ms)),
                 field("liste_p95_ms", one_decimal(result.p95_ms)),
                 field("bulk_mib_s", one_decimal(result.bulk_mib_s)),
+                field(
+                    "annahme_anfrage_p95_ms",
+                    one_decimal(result.request_accept_p95_ms),
+                ),
+                field(
+                    "annahme_antwort_p95_ms",
+                    one_decimal(result.reply_accept_p95_ms),
+                ),
+                field("srtt_client_ms", one_decimal(result.client_srtt_ms)),
+                field("srtt_host_ms", one_decimal(result.host_srtt_ms)),
+                field("verlust_client_pakete", result.client_lost),
+                field("verlust_host_pakete", result.host_lost),
             ]
         )
     );
@@ -237,7 +252,9 @@ fn verbindungen_messung_task_m3_vorher() -> Result<(), String> {
     )
 }
 
-/// "nachher": transfer streams at priority -1 (E4).
+/// "nachher", the production mechanism (E4, decision of 2026-11-14):
+/// transfer streams at priority -1 plus the yielding controller, which each
+/// listing engages through the metadata presence of both sides.
 #[test]
 #[ignore = "Messung; Suite crates-task"]
 fn verbindungen_messung_task_m3_prio() -> Result<(), String> {

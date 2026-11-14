@@ -179,6 +179,10 @@ pub(super) enum IpcRequest {
     OpenShare {
         token: String,
         target: crate::share::PeerOpenTarget,
+        /// Who uses the opened backend (E4, 2026-11-14); clients before
+        /// this field open for the job engine (no metadata presence).
+        #[serde(default)]
+        origin: crate::share::OperationOrigin,
     },
     ProbeShareMount {
         token: String,

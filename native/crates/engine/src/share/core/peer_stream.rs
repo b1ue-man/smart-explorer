@@ -99,18 +99,18 @@ pub(super) fn call<T>(
     mut message: impl FnMut(FsResponse) -> io::Result<Option<T>>,
 ) -> io::Result<T> {
     let endpoint = backend.current_endpoint()?;
+    // A person's listing, removal or digest is presence until it ends (E4).
+    let _presence = backend.metadata_presence(&endpoint);
     let mut opened = backend.node.open_stream(&endpoint, &backend.identity)?;
     let lease = backend.mount_lease_token()?;
+    let ctrl = Ctrl::Fs {
+        req: request,
+        lease,
+    };
     let result = backend.node.block_on_route(opened.generation, async {
         io_deadline::run(
             "Share streaming request",
-            framing::send_ctrl(
-                &mut opened.send,
-                &Ctrl::Fs {
-                    req: request,
-                    lease,
-                },
-            ),
+            framing::send_fs_ctrl(&mut opened.send, &ctrl, backend.origin),
         )
         .await?;
         loop {

@@ -38,8 +38,19 @@ enum OpenAttempt {
     Unreachable,
 }
 
+/// Opens `target` through the worker for the job engine (no metadata
+/// presence); [`open_share_backend_for`] names another origin.
 pub fn open_share_backend(
     target: crate::share::PeerOpenTarget,
+) -> Result<(String, crate::vfs::BackendHandle, crate::share::ShareStatus), String> {
+    open_share_backend_for(target, crate::share::OperationOrigin::Job)
+}
+
+/// Opens `target` through the worker for operations of `origin`: a person's
+/// (Explorer, `se`, MCP file tools) set metadata presence (E4, 2026-11-14).
+pub fn open_share_backend_for(
+    target: crate::share::PeerOpenTarget,
+    origin: crate::share::OperationOrigin,
 ) -> Result<(String, crate::vfs::BackendHandle, crate::share::ShareStatus), String> {
     ensure_worker_ready()?;
     let token = read_token().map_err(|error| format!("Background-Worker Token: {error}"))?;
@@ -48,7 +59,7 @@ pub fn open_share_backend(
     let mut restarted_after_missing_ipc = false;
     for _ in 0..8 {
         let attempt = match read_ipc_addr() {
-            Some(addr) => open_attempt(addr, &token, &target, OPEN_ANSWER_TIMEOUT),
+            Some(addr) => open_attempt(addr, &token, &target, origin, OPEN_ANSWER_TIMEOUT),
             None => OpenAttempt::Unreachable,
         };
         match attempt {
@@ -104,6 +115,7 @@ fn open_attempt(
     addr: SocketAddr,
     token: &str,
     target: &crate::share::PeerOpenTarget,
+    origin: crate::share::OperationOrigin,
     answer_timeout: Duration,
 ) -> OpenAttempt {
     let Ok(mut stream) =
@@ -115,6 +127,7 @@ fn open_attempt(
     let request = IpcRequest::OpenShare {
         token: token.to_string(),
         target: target.clone(),
+        origin,
     };
     if let Err(error) = write_request(&mut stream, &request) {
         return OpenAttempt::Broken(error.to_string());
@@ -159,6 +172,8 @@ mod tests {
     use std::net::TcpListener;
     use std::time::{Duration, Instant};
 
+    const JOB: crate::share::OperationOrigin = crate::share::OperationOrigin::Job;
+
     fn target() -> crate::share::PeerOpenTarget {
         crate::share::PeerOpenTarget::Direct {
             contact_id: "win10".into(),
@@ -197,7 +212,7 @@ mod tests {
             Duration::from_secs(4),
             Some(r#"{"t":"err","msg":"Share-Anmeldung nicht autorisiert"}"#),
         );
-        match open_attempt(addr, "token", &target(), Duration::from_secs(20)) {
+        match open_attempt(addr, "token", &target(), JOB, Duration::from_secs(20)) {
             OpenAttempt::Failed(message) => {
                 assert_eq!(message, "Share-Anmeldung nicht autorisiert")
             }
@@ -209,7 +224,7 @@ mod tests {
     fn windows_direct_task_open_names_a_silent_worker() {
         let addr = worker(Duration::from_secs(3), None);
         let started = Instant::now();
-        match open_attempt(addr, "token", &target(), Duration::from_secs(1)) {
+        match open_attempt(addr, "token", &target(), JOB, Duration::from_secs(1)) {
             OpenAttempt::Failed(message) => {
                 assert!(message.contains("Hintergrund-Worker"), "{message}");
                 assert!(message.contains("share://direct/win10"), "{message}");
@@ -223,7 +238,7 @@ mod tests {
     fn windows_direct_task_open_retries_a_broken_connection() {
         let addr = worker(Duration::ZERO, None);
         assert!(matches!(
-            open_attempt(addr, "token", &target(), Duration::from_secs(5)),
+            open_attempt(addr, "token", &target(), JOB, Duration::from_secs(5)),
             OpenAttempt::Broken(_)
         ));
     }

@@ -9,8 +9,8 @@ use super::auth_penalty::PenaltyKind;
 use super::connection_events::ConnectionErrorKind;
 use super::core::eio;
 use super::framing::{
-    recv_ctrl_limited, reply, reply_err, send_ctrl, MAX_HANDSHAKE_CTRL_FRAME,
-    MAX_REQUEST_CTRL_FRAME,
+    recv_ctrl_limited, recv_ctrl_with_origin, reply, reply_err, send_ctrl,
+    MAX_HANDSHAKE_CTRL_FRAME, MAX_REQUEST_CTRL_FRAME,
 };
 use super::fs_access::FsAccess;
 use super::handshake_limits::ApplicationHandshakePermit;
@@ -52,6 +52,8 @@ struct StreamContext {
     activity: Arc<IncomingActivity>,
     /// LZ4 measurements of this connection's content streams (Z-P8).
     lz4: super::framing::lz4_stream::Lz4Link,
+    /// The remote device, for its metadata presence (`metadata_presence.rs`).
+    peer: iroh::EndpointId,
 }
 
 impl StreamContext {
@@ -221,6 +223,7 @@ pub(super) async fn handle_connection(
             legacy_connection,
             activity: activity.clone(),
             lz4: connection_lz4.clone(),
+            peer: conn.remote_id(),
         };
         let node = node.clone();
         let connection = conn.clone();
@@ -252,9 +255,9 @@ async fn handle_peer_stream(
     mut recv: RecvStream,
     context: StreamContext,
 ) -> io::Result<()> {
-    let ctrl = io_deadline::run(
+    let (ctrl, origin) = io_deadline::run(
         "Share operation frame",
-        recv_ctrl_limited(&mut recv, MAX_REQUEST_CTRL_FRAME),
+        recv_ctrl_with_origin(&mut recv, MAX_REQUEST_CTRL_FRAME),
     )
     .await?;
     let node = context.node.clone();
@@ -319,6 +322,9 @@ async fn handle_peer_stream(
         Ctrl::Exec { req } => return handle_exec_stream(&mut send, req, context.exec_slots).await,
         _ => return Err(eio("Dateioperation erwartet")),
     };
+    // A request a person started (E4, 2026-11-14): this host's sends to that
+    // device yield while it answers and for the hold after.
+    let _presence = super::keepalive::metadata_presence::begin(context.peer, origin);
     let principal = session.principal();
     let _holds = admission::stream_holds(&node, &context.activity, &req);
     if req.mutates_filesystem() && !session_rights.may_write {

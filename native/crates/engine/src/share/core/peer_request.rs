@@ -7,10 +7,12 @@ use crate::vfs::VfsResult;
 
 use super::backend::PeerBackend;
 use super::core::eio;
-use super::framing::{decode_resp, recv_resp_wire, send_ctrl, TAG_DATA};
+use super::framing::{decode_resp, recv_resp_wire, send_ctrl, send_fs_ctrl, TAG_DATA};
 use super::io_deadline;
+use super::keepalive::metadata_presence::{self, MetadataGuard};
 use super::node::closed_idle;
 use super::node_sessions::OpenedPeerStream;
+use super::types::PeerEndpoint;
 use super::wire::{Ctrl, FsFileEvidence, FsRequest, FsResponse};
 
 #[path = "peer_request_policy.rs"]
@@ -55,6 +57,19 @@ impl Attempts {
 }
 
 impl PeerBackend {
+    /// The same backend for operations of `origin` (default: the job
+    /// engine). Explorer, `se`, MCP and drives open theirs with `User`.
+    pub fn with_origin(mut self, origin: super::OperationOrigin) -> Self {
+        self.origin = origin;
+        self
+    }
+
+    /// Metadata presence for one operation to `endpoint` while the guard
+    /// lives; `None` for the job engine (`metadata_presence.rs`).
+    pub(super) fn metadata_presence(&self, endpoint: &PeerEndpoint) -> Option<MetadataGuard> {
+        metadata_presence::begin_for_node(&endpoint.presence.node_id, self.origin)
+    }
+
     pub(super) fn request(&self, req: FsRequest) -> io::Result<FsResponse> {
         let lease = self.mount_lease.current()?;
         if self.mount_lease.anchor().is_none() {
@@ -100,6 +115,9 @@ impl PeerBackend {
         let operation = super::peer_fs_logging::request_label(&req);
         let started = Instant::now();
         let mut last_error = None;
+        // Held from before the first send to the last answer (E4).
+        let presence_to = self.current_endpoint().ok();
+        let _presence = presence_to.and_then(|endpoint| self.metadata_presence(&endpoint));
         while attempts.next() {
             let endpoint = self.current_endpoint()?;
             let connect_deadline = control_attempt_deadline(deadline)?;
@@ -188,7 +206,8 @@ impl PeerBackend {
                 timeout,
                 absolute.then_some(deadline),
                 async {
-                    send_ctrl(&mut opened.send, &Ctrl::Fs { req, lease }).await?;
+                    let ctrl = Ctrl::Fs { req, lease };
+                    send_fs_ctrl(&mut opened.send, &ctrl, self.origin).await?;
                     recv_resp_wire(&mut opened.recv).await
                 },
             ),

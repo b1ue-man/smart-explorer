@@ -228,7 +228,9 @@ pub(super) fn serve_child(
         .map_err(|error| error.to_string())
         .and_then(|()| BackendRoot::parse(&root).map_err(|error| error.to_string()))
         .and_then(|root| {
-            let (_, backend, _) = host.open_share(open_target_of(&target))?;
+            // The devices drive serves a person's file manager (E4).
+            let origin = crate::share::OperationOrigin::User;
+            let (_, backend, _) = host.open_share(open_target_of(&target), origin)?;
             super::super::rooted_backend::RootedBackend::new_in(
                 backend,
                 &root,

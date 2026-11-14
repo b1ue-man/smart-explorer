@@ -300,7 +300,9 @@ impl App {
         let spawned = std::thread::Builder::new()
             .name("share-open".into())
             .spawn(move || {
-                let _ = tx.send(crate::daemon::open_share_backend(target));
+                // The Explorer view: a person browses (metadata presence, E4).
+                let origin = crate::share::OperationOrigin::User;
+                let _ = tx.send(crate::daemon::open_share_backend_for(target, origin));
             });
         match spawned {
             Ok(_) => self.share_open_rx = Some(rx),

@@ -72,6 +72,7 @@ pub fn register_gui_panels() {
     crate::app::register_commands_panel(transfer_recovery_panel::render_commands);
 }
 
+use crate::share::OperationOrigin;
 use clap::{Args, CommandFactory, Parser, Subcommand};
 use std::io::{self, Write};
 
@@ -380,7 +381,7 @@ fn run_inner(cli: Cli) -> Result<i32, String> {
         Command::Plugin(args) => plugin::run(args),
         Command::Licenses(args) => Ok(licenses::run(args.json)),
         Command::Ls(args) => {
-            let t = target::resolve(&args.target)?;
+            let t = target::resolve(&args.target, OperationOrigin::User)?;
             if args.recursive {
                 return ls_recursive::list(&t, args.json);
             }
@@ -388,18 +389,18 @@ fn run_inner(cli: Cli) -> Result<i32, String> {
             Ok(0)
         }
         Command::Stat(args) => {
-            let t = target::resolve(&args.target)?;
+            let t = target::resolve(&args.target, OperationOrigin::User)?;
             ops::stat(&t)?;
             Ok(0)
         }
         Command::Cat(args) => {
-            let t = target::resolve(&args.target)?;
+            let t = target::resolve(&args.target, OperationOrigin::User)?;
             ops::cat(&t)?;
             Ok(0)
         }
         Command::Get(args) | Command::Put(args) | Command::Cp(args) => {
-            let src = target::resolve(&args.src)?;
-            let dst = target::resolve(&args.dst)?;
+            let src = target::resolve(&args.src, OperationOrigin::Job)?;
+            let dst = target::resolve(&args.dst, OperationOrigin::Job)?;
             if args.conflict.is_some() {
                 update_copy::run_cli(
                     &src,
@@ -423,8 +424,8 @@ fn run_inner(cli: Cli) -> Result<i32, String> {
             Ok(0)
         }
         Command::Mv(args) => {
-            let src = target::resolve(&args.src)?;
-            let dst = target::resolve(&args.dst)?;
+            let src = target::resolve(&args.src, OperationOrigin::Job)?;
+            let dst = target::resolve(&args.dst, OperationOrigin::Job)?;
             if args.conflict.is_some() {
                 update_copy::run_cli(
                     &src,
@@ -447,17 +448,17 @@ fn run_inner(cli: Cli) -> Result<i32, String> {
             Ok(0)
         }
         Command::Rm(args) => {
-            let t = target::resolve(&args.target)?;
+            let t = target::resolve(&args.target, OperationOrigin::User)?;
             ops::remove(&t, args.recursive, args.force, args.no_preserve_root)?;
             Ok(0)
         }
         Command::Mkdir(args) => {
-            let t = target::resolve(&args.target)?;
+            let t = target::resolve(&args.target, OperationOrigin::User)?;
             t.backend.mkdir_all(&t.path).map_err(|e| e.to_string())?;
             Ok(0)
         }
         Command::Search(args) => {
-            let t = target::resolve(&args.target)?;
+            let t = target::resolve(&args.target, OperationOrigin::User)?;
             search::search(&t, &args.query, args.glob, args.max_results, args.dirs)?;
             Ok(0)
         }

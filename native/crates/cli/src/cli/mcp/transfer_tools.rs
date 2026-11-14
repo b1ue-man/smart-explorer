@@ -46,8 +46,10 @@ pub(super) fn start(session: &Session, kind: JobKind, args: &Args<'_>) -> Result
         );
     }
     // Resolve both ends before a job exists, so a typo fails immediately.
-    let source = session.targets.resolve(&source_spec)?;
-    let destination = session.targets.resolve(&destination_spec)?;
+    // The copy engine's own operations are no presence (E4).
+    let job_origin = crate::share::OperationOrigin::Job;
+    let source = session.targets.resolve_for(&source_spec, job_origin)?;
+    let destination = session.targets.resolve_for(&destination_spec, job_origin)?;
     let job = session.jobs.create(
         kind,
         format!("{} {source_spec} -> {destination_spec}", kind.label()),

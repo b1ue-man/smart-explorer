@@ -1,4 +1,5 @@
 use crate::creds::{Protocol, SavedConnection};
+use crate::share::OperationOrigin;
 use crate::vfs::BackendHandle;
 
 #[path = "target_vault.rs"]
@@ -133,14 +134,20 @@ impl Target {
 pub(super) type OpenSaved<'a> =
     &'a dyn Fn(&SavedConnection, &str) -> Result<(BackendHandle, String), String>;
 
-pub(crate) fn resolve(spec: &str) -> Result<Target, String> {
-    resolve_with(spec, None)
+/// The target `spec` for operations of `origin`: `User` for a command a
+/// person waits on (`ls`, `stat`, ...), `Job` for the copy engine (E4).
+pub(crate) fn resolve(spec: &str, origin: OperationOrigin) -> Result<Target, String> {
+    resolve_with(spec, None, origin)
 }
 
 /// [`resolve`] for a long-running caller that reuses one login per saved URL
 /// connection (`open`). Windows UNC shares, Share peers, Google Drive and
 /// local paths resolve exactly as in [`resolve`].
-pub(super) fn resolve_with(spec: &str, open: Option<OpenSaved<'_>>) -> Result<Target, String> {
+pub(super) fn resolve_with(
+    spec: &str,
+    open: Option<OpenSaved<'_>>,
+    origin: OperationOrigin,
+) -> Result<Target, String> {
     if let Some((conn, path)) = saved_shorthand(spec)? {
         let preserved_root = same_normalized_path(&path, &conn.root);
         let (backend, opened, net) = match open {
@@ -172,7 +179,7 @@ pub(super) fn resolve_with(spec: &str, open: Option<OpenSaved<'_>>) -> Result<Ta
             open(&connection, &path)?
         }
         _ => super::host_key_prompt::with_host_key_prompt(|| {
-            crate::connect::resolve_endpoint(&normalized)
+            crate::connect::resolve_endpoint_for(&normalized, origin)
         })?,
     };
     let preserved_root = is_endpoint_namespace_root(&normalized, &path)

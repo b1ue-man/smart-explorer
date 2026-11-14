@@ -80,8 +80,9 @@ impl ShareIrohNode {
                         Err(_) => return,
                     };
                     // The late-bound purpose: the controller yields (or not)
-                    // by the negotiated ALPN from now on.
-                    purpose.bind_alpn(connection.alpn());
+                    // by the negotiated ALPN from now on, and follows the
+                    // metadata presence of the remote device.
+                    purpose.bind_accepted(&connection);
                     let remote = connection.remote_id().to_string();
                     let known = node.known_endpoint(&remote);
                     if connection.alpn() == super::lan_link_wire::LAN_LINK_ALPN && !known {
