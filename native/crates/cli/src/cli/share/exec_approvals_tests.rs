@@ -29,6 +29,10 @@ impl ApprovalSource for ApprovalService {
     }
 
     fn decide(&self, id: &str, decision: ApprovalDecision) -> Result<(), String> {
+        self.decide_counted(id, decision).map(|_| ())
+    }
+
+    fn decide_counted(&self, id: &str, decision: ApprovalDecision) -> Result<usize, String> {
         ApprovalService::decide(self, &ApprovalId::parse(id)?, decision)
     }
 }
@@ -151,12 +155,13 @@ fn perm_task_cli_approvals_roundtrip() {
     // user sees which device, command and relation the decision was for.
     assert_eq!(
         answer,
-        json!({"id": id, "decision": "once", "decided": true, "request": entry})
+        json!({"id": id, "decision": "once", "decided": true, "request": entry, "also_answered": 0})
     );
     assert_eq!(outcome(&mut first), ApprovalOutcome::Once);
     assert!(ApprovalService::pending(&service).is_empty());
 
-    // „Immer erlauben“ and „Ablehnen“ answer exactly their own request.
+    // „Immer erlauben“ and „Ablehnen“ answer their own request and the open
+    // requests equal to it (E28); here none is equal.
     let mut second = ask(&service, "phone", "uptime");
     let mut third = ask(&service, "tablet", "df");
     let (phone, tablet) = (id_of(&service, "phone"), id_of(&service, "tablet"));
@@ -174,7 +179,7 @@ fn perm_task_cli_approvals_roundtrip() {
     );
     assert_eq!(
         always_lines[1],
-        format!("approval\t{phone}\tdecision=always\tdecided=true")
+        format!("approval\t{phone}\tdecision=always\tdecided=true\talso_answered=0")
     );
     assert_eq!(ApprovalService::pending(&service).len(), 1);
     run(&service, deny(&tablet), false).unwrap();

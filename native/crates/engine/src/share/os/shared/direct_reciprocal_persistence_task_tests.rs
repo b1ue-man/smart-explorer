@@ -178,3 +178,76 @@ fn code_renewal_task_renewal_refuses_a_removed_device_and_keeps_the_profile() {
         before_json
     );
 }
+
+/// E43, M21, S2 (L2 point 4): „Gerät entfernen“ runs
+/// `forget_direct_peer_persisted` (Desktop, Android, `se setup`, `se share
+/// grants`); the machine login target the removed device had sent goes with
+/// it, in the same isolated data folder as the profile.
+#[test]
+fn login_ziel_task_forget_direct_peer_persisted_deletes_the_target() {
+    use crate::login::core::{gateway_types::GatewayTarget, model::VERSION};
+    use crate::share::login_transport::{
+        paired_login_target_bound, target_store, target_wire, SessionPeer,
+    };
+
+    let folder = IsolatedDataFolder::new();
+    let home = folder.home();
+    let host = identity_of("l2-forget-device", 207);
+    let old = peer_of(&host, "lookup-l2-forget", 15);
+    let mut profiles = paired_profiles(&old);
+    assert_eq!(
+        profiles.direct_contacts[0].remote_device_id.as_deref(),
+        Some("l2-forget-device")
+    );
+    profiles
+        .save()
+        .expect("the profile is saved in the isolated folder");
+
+    // The host's answer as the viewer took it into its book.
+    let gateway = GatewayTarget {
+        format: VERSION,
+        machine_id: "machine-l2-forget".into(),
+        public_key: iroh::SecretKey::from_bytes(&[208; 32]).public().to_string(),
+        direct_addresses: vec!["192.0.2.21:4433".parse().expect("address")],
+        relay_urls: vec!["https://relay.example.test/".into()],
+        use_default_relays: false,
+        allow_plaintext_relays: false,
+    };
+    let grants = vec!["l2-forget-viewer".to_string()];
+    let message = target_wire::host_message(&target_wire::HostFacts {
+        host_device_id: "l2-forget-device",
+        device_id: "l2-forget-viewer",
+        steering: true,
+        account: Some("1000"),
+        own_grants: &grants,
+        target: Some(&gateway),
+    });
+    let peer = SessionPeer {
+        device_id: "l2-forget-device".into(),
+        public_key: host.public_key.clone(),
+        node_id: host.node_id.clone(),
+        device_name: "Gerät l2".into(),
+        relation_id: "contact-l22".into(),
+        pinned: true,
+    };
+    let stored = target_store::update(|book| {
+        let change = book.apply(&peer, &message, 300);
+        let changed = change.is_ok();
+        (change, changed)
+    })
+    .expect("the book is written");
+    assert_eq!(stored, Ok(target_store::Change::Stored));
+    assert!(paired_login_target_bound("l2-forget-device", &host.public_key).is_some());
+
+    let (_, change, forgotten) =
+        ShareProfiles::forget_direct_peer_persisted(home.clone(), "contact-l22")
+            .expect("the contact is removed");
+    assert!(change.changed && forgotten.is_some());
+    assert!(paired_login_target_bound("l2-forget-device", &host.public_key).is_none());
+    let book = target_store::load().expect("the book loads");
+    assert!(book
+        .targets()
+        .iter()
+        .all(|target| target.device_id != "l2-forget-device"));
+    drop(folder);
+}

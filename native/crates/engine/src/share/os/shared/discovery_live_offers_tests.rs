@@ -13,6 +13,8 @@ fn live(offer_id: &str, rights: Option<ConnectionRights>) -> OwnDiscoveryOffer {
         discoverable_until: i64::MAX,
         published: true,
         rights,
+        renewed_after_failed_attempts: false,
+        pin: None,
     }
 }
 

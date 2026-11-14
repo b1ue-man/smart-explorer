@@ -128,6 +128,8 @@ fn abgleich_task_offer_snapshot_keeps_the_wire_form_compatible() {
         discoverable_until: 42,
         published: true,
         rights: Some(RightsPreset::ReadWrite.rights()),
+        renewed_after_failed_attempts: false,
+        pin: None,
     };
     let json = serde_json::to_string(&with_rights).unwrap();
     let back: OwnDiscoveryOffer = serde_json::from_str(&json).unwrap();

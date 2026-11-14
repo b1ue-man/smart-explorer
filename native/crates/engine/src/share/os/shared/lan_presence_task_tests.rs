@@ -9,8 +9,8 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 
 use super::*;
 use crate::share::lan_privacy::{
-    make_proof, open_proof, rotating_id, seal_proof, verify_any_sighting, verify_sighting,
-    ID_EPOCH_SECS, PROOF_LIFETIME_SECS,
+    accepted_any_sighting, make_proof, open_proof, rotating_id, seal_proof, verify_any_sighting,
+    verify_sighting, ID_EPOCH_SECS, PROOF_LIFETIME_SECS,
 };
 
 const NOW: i64 = 1_800;
@@ -240,19 +240,25 @@ fn entdeckung_task_a_resolved_sealed_record_with_a_wrong_secret_or_changed_field
         &[8; 32],
         NOW
     ));
-    // An address injected into the unsigned record next to a signed one.
+    // An address injected into the unsigned record next to a signed one: the
+    // sighting is cut to the signed address, the injected one is dropped (E26).
     let (injected, injected_proof) = authenticated(event_from(&record(
         "192.168.1.5,192.168.9.9",
         properties.clone(),
     )));
     assert_eq!(injected.addrs.len(), 2);
-    assert!(!verify_any_sighting(
+    assert!(verify_any_sighting(
         &injected,
         &injected_proof,
         &announced.node,
         &SECRET,
         NOW
     ));
+    let cut = accepted_any_sighting(&injected, &injected_proof, &announced.node, &SECRET, NOW);
+    assert_eq!(
+        cut.map(|sighting| sighting.addrs),
+        Some(vec!["192.168.1.5".parse::<IpAddr>().expect("address")])
+    );
     // The clear epoch and expiry of the record are bound into the seal.
     for key in ["e", "x"] {
         let mut changed = properties.clone();
@@ -375,4 +381,25 @@ fn code_renewal_task_retiring_announcement_yields_a_sealed_and_a_plain_record_un
     assert_eq!(records[0].0, INSTANCE_PREFIX);
     assert_eq!(views.len(), 1);
     assert_eq!(views[0].hashed_id, retiring_id);
+}
+
+#[test]
+fn unbelegt_task_unsigned_sighting_drops_multicast() {
+    // An unsigned record whose resolved addresses include a multicast one
+    // keeps only the unicast address, so no dial candidate can name the
+    // multicast one and the remaining address still counts.
+    let properties = HashMap::from([("p4".to_string(), "51820".to_string())]);
+    let info = resolved(
+        INSTANCE_PREFIX,
+        "0123456789abcdef",
+        "224.0.0.251,192.168.1.9",
+        properties,
+    );
+    match event_from(&info) {
+        Some(LanEvent::Seen(sighting)) => {
+            let unicast: IpAddr = "192.168.1.9".parse().expect("address");
+            assert_eq!(sighting.addrs, vec![unicast]);
+        }
+        other => panic!("expected a plain sighting, got {other:?}"),
+    }
 }

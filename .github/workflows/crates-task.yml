@@ -22,6 +22,32 @@ name: Crate split and shared task setup
 #   agent        build the SSH-agent bundles the release embeds
 #   servers      the tests of the two packages outside the workspace (Linux):
 #                share-server (with tests/relay_startup.rs) and se-agent
+#   s4           the S4 measurement of the ignored tests s4_messung_task_* (plan 2026-11-08, E30):
+#                the share of encryption in a Share transfer on Linux x86_64, Linux ARM64 and
+#                Windows x86_64, one job per platform, with the threshold of 10 % (log line
+#                S4-MESSUNG, the finding S4-BEFUND at or above it)
+#   e2e          the Direct-code renewal across real processes (Linux, E17): share server, host,
+#                an online contact, an offline contact that returns, the published v0.5.195 se
+#                without code_renewal_v1 (downloaded from the GitHub Release page, SHA-256
+#                checked) and a removed contact; native/test-share-code-renewal-e2e.sh
+#   verbindungen        the measurements M1 to M4 and M6 to M9 of the plan 2026-11-14 "Verbindungen je
+#                Zweck" (C7, package P8): the ignored tests verbindungen_messung_task_* of the engine,
+#                built with the speed profile, alone on their runner (Linux x86_64, Linux ARM64,
+#                Windows x86_64). Linux x86_64 shapes the loopback with netem for M2, M3, M7 and M8
+#                (profiles lan, wan and loss of native/rdt_task/speed_net.py, plus loss1: 1 % loss,
+#                40 ms round trip, 100 Mbit/s); M1, M4 and M6 run on every platform unshaped, with
+#                Cisco's OpenH264 (the pinned file, SE_SCREEN_TASK_OPENH264) on Linux x86_64 and
+#                Windows. Log lines VERBINDUNGEN-MESSUNG per case, VERBINDUNGEN-BEFUND per decision
+#                rule of C7 and D4: the acceptances E2, E4 and E7 fail the job when not passed, the
+#                conditions of the packages B1 to B5 never do; a measurement that did not measure
+#                fails it
+#   verbindungen-gesamt  after the three jobs above: the decisions that need every platform
+#                (DRIVER_RATE of the slowest platform, the send bundle, four connections against one,
+#                the ACK frequency on at least two platforms) from the line files they uploaded
+#   Every other test of the batch "open points of v0.5.196" runs in `workspace` (Linux, Windows;
+#   the #[ignore] ones in their groups), `servers` (share-server) or `android` (Kotlin JVM tests);
+#   so do the new tests of that plan (VERBINDUNGEN_TESTS, expected by name on the OS they run on;
+#   the Kotlin ones in `android`). docs/tests/register.tsv names the requirement each protects.
 # Input part=compile-timings runs only the compile stage of `workspace` on Linux
 # and Windows (no test runs, no other job), with Cargo's timing report, one line
 # per finished unit and a resource line every 30 s, to measure the build time.
@@ -69,7 +95,9 @@ jobs:
     # ended after 5 min; a process a test leaves holding the output is ended
     # 30 s after its command (native/test-crates-task.py). The ignored tests with
     # their environment (21 tests per OS, plus one program test
-    # on Linux; no new compilation) add an estimated 10 min; not measured yet.
+    # on Linux; no new compilation) add an estimated 10 min; not measured yet. The batch of
+    # 2026-11-08 adds three more ignored groups and the root test on Linux (no new compilation
+    # beyond one `--no-run` report), about 5 min.
     timeout-minutes: ${{ inputs.part == 'compile-timings' && 75 || 150 }}
     steps:
       - uses: actions/checkout@v7
@@ -269,6 +297,194 @@ jobs:
         if: always()
         with:
           name: crates-task-servers
+          path: native/target/crates-task-logs
+          if-no-files-found: warn
+          retention-days: 7
+
+  s4:
+    if: inputs.part == 'suite'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm, windows-2025]
+    runs-on: ${{ matrix.os }}
+    # Not measured yet: a cold build of the engine's tests with the speed profile (release
+    # optimization, thin LTO) plus four measuring tests of at most 60 s each, run alone on the
+    # runner. The workspace job allows 150 min for a debug build of every crate on Windows.
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.candidate_sha }}
+
+      - name: Bind the checkout to the requested candidate
+        shell: bash
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[a-fA-F0-9]{40}$ ]]
+          [[ "$(git rev-parse HEAD)" == "${CANDIDATE_SHA,,}" ]]
+
+      - name: Rust toolchain and dependency cache
+        uses: ./.github/actions/native-setup
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Linux build packages
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config
+
+      - name: Runner
+        run: python -c "import platform; print(platform.system(), platform.machine(), platform.platform())"
+        shell: bash
+
+      - name: S4 measurement (encryption share of a transfer)
+        timeout-minutes: 140
+        run: python native/test-crates-task.py --part s4
+        shell: bash
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: crates-task-s4-${{ matrix.os }}
+          path: native/target/crates-task-logs
+          if-no-files-found: warn
+          retention-days: 7
+
+  verbindungen:
+    if: inputs.part == 'suite'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm, windows-2025]
+    runs-on: ${{ matrix.os }}
+    # Not measured yet: a cold build of the engine's tests with the speed profile (release
+    # optimization, thin LTO, as in `s4`), then the ignored measuring tests, each at most 60 s,
+    # one after the other: on Linux x86_64 19 cases unshaped, 11 on lan, 11 on wan and one each
+    # on loss and loss1 (an estimated 40 min); Linux ARM64 and Windows only the unshaped group
+    # (Windows its H.264 cases twice). The workspace job allows 150 min for a debug build of every
+    # crate on Windows.
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.candidate_sha }}
+
+      - name: Bind the checkout to the requested candidate
+        shell: bash
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[a-fA-F0-9]{40}$ ]]
+          [[ "$(git rev-parse HEAD)" == "${CANDIDATE_SHA,,}" ]]
+
+      - name: Rust toolchain and dependency cache
+        uses: ./.github/actions/native-setup
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Linux build packages and the traffic control tool
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config iproute2
+
+      - name: Runner
+        run: python -c "import platform; print(platform.system(), platform.machine(), platform.platform())"
+        shell: bash
+
+      - name: Connection measurements (M1 to M4, M6 to M9)
+        timeout-minutes: 140
+        run: python native/test-crates-task.py --part verbindungen
+        shell: bash
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: crates-task-verbindungen-${{ matrix.os }}
+          path: native/target/crates-task-logs
+          if-no-files-found: warn
+          retention-days: 7
+
+  verbindungen-gesamt:
+    if: ${{ always() && inputs.part == 'suite' }}
+    needs: verbindungen
+    runs-on: ubuntu-24.04
+    # Reads three small line files and prints the decisions that need every platform.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.candidate_sha }}
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      # A platform whose job produced no artifact is named missing by the evaluation below.
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          pattern: crates-task-verbindungen-*
+          path: verbindungen-artifacts
+
+      - name: Decisions over every platform (DRIVER_RATE, send bundle, MAX_EXTRA, ACK frequency)
+        run: python3 native/test-crates-task.py --part verbindungen-gesamt --lines-dir verbindungen-artifacts
+
+  e2e:
+    if: inputs.part == 'suite'
+    runs-on: ubuntu-24.04
+    # Not measured yet: a cold development build of `se` (all programs' dependencies) and of
+    # the share server, then the script with five devices; every convergence in the script
+    # waits at most 150 s, the whole script takes an estimated 15 min.
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.candidate_sha }}
+
+      - name: Bind the checkout to the requested candidate
+        shell: bash
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[a-fA-F0-9]{40}$ ]]
+          [[ "$(git rev-parse HEAD)" == "${CANDIDATE_SHA,,}" ]]
+
+      - name: Rust toolchain and dependency cache
+        uses: ./.github/actions/native-setup
+        with:
+          workspaces: |
+            native
+            share-server
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Linux packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config jq curl xvfb libegl1 libgl1 libx11-6 \
+            libx11-xcb1 libxcursor1 libxi6 libxkbcommon0 libxkbcommon-x11-0 libxrandr2
+
+      - name: Code renewal across processes
+        timeout-minutes: 100
+        run: python3 native/test-crates-task.py --part e2e
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: crates-task-e2e
           path: native/target/crates-task-logs
           if-no-files-found: warn
           retention-days: 7

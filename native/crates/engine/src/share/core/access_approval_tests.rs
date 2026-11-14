@@ -268,7 +268,9 @@ fn drive(
                 tokio::time::sleep(Duration::from_millis(10)).await;
             };
             match act {
-                Act::Answer(answer) => host.service.decide(&view.id, answer).unwrap(),
+                Act::Answer(answer) => {
+                    host.service.decide(&view.id, answer).unwrap();
+                }
                 Act::Always => {
                     let revision = host.change_grant(&[(view.capability, Allow)]);
                     let principal = &host.authorized.principal;

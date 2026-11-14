@@ -67,15 +67,6 @@ fn changes_until(
 fn vault_task_watch_reports_nothing_from_an_unlocked_vault_drive() {
     let (_directory, folder, drive) = vault_fixture();
     let _published = Published::new(&drive);
-    if cfg!(windows) {
-        // A Windows host watches no local share (watch_confined ends as
-        // Unsupported): there is no session, so no name from the drive can come out.
-        let error = start("/Docs", &access(&folder))
-            .err()
-            .expect("the export is refused on Windows");
-        assert_eq!(error.kind(), io::ErrorKind::Unsupported, "{error}");
-        return;
-    }
     let session = start("/Docs", &access(&folder)).expect("the export is watched");
     armed(&session);
     std::fs::write(drive.join("neu.txt"), b"klartext").unwrap();
@@ -109,20 +100,16 @@ fn vault_task_watch_on_an_unlocked_vault_drive_is_a_permission_refusal() {
         let error = start(path, &access).err().expect("the watch is refused");
         assert_eq!(error.kind(), io::ErrorKind::PermissionDenied, "{path}");
     }
-    assert_watchable_or_unsupported("/Docs", &access);
+    assert_watch_starts("/Docs", &access);
     drop(published);
-    assert_watchable_or_unsupported("/Docs/T", &access);
+    assert_watch_starts("/Docs/T", &access);
 }
 
-/// Whether a watch of `path` starts. On a Windows host a local share is never
-/// watched: the watch ends as `Unsupported`, which is not a permission refusal.
-fn assert_watchable_or_unsupported(path: &str, access: &FsAccess) {
-    let result = start(path, access);
-    if cfg!(windows) {
-        let error = result.err().expect("a Windows host watches no local share");
-        assert_eq!(error.kind(), io::ErrorKind::Unsupported, "{path}");
-    } else {
-        assert!(result.is_ok(), "{path}");
+/// Asserts that a watch of `path` starts on every host platform, Windows
+/// included: there a local share is watched through the held folder handle.
+fn assert_watch_starts(path: &str, access: &FsAccess) {
+    if let Err(error) = start(path, access) {
+        panic!("the watch of {path} does not start: {error}");
     }
 }
 

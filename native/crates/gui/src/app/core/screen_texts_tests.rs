@@ -20,7 +20,7 @@ const STATES: [SessionState; 13] = [
     SessionState::Unknown,
 ];
 
-const END_REASONS: [EndReason; 8] = [
+const END_REASONS: [EndReason; 9] = [
     EndReason::ViewerClosed,
     EndReason::HostStopped,
     EndReason::CapabilityNarrowed,
@@ -29,6 +29,7 @@ const END_REASONS: [EndReason; 8] = [
     EndReason::UpdateStop,
     EndReason::ConnectionLost,
     EndReason::Failed,
+    EndReason::SessionChanged,
 ];
 
 const BLOCKS: [ControlBlock; 5] = [

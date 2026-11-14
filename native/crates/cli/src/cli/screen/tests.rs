@@ -84,6 +84,7 @@ fn bench() -> BenchReport {
         recoveries: vec![250.0],
         corrupt_frames: 0,
         static_psnr_db: None,
+        stages_ms: Default::default(),
     }
 }
 
@@ -247,5 +248,30 @@ fn screen_task_cli_device_selection_and_options() {
             all: true,
             json: true
         }
+    );
+}
+
+#[test]
+fn verbindungen_task_cli_bench_stages_in_text() {
+    // A report without stations prints no station line.
+    let plain = serde_json::to_value(bench()).unwrap();
+    assert!(output::stage_lines(&plain).is_empty());
+    // Stations in the order of the path, other ones alphabetically after
+    // them; a station without both percentiles is left out.
+    let report = serde_json::json!({
+        "stages_ms": {
+            "decode": {"p50": 3.0, "p95": 4.5},
+            "custom": {"p50": 0.5, "p95": 0.7},
+            "capture": {"p50": 1.5, "p95": 2.0},
+            "broken": {"p50": 1.0},
+        }
+    });
+    assert_eq!(
+        output::stage_lines(&report),
+        [
+            "stage_ms\tcapture\tp50=1.5\tp95=2.0",
+            "stage_ms\tdecode\tp50=3.0\tp95=4.5",
+            "stage_ms\tcustom\tp50=0.5\tp95=0.7",
+        ]
     );
 }

@@ -165,8 +165,13 @@ fn review_task_bound_lookup_requires_access_and_only_its_owner_mutates_it() {
         .contains("lookup"));
     direct_presence::watch(watcher.id, &watcher.writer, "lookup", Some(proof), &state);
     assert!(matches!(recv(&watcher), Out::DirectAvailable { .. }));
+    // E60: a client without key login cannot show a proof; it does not see a bound lookup,
+    // and its refused watch is not kept.
     direct_presence::watch(legacy.id, &legacy.writer, "lookup", None, &state);
-    assert!(matches!(recv(&legacy), Out::DirectAvailable { .. }));
+    rejected(&legacy);
+    assert!(!state.lock().unwrap().clients[&legacy.id]
+        .watched_lookup_ids
+        .contains("lookup"));
     direct_presence::publish(
         watcher.id,
         &watcher.writer,
@@ -200,7 +205,10 @@ fn review_task_bound_lookup_requires_access_and_only_its_owner_mutates_it() {
     assert_eq!(state.lock().unwrap().direct["lookup"].0, owner.id);
     direct_presence::unpublish(owner.id, "lookup", &state);
     assert!(matches!(recv(&watcher), Out::DirectOffline { .. }));
-    assert!(matches!(recv(&legacy), Out::DirectOffline { .. }));
+    assert!(legacy
+        .receiver
+        .recv_timeout(Duration::from_millis(200))
+        .is_err());
     assert!(direct_presence::require_owner(
         &state,
         owner.id,

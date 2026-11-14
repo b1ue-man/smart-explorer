@@ -12,6 +12,8 @@ fn offer(rights: Option<crate::share::connection_rights::ConnectionRights>) -> O
         discoverable_until: 1_299,
         published: true,
         rights,
+        renewed_after_failed_attempts: false,
+        pin: None,
     }
 }
 

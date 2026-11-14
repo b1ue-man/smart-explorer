@@ -26,6 +26,7 @@ fn summary(startable: bool, setup: SetupState, apps: Vec<PublishedApp>) -> RdpFe
         startable,
         setup,
         remote_apps: apps,
+        diagnostics: Vec::new(),
     }
 }
 

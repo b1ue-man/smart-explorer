@@ -10,9 +10,12 @@ use super::limits::{
     SourceKey, MAX_PUBLISHED_DIRECTS_PER_CLIENT, MAX_REGISTERED_CLIENTS,
     MAX_REGISTERED_CLIENTS_PER_SOURCE, MAX_ROOMS_PER_CLIENT, MAX_WATCHES_PER_CLIENT,
 };
-use super::state::{cleanup, join_room, lock_state, register_client, RegistrationError, State};
+use super::state::{
+    cleanup, lock_state, register_client, register_client_with_identity, ClientIdentity,
+    RegistrationError, State,
+};
 use super::transport::{handle, handle_with_timeout};
-use super::{tracked_direct, Out, PeerPresence, Writer};
+use super::{direct_presence, login, rooms, tracked_direct, Out, PeerPresence, Writer};
 
 #[test]
 fn registered_clients_are_hard_capped_and_all_slots_are_reusable() {
@@ -117,52 +120,79 @@ fn registered_client_source_cap_preserves_slots_for_other_sources() {
 fn retained_state_caps_reject_growth_and_cleanup_returns_to_baseline() {
     let state = Arc::new(Mutex::new(State::default()));
     let (writer, _receiver) = Writer::test_raw_channel(512);
-    let id = register_client(
+    // E60: a client without key login publishes no Direct presence, so the client logs in
+    // with its key; its presences carry that key and every relation shows its proof.
+    let key = iroh_base::SecretKey::from_bytes(&[90; 32]);
+    let proof = login::hex(&[5; 32]);
+    let hash = login::hex(&login::sha256(&[5; 32]));
+    let own = |relation: &str, kind: &str| {
+        let mut own = presence("device", relation);
+        own.kind = kind.into();
+        own.public_key = key.public().to_string();
+        own.node_id = key.public().to_string();
+        own
+    };
+    let id = register_client_with_identity(
         &state,
         writer.clone(),
         source(0),
         "device".into(),
         HashSet::new(),
+        ClientIdentity::Proven(key.public()),
     )
     .unwrap();
 
     for index in 0..MAX_PUBLISHED_DIRECTS_PER_CLIENT {
-        let mut presence = presence("device", &format!("direct-{index}"));
-        presence.kind = "direct".into();
-        tracked_direct::publish(id, &writer, presence, &state);
+        let presence = own(&format!("direct-{index}"), "direct");
+        direct_presence::publish(id, &writer, presence, Some(hash.clone()), &state);
     }
-    tracked_direct::publish(id, &writer, presence("device", "direct-overflow"), &state);
+    direct_presence::publish(
+        id,
+        &writer,
+        own("direct-overflow", "direct"),
+        Some(hash.clone()),
+        &state,
+    );
 
     for index in 0..MAX_WATCHES_PER_CLIENT {
-        tracked_direct::watch(id, &writer, &format!("watch-{index}"), &state);
+        let lookup = format!("watch-{index}");
+        direct_presence::watch(id, &writer, &lookup, Some(proof.clone()), &state);
     }
-    tracked_direct::watch(id, &writer, "watch-overflow", &state);
+    direct_presence::watch(id, &writer, "watch-overflow", Some(proof.clone()), &state);
 
     for index in 0..MAX_ROOMS_PER_CLIENT {
         let room_id = format!("room-{index}");
-        let mut room_presence = presence("device", &room_id);
-        room_presence.kind = "room".into();
-        join_room(id, &writer, &room_id, room_presence, &state);
+        let room_presence = own(&room_id, "room");
+        rooms::join_with_access(
+            id,
+            &writer,
+            &room_id,
+            room_presence,
+            Some(proof.clone()),
+            &state,
+        );
     }
-    join_room(
+    rooms::join_with_access(
         id,
         &writer,
         "room-overflow",
-        presence("device", "room-overflow"),
+        own("room-overflow", "room"),
+        Some(proof.clone()),
         &state,
     );
 
     let before_invalid = state_counts(&state);
     let oversized = "x".repeat(257);
-    let mut invalid_presence = presence("device", "invalid-direct");
+    let mut invalid_presence = own("invalid-direct", "direct");
     invalid_presence.device_name = "n".repeat(1025);
-    tracked_direct::publish(id, &writer, invalid_presence, &state);
-    tracked_direct::watch(id, &writer, &oversized, &state);
-    join_room(
+    direct_presence::publish(id, &writer, invalid_presence, Some(hash), &state);
+    direct_presence::watch(id, &writer, &oversized, Some(proof.clone()), &state);
+    rooms::join_with_access(
         id,
         &writer,
         &oversized,
-        presence("device", "invalid-room"),
+        own("invalid-room", "room"),
+        Some(proof),
         &state,
     );
 
@@ -196,7 +226,7 @@ fn watch_unwatch_churn_does_not_retain_empty_lookup_keys() {
 
     for index in 0..1_000 {
         let lookup_id = format!("lookup-{index}");
-        tracked_direct::watch(id, &writer, &lookup_id, &state);
+        direct_presence::watch(id, &writer, &lookup_id, None, &state);
         tracked_direct::unwatch(id, &lookup_id, &state);
     }
 

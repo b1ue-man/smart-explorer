@@ -111,7 +111,7 @@ fn code_renewal_task_need_follows_the_latest_removal() {
     // A removal before the first run of this version renews nothing
     // retroactively; only a later one does.
     assert_eq!(state.covered_removals_at, Some(10));
-    // The fifth renewal waits while four generations still run out.
+    // The next renewal waits while every allowed generation (MAX_RETIRING_CODES) still runs out.
     for index in 0..MAX_RETIRING_CODES {
         state.retiring.push(RetiringCode {
             lookup_id: format!("old-{index}"),

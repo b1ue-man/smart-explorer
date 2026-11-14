@@ -60,3 +60,40 @@ fn entdeckung_task_a_contact_that_never_signed_keeps_its_v1_match() {
     assert_eq!(contact_id, "contact-node-older");
     assert_eq!(candidates, vec!["192.168.1.9:4000".to_string()]);
 }
+
+#[test]
+fn unbelegt_task_candidates_exclude_loopback_multicast_and_mapped() {
+    let addresses = [
+        "127.0.0.1",
+        "0.0.0.0",
+        "224.0.0.251",
+        "::1",
+        "::",
+        "ff02::fb",
+        "::ffff:127.0.0.1",
+        "::ffff:224.0.0.251",
+        "2001:db8::5",
+        "192.168.1.9",
+    ];
+    let seen = LanSighting {
+        id: "x".into(),
+        addrs: addresses
+            .iter()
+            .map(|ip| ip.parse().expect("address"))
+            .collect(),
+        p4: 4000,
+        p6: 6000,
+        uplink: false,
+        seen_at: 100,
+    };
+    assert_eq!(
+        candidates_for(&seen, &[]),
+        ["192.168.1.9:4000", "[2001:db8::5]:6000"]
+    );
+    // A matched announcement stores exactly these candidates as LAN evidence.
+    let mut announcement = seen.clone();
+    announcement.id = hashed_lan_id("node-filtered");
+    let (_, stored) =
+        match_sighting(&[contact("node-filtered", false)], &announcement, &[]).expect("matches");
+    assert_eq!(stored, ["192.168.1.9:4000", "[2001:db8::5]:6000"]);
+}

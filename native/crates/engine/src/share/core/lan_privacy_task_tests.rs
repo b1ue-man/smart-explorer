@@ -174,10 +174,17 @@ fn entdeckung_task_a_wrong_secret_changed_clear_fields_or_an_injected_address_ar
     let mut other_nonce = fixture.received.clone();
     other_nonce.sealed.as_mut().expect("sealed").nonce[0] ^= 0x01;
     assert!(open_proof(&fixture.sighting, &other_nonce, &SECRET).is_none());
-    // An address resolved from an unsigned record is not in the signed list.
+    // An address resolved from an unsigned record is not in the signed list: it
+    // is dropped (E26), the signed address stays, so the sighting verifies with
+    // that address only.
     let mut injected = fixture.sighting.clone();
     injected.addrs = vec![address("192.168.1.5"), address("192.168.9.9")];
-    assert!(!verifies(&injected, &fixture.received, &SECRET));
+    assert!(verifies(&injected, &fixture.received, &SECRET));
+    let accepted = accepted_any_sighting(&injected, &fixture.received, &fixture.node, &SECRET, NOW);
+    assert_eq!(
+        accepted.map(|cut| cut.addrs),
+        Some(vec![address("192.168.1.5")])
+    );
     // An expired proof stays expired.
     assert!(!verify_any_sighting(
         &fixture.sighting,

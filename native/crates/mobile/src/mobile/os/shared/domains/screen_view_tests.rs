@@ -285,6 +285,7 @@ fn all_keys() -> String {
         EndReason::UpdateStop,
         EndReason::ConnectionLost,
         EndReason::Failed,
+        EndReason::SessionChanged,
     ];
     reasons.iter().for_each(|reason| match reason {
         EndReason::ViewerClosed
@@ -294,7 +295,8 @@ fn all_keys() -> String {
         | EndReason::HostShutdown
         | EndReason::UpdateStop
         | EndReason::ConnectionLost
-        | EndReason::Failed => {}
+        | EndReason::Failed
+        | EndReason::SessionChanged => {}
     });
     let blocks = [
         ControlBlock::ElevatedWindow,

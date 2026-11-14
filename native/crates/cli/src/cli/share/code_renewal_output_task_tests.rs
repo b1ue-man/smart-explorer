@@ -147,7 +147,8 @@ fn code_renewal_surface_task_status_document_keeps_its_keys_and_contacts() {
     let object = without.as_object().expect("status document is an object");
     let mut keys: Vec<&str> = object.keys().map(String::as_str).collect();
     keys.sort_unstable();
-    // The 20 keys of the document before the batch (`git show HEAD:` status.rs) plus `code_renewal`.
+    // The 20 keys of the document before the batch (`git show HEAD:` status.rs) plus
+    // `code_renewal` and `discoverable_renewals` (E49).
     let mut expected = vec![
         "access_gaps",
         "candidates",
@@ -156,6 +157,7 @@ fn code_renewal_surface_task_status_document_keeps_its_keys_and_contacts() {
         "connected",
         "contacts",
         "discoverable",
+        "discoverable_renewals",
         "events",
         "grants",
         "last_error",

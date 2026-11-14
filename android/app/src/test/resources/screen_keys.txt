@@ -33,6 +33,7 @@ end:host_shutdown
 end:update_stop
 end:connection_lost
 end:failed
+end:session_changed
 end:ended
 end:connection_failed
 block:elevated_window

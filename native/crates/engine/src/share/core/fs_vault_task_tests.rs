@@ -4,6 +4,7 @@
 //! itself.
 use super::*;
 use crate::share::{
+    fs_host_policy::in_vault_drive,
     fs_host_policy_task_tests::{text, vault_fixture, Published},
     profile_edits::refuse_vault_exports,
     ShareProfiles,
@@ -38,11 +39,24 @@ fn refusal<T>(result: io::Result<T>) -> io::ErrorKind {
 /// M16-c: under an export that holds the drive, the listing leaves it out
 /// and every operation on it is a permission refusal; an export whose
 /// folder is the drive itself resolves to nothing. The drive is ordinary
-/// again once it ended.
+/// again once it ended. E35: `in_vault_drive` (spelling, then identity)
+/// names the same drive, a file below it and the drive root alike, while the
+/// drive is mounted; this test also absorbs the function-level check of the
+/// first run (`fs_tresor_task_reported_mount_is_private_for_share_host`).
 #[test]
 fn vault_task_share_host_hides_and_refuses_an_unlocked_vault_drive() {
     let (_directory, folder, drive) = vault_fixture();
+    let drive_text = drive.to_string_lossy().into_owned();
+    assert!(
+        !in_vault_drive(&drive_text),
+        "private before the drive reports"
+    );
     let published = Published::new(&drive);
+    assert!(in_vault_drive(&drive_text), "the drive root is private");
+    assert!(
+        in_vault_drive(&drive.join("geheim.txt").to_string_lossy()),
+        "a file below the drive is private"
+    );
     let docs = exports(&[("Docs", folder.clone())]);
     let listed = names("/Docs", &docs);
     assert!(listed.contains(&"frei.txt".to_string()), "{listed:?}");
@@ -61,6 +75,10 @@ fn vault_task_share_host_hides_and_refuses_an_unlocked_vault_drive() {
     assert_eq!(refusal(list_dir("/Tresor", &vault)), denied);
 
     drop(published);
+    assert!(
+        !in_vault_drive(&drive_text),
+        "shareable again after the withdrawal"
+    );
     assert!(names("/Docs", &docs).contains(&"T".to_string()));
     assert_eq!(stat("/Docs/T/geheim.txt", &docs).unwrap().size, 8);
     resolve("/Tresor/geheim.txt", &vault).unwrap();

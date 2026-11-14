@@ -5,14 +5,17 @@ use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use iroh_base::SecretKey;
 use serde_json::Value;
 
 use super::idle::{Keepalive, SignalClock, TestClock, CAPABILITY};
 use super::idle_outbox::IdleOutbox;
 use super::limits::{SourceKey, MAX_WRITER_QUEUED_BYTES};
-use super::state::{join_room, leave_room, register_client, State};
+use super::state::{leave_room, register_client_with_identity, ClientIdentity, State};
 use super::writer::QueuedMessage;
-use super::{dispatch, tracked_direct, In, Out, PeerPresence, Writer};
+use super::{
+    direct_presence, dispatch, login, rooms, tracked_direct, In, Out, PeerPresence, Writer,
+};
 
 const START_UNIX: i64 = 1_800_000_000;
 const LOOKUP: &str = "lookup-desktop";
@@ -24,6 +27,26 @@ struct Peer {
     receiver: Receiver<QueuedMessage>,
 }
 
+/// Every participant logs in with its key (E60): a client without key login
+/// publishes no Direct presence. The key of a device follows its name's length,
+/// which differs between the devices of this file.
+fn key(device: &str) -> SecretKey {
+    SecretKey::from_bytes(&[device.len() as u8; 32])
+}
+
+/// The proof the relation's members show, and the hash its owner leaves.
+fn proof() -> String {
+    login::hex(&[5; 32])
+}
+
+fn hash() -> String {
+    login::hex(&login::sha256(&[5; 32]))
+}
+
+fn join(peer: &Peer, room: &str, presence: PeerPresence, state: &Arc<Mutex<State>>) {
+    rooms::join_with_access(peer.id, &peer.writer, room, presence, Some(proof()), state);
+}
+
 fn peer(state: &Arc<Mutex<State>>, clock: &Arc<TestClock>, device: &str, idle: bool) -> Peer {
     let (writer, receiver) = Writer::test_raw_channel(64);
     let mut capabilities = HashSet::new();
@@ -32,7 +55,15 @@ fn peer(state: &Arc<Mutex<State>>, clock: &Arc<TestClock>, device: &str, idle: b
         capabilities.insert(CAPABILITY.to_string());
     }
     let source = SourceKey::Ipv4([192, 0, 2, device.len() as u8]);
-    let id = register_client(state, writer.clone(), source, device.into(), capabilities).unwrap();
+    let id = register_client_with_identity(
+        state,
+        writer.clone(),
+        source,
+        device.into(),
+        capabilities,
+        ClientIdentity::Proven(key(device).public()),
+    )
+    .unwrap();
     Peer {
         id,
         writer,
@@ -46,9 +77,9 @@ fn presence(device: &str, relation: &str, clock: &TestClock, route: &str) -> Pee
         relation_id: relation.into(),
         device_id: device.into(),
         device_name: device.into(),
-        public_key: "pk".into(),
+        public_key: key(device).public().to_string(),
         fingerprint: "fp".into(),
-        node_id: format!("node-{device}"),
+        node_id: key(device).public().to_string(),
         relay_url: "http://127.0.0.1:51821".into(),
         candidates: vec![route.into()],
         expires_at: clock.unix_secs() + 300,
@@ -86,7 +117,7 @@ fn watch(peer: &Peer, state: &Arc<Mutex<State>>) {
         &peer.writer,
         In::WatchDirect {
             lookup_id,
-            access_proof: None,
+            access_proof: Some(proof()),
         },
         state,
     );
@@ -94,7 +125,7 @@ fn watch(peer: &Peer, state: &Arc<Mutex<State>>) {
 
 fn publish(peer: &Peer, state: &Arc<Mutex<State>>, clock: &TestClock, route: &str) {
     let presence = presence("desktop", LOOKUP, clock, route);
-    tracked_direct::publish(peer.id, &peer.writer, presence, state);
+    direct_presence::publish(peer.id, &peer.writer, presence, Some(hash()), state);
 }
 
 /// Desktop publisher plus an idle phone that already holds its presence.
@@ -157,24 +188,24 @@ fn android_background_task_route_change_first_presence_and_expiry_are_immediate(
         &phone.writer,
         In::WatchDirect {
             lookup_id,
-            access_proof: None,
+            access_proof: Some(proof()),
         },
         &state,
     );
     let mut short = presence("laptop", "lookup-laptop", &clock, "10.0.0.3:1");
     short.expires_at = clock.unix_secs() + 100;
-    tracked_direct::publish(laptop.id, &laptop.writer, short, &state);
+    direct_presence::publish(laptop.id, &laptop.writer, short, Some(hash()), &state);
     assert_eq!(tags(&phone.receiver), ["direct_available"]);
 
     // The held copy would expire before the next tick plus margin: immediate.
     clock.advance(SECOND);
     let refresh = presence("laptop", "lookup-laptop", &clock, "10.0.0.3:1");
-    tracked_direct::publish(laptop.id, &laptop.writer, refresh, &state);
+    direct_presence::publish(laptop.id, &laptop.writer, refresh, Some(hash()), &state);
     assert_eq!(tags(&phone.receiver), ["direct_available"]);
     assert_eq!(phone.writer.idle_deferred_len(), 0);
     // Now the copy lasts long enough, so the next pure refresh is held.
     let refresh = presence("laptop", "lookup-laptop", &clock, "10.0.0.3:1");
-    tracked_direct::publish(laptop.id, &laptop.writer, refresh, &state);
+    direct_presence::publish(laptop.id, &laptop.writer, refresh, Some(hash()), &state);
     assert!(tags(&phone.receiver).is_empty());
     assert_eq!(phone.writer.idle_deferred_len(), 1);
 }
@@ -209,15 +240,15 @@ fn android_background_task_offline_unwatch_and_leave_drop_deferred_refreshes() {
     // Rooms: a member refresh is held, the member's leave drops it.
     let mut member = presence("desktop", "room", &clock, "10.0.0.1:1");
     member.kind = "room".into();
-    join_room(desktop.id, &desktop.writer, "room", member.clone(), &state);
+    join(&desktop, "room", member.clone(), &state);
     let mut own = presence("phone", "room", &clock, "10.0.0.9:1");
     own.kind = "room".into();
-    join_room(phone.id, &phone.writer, "room", own, &state);
+    join(&phone, "room", own, &state);
     assert_eq!(tags(&phone.receiver), ["room_roster"]);
     clock.advance(SECOND);
     member.expires_at = clock.unix_secs() + 300;
     member.nonce = "refreshed".into();
-    join_room(desktop.id, &desktop.writer, "room", member, &state);
+    join(&desktop, "room", member, &state);
     assert!(
         tags(&phone.receiver).is_empty(),
         "room refresh was not held"
@@ -243,31 +274,13 @@ fn android_background_task_room_refresh_is_delivered_with_keepalive() {
         presence.kind = "room".into();
         presence
     };
-    join_room(
-        desktop.id,
-        &desktop.writer,
-        "room",
-        room_presence("desktop"),
-        &state,
-    );
-    join_room(
-        phone.id,
-        &phone.writer,
-        "room",
-        room_presence("phone"),
-        &state,
-    );
+    join(&desktop, "room", room_presence("desktop"), &state);
+    join(&phone, "room", room_presence("phone"), &state);
     set_idle(&phone, &state, true, None);
     assert_eq!(tags(&phone.receiver), ["room_roster", "idle_ack"]);
 
     clock.advance(60 * SECOND);
-    join_room(
-        desktop.id,
-        &desktop.writer,
-        "room",
-        room_presence("desktop"),
-        &state,
-    );
+    join(&desktop, "room", room_presence("desktop"), &state);
     assert!(tags(&phone.receiver).is_empty());
     clock.advance(120 * SECOND);
     phone.writer.idle_tick(clock.now());
@@ -311,7 +324,7 @@ fn android_background_task_keepalive_proposal_and_capability_gate() {
         &legacy.writer,
         In::WatchDirect {
             lookup_id,
-            access_proof: None,
+            access_proof: Some(proof()),
         },
         &state,
     );

@@ -31,6 +31,7 @@ fn direct_request_routes_to_lookup_owner() {
     let state = Arc::new(Mutex::new(state));
 
     tracked_direct::request_legacy(
+        2,
         &requester_writer,
         "lookup",
         presence("direct", "lookup", "requester"),
@@ -61,6 +62,7 @@ fn direct_accept_routes_to_requester_device() {
     let state = Arc::new(Mutex::new(state));
 
     tracked_direct::decision_legacy(
+        1,
         &requester_writer,
         "lookup",
         "requester",
