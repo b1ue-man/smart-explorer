@@ -303,6 +303,27 @@ def end_processes(processes):
             continue
 
 
+def reported_passed_once(lines, name):
+    """Whether the output reports the test `name` exactly once as started and passed. The verdict `ok` is on the
+    start line (`test <path>::<name> ... ok`), or on a later line of its own before the next test starts: a test's
+    own output can sit between its start and its verdict. Cisco's OpenH264 library writes to the process's standard
+    output while the H.264 measurements run (Windows run 2026-11-14: `[OpenH264] ...` lines between `... ` and `ok`).
+    A verdict `FAILED`, a second start or no verdict does not count."""
+    start = re.compile(r"^test (.*::)?" + re.escape(name) + r" \.\.\. ")
+    starts = [index for index, line in enumerate(lines) if start.match(line)]
+    if len(starts) != 1:
+        return False
+    for index in range(starts[0], len(lines)):
+        line = lines[index].rstrip()
+        if index > starts[0] and line.startswith("test "):
+            return False
+        if line.endswith("FAILED"):
+            return False
+        if re.search(r"(^|\s)ok$", line):
+            return True
+    return False
+
+
 def run(title, command, cwd=NATIVE, env=None, cargo_json=False, expect=(), collect=None):
     """Runs one command. `expect` names tests that must each be reported as passed
     exactly once (`test <path>::<name> ... ok`): a test that was renamed or lost
@@ -366,9 +387,9 @@ def run(title, command, cwd=NATIVE, env=None, cargo_json=False, expect=(), colle
         summary("```\n" + "\n".join(tail) + "\n```")
     unreported = []
     for name in expect:
-        passed = [line for line in lines if re.match(r"^test (.*::)?" + re.escape(name) + r" \.\.\. ok\b", line)]
-        if len(passed) != 1:
-            unreported.append(f"{name} ({len(passed)} times)")
+        if not reported_passed_once(lines, name):
+            starts = [line for line in lines if re.match(r"^test (.*::)?" + re.escape(name) + r" \.\.\. ", line)]
+            unreported.append(f"{name} (started {len(starts)} times)")
     if unreported:
         summary("expected to pass exactly once, but not reported so: " + ", ".join(unreported))
     return returncode == 0 and not unreported
@@ -1485,19 +1506,24 @@ def part_verbindungen():
     groups = vb.groups_for(key)
     links = ", ".join(sorted({group.profile for group in groups})) or "none"
     summary(f"### Verbindungen\nplatform {key}; links: {links}")
-    if not groups:
-        summary(f"no measurement plan for {key}")
+
+    def job_failed(reasons):
+        # A failing job prints exactly one VERBINDUNGEN-BEFUND line (bestanden=nein) that names every reason.
+        summary(vb.missing_line(key, reasons))
         return False
+
+    if not groups:
+        return job_failed([f"no measurement plan for {key}"])
     try:
         profiles = vb.link_profiles() if key == "linux-x86_64" else {}
-        shipped = vb.shipped_target_ms(ROOT)
+        # T only feeds the Linux x86_64 evaluation: a Windows or Linux ARM64 job must not depend on it.
+        shipped = vb.shipped_target_ms(ROOT) if key == "linux-x86_64" else None
     except Exception as error:  # an import or a source that changed: the part cannot decide
-        summary(f"the decision rules cannot start: {error!r}")
-        return False
+        return job_failed([f"the decision rules cannot start: {error!r}"])
     if not run("Verbindungen: compile the engine's tests (speed profile)",
                ["cargo", "test", "--locked", "--profile", "speed", "-p", "smart_explorer_engine", "--lib",
                 "--no-run"]):
-        return False
+        return job_failed(["the engine's tests did not compile (speed profile)"])
     scratch = Path(tempfile.mkdtemp(prefix="crates-task-verbindungen-"))
     try:
         library = None
@@ -1506,32 +1532,33 @@ def part_verbindungen():
                 library = vb.openh264_download(ROOT, key, scratch)
             except vb.Problem as error:
                 summary(f"### OpenH264\nthe pinned library is not there: {error}")
-                return False
+                return job_failed([f"the pinned OpenH264 library is not there: {error}"])
             summary(f"### OpenH264\n{library.name if library else 'no pin for ' + key} "
                     "(SE_SCREEN_TASK_OPENH264, size and SHA-256 as pinned in openh264_pins.rs)")
-        ok = True
         records = []
-        problems = []
+        reasons = []
         for group in groups:
             ran, found = verbindungen_group(vb, group, key, library, profiles)
-            ok = ran and ok
+            if not ran:
+                reasons.append(f"{group.title}: the test command, its link set-up or its cleanup did not pass")
             records.extend(found)
-            problems.extend(f"{group.title}: {text}" for text in vb.check_group(group, found, key))
+            reasons.extend(f"{group.title}: {text}" for text in vb.check_group(group, found, key))
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
     logs = NATIVE / "target" / "crates-task-logs"
     logs.mkdir(parents=True, exist_ok=True)
     (logs / vb.LINES_FILE).write_text("".join(vb.render(record) + "\n" for record in records), encoding="utf-8")
     summary("### Measurement lines\n```\n" + "\n".join(vb.render(record) for record in records) + "\n```")
-    if problems:
-        summary("### A measurement did not measure\n" + "\n".join(f"- {text}" for text in problems))
-        return False
+    if reasons:
+        summary("### A measurement did not measure\n" + "\n".join(f"- {text}" for text in reasons))
+        return job_failed(reasons)
     findings, failed = vb.evaluate_platform(key, records, shipped, profiles)
-    summary(f"### Findings ({key}, T shipped {shipped} ms)\n```\n" + "\n".join(findings) + "\n```")
+    shown = f", T shipped {shipped} ms" if shipped is not None else ""
+    summary(f"### Findings ({key}{shown})\n```\n" + "\n".join(findings) + "\n```")
     if failed:
         summary("an acceptance of C7 (E2, E4 or E7) is not passed: the line says which value; the next run of "
                 "the same suite confirms the corrected one (plan D4, N1)")
-    return ok and not failed
+    return not failed
 
 
 def part_verbindungen_gesamt(directory):

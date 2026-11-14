@@ -246,7 +246,12 @@ fn relay_names_withdrawn(addr: &IncomingAddr) -> bool {
 
 // Unknown application peers cannot hold the 20 s window reserved for pinned
 // identities. Separate pools preserve that capacity under untrusted load.
-const UNKNOWN_HANDSHAKE: Duration = Duration::from_secs(3);
+// 3.5 s, not 3 s: on a path with 600..800 ms round trip a handshake that
+// loses one datagram ends at 3 x RTT + RTT + processing, at most 3.26 s
+// (suite run of 2026-11-14: 3 of 100 handshakes hit 3 s under netem
+// 350 ms +-50 ms, 2 % loss; derivation in
+// `unbelegt_handshake_mobile_task_tests.rs`).
+const UNKNOWN_HANDSHAKE: Duration = Duration::from_millis(3500);
 const KNOWN_HANDSHAKE: Duration = Duration::from_secs(20);
 fn refuse(connection: &Connection) {
     connection.close(VarInt::from_u32(2), b"Share admission rejected");

@@ -552,3 +552,12 @@ def evaluate_overall(by_platform: dict[str, list[dict]]) -> tuple[list[str], boo
     except Problem as error:
         out.add("abnahme", "Gesamtauswertung", ("bestanden", "nein"), grund=str(error))
     return out.lines, out.failed
+
+
+def missing_line(key: str, reasons: list[str]) -> str:
+    """The one line `VERBINDUNGEN-BEFUND` of a job that fails because a measurement of its platform did not
+    measure (a command that did not pass, a missing or doubled line, a line that is not on its link): verdict
+    `bestanden=nein`, every reason in `grund`. The part prints it instead of any finding."""
+    out = _Lines()
+    out.add("abnahme", "Messung", ("bestanden", "nein"), plattform=key, grund="; ".join(reasons))
+    return out.lines[0]

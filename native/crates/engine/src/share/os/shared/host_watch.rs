@@ -289,7 +289,12 @@ fn private_forms(places: &[std::path::PathBuf]) -> Vec<String> {
 /// mounted since (as published; the filter runs on the watch service
 /// thread and does no I/O). A folder answered `true` is not watched below.
 fn watch_excluded(base: &std::path::Path, rel: &str, excluded: &[String]) -> bool {
-    let path = normalized(&format!("{}/{rel}", base.to_string_lossy()));
+    // `base` can end in a separator (`PathBuf::join("")` of an export root
+    // whose target is the root itself): normalizing it first keeps `//` out
+    // of the joined text, which no place would match (Windows reports the
+    // changes below a vault drive through this filter; E11).
+    let base = normalized(&base.to_string_lossy());
+    let path = normalized(&format!("{base}/{rel}"));
     excluded.iter().any(|place| within(&path, place))
         || private_forms(&crate::share::fs_host_policy::vault_roots())
             .iter()

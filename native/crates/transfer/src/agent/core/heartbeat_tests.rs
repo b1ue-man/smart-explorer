@@ -50,6 +50,7 @@ fn remote_drive_task_heartbeat_retires_blackholed_live_channel_and_reconnects() 
     let address = listener.local_addr().unwrap();
     let heartbeats = Arc::new(AtomicUsize::new(0));
     let server_heartbeats = heartbeats.clone();
+    let (replacement_ready_tx, replacement_ready_rx) = mpsc::channel();
     let server = std::thread::spawn(move || {
         let (mut blackhole, _) = listener.accept().unwrap();
         let mut blackhole_reader = handshake(&mut blackhole);
@@ -61,6 +62,9 @@ fn remote_drive_task_heartbeat_retires_blackholed_live_channel_and_reconnects() 
 
         let (mut replacement, _) = listener.accept().unwrap();
         let mut replacement_reader = handshake(&mut replacement);
+        // The replacement is up and nothing has closed it yet. The client
+        // reads its counters at this point (see the assertions below).
+        replacement_ready_tx.send(()).unwrap();
         loop {
             let (id, request) = read_frame(&mut replacement_reader).unwrap().unwrap();
             match request {
@@ -93,9 +97,16 @@ fn remote_drive_task_heartbeat_retires_blackholed_live_channel_and_reconnects() 
     let started = Instant::now();
     assert!(backend.rename("/source", "/destination").is_err());
     assert!(started.elapsed() < Duration::from_secs(3));
-    assert!(backend.list_dir("/").unwrap().is_empty());
+    // Count the blackhole's reconnect before ListDir. The server ends the
+    // replacement right after answering ListDir; the replacement's heartbeat
+    // then reconnects once more, which is not part of this property. The
+    // timeout only guards against a hang when the replacement never appears.
+    replacement_ready_rx
+        .recv_timeout(Duration::from_secs(10))
+        .unwrap();
     assert_eq!(heartbeats.load(Ordering::SeqCst), 1);
     assert_eq!(reconnects.load(Ordering::SeqCst), 1);
+    assert!(backend.list_dir("/").unwrap().is_empty());
     drop(backend);
     server.join().unwrap();
 }
@@ -292,8 +303,12 @@ fn remote_drive_task_metadata_timeout_drains_old_mutation_without_poisoning_repl
     let next = connection
         .safe_call_timeout(Frame::TryExists("/".into()), Duration::from_millis(400))
         .unwrap();
+    // The replacement itself answered, so the request did not use a third
+    // connection. The reconnect count is not read again here: the server ends
+    // the replacement right after this answer, and a background heartbeat may
+    // then replace the closed connection (count 2), which is not part of this
+    // property. The count was fixed before the request, above.
     assert!(matches!(next, Frame::Exists(true)));
-    assert_eq!(reconnects.load(Ordering::SeqCst), 1);
     drop(connection);
     server.join().unwrap();
 }

@@ -139,4 +139,13 @@ fn review_task_watch_filter_drops_the_app_data_folder_and_only_that() {
     ] {
         assert!(!watch_excluded(home, &outside, &excluded), "{outside}");
     }
+    // A watch root that is its export root itself ends in a separator
+    // (`join("")`); the decision stays the same.
+    let with_separator = home.join("");
+    assert!(watch_excluded(&with_separator, &name, &excluded), "{name}");
+    assert!(
+        watch_excluded(&with_separator, &format!("{name}/identity.json"), &excluded),
+        "{name}/identity.json"
+    );
+    assert!(!watch_excluded(&with_separator, "a.txt", &excluded));
 }

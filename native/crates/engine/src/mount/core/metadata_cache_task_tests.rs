@@ -17,6 +17,8 @@ struct MetadataBackend {
     lists: AtomicUsize,
     list_paths: Mutex<Vec<String>>,
     list_delay: Duration,
+    /// `None` keeps the trait default, `rayon::current_num_threads()`.
+    pinned_width: Option<usize>,
 }
 
 impl MetadataBackend {
@@ -51,10 +53,11 @@ impl MetadataBackend {
             lists: AtomicUsize::new(0),
             list_paths: Mutex::new(Vec::new()),
             list_delay,
+            pinned_width: None,
         })
     }
 
-    fn wide_tree(children: usize) -> Arc<Self> {
+    fn wide_tree(children: usize, pinned_width: Option<usize>) -> Arc<Self> {
         let mut metadata = HashMap::from([("/".into(), directory("/"))]);
         let mut listings = HashMap::new();
         let mut root = Vec::new();
@@ -78,6 +81,7 @@ impl MetadataBackend {
             lists: AtomicUsize::new(0),
             list_paths: Mutex::new(Vec::new()),
             list_delay: Duration::ZERO,
+            pinned_width,
         })
     }
 }
@@ -89,6 +93,10 @@ impl Backend for MetadataBackend {
 
     fn root_display(&self) -> String {
         "/".into()
+    }
+
+    fn parallelism(&self) -> usize {
+        self.pinned_width.unwrap_or_else(rayon::current_num_threads)
     }
 
     fn list_dir(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
@@ -216,7 +224,7 @@ fn remote_drive_task_preload_is_complete_depth_bounded_and_keeps_admission_live(
 fn remote_drive_task_startup_walk_is_root_only_and_background_batches_are_bounded() -> io::Result<()>
 {
     let temporary = tempfile::tempdir()?;
-    let backend = MetadataBackend::wide_tree(12);
+    let backend = MetadataBackend::wide_tree(12, None);
     let handle: BackendHandle = backend.clone();
     let engine = MountEngine::open_host_cache(
         MountRuntimeConfig::new(
@@ -257,9 +265,11 @@ fn remote_drive_task_startup_walk_is_root_only_and_background_batches_are_bounde
         ]
     );
     // Case "background stop": a background preload stops between two targets.
+    // One worker: with several, a target that already passed the stop check
+    // still starts, so the count after the stop would depend on scheduling.
     fn background_stop() -> io::Result<()> {
         let temporary = tempfile::tempdir()?;
-        let backend = MetadataBackend::wide_tree(12);
+        let backend = MetadataBackend::wide_tree(12, Some(1));
         let handle: BackendHandle = backend.clone();
         let engine = MountEngine::open_host_cache(
             MountRuntimeConfig::new(

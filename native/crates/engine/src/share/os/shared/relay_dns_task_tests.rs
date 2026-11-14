@@ -15,7 +15,7 @@ use std::net::Ipv4Addr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use iroh::endpoint::{presets, Connection, PortmapperConfig, RemoteKeyGate};
+use iroh::endpoint::{presets, Connection, ConnectionError, PortmapperConfig, RemoteKeyGate};
 use iroh::{Endpoint, EndpointAddr, TransportAddr};
 
 use crate::share::identity::code_renewal_registry as registry;
@@ -62,6 +62,15 @@ fn direct_addr(endpoint: &Endpoint) -> EndpointAddr {
 
 /// One connection attempt of `client` to `server`: the connection each side
 /// completed, if any.
+///
+/// In TLS 1.3 the client finishes its handshake when it sends its own
+/// Finished, in the flight that carries its certificate, so noq reports the
+/// dialer as connected before the server has verified that certificate
+/// (`vendor/noq-proto-1.3.0/src/connection/mod.rs`, `Event::Connected` after
+/// the client branch). A dialer whose key the host's gate refuses therefore
+/// first holds a connection that the host then aborts with a TLS alert; it
+/// counts as refused (`refused_by_host`). The host side is unaffected: its
+/// handshake fails, so `accepted` stays `None`.
 async fn handshake(
     client: &Endpoint,
     server: &Endpoint,
@@ -82,7 +91,28 @@ async fn handshake(
             .ok()
             .and_then(Result::ok)
     };
-    tokio::join!(dialing, accepting)
+    let (dialed, accepted) = tokio::join!(dialing, accepting);
+    let dialed = match (dialed, &accepted) {
+        (Some(conn), None) => refused_by_host(conn).await,
+        (dialed, _) => dialed,
+    };
+    (dialed, accepted)
+}
+
+/// `conn` unless the host aborts it with a TLS alert (a `CONNECTION_CLOSE`
+/// with a crypto error code, 0x100 to 0x1ff, RFC 9001 section 4.8) within
+/// `HANDSHAKE_LIMIT`. Every other end keeps the connection as completed, so a
+/// handshake that is not refused by the gate still fails the assertions.
+async fn refused_by_host(conn: Connection) -> Option<Connection> {
+    let end = tokio::time::timeout(HANDSHAKE_LIMIT, conn.closed()).await;
+    match end {
+        Ok(ConnectionError::ConnectionClosed(close))
+            if (0x100..0x200).contains(&u64::from(close.error_code)) =>
+        {
+            None
+        }
+        _ => Some(conn),
+    }
 }
 
 /// The relations of a Share node without any grant, contact or room.

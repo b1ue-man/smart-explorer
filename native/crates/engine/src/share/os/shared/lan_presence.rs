@@ -53,6 +53,9 @@ pub struct LanAnnouncement {
 mod retiring;
 pub use retiring::RetiringLanAnnouncement;
 use retiring::{same_proof, same_records};
+#[path = "lan_presence_queue.rs"]
+mod queue;
+use queue::send_when_room;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LanEvent {
@@ -155,7 +158,7 @@ impl LanPresence {
         }
         if let Some((fullnames, _, _)) = guard.take() {
             for fullname in fullnames {
-                let _ = self.daemon.unregister(&fullname);
+                let _ = send_when_room(|| self.daemon.unregister(&fullname));
             }
         }
         let mut records = Vec::new();
@@ -184,7 +187,7 @@ impl LanPresence {
                 Err(error) => {
                     // Never leave a record behind that no later call removes.
                     for fullname in fullnames {
-                        let _ = self.daemon.unregister(&fullname);
+                        let _ = send_when_room(|| self.daemon.unregister(&fullname));
                     }
                     return Err(error);
                 }
@@ -211,8 +214,7 @@ impl LanPresence {
             .map_err(|error| format!("mDNS-Ankuendigung ungueltig: {error}"))?
             .enable_addr_auto();
         let fullname = info.get_fullname().to_string();
-        self.daemon
-            .register(info)
+        send_when_room(|| self.daemon.register(info.clone()))
             .map_err(|error| format!("mDNS-Ankuendigung fehlgeschlagen: {error}"))?;
         Ok(fullname)
     }
@@ -221,7 +223,7 @@ impl LanPresence {
         if let Ok(mut guard) = self.announced.lock() {
             if let Some((fullnames, _, _)) = guard.take() {
                 for fullname in fullnames {
-                    let _ = self.daemon.unregister(&fullname);
+                    let _ = send_when_room(|| self.daemon.unregister(&fullname));
                 }
             }
         }
@@ -231,7 +233,7 @@ impl LanPresence {
 impl Drop for LanPresence {
     fn drop(&mut self) {
         self.withdraw();
-        let _ = self.daemon.shutdown();
+        let _ = send_when_room(|| self.daemon.shutdown());
     }
 }
 

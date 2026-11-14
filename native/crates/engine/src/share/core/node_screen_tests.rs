@@ -145,18 +145,47 @@ fn screen_task_pair_bench_tiles() {
     assert!(registry.is_empty());
 }
 
+/// `bench_on` with `count` resets of the host's picture stream injected
+/// `after` the session was opened (not after the test began: the opening of
+/// a session takes as long as the machine lets it, and a reset before the
+/// viewer showed its first picture is no disruption the viewer can measure).
+/// Also returns how long the opening took.
+fn bench_with_resets(
+    pair: &ScreenPair,
+    seconds: u32,
+    after: Duration,
+    count: u32,
+) -> (BenchReport, Duration) {
+    let started = std::time::Instant::now();
+    let session = pair.open(&test_picture(SessionMode::View), |_| {}).unwrap();
+    let opened = started.elapsed();
+    let resets = pair.host.0.screen.inject_resets.clone();
+    let injector = std::thread::spawn(move || {
+        std::thread::sleep(after);
+        resets.store(count, Ordering::Release);
+    });
+    let report = pair
+        .viewer
+        .0
+        .block_on(bench::run(
+            session,
+            options(seconds),
+            &crate::screen::core::codec_registry::CodecRegistry::builtin(),
+        ))
+        .unwrap();
+    injector.join().unwrap();
+    (report, opened)
+}
+
 #[test]
 fn screen_task_recovery_after_injected_reset() {
     let pair = ScreenPair::new(Allow, Off);
-    let resets = pair.host.0.screen.inject_resets.clone();
-    let injector = std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(1200));
-        resets.store(1, Ordering::Release);
-    });
-    let report = bench_on(&pair, 4);
-    injector.join().unwrap();
+    let (report, opened) = bench_with_resets(&pair, 4, Duration::from_millis(1200), 1);
     assert_eq!(report.corrupt_frames, 0, "{report:?}");
-    assert!(!report.recoveries.is_empty(), "{report:?}");
+    assert!(
+        !report.recoveries.is_empty(),
+        "opening took {opened:?}: {report:?}"
+    );
     assert!(
         report.recoveries.iter().all(|ms| *ms <= 1000.0),
         "{report:?}"
@@ -172,13 +201,7 @@ fn screen_task_reset_streams_free_slots() {
     // Six resets in a row: with four uni-stream slots the viewer must stop
     // each broken stream, or no picture stream after the fourth could open.
     let pair = ScreenPair::new(Allow, Off);
-    let resets = pair.host.0.screen.inject_resets.clone();
-    let injector = std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(700));
-        resets.store(6, Ordering::Release);
-    });
-    let report = bench_on(&pair, 5);
-    injector.join().unwrap();
+    let (report, _opened) = bench_with_resets(&pair, 5, Duration::from_millis(700), 6);
     assert_eq!(report.corrupt_frames, 0, "{report:?}");
     assert!(
         report.keyframes >= 2,

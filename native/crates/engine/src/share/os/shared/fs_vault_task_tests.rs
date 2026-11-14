@@ -66,11 +66,16 @@ fn fs_tresor_task_spellings_of_a_mounted_drive_are_private() {
     let secret = drive.join("Geheim");
     std::fs::create_dir_all(&secret).expect("vault folder");
     let _mount = PublishedMount::publish("fs-tresor-task-mount-2", &drive);
+    // `.` and `..` are names a path can fold only outside the Windows
+    // verbatim form (`\\?\` names every component literally, so `Geheim/./`
+    // is no name there at all); the canonical drive is verbatim on Windows, so
+    // those two spellings are built from its plain form, which the host folds.
+    let plain = PathBuf::from(secret.to_string_lossy().trim_start_matches(r"\\?\"));
     let mut spellings = vec![
         secret.clone(),
         PathBuf::from(format!("{}/", secret.display())),
-        PathBuf::from(format!("{}/./", secret.display())),
-        drive.join("Geheim").join("..").join("Geheim"),
+        PathBuf::from(format!("{}/./", plain.display())),
+        plain.join("..").join("Geheim"),
     ];
     spellings.extend(symlink_spelling(dir.path(), &secret));
     for spelling in &spellings {
@@ -78,6 +83,23 @@ fn fs_tresor_task_spellings_of_a_mounted_drive_are_private() {
         assert!(in_vault_drive(&text), "private spelling: {text}");
         let error = share_refusal(spelling).expect_err("refused spelling");
         assert_eq!(error.kind(), io::ErrorKind::PermissionDenied, "{text}");
+    }
+    // The literal verbatim spelling is no name on Windows: the file system
+    // refuses it before any folder is looked at, inside a mounted vault drive
+    // and beside it with the same error, so the refusal tells nothing about
+    // the vault.
+    #[cfg(windows)]
+    {
+        let beside = drive
+            .with_file_name("tresor-schreibweisen-offen")
+            .join("Geheim");
+        std::fs::create_dir_all(&beside).expect("sibling folder");
+        let inside = share_refusal(Path::new(&format!("{}/./", secret.display())))
+            .expect_err("the literal spelling is no name");
+        let outside = share_refusal(Path::new(&format!("{}/./", beside.display())))
+            .expect_err("the literal spelling is no name beside the vault");
+        assert_eq!(inside.kind(), outside.kind());
+        assert_ne!(inside.kind(), io::ErrorKind::PermissionDenied);
     }
 }
 

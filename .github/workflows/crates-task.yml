@@ -126,11 +126,13 @@ jobs:
         with:
           tool: nextest@0.9
 
+      # libxcb1-dev provides libxcb.so, the file `-lxcb` of the engine's test binary needs (see `s4`).
+      # This job linked without it (run 2026-11-14, ubuntu-24.04); the package is a safety margin.
       - name: Linux test packages
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential pkg-config xvfb libegl1 libgl1 libx11-6 libx11-xcb1 \
+          sudo apt-get install -y build-essential pkg-config libxcb1-dev xvfb libegl1 libgl1 libx11-6 libx11-xcb1 \
             libxcursor1 libxi6 libxkbcommon0 libxkbcommon-x11-0 libxrandr2
 
       - name: Runner resources and Defender state
@@ -333,11 +335,15 @@ jobs:
         with:
           python-version: '3.12'
 
+      # libxcb1-dev provides libxcb.so: the engine's lib test binary, built alone with
+      # `-p smart_explorer_engine` (speed profile), links `-lxcb`. Measured without it (run 2026-11-14):
+      # `rust-lld: error: unable to find library -lxcb` on ubuntu-24.04 and `/usr/bin/ld: cannot find -lxcb`
+      # on ubuntu-24.04-arm. The runtime package libxcb1 provides only libxcb.so.1, which `-lxcb` does not match.
       - name: Linux build packages
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential pkg-config
+          sudo apt-get install -y build-essential pkg-config libxcb1-dev
 
       - name: Runner
         run: python -c "import platform; print(platform.system(), platform.machine(), platform.platform())"
@@ -391,11 +397,12 @@ jobs:
         with:
           python-version: '3.12'
 
+      # libxcb1-dev: the same `-lxcb` link of the engine's lib test binary as in `s4` (measured without it).
       - name: Linux build packages and the traffic control tool
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential pkg-config iproute2
+          sudo apt-get install -y build-essential pkg-config libxcb1-dev iproute2
 
       - name: Runner
         run: python -c "import platform; print(platform.system(), platform.machine(), platform.platform())"
@@ -471,10 +478,12 @@ jobs:
         with:
           python-version: '3.12'
 
+      # libxcb1-dev as in `workspace` (a safety margin: this job builds `se` and the share server, not the
+      # engine's test binary; not measured without it).
       - name: Linux packages
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential pkg-config jq curl xvfb libegl1 libgl1 libx11-6 \
+          sudo apt-get install -y build-essential pkg-config libxcb1-dev jq curl xvfb libegl1 libgl1 libx11-6 \
             libx11-xcb1 libxcursor1 libxi6 libxkbcommon0 libxkbcommon-x11-0 libxrandr2
 
       - name: Code renewal across processes

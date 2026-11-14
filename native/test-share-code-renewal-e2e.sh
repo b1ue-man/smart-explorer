@@ -325,7 +325,10 @@ pair() {
   [[ "${endpoint_of[$label]}" == share://direct/* ]] || fail "$label: add-peer emitted no direct endpoint"
   wait_request_state "$se_bin" "$host_profile" "$request_id" \
     '.direction == "incoming" and .decision.state == "pending"' "host-sees-$label"
-  as "$se_bin" "$host_profile" share request accept "$request_id" --json >"$root/host-accept-$label.json"
+  # Since R2 (plan 2026-11-06) an accepted device gets no folder unless the acceptance or the
+  # direct code's rights name one ("Rechte offen"); the contact must see the exported folder.
+  as "$se_bin" "$host_profile" share request accept "$request_id" --folder Files --json \
+    >"$root/host-accept-$label.json"
   jq -e '.request.decision.state == "accepted" and .request.authorization.active == true' \
     >/dev/null <"$root/host-accept-$label.json" || fail "the host did not accept $label"
   wait_request_state "$binary" "$profile" "$request_id" \
