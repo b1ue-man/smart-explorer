@@ -209,7 +209,7 @@ fn send(ctx: &egui::Context, state: &Shared, id: String, decision: ApprovalDecis
             pending.sending = false;
             pending.read_at = None;
             match result {
-                Ok(()) => pending.requests.retain(|request| request.id.as_str() != id),
+                Ok(_) => pending.requests.retain(|request| request.id.as_str() != id),
                 Err(error) => pending.error = Some(format!("Antwort nicht übermittelt: {error}")),
             }
             thread_ctx.request_repaint();

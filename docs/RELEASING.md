@@ -341,7 +341,8 @@ Since 2026-11-08 (plan `docs/plaene/2026-11-08-offene-punkte/`) `part=suite` als
 parts. `s4` measures the share of encryption in a Share transfer (the ignored tests
 `s4_messung_task_*`, decision E30) on `ubuntu-24.04`, `ubuntu-24.04-arm` and `windows-2025`, one
 job per platform; it builds with `--profile speed`, because the development profile measures the
-QUIC code several times slower, prints exactly one line `S4-MESSUNG` and fails with the line
+QUIC code several times slower, prints exactly one line `S4-MESSUNG` (with `gezaehlt_mib`, the MiB of one
+counted Share run: 1024, or less on a runner that cannot move 3 GiB within the 60 s of the case) and fails with the line
 `S4-BEFUND` when encryption takes 10 % or more of a transfer. `e2e` (Linux) builds `se` and the
 share server and runs `native/test-share-code-renewal-e2e.sh`: the Direct-code renewal across real
 processes with an online contact, an offline contact that returns, the published v0.5.195 `se`

@@ -173,8 +173,6 @@ fn room_list(rooms: &[RoomProfile]) -> String {
         .join(", ")
 }
 
-/// Offers to stop: all, the one named by id or unique id prefix, or the only
-/// running offer when no selector is given.
 /// The replaced offers whose renewal in its pause a stop cancels (E49):
 /// every one without a selection and with `--all`, and exactly the one a
 /// selection names by its full id.
@@ -190,6 +188,8 @@ pub(super) fn renewal_stops(
         .collect()
 }
 
+/// Offers to stop: all, the one named by id or unique id prefix, or the only
+/// running offer when no selector is given.
 pub(super) fn select_offers(
     offers: &[OwnDiscoveryOffer],
     selector: Option<&str>,

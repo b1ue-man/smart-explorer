@@ -9,7 +9,7 @@ use crossbeam_channel::Receiver;
 
 use super::*;
 use crate::local_access::DirectoryHandle;
-use crate::watch::EventKind;
+use crate::watch::{Coverage, EventKind};
 
 const WAIT: Duration = Duration::from_secs(10);
 

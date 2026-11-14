@@ -20,6 +20,9 @@ pub(super) const MEASURED_BYTES: u64 = 1 << 30;
 const WARMUP_BYTES: u64 = 64 << 20;
 /// Blockgroesse der AEAD-Messung und Puffergroesse der Uebertragung (64 KiB).
 const BLOCK_BYTES: usize = 64 * 1024;
+/// Zeit, die die drei gezaehlten Share-Laeufe zusammen haben; Aufbau, Aufwaermlauf und Schliessen
+/// brauchen den Rest der 60 s von `CASE_BUDGET` (wie `COUNTED_RUNS` der Messung M1).
+const COUNTED_RUNS: Duration = Duration::from_secs(42);
 /// Schwelle fuer den Anteil Share-Durchsatz zu AEAD-Durchsatz in Prozent (E30).
 pub(super) const THRESHOLD_PERCENT: f64 = 10.0;
 /// ALPN, den nur diese Messung verwendet.
@@ -126,10 +129,31 @@ pub(super) fn aead_mib_s(aead: Aead) -> Result<f64, String> {
     Ok(median(runs))
 }
 
+/// Ergebnis der Share-Messung.
+pub(super) struct ShareResult {
+    /// Median der drei gezaehlten Laeufe in MiB/s.
+    pub(super) mib_s: f64,
+    /// MiB eines gezaehlten Laufs (1024, ausser der Runner ist dafuer zu langsam).
+    pub(super) counted_mib: u64,
+}
+
+/// Bytes eines gezaehlten Laufs auf einer Verbindung, die den Aufwaermlauf mit `warmup_mib_s`
+/// uebertragen hat: 1 GiB, oder, wo drei Laeufe zu 1 GiB bei dieser Rate nicht in
+/// `COUNTED_RUNS` passen, das groesste ganze Vielfache der Aufwaermgroesse, das passt
+/// (mindestens eines). Ein langsamer Runner misst dann trotzdem und meldet die gezaehlte
+/// Groesse, statt an `CASE_BUDGET` ohne Zeile zu enden (der Windows-Runner des ersten
+/// Suite-Laufs uebertrug 3 GiB nicht in 60 s). Die Schwelle aendert das nicht: der Anteil
+/// bleibt Share-Durchsatz geteilt durch AEAD-Durchsatz.
+fn counted_bytes(warmup_mib_s: f64) -> u64 {
+    let per_run = warmup_mib_s * COUNTED_RUNS.as_secs_f64() / 3.0 * 1024.0 * 1024.0;
+    let steps = (per_run / WARMUP_BYTES as f64).floor().max(1.0) as u64;
+    MEASURED_BYTES.min(steps.saturating_mul(WARMUP_BYTES))
+}
+
 /// Share-Durchsatz ueber Loopback in MiB/s: ein Aufwaermlauf (64 MiB, nicht gezaehlt), dann
-/// drei Uebertragungen zu je 1 GiB auf einer Verbindung; Ergebnis ist der Median. Die
-/// gesamte Messung endet nach `CASE_BUDGET`.
-pub(super) fn share_loopback_mib_s() -> Result<f64, String> {
+/// drei Uebertragungen zu je 1 GiB (`counted_bytes` fuer einen zu langsamen Runner) auf einer
+/// Verbindung; Ergebnis ist der Median. Die gesamte Messung endet nach `CASE_BUDGET`.
+pub(super) fn share_loopback_mib_s() -> Result<ShareResult, String> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -168,13 +192,15 @@ pub(super) fn messung_zeile(
     plattform: &str,
     aead: Aead,
     aead_mib_s: f64,
-    share_mib_s: f64,
+    share: &ShareResult,
 ) -> String {
-    let anteil = anteil_prozent(share_mib_s, aead_mib_s);
+    let anteil = anteil_prozent(share.mib_s, aead_mib_s);
     format!(
         "S4-MESSUNG plattform={plattform} verfahren={} aead_mib_s={aead_mib_s:.1} \
-         share_mib_s={share_mib_s:.1} anteil_prozent={anteil:.1}",
-        aead.name()
+         share_mib_s={:.1} anteil_prozent={anteil:.1} gezaehlt_mib={}",
+        aead.name(),
+        share.mib_s,
+        share.counted_mib
     )
 }
 
@@ -278,20 +304,25 @@ async fn transfer(sender: &Connection, receiver: &Connection, total: u64) -> Res
     received.map_err(|error| format!("Empfangen: {error}"))
 }
 
-async fn share_inner() -> Result<f64, String> {
+async fn share_inner() -> Result<ShareResult, String> {
     let server = endpoint().await?;
     let client = endpoint().await?;
     let (sender, receiver) = connected_pair(&server, &client).await?;
+    let warmup = Instant::now();
     transfer(&sender, &receiver, WARMUP_BYTES).await?;
+    let counted = counted_bytes(mib_s(WARMUP_BYTES, warmup.elapsed()));
     let mut runs = [0.0; 3];
     for run in &mut runs {
         let started = Instant::now();
-        transfer(&sender, &receiver, MEASURED_BYTES).await?;
-        *run = mib_s(MEASURED_BYTES, started.elapsed());
+        transfer(&sender, &receiver, counted).await?;
+        *run = mib_s(counted, started.elapsed());
     }
     sender.close(0u32.into(), b"s4 messung beendet");
     receiver.close(0u32.into(), b"s4 messung beendet");
     client.close().await;
     server.close().await;
-    Ok(median(runs))
+    Ok(ShareResult {
+        mib_s: median(runs),
+        counted_mib: counted >> 20,
+    })
 }

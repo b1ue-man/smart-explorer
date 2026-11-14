@@ -9,6 +9,7 @@ use crate::screen::core::host_codec_adapters::{AdmittedTilesEncoder, HostCodecPl
 use crate::screen::core::host_stage::StageRequest;
 use crate::screen::core::negotiate::{CodecChoice, CodecKind};
 use x11rb::protocol::xproto::{ConfigureWindowAux, CreateWindowAux, WindowClass};
+use x11rb::rust_connection::RustConnection;
 
 struct WindowOwner {
     connection: RustConnection,

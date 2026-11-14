@@ -44,9 +44,9 @@ fn s4_messung_task_aead_chacha20_poly1305() -> Result<(), String> {
 fn s4_messung_task_share_loopback_anteil() -> Result<(), String> {
     let aead = negotiated_aead()?;
     let aead_mib = aead_mib_s(aead)?;
-    let share_mib = share_loopback_mib_s()?;
-    let anteil = anteil_prozent(share_mib, aead_mib);
-    println!("{}", messung_zeile(&platform(), aead, aead_mib, share_mib));
+    let share = share_loopback_mib_s()?;
+    let anteil = anteil_prozent(share.mib_s, aead_mib);
+    println!("{}", messung_zeile(&platform(), aead, aead_mib, &share));
     assert!(
         anteil < THRESHOLD_PERCENT,
         "anteil_prozent={:.1} liegt nicht unter {:.1} (E30: Befund fuer den Klartextkanal)",

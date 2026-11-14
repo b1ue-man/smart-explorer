@@ -1377,7 +1377,7 @@ def part_agent():
 # they run alone, one after the other, with the profile that ships the release optimization.
 S4_THRESHOLD_PERCENT = 10.0
 S4_LINE = re.compile(r"S4-MESSUNG plattform=(\S+) verfahren=(\S+) aead_mib_s=([\d.]+) "
-                     r"share_mib_s=([\d.]+) anteil_prozent=([\d.]+)")
+                     r"share_mib_s=([\d.]+) anteil_prozent=([\d.]+) gezaehlt_mib=(\d+)")
 
 
 def part_s4():
@@ -1394,9 +1394,9 @@ def part_s4():
     if len(measured) != 1:
         summary(f"S4: expected exactly one S4-MESSUNG line, found {len(measured)}")
         return False
-    platform_name, method, aead, share, percent = measured[0].groups()
+    platform_name, method, aead, share, percent, counted = measured[0].groups()
     summary(f"S4-MESSUNG plattform={platform_name} verfahren={method} aead_mib_s={aead} share_mib_s={share} "
-            f"anteil_prozent={percent} schwelle_prozent={S4_THRESHOLD_PERCENT:.1f}")
+            f"anteil_prozent={percent} gezaehlt_mib={counted} schwelle_prozent={S4_THRESHOLD_PERCENT:.1f}")
     if float(percent) >= S4_THRESHOLD_PERCENT:
         summary(f"S4-BEFUND: on {platform_name} encryption takes {percent} % of a transfer, at or above the "
                 f"{S4_THRESHOLD_PERCENT:.0f} % threshold (E30): the plan owner decides on the plaintext channel.")
@@ -1470,7 +1470,7 @@ def verbindungen_group(vb, group, key, library, profiles):
             else:
                 passed = run(title,
                              ["cargo", "test", "--locked", "--profile", "speed", "-p", "smart_explorer_engine",
-                              "--lib", "--no-fail-fast", *tests, "--", "--ignored", "--show-output",
+                              "--lib", "--no-fail-fast", "--", *tests, "--ignored", "--show-output",
                               "--test-threads=1"],
                              env=env, expect=tests, collect=lines)
     finally:
