@@ -69,9 +69,12 @@ impl ShareIrohNode {
                 .map_err(eio)?
                 .map_err(|reason| io::Error::new(io::ErrorKind::Unsupported, reason))?;
                 // A right revoked meanwhile must not receive the fresh secret;
-                // the next revocation rotates it again (T-R2).
+                // the next revocation rotates it again (T-R2). E57: the sharing
+                // that se set up is switched off once no device steers any more.
                 if let Err(error) = self.require_steering(principal) {
-                    crate::rdp::host_setup::rotate_managed_credentials();
+                    crate::rdp::host_setup::coverage_ended(
+                        crate::share::access_steering::any_steering(),
+                    );
                     return Err(error);
                 }
                 Ok(AppsResult::RdpCredential {
@@ -136,3 +139,7 @@ async fn probe_v2() -> io::Result<crate::rdp::HostProbe> {
     host.version = crate::rdp::core::RDP_PROBE_VERSION_V2;
     Ok(host)
 }
+
+#[cfg(test)]
+#[path = "rdp_entzug_task_tests.rs"]
+mod rdp_entzug_task_tests;

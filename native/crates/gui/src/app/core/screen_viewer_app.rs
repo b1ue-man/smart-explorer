@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 use eframe::egui::{self, ViewportCommand};
 use eframe::egui_wgpu::{self, wgpu};
 
+use super::login_viewer::AutoLoginView;
 use super::screen_devices::GridScope;
 use super::screen_input_keys::{local_keys, LocalKey};
 use super::screen_pool::{preview_edge, to_tile, to_view, DEFAULT_PREVIEW_INTERVAL_MS};
@@ -24,6 +25,7 @@ use super::screen_view_widget::ViewParams;
 use super::screen_viewer_view::{device_list, Common, ViewState};
 use crate::screen::core::pixel_convert::FrameSize;
 use crate::screen::core::session_state::SessionState;
+use crate::share::login_transport::SwitchAction;
 
 /// How the viewer starts.
 #[derive(Clone)]
@@ -71,6 +73,8 @@ pub struct ScreenViewerApp {
     title: String,
     exit_chord_held: bool,
     fullscreen_hint_until: Option<Instant>,
+    /// E22: the paired device's login screen while its stream pauses.
+    login: AutoLoginView,
 }
 
 impl ScreenViewerApp {
@@ -115,6 +119,7 @@ impl ScreenViewerApp {
             title: String::new(),
             exit_chord_held: false,
             fullscreen_hint_until: None,
+            login: AutoLoginView::default(),
         }
     }
 
@@ -169,7 +174,23 @@ impl ScreenViewerApp {
                 }
             }
         }
-        let status = view.status_text();
+        let state = view.session.as_ref().map(|session| session.info().state);
+        if let Some(state) = state {
+            let target = &view.target;
+            let selector = target.device_id.as_deref().unwrap_or(&target.relation_id);
+            if self.login.observe(selector, state.key()) == SwitchAction::EnterLogin {
+                if let Some(session) = &view.session {
+                    view.widget.release_input(session);
+                }
+            }
+        }
+        let mut status = view.status_text();
+        if let Some(notice) = self.login.notice().filter(|_| !self.login.active()) {
+            if !status.is_empty() {
+                status.push_str(" · ");
+            }
+            status.push_str(notice);
+        }
         // Painted over the picture: as a status panel it changed the picture
         // area, every change sent a visibility report, the report invalidated
         // the picture and input — an endless black/picture loop while
@@ -236,6 +257,10 @@ impl ScreenViewerApp {
         egui::CentralPanel::default()
             .frame(egui::Frame::none())
             .show(ctx, |ui| {
+                if self.login.active() {
+                    self.login.show(ui);
+                    return;
+                }
                 let Some(session) = &view.session else {
                     ui.centered_and_justified(|ui| ui.label(&status));
                     return;
@@ -344,6 +369,7 @@ impl ScreenViewerApp {
     }
 
     fn to_grid(&mut self, ctx: &egui::Context) {
+        self.login.reset();
         let backend = self.common.backend.clone();
         let mut grid =
             ScreenTileGrid::new(self.scope.clone(), backend, self.common.devices.clone());
@@ -361,6 +387,7 @@ impl ScreenViewerApp {
     }
 
     fn to_view(&mut self, ctx: &egui::Context, target: ScreenTarget) {
+        self.login.reset();
         let display = Self::display_size(ctx);
         let tile = match &mut self.mode {
             Mode::Grid(grid) => grid.take_session(&target),

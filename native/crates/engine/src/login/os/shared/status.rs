@@ -33,7 +33,8 @@ pub fn installation_status() -> InstallationStatus {
     let activity = super::host_status::activity();
     InstallationStatus { state: state.into(), reason, installed_release, policy,
         service_runtime: activity.state.clone(), activity, limits: vec![
-            "Only an explicit administrative service installation grants pre-login access.".into(),
+            "Pre-login access needs the installed login service: „Bildschirm steuern: Erlauben“ sets it up with one operating-system approval per version, or an administrator installs it explicitly.".into(),
+            "A self-set grant names only the account that granted „Bildschirm steuern“; administrative grants stay as written.".into(),
             "The public machine target must be explicitly pinned; a normal device identity does not prove it.".into(),
             "Every operation is independently signed for its current boot, user, session, desktop, policy and sequence.".into(),
             "Five seconds without a new signed operation ends the broker bridge; status calls do not renew it.".into(),

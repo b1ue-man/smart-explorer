@@ -1,15 +1,25 @@
 //! GNOME 48+ runtime modes; never invoke `grdctl --system`, which uses pkexec.
+//! E29 (M11): the sharing that se sets up listens only during a session. Its
+//! switch per session, clock and crash record live in `gnome_session.rs`; the
+//! loopback connection rows in `gnome_net.rs`.
 use super::inventory::{self, attach_listener, certificate, service, unit};
+use crate::rdp::host_setup::OFF_BETWEEN_SESSIONS;
 use crate::rdp::{
     core::{HostKind, HostProbe, HostService, SessionMode, SetupState},
     os::shared::process::{capture, find_tool},
 };
 use std::path::Path;
 
+#[path = "gnome_net.rs"]
+mod net;
+#[path = "gnome_session.rs"]
+mod session;
+
 pub(super) fn probe(report: &mut HostProbe) {
     let Some(grdctl) = find_tool(&["grdctl"]) else {
         return;
     };
+    session::release_orphan(&grdctl);
     for (id, flag, mode, unit_name, user) in [
         (
             "gnome-console",
@@ -93,10 +103,10 @@ pub(super) fn probe(report: &mut HostProbe) {
 }
 
 /// Evidence on a GNOME desktop sharing that se set up and that listens now.
-pub(super) const NETWORK_REACH_EVIDENCE: &str = "GNOME desktop sharing set up by se listens on every network interface while a device may steer this screen: GNOME offers no loopback binding, so devices in the local network reach its RDP login directly; se itself connects through the authenticated tunnel";
+pub(super) const NETWORK_REACH_EVIDENCE: &str = "GNOME desktop sharing set up by se listens on every network interface during a se remote-desktop session: GNOME offers no loopback binding, so devices in the local network reach its RDP login directly during that session; se itself connects through the authenticated tunnel";
 /// The same fact for the person, in the report's diagnostics that every
 /// surface showing this device's Remote Desktop state lists.
-pub(super) const NETWORK_REACH_NOTE: &str = "Remote Desktop dieses Geräts ist im lokalen Netz erreichbar, solange ein Gerät „Bildschirm steuern: Erlauben“ hat: die von se eingerichtete GNOME-Desktopfreigabe kennt keine Bindung an Loopback. se selbst verbindet über den geschützten Tunnel.";
+pub(super) const NETWORK_REACH_NOTE: &str = "Remote Desktop dieses Geräts ist im lokalen Netz erreichbar, nur während einer Sitzung: die von se eingerichtete GNOME-Desktopfreigabe kennt keine Bindung an Loopback und ist außerhalb einer Sitzung ausgeschaltet. se selbst verbindet über den geschützten Tunnel.";
 
 /// Marks each GNOME desktop sharing whose credentials se manages and whose
 /// listener the probe proved: it is reachable beyond loopback (review
@@ -170,8 +180,11 @@ fn apply_status(found: &mut HostService, status: &str, unit: &inventory::Unit) {
             Some("GNOME effective RDP port is not proved by status and process sockets".into());
     }
     if !enabled {
-        found.unavailable_reason =
-            Some("GNOME RDP backend is disabled or its status is unreadable".into());
+        found.unavailable_reason = Some(if found.managed_credentials {
+            OFF_BETWEEN_SESSIONS.into()
+        } else {
+            "GNOME RDP backend is disabled or its status is unreadable".into()
+        });
     }
     if let Some(cert) = cert {
         certificate(found, Path::new(&cert));
@@ -303,8 +316,9 @@ fn ensure_tls(grdctl: &Path) -> Result<(), SetupState> {
 }
 
 /// GNOME desktop sharing set up by the session's own service (design 3.3):
-/// TLS, RDP enabled with control, the user unit running, fresh random
-/// credentials that nobody holds yet.
+/// TLS, control allowed, the user unit running, fresh random credentials that
+/// nobody holds yet. E29: RDP stays switched off; a session start switches it
+/// on (`issue_credential`).
 pub(super) fn configure(device_id: &str) -> SetupState {
     match configure_steps(device_id) {
         Ok(()) => SetupState::Done,
@@ -315,7 +329,6 @@ pub(super) fn configure(device_id: &str) -> SetupState {
 fn configure_steps(device_id: &str) -> Result<(), SetupState> {
     let grdctl = grdctl()?;
     ensure_tls(&grdctl)?;
-    grdctl_run(&grdctl, &["rdp", "enable"], None)?;
     grdctl_run(&grdctl, &["rdp", "disable-view-only"], None)?;
     let systemctl =
         find_tool(&["systemctl"]).ok_or_else(|| SetupState::Failed("systemctl_missing".into()))?;
@@ -329,10 +342,12 @@ fn configure_steps(device_id: &str) -> Result<(), SetupState> {
 }
 
 /// New credentials for one RDP start (`RdpCredential`); se keeps no copy.
+/// E29: the start also switches the sharing on and waits for its listener.
 pub(super) fn issue_credential(device_id: &str) -> Result<(String, String), String> {
     let username = managed_username(device_id);
     let password = random_password()?;
     set_credentials(&username, &password).map_err(|state| state.text())?;
+    session::switch_on()?;
     Ok((username, password))
 }
 
@@ -345,7 +360,7 @@ pub fn withdraw() -> Result<bool, String> {
         return Ok(false);
     }
     let grdctl = grdctl().map_err(|state| state.text())?;
-    grdctl_run(&grdctl, &["rdp", "disable"], None).map_err(|state| state.text())?;
+    session::withdraw(&grdctl).map_err(|state| state.text())?;
     Ok(true)
 }
 
@@ -359,6 +374,35 @@ pub fn rotate_credential(device_id: &str) -> Result<(), String> {
     set_credentials(&username, &password).map_err(|state| state.text())
 }
 
+/// The value of `key` in the `RDP:` block of `grdctl status`.
+fn rdp_setting<'a>(status: &'a str, key: &str) -> Option<&'a str> {
+    let mut rdp = false;
+    for line in status.lines() {
+        if line == "RDP:" {
+            rdp = true;
+            continue;
+        }
+        if !line.starts_with(char::is_whitespace) && line.ends_with(':') {
+            rdp = false;
+        }
+        let value = line
+            .trim()
+            .strip_prefix(key)
+            .and_then(|rest| rest.strip_prefix(':'));
+        if let (true, Some(value)) = (rdp, value) {
+            return Some(value.trim());
+        }
+    }
+    None
+}
+
+fn rdp_enabled(status: &str) -> bool {
+    rdp_setting(status, "Status") == Some("enabled")
+}
+
 #[cfg(test)]
 #[path = "gnome_reach_tests.rs"]
 mod gnome_reach_tests;
+#[cfg(test)]
+#[path = "rdp_netz_task_tests.rs"]
+mod rdp_netz_task_tests;

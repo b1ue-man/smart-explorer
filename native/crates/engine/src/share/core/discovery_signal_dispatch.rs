@@ -203,6 +203,7 @@ impl DiscoverySignalRuntime {
         if self.state.exchanges.len() + self.state.pending_publisher_count()
             >= MAX_ACTIVE_DISCOVERY_EXCHANGES
         {
+            self.state.remember_closed_exchange(exchange_id.clone());
             self.reject_exchange(signal, &exchange_id)?;
             send_discovery_event(
                 events,
@@ -403,3 +404,7 @@ impl DiscoverySignalRuntime {
         let _ = events.send(ShareEvent::Error(error.into()));
     }
 }
+
+#[cfg(test)]
+#[path = "discovery_dispatch_grenze_task_tests.rs"]
+mod grenze_task_tests;

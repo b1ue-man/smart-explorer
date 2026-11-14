@@ -42,6 +42,17 @@ struct Pending {
     proved: bool,
 }
 
+/// Whose capabilities a prelude admits.
+#[derive(Clone, Copy)]
+pub(super) enum Authority<'a> {
+    /// The worker IPC: the daemon token and the tokens of its drive hosts.
+    Worker(&'a ShareHost),
+    /// A window channel (`ipc_window_channel.rs`, E46): only its own token,
+    /// in the field `token`. Its unauthenticated connections wait here like
+    /// those of the worker IPC, without a client thread or a permit.
+    Window,
+}
+
 #[derive(Default)]
 pub(super) struct AdmissionQueue {
     pending: VecDeque<Pending>,
@@ -52,14 +63,14 @@ impl AdmissionQueue {
         &mut self,
         stream: TcpStream,
         peer: SocketAddr,
-        host: &ShareHost,
+        authority: Authority<'_>,
         token: &str,
         mut serve: impl FnMut(TcpStream),
     ) {
         if !peer.ip().is_loopback() || stream.set_nonblocking(true).is_err() {
             return;
         }
-        match inspect(&stream, |hint| authorized(hint, host, token)) {
+        match inspect(&stream, |hint| authorized(hint, authority, token)) {
             Ok(Some(Verdict::Admit)) => serve(stream),
             Ok(Some(Verdict::Refuse)) => refuse(stream),
             Ok(Some(Verdict::Prove(length, nonce))) => {
@@ -87,7 +98,7 @@ impl AdmissionQueue {
 
     pub(super) fn poll(
         &mut self,
-        host: &ShareHost,
+        authority: Authority<'_>,
         token: &str,
         mut serve: impl FnMut(TcpStream),
     ) -> bool {
@@ -99,7 +110,7 @@ impl AdmissionQueue {
             if Instant::now() >= pending.deadline {
                 continue;
             }
-            match inspect(&pending.stream, |hint| authorized(hint, host, token)) {
+            match inspect(&pending.stream, |hint| authorized(hint, authority, token)) {
                 Ok(Some(Verdict::Admit)) => serve(pending.stream),
                 Ok(Some(Verdict::Refuse)) => refuse(pending.stream),
                 // One proof per connection; a second request is dropped.
@@ -250,8 +261,10 @@ fn answer_proof(stream: &TcpStream, length: usize, nonce: &[u8; 32], token: &str
 }
 
 /// Text of a refused capability. It names neither the token nor any field
-/// of the request.
-const REFUSED: &str =
+/// of the request. A window channel answers a refused request with it too
+/// (`ipc_window_channel.rs`), so a request outside a window's scope reads
+/// like a wrong token.
+pub(super) const REFUSED: &str =
     "Daemon-IPC-Anfrage abgelehnt: die Berechtigung ist ungueltig oder gehoert zu keinem laufenden Laufwerk-Host";
 
 /// Answers a refused capability on the still nonblocking stream. The
@@ -287,9 +300,17 @@ fn refuse(mut stream: TcpStream) {
     let _ = stream.shutdown(Shutdown::Write);
 }
 
-fn authorized(hint: &Hint, host: &ShareHost, expected_token: &str) -> bool {
+fn authorized(hint: &Hint, authority: Authority<'_>, expected_token: &str) -> bool {
     let (Some(kind), Some(token)) = (hint.kind.as_deref(), hint.token.as_deref()) else {
         return false;
+    };
+    let host = match authority {
+        Authority::Worker(host) => host,
+        // A window token is no capability of a drive host.
+        Authority::Window => {
+            return hint.token_field.as_deref() == Some("token")
+                && constant_time_eq(expected_token, token);
+        }
     };
     match kind {
         "mount_host_attach" => {
@@ -326,7 +347,7 @@ fn authorized(hint: &Hint, host: &ShareHost, expected_token: &str) -> bool {
     }
 }
 
-fn constant_time_eq(left: &str, right: &str) -> bool {
+pub(super) fn constant_time_eq(left: &str, right: &str) -> bool {
     if left.len() != right.len() {
         return false;
     }

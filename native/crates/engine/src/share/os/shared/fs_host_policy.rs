@@ -27,6 +27,9 @@ use super::{
     fs_host_destructive, fs_local_paths, fs_path_adapter,
     fs_policy::{normalized, private_path, system_write, within},
 };
+#[cfg(windows)]
+#[path = "../windows/vault_identity.rs"]
+mod vault_identity;
 
 #[derive(Clone)]
 pub(super) struct TargetPolicy {
@@ -226,6 +229,8 @@ pub(in crate::share) fn vault_roots() -> Vec<PathBuf> {
 
 /// Whether `path` (a local host path, any spelling) lies in an unlocked
 /// vault drive, compared as given and canonical like the private roots.
+/// The spelling check comes first; where it does not decide, the identity of
+/// the object decides (Windows, E35).
 pub(in crate::share) fn in_vault_drive(path: &str) -> bool {
     let forms = with_vault_forms(&Arc::new(Vec::new()));
     if forms.is_empty() {
@@ -238,6 +243,20 @@ pub(in crate::share) fn in_vault_drive(path: &str) -> bool {
     candidates
         .iter()
         .any(|candidate| forms.iter().any(|root| within(candidate, root)))
+        || identity_in_vault(Path::new(path))
+}
+
+/// Whether the object `path` names lies in an unlocked vault drive by identity
+/// (volume and file ID of its nearest existing folder, E35). Platforms without
+/// this check decide by the spelling check of `in_vault_drive` alone.
+#[cfg(windows)]
+pub(in crate::share) fn identity_in_vault(path: &Path) -> bool {
+    vault_identity::in_vault_identity(path, &vault_roots())
+}
+
+#[cfg(not(windows))]
+pub(in crate::share) fn identity_in_vault(_path: &Path) -> bool {
+    false
 }
 
 /// `constant` plus the normalized spellings (as given and canonical) of the
@@ -353,3 +372,7 @@ pub(super) fn denied() -> io::Error {
         "Pfad ist nicht freigegeben",
     )
 }
+
+#[cfg(test)]
+#[path = "fs_vault_task_tests.rs"]
+mod task_tests;

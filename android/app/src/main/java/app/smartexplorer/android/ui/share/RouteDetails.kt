@@ -21,6 +21,7 @@ import androidx.lifecycle.repeatOnLifecycle
 import app.smartexplorer.android.api.ConnectionRoute
 import app.smartexplorer.android.api.DeviceRoute
 import app.smartexplorer.android.api.RouteApi
+import app.smartexplorer.android.api.RouteBudget
 import app.smartexplorer.android.api.RouteMeasurement
 import app.smartexplorer.android.api.RouteStatus
 import app.smartexplorer.android.core.CoreException
@@ -97,9 +98,14 @@ private fun ConnectionDetails(connection: ConnectionRoute) {
             budget.maxProbeAttempts?.let { Text("Maximale Probeversuche: $it; Retryintervalle: ${budget.retryIntervalsMs.joinToString(", ")} ms") }
             budget.directDeadlineMs?.let { Text("Direktfrist: $it ms ab Beginn dieser Netzgeneration") }
             budget.frozenCandidates?.let { Text("Eingefrorene Direktkandidaten: $it") }
+            droppedCandidatesLine(budget)?.let { Text(it) }
         }
     }
 }
+
+/** The dropped-candidate line of the route budget (F13): shown only when candidates were refused. */
+internal fun droppedCandidatesLine(budget: RouteBudget): String? =
+    budget.droppedCandidates?.let { "Verworfene Kandidaten über der Grenze: $it" }
 
 @Composable
 private fun MeasurementDetails(sample: RouteMeasurement) {

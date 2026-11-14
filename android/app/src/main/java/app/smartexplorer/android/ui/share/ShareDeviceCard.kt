@@ -19,6 +19,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.smartexplorer.android.R
 import app.smartexplorer.android.api.CodeRenewalInfo
+import app.smartexplorer.android.api.DiscoveryOffer
+import app.smartexplorer.android.api.RenewalWaiting
 import app.smartexplorer.android.api.RightsPresetInfo
 import app.smartexplorer.android.api.SHARE_DIRECT
 import app.smartexplorer.android.api.ShareStatus
@@ -118,8 +120,12 @@ internal fun ThisDeviceCard(
                     style = MaterialTheme.typography.bodySmall,
                     modifier = inset,
                 )
+                RenewedOfferNotice(offer, inset)
                 OutlinedButton(onClick = { actions.stopDiscoverable(offer.offerId) }, modifier = inset) { Text("Suchbar beenden") }
             } else {
+                status.discovery.renewalWaiting?.let { waiting ->
+                    RenewalWaitingNotice(waiting, nowMs, inset) { actions.stopDiscoverable(waiting.replaces) }
+                }
                 Button(onClick = actions.makeDiscoverable, modifier = inset) { Text("Suchbar machen") }
             }
             if (identity.directCode.isNotBlank()) {
@@ -151,6 +157,29 @@ internal fun ThisDeviceCard(
             }
         }
     }
+}
+
+/**
+ * E49: an offer the worker published again after too many failed PIN attempts: the hint that someone
+ * may have been guessing, and the new PIN to read out; the texts come from the worker.
+ */
+@Composable
+internal fun RenewedOfferNotice(offer: DiscoveryOffer, modifier: Modifier = Modifier) {
+    if (!offer.renewedAfterFailedAttempts) return
+    offer.hint?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error, modifier = modifier) }
+    offer.pin?.let { Text("Neue PIN: $it", style = MaterialTheme.typography.titleMedium, modifier = modifier) }
+}
+
+/**
+ * E49: an offer that ended after too many failed PIN attempts waits for its renewal with a new PIN;
+ * the seconds until then, and „Nicht erneuern“, which stops the replaced offer so none follows.
+ */
+@Composable
+internal fun RenewalWaitingNotice(waiting: RenewalWaiting, nowMs: Long, modifier: Modifier = Modifier, onStop: () -> Unit) {
+    val left = ((waiting.dueMs - nowMs) / 1000).coerceAtLeast(0)
+    waiting.hint?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error, modifier = modifier) }
+    Text("Neues Angebot mit neuer PIN in $left s", style = MaterialTheme.typography.bodyMedium, modifier = modifier)
+    OutlinedButton(onClick = onStop, modifier = modifier) { Text("Nicht erneuern") }
 }
 
 /**

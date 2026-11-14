@@ -45,7 +45,7 @@ pub(super) fn gateway_account() -> io::Result<(u32, u32)> {
     }
     Ok((record.pw_uid, record.pw_gid))
 }
-fn peer_uid(stream: &UnixStream) -> io::Result<u32> {
+pub(super) fn peer_uid(stream: &UnixStream) -> io::Result<u32> {
     let mut credentials: libc::ucred = unsafe { std::mem::zeroed() };
     let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
     let result = unsafe {
@@ -128,6 +128,10 @@ pub fn run_broker() -> io::Result<()> {
         nonce()?
     );
     super::super::shared::host_status::publish("idle", &boot, &initial.policy)?;
+    // The self-setup's grant channel (E21); login keeps working without it.
+    if let Err(error) = super::self_platform::start_grant_listener(&STOP) {
+        eprintln!("login grant channel unavailable: {error}");
+    }
     super::readiness::notify()?;
     let mut status_at = std::time::Instant::now() - Duration::from_secs(2);
     while !STOP.load(Ordering::SeqCst) {

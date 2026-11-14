@@ -95,6 +95,10 @@ fn serve() -> io::Result<()> {
     // Broker restart and OS boot both invalidate every old signed request.
     let boot = format!("{}:{}", unsafe { GetTickCount64() }, nonce()?);
     let mut pipe = pipe::create(PIPE, Some(&install.policy.gateway_identity))?;
+    // The self-setup's grant channel (E21); login keeps working without it.
+    if let Err(error) = super::self_platform::start_grant_pipe(&STOP) {
+        eprintln!("login grant channel unavailable: {error}");
+    }
     report(SERVICE_RUNNING, 0);
     while !STOP.load(Ordering::SeqCst) {
         super::super::shared::host_status::publish("idle", &boot, &installation::policy()?)?;

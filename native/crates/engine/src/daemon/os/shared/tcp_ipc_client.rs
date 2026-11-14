@@ -4,6 +4,7 @@ use super::ipc_protocol::{
     read_response, set_stream_timeout, write_request, IpcRequest, IpcResponse,
 };
 use crate::share::{
+    auto_forward::MappedService,
     tcp_forward::{ListenerAdmission, TcpStart, TunnelId, TunnelView},
     PeerOpenTarget,
 };
@@ -211,6 +212,39 @@ pub fn tcp_close(id: TunnelId) -> Result<bool, String> {
         return Ok(false);
     }
     match exchange(TcpIpcRequest::Close { id }, Some(LOCAL_REPLY), || {})? {
+        TcpIpcReply::Closed { closed } => Ok(closed),
+        _ => Err("Unexpected TCP close reply".into()),
+    }
+}
+/// Desktop „Öffnen“ (E27): the worker opens the port that the device's
+/// current feed names, also above the automatic budget.
+pub fn tcp_open_service(
+    device_id: &str,
+    public_key: &str,
+    port: u16,
+) -> Result<MappedService, String> {
+    let request = TcpIpcRequest::OpenService {
+        device_id: device_id.to_string(),
+        public_key: public_key.to_string(),
+        port,
+    };
+    match exchange(request, Some(LOCAL_REPLY), || {})? {
+        TcpIpcReply::Service { mapping } => Ok(mapping),
+        _ => Err("Unexpected TCP open reply".into()),
+    }
+}
+/// Desktop „Schließen“ (E27): ends the service, which stays closed until
+/// `tcp_open_service`. `false` when the feed names no such port.
+pub fn tcp_close_service(device_id: &str, public_key: &str, port: u16) -> Result<bool, String> {
+    if super::ipc_storage::read_ipc_addr().is_none() {
+        return Ok(false);
+    }
+    let request = TcpIpcRequest::CloseService {
+        device_id: device_id.to_string(),
+        public_key: public_key.to_string(),
+        port,
+    };
+    match exchange(request, Some(LOCAL_REPLY), || {})? {
         TcpIpcReply::Closed { closed } => Ok(closed),
         _ => Err("Unexpected TCP close reply".into()),
     }

@@ -105,7 +105,9 @@ data class ShareExports(
  * Own running offer; [target] is `direct` or a room profile id. [rights] are the rights a device
  * gets that pairs with the offer, as the worker holds them (so they are right after a restart of
  * the app too); `null`: the device connects without rights and waits for its confirmation, and a
- * room's rights are the room's own.
+ * room's rights are the room's own. [renewedAfterFailedAttempts]: the worker published this offer
+ * again after too many failed PIN attempts; [hint] names it and [pin] is the new PIN to read out
+ * (both `null` for an ordinary offer).
  */
 @Serializable
 data class DiscoveryOffer(
@@ -114,6 +116,9 @@ data class DiscoveryOffer(
     val alias: String = "",
     val untilMs: Long = 0,
     val rights: Rights? = null,
+    val renewedAfterFailedAttempts: Boolean = false,
+    val hint: String? = null,
+    val pin: String? = null,
 )
 
 /** A device or room that is discoverable right now; [kind] `direct|room`. */
@@ -134,9 +139,23 @@ data class DiscoveryExchange(
     val message: String? = null,
 )
 
+/**
+ * E49: an own offer that ended after too many failed PIN attempts and goes out again with a new PIN
+ * at [dueMs], unless the person stops [replaces] first („Nicht erneuern“, [ShareApi.stopDiscoverable]).
+ * [hint] is the worker's text; `null` from a core predating it.
+ */
+@Serializable
+data class RenewalWaiting(
+    val replaces: String,
+    val alias: String = "",
+    val dueMs: Long = 0,
+    val hint: String? = null,
+)
+
 @Serializable
 data class ShareDiscovery(
     val offer: DiscoveryOffer? = null,
+    val renewalWaiting: RenewalWaiting? = null,
     val advertisements: List<DiscoveryAdvert> = emptyList(),
     val exchange: DiscoveryExchange? = null,
 )

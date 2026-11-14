@@ -7,11 +7,18 @@ use super::route_diagnostics::{milliseconds, RouteBudget};
 use super::route_state::{RouteClass, RoutePhase, RouteStatus};
 use std::collections::BTreeSet;
 use std::time::Duration;
+/// Cap on candidates admitted during the collection window. LAN paths are
+/// exempt (see `observe`); refused candidates are counted in
+/// `RouteBudget::dropped_candidates`.
 const MAX_FROZEN_CANDIDATES: usize = 128;
 
 #[cfg(test)]
 #[path = "batches_route_task_tests.rs"]
 pub mod batches_route_task_tests;
+
+#[cfg(test)]
+#[path = "unbelegt_route_cap_task_tests.rs"]
+mod unbelegt_route_cap_task_tests;
 
 #[path = "route_start.rs"]
 pub(super) mod route_start;
@@ -51,6 +58,8 @@ pub struct RoutePolicy {
     candidates: BTreeSet<String>,
     lan_candidates: BTreeSet<String>,
     initial_round: Option<String>,
+    /// A refused round candidate keeps the initial round open (`round_completed`).
+    round_refused: bool,
     chosen: Option<String>,
     had_route: bool,
     start: route_start::StartPhase,
@@ -75,6 +84,7 @@ impl RoutePolicy {
             candidates: BTreeSet::new(),
             lan_candidates: BTreeSet::new(),
             initial_round: None,
+            round_refused: false,
             chosen: None,
             had_route: false,
             start: route_start::StartPhase::default(),
@@ -114,18 +124,42 @@ impl RoutePolicy {
         round: Option<&RoundFacts>,
     ) -> Option<String> {
         if !self.frozen {
-            for candidate in paths.iter().filter(|p| p.class != RouteClass::Relay) {
-                if self.candidates.len() < MAX_FROZEN_CANDIDATES {
+            // LAN paths come first and are never refused: the LAN phase needs all of them.
+            for candidate in paths.iter().filter(|p| p.class == RouteClass::Lan) {
+                self.candidates.insert(candidate.snapshot_key.clone());
+                self.lan_candidates.insert(candidate.snapshot_key.clone());
+            }
+            // Refused remote candidates of this observation, each once: open paths and
+            // hints of one remote share its snapshot key, and a hinted round candidate
+            // arrives both as path and as round entry (`route_adapter.rs`).
+            let mut refused: BTreeSet<&str> = BTreeSet::new();
+            for candidate in paths
+                .iter()
+                .filter(|p| p.class != RouteClass::Relay && p.class != RouteClass::Lan)
+            {
+                if self.candidates.contains(&candidate.snapshot_key)
+                    || self.candidates.len() < MAX_FROZEN_CANDIDATES
+                {
                     self.candidates.insert(candidate.snapshot_key.clone());
-                    if candidate.class == RouteClass::Lan {
-                        self.lan_candidates.insert(candidate.snapshot_key.clone());
-                    }
+                } else {
+                    refused.insert(candidate.snapshot_key.as_str());
                 }
             }
             if let Some(round) = round {
-                let remaining = MAX_FROZEN_CANDIDATES.saturating_sub(self.candidates.len());
-                self.candidates
-                    .extend(round.candidates.iter().take(remaining).cloned());
+                if self.initial_round.as_deref() != Some(round.round.as_str()) {
+                    self.round_refused = false;
+                }
+                for key in &round.candidates {
+                    if self.candidates.contains(key) {
+                        continue;
+                    }
+                    if self.candidates.len() < MAX_FROZEN_CANDIDATES {
+                        self.candidates.insert(key.clone());
+                    } else {
+                        refused.insert(key.as_str());
+                        self.round_refused = true;
+                    }
+                }
                 self.initial_round = Some(round.round.clone());
                 self.budget.retry_intervals_ms = round
                     .retry_intervals
@@ -135,6 +169,7 @@ impl RoutePolicy {
                     .collect();
                 self.budget.max_probe_attempts = round.max_probe_attempts;
             }
+            self.budget.dropped_candidates = refused.len();
             if now_ms >= self.collection_until {
                 self.frozen = true;
                 self.budget.frozen_candidates = self.candidates.len();
@@ -197,7 +232,9 @@ impl RoutePolicy {
             return false;
         };
         // Later upgrade rounds neither end nor extend the frozen initial round.
+        // A round that refused a candidate of the cap never probed that candidate.
         self.initial_round.as_deref() == Some(round.round.as_str())
+            && !self.round_refused
             && round.exhausted
             && round.pending_path_opens == 0
             && round

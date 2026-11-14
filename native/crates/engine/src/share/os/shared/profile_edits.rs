@@ -2,7 +2,9 @@ use crate::share::{DirectContact, RoomProfile, ShareProfiles, ShareStatus};
 
 #[path = "profile_export_edits.rs"]
 mod export_edits;
-pub(in crate::share) use export_edits::{export_roots, refuse_vault_exports};
+pub(in crate::share) use export_edits::export_roots;
+// The drive host test of the worker (`mount_tresor_task_tests.rs`) checks it too.
+pub(crate) use export_edits::refuse_vault_exports;
 
 /// Rebase only user-owned configuration fields onto the latest daemon-owned
 /// profile. Runtime presence and lifecycle updates are intentionally left on

@@ -39,6 +39,10 @@ fn system_only_resolver() -> DnsResolver {
         .build()
 }
 
+#[cfg(test)]
+#[path = "relay_dns_task_tests.rs"]
+mod task_tests;
+
 #[derive(Clone, Debug)]
 struct SystemFirstResolver {
     /// Iroh's own resolver, reading the system DNS configuration only.
@@ -235,7 +239,7 @@ mod public_fallback_tests {
 
     /// The public resolvers of Iroh's default fallback tier: Cloudflare,
     /// Google and Quad9, IPv4 and IPv6.
-    const PUBLIC_RESOLVERS: [&str; 12] = [
+    pub(super) const PUBLIC_RESOLVERS: [&str; 12] = [
         "1.1.1.1",
         "1.0.0.1",
         "8.8.8.8",
@@ -251,7 +255,7 @@ mod public_fallback_tests {
     ];
 
     /// Every IP address `text` names, alone or as a socket address.
-    fn addresses_in(text: &str) -> Vec<IpAddr> {
+    pub(super) fn addresses_in(text: &str) -> Vec<IpAddr> {
         text.split(|c: char| !(c.is_ascii_hexdigit() || c == '.' || c == ':'))
             .filter_map(|token| {
                 token
@@ -263,7 +267,7 @@ mod public_fallback_tests {
     }
 
     /// The nameservers of the system configuration.
-    fn system_nameservers() -> Vec<IpAddr> {
+    pub(super) fn system_nameservers() -> Vec<IpAddr> {
         let text = std::fs::read_to_string("/etc/resolv.conf").unwrap_or_default();
         text.lines()
             .filter_map(|line| line.trim().strip_prefix("nameserver"))

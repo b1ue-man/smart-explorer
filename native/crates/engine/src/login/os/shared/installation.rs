@@ -1,4 +1,6 @@
 //! Read-only administrative trust anchors; no user updater or alternate path.
+//! The broker's grant channel (`self_channel.rs`) is the only writer of a
+//! policy besides the administrative and self-setup installers.
 use super::{super::platform, denied};
 use crate::login::core::{
     manifest::Manifest,
@@ -22,10 +24,7 @@ pub struct Installation {
     pub image_path: PathBuf,
 }
 
-pub fn read_json<T: serde::de::DeserializeOwned>(
-    mut file: File,
-    max: usize,
-) -> io::Result<T> {
+pub fn read_json<T: serde::de::DeserializeOwned>(mut file: File, max: usize) -> io::Result<T> {
     if file.metadata()?.len() > max as u64 {
         return Err(denied("protected login record exceeds limit"));
     }
@@ -67,7 +66,8 @@ pub fn load() -> io::Result<Installation> {
         image_path,
     })
 }
-pub fn verify_hash(file: &File, expected: &str) -> io::Result<()> {
+/// Lowercase hex SHA-256 of the whole `file`; the position is reset.
+pub fn sha256_hex(file: &File) -> io::Result<String> {
     let mut file = file.try_clone()?;
     file.seek(SeekFrom::Start(0))?;
     let mut digest = Sha256::new();
@@ -85,17 +85,17 @@ pub fn verify_hash(file: &File, expected: &str) -> io::Result<()> {
         .map(|byte| format!("{byte:02x}"))
         .collect();
     file.seek(SeekFrom::Start(0))?;
+    Ok(actual)
+}
+pub fn verify_hash(file: &File, expected: &str) -> io::Result<()> {
+    let actual = sha256_hex(file)?;
     if !actual.eq_ignore_ascii_case(expected) {
         return Err(denied("protected login executable SHA-256 mismatch"));
     }
     Ok(())
 }
 /// Administrative offline candidate validation. No endpoint or service is started.
-pub fn validate_candidate(
-    version: &str,
-    expected: &str,
-    records: &[PathBuf],
-) -> io::Result<()> {
+pub fn validate_candidate(version: &str, expected: &str, records: &[PathBuf]) -> io::Result<()> {
     use crate::login::core::{
         gateway_types::{GatewayNetwork, MAX_NETWORK},
         machine::MachineIdentity,

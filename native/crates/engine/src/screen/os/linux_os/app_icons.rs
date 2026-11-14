@@ -1,5 +1,8 @@
 //! Linux desktop-entry identities and Icon Theme 0.13 lookup, with host-only SVG.
 //! `Exec=` is never read. Every path comes from the host's installed catalog/theme.
+//! A root worker that follows a session never runs this for that session
+//! (its account's host process does, E47); there the account's directories
+//! count only as its own files without a link (`trusted`).
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::io;
@@ -27,7 +30,25 @@ fn icon_bases(dirs: &[PathBuf]) -> Vec<PathBuf> {
         bases.push(PathBuf::from(home).join(".icons"));
     }
     bases.extend(dirs.iter().map(|dir| dir.join("icons")));
-    bases
+    trusted(bases)
+}
+
+/// `dirs` as this process may search them: in a host process of a worker
+/// that follows a session (E47) the directories below the account's home
+/// only when the account owns them with no link on the way down from the
+/// home (`followed_account`); in any other process unchanged.
+fn trusted(dirs: Vec<PathBuf>) -> Vec<PathBuf> {
+    match super::host_backend::followed::account::started_host_account() {
+        Some(account) => account.trusted_dirs(dirs),
+        None => dirs,
+    }
+}
+
+/// The data directories with `applications/` and `icons/`.
+fn icon_dirs() -> Vec<PathBuf> {
+    trusted(super::app_units::data_dirs(&|name| {
+        std::env::var(name).ok()
+    }))
 }
 
 /// Host configuration only; no requester-controlled command or argument is executed.
@@ -279,7 +300,7 @@ fn resolve(entry: &DesktopIcon, dirs: &[PathBuf], theme: &str) -> Option<IconRep
 }
 
 pub fn attach(list: &mut WindowList) {
-    let dirs = super::app_units::data_dirs(&|name| std::env::var(name).ok());
+    let dirs = icon_dirs();
     let entries = catalog(&dirs);
     let theme = current_theme();
     let wm_class = matches!(
@@ -326,7 +347,7 @@ pub fn load(entry: AuthorizedIconEntry<'_>) -> io::Result<Option<IconReply>> {
     let (Some(id), Some(expected)) = (id, expected) else {
         return Ok(None);
     };
-    let dirs = super::app_units::data_dirs(&|name| std::env::var(name).ok());
+    let dirs = icon_dirs();
     let entries = catalog(&dirs);
     let Some(desktop) = desktop_for(&entries, id, false) else {
         return Ok(None);
@@ -342,7 +363,7 @@ pub fn load(entry: AuthorizedIconEntry<'_>) -> io::Result<Option<IconReply>> {
 
 /// Exact installed desktop-file ID, reusable by the authorized AppHost catalog.
 pub fn catalog_icon(app_id: &str) -> Option<IconReply> {
-    let dirs = super::app_units::data_dirs(&|name| std::env::var(name).ok());
+    let dirs = icon_dirs();
     let entries = catalog(&dirs);
     let entry = desktop_for(&entries, app_id, false)?;
     resolve(entry, &dirs, &current_theme()).map(|mut reply| {
@@ -352,7 +373,7 @@ pub fn catalog_icon(app_id: &str) -> Option<IconReply> {
 }
 
 pub fn attach_apps(apps: &mut [crate::screen::core::window_list::AppEntry]) {
-    let dirs = super::app_units::data_dirs(&|name| std::env::var(name).ok());
+    let dirs = icon_dirs();
     let entries = catalog(&dirs);
     let theme = current_theme();
     for app in apps {

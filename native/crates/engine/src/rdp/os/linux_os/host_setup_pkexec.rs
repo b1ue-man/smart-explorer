@@ -1,7 +1,8 @@
 //! The polkit path of the Linux RDP self-setup (design 3.3): a non-root
-//! service runs one fixed root step through `pkexec <se> rdp host-setup
-//! --system <step>`, only on an administrator-owned se, and reads the
-//! child's `state=` line or pkexec's documented exit codes.
+//! service runs its fixed root step through `pkexec <se> rdp host-setup
+//! --system <step>`, bundled with the login step of the same trigger (E44),
+//! only on an administrator-owned se, and reads the child's `state=` line or
+//! pkexec's documented exit codes.
 use super::{find_tool, has_display, last_line, run_unbounded, SystemStep};
 use crate::rdp::core::SetupState;
 use std::path::Path;
@@ -45,7 +46,13 @@ pub fn pkexec_outcome(code: Option<i32>, stdout: &str, stderr: &str) -> SetupSta
     }
 }
 
+/// The root step through the elevation bundle (E44): one `pkexec <se> rdp
+/// host-setup --system <login> --system <step>` also carries the login step
+/// of the same trigger. This setup's checks (display, pkexec, an
+/// administrator-owned `se`) run before the step is handed in; its launcher
+/// starts the call. The `state=` line is this step's own result.
 pub(super) fn via_pkexec(step: SystemStep) -> SetupState {
+    use crate::rdp::host_setup::elevated::{self, Launched, Party};
     if !has_display() {
         return SetupState::Failed("no_interactive_session".into());
     }
@@ -59,17 +66,35 @@ pub(super) fn via_pkexec(step: SystemStep) -> SetupState {
     if root_owned(&se).is_err() {
         return SetupState::Impossible("se_binary_not_root_owned".into());
     }
-    let Some(se) = se.to_str() else {
+    let Some(se) = se.to_str().map(str::to_string) else {
         return SetupState::Impossible("se_binary_not_root_owned".into());
     };
-    let args = [se, "rdp", "host-setup", "--system", step.name()];
-    crate::rdp::host_setup::prompt_follows();
-    match run_unbounded(&pkexec, &args, &[]) {
-        Ok(output) => {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            pkexec_outcome(output.status.code(), &stdout, &stderr)
+    let launcher: elevated::Launcher = Box::new(move |steps: &[String]| {
+        let mut args = vec![se];
+        args.extend(elevated::system_args(steps));
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        crate::rdp::host_setup::prompt_follows();
+        let output = run_unbounded(&pkexec, &args, &[])?;
+        Ok(Launched {
+            code: output.status.code(),
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        })
+    });
+    match elevated::submit(Party::Rdp, step.name().into(), launcher) {
+        (call, Ok(launched)) => {
+            // A failed login step before it leaves the code unknown; the
+            // `state=` line still tells (`pkexec_outcome` reads it first).
+            let code = elevated::step_code(&call, Party::Rdp, launched.code);
+            let reported = launched
+                .stdout
+                .lines()
+                .any(|line| line.trim().starts_with("state="));
+            if code.is_none() && launched.code.is_some() && !reported {
+                return SetupState::Failed("bundled_step_unreported".into());
+            }
+            pkexec_outcome(code, &launched.stdout, &launched.stderr)
         }
-        Err(error) => SetupState::Failed(error),
+        (_, Err(error)) => SetupState::Failed(error),
     }
 }

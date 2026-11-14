@@ -68,13 +68,18 @@ pub fn make_proof(
     proof
 }
 
-pub fn verify_sighting(
+/// The sighting cut to the addresses its signed list names (E26). Addresses
+/// outside the signed list are dropped and the rest stay; nothing is added,
+/// because the signature covers only the signed list. `None` when the proof,
+/// the lookup id, the epoch, the lifetime or the signature fail, or when no
+/// signed address is left.
+pub fn accepted_sighting(
     sighting: &LanSighting,
     proof: &LanProof,
     pinned_node: &str,
     secret: &[u8],
     now: i64,
-) -> bool {
+) -> Option<LanSighting> {
     let epoch = now.div_euclid(ID_EPOCH_SECS);
     if proof.epoch < epoch.saturating_sub(1)
         || proof.epoch > epoch.saturating_add(1)
@@ -86,16 +91,53 @@ pub fn verify_sighting(
             .addresses
             .iter()
             .any(|ip| ip.is_loopback() || ip.is_unspecified() || ip.is_multicast())
-        || sighting.addrs.is_empty()
-        || sighting
-            .addrs
-            .iter()
-            .any(|ip| !proof.addresses.contains(ip))
         || rotating_id(pinned_node, secret, proof.epoch).as_deref() != Some(sighting.id.as_str())
     {
-        return false;
+        return None;
     }
-    verify_iroh_signature(pinned_node, &payload(sighting, proof), &proof.signature)
+    let addrs: Vec<IpAddr> = sighting
+        .addrs
+        .iter()
+        .filter(|ip| proof.addresses.contains(ip))
+        .copied()
+        .collect();
+    if addrs.is_empty()
+        || !verify_iroh_signature(pinned_node, &payload(sighting, proof), &proof.signature)
+    {
+        return None;
+    }
+    Some(LanSighting {
+        addrs,
+        ..sighting.clone()
+    })
+}
+
+/// The sighting of a received proof of either format (E26): a sealed (`v=3`)
+/// proof is opened with `secret` first, then [`accepted_sighting`] applies.
+pub fn accepted_any_sighting(
+    sighting: &LanSighting,
+    proof: &LanProof,
+    pinned_node: &str,
+    secret: &[u8],
+    now: i64,
+) -> Option<LanSighting> {
+    if proof.sealed.is_none() {
+        return accepted_sighting(sighting, proof, pinned_node, secret, now);
+    }
+    let opened = open_proof(sighting, proof, secret)?;
+    accepted_sighting(sighting, &opened, pinned_node, secret, now)
+}
+
+/// `true` when [`accepted_sighting`] accepts the sighting. Addresses outside the
+/// signed list are dropped, neither refused as a whole nor adopted (E26).
+pub fn verify_sighting(
+    sighting: &LanSighting,
+    proof: &LanProof,
+    pinned_node: &str,
+    secret: &[u8],
+    now: i64,
+) -> bool {
+    accepted_sighting(sighting, proof, pinned_node, secret, now).is_some()
 }
 
 /// Verifies a received proof of either format: a sealed (`v=3`) proof is
@@ -107,11 +149,7 @@ pub fn verify_any_sighting(
     secret: &[u8],
     now: i64,
 ) -> bool {
-    if proof.sealed.is_none() {
-        return verify_sighting(sighting, proof, pinned_node, secret, now);
-    }
-    open_proof(sighting, proof, secret)
-        .is_some_and(|opened| verify_sighting(sighting, &opened, pinned_node, secret, now))
+    accepted_any_sighting(sighting, proof, pinned_node, secret, now).is_some()
 }
 
 fn payload(sighting: &LanSighting, proof: &LanProof) -> Vec<u8> {
@@ -181,3 +219,7 @@ mod tests {
 #[cfg(test)]
 #[path = "lan_privacy_task_tests.rs"]
 mod task_tests;
+
+#[cfg(test)]
+#[path = "lan_kuerzung_task_tests.rs"]
+mod kuerzung_task_tests;

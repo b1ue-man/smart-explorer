@@ -38,6 +38,20 @@ enum TcpCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Open a shared service that has no address here (desktop „Öffnen“).
+    Open {
+        device: String,
+        port: u16,
+        #[arg(long)]
+        json: bool,
+    },
+    /// End a shared service here (desktop „Schließen“); it stays closed until `open`.
+    CloseService {
+        device: String,
+        port: u16,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Args, Debug, Default, PartialEq, Eq)]
@@ -115,6 +129,14 @@ pub(super) fn run(args: TcpArgs) -> Result<i32, String> {
                 format!("closed\t{id}")
             });
         }
+        TcpCommand::Open { device, port, json } => {
+            let value = open_service(&device, port)?;
+            output(json, &value, || mapping_text(&value["mapping"]));
+        }
+        TcpCommand::CloseService { device, port, json } => {
+            let value = close_service(&device, port)?;
+            output(json, &value, || format!("closed\t{port}"));
+        }
     }
     Ok(0)
 }
@@ -184,6 +206,49 @@ fn services_text(value: &Value) -> String {
         lines.push(format!("unavailable\t{reason}"));
     }
     lines.join("\n")
+}
+
+/// The text of a device without a feed here; the words of `auto_forward::open`.
+const NO_FEED: &str = "Gerät liefert keine Dienstliste (offline oder ohne Freigabe)";
+
+/// `se tcp open` and MCP `open_service`: the service on `port` of the device
+/// gets its address here, also above the automatic budget (E27).
+pub(crate) fn open_service(selector: &str, port: u16) -> Result<Value, String> {
+    let (target, _name) = super::screen::device_target(selector)?;
+    let snapshot = crate::daemon::share_worker_snapshot()?;
+    let (device, key) =
+        tiles::identity_of(&snapshot.profiles, &target).ok_or_else(|| NO_FEED.to_string())?;
+    let mapping = crate::daemon::tcp_open_service(&device, &key, port)?;
+    Ok(json!({"mapping": mapping}))
+}
+
+/// `se tcp close-service` and MCP `close_service`: ends the service on `port`;
+/// it stays closed until `open_service` (E27).
+pub(crate) fn close_service(selector: &str, port: u16) -> Result<Value, String> {
+    let (target, _name) = super::screen::device_target(selector)?;
+    let snapshot = crate::daemon::share_worker_snapshot()?;
+    let (device, key) =
+        tiles::identity_of(&snapshot.profiles, &target).ok_or_else(|| NO_FEED.to_string())?;
+    if !crate::daemon::tcp_close_service(&device, &key, port)? {
+        return Err(format!("Port {port} ist auf dem Gerät nicht freigegeben"));
+    }
+    Ok(json!({"closed": true}))
+}
+
+/// One mapped service in the row form of `se tcp services`.
+fn mapping_text(mapping: &Value) -> String {
+    let field = |key: &str| match &mapping[key] {
+        Value::Null => "-".to_string(),
+        Value::String(text) => text.replace(['\t', '\r', '\n'], " "),
+        other => other.to_string(),
+    };
+    format!(
+        "service\t{}\t{}\t{}\t{}",
+        field("host_port"),
+        field("process"),
+        field("url"),
+        field("address")
+    )
 }
 
 fn text(tunnel: &TunnelView) -> String {

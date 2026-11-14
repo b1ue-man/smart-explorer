@@ -76,6 +76,10 @@ pub struct RouteBudgetView {
     pub direct_deadline_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub frozen_candidates: Option<usize>,
+    /// Candidates refused by the candidate cap; absent when none was refused,
+    /// so older readers and outputs without refusals stay unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dropped_candidates: Option<usize>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -284,6 +288,8 @@ impl RouteBudgetView {
             direct_deadline_ms: (budget.direct_deadline_ms > 0)
                 .then_some(budget.direct_deadline_ms),
             frozen_candidates: (budget.direct_deadline_ms > 0).then_some(budget.frozen_candidates),
+            dropped_candidates: (budget.dropped_candidates > 0)
+                .then_some(budget.dropped_candidates),
         }
     }
 
@@ -315,6 +321,9 @@ impl RouteBudgetView {
         }
         if let Some(candidates) = self.frozen_candidates {
             lines.push(format!("Eingefrorene Direktkandidaten: {candidates}"));
+        }
+        if let Some(dropped) = self.dropped_candidates {
+            lines.push(format!("Verworfene Kandidaten über der Grenze: {dropped}"));
         }
         lines
     }

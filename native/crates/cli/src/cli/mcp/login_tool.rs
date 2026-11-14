@@ -1,4 +1,5 @@
 //! MCP owns its viewer sockets; responses contain metadata, never live pixels.
+//! `open` takes a paired `device` (E22) or an explicit administrative `target`.
 use super::{args::Args, response};
 use crate::daemon::{LoginClose, LoginCommand, LoginViewer};
 use rmcp::model::CallToolResult;
@@ -12,18 +13,19 @@ struct Owned {
     close: LoginClose,
 }
 static OWNED: Mutex<BTreeMap<String, Arc<Owned>>> = Mutex::new(BTreeMap::new());
-pub(super) const DESCRIPTION: &str = "Read optional login installation, administrative rights/platform limits and owned viewer sessions. Open only with an explicit administrator-provided public machine target and acknowledge_machine_pin; a normal device selector is not machine proof. Every start/capture/input/release/SAS/stop uses the same daemon owner socket and independent peer-signed broker contract. The existing five-second signed-operation idle lease is never renewed by status/challenge. No automatic input retry, service installation, policy mutation, password-specific argument, live picture stream or image bytes in tool results. Capture returns bounded frame metadata only. Close ends the owner and releases inputs.";
+pub(super) const DESCRIPTION: &str = "Opens and drives the login screen (sign-in, lock screen, Windows secure desktop) of a paired device and reads the optional login installation and owned viewer sessions. Open with `device` (device ID, contact ID or name): the device sends its machine target over the pinned Share connection once it allows this device „screen control“, so no file and no pin acknowledgement are needed; `target_user` is optional there. The administrative form with an explicit public `target`, `target_user` and `acknowledge_machine_pin` stays. Every start/capture/input/release/SAS/stop uses the same daemon owner socket and independent peer-signed broker contract. The existing five-second signed-operation idle lease is never renewed by status/challenge. No automatic input retry, service installation, policy mutation, password-specific argument, live picture stream or image bytes in tool results. Capture returns bounded frame metadata only. Close ends the owner and releases inputs.";
 pub(super) fn properties() -> Value {
     json!({
         "action":{"type":"string","enum":["status","sessions","session","open","challenge","start","capture","input","release_inputs","secure_attention","close"]},
         "id":{"type":"string","description":"Exact owning login session ID"},
+        "device":{"type":"string","description":"Paired device (device ID, contact ID or name) whose login screen to open; it sent its machine target over the pinned Share connection"},
         "target":{"type":"object","additionalProperties":false,
             "required":["format","machine_id","public_key","direct_addresses","relay_urls","use_default_relays","allow_plaintext_relays"],
             "properties":{"format":{"type":"integer","const":1},"machine_id":{"type":"string"},"public_key":{"type":"string"},
                 "direct_addresses":{"type":"array","maxItems":32,"items":{"type":"string"}},"relay_urls":{"type":"array","maxItems":16,"items":{"type":"string"}},
                 "use_default_relays":{"type":"boolean"},"allow_plaintext_relays":{"type":"boolean"}}},
-        "target_user":{"type":"string","description":"Exact administratively granted host user ID; Windows account SID or Linux UID"},
-        "acknowledge_machine_pin":{"type":"boolean","description":"Explicit user pinning of this public machine target; never inferred from a normal peer"},
+        "target_user":{"type":"string","description":"Host account (Windows SID, Linux UID); required with `target`, optional with `device` (the device names it)"},
+        "acknowledge_machine_pin":{"type":"boolean","description":"Explicit user pinning of an administrator-provided `target`; not used with `device`"},
         "frame_id":{"type":"integer","minimum":0},
         "events":{"type":"array","minItems":1,"maxItems":crate::screen::core::input_model::MAX_INPUT_EVENTS,
             "items":{"type":"object","description":"A typed screen InputEvent; Android actions are unavailable at login"}}
@@ -45,21 +47,38 @@ pub(super) fn login(args: &Args) -> Result<CallToolResult, String> {
             {
                 return Err("MCP login session admission is full".into());
             }
-            let target = serde_json::from_value(
-                args.value("target")
-                    .cloned()
-                    .ok_or_else(|| "target is required".to_string())?,
-            )
-            .map_err(|error| error.to_string())?;
-            let mut viewer = LoginViewer::open(
-                target,
-                args.string("target_user")?,
-                args.flag("acknowledge_machine_pin")?,
-            )?;
+            let device = args.value("device").and_then(Value::as_str);
+            let (mut viewer, paired) = match (device, args.value("target")) {
+                (Some(_), Some(_)) => return Err("give either device or target".into()),
+                (Some(device), None) => {
+                    let paired = crate::share::login_transport::paired_login_target(device)
+                        .map_err(|error| error.to_string())?;
+                    let user = args
+                        .value("target_user")
+                        .and_then(Value::as_str)
+                        .filter(|user| !user.is_empty())
+                        .map_or_else(|| paired.target_user.clone(), str::to_string);
+                    let viewer = LoginViewer::open(paired.target.clone(), user, true)?;
+                    let summary = json!({"device_id":paired.device_id,"device_name":paired.device_name,
+                        "machine_id":paired.target.machine_id,"machine_public_key":paired.target.public_key,
+                        "target_user":paired.target_user,"received_at":paired.received_at});
+                    (viewer, summary)
+                }
+                (None, Some(target)) => {
+                    let target = serde_json::from_value(target.clone())
+                        .map_err(|error| error.to_string())?;
+                    let viewer = LoginViewer::open(
+                        target,
+                        args.string("target_user")?,
+                        args.flag("acknowledge_machine_pin")?,
+                    )?;
+                    (viewer, Value::Null)
+                }
+                (None, None) => return Err("device or target is required".into()),
+            };
             let started = viewer.command(LoginCommand::Start)?;
             let id = viewer.view().session.clone();
-            let result =
-                json!({"session":viewer.view(),"start":started.reply,"live_image_stream":false});
+            let result = json!({"session":viewer.view(),"start":started.reply,"paired":paired,"live_image_stream":false});
             if viewer.view().challenge.is_some() {
                 let owned = Arc::new(Owned {
                     close: viewer.control(),

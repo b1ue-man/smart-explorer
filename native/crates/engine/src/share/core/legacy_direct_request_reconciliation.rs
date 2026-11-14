@@ -123,10 +123,13 @@ impl ShareProfiles {
     pub fn mark_legacy_revoked_for_peer(&mut self, peer: &DirectPeerIdentity, now: i64) -> usize {
         let mut changed = 0;
         for entry in &mut self.legacy_direct_requests {
-            if (!peer.public_key.is_empty() && entry.peer.public_key == peer.public_key
-                || !peer.node_id.is_empty() && entry.peer.node_id == peer.node_id)
-                && entry.decision == LegacyDirectDecisionState::Accepted
-            {
+            let reached = Self::revocation_reaches(
+                peer,
+                &entry.peer.device_id,
+                &entry.peer.public_key,
+                &entry.peer.node_id,
+            );
+            if reached && entry.decision == LegacyDirectDecisionState::Accepted {
                 mark_revoked(entry, LegacyDirectDecisionSource::User, now);
                 changed += 1;
             }
@@ -301,4 +304,27 @@ fn suspend_for_reconfirm(grant: &mut super::types::DirectGrant, now: i64) {
     }
     grant.updated_at = now;
     grant.exec.disable_without_decision(now);
+}
+
+impl ShareProfiles {
+    /// Whether a revocation by `caller` reaches the entry with this identity
+    /// (r-zugang U2). A caller with a key or a node id matches only that key or
+    /// node. A caller with neither revokes only entries that carry neither and
+    /// share its device id, so an identity-less claim never withdraws an entry
+    /// that has an identity.
+    pub(super) fn revocation_reaches(
+        caller: &DirectPeerIdentity,
+        device_id: &str,
+        public_key: &str,
+        node_id: &str,
+    ) -> bool {
+        if caller.public_key.is_empty() && caller.node_id.is_empty() {
+            return public_key.is_empty()
+                && node_id.is_empty()
+                && !caller.device_id.is_empty()
+                && device_id == caller.device_id.as_str();
+        }
+        (!caller.public_key.is_empty() && public_key == caller.public_key.as_str())
+            || (!caller.node_id.is_empty() && node_id == caller.node_id.as_str())
+    }
 }

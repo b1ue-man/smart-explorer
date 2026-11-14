@@ -6,11 +6,11 @@ use std::time::{Duration, Instant};
 use clap::{Args, Subcommand};
 
 use super::discoverable_input::{
-    duration_secs, pin_source, read_pin, resolve_room, select_offers, validate_name,
-    weak_pin_check, PinSource,
+    duration_secs, pin_source, read_pin, resolve_room, validate_name, weak_pin_check, PinSource,
 };
 use super::discoverable_output::{
-    clean, local_time, offer_text, offer_value, stop_reason_text, target_text,
+    clean, local_time, offer_text, offer_value, renewal_lines, stop_reason_text, target_text,
+    waiting_text, waiting_value,
 };
 use crate::daemon::{ShareCommandReply, ShareWorkerSnapshot};
 use crate::share::{
@@ -32,8 +32,10 @@ Publishes this device, or a room with --room, on the Share server under a name
 for a limited time (default 5, at most 30 minutes). Another device finds the
 name in its discovery list and pairs by entering the same PIN; the Share server
 only relays the pairing and never learns the PIN. The offer ends after the first
-pairing or after 5 failed attempts. Without a subcommand this starts an offer
-with a random six-digit PIN that is printed:
+pairing or after 5 failed attempts; after failed attempts the device publishes it
+again 30 seconds later with a new PIN while time remains (`list` shows the hint
+and the PIN). Without a subcommand this starts an offer with a random six-digit
+PIN that is printed:
 
   se share discoverable --minutes 5
   printf '%s\\n' 481902 | se share discoverable --pin-stdin
@@ -138,7 +140,7 @@ pub(super) fn run(args: DiscoverableArgs) -> Result<(), String> {
     match args.command {
         None => publish(args.publish),
         Some(DiscoverableCommand::List(args)) => list(args.json),
-        Some(DiscoverableCommand::Stop(args)) => stop(args),
+        Some(DiscoverableCommand::Stop(args)) => stop_command::stop(args),
     }
 }
 
@@ -335,9 +337,12 @@ fn list(json: bool) -> Result<(), String> {
     let profiles = super::checked_profiles()?;
     let now = crate::share::core_now_secs();
     let worker = crate::daemon::share_worker_snapshot();
-    let offers: &[OwnDiscoveryOffer] = match &worker {
-        Ok(snapshot) => &snapshot.discovery_offers,
-        Err(_) => &[],
+    let (offers, renewals) = match &worker {
+        Ok(snapshot) => (
+            snapshot.discovery_offers.as_slice(),
+            snapshot.discovery_renewals.as_slice(),
+        ),
+        Err(_) => (&[][..], &[][..]),
     };
     if json {
         let value = serde_json::json!({
@@ -345,6 +350,12 @@ fn list(json: bool) -> Result<(), String> {
             "offers": offers
                 .iter()
                 .map(|offer| offer_value(offer, &profiles, now))
+                .collect::<Vec<_>>(),
+            // E49: offers that ended after too many failed attempts and go out
+            // again with a new PIN after the pause, unless stopped.
+            "renewals": renewals
+                .iter()
+                .map(|renewal| waiting_value(renewal, &profiles, now))
                 .collect::<Vec<_>>(),
         });
         println!(
@@ -362,8 +373,14 @@ fn list(json: bool) -> Result<(), String> {
     }
     for offer in offers {
         println!("{}", offer_text(offer, &profiles, now));
+        for line in renewal_lines(offer) {
+            println!("{line}");
+        }
     }
-    if worker.is_ok() && offers.is_empty() {
+    for renewal in renewals {
+        println!("{}", waiting_text(renewal, &profiles, now));
+    }
+    if worker.is_ok() && offers.is_empty() && renewals.is_empty() {
         println!("discoverable\tnone");
     }
     Ok(())
@@ -386,52 +403,8 @@ fn worker_value(worker: &Result<ShareWorkerSnapshot, String>) -> serde_json::Val
     }
 }
 
-fn stop(args: StopArgs) -> Result<(), String> {
-    let snapshot = crate::daemon::share_worker_snapshot()?;
-    let selected = select_offers(&snapshot.discovery_offers, args.offer.as_deref(), args.all)?;
-    let mut stopped = Vec::new();
-    let mut failed = Vec::new();
-    for offer in &selected {
-        let offer_id = offer.offer_id.clone();
-        let command = ShareCmd::Discovery(DiscoveryCommand::StopPublishing {
-            offer_id: offer_id.clone(),
-        });
-        match crate::daemon::share_command(command) {
-            Ok(_) => stopped.push(offer_id),
-            Err(error) => failed.push((offer_id, error)),
-        }
-    }
-    if args.json {
-        let failed_values: Vec<_> = failed
-            .iter()
-            .map(|(offer_id, error)| serde_json::json!({ "offer_id": offer_id, "error": error }))
-            .collect();
-        let value = serde_json::json!({
-            "action": "stop",
-            "stopped": stopped,
-            "failed": failed_values,
-        });
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&value).map_err(|error| error.to_string())?
-        );
-    } else {
-        if selected.is_empty() {
-            println!("stopped\tnone\tno offer is discoverable");
-        }
-        for offer_id in &stopped {
-            println!("stopped\t{offer_id}");
-        }
-        for (offer_id, error) in &failed {
-            println!("failed\t{offer_id}\t{}", clean(error));
-        }
-    }
-    if failed.is_empty() {
-        return Ok(());
-    }
-    let (failures, total) = (failed.len(), selected.len());
-    Err(format!("{failures} of {total} offers could not be stopped"))
-}
+#[path = "discoverable_stop.rs"]
+mod stop_command;
 
 #[cfg(test)]
 mod tests {

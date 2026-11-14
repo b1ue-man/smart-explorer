@@ -35,8 +35,9 @@ internal fun approvalAction(uri: Uri?): Pair<String, String>? {
 /**
  * „Diesmal erlauben“, „Immer erlauben“ and „Ablehnen“ of a question's notification, and its swipe
  * away (= „Ablehnen“). Not exported: only this app's immutable PendingIntents reach it. The answer
- * goes to exactly the question the action's URI names (`share.decideAccessApproval`); an action
- * that names none is ignored, so the question stays open and is never allowed by it.
+ * names the question of the action's URI; „Immer erlauben“ and „Ablehnen“ also answer the open
+ * questions equal to it (E28) (`share.decideAccessApproval`); an action that names none is
+ * ignored, so the question stays open and is never allowed by it.
  */
 class AccessApprovalReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {

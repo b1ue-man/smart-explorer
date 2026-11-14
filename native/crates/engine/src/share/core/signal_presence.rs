@@ -272,3 +272,7 @@ mod task_tests;
 #[cfg(test)]
 #[path = "signal_presence_flood_task_tests.rs"]
 mod flood_task_tests;
+
+#[cfg(test)]
+#[path = "code_renewal_retiring_presence_task_tests.rs"]
+mod retiring_presence_task_tests;

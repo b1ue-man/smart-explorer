@@ -10,7 +10,7 @@ use std::sync::Mutex;
 
 use crossbeam_channel::{bounded, Receiver, TrySendError};
 
-use super::lan_presence_match::{LanSighting, LAN_PRESENCE_VERSION};
+use super::lan_presence_match::{dialable_ip, LanSighting, LAN_PRESENCE_VERSION};
 use super::lan_privacy::{LanProof, SealedLanProof, MAX_ADDRESSES, SEAL_NONCE_BYTES};
 
 const SERVICE: &str = "_se-share._udp.local.";
@@ -355,6 +355,7 @@ fn sighting_from(info: &mdns_sd::ResolvedService) -> Option<LanSighting> {
         .get_addresses()
         .iter()
         .map(mdns_sd::ScopedIp::to_ip_addr)
+        .filter(|ip| dialable_ip(*ip))
         .collect();
     addrs.sort();
     addrs.dedup();
@@ -379,9 +380,9 @@ fn event_from(info: &mdns_sd::ResolvedService) -> Option<LanEvent> {
         return None;
     }
     if version == Some("3") {
-        // The resolved addresses stay as received: the authenticator opens
-        // the seal and accepts the sighting only when every one of them is
-        // in the signed list, so an injected address never passes.
+        // The resolved addresses keep only dialable ones (`sighting_from`);
+        // the authenticator opens the seal and checks the remaining ones
+        // against the signed list, so an injected address never passes.
         return Some(LanEvent::SeenAuthenticated {
             proof: LanProof {
                 epoch: info.get_property_val_str("e")?.parse().ok()?,

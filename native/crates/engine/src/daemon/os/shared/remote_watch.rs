@@ -5,6 +5,17 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+/// Start of an `Ended` text after which this side only polls (no change
+/// signal, or a Share host that cannot watch the path: `watch_wire.rs`
+/// `POLL_ONLY` holds the same words).
+const POLL_ONLY: &str = "Keine Änderungsereignisse; Abfrage aktiv";
+
+/// Whether a notice ends the subscription for good: subscribing again would
+/// fail the same way, so the job keeps polling (M14).
+fn polls_only(notice: &ChangeNotice) -> bool {
+    matches!(notice, ChangeNotice::Ended(reason) if reason.starts_with(POLL_ONLY))
+}
+
 pub(super) struct Message {
     pub(super) side: PairSide,
     pub(super) event: ChangeNotice,
@@ -44,7 +55,7 @@ pub(super) fn start(
                 Ok(Some(subscription)) => subscription,
                 Ok(None) => {
                     deliver(&sink, &overflow, Message { side,
-                        event: ChangeNotice::Ended("Keine Änderungsereignisse; Abfrage aktiv".into()) });
+                        event: ChangeNotice::Ended(POLL_ONLY.into()) });
                     return;
                 }
                 Err(error) => {
@@ -62,8 +73,9 @@ pub(super) fn start(
                     Ok(event) => {
                         let needs_user = matches!(&event, ChangeNotice::Ended(error) if super::job_triggers::connect_failure(error).needs_user());
                         let ended = matches!(event, ChangeNotice::Ended(_));
+                        let poll_only = polls_only(&event);
                         deliver(&sink, &overflow, Message { side, event });
-                        if needs_user { return; }
+                        if needs_user || poll_only { return; }
                         if ended { break; }
                     }
                     Err(crossbeam_channel::RecvTimeoutError::Timeout) => {},
@@ -95,4 +107,22 @@ fn wait(stop: &AtomicBool, duration: Duration) -> bool {
         std::thread::sleep(Duration::from_secs(1));
     }
     stop.load(Ordering::Acquire)
+}
+
+#[cfg(test)]
+mod windows_watch_task_tests {
+    use super::*;
+
+    #[test]
+    fn windows_watch_task_unsupported_host_switches_the_peer_to_polling() {
+        // The text `FsWatchEvent::into_notice` makes of an unsupported watch.
+        let unsupported = "Keine Änderungsereignisse; Abfrage aktiv: Unsupported";
+        assert!(polls_only(&ChangeNotice::Ended(unsupported.into())));
+        assert!(polls_only(&ChangeNotice::Ended(POLL_ONLY.into())));
+        // Transient ends still subscribe again after one poll interval.
+        for reason in ["RootMissing", "AccessDenied", "Änderungsabonnement beendet"] {
+            assert!(!polls_only(&ChangeNotice::Ended(reason.into())));
+        }
+        assert!(!polls_only(&ChangeNotice::Overflow));
+    }
 }

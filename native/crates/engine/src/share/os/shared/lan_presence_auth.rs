@@ -184,28 +184,38 @@ impl LanAuthenticator {
         ))
     }
 
+    /// The contact a sighting verifies for, and the sighting cut to the addresses
+    /// its signed list names (E26). Addresses the contact did not sign are dropped.
+    pub fn authenticate_cut(
+        &self,
+        sighting: &LanSighting,
+        proof: &LanProof,
+        now: i64,
+    ) -> Option<(String, LanSighting)> {
+        let principal = self.principals.get(*self.ids.get(&sighting.id)?)?;
+        let accepted = lan_privacy::accepted_any_sighting(
+            sighting,
+            proof,
+            &principal.node,
+            &principal.secret,
+            now,
+        )?;
+        if proof.sealed.is_some() {
+            if let Ok(mut readers) = self.sealed_readers.lock() {
+                readers.insert(principal.contact_id.clone());
+            }
+        }
+        Some((principal.contact_id.clone(), accepted))
+    }
+
     pub fn authenticate(
         &self,
         sighting: &LanSighting,
         proof: &LanProof,
         now: i64,
     ) -> Option<String> {
-        let principal = self.principals.get(*self.ids.get(&sighting.id)?)?;
-        if !lan_privacy::verify_any_sighting(
-            sighting,
-            proof,
-            &principal.node,
-            &principal.secret,
-            now,
-        ) {
-            return None;
-        }
-        if proof.sealed.is_some() {
-            if let Ok(mut readers) = self.sealed_readers.lock() {
-                readers.insert(principal.contact_id.clone());
-            }
-        }
-        Some(principal.contact_id.clone())
+        self.authenticate_cut(sighting, proof, now)
+            .map(|(contact_id, _)| contact_id)
     }
 }
 
@@ -254,3 +264,7 @@ fn node(contact: &DirectContact) -> Option<String> {
 #[cfg(test)]
 #[path = "lan_presence_auth_task_tests.rs"]
 pub(crate) mod task_tests;
+
+#[cfg(test)]
+#[path = "lan_kuerzung_wahl_task_tests.rs"]
+mod kuerzung_wahl_task_tests;

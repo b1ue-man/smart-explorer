@@ -12,9 +12,16 @@
 //! `code_renewal_registry.rs`.
 use serde::{Deserialize, Serialize};
 
-/// At most this many generations run out at the same time; one more removal
-/// waits until one of them has ended (`RenewalNeed::Deferred`).
-pub const MAX_RETIRING_CODES: usize = 4;
+/// Lookup ids one registered client of the share server may publish at the
+/// same time (`share-server/src/limits.rs`, `MAX_PUBLISHED_DIRECTS_PER_CLIENT`;
+/// refused in `share-server/src/direct_presence.rs` from 64 on). The engine
+/// does not depend on the server crate, so the value is mirrored here.
+pub const SERVER_PUBLISHED_DIRECTS_PER_CLIENT: usize = 64;
+/// At most this many generations run out at the same time. The current lookup
+/// id holds one of the server's published slots, so the retiring ids can use
+/// the other 63: `64 - 1`. One more removal waits until one of them has ended
+/// (`RenewalNeed::Deferred`).
+pub const MAX_RETIRING_CODES: usize = SERVER_PUBLISHED_DIRECTS_PER_CLIENT - 1;
 /// Pending devices of one retiring generation (grants of this device).
 pub const MAX_RENEWAL_PEERS: usize = 1024;
 /// Names a status shows at most.
@@ -337,6 +344,9 @@ mod task_fall3_tests;
 #[cfg(test)]
 #[path = "code_renewal_task_fall5_tests.rs"]
 mod task_fall5_tests;
+#[cfg(test)]
+#[path = "code_renewal_grenze_task_tests.rs"]
+mod task_grenze_tests;
 #[cfg(test)]
 #[path = "code_renewal_task_tests.rs"]
 mod task_tests;

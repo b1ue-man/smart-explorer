@@ -1,6 +1,16 @@
 //! Minimal public evidence. Administrative file ownership replaces no broker grant.
+//! On Windows it also names the broker's grant pipe (E45, L15): users read
+//! the status, only SYSTEM writes it (`windows/host_status.rs`).
 use crate::login::{core::model::VERSION, os::platform, Policy};
 use serde::{Deserialize, Serialize};
+use std::sync::RwLock;
+
+/// The grant pipe names a Windows broker creates: this prefix and 32 hex
+/// digits (128 bits of randomness), so no other process can hold the name
+/// before the broker does.
+pub const GRANT_PIPE_PREFIX: &str = r"\\.\pipe\SmartExplorerLoginGrants-";
+/// The grant pipe this broker process holds; published with every status.
+static GRANT_PIPE: RwLock<Option<String>> = RwLock::new(None);
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HostEvidence {
     pub format: u32,
@@ -14,6 +24,9 @@ pub struct HostEvidence {
     pub observed_at_ms: u64,
     pub valid_until_ms: u64,
     pub helper: Option<HostProcess>,
+    /// The broker's grant pipe (Windows, E45); absent from older brokers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grant_pipe: Option<String>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HostProcess {
@@ -44,6 +57,34 @@ fn millis() -> std::io::Result<u64> {
     )
     .map_err(std::io::Error::other)
 }
+/// A grant pipe name this broker could have created: the prefix and exactly
+/// 32 hex digits. Any other published name is dropped by the reader.
+pub fn valid_grant_pipe(name: &str) -> bool {
+    name.strip_prefix(GRANT_PIPE_PREFIX)
+        .is_some_and(|rest| rest.len() == 32 && rest.bytes().all(|byte| byte.is_ascii_hexdigit()))
+}
+
+/// Broker side: the grant pipe it holds from now on.
+pub fn note_grant_pipe(name: &str) {
+    if let Ok(mut current) = GRANT_PIPE.write() {
+        *current = Some(name.to_string());
+    }
+}
+
+/// The grant pipe this process noted last (broker side).
+pub fn noted_grant_pipe() -> Option<String> {
+    GRANT_PIPE.read().ok().and_then(|current| current.clone())
+}
+
+/// Worker side: the grant pipe the broker's verified status names, `None`
+/// without one (a broker of an older version) or with a malformed one.
+pub fn published_grant_pipe() -> Option<String> {
+    activity()
+        .evidence?
+        .grant_pipe
+        .filter(|name| valid_grant_pipe(name))
+}
+
 pub fn publish(state: &str, boot: &str, policy: &Policy) -> std::io::Result<()> {
     publish_inner(state, boot, policy, None)
 }
@@ -75,6 +116,7 @@ fn publish_inner(
                 platform::host_process_instance(pid).map(|instance| HostProcess { pid, instance })
             })
             .transpose()?,
+        grant_pipe: noted_grant_pipe(),
     };
     platform::write_host_evidence(&serde_json::to_vec(&record).map_err(std::io::Error::other)?)
 }

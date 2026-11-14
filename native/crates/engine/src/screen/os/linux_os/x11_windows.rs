@@ -176,11 +176,7 @@ pub fn root_geometry<C: Connection>(
 }
 
 /// Whether `window` is minimized (`_NET_WM_STATE_HIDDEN`).
-pub fn is_hidden<C: Connection>(
-    conn: &C,
-    atoms: &Atoms,
-    window: Window,
-) -> io::Result<bool> {
+pub fn is_hidden<C: Connection>(conn: &C, atoms: &Atoms, window: Window) -> io::Result<bool> {
     let states = words(conn, window, atoms.wm_state, AtomEnum::ATOM)?;
     Ok(states.contains(&atoms.wm_state_hidden))
 }
@@ -206,9 +202,11 @@ pub fn window_manager_running() -> io::Result<bool> {
     Ok(!words(&conn, root, check, AtomEnum::WINDOW)?.is_empty())
 }
 
-/// The windows of the session of `DISPLAY`.
+/// The windows of the session of `DISPLAY` (or of the followed session,
+/// E23).
 pub fn list() -> io::Result<WindowList> {
-    let (conn, screen_number) = RustConnection::connect(None).map_err(failed)?;
+    let (conn, screen_number) =
+        super::session_detect::active_session::x11::connect().map_err(failed)?;
     let root = conn.setup().roots[screen_number].root;
     list_on(&conn, root, screen_number)
 }

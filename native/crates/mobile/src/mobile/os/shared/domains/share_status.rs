@@ -214,6 +214,11 @@ fn discovery_json(input: &StatusInput<'_>) -> Value {
                     .cloned()
                     .unwrap_or_else(|| offer.alias.clone()),
             };
+            // The daemon published the offer again after too many failed
+            // attempts (E49): the hint and the new PIN to read out.
+            let notice = offer.renewal_notice();
+            let hint = notice.as_ref().map(|notice| notice.hint());
+            let pin = notice.as_ref().and_then(|notice| notice.pin_text());
             json!({
                 "offerId": offer.offer_id,
                 "target": key,
@@ -222,6 +227,9 @@ fn discovery_json(input: &StatusInput<'_>) -> Value {
                 // What a device pairing with the offer gets, as the worker
                 // reports it (plan 2026-10-31 F5); null: it waits.
                 "rights": offer.rights.as_ref().map(super::share_rights::rights_json),
+                "renewedAfterFailedAttempts": offer.renewed_after_failed_attempts,
+                "hint": hint,
+                "pin": pin,
             })
         });
     let advertisements: Vec<Value> = discovery
@@ -254,8 +262,25 @@ fn discovery_json(input: &StatusInput<'_>) -> Value {
             "message": record.state.label(),
         }))
     });
+    // E49: an offer that ended after too many failed attempts, in its pause;
+    // „Nicht erneuern“ stops `replaces` (`share.stopDiscoverable`).
+    let renewal_waiting = discovery
+        .waiting_renewals
+        .iter()
+        .min_by_key(|renewal| {
+            !matches!(renewal.target, crate::share::DiscoveryPublishTarget::Direct)
+        })
+        .map(|renewal| {
+            json!({
+                "replaces": renewal.replaces,
+                "alias": renewal.display_alias,
+                "dueMs": renewal.due.saturating_mul(1000),
+                "hint": crate::share::discovery_state::pin_renewal_hint(),
+            })
+        });
     json!({
         "offer": offer,
+        "renewalWaiting": renewal_waiting,
         "advertisements": advertisements,
         "exchange": exchange,
     })

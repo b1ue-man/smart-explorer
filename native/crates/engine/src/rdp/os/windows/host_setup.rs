@@ -124,29 +124,39 @@ fn exit_code(program: &str, encode: bool) -> Result<i32, String> {
 /// The fixed step name of `se rdp host-setup --system` on Windows.
 const WINDOWS_STEP: &str = "windows-rdp";
 
-/// The elevated run through `Start-Process -Verb RunAs`; a declined prompt
-/// becomes exit code 1223. The elevated program is Smart Explorer's own
-/// `se.exe` (`se rdp host-setup --system windows-rdp --user-sid <SID>`), so
-/// the UAC prompt names it instead of Windows PowerShell (threat T-R6); only
-/// when no `se.exe` lies next to this program does PowerShell carry the
-/// fixed script itself, as before.
-fn uac_program(script: &str, sid: &str) -> Result<String, String> {
+/// The elevated run of `program` with `arguments` through `Start-Process
+/// -Verb RunAs`; a declined prompt becomes exit code 1223.
+fn uac_launch(program: &str, arguments: &str) -> Result<String, String> {
+    let launch = format!(
+        "{SYSTEM_MODULES}try {{ $p = Start-Process -FilePath {} -Verb RunAs -Wait -WindowStyle Hidden -PassThru \
+         -ArgumentList {}; exit $p.ExitCode }} catch {{ $code = 1224; $e = $_.Exception; \
+         while ($e) {{ if ($e -is [System.ComponentModel.Win32Exception] -and \
+         $e.NativeErrorCode -eq {DECLINED}) {{ $code = {DECLINED} }}; $e = $e.InnerException }}; \
+         exit $code }}",
+        quote(program),
+        quote(arguments)
+    );
+    if launch.encode_utf16().count() > 30000 {
+        return Err("setup command exceeds the Windows command-line limit".into());
+    }
+    Ok(launch)
+}
+
+/// The UAC path. The elevated program is Smart Explorer's own `se.exe`
+/// (`se rdp host-setup --system <login> --system windows-rdp --user-sid
+/// <SID>`), so the UAC prompt names it instead of Windows PowerShell (threat
+/// T-R6); the step goes to the elevation bundle, whose one prompt also
+/// carries the login step of the same trigger (E44). Only when no `se.exe`
+/// lies next to this program does PowerShell carry the fixed script alone,
+/// as before.
+fn uac_setup(script: &str, sid: &str) -> SetupState {
+    use crate::rdp::host_setup::elevated::{self, Launched, Party};
     let se = crate::updater::installed_cli_path()
         .ok()
         .filter(|path| path.is_file());
-    let (program, arguments) = match se {
-        Some(se) => {
-            let se = se
-                .to_str()
-                .ok_or_else(|| "se path is not Unicode".to_string())?
-                .to_string();
-            (
-                se,
-                format!("rdp host-setup --system {WINDOWS_STEP} --user-sid {sid}"),
-            )
-        }
-        None => {
-            let engine = powershell()?;
+    let Some(se) = se else {
+        crate::rdp::host_setup::prompt_follows();
+        let code = powershell().and_then(|engine| {
             let engine = engine
                 .to_str()
                 .ok_or_else(|| "powershell path is not Unicode".to_string())?
@@ -155,23 +165,34 @@ fn uac_program(script: &str, sid: &str) -> Result<String, String> {
                 "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand {}",
                 encoded(script)
             );
-            (engine, arguments)
-        }
+            exit_code(&uac_launch(&engine, &arguments)?, false)
+        });
+        return code.map_or_else(SetupState::Failed, state_for_exit);
     };
-    let engine = program.as_str();
-    let launch = format!(
-        "{SYSTEM_MODULES}try {{ $p = Start-Process -FilePath {} -Verb RunAs -Wait -WindowStyle Hidden -PassThru \
-         -ArgumentList {}; exit $p.ExitCode }} catch {{ $code = 1224; $e = $_.Exception; \
-         while ($e) {{ if ($e -is [System.ComponentModel.Win32Exception] -and \
-         $e.NativeErrorCode -eq {DECLINED}) {{ $code = {DECLINED} }}; $e = $e.InnerException }}; \
-         exit $code }}",
-        quote(engine),
-        quote(&arguments)
-    );
-    if launch.encode_utf16().count() > 30000 {
-        return Err("setup command exceeds the Windows command-line limit".into());
+    let Some(se) = se.to_str().map(str::to_string) else {
+        return SetupState::Failed("se path is not Unicode".into());
+    };
+    let sid = sid.to_string();
+    let launcher: elevated::Launcher = Box::new(move |steps: &[String]| {
+        let arguments = format!(
+            "{} --user-sid {sid}",
+            elevated::system_args(steps).join(" ")
+        );
+        crate::rdp::host_setup::prompt_follows();
+        let code = exit_code(&uac_launch(&se, &arguments)?, false)?;
+        Ok(Launched {
+            code: Some(code),
+            ..Launched::default()
+        })
+    });
+    match elevated::submit(Party::Rdp, WINDOWS_STEP.into(), launcher) {
+        // UAC carries no output: after a failed login step before it, this
+        // step's code is unknown and the probe after `ensure` decides
+        // (`self_setup_state::recorded_state`).
+        (call, Ok(launched)) => elevated::step_code(&call, Party::Rdp, launched.code)
+            .map_or(SetupState::Done, state_for_exit),
+        (_, Err(error)) => SetupState::Failed(error),
     }
-    Ok(launch)
 }
 
 /// Windows hosts RDP; the edition check runs inside `ensure`.
@@ -204,19 +225,14 @@ pub fn ensure(_probe: &HostProbe, _device_id: Option<&str>) -> SetupState {
         return SetupState::Failed("invalid_user_sid".into());
     }
     let script = setup_script(&context.sid);
-    let code = if context.elevated {
-        exit_code(&script, true)
-    } else if context.session == 0 {
+    if context.elevated {
+        return exit_code(&script, true).map_or_else(SetupState::Failed, state_for_exit);
+    }
+    if context.session == 0 {
         // A service without a desktop cannot show the UAC prompt.
         return SetupState::Failed("no_interactive_session".into());
-    } else {
-        crate::rdp::host_setup::prompt_follows();
-        uac_program(&script, &context.sid).and_then(|launch| exit_code(&launch, false))
-    };
-    match code {
-        Ok(code) => state_for_exit(code),
-        Err(error) => SetupState::Failed(error),
     }
+    uac_setup(&script, &context.sid)
 }
 
 /// Windows RDP uses the account's own sign-in; se manages no credentials.
@@ -276,8 +292,9 @@ fn setup_script(sid: &str) -> String {
 }
 
 /// `se rdp host-setup --system windows-rdp --user-sid <SID>`, run elevated
-/// through UAC by `uac_program`: the fixed script with that SID; the exit
-/// code is the script's, which `state_for_exit` reads in the caller. The
+/// through UAC by `uac_setup` (beside a bundled login step, E44): the fixed
+/// script with that SID; the exit code is the script's, which
+/// `state_for_exit` reads in the caller. The
 /// Linux root steps have no Windows counterpart.
 pub fn run_system_step(step: &str, user_sid: Option<&str>) -> (String, i32) {
     let code = match (step, user_sid) {

@@ -192,6 +192,12 @@ pub enum FsResponse {
     RemoveTree {
         message: FsRemoveTreeMessage,
     },
+    /// `login_target_v1` `LoginTarget` (E43): an offer only for a device
+    /// that may steer this host's screen, else a withdrawal without target;
+    /// never more than `MAX_NETWORK` bytes (`LoginTargetMessage::encode`).
+    LoginTarget {
+        message: crate::share::login_transport::LoginTargetMessage,
+    },
     Err {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         kind: Option<FsErrorKind>,

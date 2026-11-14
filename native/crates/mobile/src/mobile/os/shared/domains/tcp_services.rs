@@ -79,10 +79,20 @@ pub(super) fn open(args: &Value) -> Result<Value, ApiError> {
     Ok(json!({ "mapping": mapping }))
 }
 
-/// Ends the local access of one service.
+/// Ends the local access of one service. A port the device's feed does not
+/// name is refused with the text of `se tcp close-service` and the desktop
+/// (E50), not answered as a close that changed nothing.
 pub(super) fn close(args: &Value) -> Result<Value, ApiError> {
     let (device, key) = identity(args)?;
     let port = port_arg(args)?;
-    let closed = crate::share::auto_forward::close(device, key, port);
-    Ok(json!({ "closed": closed }))
+    if !crate::share::auto_forward::close(device, key, port) {
+        return Err(invalid(format!(
+            "Port {port} ist auf dem Gerät nicht freigegeben"
+        )));
+    }
+    Ok(json!({ "closed": true }))
 }
+
+#[cfg(test)]
+#[path = "tcp_services_close_task_tests.rs"]
+mod close_task_tests;

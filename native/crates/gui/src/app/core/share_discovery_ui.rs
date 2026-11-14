@@ -8,7 +8,7 @@ use eframe::egui;
 
 #[path = "share_discovery_publish_ui.rs"]
 mod publish_ui;
-use publish_ui::{pin_guidance, publisher_ui};
+use publish_ui::{pin_guidance, publisher_ui, renewal_notice_ui};
 
 impl App {
     pub(in crate::app) fn ui_share_discovery_direct(&mut self, ui: &mut egui::Ui) {
@@ -157,12 +157,13 @@ fn active_room_offers_ui(
                     room_name.clone(),
                     offer.expires_at,
                     offer.phase,
+                    offer.renewal_notice(),
                 ))
             }
             DiscoveryPublishTarget::Room { .. } | DiscoveryPublishTarget::Direct => None,
         })
         .collect();
-    for (offer_id, room_name, expires_at, phase) in other_offers {
+    for (offer_id, room_name, expires_at, phase, renewal) in other_offers {
         ui.horizontal_wrapped(|ui| {
             ui.label(format!("Weiterer sichtbarer Raum: {room_name}"));
             ui.label(offer_phase_label(phase));
@@ -175,6 +176,9 @@ fn active_room_offers_ui(
                 actions.push(DiscoveryUiAction::Stop { offer_id });
             }
         });
+        if let Some(notice) = &renewal {
+            renewal_notice_ui(ui, notice);
+        }
     }
 }
 

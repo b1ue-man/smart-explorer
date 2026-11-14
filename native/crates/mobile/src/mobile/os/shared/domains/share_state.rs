@@ -134,9 +134,9 @@ impl ShareState {
                 _ => {}
             }
         }
-        // Offers of a stopped or handed-over worker end here too.
+        // Offers of a stopped or handed-over worker end here; renewals wait (E49).
         self.discovery
-            .retain_live_offers(&snapshot.discovery_offers);
+            .adopt_live(&snapshot.discovery_offers, &snapshot.discovery_renewals);
         self.after_discovery_changes();
         let facts = WorkerFacts::from_snapshot(&snapshot);
         // E17: the daemon renewed the Direct code; read the identity again.

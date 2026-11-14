@@ -2,6 +2,7 @@
 mod host_status;
 mod protected;
 mod readiness;
+mod self_platform;
 mod service;
 pub use host_status::{
     host_process_instance, host_uptime_ms, read_host_evidence, write_host_evidence,
@@ -13,6 +14,11 @@ use crate::login::{
     os::shared::{denied, installation::Paths},
 };
 pub use protected::{open_protected, ProtectedFile};
+pub use self_platform::{
+    connect_grants, create_stage_file, elevation, open_image, privileged, read_self_record,
+    run_elevated, run_install_script, stage_root, write_self_record, APP_FILE, SCRIPT, SCRIPT_NAME,
+    STAGE_IMAGE,
+};
 pub use service::{connect, run_broker, ClientStream};
 pub use session::{binding, finish_helper, helper_binding_matches, prepare_helper};
 pub use spawn::spawn;

@@ -91,12 +91,7 @@ internal suspend fun deliverApproval(
  * actions shows.
  */
 internal fun approvalNotification(context: Context, approval: AccessApproval, id: Int): Notification {
-    val open = PendingIntent.getActivity(
-        context,
-        id,
-        AppNav.intentFor(context, NavRequest.SelectTab(MainTab.Share)),
-        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
-    )
+    val open = shareTabPendingIntent(context, id)
     val lines = approvalLines(approval)
     val hidden = NotificationCompat.Builder(context, Notifications.CHANNEL_ACCESS_APPROVAL)
         .setSmallIcon(R.drawable.ic_lock)
@@ -137,7 +132,7 @@ internal fun screenAction(context: Context, approval: AccessApproval, decision: 
         .build()
 }
 
-/** One answer to exactly [approvalId]: its own data URI keeps it apart from every other question. */
+/** One answer that names [approvalId]: its own data URI keeps it apart from every other question. */
 private fun answerIntent(context: Context, approvalId: String, decision: String): PendingIntent =
     PendingIntent.getBroadcast(
         context,
@@ -164,14 +159,68 @@ private fun answerAction(
 internal fun freeApprovalNotificationId(used: Collection<Int>): Int? =
     (Notifications.ID_APPROVAL_FIRST until Notifications.ID_APPROVAL_FIRST + Notifications.APPROVAL_ID_COUNT).firstOrNull { it !in used }
 
+/** Opens the app on its Share tab; [id] keeps the PendingIntents of different notifications apart. */
+private fun shareTabPendingIntent(context: Context, id: Int): PendingIntent =
+    PendingIntent.getActivity(
+        context,
+        id,
+        AppNav.intentFor(context, NavRequest.SelectTab(MainTab.Share)),
+        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+    )
+
+/** The open questions of one requesting device (E28, M32); [key] is the device id. */
+internal data class DeviceApprovals(
+    val key: String,
+    val deviceName: String,
+    val approvals: List<AccessApproval>,
+) {
+    /** The number of open questions of the device, which its one notification announces. */
+    val count: Int
+        get() = approvals.size
+}
+
+/** The group of a question: its requesting device; a question without a device id forms a group of its own. */
+internal fun deviceGroupKey(approval: AccessApproval): String = approval.deviceId.ifBlank { approval.id }
+
+/** The open questions grouped by requesting device, in the order each device's first question came. */
+internal fun deviceApprovalGroups(list: List<AccessApproval>): List<DeviceApprovals> =
+    list.groupBy { deviceGroupKey(it) }.map { (key, items) -> DeviceApprovals(key, items.first().deviceName, items) }
+
+/**
+ * The notification of a device with two or more open questions (E28, M32): it names their number and
+ * the device. Tapping it opens the app, where the dialog answers each question on its own. It has no
+ * answer action, since one would answer one question of several, and swiping it away answers nothing:
+ * the questions stay open, and the notification returns when their number changes.
+ */
+internal fun deviceApprovalsNotification(context: Context, device: DeviceApprovals, id: Int): Notification {
+    val name = device.deviceName.ifBlank { "einem Gerät" }
+    val hidden = NotificationCompat.Builder(context, Notifications.CHANNEL_ACCESS_APPROVAL)
+        .setSmallIcon(R.drawable.ic_lock)
+        .setContentTitle("${device.count} Rückfragen warten auf deine Bestätigung")
+        .setContentText("Entsperren, um die Rückfragen zu sehen")
+        .build()
+    return NotificationCompat.Builder(context, Notifications.CHANNEL_ACCESS_APPROVAL)
+        .setSmallIcon(R.drawable.ic_lock)
+        .setContentTitle("${device.count} Rückfragen von $name")
+        .setContentText("Öffnen, um jede Rückfrage einzeln zu beantworten")
+        .setPriority(NotificationCompat.PRIORITY_HIGH)
+        .setOnlyAlertOnce(true)
+        .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+        .setPublicVersion(hidden)
+        .setContentIntent(shareTabPendingIntent(context, id))
+        .build()
+}
+
 /**
  * Questions of other devices that wait for this phone's user (plan 2026-10-17, PRM-M10). Woken by
  * [ExecHostNotifier] on every `share` event (the core sends one when a question opens or ends) and
  * by the app's visibility; reads `share.accessApprovals` and shows each question as a dialog in the
- * visible app or as a notification ([approvalDelivery]). When the app is hidden and cannot post a
- * notification (`POST_NOTIFICATIONS` missing or notifications off) it reports
- * `share.reportApprovalUndeliverable`, so the other device is refused with `approval_unavailable`
- * instead of waiting. Every answer names exactly one question. Runs for the whole process once
+ * visible app or as a notification ([approvalDelivery]). The notifications of one requesting device
+ * are one notification that names the number of its open questions ([DeviceApprovals], E28, M32).
+ * When the app is hidden and cannot post a notification (`POST_NOTIFICATIONS` missing or
+ * notifications off) it reports `share.reportApprovalUndeliverable`, so the other device is refused
+ * with `approval_unavailable` instead of waiting. Every answer names one question; „Immer erlauben“
+ * and „Ablehnen“ also answer the open questions equal to it (E28). Runs for the whole process once
  * [start]ed; all state is touched on the main thread.
  */
 object AccessApprovalNotifier {
@@ -192,7 +241,11 @@ object AccessApprovalNotifier {
     /** The open questions, oldest first, without those just answered. */
     val pending: StateFlow<List<AccessApproval>> = pendingFlow.asStateFlow()
 
-    private val notified = LinkedHashMap<String, Int>()
+    /** The notification of each requesting device with open questions. */
+    private val notified = LinkedHashMap<String, Notice>()
+
+    /** A device's notification: its id and the number of open questions it announced. */
+    private class Notice(val id: Int, val count: Int)
     private val reported = HashSet<String>()
     private val answering = HashSet<String>()
     private var startedActivities = 0
@@ -224,8 +277,9 @@ object AccessApprovalNotifier {
     internal fun foregroundActivity(): Activity? = resumed.get()
 
     /**
-     * Answers exactly [approvalId] with [decision] (`once`, `always`, `deny`); [done] ends the
-     * broadcast of a notification action. A question that is no longer open stays unanswered. A
+     * Answers [approvalId] with [decision] (`once`, `always`, `deny`; `always` and `deny` also answer
+     * the open questions equal to it, E28); [done] ends the broadcast of a notification action. A
+     * question that is no longer open stays unanswered. A
      * screen question is allowed only through [ScreenConsentActivity] (system dialog afterwards):
      * from the visible app it opens there; without a visible app nothing is allowed.
      */
@@ -294,7 +348,8 @@ object AccessApprovalNotifier {
         val list = all.filterNot { it.id in answering }
         pendingFlow.value = list
         val open = all.map { it.id }.toSet()
-        notified.keys.filter { it !in open }.forEach { id -> notified.remove(id)?.let { Notifications.cancel(context, it) } }
+        val openDevices = all.map { deviceGroupKey(it) }.toSet()
+        notified.keys.filter { it !in openDevices }.forEach { key -> notified.remove(key)?.let { Notifications.cancel(context, it.id) } }
         reported.retainAll(open)
         val now = SystemClock.elapsedRealtime()
         val since = hiddenSince
@@ -309,17 +364,19 @@ object AccessApprovalNotifier {
         val visible = startedActivities > 0
         // A connection that arose in the background and waits for its rights (plan §F, F1).
         RightsPendingNotifier.refresh(context, visible)
-        for (approval in list) {
-            if (approval.id in reported) continue
-            val delivery = deliverApproval(
-                approval,
-                visible,
-                showInApp = { showInApp(now) },
-                post = { post(context, approval) },
-                report = { id -> reportUndeliverable(id) },
-            )
-            if (delivery == ApprovalDelivery.InApp && visible) {
-                notified.remove(approval.id)?.let { Notifications.cancel(context, it) }
+        for (device in deviceApprovalGroups(list)) {
+            for (approval in device.approvals) {
+                if (approval.id in reported) continue
+                val delivery = deliverApproval(
+                    approval,
+                    visible,
+                    showInApp = { showInApp(now) },
+                    post = { postDevice(context, device) },
+                    report = { id -> reportUndeliverable(id) },
+                )
+                if (delivery == ApprovalDelivery.InApp && visible) {
+                    notified.remove(device.key)?.let { Notifications.cancel(context, it.id) }
+                }
             }
         }
     }
@@ -339,11 +396,24 @@ object AccessApprovalNotifier {
         }
     }
 
-    private fun post(context: Context, approval: AccessApproval): Boolean {
-        val id = notified[approval.id] ?: freeApprovalNotificationId(notified.values) ?: return false
+    /**
+     * Shows [device] as one notification or updates the one it has. A single question is posted on every
+     * refresh, as before. A notification of two or more questions is posted again only when their number
+     * changes, so one the person swiped away does not come back on every refresh. `true` when it shows
+     * the device's questions.
+     */
+    private fun postDevice(context: Context, device: DeviceApprovals): Boolean {
+        val shown = notified[device.key]
+        if (device.count > 1 && shown != null && shown.count == device.count) return true
+        val id = shown?.id ?: freeApprovalNotificationId(notified.values.map { it.id }) ?: return false
         Notifications.ensureChannels(context)
-        if (!Notifications.notify(context, id, approvalNotification(context, approval, id))) return false
-        notified[approval.id] = id
+        val notification = if (device.count == 1) {
+            approvalNotification(context, device.approvals.single(), id)
+        } else {
+            deviceApprovalsNotification(context, device, id)
+        }
+        if (!Notifications.notify(context, id, notification)) return false
+        notified[device.key] = Notice(id, device.count)
         return true
     }
 

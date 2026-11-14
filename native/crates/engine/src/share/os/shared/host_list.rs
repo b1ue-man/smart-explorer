@@ -41,15 +41,24 @@ pub(in crate::share) fn listing(
     }
     let listing = crate::vfs::list_dir_tolerant(&*target.backend, &target.path)?;
     let excluded = crate::share::storage_roots::excluded();
+    // L19 (E53): an entry is private by its spelling, and by its identity only
+    // while an unlocked vault drive is mounted; the identity check opens a
+    // handle per entry on Windows.
+    let identity_checks = !crate::vault::vault_mount_roots().is_empty();
     let entries = listing
         .entries
         .into_iter()
         .filter(|entry| {
-            !hidden(&entry.name)
-                && (target.backend.scheme() != crate::vfs::Scheme::Local
-                    || !excluded.iter().any(|hidden| {
-                        hidden == &std::path::Path::new(&target.path).join(&entry.name)
-                    }))
+            if hidden(&entry.name) {
+                return false;
+            }
+            if target.backend.scheme() != crate::vfs::Scheme::Local {
+                return true;
+            }
+            let entry_path = std::path::Path::new(&target.path).join(&entry.name);
+            !(excluded.iter().any(|place| entry_path.starts_with(place))
+                || (identity_checks
+                    && crate::share::fs_host_policy::identity_in_vault(&entry_path)))
         })
         .map(Into::into)
         .collect();

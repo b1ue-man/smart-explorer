@@ -40,6 +40,8 @@ data class RdpFeedState(
     val setupText: String = "",
     val setupPossible: Boolean = true,
     val remoteApps: List<RdpRemoteApp> = emptyList(),
+    /** Diagnostic lines of that device's RDP host (E54); empty when the device sends none. */
+    val diagnostics: List<String> = emptyList(),
 )
 
 /**

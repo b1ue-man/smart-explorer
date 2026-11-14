@@ -10,7 +10,9 @@
 //!
 //! The place travels with the connection thread (`hold` before the handler,
 //! `release_current` at the registration), so the transport code needs no
-//! extra parameter.
+//! extra parameter. A registering connection reserves its place
+//! (`reserve_current`, O-S5): a reserved place is never evicted, and a newcomer
+//! of a scope whose places are all reserved is refused; its connection is closed.
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -29,6 +31,8 @@ struct Entry {
     source: SourceKey,
     /// A clone of the connection's socket; shutting it down ends the handler.
     stream: TcpStream,
+    /// Set while the connection registers (O-S5); a reserved place is never evicted.
+    reserved: bool,
 }
 
 #[derive(Default)]
@@ -65,8 +69,9 @@ impl HandshakeSlots {
     }
 
     /// A place for a new connection from `source`; a full scope first closes
-    /// its oldest waiting connection. `None` only when the socket cannot be
-    /// cloned for a later eviction.
+    /// its oldest waiting connection that is not reserved. `None` when the
+    /// socket cannot be cloned, or when a full scope holds only reserved places
+    /// (O-S5): the newcomer is then refused, and the caller closes its connection.
     pub(super) fn try_acquire(
         &self,
         source: SourceKey,
@@ -83,9 +88,19 @@ impl HandshakeSlots {
                 let _ = entry.stream.shutdown(Shutdown::Both);
             }
         }
+        if self.is_full(&registry, source) {
+            return None;
+        }
         let id = registry.next_id;
         registry.next_id = registry.next_id.wrapping_add(1);
-        registry.entries.insert(id, Entry { source, stream });
+        registry.entries.insert(
+            id,
+            Entry {
+                source,
+                stream,
+                reserved: false,
+            },
+        );
         Some(HandshakeSlot {
             registry: self.registry.clone(),
             id,
@@ -98,7 +113,7 @@ impl HandshakeSlots {
             registry
                 .entries
                 .iter()
-                .find(|&(_, entry)| matches(entry))
+                .find(|&(_, entry)| !entry.reserved && matches(entry))
                 .map(|(id, _)| *id)
         };
         if source.has_internal_source_limit() {
@@ -117,6 +132,23 @@ impl HandshakeSlots {
             return oldest(&|_: &Entry| true);
         }
         None
+    }
+
+    /// Whether no place is left for `source`, also after the evictions.
+    fn is_full(&self, registry: &Registry, source: SourceKey) -> bool {
+        let same_source = |entry: &Entry| entry.source == source;
+        if source.has_internal_source_limit()
+            && count(registry, &same_source) >= self.max_per_source
+        {
+            return true;
+        }
+        if let Some(network) = source.network() {
+            let same_network = |entry: &Entry| in_network(entry, network);
+            if count(registry, &same_network) >= self.max_per_network {
+                return true;
+            }
+        }
+        registry.entries.len() >= self.max_total
     }
 }
 
@@ -144,6 +176,15 @@ pub(super) struct HandshakeSlot {
     id: u64,
 }
 
+impl HandshakeSlot {
+    /// Marks the place as reserved while the connection registers (O-S5).
+    fn reserve(&self) {
+        if let Some(entry) = lock(&self.registry).entries.get_mut(&self.id) {
+            entry.reserved = true;
+        }
+    }
+}
+
 impl Drop for HandshakeSlot {
     fn drop(&mut self) {
         lock(&self.registry).entries.remove(&self.id);
@@ -166,6 +207,20 @@ pub(super) fn release_current() {
     drop(slot);
 }
 
+/// Reserves the connection thread's place while its registration runs (O-S5);
+/// a thread without a place does nothing.
+pub(super) fn reserve_current() {
+    CURRENT.with(|current| {
+        if let Some(slot) = current.borrow().as_ref() {
+            slot.reserve();
+        }
+    });
+}
+
 #[cfg(test)]
 #[path = "handshake_slots_tests.rs"]
 mod handshake_slots_tests;
+
+#[cfg(test)]
+#[path = "handshake_slots_task_tests.rs"]
+mod handshake_slots_task_tests;

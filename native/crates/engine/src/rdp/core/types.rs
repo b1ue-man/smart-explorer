@@ -1,4 +1,9 @@
 use serde::{Deserialize, Serialize};
+#[path = "feed_diagnostics.rs"]
+mod feed_diagnostics;
+#[cfg(test)]
+#[path = "feed_diagnostics_task_tests.rs"]
+mod feed_diagnostics_task_tests;
 
 pub const RDP_PROBE_VERSION: u16 = 1;
 /// Probe v2 (0.5.189): adds the SHA-1 listener thumbprint and se-managed
@@ -461,6 +466,10 @@ pub struct RdpFeedSummary {
     pub startable: bool,
     pub setup: SetupState,
     pub remote_apps: Vec<PublishedApp>,
+    /// Diagnostic lines of the host probe (E54): at most 16 lines of at most 300 characters,
+    /// also when read from a peer (S16).
+    #[serde(default, deserialize_with = "feed_diagnostics::deserialize_bounded")]
+    pub diagnostics: Vec<String>,
 }
 impl RdpFeedSummary {
     pub fn from_probe(probe: &HostProbe, setup: SetupState) -> Self {
@@ -471,6 +480,7 @@ impl RdpFeedSummary {
             remote_apps: preferred
                 .map(|service| service.remote_apps.clone())
                 .unwrap_or_default(),
+            diagnostics: feed_diagnostics::bounded_feed_diagnostics(&probe.diagnostics),
         }
     }
 }

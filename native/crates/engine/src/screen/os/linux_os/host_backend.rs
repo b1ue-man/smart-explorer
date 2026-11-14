@@ -10,15 +10,22 @@
 //! there input is `control_unavailable`.
 //! The test picture `synthetic` is delegated unchanged. A process without a
 //! display, without PipeWire or without a window-list interface starts and
-//! says so in its limits.
+//! says so in its limits. A daemon without session variables (a root
+//! service, E23) follows the active session of `seat0` at every request
+//! (`active_session::backend`) and reaches its X server through
+//! `active_session::x11`; its window list, icons and portal tokens come
+//! from the session's account (`host_backend_followed`, E47).
 use std::io;
 use std::path::PathBuf;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
+#[path = "host_backend_followed.rs"]
+pub(super) mod followed;
 #[path = "capture_prepared.rs"]
 pub(super) mod prepared;
 
 use super::portal_session::{PortalOptions, PortalSource};
 use super::portal_tokens::{self, TokenKind};
+use super::session_detect::active_session::backend::{Follow, PerSession};
 use super::session_detect::{self, SessionKind};
 use super::{app_units, kde_window_management, pipewire_abi, wayland_toplevels};
 use super::{x11_capture, x11_monitors, x11_windows};
@@ -55,21 +62,25 @@ pub fn is_terminal_program(program: &std::path::Path) -> bool {
 /// The Linux screen host.
 pub struct LinuxBackend {
     session: SessionKind,
+    /// Whether `session` follows the active session (E23).
+    follow: Follow,
     pipewire_library: &'static str,
     /// Token file of the tests; `None` is this user's.
     tokens_file: Option<PathBuf>,
-    x11_facts: OnceLock<Option<x11_capture::ServerFacts>>,
-    no_window_list: OnceLock<bool>,
+    x11_facts: PerSession<Arc<Option<x11_capture::ServerFacts>>>,
+    no_window_list: PerSession<bool>,
 }
 
 impl LinuxBackend {
     /// The backend of this process's session.
     pub fn new() -> Self {
-        Self::with(
+        let mut backend = Self::with(
             session_detect::detect_process(),
             pipewire_abi::LIBRARY_NAME,
             None,
-        )
+        );
+        backend.follow = Follow::of_process();
+        backend
     }
 
     pub fn with(
@@ -79,33 +90,45 @@ impl LinuxBackend {
     ) -> Self {
         Self {
             session,
+            follow: Follow::fixed(),
             pipewire_library,
             tokens_file,
-            x11_facts: OnceLock::new(),
-            no_window_list: OnceLock::new(),
+            x11_facts: PerSession::default(),
+            no_window_list: PerSession::default(),
         }
+    }
+
+    /// The session kind now: fixed, or that of the followed session.
+    fn session(&self) -> SessionKind {
+        self.follow.session(self.session)
     }
 
     fn has_stored_token(&self) -> bool {
         let tokens = match &self.tokens_file {
             Some(file) => portal_tokens::load_from(file),
+            None if self.follow.follows() => followed::stored_tokens(),
             None => portal_tokens::load(),
         };
         tokens.get(TokenKind::ScreenCast).is_some()
     }
 
-    fn x11_facts(&self) -> Option<&x11_capture::ServerFacts> {
-        self.x11_facts.get_or_init(x11_capture::probe).as_ref()
+    fn x11_facts(&self) -> Arc<Option<x11_capture::ServerFacts>> {
+        self.x11_facts
+            .get(self.follow.generation(), || Arc::new(x11_capture::probe()))
     }
 
     /// The list from the first interface the session offers.
     fn list_windows(&self) -> io::Result<WindowList> {
-        let mut list = match self.session {
+        let session = self.session();
+        if self.follow.follows() {
+            return Ok(followed::windows(session));
+        }
+        let mut list = match session {
             SessionKind::None => unknown_list(),
             SessionKind::X11 => x11_windows::list()?,
             SessionKind::Wayland => wayland_list(),
         };
-        if self.session == SessionKind::Wayland {
+        if session == SessionKind::Wayland {
             list.limits.push(LIMIT_WINDOW_PICK_ON_HOST.into());
             if kde_desktop_without_desktop_app() {
                 list.limits.push(LIMIT_KDE_NEEDS_DESKTOP_APP.into());
@@ -159,11 +182,11 @@ impl ScreenHostBackend for LinuxBackend {
     }
 
     fn graphical_session(&self) -> bool {
-        self.session != SessionKind::None
+        self.session() != SessionKind::None
     }
 
     fn monitors(&self) -> Vec<MonitorInfo> {
-        match self.session {
+        match self.session() {
             SessionKind::None => Vec::new(),
             SessionKind::Wayland => vec![MonitorInfo {
                 id: PORTAL_MONITOR_ID.into(),
@@ -183,20 +206,18 @@ impl ScreenHostBackend for LinuxBackend {
     }
 
     fn input(&self) -> InputCapabilities {
-        let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
-        input_for(self.session, &desktop)
+        input_for(self.session(), &self.follow.desktop())
     }
 
     fn limits(&self) -> Vec<String> {
         let mut limits = Vec::new();
-        match self.session {
+        match self.session() {
             SessionKind::Wayland => {
                 if !self.has_stored_token() {
                     limits.push(LIMIT_CONSENT_EACH_SESSION.into());
                 }
                 limits.push(LIMIT_WINDOW_PICK_ON_HOST.into());
-                let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
-                if session_detect::is_wlroots_desktop(&desktop) {
+                if session_detect::is_wlroots_desktop(&self.follow.desktop()) {
                     limits.push(LIMIT_PERSIST_NEEDS_XDPW_ENV.into());
                 }
                 if !pipewire_abi::available(self.pipewire_library) {
@@ -207,7 +228,7 @@ impl ScreenHostBackend for LinuxBackend {
                 }
             }
             SessionKind::X11 => {
-                if let Some(facts) = self.x11_facts() {
+                if let Some(facts) = &*self.x11_facts() {
                     if !facts.shm {
                         limits.push(LIMIT_X11_NO_SHM.into());
                     }
@@ -218,7 +239,7 @@ impl ScreenHostBackend for LinuxBackend {
             }
             SessionKind::None => {}
         }
-        let none = *self.no_window_list.get_or_init(|| {
+        let none = self.no_window_list.get(self.follow.generation(), || {
             self.list_windows()
                 .map_or(true, |list| list.list_source == ListSource::Unknown)
         });
@@ -230,7 +251,7 @@ impl ScreenHostBackend for LinuxBackend {
 
     fn windows(&self) -> io::Result<WindowList> {
         let mut list = self.list_windows()?;
-        super::app_icons::attach(&mut list);
+        followed::attach(self.follow.follows(), &mut list);
         Ok(list)
     }
 
@@ -238,7 +259,7 @@ impl ScreenHostBackend for LinuxBackend {
         &self,
         entry: crate::screen::core::app_icon::AuthorizedIconEntry<'_>,
     ) -> io::Result<Option<crate::screen::core::app_icon::IconReply>> {
-        super::app_icons::load(entry)
+        followed::icon(self.follow.follows(), entry)
     }
 
     fn prepare_session_source(
@@ -262,7 +283,7 @@ impl ScreenHostBackend for LinuxBackend {
             &format!("linux:{source:?}"),
         )
         .map_err(|error| SourceRefusal::new(&error.to_string()))?;
-        match self.session {
+        match self.session() {
             SessionKind::None => Err(SourceRefusal::new("no_display")),
             SessionKind::X11 => {
                 prepared::X11Prepared::new(source, key, admission, false).map(|source| {
@@ -271,7 +292,7 @@ impl ScreenHostBackend for LinuxBackend {
             }
             SessionKind::Wayland => match source {
                 SourceId::Monitor(id) if id == PORTAL_MONITOR_ID => {
-                    let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
+                    let desktop = self.follow.desktop();
                     crate::screen::core::host_admission::prepare_registered(
                         key.clone(),
                         admission.clone(),
@@ -306,7 +327,7 @@ impl ScreenHostBackend for LinuxBackend {
         if admission.session() != session {
             return Err(SourceRefusal::new("capture_session_mismatch"));
         }
-        match self.session {
+        match self.session() {
             SessionKind::X11 => {
                 let source = SourceId::Window(native.0.to_string());
                 let key = crate::screen::core::capture_admission::SourceKey::new(
@@ -329,10 +350,11 @@ impl ScreenHostBackend for LinuxBackend {
         wanted: Option<FrameSize>,
     ) -> Result<Box<dyn ScreenSource>, SourceRefusal> {
         let _ = wanted;
-        if self.session == SessionKind::None && !matches!(source, SourceId::Synthetic) {
+        let session = self.session();
+        if session == SessionKind::None && !matches!(source, SourceId::Synthetic) {
             return Err(SourceRefusal::new("no_display"));
         }
-        if self.session == SessionKind::Wayland
+        if session == SessionKind::Wayland
             && !matches!(source, SourceId::Synthetic)
             && !matches!(source,SourceId::Monitor(id) if id==PORTAL_MONITOR_ID)
         {
@@ -382,7 +404,7 @@ impl ScreenHostBackend for LinuxBackend {
     }
 
     fn inject(&self, events: &[InputEvent]) -> Result<(), ControlBlock> {
-        match self.session {
+        match self.session() {
             SessionKind::X11 => super::x11_input::inject(events),
             SessionKind::Wayland => super::portal_input::inject(events),
             SessionKind::None => Err(ControlBlock::UnsupportedOnHost),
@@ -393,14 +415,14 @@ impl ScreenHostBackend for LinuxBackend {
         member: &crate::remote_window::CaptureMember,
         events: &[InputEvent],
     ) -> Result<(), ControlBlock> {
-        if self.session == SessionKind::X11 {
+        if self.session() == SessionKind::X11 {
             inject_x11_family(member, events, super::x11_input::inject_bound)
         } else {
             self.inject(events)
         }
     }
     fn release_input(&self, events: &[InputEvent]) -> Result<(), ControlBlock> {
-        match self.session {
+        match self.session() {
             SessionKind::X11 => super::x11_input::release(events),
             // Keep the actual portal session/device grant boundary unchanged.
             SessionKind::Wayland => super::portal_input::inject(events),
@@ -433,11 +455,10 @@ pub fn input_for(session: SessionKind, desktop: &str) -> InputCapabilities {
     }
 }
 
-/// The monitors of the X server of `DISPLAY`.
+/// The monitors of the X server of `DISPLAY` (or of the followed session).
 fn x11_rb_monitors() -> io::Result<Vec<MonitorInfo>> {
     use x11rb::connection::Connection;
-    let (connection, screen) =
-        x11rb::rust_connection::RustConnection::connect(None).map_err(io::Error::other)?;
+    let (connection, screen) = session_detect::active_session::x11::connect()?;
     let root = connection.setup().roots[screen].root;
     x11_monitors::list(&connection, root)
 }

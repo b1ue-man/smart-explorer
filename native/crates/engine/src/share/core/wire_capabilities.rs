@@ -86,6 +86,11 @@ pub struct FsHostFeatures {
     /// with its renewed data (`direct_reciprocal_wire.rs`).
     #[serde(default, skip_serializing_if = "is_false")]
     pub code_renewal_v1: bool,
+    /// E22/E43: `LoginTarget`, the public target of this host's machine
+    /// login gateway for a device that may steer its screen
+    /// (`login_transport::host_login_target`); others get a withdrawal.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub login_target_v1: bool,
 }
 
 impl FsHostFeatures {
@@ -113,6 +118,7 @@ impl FsHostFeatures {
             reversible_replace_v1: true,
             remove_tree_v1: true,
             code_renewal_v1: true,
+            login_target_v1: true,
         }
     }
 
@@ -144,6 +150,7 @@ impl FsHostFeatures {
             (self.reversible_replace_v1, "reversible_replace_v1"),
             (self.remove_tree_v1, "remove_tree_v1"),
             (self.code_renewal_v1, "code_renewal_v1"),
+            (self.login_target_v1, "login_target_v1"),
         ]
         .into_iter()
         .filter_map(|(offered, name)| offered.then_some(name))

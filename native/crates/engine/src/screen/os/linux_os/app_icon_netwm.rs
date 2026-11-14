@@ -6,7 +6,8 @@ pub(super) fn window_icon(window: &WindowEntry, desktop: &DesktopIcon) -> Option
     use x11rb::connection::Connection;
     use x11rb::protocol::xproto::{AtomEnum, ConnectionExt};
     let xid: u32 = window.id.parse().ok()?;
-    let (connection, _) = x11rb::rust_connection::RustConnection::connect(None).ok()?;
+    // The server of `DISPLAY`, or of the session a daemon follows (E23).
+    let (connection, _) = super::super::session_detect::active_session::x11::connect().ok()?;
     let class = connection
         .get_property(false, xid, AtomEnum::WM_CLASS, AtomEnum::STRING, 0, 1024)
         .ok()?

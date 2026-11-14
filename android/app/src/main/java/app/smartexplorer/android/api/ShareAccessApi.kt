@@ -167,6 +167,10 @@ data class AccessApproval(
 @Serializable
 data class AccessApprovals(val pending: List<AccessApproval> = emptyList())
 
+/** The reply of `share.decideAccessApproval`: how many other open questions it answered too (E28). */
+@Serializable
+data class DecisionReply(val alsoAnswered: Int = 0)
+
 /** The arguments of `share.setAccess`; `validUntil` [ValidUntil.None] is sent as `null`. */
 internal fun setAccessArgs(targetKey: String, change: AccessChange): JsonObject = buildJsonObject {
     put("targetKey", targetKey)
@@ -206,16 +210,19 @@ object ShareAccessApi {
     /** Open questions of other devices, oldest first. */
     suspend fun approvals(): List<AccessApproval> = Core.request<AccessApprovals>("share.accessApprovals").pending
 
-    /** The answer to exactly [approvalId]; `not_found` once the question is no longer open. */
-    suspend fun decide(approvalId: String, decision: String) {
-        Core.call(
+    /**
+     * The answer to [approvalId]; `not_found` once the question is no longer open. „Immer erlauben“
+     * and „Ablehnen“ also answer the open questions equal to it (E28). Returns how many of those other
+     * questions were answered too.
+     */
+    suspend fun decide(approvalId: String, decision: String): Int =
+        Core.request<DecisionReply>(
             "share.decideAccessApproval",
             buildJsonObject {
                 put("approvalId", approvalId)
                 put("decision", decision)
             },
-        )
-    }
+        ).alsoAnswered
 
     /** This phone can show [approvalId] nowhere: the other device gets `approval_unavailable`. */
     suspend fun reportUndeliverable(approvalId: String) {

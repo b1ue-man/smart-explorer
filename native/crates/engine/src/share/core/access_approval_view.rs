@@ -19,7 +19,8 @@ const MAX_SHOWN_CHARS: usize = 256;
 const MAX_SHOWN_ARGS: usize = 32;
 
 /// Id of one request: 16 random bytes as 32 lowercase hex characters. A
-/// decision names exactly one request; ids are never reused.
+/// decision names one request; „Immer erlauben“ and „Ablehnen“ also answer
+/// the open requests equal to it (E28); ids are never reused.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub struct ApprovalId(String);

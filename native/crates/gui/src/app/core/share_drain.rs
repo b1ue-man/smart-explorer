@@ -387,6 +387,9 @@ impl App {
         // that was stopped or handed over to a new version disappear here.
         self.share_discovery
             .retain_live_offers(&snapshot.discovery_offers);
+        // E49: offers that ended after too many failed attempts, in their pause.
+        self.share_discovery
+            .set_waiting_renewals(&snapshot.discovery_renewals);
         if let Some(target) = auto_open_target {
             self.open_share_target(target);
         }

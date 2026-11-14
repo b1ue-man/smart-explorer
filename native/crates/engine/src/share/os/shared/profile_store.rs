@@ -214,7 +214,25 @@ impl ShareProfiles {
     }
 
     pub fn remove_direct_contact(&mut self, contact_id: &str) -> Result<ProfileChange, String> {
-        self.remove_direct_contact_with(contact_id, &mut SystemProfilePersistence::default())
+        let device = self
+            .direct_contacts
+            .iter()
+            .find(|contact| contact.id == contact_id)
+            .and_then(|contact| {
+                super::login_transport::removed_contact_device(
+                    contact.remote_device_id.as_deref(),
+                    contact.presence.as_ref(),
+                )
+            });
+        let change =
+            self.remove_direct_contact_with(contact_id, &mut SystemProfilePersistence::default())?;
+        // E43: the removed contact's machine login target goes with it.
+        if let Some(device) = device {
+            if let Err(error) = super::login_transport::viewer_forget_login_target(&device) {
+                eprintln!("Anmeldeziel von {device} nicht gelöscht: {error}");
+            }
+        }
+        Ok(change)
     }
 
     pub fn add_room_from_code(&mut self, code: &str, name: &str) -> Result<String, String> {

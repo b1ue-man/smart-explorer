@@ -81,37 +81,63 @@ pub fn run_until_ready(
     let identity: MachineIdentity = serde_json::from_slice(&raw)
         .map_err(|_| denied("private gateway machine identity JSON is invalid"))?;
     let key = identity.key_for_policy(&policy)?;
+    let mut options = read_network()?;
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_name("login-gateway")
+        .build()?;
+    let mut ready = Some(ready);
+    let mut initial = Some(policy);
+    // E21: the broker replaces `gateway-network.json` when the configured
+    // Share server changes; the endpoint is bound again with the new relays.
+    let result = loop {
+        let current = match initial.take() {
+            Some(policy) => Ok(policy),
+            None => installation::policy(),
+        };
+        let current = match current.and_then(epoch) {
+            Ok(current) => current,
+            Err(error) => break Err(error),
+        };
+        let served = runtime.block_on(serve(
+            key.clone(),
+            identity.machine_id.clone(),
+            options.clone(),
+            current,
+            stop.clone(),
+            ready.take(),
+        ));
+        match served {
+            Ok(Some(next)) => options = next,
+            Ok(None) => break Ok(()),
+            Err(error) => break Err(error),
+        }
+    };
+    // Blocking broker operations have bounded native IPC. Dropping their command
+    // sender cooperatively ends the worker; abort is never treated as cancellation.
+    runtime.shutdown_timeout(Duration::from_secs(15));
+    result
+}
+fn read_network() -> io::Result<GatewayNetwork> {
     let options: GatewayNetwork = match platform::read_gateway_network()? {
         Some(bytes) => serde_json::from_slice(&bytes)
             .map_err(|_| denied("private gateway network JSON is invalid"))?,
         None => GatewayNetwork::default(),
     };
     options.validate()?;
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .thread_name("login-gateway")
-        .build()?;
-    let result = runtime.block_on(serve(
-        key,
-        identity.machine_id.clone(),
-        options,
-        epoch(policy)?,
-        stop,
-        ready,
-    ));
-    // Blocking broker operations have bounded native IPC. Dropping their command
-    // sender cooperatively ends the worker; abort is never treated as cancellation.
-    runtime.shutdown_timeout(Duration::from_secs(15));
-    result
+    Ok(options)
 }
+/// Network record polls per policy tick (200 ms each).
+const NETWORK_TICKS: u32 = 10;
+/// `Ok(Some(network))`: the network record changed, bind again with it.
 async fn serve(
     key: iroh::SecretKey,
     machine: String,
     options: GatewayNetwork,
     initial: Epoch,
     stop: Arc<AtomicBool>,
-    ready: impl FnOnce() -> io::Result<()>,
-) -> io::Result<()> {
+    ready: Option<impl FnOnce() -> io::Result<()>>,
+) -> io::Result<Option<GatewayNetwork>> {
     let endpoint = transport::bind_machine(key, &options).await?;
     let (epochs, _) = watch::channel(initial);
     let admission = transport::GatewayAdmission::new(PENDING_HANDSHAKES);
@@ -124,13 +150,24 @@ async fn serve(
     let address = serde_json::to_vec(&transport::address(&machine, &endpoint, &options))
         .map_err(io::Error::other)?;
     platform::write_gateway_address(&address)?;
-    ready()?;
+    if let Some(ready) = ready {
+        ready()?;
+    }
+    let mut ticks = 0u32;
     let result = (async {
         loop {
             tokio::select! {
                 biased;
                 _ = tick.tick() => {
                     if stop.load(Ordering::SeqCst) { break; }
+                    ticks += 1;
+                    if ticks >= NETWORK_TICKS {
+                        ticks = 0;
+                        // An unreadable record keeps the running, valid binding.
+                        if let Ok(Ok(next)) = tokio::task::spawn_blocking(read_network).await {
+                            if next != options { return Ok(Some(next)); }
+                        }
+                    }
                     let next = tokio::task::spawn_blocking(installation::policy).await.map_err(io::Error::other)??;
                     platform::require_gateway(&next)?;
                     if next.machine_id != machine || next.machine_public_key != endpoint.id().to_string() {
@@ -160,7 +197,7 @@ async fn serve(
                 }
             }
         }
-        Ok(())
+        Ok(None)
     }).await;
     // Closing the endpoint revokes transport admission before async tasks drop
     // their local broker senders and release the helper through local EOF.

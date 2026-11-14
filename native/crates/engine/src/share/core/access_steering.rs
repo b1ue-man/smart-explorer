@@ -128,6 +128,15 @@ pub fn steering_device(device_id: &str, public_key: &str) -> bool {
         .is_ok_and(|devices| devices.contains(&key))
 }
 
+/// Whether any device still steers this screen (the set `note_steering_devices`
+/// holds). An unreadable set counts as no device, so the caller switches a
+/// sharing that se set up off rather than keeping it on (E57).
+pub fn any_steering() -> bool {
+    STEERING_DEVICES
+        .read()
+        .is_ok_and(|devices| !devices.is_empty())
+}
+
 /// Whether `grant` allows steering the screen at `now`.
 pub fn steers(grant: &AccessGrant, now: i64) -> bool {
     !grant.expired_at(now) && grant.decision(Capability::ScreenControl) == CapabilityDecision::Allow

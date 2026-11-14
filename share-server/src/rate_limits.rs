@@ -3,7 +3,7 @@ use std::time::Instant;
 
 use lru::LruCache;
 
-use super::limits::SourceKey;
+use super::limits::{NetworkKey, SourceKey};
 
 const ACCEPT_SOURCE_CACHE_CAPACITY: usize = 4_096;
 const ACCEPTS_PER_SECOND_GLOBAL: f64 = 128.0;
@@ -75,17 +75,24 @@ impl AcceptRateLimiter {
 /// so the permanent binding tables are filled at most this fast per source.
 const NEW_BINDINGS_PER_SECOND_PER_SOURCE: f64 = 0.1;
 const NEW_BINDING_BURST_PER_SOURCE: f64 = 512.0;
+/// New bindings of one IPv6 /56 end site, shared by its /64 sources (r-server
+/// U4): a /56 holds 256 /64 sources, which must not multiply the budget.
+const NEW_BINDINGS_PER_SECOND_PER_END_SITE: f64 = 0.1;
+const NEW_BINDING_BURST_PER_END_SITE: f64 = 512.0;
 
-/// Token buckets for new key bindings, by source; the externally limited
-/// proxy bucket has none (its proxy limits the original clients).
+/// Token buckets for new key bindings, by source and by IPv6 end site. The
+/// externally limited proxy bucket has none (its proxy limits the original
+/// clients); a binding takes one token of both buckets of its source.
 pub(super) struct NewBindingRateLimiter {
     by_source: LruCache<SourceKey, TokenBucket>,
+    by_end_site: LruCache<NetworkKey, TokenBucket>,
 }
 
 impl Default for NewBindingRateLimiter {
     fn default() -> Self {
         Self {
             by_source: LruCache::new(BINDING_SOURCE_CACHE_CAPACITY),
+            by_end_site: LruCache::new(BINDING_SOURCE_CACHE_CAPACITY),
         }
     }
 }
@@ -114,10 +121,29 @@ impl NewBindingRateLimiter {
             )
         });
         bucket.refill(now);
-        if !bucket.can_consume(1.0) {
+        let mut end_site = None;
+        if let Some(network) = source.network() {
+            let end_site_bucket = self.by_end_site.get_or_insert_mut(network, || {
+                TokenBucket::new(
+                    NEW_BINDINGS_PER_SECOND_PER_END_SITE,
+                    NEW_BINDING_BURST_PER_END_SITE,
+                    now,
+                )
+            });
+            end_site_bucket.refill(now);
+            end_site = Some(end_site_bucket);
+        }
+        let end_site_allows = match &end_site {
+            Some(end_site_bucket) => end_site_bucket.can_consume(1.0),
+            None => true,
+        };
+        if !bucket.can_consume(1.0) || !end_site_allows {
             return false;
         }
         bucket.consume(1.0);
+        if let Some(end_site_bucket) = end_site {
+            end_site_bucket.consume(1.0);
+        }
         true
     }
 }
@@ -289,3 +315,7 @@ mod tests {
 #[cfg(test)]
 #[path = "rate_limits_tests.rs"]
 mod rate_limits_tests;
+
+#[cfg(test)]
+#[path = "unbelegt_binding_budget_task_tests.rs"]
+mod unbelegt_binding_budget_task_tests;

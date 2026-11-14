@@ -179,7 +179,9 @@ pub fn resolve(path: &str, exports: &Arc<Mutex<ShareExportConfig>>) -> io::Resul
         let MountTarget::Connection { connection, access } = mount.target else {
             return Err(eio("Ungueltiges Verbindungsziel"));
         };
-        return resolve_connection(&connection, conn_rest, access);
+        // R-FS-3 as for a local share: the peer sees `/Verbindungen/<name>`.
+        let virtual_root = format!("/{CONNECTIONS_MOUNT}/{conn_name}");
+        return resolve_connection(&connection, conn_rest, access, &virtual_root);
     }
 
     let mount = local_mounts(&cfg)
@@ -216,7 +218,9 @@ fn resolve_connection(
     c: &SavedConnection,
     rest: &[String],
     access: ExportAccess,
+    virtual_root: &str,
 ) -> io::Result<ResolvedTarget> {
+    note_connection_root(&c.root, virtual_root);
     if c.protocol == Protocol::Share {
         let secret = crate::creds::get_secret_checked(&c.account()).map_err(eio)?;
         let nc = crate::net::NetConnection::connect(
@@ -226,6 +230,7 @@ fn resolve_connection(
         )?;
         let configured = c.root.replace('\\', "/");
         let (root, path) = local_paths::secure_local_resolved(&configured, rest)?;
+        super::fs_error::note_export_root(&root, virtual_root);
         return guard_target(
             ResolvedTarget {
                 backend: Arc::new(LocalBackend::new(&root)),
@@ -252,6 +257,12 @@ fn resolve_connection(
         },
         None,
     )
+}
+
+/// R-FS-3 for a saved connection: errors sent to the peer name its root by the
+/// virtual path (`/Verbindungen/<name>`), not by the configured address.
+pub(super) fn note_connection_root(root: &str, virtual_root: &str) {
+    super::fs_error::note_export_root(root, virtual_root);
 }
 
 pub fn remove_dir_recursive(be: &dyn crate::vfs::Backend, path: &str) -> io::Result<()> {
@@ -457,3 +468,7 @@ mod tests {
 #[cfg(test)]
 #[path = "fs_vault_task_tests.rs"]
 mod vault_task_tests;
+
+#[cfg(test)]
+#[path = "fs_fehler_task_tests.rs"]
+mod fehler_task_tests;

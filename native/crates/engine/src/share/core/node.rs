@@ -25,6 +25,9 @@ use super::wire::FsTransferCapabilities;
 #[path = "node_restrictions.rs"]
 mod restrictions;
 
+#[path = "blocked_keys.rs"]
+pub(in crate::share) mod blocked_keys;
+
 #[path = "node_idle.rs"]
 mod idle;
 #[path = "pq_kx.rs"]
@@ -165,7 +168,8 @@ impl ShareIrohNode {
             ])
             .relay_mode(relay_mode)
             .path_selector(Arc::new(super::route_adapter::RouteSelector::default()))
-            .transport_config(iroh_transport_config_for_routes(true));
+            .transport_config(iroh_transport_config_for_routes(true))
+            .remote_key_gate(blocked_keys::remote_key_gate(auth.clone()));
         let dns_resolver = {
             let _runtime = rt.enter();
             super::transport_options::dns_resolver()

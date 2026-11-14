@@ -123,6 +123,18 @@ fn json_value(
         // `null` without one (also while the worker cannot be reached).
         "code_renewal": code_renewal_output::value(snapshot.code_renewal.as_ref()),
         "discoverable": discoverable_values(snapshot, profiles),
+        // E49: renewals in their pause; a stop of `replaces` cancels one.
+        "discoverable_renewals": snapshot
+            .discovery_renewals
+            .iter()
+            .map(|renewal| {
+                discoverable_output::waiting_value(
+                    renewal,
+                    profiles,
+                    crate::share::core_now_secs(),
+                )
+            })
+            .collect::<Vec<_>>(),
         // This host's Remote Desktop self-setup: running (an administrator
         // prompt of Smart Explorer may be open), last result, failure.
         "rdp_setup": snapshot.rdp_setup.as_ref().map(|setup| serde_json::json!({
@@ -230,6 +242,16 @@ fn print_text(
     let now = crate::share::core_now_secs();
     for offer in &snapshot.discovery_offers {
         println!("{}", discoverable_output::offer_text(offer, profiles, now));
+        // E49: a renewed offer names why it was renewed and its new PIN.
+        for line in discoverable_output::renewal_lines(offer) {
+            println!("{line}");
+        }
+    }
+    for renewal in &snapshot.discovery_renewals {
+        println!(
+            "{}",
+            discoverable_output::waiting_text(renewal, profiles, now)
+        );
     }
 }
 

@@ -2,7 +2,9 @@
 //! roots, delivery to the consumers' sinks (filter, own directories,
 //! coalesced `Overflow` for full channels) and the lazily started platform
 //! backend (Linux/Android: one inotify instance for all roots; Windows:
-//! `ReadDirectoryChangesW` per root with handle release on volume removal).
+//! `ReadDirectoryChangesW` per root with handle release on volume removal;
+//! Windows confined watches: `ReadDirectoryChangesW` on the held pin's own
+//! overlapped handle, `windows_handle_watch.rs`).
 
 use std::collections::{BTreeMap, HashMap};
 use std::io;
@@ -24,6 +26,13 @@ static SERVICE: Mutex<Service> = Mutex::new(Service {
 });
 /// Directory verdicts remembered per watch before the cache starts over.
 const DIR_CACHE_LIMIT: usize = 4_096;
+
+#[cfg(windows)]
+#[path = "../windows_handle_watch.rs"]
+mod handle_watch;
+#[cfg(all(test, windows))]
+#[path = "../windows_handle_watch_task_tests.rs"]
+mod windows_watch_task_tests;
 
 /// What the backend needs to arm one root.
 #[derive(Clone)]
@@ -102,6 +111,8 @@ impl Drop for WatchHandle {
         if let Some(backend) = &service.backend {
             backend.remove(self.id);
         }
+        #[cfg(windows)]
+        handle_watch::remove(self.id);
     }
 }
 
@@ -130,8 +141,10 @@ pub fn watch(
 
 /// Watches an already authorized directory without resolving its display
 /// path again. Linux/Android watch the held object and its immediate entries;
-/// `Ready(LocalOnly)` requires polling for deeper changes. Windows cannot
-/// derive an overlapped watch from its read pin and returns `Unsupported`.
+/// `Ready(LocalOnly)` requires polling for deeper changes. Windows watches
+/// the whole subtree on an overlapped handle of the held object itself
+/// (identity-checked against the pin), never following links below the
+/// root; `Ready(Complete)` locally, `Ready(LocalOnly)` on network paths.
 /// A missing root must be opened safely by the caller before using this API.
 pub fn watch_confined(
     anchor: &crate::local_access::DirectoryHandle,
@@ -146,6 +159,7 @@ pub fn watch_confined(
             "watch root must be absolute",
         ));
     }
+    #[cfg(not(windows))]
     if anchor.watch_path().is_none() {
         return Err(io::Error::new(
             io::ErrorKind::Unsupported,
@@ -190,6 +204,23 @@ fn register(
             dir_verdicts: HashMap::new(),
         },
     );
+    // A confined Windows watch never reaches the path-based backend.
+    #[cfg(windows)]
+    if let Some(anchor) = spec.anchor.clone() {
+        drop(service);
+        if let Err(error) = handle_watch::add(id, anchor) {
+            emit(
+                id,
+                vec![WatchEvent::Unavailable(UnavailableReason::Failed(format!(
+                    "Überwachung nicht startbar: {error}"
+                )))],
+            );
+        }
+        return Ok(WatchHandle {
+            id,
+            root: display_root.to_path_buf(),
+        });
+    }
     if service.backend.is_none() {
         match Backend::start() {
             Ok(backend) => service.backend = Some(backend),
@@ -301,6 +332,8 @@ pub fn emit(id: WatchId, events: Vec<WatchEvent>) {
                 if let Some(backend) = &service.backend {
                     backend.remove(id);
                 }
+                #[cfg(windows)]
+                handle_watch::remove(id);
                 return;
             }
         }

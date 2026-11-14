@@ -54,6 +54,8 @@ data class RouteBudget(
     /** Offset from this generation's start, not a wall-clock timestamp. */
     val directDeadlineMs: Long? = null,
     val frozenCandidates: Int? = null,
+    /** Candidates refused by the candidate cap; null when none was refused (F13). */
+    val droppedCandidates: Int? = null,
 )
 
 @Serializable

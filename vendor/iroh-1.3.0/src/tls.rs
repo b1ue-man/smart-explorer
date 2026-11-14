@@ -1,3 +1,5 @@
+// Smart Explorer M6 patch (2026-11-08): remote key gate and no TLS resumption while it is set;
+// see vendor/SMART_EXPLORER_ROUTE_POLICY.md, section "M6: remote key gate before any own address".
 //! TLS configuration for iroh.
 //!
 //! Currently there is one mechanism available:
@@ -12,6 +14,7 @@ use noq::crypto::rustls::{QuicClientConfig, QuicServerConfig};
 use tracing::warn;
 
 use self::resolver::ResolveRawPublicKeyCert;
+use crate::endpoint::RemoteKeyGate;
 
 pub(crate) mod misc;
 pub(crate) mod name;
@@ -49,6 +52,8 @@ pub(crate) struct TlsConfig {
     client_verifier: Arc<verifier::ClientCertificateVerifier>,
     session_store: Arc<dyn rustls::client::ClientSessionStore>,
     crypto_provider: Arc<rustls::crypto::CryptoProvider>,
+    /// Smart Explorer M6: remote keys refused in the handshake (`None`: upstream behavior).
+    pub(crate) remote_key_gate: Option<RemoteKeyGate>,
 }
 
 impl TlsConfig {
@@ -59,14 +64,25 @@ impl TlsConfig {
     ) -> Self {
         Self {
             cert_resolver: Arc::new(ResolveRawPublicKeyCert::new(&secret_key)),
-            server_verifier: Arc::new(verifier::ServerCertificateVerifier),
-            client_verifier: Arc::new(verifier::ClientCertificateVerifier),
+            server_verifier: Arc::new(verifier::ServerCertificateVerifier::default()),
+            client_verifier: Arc::new(verifier::ClientCertificateVerifier::default()),
             session_store: Arc::new(rustls::client::ClientSessionMemoryCache::new(
                 max_tls_tickets,
             )),
             crypto_provider,
             secret_key,
+            remote_key_gate: None,
         }
+    }
+
+    /// Smart Explorer M6: both verifiers refuse the keys `gate` refuses, and
+    /// the configurations made afterwards resume no TLS session. Call before
+    /// [`Self::make_client_config`] and [`Self::make_server_config`].
+    pub(crate) fn with_remote_key_gate(mut self, gate: Option<RemoteKeyGate>) -> Self {
+        self.server_verifier = Arc::new(verifier::ServerCertificateVerifier { gate: gate.clone() });
+        self.client_verifier = Arc::new(verifier::ClientCertificateVerifier { gate: gate.clone() });
+        self.remote_key_gate = gate;
+        self
     }
 
     /// Create a TLS client configuration.
@@ -87,6 +103,12 @@ impl TlsConfig {
         // TODO: enable/disable 0-RTT/storing tickets
         crypto.resumption = rustls::client::Resumption::store(self.session_store.clone());
         crypto.enable_early_data = true;
+        if self.remote_key_gate.is_some() {
+            // Smart Explorer M6: every handshake shows the server certificate
+            // to the gate; a resumed one would skip the verifier.
+            crypto.resumption = rustls::client::Resumption::disabled();
+            crypto.enable_early_data = false;
+        }
 
         // The synthetic server name is used locally to select the expected endpoint ID
         // and to partition the session cache. Iroh servers do not use SNI, so do not
@@ -123,6 +145,13 @@ impl TlsConfig {
         // must be u32::MAX or 0 (the default). Any other value panics with QUIC
         // This is specified in RFC 9001: https://www.rfc-editor.org/rfc/rfc9001#section-4.6.1
         crypto.max_early_data_size = u32::MAX;
+        if self.remote_key_gate.is_some() {
+            // Smart Explorer M6: no ticket and no stored session, so no client
+            // resumes past the client verifier (a PSK handshake carries no
+            // certificate) and no 0-RTT frame arrives before the gate answered.
+            crypto.send_tls13_tickets = 0;
+            crypto.session_storage = Arc::new(rustls::server::NoServerSessionStorage {});
+        }
         let quic = QuicServerConfig::try_from(crypto)?;
         Ok(quic)
     }

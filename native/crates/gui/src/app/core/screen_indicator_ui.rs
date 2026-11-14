@@ -6,7 +6,10 @@
 //! every session it shows: no session runs without the indicator. It reads
 //! the sessions from the worker as they change and closes itself shortly
 //! after the last one ended. A new update-stop request closes it without
-//! ending sessions; the worker ends them on its own (V8).
+//! ending sessions; the worker ends them on its own (V8). A window of a
+//! followed session (E46) reads only the channel its worker gave it; when
+//! that channel stays unreachable, the worker is gone and so are its
+//! sessions, as for a window that finds no worker.
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::{Duration, Instant};
 
@@ -21,6 +24,8 @@ use crate::screen::core::wire_hello::SessionMode;
 const EMPTY_LINGER: Duration = Duration::from_secs(3);
 /// Pause after a failed read of the sessions.
 const RETRY: Duration = Duration::from_secs(1);
+/// Failed reads in a row after which a window channel counts as gone.
+const CHANNEL_GONE_AFTER: u32 = 5;
 
 /// Runs the indicator until no session is left or the user closes it.
 pub fn run_screen_indicator() -> eframe::Result<()> {
@@ -196,6 +201,8 @@ fn stop(session: Option<String>) {
 /// is no session, so the window closes.
 fn watch(slot: &Weak<Mutex<State>>, ctx: &egui::Context) {
     let mut revision = None;
+    let channel = crate::share::consent_launch::in_window_channel();
+    let mut failures = 0u32;
     loop {
         let read = match revision {
             None => crate::daemon::screen_sessions(),
@@ -209,6 +216,7 @@ fn watch(slot: &Weak<Mutex<State>>, ctx: &egui::Context) {
             match read {
                 Ok((next, sessions)) => {
                     revision = Some(next);
+                    failures = 0;
                     current.sessions = sessions;
                     current.loaded = true;
                     current.error = None;
@@ -216,6 +224,11 @@ fn watch(slot: &Weak<Mutex<State>>, ctx: &egui::Context) {
                 }
                 Err(error) => {
                     revision = None;
+                    failures = failures.saturating_add(1);
+                    if channel && failures >= CHANNEL_GONE_AFTER {
+                        current.sessions.clear();
+                        current.loaded = true;
+                    }
                     current.error = Some(error);
                     true
                 }

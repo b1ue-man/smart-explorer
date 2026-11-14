@@ -16,6 +16,8 @@ use super::state::log;
 
 #[path = "ipc_admission.rs"]
 mod admission;
+#[path = "ipc_window_channel.rs"]
+mod window_channel;
 
 const PRE_AUTH_READ_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_PRE_AUTH_CONNECTIONS: usize = 16;
@@ -65,6 +67,9 @@ pub fn start_listener(host: ShareHost) -> io::Result<IpcListener> {
     let limiter = PreAuthLimiter::new(MAX_PRE_AUTH_CONNECTIONS);
     let stopping = Arc::new(AtomicBool::new(false));
     let loop_stopping = Arc::clone(&stopping);
+    // E46: the windows of a followed session reach this listener through
+    // channels of their own (`ipc_window_channel.rs`).
+    let window_token = token.clone();
 
     let spawned = std::thread::Builder::new()
         .name("daemon-ipc".into())
@@ -82,14 +87,16 @@ pub fn start_listener(host: ShareHost) -> io::Result<IpcListener> {
                 &loop_stopping,
                 &|| stop_requested_for(&generation),
                 |stream, peer| {
+                    let authority = admission::Authority::Worker(&host);
                     admissions
                         .borrow_mut()
-                        .accept(stream, peer, &host, &token, |stream| {
+                        .accept(stream, peer, authority, &token, |stream| {
                             admit_client(stream, &host, &token, &limiter)
                         })
                 },
                 || {
-                    admissions.borrow_mut().poll(&host, &token, |stream| {
+                    let authority = admission::Authority::Worker(&host);
+                    admissions.borrow_mut().poll(authority, &token, |stream| {
                         admit_client(stream, &host, &token, &limiter)
                     })
                 },
@@ -97,7 +104,10 @@ pub fn start_listener(host: ShareHost) -> io::Result<IpcListener> {
         });
 
     match spawned {
-        Ok(_) => Ok(IpcListener { addr, stopping }),
+        Ok(_) => {
+            window_channel::install(addr, window_token);
+            Ok(IpcListener { addr, stopping })
+        }
         Err(error) => {
             clear_publication();
             Err(error)
@@ -307,14 +317,16 @@ pub(in crate::daemon) fn serve_for_test(host: ShareHost, token: String) -> io::R
                 &loop_stopping,
                 &|| false,
                 |stream, peer| {
+                    let authority = admission::Authority::Worker(&host);
                     admissions
                         .borrow_mut()
-                        .accept(stream, peer, &host, &token, |stream| {
+                        .accept(stream, peer, authority, &token, |stream| {
                             admit_client(stream, &host, &token, &limiter)
                         })
                 },
                 || {
-                    admissions.borrow_mut().poll(&host, &token, |stream| {
+                    let authority = admission::Authority::Worker(&host);
+                    admissions.borrow_mut().poll(authority, &token, |stream| {
                         admit_client(stream, &host, &token, &limiter)
                     })
                 },

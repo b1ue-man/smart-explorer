@@ -238,8 +238,7 @@ impl ShareProfiles {
         now: i64,
     ) {
         for grant in &mut self.direct_grants {
-            if (!peer.public_key.is_empty() && grant.public_key == peer.public_key
-                || !peer.node_id.is_empty() && grant.node_id == peer.node_id)
+            if Self::revocation_reaches(peer, &grant.device_id, &grant.public_key, &grant.node_id)
                 && (grant.state != DirectGrantState::Ignored || grant.exec.grants_any())
             {
                 grant.state = DirectGrantState::Ignored;
@@ -297,9 +296,15 @@ impl ShareProfiles {
             public_key: grant.public_key.clone(),
             fingerprint: grant.fingerprint.clone(),
         };
+        // The same reach as a revocation (`withdraw_direct_key`), so a grant
+        // without key and node id that a revocation reached can be allowed again.
         let matches = |grant: &DirectGrant| {
-            !identity.public_key.is_empty() && grant.public_key == identity.public_key
-                || !identity.node_id.is_empty() && grant.node_id == identity.node_id
+            Self::revocation_reaches(
+                &identity,
+                &grant.device_id,
+                &grant.public_key,
+                &grant.node_id,
+            )
         };
         if self.removed_direct_peer(&identity).is_none()
             && !self
@@ -447,7 +452,7 @@ impl DirectContact {
             return PresenceApply::Conflict;
         }
         let mut pinned = false;
-        if self.expected_node_id.trim().is_empty() {
+        if self.expected_node_id.trim().is_empty() && !presence.node_id.trim().is_empty() {
             self.expected_node_id = presence.node_id.clone();
             pinned = true;
         }
@@ -455,7 +460,7 @@ impl DirectContact {
             self.remote_device_id = Some(presence.device_id.clone());
             pinned = true;
         }
-        if self.remote_public_key.is_none() {
+        if self.remote_public_key.is_none() && !presence.public_key.trim().is_empty() {
             self.remote_public_key = Some(presence.public_key.clone());
             pinned = true;
         }
@@ -478,3 +483,7 @@ impl DirectContact {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "unbelegt_direct_relation_task_tests.rs"]
+mod unbelegt_direct_relation_task_tests;

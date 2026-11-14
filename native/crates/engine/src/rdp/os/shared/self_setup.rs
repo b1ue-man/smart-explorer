@@ -2,7 +2,8 @@
 //! eine freigabe muss reichen, der rest muss laufen“). Triggers T1–T4, one
 //! marker per version, one setup at a time. The platform adapters do the
 //! work; this module decides when, records the result and refreshes the
-//! port list, listener owners and feed summary after every probe.
+//! port list, listener owners and feed summary after every probe. The same
+//! triggers set the machine login up (E21, `login/os/shared/self_setup.rs`).
 use super::super::platform::host_setup as platform;
 use crate::rdp::core::{note_host_summary, HostProbe, RdpFeedSummary};
 pub use crate::rdp::core::{SetupState, SetupTrigger};
@@ -10,6 +11,13 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, RwLock};
+
+/// One OS approval for the RDP and the login step of a trigger (E44).
+#[path = "self_setup_elevated.rs"]
+pub mod elevated;
+#[path = "self_setup_state.rs"]
+mod state;
+pub use state::{current_state, switched_off_between_sessions, OFF_BETWEEN_SESSIONS};
 
 /// Status line while an administrator prompt may be open (threat T-R6);
 /// `SetupStatus::lines` shows it on every surface.
@@ -29,6 +37,9 @@ pub struct SetupStatus {
     pub at: Option<i64>,
     /// A failure the marker could not carry.
     pub last_error: Option<String>,
+    /// The machine login's self-setup (E21), when it has a result.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub login: Option<crate::login::self_setup::SelfSetupStatus>,
 }
 impl SetupStatus {
     /// The German lines every surface shows.
@@ -49,6 +60,9 @@ impl SetupStatus {
         if let Some(error) = &self.last_error {
             lines.push(format!("Remote-Desktop-Einrichtung: {error}"));
         }
+        if let Some(login) = &self.login {
+            lines.extend(login.lines());
+        }
         lines
     }
 }
@@ -57,12 +71,15 @@ impl SetupStatus {
 pub fn status() -> SetupStatus {
     let marker = read_marker();
     let stored = marker.as_ref().map(|marker| marker.state.clone());
+    let login = crate::login::self_setup::status();
     SetupStatus {
-        running: in_progress(),
+        // Same status text while the login setup's prompt may be open.
+        running: in_progress() || login.as_ref().is_some_and(|login| login.running),
         state: platform::impossible().or(stored),
         trigger: marker.as_ref().map(|marker| marker.trigger),
         at: marker.as_ref().map(|marker| marker.at),
         last_error: last_error(),
+        login,
     }
 }
 
@@ -197,46 +214,6 @@ pub fn in_progress() -> bool {
     RUNNING.load(Ordering::Acquire)
 }
 
-/// The setup state a probe v2 reports with `probe` (design 9.2).
-pub fn current_state(probe: &HostProbe) -> SetupState {
-    if let Some(state) = platform::impossible() {
-        return state;
-    }
-    let marker = read_marker().map(|marker| marker.state);
-    if probe.preferred_service().is_some() {
-        return match marker {
-            Some(SetupState::Done) => SetupState::Done,
-            _ => SetupState::NotNeeded,
-        };
-    }
-    match marker {
-        Some(SetupState::Done | SetupState::NotNeeded) => {
-            SetupState::Failed(format!("no_listener: {}", unavailable_reason(probe)))
-        }
-        Some(state) => state,
-        None => SetupState::Failed("not_set_up".into()),
-    }
-}
-
-fn unavailable_reason(probe: &HostProbe) -> String {
-    let mut reasons: Vec<String> = probe
-        .services
-        .iter()
-        .filter_map(|service| {
-            let reason = service.startable().err()?;
-            Some(format!("{}: {reason}", service.id))
-        })
-        .collect();
-    if let Some(reason) = &probe.unavailable_reason {
-        reasons.push(reason.clone());
-    }
-    if reasons.is_empty() {
-        "kein startbarer RDP-Dienst".into()
-    } else {
-        reasons.join("; ")
-    }
-}
-
 /// A fresh probe of this host. It refreshes the RDP port list and listener
 /// owners of `access_steering` and the feed summary (design 3.1, 5.2).
 pub fn refresh_probe() -> HostProbe {
@@ -261,6 +238,11 @@ pub fn refresh_probe() -> HostProbe {
 /// setup running meanwhile takes that setup's result instead of starting
 /// one more (no repeated prompt for requests queued behind an open one).
 pub fn ensure_rdp_host(trigger: SetupTrigger, device: Option<String>) -> SetupState {
+    // Until this setup decides, the login step of the trigger waits for it.
+    let _deciding = elevated::announce(elevated::Party::Rdp);
+    if trigger == SetupTrigger::PeerRequest {
+        crate::login::self_setup::request(login_trigger(trigger));
+    }
     let asked_at = crate::share::core_now_secs();
     let _turn = RUN.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let asking = Asking {
@@ -285,12 +267,7 @@ pub fn ensure_rdp_host(trigger: SetupTrigger, device: Option<String>) -> SetupSt
         let state = platform::ensure(&probe, device.as_deref());
         RUNNING.store(false, Ordering::Release);
         probe = refresh_probe();
-        match state {
-            SetupState::Done if probe.preferred_service().is_none() => {
-                SetupState::Failed(format!("no_listener: {}", unavailable_reason(&probe)))
-            }
-            other => other,
-        }
+        state::recorded_state(&probe, state)
     };
     let marker = Marker {
         state: state.clone(),
@@ -308,6 +285,9 @@ pub fn ensure_rdp_host(trigger: SetupTrigger, device: Option<String>) -> SetupSt
 
 /// Starts `ensure_rdp_host` in the background unless a setup already runs.
 pub fn request(trigger: SetupTrigger) {
+    // Announced before the login setup starts (E44, one prompt per trigger).
+    let deciding = elevated::announce(elevated::Party::Rdp);
+    crate::login::self_setup::request(login_trigger(trigger));
     if recorded_for_test(trigger) || in_progress() {
         return;
     }
@@ -315,6 +295,7 @@ pub fn request(trigger: SetupTrigger) {
         .name("rdp-self-setup".into())
         .spawn(move || {
             ensure_rdp_host(trigger, None);
+            drop(deciding);
         });
     if let Err(error) = spawned {
         note_error(format!("Einrichtungsthread startet nicht: {error}"));
@@ -338,6 +319,9 @@ fn recorded_for_test(_: SetupTrigger) -> bool {
 /// Service start: probe once so the RDP port list is not empty after a
 /// restart; T2 when a relation steers this screen.
 pub fn on_service_start(steering: bool) {
+    let deciding = steering.then(|| elevated::announce(elevated::Party::Rdp));
+    // Always: also removes login grants of a right that ended meanwhile.
+    crate::login::self_setup::request(crate::login::core::self_plan::LoginTrigger::VersionStart);
     let spawned = std::thread::Builder::new()
         .name("rdp-self-setup-start".into())
         .spawn(move || {
@@ -345,9 +329,23 @@ pub fn on_service_start(steering: bool) {
             if steering {
                 ensure_rdp_host(SetupTrigger::VersionStart, None);
             }
+            drop(deciding);
         });
     if let Err(error) = spawned {
         note_error(format!("Startprobe startet nicht: {error}"));
+    }
+}
+
+/// Ordered end of the worker (E29, M11): a se-managed GNOME sharing is switched
+/// off, so no listener outlives the worker. The daemon calls it once in its stop
+/// path (`daemon/os/shared/run_loop_stop.rs`, `stop_daemon`). Platforms without a
+/// se-managed sharing switch nothing off (`withdraw_managed` returns `Ok(false)`).
+pub fn on_worker_stop() {
+    if cfg!(any(test, feature = "test-support")) {
+        return;
+    }
+    if let Err(error) = platform::withdraw_managed() {
+        note_error(format!("RDP bleibt beim Beenden eingeschaltet: {error}"));
     }
 }
 
@@ -423,6 +421,7 @@ pub fn coverage_ended(steering_remains: bool) {
     if cfg!(any(test, feature = "test-support")) {
         return;
     }
+    crate::login::self_setup::request(crate::login::core::self_plan::LoginTrigger::CoverageEnded);
     let spawned = std::thread::Builder::new()
         .name("rdp-credential-rotate".into())
         .spawn(move || {
@@ -451,13 +450,33 @@ pub fn coverage_ended(steering_remains: bool) {
     }
 }
 
-/// `se rdp host-setup --system <step> [--user-sid <sid>]` (design 3.2,
-/// 3.3): one fixed elevated step; the line to print and the exit code.
+/// `se rdp host-setup --system <step>… [--user-sid <sid>]` (E44): every
+/// step in this one elevated process, in the given order, one line each;
+/// the exit code is the first one other than 0. Called by `cli::rdp`.
+pub fn run_system_steps(steps: &[String], user_sid: Option<&str>) -> (Vec<String>, i32) {
+    elevated::run_steps(steps, |step| run_system_step(step, user_sid))
+}
+
+/// One fixed elevated step (design 3.2, 3.3); the line to print and the exit code.
 /// Linux runs its root steps through `pkexec`; Windows runs its setup
 /// script in this elevated se, so the UAC prompt names Smart Explorer's se
-/// instead of Windows PowerShell (threat T-R6). Called by `cli::rdp`.
+/// instead of Windows PowerShell (threat T-R6).
 pub fn run_system_step(step: &str, user_sid: Option<&str>) -> (String, i32) {
+    if step.starts_with("login-service") {
+        return crate::login::self_setup::run_system_step(step);
+    }
     platform::run_system_step(step, user_sid)
+}
+
+/// The machine login follows the same four triggers (E21).
+fn login_trigger(trigger: SetupTrigger) -> crate::login::core::self_plan::LoginTrigger {
+    use crate::login::core::self_plan::LoginTrigger;
+    match trigger {
+        SetupTrigger::Grant => LoginTrigger::Grant,
+        SetupTrigger::VersionStart => LoginTrigger::VersionStart,
+        SetupTrigger::PeerOnline => LoginTrigger::PeerOnline,
+        SetupTrigger::PeerRequest => LoginTrigger::PeerRequest,
+    }
 }
 
 #[cfg(test)]

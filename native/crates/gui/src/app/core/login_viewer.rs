@@ -1,5 +1,8 @@
-//! Dedicated machine-login pane; normal device grants never edit its authority.
+//! Machine-login pane. A paired device's target (E22) opens without a file
+//! and without a pin acknowledgement; the administrative target file stays.
+//! Normal device grants never edit the gateway's authority.
 use crate::login::{GatewayTarget, ViewerSession};
+use crate::share::login_transport::{LoginSwitch, PairedLoginTarget, SwitchAction, ViewerSurface};
 use eframe::egui;
 use std::{
     sync::{Arc, Mutex},
@@ -8,6 +11,8 @@ use std::{
 #[path = "login_viewer_image.rs"]
 mod image;
 pub struct LoginViewerPane {
+    /// The target a paired device sent over its pinned Share session.
+    paired: Option<PairedLoginTarget>,
     path: String,
     user: String,
     target: Option<GatewayTarget>,
@@ -23,6 +28,7 @@ pub struct LoginViewerPane {
 impl Default for LoginViewerPane {
     fn default() -> Self {
         Self {
+            paired: None,
             path: String::new(),
             user: String::new(),
             target: None,
@@ -38,6 +44,54 @@ impl Default for LoginViewerPane {
     }
 }
 impl LoginViewerPane {
+    /// A pane for the target of a paired device.
+    pub fn paired(target: PairedLoginTarget) -> Self {
+        let mut pane = Self::default();
+        pane.set_paired(Some(target));
+        pane
+    }
+    /// Adopts (or drops) a paired device's target; a running session stays.
+    pub fn set_paired(&mut self, target: Option<PairedLoginTarget>) {
+        if self.paired != target {
+            self.paired = target;
+        }
+    }
+    pub fn has_paired(&self) -> bool {
+        self.paired.is_some()
+    }
+    /// Opens the paired device's login screen: no file, no pin
+    /// acknowledgement (the pairing pinned the machine key).
+    pub fn start_paired(&mut self) -> Result<(), String> {
+        let Some(paired) = self.paired.clone() else {
+            return Err("login_target_missing: kein Anmeldeziel des Geräts".into());
+        };
+        self.stop();
+        self.error = None;
+        self.control = false;
+        match ViewerSession::start(paired.target, paired.target_user, true) {
+            Ok(session) => {
+                self.session = Some(session);
+                Ok(())
+            }
+            Err(error) => {
+                let error = error.to_string();
+                self.error = Some(error.clone());
+                Err(error)
+            }
+        }
+    }
+    /// The current session ended (or none runs).
+    pub fn ended(&self) -> bool {
+        !self
+            .session
+            .as_ref()
+            .is_some_and(|session| session.snapshot().state != "ended")
+    }
+    /// Why the last session ended, when it did.
+    pub fn end_reason(&self) -> Option<String> {
+        let snapshot = self.session.as_ref()?.snapshot();
+        (snapshot.state == "ended").then(|| snapshot.reason.unwrap_or_default())
+    }
     pub fn stop(&mut self) {
         if let Some(session) = self.session.take() {
             session.release();
@@ -82,8 +136,32 @@ impl LoginViewerPane {
         let running = snapshot
             .as_ref()
             .is_some_and(|snapshot| !matches!(snapshot.state.as_str(), "ended" | "stopping"));
-        ui.label("Maschinenanmeldung · eigener administrativer Zugang");
-        ui.label("Die normale Gerätefreigabe erteilt hier keine Rechte. Den öffentlichen Maschinenpin und Zielbenutzer ausdrücklich vom Administrator übernehmen.");
+        if let Some(paired) = self.paired.clone() {
+            ui.label(format!(
+                "Anmeldebildschirm von {} · über die gekoppelte Verbindung",
+                paired.device_name
+            ));
+            ui.label(format!(
+                "Maschine: {} · Zielkonto: {}",
+                paired.target.machine_id, paired.target_user
+            ));
+            if ui
+                .add_enabled(!running, egui::Button::new("Anmeldebildschirm öffnen"))
+                .clicked()
+            {
+                self.image.reset();
+                let _ = self.start_paired();
+            }
+        }
+        let administrative = self.paired.is_none() || (running && self.target.is_some());
+        egui::CollapsingHeader::new("Administratives Maschinenziel (Datei)")
+            .id_salt("login-administrative-target")
+            .default_open(administrative)
+            .show(ui, |ui| self.administrative(ui, running));
+        self.session_view(ui, running);
+    }
+    fn administrative(&mut self, ui: &mut egui::Ui, running: bool) {
+        ui.label("Den öffentlichen Maschinenpin und Zielbenutzer ausdrücklich vom Administrator übernehmen.");
         ui.add_enabled_ui(!running && !self.loading, |ui| {
             ui.horizontal(|ui| {
                 ui.label("gateway-target.json:");
@@ -140,13 +218,15 @@ impl LoginViewerPane {
                     }
                 }
             }
-            if ui
-                .add_enabled(running, egui::Button::new("Beenden"))
-                .clicked()
-            {
-                self.stop();
-            }
         });
+    }
+    fn session_view(&mut self, ui: &mut egui::Ui, running: bool) {
+        if ui
+            .add_enabled(running, egui::Button::new("Beenden"))
+            .clicked()
+        {
+            self.stop();
+        }
         if let Some(error) = &self.error {
             ui.colored_label(egui::Color32::RED, error);
         }
@@ -217,6 +297,101 @@ impl Drop for LoginViewerPane {
     fn drop(&mut self) {
         if let Some(session) = &self.session {
             session.close();
+        }
+    }
+}
+/// The automatic login view of the screen viewer (E22): while the stream of
+/// a paired device pauses with `secure_desktop`, `host_locked` or
+/// `session_inactive`, the viewer shows the device's login screen without a
+/// click, and the picture again as soon as the stream shows the user session.
+#[derive(Default)]
+pub struct AutoLoginView {
+    switch: LoginSwitch,
+    pane: Option<LoginViewerPane>,
+    cached: Option<(Instant, String, Option<PairedLoginTarget>)>,
+    notice: Option<String>,
+}
+impl AutoLoginView {
+    /// The paired target of `selector`, read at most every two seconds.
+    fn target(&mut self, selector: &str) -> Option<PairedLoginTarget> {
+        if let Some((at, cached, target)) = &self.cached {
+            if cached == selector && at.elapsed() < Duration::from_secs(2) {
+                return target.clone();
+            }
+        }
+        let target = crate::share::login_transport::paired_login_target(selector).ok();
+        self.cached = Some((Instant::now(), selector.to_string(), target.clone()));
+        target
+    }
+    /// One observation of the screen stream of `selector` (device or
+    /// contact ID). `EnterLogin`: the caller releases the screen view's held
+    /// inputs; `LeaveLogin`: the login view released its inputs and closed.
+    pub fn observe(&mut self, selector: &str, screen_state: &str) -> SwitchAction {
+        let target = self.target(selector);
+        let action = self.switch.observe(screen_state, target.is_some());
+        match (action, target) {
+            (SwitchAction::EnterLogin, Some(target)) => {
+                let mut pane = LoginViewerPane::paired(target);
+                match pane.start_paired() {
+                    Ok(()) => {
+                        self.notice = None;
+                        self.pane = Some(pane);
+                        return SwitchAction::EnterLogin;
+                    }
+                    Err(error) => {
+                        self.notice = Some(format!("Anmeldebildschirm nicht geöffnet: {error}"));
+                        self.switch.login_failed();
+                        return SwitchAction::Stay;
+                    }
+                }
+            }
+            (SwitchAction::EnterLogin, None) => {
+                self.switch.login_failed();
+                return SwitchAction::Stay;
+            }
+            (SwitchAction::LeaveLogin, _) => {
+                self.close();
+                return SwitchAction::LeaveLogin;
+            }
+            _ => {}
+        }
+        if self.switch.surface() == ViewerSurface::Login
+            && self.pane.as_ref().is_some_and(LoginViewerPane::ended)
+        {
+            let reason = self.pane.as_ref().and_then(LoginViewerPane::end_reason);
+            self.notice = Some(format!(
+                "Anmeldebildschirm beendet{}",
+                reason
+                    .filter(|reason| !reason.is_empty())
+                    .map_or(String::new(), |reason| format!(": {reason}"))
+            ));
+            self.close();
+            self.switch.login_failed();
+            return SwitchAction::LeaveLogin;
+        }
+        SwitchAction::Stay
+    }
+    /// The login view replaces the picture.
+    pub fn active(&self) -> bool {
+        self.switch.surface() == ViewerSurface::Login && self.pane.is_some()
+    }
+    pub fn show(&mut self, ui: &mut egui::Ui) {
+        if let Some(pane) = &mut self.pane {
+            pane.show(ui);
+        }
+    }
+    pub fn notice(&self) -> Option<&str> {
+        self.notice.as_deref()
+    }
+    /// Another device or the group view: the login view ends.
+    pub fn reset(&mut self) {
+        self.close();
+        self.switch = LoginSwitch::default();
+        self.notice = None;
+    }
+    fn close(&mut self) {
+        if let Some(mut pane) = self.pane.take() {
+            pane.stop();
         }
     }
 }

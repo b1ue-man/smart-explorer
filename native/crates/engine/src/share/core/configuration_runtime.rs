@@ -12,6 +12,7 @@ use super::types::{
     DirectAccessState, DirectContact, DirectGrant, PeerEndpoint, RoomProfile, ShareAuthState,
     ShareScope,
 };
+use crate::login::core::self_grants::SteeringGrant;
 
 pub(super) struct RuntimeConfiguration<'a> {
     pub(super) auth: &'a Arc<Mutex<ShareAuthState>>,
@@ -74,6 +75,7 @@ impl RuntimeConfiguration<'_> {
                 granted_since_start(&candidate, &steering_before, now_secs()),
                 !steering_before.is_subset(&steering_after),
                 steering_after,
+                login_steering(&candidate, now_secs()),
             ));
             let restrictions = authorization_restrictions(&state, &candidate);
             if !restrictions.is_empty() {
@@ -104,8 +106,8 @@ impl RuntimeConfiguration<'_> {
         // A6: every new configuration may widen or narrow what a feed shows.
         crate::screen::core::feed_host::rights_changed();
         drop(transition);
-        if let Some((granted, revoked, steering)) = steering_change {
-            apply_steering_change(granted, revoked, steering);
+        if let Some((granted, revoked, steering, login)) = steering_change {
+            apply_steering_change(granted, revoked, steering, login);
         }
         if let Some(reciprocal) = self.iroh.direct_repair_coordinator() {
             reciprocal.set_current_generation(snapshot.authorization_epoch);
@@ -123,29 +125,74 @@ fn process_start() -> i64 {
     *PROCESS_START.get_or_init(now_secs)
 }
 
+/// Every (device ID, public key, access right) of an active relation of
+/// `state`: accepted Direct grants while Direct is online and admitted
+/// members of auto-joined rooms. The steering devices and the login grants
+/// (E42) both come from exactly this list.
+fn relation_access(
+    state: &ShareAuthState,
+) -> impl Iterator<Item = (&str, &str, super::access_grant::AccessGrant)> + '_ {
+    let direct = state
+        .direct_grants
+        .iter()
+        .filter(move |grant| {
+            state.direct_online && grant.state == super::types::DirectGrantState::Accepted
+        })
+        .map(|grant| {
+            let access = grant.exec.access_grant();
+            (grant.device_id.as_str(), grant.public_key.as_str(), access)
+        });
+    let rooms = state
+        .rooms
+        .iter()
+        .filter(|room| room.auto_join)
+        .flat_map(|room| room.members.iter())
+        .filter(|member| member.is_admitted())
+        .map(|member| {
+            let access = member.exec.access_grant();
+            (
+                member.device_id.as_str(),
+                member.public_key.as_str(),
+                access,
+            )
+        });
+    direct.chain(rooms)
+}
+
 /// Every (device ID, public key) that may steer this screen in an active
 /// relation of `state` at `now` (`access_steering::steers`).
 pub(super) fn steering_devices(state: &ShareAuthState, now: i64) -> BTreeSet<(String, String)> {
-    use super::access_steering::steers;
-    let mut devices = BTreeSet::new();
-    if state.direct_online {
-        for grant in state.direct_grants.iter().filter(|grant| {
-            grant.state == super::types::DirectGrantState::Accepted
-                && steers(&grant.exec.access_grant(), now)
-        }) {
-            devices.insert((grant.device_id.clone(), grant.public_key.clone()));
-        }
-    }
-    for room in state.rooms.iter().filter(|room| room.auto_join) {
-        for member in room
-            .members
-            .iter()
-            .filter(|member| member.is_admitted() && steers(&member.exec.access_grant(), now))
-        {
-            devices.insert((member.device_id.clone(), member.public_key.clone()));
-        }
-    }
-    devices
+    relation_access(state)
+        .filter(|(_, _, access)| super::access_steering::steers(access, now))
+        .map(|(device, key, _)| (device.to_string(), key.to_string()))
+        .collect()
+}
+
+/// E42: one login grant per steering right, with the right's end; the
+/// account stays the worker's own (S1). A device named twice (Direct grant
+/// and room) is merged by `login::self_setup::note_steering`.
+fn login_steering(state: &ShareAuthState, now: i64) -> Vec<SteeringGrant> {
+    login_grants(relation_access(state), now)
+}
+
+/// The login grants of `rights` that steer at `now`; an end of at most 0
+/// seconds is no end the login service can hold (`None`).
+fn login_grants<'a>(
+    rights: impl IntoIterator<Item = (&'a str, &'a str, super::access_grant::AccessGrant)>,
+    now: i64,
+) -> Vec<SteeringGrant> {
+    rights
+        .into_iter()
+        .filter(|(_, _, access)| super::access_steering::steers(access, now))
+        .map(|(device, key, access)| SteeringGrant {
+            peer_id: device.to_string(),
+            public_key: key.to_string(),
+            valid_until: access
+                .valid_until
+                .filter(|end| *end > 0)
+                .and_then(|end| u64::try_from(end).ok()),
+        })
+        .collect()
 }
 
 /// T1 (design 3.1): a device that did not steer before received the right
@@ -178,11 +225,19 @@ fn granted_since_start(
             })
 }
 
-/// Records the steering devices and starts the RDP self-setup (T1) or the
-/// rotation of se-managed RDP credentials after a revocation (T-R2).
-fn apply_steering_change(granted: bool, revoked: bool, steering: BTreeSet<(String, String)>) {
+/// Records the steering devices, hands their login grants to the login
+/// self-setup (E42) and starts the RDP self-setup (T1) or the rotation of
+/// se-managed RDP credentials after a revocation (T-R2).
+fn apply_steering_change(
+    granted: bool,
+    revoked: bool,
+    steering: BTreeSet<(String, String)>,
+    login: Vec<SteeringGrant>,
+) {
     let remaining = !steering.is_empty();
     let ended = super::access_steering::note_steering_devices(steering) || revoked;
+    // Test builds only record the login trigger (`self_setup::TEST_REQUESTS`).
+    crate::login::self_setup::note_steering(login);
     if cfg!(any(test, feature = "test-support")) {
         return;
     }
@@ -202,9 +257,10 @@ fn apply_steering_change(granted: bool, revoked: bool, steering: BTreeSet<(Strin
 pub(super) fn recheck_steering(state: &ShareAuthState, now: i64) -> Option<i64> {
     let steering = steering_devices(state, now);
     let remaining = !steering.is_empty();
-    if super::access_steering::note_steering_devices(steering)
-        && !cfg!(any(test, feature = "test-support"))
-    {
+    let ended = super::access_steering::note_steering_devices(steering);
+    // An ended right leaves the login grants at this instant too (S1).
+    crate::login::self_setup::note_steering(login_steering(state, now));
+    if ended && !cfg!(any(test, feature = "test-support")) {
         crate::rdp::host_setup::coverage_ended(remaining);
     }
     next_steering_end(state, now)
@@ -240,12 +296,17 @@ pub(super) fn next_steering_end(state: &ShareAuthState, now: i64) -> Option<i64>
 /// background, and T2 runs when a relation steers this screen.
 pub(super) fn on_node_start(auth: &Arc<Mutex<ShareAuthState>>, device_id: &str) {
     process_start();
-    let steering = match auth.lock() {
-        Ok(state) => steering_devices(&state, now_secs()),
-        Err(_) => BTreeSet::new(),
+    // A poisoned state grants nothing: no device, no login grant.
+    let (steering, login) = match auth.lock() {
+        Ok(state) => (
+            steering_devices(&state, now_secs()),
+            login_steering(&state, now_secs()),
+        ),
+        Err(_) => (BTreeSet::new(), Vec::new()),
     };
     let any = !steering.is_empty();
     super::access_steering::note_steering_devices(steering);
+    crate::login::self_setup::note_steering(login);
     if cfg!(any(test, feature = "test-support")) {
         return;
     }
@@ -323,3 +384,7 @@ fn schedule_snapshot_with(
 #[cfg(test)]
 #[path = "configuration_runtime_task_tests.rs"]
 mod task_tests;
+
+#[cfg(test)]
+#[path = "login_selbst_einspeisung_task_tests.rs"]
+mod login_selbst_tests;

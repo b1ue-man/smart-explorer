@@ -1,7 +1,9 @@
-//! Explicit administrative bundles and a socket-owning CLI login session.
+//! Explicit administrative bundles and a socket-owning CLI login session,
+//! opened for a paired device (E22) or from an explicit machine target file.
 use crate::{
     daemon::{LoginCommand, LoginViewer},
     login::{GatewayNetwork, GatewayTarget, PeerGrant},
+    share::login_transport::{self, OpenChoice},
 };
 use clap::{Args, Subcommand};
 use serde::de::DeserializeOwned;
@@ -66,12 +68,20 @@ enum LoginCliCommand {
         #[arg(long)]
         json: bool,
     },
-    /// Own a viewer until stdin EOF/stop. Read bounded LoginCommand JSON lines
-    /// from stdin; output metadata only, never pixel bytes or credential data.
+    /// Open the login screen of a paired device: `se login open <device>`.
+    /// The device sends its machine target over the pinned Share session once
+    /// it allows this device „Bildschirm steuern“; no file, no pin
+    /// acknowledgement. The administrative form `se login open TARGET_FILE
+    /// --target-user ID --acknowledge-machine-pin` stays. Owns a viewer until
+    /// stdin EOF/stop, reads bounded LoginCommand JSON lines from stdin and
+    /// outputs metadata only, never pixel bytes or credential data.
     Open {
-        target_file: PathBuf,
+        /// Paired device (device ID, contact ID or name); with
+        /// --acknowledge-machine-pin a public gateway-target.json.
+        target: String,
+        /// Host account (Windows SID, Linux UID); a paired device names it.
         #[arg(long)]
-        target_user: String,
+        target_user: Option<String>,
         #[arg(long)]
         acknowledge_machine_pin: bool,
         #[arg(long)]
@@ -132,13 +142,35 @@ pub(super) fn run(args: LoginArgs) -> Result<i32, String> {
             );
         }
         LoginCliCommand::Open {
-            target_file: file,
+            target,
             target_user,
             acknowledge_machine_pin,
             json,
         } => {
-            let mut viewer =
-                LoginViewer::open(target_file(&file)?, target_user, acknowledge_machine_pin)?;
+            let file = PathBuf::from(&target);
+            let choice = login_transport::login_open_choice(
+                &target,
+                acknowledge_machine_pin,
+                file.is_file(),
+            )
+            .map_err(text)?;
+            let (mut viewer, paired) = match choice {
+                OpenChoice::File => {
+                    let user = target_user.filter(|user| !user.is_empty()).ok_or_else(|| {
+                        "--target-user is required with a target file".to_string()
+                    })?;
+                    let viewer =
+                        LoginViewer::open(target_file(&file)?, user, acknowledge_machine_pin)?;
+                    (viewer, Value::Null)
+                }
+                OpenChoice::Device(paired) => {
+                    let user = target_user
+                        .filter(|user| !user.is_empty())
+                        .unwrap_or_else(|| paired.target_user.clone());
+                    let viewer = LoginViewer::open(paired.target.clone(), user, true)?;
+                    (viewer, paired_json(&paired))
+                }
+            };
             let started = viewer.command(LoginCommand::Start)?;
             let pixel_bytes = started
                 .image
@@ -146,7 +178,7 @@ pub(super) fn run(args: LoginArgs) -> Result<i32, String> {
                 .map_or(0, |image| image.image().data().len());
             output(
                 json,
-                json!({"reply":started.reply,"pixel_bytes":pixel_bytes}),
+                json!({"reply":started.reply,"pixel_bytes":pixel_bytes,"paired":paired}),
             );
             if viewer.view().challenge.is_none() {
                 return Ok(0);
@@ -199,6 +231,13 @@ pub(super) fn run(args: LoginArgs) -> Result<i32, String> {
         }
     }
     Ok(0)
+}
+/// The paired device of a device-form open (E22); no key material beyond the
+/// public machine pin.
+fn paired_json(paired: &login_transport::PairedLoginTarget) -> Value {
+    json!({"device_id":paired.device_id,"device_name":paired.device_name,
+        "machine_id":paired.target.machine_id,"machine_public_key":paired.target.public_key,
+        "target_user":paired.target_user,"received_at":paired.received_at})
 }
 pub(crate) fn target_file(path: &Path) -> Result<GatewayTarget, String> {
     let target: GatewayTarget = read_json(path, crate::login::core::gateway_types::MAX_NETWORK)?;

@@ -8,6 +8,7 @@ use super::super::share_discovery_state::{
 };
 use super::{offer_expiration_label, offer_phase_label};
 use crate::app::theme;
+use crate::share::discovery_state::{waiting_renewal_text, RenewalNotice};
 use eframe::egui;
 
 const MAX_OFFER_MINUTES: u64 = crate::share::DISCOVERY_MAX_OFFER_SECS / 60;
@@ -21,6 +22,7 @@ pub(super) fn publisher_ui(
     actions: &mut Vec<DiscoveryUiAction>,
 ) {
     let active = state.offer_for_target(target).cloned();
+    let renewal = active.as_ref().and_then(|offer| offer.renewal_notice());
     suggest_once(ui, state, target);
     let duration_secs = state.duration_secs();
     let pending_publish = match target {
@@ -113,6 +115,10 @@ pub(super) fn publisher_ui(
             state.allow_weak_pin = false;
         }
     });
+    if let Some(notice) = &renewal {
+        renewal_notice_ui(ui, notice);
+    }
+    waiting_renewal_ui(ui, state, target, now, actions);
     let weak = pin_draft(state, target).strength().problem();
     if let Some(problem) = weak {
         ui.horizontal_wrapped(|ui| {
@@ -126,6 +132,55 @@ pub(super) fn publisher_ui(
     }
     pin_guidance(ui, pin_draft(state, target));
     unconfirmed_pairings_ui(ui, state, actions);
+}
+
+/// A renewed offer (E49): the hint that someone may have been guessing, and
+/// the new PIN to read out to the device that wants to pair.
+pub(super) fn renewal_notice_ui(ui: &mut egui::Ui, notice: &RenewalNotice) {
+    ui.colored_label(theme::warning(ui), notice.hint());
+    if let Some(pin) = notice.pin_text() {
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Neue PIN:");
+            ui.add(
+                egui::Label::new(egui::RichText::new(pin).monospace().strong()).selectable(true),
+            );
+        });
+    }
+}
+
+/// An offer of `target` that ended after too many failed attempts, in its
+/// pause (E49): when the offer with a new PIN goes out, and „Nicht erneuern“.
+fn waiting_renewal_ui(
+    ui: &mut egui::Ui,
+    state: &DiscoveryUiState,
+    target: &DiscoveryPublishTarget,
+    now: i64,
+    actions: &mut Vec<DiscoveryUiAction>,
+) {
+    let Some(waiting) = state.waiting_renewal_for(target) else {
+        return;
+    };
+    let stopping = state.pending_stops.contains(&waiting.replaces);
+    ui.horizontal_wrapped(|ui| {
+        ui.colored_label(theme::warning(ui), pin_renewal_hint_line(waiting, now));
+        if ui
+            .add_enabled(!stopping, egui::Button::new("Nicht erneuern"))
+            .on_hover_text("Kein neues Angebot; das Gerät bleibt unsichtbar.")
+            .clicked()
+        {
+            actions.push(DiscoveryUiAction::Stop {
+                offer_id: waiting.replaces.clone(),
+            });
+        }
+    });
+}
+
+fn pin_renewal_hint_line(waiting: &crate::share::WaitingRenewal, now: i64) -> String {
+    format!(
+        "{} – {}",
+        crate::share::discovery_state::pin_renewal_hint(),
+        waiting_renewal_text(waiting, now)
+    )
 }
 
 fn pin_draft<'a>(

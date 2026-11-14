@@ -41,6 +41,7 @@ pub(super) fn device(args: &Value) -> Result<Value, ApiError> {
                 "displayName": app.display_name,
                 "collection": app.collection,
             })).collect::<Vec<_>>(),
+            "diagnostics": rdp.diagnostics,
         })
     });
     Ok(json!({

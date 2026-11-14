@@ -104,15 +104,20 @@ pub fn load_from(path: &Path) -> Tokens {
             return Tokens::default();
         }
     };
-    match serde_json::from_str::<Value>(&text) {
-        Ok(Value::Object(map)) => Tokens {
+    parse(&text).unwrap_or_else(|| {
+        eprintln!("screen portal tokens: {} is not valid", path.display());
+        Tokens::default()
+    })
+}
+
+/// The tokens of the text of a token file; `None` when it is not valid.
+pub fn parse(text: &str) -> Option<Tokens> {
+    match serde_json::from_str::<Value>(text) {
+        Ok(Value::Object(map)) => Some(Tokens {
             screencast: entry(&map, TokenKind::ScreenCast),
             remote_desktop: entry(&map, TokenKind::RemoteDesktop),
-        },
-        _ => {
-            eprintln!("screen portal tokens: {} is not valid", path.display());
-            Tokens::default()
-        }
+        }),
+        _ => None,
     }
 }
 

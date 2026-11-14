@@ -15,6 +15,9 @@ pub use exec_grant_client::mutate_exec_grant;
 mod peek_client;
 pub use peek_client::vault_status_peek;
 pub use peek_client::{drive_devices_peek, drive_devices_watch_peek, share_worker_peek};
+#[path = "ipc_worker_probe.rs"]
+mod worker_probe;
+use worker_probe::{answers, to_worker_probe, ProbeOutcome};
 #[path = "ipc_share_client.rs"]
 mod share_client;
 pub use share_client::{hand_off_running_worker, share_command, WorkerHandoff};
@@ -261,24 +264,29 @@ enum WorkerProbe {
 }
 
 fn probe_worker(timeout: Duration) -> WorkerProbe {
+    to_worker_probe(probe_outcome(timeout))
+}
+
+/// The handshake of one probe: the proof first, then `Ping` and its `Pong`.
+fn probe_outcome(timeout: Duration) -> ProbeOutcome {
     let Ok(token) = read_token() else {
-        return WorkerProbe::Missing;
+        return ProbeOutcome::Missing;
     };
     let Some(addr) = read_ipc_addr() else {
-        return WorkerProbe::Missing;
+        return ProbeOutcome::Missing;
     };
     // r-lokal-1: the token goes only to a process that proved it holds it.
     // A process that answers without the proof (also a worker from before
     // the check) is replaced through the file handoff, never sent the token.
     let mut stream = match super::ipc_proof::connect_with_token(&addr, timeout, &token) {
         Ok(stream) => stream,
-        Err(super::ipc_proof::ProofFailure::Unproven) => return WorkerProbe::Stale,
-        Err(super::ipc_proof::ProofFailure::Unreachable(_)) => return WorkerProbe::Missing,
+        Err(super::ipc_proof::ProofFailure::Unproven) => return ProbeOutcome::Unproven,
+        Err(super::ipc_proof::ProofFailure::Unreachable(_)) => return ProbeOutcome::Unreachable,
     };
     let _ = stream.set_read_timeout(Some(timeout));
     let _ = stream.set_write_timeout(Some(timeout));
     if write_request(&mut stream, &IpcRequest::Ping { token }).is_err() {
-        return WorkerProbe::Missing;
+        return ProbeOutcome::Missing;
     }
     match read_response(&mut stream) {
         Ok(IpcResponse::Pong {
@@ -287,16 +295,25 @@ fn probe_worker(timeout: Duration) -> WorkerProbe {
             initialized,
         }) if worker_version_is_current(&version) && valid_generation(&generation) => {
             if initialized && stop_requested_for(&generation) {
-                WorkerProbe::Retiring
+                ProbeOutcome::Retiring
             } else if initialized {
-                WorkerProbe::Ready { generation }
+                ProbeOutcome::Ready { generation }
             } else {
-                WorkerProbe::Starting { generation }
+                ProbeOutcome::Starting { generation }
             }
         }
-        Ok(IpcResponse::Pong { .. }) => WorkerProbe::Stale,
-        Ok(_) | Err(_) => WorkerProbe::Missing,
+        Ok(IpcResponse::Pong { .. }) => ProbeOutcome::OtherPong,
+        Ok(_) | Err(_) => ProbeOutcome::Missing,
     }
+}
+
+/// Whether a worker of any version answers after the proof (E55). `se update`
+/// reads it before it stops the worker, and starts nothing.
+pub fn worker_answers() -> bool {
+    // A busy worker that is alive must not look absent: it would not be
+    // started again after an update (E24).
+    const ANSWER_TIMEOUT: Duration = Duration::from_secs(2);
+    answers(&probe_outcome(ANSWER_TIMEOUT))
 }
 
 fn valid_generation(value: &str) -> bool {

@@ -12,6 +12,8 @@ pub(super) fn is_retryable_read(request: &FsRequest) -> bool {
             | FsRequest::Stat { .. }
             | FsRequest::SyncChildPath { .. }
             | FsRequest::PutBatchStatus { .. }
+            // A read-only control request without file access (E43).
+            | FsRequest::LoginTarget
     )
 }
 
@@ -81,6 +83,7 @@ pub(super) fn response_matches(request: &FsRequest, response: &FsResponse) -> bo
         FsRequest::Recycle(_) => matches!(response, FsResponse::Recycle { .. }),
         FsRequest::FinishStage(_) => matches!(response, FsResponse::StageFinished { .. }),
         FsRequest::SyncFilesystem(_) => matches!(response, FsResponse::Synced { .. }),
+        FsRequest::LoginTarget => matches!(response, FsResponse::LoginTarget { .. }),
         FsRequest::Read { .. }
         | FsRequest::ReadAt { .. }
         | FsRequest::Write { .. }

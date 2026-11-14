@@ -35,7 +35,9 @@ pub use self::direct_relation_actions::{
 };
 pub use self::direct_request_tombstone::DirectRequestTombstone;
 pub use self::direct_signal_event::DirectSignalEvent;
-pub use self::discovery_offer_book::{DiscoveryOfferBook, OfferLookup, OwnDiscoveryOffer};
+pub use self::discovery_offer_book::{
+    DiscoveryOfferBook, OfferLookup, OwnDiscoveryOffer, WaitingRenewal,
+};
 pub use self::discovery_pin::{
     discovery_pin_strength, suggest_discovery_pin, DiscoveryPinStrength,
     DISCOVERY_MAX_FAILED_PAIRINGS, DISCOVERY_MAX_OFFER_SECS, DISCOVERY_MIN_PIN_CHARS,

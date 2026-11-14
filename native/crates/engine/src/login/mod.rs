@@ -6,8 +6,12 @@
 //! Iroh machine key, forwards peer-signed operations through GatewayClient and
 //! encodes returned raw pixels without loading a codec into the broker/helper.
 //! Existing user daemons and account-exec services retain their entrypoints.
-//! Install scripts are explicit administrative actions; a per-user update never
-//! installs, replaces, or enables this service.
+//! Since E21 (plan 2026-11-08) „Bildschirm steuern: Erlauben“ sets the
+//! service up by itself (`os/shared/self_setup.rs`): one operating-system
+//! approval per version runs the checked-in install script with fixed
+//! arguments, the broker's local grant channel holds the grants of the
+//! granting account, and the last revocation removes the services. The
+//! explicit administrative install scripts and `provision` stay available.
 pub mod core;
 pub mod os;
 pub use core::model::{
@@ -44,6 +48,7 @@ pub use os::shared::host_status::activity as host_activity;
 pub use os::shared::provision::{
     provision, provision_network, ProvisionRequest, Provisioned, ProvisionedNetwork,
 };
+pub use os::shared::self_setup;
 pub use os::shared::status::{installation_status, InstallationStatus};
 pub use os::shared::target::read_target_file;
 pub use os::shared::viewer::{ViewerFrame, ViewerSession, ViewerSnapshot};

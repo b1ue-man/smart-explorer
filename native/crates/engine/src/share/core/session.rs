@@ -95,6 +95,16 @@ impl PeerPrincipal {
         )
     }
 
+    /// The device ID the session's hello and grant authenticated.
+    pub(super) fn device_id(&self) -> &str {
+        &self.device_id
+    }
+
+    /// The Share public key the session's hello and grant authenticated.
+    pub(super) fn public_key(&self) -> &str {
+        &self.public_key
+    }
+
     pub(super) fn device_identity(&self) -> PeerDeviceKey {
         PeerDeviceKey {
             public_key: self.public_key.clone(),

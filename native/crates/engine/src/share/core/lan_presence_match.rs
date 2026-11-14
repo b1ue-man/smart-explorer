@@ -67,12 +67,12 @@ pub fn candidates_for(sighting: &LanSighting, local_scopes: &[u32]) -> Vec<Strin
     for ip in &sighting.addrs {
         match ip {
             IpAddr::V4(v4) => {
-                if sighting.p4 != 0 && !v4.is_loopback() && !v4.is_unspecified() {
+                if sighting.p4 != 0 && dialable_ip(*ip) {
                     out.push(format!("{v4}:{}", sighting.p4));
                 }
             }
             IpAddr::V6(v6) => {
-                if sighting.p6 == 0 || v6.is_loopback() || v6.is_unspecified() {
+                if sighting.p6 == 0 || !dialable_ip(*ip) {
                     continue;
                 }
                 if (v6.segments()[0] & 0xffc0) == 0xfe80 {
@@ -88,6 +88,23 @@ pub fn candidates_for(sighting: &LanSighting, local_scopes: &[u32]) -> Vec<Strin
     out.sort();
     out.dedup();
     out
+}
+
+/// Whether an address of an unauthenticated LAN announcement may become a
+/// dial candidate: not loopback, unspecified or multicast, also not in its
+/// IPv4-mapped form (`::ffff:a.b.c.d`). Applied where LAN evidence enters
+/// (`candidates_for`, the resolver in `lan_presence.rs`); `effective_presence`
+/// passes candidates on unchanged, because the routes of a server presence
+/// come from the peer and may name a loopback route of a peer on this host.
+pub(crate) fn dialable_ip(ip: IpAddr) -> bool {
+    let plain = match ip {
+        IpAddr::V6(v6) => v6.to_ipv4_mapped().map_or(ip, IpAddr::V4),
+        IpAddr::V4(_) => ip,
+    };
+    match plain {
+        IpAddr::V4(v4) => !(v4.is_loopback() || v4.is_unspecified() || v4.is_multicast()),
+        IpAddr::V6(v6) => !(v6.is_loopback() || v6.is_unspecified() || v6.is_multicast()),
+    }
 }
 
 /// The accepted contact an announcement belongs to, with its dial candidates.

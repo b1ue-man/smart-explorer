@@ -99,7 +99,11 @@ pub(super) fn create(name: &str, gateway_sid: Option<&str>) -> io::Result<Client
     if let Some(sid) = gateway_sid {
         sddl.push_str(&format!("(A;;0x00100003;;;{sid})"));
     }
-    let descriptor = Descriptor::new(&sddl)?;
+    create_with(name, &sddl)
+}
+/// One local first-instance pipe with an explicit security descriptor.
+pub(super) fn create_with(name: &str, sddl: &str) -> io::Result<ClientStream> {
+    let descriptor = Descriptor::new(sddl)?;
     let handle = unsafe {
         Pipes::CreateNamedPipeW(
             wide(name).as_ptr(),
@@ -202,6 +206,39 @@ pub(super) fn authorize_gateway(pipe: &ClientStream, sid: &str) -> io::Result<()
         ));
     }
     Ok(())
+}
+/// The account of the grant-channel client (E21): its token user SID,
+/// whether the token holds the Administrators group, enabled or as the
+/// deny-only group of a UAC-filtered token (the account can approve UAC),
+/// and whether it is an interactive logon (INTERACTIVE, S-1-5-4).
+pub(super) fn client_account(pipe: &ClientStream) -> io::Result<(String, bool, bool)> {
+    if unsafe { Pipes::ImpersonateNamedPipeClient(pipe.raw()) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    struct Revert;
+    impl Drop for Revert {
+        fn drop(&mut self) {
+            unsafe {
+                Security::RevertToSelf();
+            }
+        }
+    }
+    let _revert = Revert;
+    let mut raw = null_mut();
+    if unsafe { OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, 1, &mut raw) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let token = Handle::new(raw)?;
+    let user = security::token_user(token.0)?;
+    let administrator = group_enabled(token.0, TokenGroups, "S-1-5-32-544", true)?;
+    let interactive = group_enabled(token.0, TokenGroups, "S-1-5-4", false)?;
+    Ok((user, administrator, interactive))
+}
+/// Worker side of the grant channel; the server must be a LocalSystem process.
+pub(super) fn connect_grants(name: &str) -> io::Result<ClientStream> {
+    let stream = open(name)?;
+    verify_server(&stream, None)?;
+    Ok(stream)
 }
 fn open(name: &str) -> io::Result<ClientStream> {
     let raw = unsafe {

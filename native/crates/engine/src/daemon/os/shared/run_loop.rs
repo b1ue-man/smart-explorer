@@ -13,13 +13,15 @@ use super::handoff::{
     stop_requested_checked_for, wait_for_handoff_activation,
 };
 use super::ipc::{start_listener, ShareHost};
-use super::ipc_listener::IpcListener;
 use super::job_supervisor::{EnqueueStatus, JobSupervisor};
 use super::live;
 use super::schedule::new_generation;
 use super::state::{
     clear_heartbeat, log, now_secs, pause_reason, scheduling_controls, write_heartbeat, PauseReason,
 };
+
+#[path = "run_loop_stop.rs"]
+mod stop;
 
 const HANDOFF_ACTIVATION_TIMEOUT: Duration = Duration::from_secs(2);
 const DAEMON_HANDOFF_TIMEOUT: Duration = Duration::from_secs(300);
@@ -125,7 +127,7 @@ pub fn run_daemon_with(handoff: Option<Handoff>) {
     loop {
         let controls = scheduling_controls();
         if stop_requested(share_host.generation()) {
-            stop_daemon(&mut job_supervisor, &share_host, &listener);
+            stop::stop_daemon(&mut job_supervisor, &share_host, &listener);
             return;
         }
         let enabled_now = super::run_start_reason::sync_enabled();
@@ -150,7 +152,7 @@ pub fn run_daemon_with(handoff: Option<Handoff>) {
         }
         super::run_start_reason::tick(&share_host);
         if stop_requested(share_host.generation()) {
-            stop_daemon(&mut job_supervisor, &share_host, &listener);
+            stop::stop_daemon(&mut job_supervisor, &share_host, &listener);
             return;
         }
         let now = now_secs();
@@ -471,25 +473,6 @@ fn enqueue_job(supervisor: &mut JobSupervisor, job: &SyncJob, cause: RunCause, g
         Ok(EnqueueStatus::AlreadyScheduled | EnqueueStatus::RecentlyAttempted) => {}
         Err(error) => log(&error),
     }
-}
-
-fn stop_daemon(supervisor: &mut JobSupervisor, share_host: &ShareHost, listener: &IpcListener) {
-    log("daemon stopping (stop requested or unreadable stop control)");
-    // No new IPC client is admitted while the worker winds down.
-    listener.shutdown();
-    super::login_shutdown::drain();
-    share_host.shutdown_lan();
-    // Each step is logged, so a stop that hangs shows where in the worker log.
-    log("daemon stop: IPC listener closed, LAN presence withdrawn");
-    share_host.stop_mounts();
-    log("daemon stop: drives ended");
-    for error in supervisor.cancel_and_join() {
-        log(&error);
-    }
-    log("daemon stop: sync jobs ended");
-    crate::vault::lock_all_for_exit();
-    log("daemon stop: vaults locked");
-    clear_heartbeat();
 }
 
 fn poll_jobs(supervisor: &mut JobSupervisor) {

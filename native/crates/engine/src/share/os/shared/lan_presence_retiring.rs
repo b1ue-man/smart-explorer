@@ -68,3 +68,7 @@ pub(super) fn same_proof(previous: &LanProof, next: &LanProof) -> bool {
         && previous.sealed.is_some() == next.sealed.is_some()
         && previous.expires_at > super::super::core::now_secs().saturating_add(60)
 }
+
+#[cfg(test)]
+#[path = "code_renewal_grenze_task_tests.rs"]
+mod grenze_task_tests;

@@ -17,7 +17,7 @@ pub(in crate::share) fn export_roots(profiles: &ShareProfiles) -> Vec<SharedRoot
 /// export may be added in it or changed there; exports already stored stay
 /// as they are and can be removed (their peers are refused on access).
 /// A locked vault container is an ordinary folder and stays exportable.
-pub(in crate::share) fn refuse_vault_exports(
+pub(crate) fn refuse_vault_exports(
     before: &[SharedRoot],
     after: &ShareProfiles,
 ) -> Result<(), String> {

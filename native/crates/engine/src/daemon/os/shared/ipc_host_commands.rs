@@ -9,6 +9,9 @@ use crate::share::{
 use super::ipc_host::{stop::stop_locked, ui_events, ShareHost, ShareHostState};
 use super::ipc_protocol::{CodeRenewalView, ShareCommandReply, ShareWorkerSnapshot};
 
+#[path = "ipc_host_discovery_renewal.rs"]
+mod renewal;
+
 impl ShareHost {
     pub(super) fn send_command(&self, cmd: ShareCmd) -> Result<ShareCommandReply, String> {
         if matches!(
@@ -28,6 +31,13 @@ impl ShareHost {
                 .map_err(|_| "Share-Worker State ist gesperrt".to_string())?;
             if let crate::share::ShareCmd::Stop = &cmd {
                 return stop_locked(&mut state).map(|()| ShareCommandReply::Applied);
+            }
+            // The person stops an offer that ended after too many failed
+            // attempts and waits for its renewal: no renewal follows (S9).
+            if let ShareCmd::Discovery(DiscoveryCommand::StopPublishing { offer_id }) = &cmd {
+                if state.discovery_offers.cancel_renewal(offer_id) {
+                    return Ok(ShareCommandReply::Applied);
+                }
             }
         }
         let publish_target = match &cmd {
@@ -154,6 +164,7 @@ fn state_snapshot(state: &mut ShareHostState, drain: bool, now: i64) -> ShareWor
         candidates,
         lan: state.lan_status.clone(),
         discovery_offers: state.discovery_offers.offers(now),
+        discovery_renewals: state.discovery_offers.waiting_renewals(),
         peer_feeds: crate::share::peer_feed::views(),
         rdp_setup: Some(crate::rdp::host_setup::status()),
         code_renewal: state.identity.as_ref().and_then(CodeRenewalView::of),
@@ -289,3 +300,7 @@ mod tests {
             .is_empty());
     }
 }
+
+#[cfg(test)]
+#[path = "ipc_host_discovery_pause_task_tests.rs"]
+mod pause_task_tests;

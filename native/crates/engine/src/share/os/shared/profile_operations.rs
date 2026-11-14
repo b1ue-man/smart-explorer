@@ -172,8 +172,9 @@ impl ShareProfiles {
     }
 
     /// Remove a Direct peer completely: contact, relation secret, the peer's
-    /// grant, every request of that device, and a durable denial of automatic
-    /// re-installation (see `removed_direct_peers`). Replays safely under the
+    /// grant, every request of that device, its saved login target (E43),
+    /// and a durable denial of automatic re-installation (see
+    /// `removed_direct_peers`). Replays safely under the
     /// compare-and-swap; an already removed contact reports `changed = false`.
     pub fn forget_direct_peer_persisted(
         default_home: Option<String>,
@@ -181,11 +182,28 @@ impl ShareProfiles {
     ) -> Result<(Self, ProfileChange, Option<ForgottenDirectPeer>), String> {
         let now = super::core::now_secs();
         let mut forgotten = None;
+        let mut device = None;
         let profiles = Self::mutate_persisted(default_home, |profiles| {
+            device = profiles
+                .direct_contacts
+                .iter()
+                .find(|contact| contact.id == contact_id)
+                .and_then(|contact| {
+                    super::login_transport::removed_contact_device(
+                        contact.remote_device_id.as_deref(),
+                        contact.presence.as_ref(),
+                    )
+                });
             forgotten = profiles.forget_direct_peer(contact_id, now);
             Ok(())
         })?;
         let changed = forgotten.is_some();
+        // E43: the removed contact's machine login target goes with it.
+        if let (true, Some(device)) = (changed, device.as_deref()) {
+            if let Err(error) = super::login_transport::viewer_forget_login_target(device) {
+                eprintln!("Anmeldeziel von {device} nicht gelöscht: {error}");
+            }
+        }
         let cleanup_warning = changed
             .then(|| delete_credential_verified(&direct_contact_secret_account(contact_id)))
             .and_then(Result::err)

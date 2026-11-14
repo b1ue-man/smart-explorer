@@ -87,6 +87,84 @@ if ($supported) {
         } catch { $notes.Add('Local RDS RemoteApp publication inventory is unavailable: ' + $_.Exception.Message) }
     }
 }
+# E29 / O10: facts of the firewall reading for the RDP port. Rule names stay on
+# this host: only profile names, the active network profiles, booleans and the
+# rule's profile list leave it. probe.rs decides; a fact that was not read is null.
+# Every query reads the ActiveStore, the effective policy (group policy and the
+# local stores); without -PolicyStore the cmdlets read only the PersistentStore.
+function Test-RdpPortFilter([object[]]$values, [int]$rdpPort) {
+    foreach ($value in $values) {
+        $text = ([string]$value).Trim()
+        if ($text -eq 'Any') { return $true }
+        if ($text -match '^(\d{1,5})-(\d{1,5})$') {
+            if ($rdpPort -ge [int]$Matches[1] -and $rdpPort -le [int]$Matches[2]) { return $true }
+        } elseif ($text -match '^\d{1,5}$' -and [int]$text -eq $rdpPort) { return $true }
+    }
+    return $false
+}
+$firewallProfiles = $null
+$firewallActive = $null
+$firewallCandidates = $null
+$firewallErrors = [System.Collections.Generic.List[string]]::new()
+if ($supported -and $null -ne $port) {
+    try {
+        $profileRows = [System.Collections.Generic.List[object]]::new()
+        foreach ($firewallProfile in @(Get-NetFirewallProfile -All -PolicyStore ActiveStore -ErrorAction Stop)) {
+            $enabledText = [string]$firewallProfile.Enabled
+            $profileEnabled = $null
+            if ($enabledText -eq 'True') { $profileEnabled = $true }
+            if ($enabledText -eq 'False') { $profileEnabled = $false }
+            $inboundText = [string]$firewallProfile.DefaultInboundAction
+            $profileInbound = $null
+            if ($inboundText -eq 'Allow') { $profileInbound = 'allow' }
+            if ($inboundText -eq 'Block') { $profileInbound = 'block' }
+            $profileRows.Add([pscustomobject]@{ name = [string]$firewallProfile.Name; enabled = $profileEnabled; inbound = $profileInbound })
+        }
+        $firewallProfiles = @($profileRows.ToArray())
+    } catch { $firewallErrors.Add('Firewallprofile nicht lesbar: ' + $_.Exception.Message) }
+    try {
+        $activeRows = [System.Collections.Generic.List[string]]::new()
+        $activeKnown = $true
+        foreach ($connection in @(Get-NetConnectionProfile -ErrorAction Stop)) {
+            switch ([string]$connection.NetworkCategory) {
+                'DomainAuthenticated' { $activeRows.Add('Domain') }
+                'Private' { $activeRows.Add('Private') }
+                'Public' { $activeRows.Add('Public') }
+                default { $activeKnown = $false }
+            }
+        }
+        if ($activeKnown) { $firewallActive = @($activeRows.ToArray()) }
+    } catch { $firewallErrors.Add('Netzprofil nicht lesbar: ' + $_.Exception.Message) }
+    try {
+        $seenRules = @{}
+        $candidateRows = [System.Collections.Generic.List[object]]::new()
+        foreach ($portFilter in @(Get-NetFirewallPortFilter -All -PolicyStore ActiveStore -ErrorAction Stop)) {
+            if ([string]$portFilter.Protocol -notin @('TCP', '6', 'Any')) { continue }
+            if (-not (Test-RdpPortFilter @($portFilter.LocalPort) ([int]$port))) { continue }
+            foreach ($rule in @(Get-NetFirewallRule -AssociatedNetFirewallPortFilter $portFilter -PolicyStore ActiveStore -ErrorAction Stop)) {
+                if ([string]$rule.Enabled -ne 'True' -or [string]$rule.Direction -ne 'Inbound' -or [string]$rule.Action -ne 'Allow') { continue }
+                $ruleKey = [string]$rule.InstanceID
+                if ($seenRules.ContainsKey($ruleKey)) { continue }
+                $seenRules[$ruleKey] = $true
+                $addressFilters = @(Get-NetFirewallAddressFilter -AssociatedNetFirewallRule $rule -PolicyStore ActiveStore -ErrorAction Stop)
+                $fromNetwork = $addressFilters.Count -eq 0
+                foreach ($addressFilter in $addressFilters) {
+                    foreach ($address in @($addressFilter.RemoteAddress)) {
+                        if (@('127.0.0.1', '::1') -notcontains ([string]$address)) { $fromNetwork = $true }
+                    }
+                }
+                $programFilters = @(Get-NetFirewallApplicationFilter -AssociatedNetFirewallRule $rule -PolicyStore ActiveStore -ErrorAction Stop)
+                $serviceFilters = @(Get-NetFirewallServiceFilter -AssociatedNetFirewallRule $rule -PolicyStore ActiveStore -ErrorAction Stop)
+                $programScoped = @($programFilters | Where-Object { [string]$_.Program -ne 'Any' }).Count -gt 0
+                $serviceScoped = @($serviceFilters | Where-Object { [string]$_.Service -ne 'Any' }).Count -gt 0
+                $candidateRows.Add([pscustomobject]@{ profile = [string]$rule.Profile; network = [bool]$fromNetwork; scoped = [bool]($programScoped -or $serviceScoped) })
+            }
+        }
+        $firewallCandidates = @($candidateRows.ToArray())
+    } catch { $firewallErrors.Add('Firewallregeln nicht lesbar: ' + $_.Exception.Message) }
+}
+$firewallNote = $null
+if ($firewallErrors.Count -gt 0) { $firewallNote = $firewallErrors -join '; ' }
 [pscustomobject]@{
     supported = [bool]$supported
     home = [bool]($sku -in $homeSkus)
@@ -106,4 +184,8 @@ if ($supported) {
     policy_denies = [bool]$policyDenies
     remote_apps = @($apps.ToArray())
     notes = @($notes.ToArray())
+    firewall_profiles = $firewallProfiles
+    firewall_active = $firewallActive
+    firewall_candidates = $firewallCandidates
+    firewall_note = $firewallNote
 } | ConvertTo-Json -Depth 5 -Compress

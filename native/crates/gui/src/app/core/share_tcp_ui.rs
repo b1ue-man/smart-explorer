@@ -62,12 +62,22 @@ fn services(ui: &mut egui::Ui, device: &str, key: &str) {
     if !feed.control {
         ui.label(SERVICES_NEED_STEERING);
     }
+    let shared = shared_state(ui.ctx(), egui::Id::new(("tcp-device", device, key)));
     for service in &feed.services {
-        service_row(ui, service);
+        service_row(ui, service, device, key, &shared);
     }
 }
 
-fn service_row(ui: &mut egui::Ui, service: &TileService) {
+/// The state of one device's panel; the services and the manual forwarding
+/// share it, so their results appear in the same place.
+fn shared_state(ctx: &egui::Context, id: egui::Id) -> Shared {
+    ctx.data_mut(|data| {
+        data.get_temp_mut_or_insert_with(id, || Arc::new(Mutex::new(State::default())))
+            .clone()
+    })
+}
+
+fn service_row(ui: &mut egui::Ui, service: &TileService, device: &str, key: &str, shared: &Shared) {
     ui.horizontal_wrapped(|ui| {
         ui.label(service.line());
         match (&service.url, service.target()) {
@@ -75,15 +85,44 @@ fn service_row(ui: &mut egui::Ui, service: &TileService) {
                 if ui.button("Öffnen").clicked() {
                     ui.ctx().open_url(egui::OpenUrl::new_tab(url));
                 }
+                close_button(ui, service.port, device, key, shared);
             }
             (None, Some(address)) => {
                 if ui.button("Adresse kopieren").clicked() {
                     ui.ctx().copy_text(address);
                 }
+                close_button(ui, service.port, device, key, shared);
             }
-            (None, None) => {}
+            (None, None) => {
+                if ui.button("Öffnen").clicked() {
+                    let (device, key) = (device.to_string(), key.to_string());
+                    let port = service.port;
+                    run(ui.ctx(), shared, move || {
+                        crate::daemon::tcp_open_service(&device, &key, port).map(|mapping| {
+                            match mapping.address {
+                                Some(address) => format!("Dienst {port} ist geöffnet: {address}"),
+                                None => format!("Dienst {port} ist geöffnet."),
+                            }
+                        })
+                    });
+                }
+            }
         }
     });
+}
+
+/// „Schließen“ of a running service (E27): it stays closed until „Öffnen“.
+fn close_button(ui: &mut egui::Ui, port: u16, device: &str, key: &str, shared: &Shared) {
+    if ui.button("Schließen").clicked() {
+        let (device, key) = (device.to_string(), key.to_string());
+        run(ui.ctx(), shared, move || {
+            if crate::daemon::tcp_close_service(&device, &key, port)? {
+                Ok(format!("Dienst {port} ist geschlossen."))
+            } else {
+                Err(format!("Port {port} ist auf dem Gerät nicht freigegeben"))
+            }
+        });
+    }
 }
 
 struct State {
@@ -115,10 +154,7 @@ impl Default for State {
 type Shared = Arc<Mutex<State>>;
 
 fn panel(ui: &mut egui::Ui, id: egui::Id, nodes: &[&str], target: Option<PeerOpenTarget>) {
-    let shared: Shared = ui.ctx().data_mut(|data| {
-        data.get_temp_mut_or_insert_with(id, || Arc::new(Mutex::new(State::default())))
-            .clone()
-    });
+    let shared = shared_state(ui.ctx(), id);
     refresh(ui.ctx(), &shared);
     let mut start = None;
     let mut close = None;

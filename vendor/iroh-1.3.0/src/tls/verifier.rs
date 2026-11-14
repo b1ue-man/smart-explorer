@@ -1,9 +1,12 @@
+// Smart Explorer M6 patch (2026-11-08): optional remote key gate in both verifiers;
+// see vendor/SMART_EXPLORER_ROUTE_POLICY.md, section "M6: remote key gate before any own address".
 //! TLS 1.3 certificates and handshakes handling.
 //!
 //! This module handles a verification of a client/server certificate chain
 //! and signatures allegedly by the given certificates, or using raw public keys.
 
-use iroh_base::{PublicKey, Signature};
+use ed25519_dalek::{VerifyingKey, pkcs8::DecodePublicKey};
+use iroh_base::{EndpointId, PublicKey, Signature};
 use rustls::{
     CertificateError, DigitallySignedStruct, DistinguishedName, SignatureScheme,
     SupportedProtocolVersion,
@@ -13,6 +16,8 @@ use rustls::{
     server::danger::{ClientCertVerified, ClientCertVerifier},
 };
 use webpki_types::SubjectPublicKeyInfoDer;
+
+use crate::endpoint::RemoteKeyGate;
 
 /// The only TLS version we support is 1.3
 pub(super) const PROTOCOL_VERSIONS: &[&SupportedProtocolVersion] = &[&rustls::version::TLS13];
@@ -27,7 +32,15 @@ const SUPPORTED_SIG_ALGS: WebPkiSupportedAlgorithms = WebPkiSupportedAlgorithms 
 ///
 /// Only TLS 1.3 is supported. TLS 1.2 should be disabled in the configuration of `rustls`.
 #[derive(Default, Debug)]
-pub(super) struct ServerCertificateVerifier;
+pub(super) struct ServerCertificateVerifier {
+    /// Smart Explorer M6: server keys this endpoint must not complete a handshake with.
+    pub(super) gate: Option<RemoteKeyGate>,
+}
+
+/// The error of a certificate whose key the [`RemoteKeyGate`] refuses.
+fn refused() -> rustls::Error {
+    rustls::Error::InvalidCertificate(CertificateError::ApplicationVerificationFailure)
+}
 
 impl ServerCertVerifier for ServerCertificateVerifier {
     fn verify_server_cert(
@@ -71,6 +84,16 @@ impl ServerCertVerifier for ServerCertificateVerifier {
             ));
         }
 
+        // Smart Explorer M6: a refused server key gets no client flight and so
+        // no REACH_OUT with this endpoint's addresses.
+        if self
+            .gate
+            .as_ref()
+            .is_some_and(|gate| gate.refuses(&remote_peer_id))
+        {
+            return Err(refused());
+        }
+
         Ok(ServerCertVerified::assertion())
     }
 
@@ -112,7 +135,10 @@ impl ServerCertVerifier for ServerCertificateVerifier {
 ///
 /// Only TLS 1.3 is supported. TLS 1.2 should be disabled in the configuration of `rustls`.
 #[derive(Default, Debug)]
-pub(super) struct ClientCertificateVerifier;
+pub(super) struct ClientCertificateVerifier {
+    /// Smart Explorer M6: client keys this endpoint must not complete a handshake with.
+    pub(super) gate: Option<RemoteKeyGate>,
+}
 
 /// We require one of the following client certificate configurations:
 ///
@@ -124,7 +150,7 @@ impl ClientCertVerifier for ClientCertificateVerifier {
 
     fn verify_client_cert(
         &self,
-        _end_entity: &Certificate,
+        end_entity: &Certificate,
         intermediates: &[Certificate],
         _now: rustls::pki_types::UnixTime,
     ) -> Result<ClientCertVerified, rustls::Error> {
@@ -132,6 +158,18 @@ impl ClientCertVerifier for ClientCertificateVerifier {
             return Err(rustls::Error::InvalidCertificate(
                 CertificateError::UnknownIssuer,
             ));
+        }
+
+        // Smart Explorer M6: a refused client key fails the handshake, so it is
+        // never registered and gets no ADD_ADDRESS with this endpoint's
+        // addresses. A key that does not decode fails closed while a gate is set.
+        if let Some(gate) = &self.gate {
+            let remote = VerifyingKey::from_public_key_der(end_entity.as_ref())
+                .map(EndpointId::from_verifying_key)
+                .map_err(|_| refused())?;
+            if gate.refuses(&remote) {
+                return Err(refused());
+            }
         }
 
         // Beyond checking for no intermediates, we don't check the client certificate.

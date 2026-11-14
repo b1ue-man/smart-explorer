@@ -15,6 +15,11 @@ const APP_DIRECTORY_MODE: u32 = 0o700;
 const TOKEN_MODE: u32 = 0o600;
 const MAX_TOKEN_BYTES: u64 = 4 * 1024;
 
+/// A window of a followed session reads address and token of its channel
+/// instead of the files (E46, S13).
+#[path = "ipc_storage_channel.rs"]
+pub(in crate::daemon) mod channel;
+
 fn ipc_addr_path() -> PathBuf {
     app_data_path().join("sync").join(IPC_ADDR_FILE)
 }
@@ -46,6 +51,9 @@ pub(super) fn write_ipc_generation(generation: &str) -> io::Result<()> {
 }
 
 pub(super) fn read_ipc_addr() -> Option<SocketAddr> {
+    if let Some(channel) = channel::channel_addr() {
+        return channel;
+    }
     secure_sync_directory().ok()?;
     crate::support_dirs::read_private_text(&ipc_addr_path(), 1024)
         .ok()
@@ -116,6 +124,9 @@ pub(super) fn load_or_create_token() -> io::Result<String> {
 }
 
 pub(super) fn read_token() -> io::Result<String> {
+    if let Some(token) = channel::channel_token() {
+        return token;
+    }
     read_token_in(&app_data_path())
 }
 

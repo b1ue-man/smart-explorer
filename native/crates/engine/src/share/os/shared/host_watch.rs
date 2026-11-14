@@ -85,7 +85,10 @@ pub(in crate::share) async fn serve(
             _ = &mut stopped => return Ok(()),
             result = &mut receive => match result.map_err(io::Error::other)? {
                 Ok(session) => break session,
-                Err(error) => return unavailable(&mut send,&authority,error.to_string()).await,
+                Err(error) => {
+                    let unsupported = error.kind() == io::ErrorKind::Unsupported;
+                    return unavailable(&mut send,&authority,error.to_string(),unsupported).await;
+                }
             },
             _ = alive.tick() => { notify(&mut send,&authority,FsWatchEvent::Alive).await?; },
         }
@@ -137,7 +140,10 @@ pub(in crate::share) async fn serve(
                         }
                         watch::WatchEvent::Change(change) => changed.push(relative(prefix,&change.rel)),
                         watch::WatchEvent::Overflow => overflow = true,
-                        watch::WatchEvent::Unavailable(reason) => return unavailable(&mut send,&authority,format!("{reason:?}")).await,
+                        watch::WatchEvent::Unavailable(reason) => {
+                            let unsupported = reason == watch::UnavailableReason::Unsupported;
+                            return unavailable(&mut send,&authority,format!("{reason:?}"),unsupported).await;
+                        }
                     }
                 }
                 for (index,(prefix,receiver)) in remote_rx.iter().enumerate() {
@@ -150,7 +156,7 @@ pub(in crate::share) async fn serve(
                                 if paths.is_empty() { overflow=true; } else { changed.extend(paths.iter().map(|p| relative(prefix,p))); }
                             }
                             crate::vfs::ChangeNotice::Overflow => overflow=true,
-                            crate::vfs::ChangeNotice::Ended(reason) => return unavailable(&mut send,&authority,reason).await,
+                            crate::vfs::ChangeNotice::Ended(reason) => return unavailable(&mut send,&authority,reason,false).await,
                         }
                     }
                 }
@@ -297,8 +303,23 @@ fn relative(prefix: &str, rel: &str) -> String {
         _ => format!("{prefix}/{rel}"),
     }
 }
-async fn unavailable(send: &mut SendStream, access: &FsAccess, reason: String) -> io::Result<()> {
-    notify(send, access, FsWatchEvent::Unavailable { reason }).await?;
+/// `unsupported`: this path can never report changes here (M14); the
+/// subscriber then polls instead of subscribing again.
+async fn unavailable(
+    send: &mut SendStream,
+    access: &FsAccess,
+    reason: String,
+    unsupported: bool,
+) -> io::Result<()> {
+    notify(
+        send,
+        access,
+        FsWatchEvent::Unavailable {
+            reason,
+            unsupported,
+        },
+    )
+    .await?;
     send.finish().map_err(io::Error::other)
 }
 async fn notify(send: &mut SendStream, access: &FsAccess, event: FsWatchEvent) -> io::Result<()> {

@@ -69,6 +69,7 @@ pub fn complete_legacy_launcher(
     // and the launcher. Callers of this bridge predate the consent dialog,
     // so an unsigned feed keeps the earlier sidecar-only check.
     let trust = crate::updater::feed_trust::read_trust(&feed, request.version)?;
+    refuse_unsigned_plain_http(&feed, &trust)?;
     if let Some(manifest) = trust.manifest() {
         boundary.check_signed(manifest)?;
     }
@@ -173,6 +174,21 @@ impl FeedBoundary {
         Ok(())
     }
 }
+/// E25: the earlier callers cannot show the consent dialog, so an unsigned
+/// `http://` feed is refused; signed feeds and unsigned `https://` feeds keep
+/// their earlier checks.
+fn refuse_unsigned_plain_http(
+    feed: &Feed,
+    trust: &crate::updater::feed_trust::FeedTrust,
+) -> Result<(), String> {
+    if trust.unsigned() == Some(crate::updater::UnsignedFeed::PlainHttp) {
+        return Err(format!(
+            "legacy_http_unsigned_refused: Der Update-Feed {} ist eine http://-Adresse ohne signiertes Release-Manifest. Der Altaufrufer lehnt unsignierte Dateien über http:// ab, weil auf dem Netzweg Programm und Prüfsumme ersetzt werden können.",
+            feed.display()
+        ));
+    }
+    Ok(())
+}
 fn configured_source(root: &Path) -> Result<String, String> {
     // Match the original installed app's precedence. The detached helper's
     // own stage directory is not the original executable's source directory.
@@ -223,3 +239,7 @@ fn validate_version(version: &str) -> Result<(), String> {
 #[cfg(test)]
 #[path = "legacy_launcher_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "update_worker_task_legacy_tests.rs"]
+mod update_worker_task_legacy_tests;

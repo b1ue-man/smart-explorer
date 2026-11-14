@@ -3,6 +3,7 @@ mod host_status;
 mod pipe;
 mod protected;
 mod security;
+mod self_platform;
 mod service;
 pub use host_status::{
     host_process_instance, host_uptime_ms, read_host_evidence, write_host_evidence,
@@ -14,10 +15,13 @@ use crate::login::os::shared::denied;
 pub use pipe::{connect, helper_channel, ClientStream};
 pub use protected::{gateway_state_directory, open_protected, paths, ProtectedFile};
 pub use sas::secure_attention;
-pub use service::run_broker;
-pub use session::{
-    binding, finish_helper, helper_binding_matches, prepare_helper, run_probe,
+pub use self_platform::{
+    connect_grants, create_stage_file, elevation, open_image, privileged, read_self_record,
+    run_elevated, run_install_script, stage_root, write_self_record, APP_FILE, SCRIPT, SCRIPT_NAME,
+    STAGE_IMAGE,
 };
+pub use service::run_broker;
+pub use session::{binding, finish_helper, helper_binding_matches, prepare_helper, run_probe};
 pub use spawn::spawn;
 use std::io;
 pub const SERVICE: &str = "SmartExplorerLoginBroker";

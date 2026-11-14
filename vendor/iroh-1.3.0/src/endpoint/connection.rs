@@ -1,4 +1,5 @@
-// Smart Explorer P28b/V3 patch (2026-10-25); see vendor/SMART_EXPLORER_ROUTE_POLICY.md.
+// Smart Explorer P28b/V3 patch (2026-10-25), M6 remote key gate before registration
+// (2026-11-08); see vendor/SMART_EXPLORER_ROUTE_POLICY.md.
 //! The [`Connection`] wraps a `noq::Connection`.
 //!
 //! The [`Connection`] is how you send data to and receive data from the remote endpoint.
@@ -343,6 +344,22 @@ fn conn_from_noq_conn(
         remote_id = %info.endpoint_id.fmt_short(),
         alpn = %String::from_utf8_lossy(&info.alpn),
     );
+
+    // Smart Explorer M6: the registration below queues this endpoint's
+    // addresses (ADD_ADDRESS) for the remote. The TLS verifiers already refused
+    // gated keys; this covers a key the application refused while its handshake
+    // was running.
+    if ep
+        .inner
+        .static_config
+        .tls_config
+        .remote_key_gate
+        .as_ref()
+        .is_some_and(|gate| gate.refuses(&info.endpoint_id))
+    {
+        conn.close(VarInt::from_u32(0), b"refused");
+        return Err(e!(ConnectingError::LocallyRejected));
+    }
 
     // Register this connection with the socket.
     let fut = ep.inner.register_connection(info.endpoint_id, conn.clone());

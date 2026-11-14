@@ -1,4 +1,5 @@
-// Smart Explorer P28b/V3 patch (2026-10-25); see vendor/SMART_EXPLORER_ROUTE_POLICY.md.
+// Smart Explorer P28b/V3 patch (2026-10-25), M6 remote key gate and resolver without public
+// fallback (2026-11-08); see vendor/SMART_EXPLORER_ROUTE_POLICY.md.
 //! The [`Endpoint`] allows establishing connections to other iroh endpoints.
 //!
 //! The [`Endpoint`] is the main API interface to manage a local iroh endpoint.  It allows
@@ -61,6 +62,8 @@ pub use super::socket::{
 use crate::address_lookup::PkarrResolver;
 #[cfg(not(wasm_browser))]
 use crate::dns::DnsResolver;
+#[cfg(not(wasm_browser))]
+use crate::dns::FallbackMode;
 #[cfg(feature = "unstable-custom-transports")]
 use crate::endpoint::transports::CustomTransport;
 #[cfg(feature = "unstable-net-report")]
@@ -89,10 +92,12 @@ mod connection;
 pub(crate) mod hooks;
 pub mod presets;
 pub(crate) mod quic;
+mod remote_key_gate;
 
 #[cfg(not(wasm_browser))]
 pub use bind::{BindOpts, InvalidSocketAddr, ToSocketAddr};
 pub use hooks::{AfterHandshakeOutcome, BeforeConnectOutcome, EndpointHooks};
+pub use remote_key_gate::RemoteKeyGate;
 
 #[cfg(feature = "qlog")]
 pub use self::quic::{QlogConfig, QlogFactory, QlogFileFactory};
@@ -148,6 +153,7 @@ pub struct Builder {
     dns_resolver: Option<DnsResolver>,
     transports: Vec<TransportConfig>,
     max_tls_tickets: usize,
+    remote_key_gate: Option<RemoteKeyGate>,
     hooks: EndpointHooksList,
     path_selector: Arc<dyn PathSelector>,
     portmapper_config: PortmapperConfig,
@@ -215,6 +221,7 @@ impl Builder {
             #[cfg(not(wasm_browser))]
             dns_resolver: None,
             max_tls_tickets: DEFAULT_MAX_TLS_TICKETS,
+            remote_key_gate: None,
             transports,
             hooks: Default::default(),
             path_selector: Arc::new(BiasedRttPathSelector::default()),
@@ -247,7 +254,8 @@ impl Builder {
             secret_key.clone(),
             self.max_tls_tickets,
             crypto_provider.clone(),
-        );
+        )
+        .with_remote_key_gate(self.remote_key_gate);
         let static_config = StaticConfig {
             server_config: tls_config.make_server_config(self.keylog)?,
             client_config: tls_config.make_client_config(self.keylog)?,
@@ -266,10 +274,14 @@ impl Builder {
             .client_config(crypto_provider)
             .map_err(|err| e!(BindError::InvalidCaRootConfig, err))?;
 
+        // Smart Explorer M6 (decision E33): the default resolver reads the
+        // system DNS configuration only and never queries the public fallback
+        // nameservers, also when the system configuration is empty or unreadable.
         #[cfg(not(wasm_browser))]
         let dns_resolver = self.dns_resolver.unwrap_or_else(|| {
             DnsResolver::builder()
                 .with_system_defaults()
+                .with_fallback_mode(FallbackMode::Never)
                 .tls_client_config(tls_config.clone())
                 .build()
         });
@@ -692,7 +704,9 @@ impl Builder {
     /// [`crate::address_lookup::DnsAddressLookup`] is configured.
     ///
     /// By default, a new DNS resolver is created which is configured to use the
-    /// host system's DNS configuration. You can pass a custom instance of [`DnsResolver`]
+    /// host system's DNS configuration only (Smart Explorer M6: with
+    /// [`FallbackMode::Never`], so no public fallback nameserver is ever
+    /// queried). You can pass a custom instance of [`DnsResolver`]
     /// here to use a differently configured DNS resolver for this endpoint, or to share
     /// a [`DnsResolver`] between multiple endpoints.
     #[cfg(not(wasm_browser))]
@@ -775,6 +789,19 @@ impl Builder {
     /// If none of these features are set, then calling this function in the builder is mandatory.
     pub fn crypto_provider(mut self, crypto_provider: Arc<rustls::crypto::CryptoProvider>) -> Self {
         self.crypto_provider = Some(crypto_provider);
+        self
+    }
+
+    /// Smart Explorer M6: refuses the TLS handshake with every remote endpoint id
+    /// for which `gate` answers `true`, in both directions.
+    ///
+    /// A refused key never completes a handshake, so it is never registered
+    /// with the socket and receives none of this endpoint's addresses
+    /// (`ADD_ADDRESS`, probes started by its `REACH_OUT`). Setting a gate
+    /// switches TLS session resumption and 0-RTT off for this endpoint, because a
+    /// resumed handshake carries no certificate for the gate to refuse.
+    pub fn remote_key_gate(mut self, gate: RemoteKeyGate) -> Self {
+        self.remote_key_gate = Some(gate);
         self
     }
 

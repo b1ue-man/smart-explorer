@@ -391,6 +391,23 @@ pub(super) async fn serve(stream: FsStream, req: FsRequest) -> io::Result<()> {
             crate::share::host_remove_tree::serve(send, path, access, authorization, principal)
                 .await
         }
+        // E43: any authenticated peer asks; the answer checks steering now
+        // and may wait for the local login broker (own queue).
+        FsRequest::LoginTarget => {
+            let (auth, asking) = (context.auth.clone(), principal.clone());
+            let class = crate::share::blocking::Class::Background;
+            let answer = crate::share::blocking::run_for(principal, class, "Share login target", {
+                move || {
+                    let (device, key) = (asking.device_id(), asking.public_key());
+                    crate::share::login_transport::host_login_answer(&auth, device, key)
+                }
+            })
+            .await;
+            match answer {
+                Ok(message) => reply(&mut send, FsResponse::LoginTarget { message }).await,
+                Err(error) => reply_err(&mut send, error).await,
+            }
+        }
         request @ (FsRequest::PutBatch { .. }
         | FsRequest::PutBatchStatus { .. }
         | FsRequest::GetBatch { .. }) => {

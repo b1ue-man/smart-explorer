@@ -3,6 +3,7 @@ package app.smartexplorer.android.ui.share
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
@@ -37,10 +38,17 @@ internal fun RdpDialog(selector: ShareDialog.Rdp, onDismiss: () -> Unit) {
     var clients by remember(selector) { mutableStateOf<RdpClients?>(null) }
     var target by remember(selector) { mutableStateOf<TcpTarget?>(null) }
     var feed by remember(selector) { mutableStateOf<DeviceFeed?>(null) }
+    var localDiagnostics by remember(selector) { mutableStateOf<List<String>>(emptyList()) }
     var busy by remember(selector) { mutableStateOf(false) }
     var info by remember(selector) { mutableStateOf<String?>(null) }
     var error by remember(selector) { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
+    LaunchedEffect(selector) {
+        // A remote device's lines come from its own device feed (E54); this phone's probe is read only without a remote identity.
+        if (rdpSelectsForeignDevice(selector.contactId, selector.deviceId, selector.publicKey)) return@LaunchedEffect
+        localDiagnostics = try { RdpApi.localHost().diagnostics } catch (cancel: CancellationException) { throw cancel
+        } catch (failure: CoreException) { listOf("Diagnose nicht lesbar: ${failure.message ?: failure.kind}") }
+    }
     LaunchedEffect(selector) {
         try {
             clients = RdpApi.clients()
@@ -55,6 +63,8 @@ internal fun RdpDialog(selector: ShareDialog.Rdp, onDismiss: () -> Unit) {
     }
     val usable = clients?.clients.orEmpty().any { it.available }
     val rdp = feed?.rdp
+    val foreign = rdpSelectsForeignDevice(selector.contactId, selector.deviceId, selector.publicKey)
+    val diagnosticLines = rdpDiagnosticSource(foreign, rdp?.diagnostics.orEmpty(), localDiagnostics)
     fun open(remoteApp: String?) {
         val device = target ?: return
         if (busy) return
@@ -83,6 +93,14 @@ internal fun RdpDialog(selector: ShareDialog.Rdp, onDismiss: () -> Unit) {
                     rdp.startable -> Text("Bereit")
                     else -> Text(rdp.setupText)
                 }
+                if (diagnosticLines.isNotEmpty()) {
+                    Text(if (foreign) "Diagnose des Remote-Desktop-Hosts dieses Geräts" else "Diagnose dieses Telefons", style = MaterialTheme.typography.titleSmall)
+                    SelectionContainer {
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            diagnosticLines.forEach { line -> Text(line, style = MaterialTheme.typography.bodySmall) }
+                        }
+                    }
+                }
                 if (usable && target != null && (rdp == null || rdp.startable || rdp.setupPossible)) {
                     TextButton(enabled = !busy, onClick = { open(null) }) { Text("Remote Desktop") }
                     rdp?.takeIf { it.startable }?.remoteApps.orEmpty().forEach { app ->
@@ -97,3 +115,23 @@ internal fun RdpDialog(selector: ShareDialog.Rdp, onDismiss: () -> Unit) {
         confirmButton = { TextButton(onClick = onDismiss) { Text("Schließen") } },
     )
 }
+
+/**
+ * The diagnostic lines to show, in the order given. Blank lines are dropped; every other line is kept
+ * literally (no trimming, cutting or merging), so each line reads and copies as it was reported.
+ */
+internal fun rdpDiagnosticLines(diagnostics: List<String>): List<String> = diagnostics.filter { it.isNotBlank() }
+
+/**
+ * Whether the selector names a remote device: by its contact, or by its device identity together with its pinned key
+ * (E54). Any other selector is this phone.
+ */
+internal fun rdpSelectsForeignDevice(contactId: String?, deviceId: String?, publicKey: String?): Boolean =
+    contactId != null || (deviceId != null && publicKey != null)
+
+/**
+ * The lines to show (E54): a remote device's lines are the lines of its own device feed, never this phone's; this
+ * phone's lines are its local probe lines.
+ */
+internal fun rdpDiagnosticSource(foreign: Boolean, feedLines: List<String>, localLines: List<String>): List<String> =
+    rdpDiagnosticLines(if (foreign) feedLines else localLines)

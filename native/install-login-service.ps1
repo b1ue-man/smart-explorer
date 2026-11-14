@@ -1,9 +1,16 @@
-# Optional explicit administrative installation; never run by the per-user updater.
+# Login service installation; never run by the per-user updater.
+# Since E21 Smart Explorer runs this script itself, non-interactively and with
+# fixed arguments, when a device may steer the screen ("Bildschirm steuern:
+# Erlauben"): -Action SelfInstall from a new SYSTEM/Administrators-only
+# directory after one UAC approval per version, -Action Uninstall after the
+# last revocation. The explicit administrative use below stays unchanged.
 # .\install-login-service.ps1 -Action Install -Image <release exe> -ExpectedSha256 <approved hash> -Version <version> -PolicyFile <administrative policy>
+# .\install-login-service.ps1 -Action SelfInstall ... (as Install, all three record files given; the policy may hold no grant yet:
+#   the broker's local grant pipe adds the granting account's grants after the start)
 # .\install-login-service.ps1 -Action Uninstall
 [CmdletBinding()]
 param(
-    [ValidateSet('Install','Uninstall')][string]$Action = 'Install',
+    [ValidateSet('Install','Uninstall','SelfInstall')][string]$Action = 'Install',
     [string]$Image,
     [ValidatePattern('^[0-9a-fA-F]{64}$')][string]$ExpectedSha256,
     [ValidatePattern('^[0-9]+\.[0-9]+\.[0-9]+$')][string]$Version,
@@ -12,6 +19,12 @@ param(
     [string]$NetworkFile
 )
 $ErrorActionPreference = 'Stop'
+$allowEmptyGrants = $false
+if ($Action -eq 'SelfInstall') {
+    if (-not $MachineIdentityFile -or -not $NetworkFile) { throw 'SelfInstall requires MachineIdentityFile and NetworkFile.' }
+    $allowEmptyGrants = $true
+    $Action = 'Install'
+}
 $principal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'Login service installation requires an elevated administrator.' }
 $broker = 'SmartExplorerLoginBroker'
@@ -263,10 +276,11 @@ try {
         $reader = [IO.StreamReader]::new($policySource,[Text.Encoding]::UTF8)
         try { $policy = $reader.ReadToEnd() | ConvertFrom-Json } finally { $reader.Dispose() }
     } finally { $policySource.Dispose() }
-    if ($policy.format -ne 1 -or -not $policy.revision -or -not $policy.machine_id -or -not $policy.machine_public_key -or -not $policy.grants) { throw 'Policy requires explicit machine identity, revision and peer grants.' }
-    foreach ($grant in $policy.grants) {
+    if ($policy.format -ne 1 -or -not $policy.revision -or -not $policy.machine_id -or -not $policy.machine_public_key -or $null -eq $policy.grants -or (-not $allowEmptyGrants -and @($policy.grants).Count -eq 0)) { throw 'Policy requires explicit machine identity, revision and peer grants.' }
+    foreach ($grant in @($policy.grants)) {
         if (-not $grant.peer_id -or -not $grant.public_key -or -not $grant.target_users -or -not $grant.rights.login) { throw 'Every login grant requires an explicit peer, target-user list and login right.' }
-        foreach ($user in $grant.target_users) { if ($user -notmatch '^S-1-5-21-[0-9-]+$') { throw 'Every Windows target user must be an explicit account SID.' } }
+        # Local and domain accounts (S-1-5-21) and Microsoft Entra accounts (S-1-12-1).
+        foreach ($user in $grant.target_users) { if ($user -notmatch '^S-1-(5-21|12-1)-[0-9-]+$') { throw 'Every Windows target user must be an explicit account SID.' } }
     }
     $keyPath = Join-Path $state 'machine-key.json'
     $keySource = if ($MachineIdentityFile) { [IO.Path]::GetFullPath($MachineIdentityFile) } else { $keyPath }

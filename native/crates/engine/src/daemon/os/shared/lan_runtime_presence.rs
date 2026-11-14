@@ -1,5 +1,6 @@
 //! Private announcement, bounded sighting admission and contact reconciliation.
 use super::*;
+use std::borrow::Cow;
 
 impl LanRuntime {
     pub(super) fn refresh_announcement(&mut self, input: &LanTickInput<'_>) {
@@ -48,14 +49,17 @@ impl LanRuntime {
                     }
                 }
                 LanEvent::SeenAuthenticated { sighting, proof } => {
-                    if own.as_deref() == Some(sighting.id.as_str())
-                        || self
-                            .authenticator
-                            .authenticate(&sighting, &proof, crate::share::core_now_secs())
-                            .is_none()
-                    {
+                    if own.as_deref() == Some(sighting.id.as_str()) {
                         continue;
                     }
+                    // E26: only the addresses the contact's signed list names are kept.
+                    let Some((_, sighting)) = self.authenticator.authenticate_cut(
+                        &sighting,
+                        &proof,
+                        crate::share::core_now_secs(),
+                    ) else {
+                        continue;
+                    };
                     if self.sightings.len() >= 1024 && !self.sightings.contains_key(&sighting.id) {
                         // A verified contact can reclaim an unverified hint.
                         let victim = self
@@ -105,15 +109,19 @@ impl LanRuntime {
         // r-entdeckung-4 (runtime half): every sighting's verified contact
         // first; a contact with a verified signed sighting now or earlier in
         // this runtime is never matched by an unsigned `v=1` sighting.
+        // E26: a verified sighting is the cut one, with only the signed addresses.
         let verified: Vec<_> = self
             .sightings
             .values()
-            .map(|sighting| {
-                let contact = self
+            .map(|stored| {
+                let cut = self
                     .proofs
-                    .get(&sighting.id)
-                    .and_then(|proof| self.authenticator.authenticate(sighting, proof, now));
-                (sighting, contact)
+                    .get(&stored.id)
+                    .and_then(|proof| self.authenticator.authenticate_cut(stored, proof, now));
+                match cut {
+                    Some((contact, cut)) => (Cow::Owned(cut), Some(contact)),
+                    None => (Cow::Borrowed(stored), None),
+                }
             })
             .collect();
         let mut signed: std::collections::HashSet<String> =
@@ -140,7 +148,7 @@ impl LanRuntime {
                 .map(|id| {
                     (
                         id.clone(),
-                        lan_presence_match::candidates_for(sighting, &scopes),
+                        lan_presence_match::candidates_for(&sighting, &scopes),
                     )
                 })
                 .or_else(|| {
@@ -149,7 +157,7 @@ impl LanRuntime {
                             legacy_contacts.get(&sighting.id).map(|id| {
                                 (
                                     id.clone(),
-                                    lan_presence_match::candidates_for(sighting, &scopes),
+                                    lan_presence_match::candidates_for(&sighting, &scopes),
                                 )
                             })
                         })

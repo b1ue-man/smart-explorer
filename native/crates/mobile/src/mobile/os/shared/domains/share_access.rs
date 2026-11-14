@@ -1,6 +1,8 @@
 //! Access rights of this phone as Exec host (PRM-M10, D.2.4): `share.setAccess`,
 //! the open confirmations (`share.accessApprovals`), the host user's answer to
-//! exactly one of them (`share.decideAccessApproval`), the report that the app
+//! one of them (`share.decideAccessApproval`; „Immer erlauben“ and „Ablehnen“
+//! also answer the open requests equal to it, E28, and the reply counts them as
+//! `alsoAnswered`), the report that the app
 //! can show one nowhere (`share.reportApprovalUndeliverable`; the host then
 //! refuses the start with `approval_unavailable`), the fields
 //! `execProvider.accountChoices`, `otherAccountsNote`, `elevated`,
@@ -395,14 +397,17 @@ pub(super) fn approvals_json(pending: &[ApprovalView]) -> Value {
     json!({ "pending": pending })
 }
 
-/// `share.decideAccessApproval {approvalId, decision}` → `{}`: the answer to
-/// exactly this request (`once`, `always`, `deny`). A request that is no
-/// longer open is `not_found`.
+/// `share.decideAccessApproval {approvalId, decision}` → `{alsoAnswered}`.
+/// The answer to the request `id`; „Immer erlauben“ and „Ablehnen“ also
+/// answer the open requests equal to it (E28). `alsoAnswered` counts those
+/// other requests (0 for `once`). A request that is no longer open is
+/// `not_found`.
 pub(in super::super) fn decide(args: &Value) -> Result<Value, ApiError> {
     let (id, decision) = decision_args(args)?;
-    crate::daemon::decide_access_approval(id.as_str(), decision).map_err(answer_error)?;
+    let also_answered =
+        crate::daemon::decide_access_approval(id.as_str(), decision).map_err(answer_error)?;
     wake();
-    Ok(json!({}))
+    Ok(json!({ "alsoAnswered": also_answered }))
 }
 
 /// `share.reportApprovalUndeliverable {approvalId}` → `{}`: the app can show

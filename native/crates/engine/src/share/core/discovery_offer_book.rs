@@ -8,8 +8,13 @@ use serde::{Deserialize, Serialize};
 
 use super::connection_rights::ConnectionRights;
 use super::discovery_signal_types::{
-    DiscoveryEvent, DiscoveryOfferStopReason, DiscoveryPublishTarget,
+    DiscoveryEvent, DiscoveryOfferStopReason, DiscoveryPin, DiscoveryPublishTarget,
 };
+
+#[path = "discovery_pin_renewal.rs"]
+mod pin_renewal;
+use self::pin_renewal::PendingRenewals;
+pub use self::pin_renewal::{PinRenewal, WaitingRenewal, PIN_RENEWAL_PAUSE_SECS};
 
 /// Offers that ended recently, so a publish acknowledged just before its
 /// offer stopped still reports the reason.
@@ -29,6 +34,14 @@ pub struct OwnDiscoveryOffer {
     /// rights and waits for its confirmation (F1). Rooms never carry any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rights: Option<ConnectionRights>,
+    /// The daemon published this offer after the previous one ended because
+    /// too many attempts failed to prove its PIN (security line S9).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub renewed_after_failed_attempts: bool,
+    /// The new PIN of a renewed offer, for the person to read out. It stays
+    /// in the daemon's memory and reaches the surfaces over the local IPC.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pin: Option<DiscoveryPin>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -43,10 +56,17 @@ pub struct DiscoveryOfferBook {
     /// Rights announced before their offer was seen (kept until it is).
     early_rights: BTreeMap<String, ConnectionRights>,
     ended: VecDeque<(String, DiscoveryOfferStopReason)>,
+    /// Renewals of offers that ended after too many failed attempts.
+    renewals: PendingRenewals,
 }
 
 impl DiscoveryOfferBook {
     pub fn observe(&mut self, event: &DiscoveryEvent) {
+        self.observe_at(event, super::core::now_secs());
+    }
+
+    /// `observe` with the time of the event as an argument.
+    pub fn observe_at(&mut self, event: &DiscoveryEvent, now: i64) {
         match event {
             DiscoveryEvent::OfferPrepared {
                 offer_id,
@@ -63,7 +83,7 @@ impl DiscoveryOfferBook {
             DiscoveryEvent::OfferRights { offer_id, rights } => {
                 self.set_rights(offer_id, rights.clone())
             }
-            DiscoveryEvent::OfferStopped { offer_id, reason } => self.end(offer_id, *reason),
+            DiscoveryEvent::OfferStopped { offer_id, reason } => self.end(offer_id, *reason, now),
             DiscoveryEvent::DiscoveryList { .. }
             | DiscoveryEvent::ExchangeStarted { .. }
             | DiscoveryEvent::ExchangeCompleted { .. }
@@ -115,9 +135,72 @@ impl DiscoveryOfferBook {
     pub fn end_all(&mut self, reason: DiscoveryOfferStopReason) -> Vec<String> {
         let ids: Vec<String> = self.active.keys().cloned().collect();
         for offer_id in &ids {
-            self.end(offer_id, reason);
+            self.end(offer_id, reason, 0);
         }
+        // Nothing renews without a worker that holds the offers.
+        self.renewals.clear();
         ids
+    }
+
+    /// The renewals due at `now`, for the daemon loop to publish. Those whose
+    /// target has an offer again (the person published meanwhile) or whose
+    /// time ran out are dropped. A claimed renewal stays until `finish_renewal`.
+    pub fn claim_due_renewals(&mut self, now: i64) -> Vec<PinRenewal> {
+        let active = &self.active;
+        self.renewals.claim_due(now, |target| {
+            active
+                .values()
+                .any(|offer| offer.target == *target && offer.discoverable_until > now)
+        })
+    }
+
+    /// A new random PIN for a renewal, from the generator of the other surfaces.
+    pub fn fresh_renewal_pin() -> Result<DiscoveryPin, String> {
+        pin_renewal::renewal_pin()
+    }
+
+    /// A renewal is wanted until the person stops the offer it replaces.
+    pub fn renewal_pending(&self, replaces: &str) -> bool {
+        self.renewals.is_pending(replaces)
+    }
+
+    /// The person stopped the offer `replaces` (or a surface did for them):
+    /// no renewal follows. `true` when one was waiting.
+    pub fn cancel_renewal(&mut self, replaces: &str) -> bool {
+        self.renewals.cancel(replaces)
+    }
+
+    /// The claimed renewal is done; `false`: it was cancelled meanwhile.
+    pub fn finish_renewal(&mut self, replaces: &str) -> bool {
+        self.renewals.finish(replaces)
+    }
+
+    /// The claimed renewal failed to publish; it is tried again later.
+    pub fn postpone_renewal(&mut self, replaces: &str, now: i64) {
+        self.renewals.postpone(replaces, now);
+    }
+
+    /// Number of renewals waiting for their pause or their publication.
+    pub fn pending_renewals(&self) -> usize {
+        self.renewals.len()
+    }
+
+    /// The renewals in their pause, for every surface (E49); a stop of their
+    /// `replaces` cancels them.
+    pub fn waiting_renewals(&self) -> Vec<WaitingRenewal> {
+        self.renewals.waiting()
+    }
+
+    /// Marks the offer the daemon published as a renewal and keeps its new PIN.
+    pub fn mark_renewed(&mut self, offer_id: &str, pin: DiscoveryPin) -> bool {
+        match self.active.get_mut(offer_id) {
+            Some(offer) => {
+                offer.renewed_after_failed_attempts = true;
+                offer.pin = Some(pin);
+                true
+            }
+            None => false,
+        }
     }
 
     fn upsert(
@@ -128,10 +211,15 @@ impl DiscoveryOfferBook {
         discoverable_until: i64,
         published: bool,
     ) {
-        // A lease renewal or lapse rewrites the offer; its rights stay.
-        let rights = match self.active.get(offer_id) {
-            Some(known) => known.rights.clone(),
-            None => self.early_rights.remove(offer_id),
+        // A lease renewal or lapse rewrites the offer; its rights and the
+        // mark of a renewed offer stay.
+        let (rights, renewed, pin) = match self.active.get(offer_id) {
+            Some(known) => (
+                known.rights.clone(),
+                known.renewed_after_failed_attempts,
+                known.pin.clone(),
+            ),
+            None => (self.early_rights.remove(offer_id), false, None),
         };
         self.active.insert(
             offer_id.to_string(),
@@ -142,6 +230,8 @@ impl DiscoveryOfferBook {
                 discoverable_until,
                 published,
                 rights,
+                renewed_after_failed_attempts: renewed,
+                pin,
             },
         );
     }
@@ -160,9 +250,32 @@ impl DiscoveryOfferBook {
         }
     }
 
-    fn end(&mut self, offer_id: &str, reason: DiscoveryOfferStopReason) {
-        self.active.remove(offer_id);
+    fn end(&mut self, offer_id: &str, reason: DiscoveryOfferStopReason, now: i64) {
+        let ended = self.active.remove(offer_id);
         self.early_rights.remove(offer_id);
+        match (reason, ended) {
+            // Someone may be guessing the PIN: after a pause the daemon offers
+            // the same target again with a new PIN. Every other reason, above
+            // all the person's stop and a pairing, leaves no renewal.
+            (DiscoveryOfferStopReason::TooManyFailedAttempts, Some(offer)) => {
+                self.renewals.plan(
+                    PinRenewal {
+                        replaces: offer.offer_id,
+                        target: offer.target,
+                        display_alias: offer.display_alias,
+                        rights: offer.rights,
+                        discoverable_until: offer.discoverable_until,
+                        due: now.saturating_add(PIN_RENEWAL_PAUSE_SECS),
+                    },
+                    now,
+                );
+            }
+            // A repeated event for an offer that already ended keeps the plan.
+            (DiscoveryOfferStopReason::TooManyFailedAttempts, None) => {}
+            _ => {
+                self.renewals.cancel(offer_id);
+            }
+        }
         self.ended.retain(|(ended, _)| ended != offer_id);
         self.ended.push_back((offer_id.to_string(), reason));
         while self.ended.len() > RECENTLY_ENDED_CAPACITY {
@@ -174,6 +287,10 @@ impl DiscoveryOfferBook {
 #[cfg(test)]
 #[path = "discovery_offer_rights_snapshot_tests.rs"]
 mod abgleich_task_tests;
+
+#[cfg(test)]
+#[path = "discovery_pin_renewal_task_tests.rs"]
+mod pin_neu_task_tests;
 
 #[cfg(test)]
 mod tests {

@@ -98,12 +98,12 @@ impl ShareHost {
                 decision,
             } => {
                 let id = ApprovalId::parse(&approval_id)?;
-                self.decide_approval(approvals, &id, decision)?;
-                Ok(AccessIpcReply::Decided)
+                let also_answered = self.decide_approval(approvals, &id, decision)?;
+                Ok(AccessIpcReply::Decided { also_answered })
             }
             AccessIpcRequest::ReportUndeliverable { approval_id } => {
                 approvals.report_undeliverable(&ApprovalId::parse(&approval_id)?)?;
-                Ok(AccessIpcReply::Decided)
+                Ok(AccessIpcReply::Decided { also_answered: 0 })
             }
             AccessIpcRequest::Accounts => Ok(self.account_list()),
             AccessIpcRequest::ExecNotice { exec_id } => Ok(AccessIpcReply::ExecNotice {
@@ -113,15 +113,17 @@ impl ShareHost {
         }
     }
 
-    /// The answer to exactly the request `id`. „Immer erlauben“ first sets
-    /// the capability to `allow`, compared against the revision the request
-    /// was made under, then releases the waiting start.
+    /// The answer to the request `id`; „Immer erlauben“ and „Ablehnen“ also
+    /// answer the open requests equal to it (E28). The result counts those
+    /// other requests. „Immer erlauben“ first sets the capability to `allow`,
+    /// compared against the revision the request was made under, then releases
+    /// the waiting start.
     fn decide_approval(
         &self,
         approvals: &ApprovalService,
         id: &ApprovalId,
         decision: ApprovalDecision,
-    ) -> Result<(), String> {
+    ) -> Result<usize, String> {
         if decision != ApprovalDecision::Always {
             return approvals.decide(id, decision);
         }
@@ -149,8 +151,7 @@ impl ShareHost {
         }
         // The waiting start reads the grant again. A request that ended
         // meanwhile still leaves the grant allowing for later starts.
-        let _ = approvals.decide(id, ApprovalDecision::Always);
-        Ok(())
+        Ok(approvals.decide(id, ApprovalDecision::Always).unwrap_or(0))
     }
 
     /// "Ausführen als" of this worker (PRM-M6, PRM-M7, D.2.4): the state of
@@ -211,14 +212,19 @@ pub fn access_approvals() -> Result<Vec<ApprovalView>, String> {
     }
 }
 
-/// The host user's answer to exactly the request `approval_id`.
-pub fn decide_access_approval(approval_id: &str, decision: ApprovalDecision) -> Result<(), String> {
+/// The host user's answer to the request `approval_id`; „Immer erlauben“ and
+/// „Ablehnen“ also answer the open requests equal to it (E28). Returns how
+/// many requests other than `approval_id` were answered too.
+pub fn decide_access_approval(
+    approval_id: &str,
+    decision: ApprovalDecision,
+) -> Result<usize, String> {
     let approval_id = approval_id.to_string();
     match request(AccessIpcRequest::Decide {
         approval_id,
         decision,
     })? {
-        AccessIpcReply::Decided => Ok(()),
+        AccessIpcReply::Decided { also_answered } => Ok(also_answered),
         _ => Err(unexpected()),
     }
 }
@@ -228,7 +234,7 @@ pub fn decide_access_approval(approval_id: &str, decision: ApprovalDecision) -> 
 pub fn report_approval_undeliverable(approval_id: &str) -> Result<(), String> {
     let approval_id = approval_id.to_string();
     match request(AccessIpcRequest::ReportUndeliverable { approval_id })? {
-        AccessIpcReply::Decided => Ok(()),
+        AccessIpcReply::Decided { .. } => Ok(()),
         _ => Err(unexpected()),
     }
 }

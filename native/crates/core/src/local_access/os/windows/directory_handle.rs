@@ -66,8 +66,9 @@ impl DirectoryHandle {
         self.0.file.metadata()
     }
 
-    /// This read pin is synchronous. A path reopen cannot manufacture an
-    /// equivalent overlapped watch capability, so callers retain polling.
+    /// This read pin is synchronous and has no path-based watch capability.
+    /// Change watches derive their overlapped handle from the pin itself
+    /// (`open_watch`, identity-checked, in `directory_watch.rs`).
     pub fn watch_path(&self) -> Option<PathBuf> {
         None
     }

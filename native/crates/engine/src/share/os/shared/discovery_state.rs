@@ -5,8 +5,11 @@
 mod live_offers;
 #[path = "discovery_pairing_ui.rs"]
 mod pairing_ui;
+#[path = "discovery_renewal_view.rs"]
+mod renewal_view;
 
 pub use pairing_ui::{revocable, unconfirmed_label, DiscoveryPinDraft};
+pub use renewal_view::{pin_renewal_hint, waiting_renewal_text, RenewalNotice};
 
 /// Status after the Share worker that held an offer stopped or was replaced.
 pub const WORKER_STOPPED_STATUS: &str =
@@ -91,6 +94,10 @@ pub struct ActiveDiscoveryOffer {
     /// The name the offer is published under, when the worker named it (an
     /// offer taken up after a restart of the interface); empty otherwise.
     pub alias: String,
+    /// The daemon renewed the offer after too many failed attempts; `pin` is
+    /// its new PIN (`renewal_view`).
+    pub renewed_after_failed_attempts: bool,
+    pub pin: Option<crate::share::DiscoveryPin>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -175,6 +182,8 @@ pub struct DiscoveryUiState {
     pub exchange_by_discovery: std::collections::HashMap<String, String>,
     pub starting_discoveries: std::collections::HashSet<String>,
     pub active_offers: Vec<ActiveDiscoveryOffer>,
+    /// Renewals in their pause, from the worker's snapshot (E49).
+    pub waiting_renewals: Vec<crate::share::WaitingRenewal>,
     pub pending_direct_publish: bool,
     pub pending_room_publish: Option<DiscoveryPublishTarget>,
     pub pending_stops: std::collections::HashSet<String>,
@@ -207,6 +216,7 @@ impl Default for DiscoveryUiState {
             exchange_by_discovery: std::collections::HashMap::new(),
             starting_discoveries: std::collections::HashSet::new(),
             active_offers: Vec::new(),
+            waiting_renewals: Vec::new(),
             pending_direct_publish: false,
             pending_room_publish: None,
             pending_stops: std::collections::HashSet::new(),
@@ -279,6 +289,8 @@ impl DiscoveryUiState {
                 existing.expires_at = expires_at;
                 existing.phase = phase;
                 existing.rights = None;
+                existing.renewed_after_failed_attempts = false;
+                existing.pin = None;
             } else {
                 self.active_offers.push(ActiveDiscoveryOffer {
                     offer_id,
@@ -287,6 +299,8 @@ impl DiscoveryUiState {
                     phase,
                     rights: None,
                     alias: String::new(),
+                    renewed_after_failed_attempts: false,
+                    pin: None,
                 });
             }
         }

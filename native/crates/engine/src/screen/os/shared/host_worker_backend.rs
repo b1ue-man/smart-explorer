@@ -1,7 +1,8 @@
 //! The host backend of the daemon with host processes (SCR-M3): a source
 //! opens in a host process of its own (`WorkerSource`), so capture and
 //! encoding run there; the encoders this host offers come from the codec
-//! inventory of the user (Media Foundation, OpenH264, tiles); platform,
+//! inventory of the user (Media Foundation, OpenH264, tiles), for a worker
+//! that follows a session (E47) of that session's account; platform,
 //! monitors, windows, limits and the input capabilities stay with the
 //! platform backend.
 //!
@@ -159,6 +160,16 @@ impl WorkerBackend {
     fn codecs(&self) -> CodecRegistry {
         super::super::codec_inventory::inventory(self.openh264_dir.as_deref(), false).registry
     }
+
+    /// The desktop program a query of the followed session runs (E47);
+    /// `None` without one and for the programs of the task tests.
+    fn session_program(&self) -> Option<&std::path::Path> {
+        match &self.program {
+            WorkerProgram::Installation { gui, .. } => gui.as_deref(),
+            #[cfg(any(test, feature = "test-support"))]
+            WorkerProgram::Fixed { .. } | WorkerProgram::InProcess => None,
+        }
+    }
 }
 
 impl ScreenHostBackend for WorkerBackend {
@@ -208,8 +219,14 @@ impl ScreenHostBackend for WorkerBackend {
         self.inner.monitors()
     }
 
+    /// The offer of the account the host processes run as: for a worker
+    /// that follows a session (E47) that account's codec inventory, asked
+    /// in its own process (never its OpenH264 store loaded here); otherwise
+    /// this process's, as before.
     fn encoders(&self) -> Vec<CodecOffer> {
-        self.codecs().encoder_offers()
+        self.session_program()
+            .and_then(super::session_queries::followed_offers)
+            .unwrap_or_else(|| self.codecs().encoder_offers())
     }
 
     fn input(&self) -> InputCapabilities {

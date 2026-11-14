@@ -65,6 +65,8 @@ mod state;
 mod state_transition_tests;
 mod tracked_direct;
 #[cfg(test)]
+mod tracked_direct_hello_tests;
+#[cfg(test)]
 mod tracked_direct_tests;
 mod transport;
 #[cfg(test)]
@@ -182,7 +184,7 @@ fn main() {
     if options.require_key_login {
         eprintln!("se-share-server: key login required; --allow-legacy-clients admits apps up to v0.5.169");
     } else {
-        eprintln!("se-share-server: compatibility mode (--allow-legacy-clients): clients without key login are admitted and can see presences without relation proofs");
+        eprintln!("se-share-server: compatibility mode (--allow-legacy-clients): clients without key login are admitted for unbound lookups only; they publish no Direct presence and reach no bound lookup");
     }
     let timing = SignalTiming::new(keepalive);
     let connections = ConnectionLimiter::from_limits(&options.limits);
@@ -288,7 +290,7 @@ fn dispatch(id: u64, writer: &Writer, msg: In, state: &Arc<Mutex<State>>) {
             presence,
         } => {
             if direct_presence::require_origin(state, id, writer, &presence) {
-                tracked_direct::request_legacy(writer, &lookup_id, presence, state);
+                tracked_direct::request_legacy(id, writer, &lookup_id, presence, state);
             }
         }
         In::DirectAccessAccepted {
@@ -306,6 +308,7 @@ fn dispatch(id: u64, writer: &Writer, msg: In, state: &Arc<Mutex<State>>) {
                 return;
             }
             tracked_direct::decision_legacy(
+                id,
                 writer,
                 &lookup_id,
                 &requester_device_id,

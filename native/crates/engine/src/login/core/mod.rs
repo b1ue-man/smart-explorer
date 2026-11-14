@@ -8,6 +8,8 @@ pub mod image_send;
 pub mod machine;
 pub mod manifest;
 pub mod model;
+pub mod self_grants;
+pub mod self_plan;
 pub mod viewer_guard;
 pub mod wire;
 

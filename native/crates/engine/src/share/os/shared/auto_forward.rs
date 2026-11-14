@@ -6,6 +6,8 @@
 //! Desktop listeners admit only processes of this service's own account
 //! (`SameAccount`); Android cannot tell who connects (assumption A7) and
 //! therefore opens a listener only on the person's tap (`AnyLocal`).
+//! `open` and `close` are that tap on both platforms: `close` keeps the
+//! service closed, so a later feed update does not restart it, until `open`.
 use crate::share::device_address::device_loopback;
 use crate::share::loopback_services::LoopbackService;
 use crate::share::tcp_forward::{ListenerAdmission, TcpDestination, TcpStart, TunnelId};
@@ -80,6 +82,9 @@ pub fn bind_mapping(
 struct Mapping {
     view: Arc<Mutex<MappedService>>,
     task: Option<tokio::task::JoinHandle<()>>,
+    /// The person closed this service (`close`): `apply` starts no listener
+    /// for it again until `open`, so a feed update does not undo the tap.
+    closed: bool,
 }
 impl Mapping {
     fn stop(&mut self, service: Option<&ShareService>) {
@@ -135,6 +140,7 @@ fn admission() -> ListenerAdmission {
 /// The feed of `device_id` listed `services` (all of them shared with this
 /// device). Desktop: listeners for new services start, listeners of gone
 /// services stop. Android: the list is kept; listeners open on `open`.
+/// A service the person closed (`close`) stays closed until `open`.
 pub fn apply(
     service: &ShareService,
     device_id: &str,
@@ -195,6 +201,7 @@ pub fn apply(
                 ..MappedService::default()
             })),
             task: None,
+            closed: false,
         });
         mapping
             .view
@@ -203,7 +210,7 @@ pub fn apply(
             .process = entry.process.clone();
         // A listener whose task ended (accept failure) starts again with
         // the next feed update: the event-driven retry of design 4.3.
-        if automatic() && !mapping.running() {
+        if automatic() && !mapping.running() && !mapping.closed {
             if let Some(budget) = budget.filter(|budget| running >= *budget) {
                 mapping
                     .view
@@ -237,8 +244,9 @@ fn running_mappings(device: &Device) -> usize {
         .count()
 }
 
-/// Android tap „Öffnen“ (only the Android bridge calls it).
-#[cfg(any(target_os = "android", all(unix, any(test, feature = "test-support"))))]
+/// Tap „Öffnen“ on a shared service. It also opens a service that the budget
+/// left without a listener. The listener admits this account's programs on
+/// desktops (`SameAccount`) and any local program on Android (`AnyLocal`).
 pub fn open(device_id: &str, public_key: &str, port: u16) -> Result<MappedService, String> {
     let mut all = devices();
     let device = all
@@ -250,6 +258,7 @@ pub fn open(device_id: &str, public_key: &str, port: u16) -> Result<MappedServic
         .mappings
         .get_mut(&port)
         .ok_or_else(|| format!("Port {port} ist auf dem Gerät nicht freigegeben"))?;
+    mapping.closed = false;
     if !mapping.running() {
         start(
             &device.service,
@@ -270,19 +279,19 @@ pub fn open(device_id: &str, public_key: &str, port: u16) -> Result<MappedServic
     }
 }
 
-/// Android tap „Schließen“.
-#[cfg(any(target_os = "android", all(unix, any(test, feature = "test-support"))))]
+/// Tap „Schließen“ on a shared service; the service stays closed until `open`.
 pub fn close(device_id: &str, public_key: &str, port: u16) -> bool {
     let mut all = devices();
     let Some(device) = all.get_mut(&device_key(device_id, public_key)) else {
         return false;
     };
     let service = device.service.clone();
-    device
-        .mappings
-        .get_mut(&port)
-        .map(|mapping| mapping.stop(Some(&service)))
-        .is_some()
+    let Some(mapping) = device.mappings.get_mut(&port) else {
+        return false;
+    };
+    mapping.closed = true;
+    mapping.stop(Some(&service));
+    true
 }
 
 fn stop_device(mut device: Device) {
@@ -465,3 +474,7 @@ async fn deliver(
     shown.last_error = None;
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "auto_forward_feed_fixture.rs"]
+pub(crate) mod feed_fixture;

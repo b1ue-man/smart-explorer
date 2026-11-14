@@ -7,6 +7,8 @@
 //!
 //! Bindings live in memory and, with `--state-file`, in a JSON file that a
 //! restart reads back; without it the first proven key after a restart wins.
+//! Copies for saving are taken under the state lock and written outside it, in
+//! generation order (`bindings_save.rs`).
 //!
 //! Keys cost nothing, so one key binds at most [`MAX_DEVICES_PER_KEY`] device
 //! ids and [`MAX_LOOKUPS_PER_KEY`] lookups, and new bindings per source are
@@ -20,6 +22,10 @@ use std::io::{self, Read, Write};
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
+
+#[path = "bindings_save.rs"]
+mod save;
+pub(super) use save::{persist_outside_lock, PendingCopy, SaveOrder};
 
 /// Entries per kind; a full table refuses new bindings without forgetting owners.
 pub(super) const MAX_BINDINGS: usize = 200_000;
@@ -55,6 +61,9 @@ pub(super) struct Bindings {
     /// Bindings per key, rebuilt on load.
     #[serde(skip)]
     per_key: HashMap<String, KeyCounts>,
+    /// Generation of the newest copy taken for saving (not persisted).
+    #[serde(skip)]
+    generation: u64,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -150,25 +159,6 @@ impl Bindings {
         let mut snapshot = self.clone();
         snapshot.version = STATE_VERSION;
         Some(snapshot)
-    }
-
-    /// Saves without a copy when an owner was added, or when only access
-    /// hashes changed and the last save is [`ACCESS_SAVE_INTERVAL_SECS`] ago.
-    /// A failed save keeps the pending changes for the next call.
-    pub(super) fn save_pending(&mut self, path: &Path, now: i64) -> io::Result<()> {
-        let access_due = self.access_dirty
-            && self
-                .saved_at
-                .is_none_or(|at| now.saturating_sub(at) >= ACCESS_SAVE_INTERVAL_SECS);
-        if !self.dirty && !access_due {
-            return Ok(());
-        }
-        self.version = STATE_VERSION;
-        self.save(path)?;
-        self.dirty = false;
-        self.access_dirty = false;
-        self.saved_at = Some(now);
-        Ok(())
     }
 
     fn bind(
@@ -366,3 +356,11 @@ mod tests {
 #[cfg(test)]
 #[path = "bindings_tests.rs"]
 mod bindings_tests;
+
+#[cfg(test)]
+#[path = "bindings_task_tests.rs"]
+mod bindings_task_tests;
+
+#[cfg(test)]
+#[path = "bindings_publish_task_tests.rs"]
+mod bindings_publish_task_tests;

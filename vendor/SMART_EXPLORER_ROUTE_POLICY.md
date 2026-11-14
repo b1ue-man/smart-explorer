@@ -480,3 +480,133 @@ token returns an error and closes nothing; after a network change no release
 happens until the new generation's Allow; a better path established later
 becomes selected, is kept, admitted after its fresh proof and then the old
 grant path is released; disabled policy prunes as upstream.
+
+## M6: remote key gate before any own address (2026-11-08)
+
+Finding (plan `docs/plaene/2026-11-08-offene-punkte`, decision E32, TODO
+SEC-ENTDECK-CODE-VENDOR), read at the source of this pin (line numbers of
+the files before this patch):
+
+1. Upstream accepts every raw public key: the server's
+   `ClientCertificateVerifier::verify_client_cert` checks only for missing
+   intermediates (`src/tls/verifier.rs` 125–143, "we don't check the client
+   certificate").
+2. After the handshake, `conn_from_noq_conn` registers the connection with
+   the socket (`src/endpoint/connection.rs` 348) before the application's
+   `after_handshake` hook (360) and before `Endpoint::accept` hands it to the
+   application.
+3. The registration runs `handle_msg_add_connection`
+   (`src/socket/remote_map/remote_state.rs` 398–426), which calls
+   `update_qnt_candidates` (1175–1194) → noq `add_nat_traversal_address` →
+   noq-proto queues one `ADD_ADDRESS` per local direct address
+   (`noq-proto/src/connection/mod.rs` 7156–7163), serialized in the Data
+   space (6292–6304). On the client side the peer's `REACH_OUT`
+   (`initiate_nat_traversal_round`, 7210–7237, started by
+   `trigger_holepunching`/`do_holepunching` for client connections only,
+   `remote_state.rs` 534–588, 992–1000) is answered by the server's noq-proto
+   on its own: `Frame::ReachOut` → `handle_reach_out` (mod.rs 5542–5575) →
+   `send_nat_traversal_path_challenge` probes (1302) from this endpoint's
+   socket to the addresses the peer names, which shows the peer this
+   endpoint's public NAT mapping.
+4. Before the handshake completes the peer learns no own address beyond the
+   one it dialed: noq-proto processes no 1-RTT packet of the peer before the
+   handshake is complete (mod.rs 4077), the transport parameters carry no
+   address (no `preferred_address` is set anywhere in this crate), and
+   `OBSERVED_ADDRESS` (6362–6372, Data space only, 5339) reports the peer's own
+   remote address, not one of this endpoint.
+5. TLS 1.3 session resumption (client `Resumption::store`, `src/tls.rs` 88;
+   rustls' default stateful server session storage with tickets) skips the
+   certificate exchange, so a verifier is not asked again for a key that
+   completed a handshake earlier in the process; with `max_early_data_size =
+   u32::MAX` (125) a resumed client could send 0-RTT frames, `REACH_OUT`
+   included.
+
+So a removed device that still knows an IP address of this endpoint gets
+every direct address (`ADD_ADDRESS`) and the public NAT mapping (probes)
+before the application refuses it. The application's accept loop refuses a
+removed device before the handshake only when it arrives over the relay,
+whose incoming address names the endpoint id.
+
+Patch:
+
+- `src/endpoint/remote_key_gate.rs` (new): `iroh::endpoint::RemoteKeyGate`,
+  a `Send + Sync` predicate over `EndpointId` set by the application;
+  `Builder::remote_key_gate(gate)` in `src/endpoint.rs`. Without a call the
+  endpoint behaves exactly as upstream.
+- `src/tls/verifier.rs`: both verifiers carry `Option<RemoteKeyGate>`. The
+  client verifier decodes the raw public key of the client certificate (the
+  same decoding as `remote_id_from_noq_conn`) and refuses it with
+  `CertificateError::ApplicationVerificationFailure`; a key that does not
+  decode fails closed while a gate is set. The server verifier refuses a
+  refused server key after its existing name/SPKI match, so a gated endpoint
+  never sends its client flight (and no `REACH_OUT`) to such a key.
+- `src/tls.rs`: `TlsConfig::with_remote_key_gate` installs the gate in both
+  verifiers before the client and server configurations are made. With a gate
+  the client resumes no session (`Resumption::disabled()`, no early data) and
+  the server issues no ticket (`send_tls13_tickets = 0`) and stores no session
+  (`NoServerSessionStorage`), so every handshake shows its certificate to the
+  gate and no 0-RTT frame arrives. `max_early_data_size` stays `u32::MAX`
+  (RFC 9001 §4.6.1 value); without tickets no early data can be offered.
+- `src/endpoint/connection.rs` `conn_from_noq_conn`: asks the gate once more
+  before `register_connection` and closes the connection (code 0, reason
+  `refused`, `ConnectingError::LocallyRejected`), for a key the application
+  refused while its handshake was running.
+
+Result: a refused key fails the handshake in both directions, is never
+registered, and no `ADD_ADDRESS`, `REACH_OUT` or NAT probe of this endpoint
+reaches it; a removal applies to the next handshake, also of a key that had
+a session before. Kept: every non-refused key connects as before; relay,
+direct paths, NAT traversal, the route policy above and the application's
+own checks are unchanged. Cost: a gated endpoint makes a full TLS handshake
+every time (one more signature and verification per connection, same round
+trips; 0-RTT is unavailable on it). An established connection of a key that
+becomes refused later is not closed by the gate; the application closes it.
+
+Rejected alternatives: the existing `EndpointHooks::after_handshake` and the
+application's accept loop run after the registration (item 2), so the
+addresses are already queued; `Incoming::refuse` knows the key only for relay
+arrivals; a check only before `register_connection` leaves the server's
+autonomous `REACH_OUT` handling and resumed 0-RTT open; swapping the server's
+session cache on every change of the refused set leaves a race for tickets
+issued during the swap; changing noq-proto was not needed, because the TLS
+handshake is the earliest point that knows the key.
+
+Application use: `native/crates/engine/src/share/core/blocked_keys.rs` sets
+the gate on the Share endpoint (`node.rs`) and refuses exactly the node ids
+the accept loop refuses early (`node_accept.rs`, `!known && is_withdrawn`):
+the user removed them (`code_renewal_registry::is_withdrawn`) and no relation
+admits them again (accepted grant or contact, admitted member of an auto-join
+room), read on every handshake. The gate never waits for the node's
+authorization lock: while another thread holds it, a removed key is refused
+(fail closed), a key that is not removed is never delayed.
+
+### E33: default resolver without public fallback
+
+`Builder::bind` builds the default `DnsResolver` (used when the application
+sets none) with `.with_fallback_mode(FallbackMode::Never)` after
+`.with_system_defaults()`: it reads the system DNS configuration only and
+never queries the public fallback nameservers, also when that configuration
+is empty or unreadable (Android without a JNI context). The Share endpoint
+already passed its own resolver with this mode (`relay_dns.rs`, decision
+E15); the change keeps every other endpoint that relies on the default from
+falling back to public resolvers. Iroh's own `DnsResolver::new()` calls in
+its tests are unchanged.
+
+Remote-suite oracles (not executed locally), prefixes `vendor_grenze_task_`
+and `dns_android_task_` in
+`native/crates/engine/src/share/os/shared/relay_dns_task_tests.rs`: a removed
+device that dials a gated host's loopback address completes no handshake on
+either side, and a gated device completes none with a removed host; an
+allowed device connects to a gated host, and after its removal the next
+handshake fails although the first one completed (no resumption); a removed
+key that an accepted relation admits again still connects, and a busy
+authorization state refuses it; the default resolver's Debug text names no public resolver that the system
+configuration does not name (control: `DnsResolver::new()` names one); with
+an empty nameserver list the Share resolver answers A and AAAA for
+`localhost` through the system before `DNS_TIMEOUT`.
+
+Rebase contract: on a pin change, recheck items 1–5 (verifier, registration
+order, `update_qnt_candidates`, `REACH_OUT` handling, 1-RTT processing and
+resumption defaults) and keep the gate at the earliest point that knows the
+remote key. Remove the patch when upstream offers a pre-registration key
+filter that also covers resumed handshakes.

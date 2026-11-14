@@ -5,6 +5,8 @@
 //! the start continues) and „Ablehnen“ (`deny`). On a host without a
 //! graphical session this is the only way to answer. An id may be shortened
 //! to its first characters while exactly one open request starts with them.
+//! Every answer names how many other open requests equal to it it answered
+//! too (`also_answered` in JSON, `also_answered=N` in text; E28).
 //! The MCP tool `se` refuses `approve`, `deny` and the account setup (C7):
 //! these decisions belong to a person at the device.
 use std::io::Write;
@@ -54,6 +56,11 @@ pub(super) struct DenyArgs {
 pub(super) trait ApprovalSource {
     fn pending(&self) -> Result<Vec<ApprovalView>, String>;
     fn decide(&self, id: &str, decision: ApprovalDecision) -> Result<(), String>;
+    /// The answer, with how many other open requests equal to `id` it answered
+    /// too (E28). A source that does not count reads as 0.
+    fn decide_counted(&self, id: &str, decision: ApprovalDecision) -> Result<usize, String> {
+        self.decide(id, decision).map(|()| 0)
+    }
 }
 
 /// The running background worker (`IpcRequest::Access`); without one no
@@ -66,6 +73,10 @@ impl ApprovalSource for Worker {
     }
 
     fn decide(&self, id: &str, decision: ApprovalDecision) -> Result<(), String> {
+        self.decide_counted(id, decision).map(|_| ())
+    }
+
+    fn decide_counted(&self, id: &str, decision: ApprovalDecision) -> Result<usize, String> {
         crate::daemon::decide_access_approval(id, decision)
     }
 }
@@ -177,7 +188,7 @@ fn answer(
     if !json {
         write(out, &line(&request))?;
     }
-    source.decide(&id, decision).map_err(|error| {
+    let also_answered = source.decide_counted(&id, decision).map_err(|error| {
         format!("{error}; `se share exec approvals` lists the requests that are still open")
     })?;
     let key = match decision {
@@ -186,11 +197,16 @@ fn answer(
         ApprovalDecision::Deny => "deny",
     };
     let text = if json {
-        let value =
-            serde_json::json!({"id": id, "decision": key, "decided": true, "request": request});
+        let value = serde_json::json!({
+            "id": id,
+            "decision": key,
+            "decided": true,
+            "request": request,
+            "also_answered": also_answered,
+        });
         serde_json::to_string_pretty(&value).map_err(|e| e.to_string())?
     } else {
-        format!("approval\t{id}\tdecision={key}\tdecided=true")
+        format!("approval\t{id}\tdecision={key}\tdecided=true\talso_answered={also_answered}")
     };
     write(out, &text)
 }
@@ -264,3 +280,7 @@ pub(crate) fn mcp_refusal(arguments: &[String]) -> Option<String> {
 #[cfg(test)]
 #[path = "exec_approvals_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "exec_approvals_task_tests.rs"]
+mod task_tests;

@@ -72,6 +72,11 @@ pub struct ShareWorkerSnapshot {
     /// the daemon's persistent view and is never consumed by a reader.
     #[serde(default)]
     pub discovery_offers: Vec<crate::share::OwnDiscoveryOffer>,
+    /// Renewals of offers that ended after too many failed attempts, in
+    /// their pause (E49); a stop of `replaces` cancels one. Empty when
+    /// reading a worker predating it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub discovery_renewals: Vec<crate::share::WaitingRenewal>,
     /// Device feeds of the other devices (design 5.2): their open windows,
     /// shared services with this device's mapping, RDP short state. Absent
     /// when reading a worker predating 0.5.189.

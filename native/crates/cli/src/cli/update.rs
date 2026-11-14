@@ -36,8 +36,9 @@ such as ~/.local/bin/se stays and keeps pointing to it. The copy is verified
 again right before the swap and before it is started, and a hash-verified
 backup is kept until then. If the new se does not start or reports another
 version than the feed, or Ctrl+C interrupts the update, the previous file is
-restored. A running background worker of the old version is then handed over to
-the new version; one se update at a time may replace a file.
+restored. A background worker that ran before the update runs again as the new
+version after the commit; with no running worker none is started. One se update
+at a time may replace a file.
 
 Next to the desktop app, se update stages app, updater and se exactly like the
 app's update check and starts the hash-bound updater. It replaces all three
@@ -95,6 +96,9 @@ pub(super) struct UpdateArgs {
         conflicts_with_all = ["check", "reinstall", "source", "startup_check", "allow_unsigned"]
     )]
     complete_install: Option<String>,
+    // Run by the new `se` after the commit when a worker ran before the update.
+    #[arg(long, hide = true, requires = "complete_install")]
+    restart_worker: bool,
 }
 
 /// What the freshly installed `se` reports back to the one it replaced.
@@ -120,7 +124,7 @@ struct Report<'a> {
 
 pub(super) fn run(args: UpdateArgs) -> Result<i32, String> {
     if let Some(expected) = &args.complete_install {
-        return complete_install(expected);
+        return complete_install(expected, args.restart_worker);
     }
     if let Some(enabled) = args.startup_check {
         crate::updater::set_startup_check(enabled)
@@ -205,13 +209,15 @@ fn install_terminal_only(
     version: &str,
     consent: &UnsignedConsent,
 ) -> Result<Installed, String> {
+    // Probed before `replace_cli` stops the worker of the previous version (E24).
+    let worker_was_running = worker_running_before_update();
     let replaced = crate::updater::replace_cli(cli, version, consent)?;
     let unsigned = replaced.unsigned();
     // The exact verified bytes, checked again right before they are started.
     if let Err(error) = replaced.verify_installed() {
         return Err(restore(replaced, error));
     }
-    let completed = match run_completion(replaced.target(), version) {
+    let completed = match run_completion(replaced.target(), version, false) {
         Ok(completed) if completed.version == version => completed,
         Ok(completed) => {
             let found = completed.version;
@@ -225,8 +231,25 @@ fn install_terminal_only(
     };
     let target = replaced.target().to_path_buf();
     let sha256 = replaced.sha256().to_string();
-    replaced.commit()?;
+    let restarted = replaced.commit_restart(worker_was_running, |installed| {
+        restart_worker(installed, version)
+    })?;
     crate::cli::plugin::refresh_generated_files();
+    // A worker that does not start after the commit is reported like a failed
+    // handoff (`worker_error`); the new se stays installed.
+    let completed = match restarted {
+        Ok(Some(worker)) => CompletedInstall {
+            version: version.to_string(),
+            worker: Some(worker),
+            worker_error: None,
+        },
+        Ok(None) => completed,
+        Err(error) => CompletedInstall {
+            version: version.to_string(),
+            worker: None,
+            worker_error: Some(error),
+        },
+    };
     Ok(Installed {
         target,
         sha256,
@@ -245,9 +268,19 @@ fn restore(replaced: ReplacedCli, failure: String) -> String {
     }
 }
 
-fn run_completion(target: &Path, version: &str) -> Result<CompletedInstall, String> {
+fn run_completion(
+    target: &Path,
+    version: &str,
+    restart_worker: bool,
+) -> Result<CompletedInstall, String> {
+    let extra: &[&str] = if restart_worker {
+        &["--restart-worker"]
+    } else {
+        &[]
+    };
     let mut child = Command::new(target)
         .args(["update", "--complete-install", version])
+        .args(extra)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
@@ -280,9 +313,11 @@ fn run_completion(target: &Path, version: &str) -> Result<CompletedInstall, Stri
 }
 
 /// Runs in the new `se`: reports the installed version and, only when it is
-/// the promised one, hands a worker of the previous version over to it. A
-/// mismatching file is rolled back by the caller and must not keep a worker.
-fn complete_install(expected: &str) -> Result<i32, String> {
+/// the promised one, hands a worker of the previous version over to it. With
+/// `restart_worker` (after the commit) it starts a worker of this version when
+/// none runs. A mismatching file is rolled back by the caller and must not keep
+/// a worker.
+fn complete_install(expected: &str, restart_worker: bool) -> Result<i32, String> {
     let version = env!("CARGO_PKG_VERSION");
     let (worker, worker_error) = if version != expected {
         (
@@ -290,7 +325,12 @@ fn complete_install(expected: &str) -> Result<i32, String> {
             Some(format!("not {expected}; the worker was left alone")),
         )
     } else {
-        match crate::daemon::hand_off_running_worker() {
+        let handoff = if restart_worker {
+            crate::daemon::ensure_worker_ready().map(|()| WorkerHandoff::Replaced)
+        } else {
+            crate::daemon::hand_off_running_worker()
+        };
+        match handoff {
             Ok(handoff) => (Some(handoff), None),
             Err(error) => (None, Some(error)),
         }
@@ -303,6 +343,30 @@ fn complete_install(expected: &str) -> Result<i32, String> {
     let answer = serde_json::to_string(&completed).map_err(|error| error.to_string())?;
     println!("{answer}");
     Ok(0)
+}
+
+/// Whether a worker answers before `se update` stops it (E24, E55). A worker of
+/// any version that answers after the proof counts as running; the update starts
+/// it again after the commit.
+fn worker_running_before_update() -> bool {
+    crate::daemon::worker_answers()
+}
+
+const WORKER_START_FAILED: &str =
+    "the new se is installed, but its background worker did not start";
+
+/// Starts the worker once more after the commit (E24). The installed file starts
+/// it, because this process still runs the previous version.
+fn restart_worker(installed: &Path, version: &str) -> Result<(), String> {
+    let answer = run_completion(installed, version, true)
+        .map_err(|error| format!("{WORKER_START_FAILED}: {error}"))?;
+    match (answer.worker, answer.worker_error) {
+        (Some(WorkerHandoff::Replaced), None) => Ok(()),
+        (_, Some(error)) => Err(format!("{WORKER_START_FAILED}: {error}")),
+        _ => Err(format!(
+            "{WORKER_START_FAILED}: no replacement was reported"
+        )),
+    }
 }
 
 fn print(

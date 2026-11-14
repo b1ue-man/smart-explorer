@@ -1,7 +1,12 @@
 //! Which kind of graphical session this process belongs to (SCR-M5, U19-3):
 //! Wayland (portal and PipeWire), X11 (MIT-SHM) or none. A process without
-//! the session variables, such as a root worker without a display, belongs
-//! to no session and shows no screen.
+//! the session variables, such as a root worker without a display, follows
+//! the active graphical session of `seat0` (E23, `active_session`): it is of
+//! that session's kind and starts its screen host and indicator window
+//! there; without a uniquely verified active session it shows no screen.
+
+#[path = "active_session.rs"]
+pub mod active_session;
 
 /// The graphical session of a process.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -26,9 +31,15 @@ pub fn detect(env: &dyn Fn(&str) -> Option<String>) -> SessionKind {
     }
 }
 
-/// The kind of session of this process.
+/// The kind of session of this process: its own variables decide when it
+/// has them (unchanged path); otherwise the active session it follows.
 pub fn detect_process() -> SessionKind {
-    detect(&|name| std::env::var(name).ok())
+    match detect(&|name| std::env::var(name).ok()) {
+        SessionKind::None => {
+            active_session::current().map_or(SessionKind::None, |session| session.kind)
+        }
+        own => own,
+    }
 }
 
 /// Whether the desktop in `XDG_CURRENT_DESKTOP` is built on wlroots; their

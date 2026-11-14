@@ -200,7 +200,7 @@ pub(super) fn tools() -> Vec<Tool> {
         tool("tcp_forward", "TCP and services of paired devices", super::tcp_tool::DESCRIPTION, super::tcp_tool::properties(), &["action"], changes(true, false)),
         tool("apps", "Installed application catalog and launch", super::apps_tool::DESCRIPTION, super::apps_tool::properties(), &["action"], changes(true, false)),
         tool("rdp", "Remote Desktop to a paired device", super::rdp_tool::DESCRIPTION, super::rdp_tool::properties(), &["action"], changes(true, false)),
-        tool("login", "Explicit machine login viewer", super::login_tool::DESCRIPTION, super::login_tool::properties(), &["action"], changes(true, false)),
+        tool("login", "Login screen of a paired device", super::login_tool::DESCRIPTION, super::login_tool::properties(), &["action"], changes(true, false)),
     ];
     tools.into_iter().map(upfront).collect()
 }

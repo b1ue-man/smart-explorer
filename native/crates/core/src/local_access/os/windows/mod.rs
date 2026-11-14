@@ -7,6 +7,8 @@ mod directory;
 pub mod directory_handle;
 mod directory_records;
 mod directory_rename;
+#[doc(hidden)]
+pub mod directory_watch;
 mod elevation;
 mod image_lock;
 mod paths;

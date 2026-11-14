@@ -471,3 +471,7 @@ mod task_tests;
 #[cfg(any(test, feature = "test-support"))]
 #[path = "mount_manager_host_session_fixture.rs"]
 pub(in crate::daemon) mod session_fixture;
+
+#[cfg(test)]
+#[path = "mount_tresor_task_tests.rs"]
+mod tresor_task_tests;

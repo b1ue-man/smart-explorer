@@ -110,13 +110,18 @@ fun ShareScreen(
         }
     }
     val offer = status?.discovery?.offer
-    LaunchedEffect(offer?.offerId) {
-        val until = offer?.untilMs ?: return@LaunchedEffect
+    // E49: an offer that ended after too many failed PIN attempts waits for its renewal. The clock
+    // runs for it as for a running offer, so „Neues Angebot mit neuer PIN in N s“ counts down.
+    val waiting = status?.discovery?.renewalWaiting
+    LaunchedEffect(offer?.offerId, waiting?.replaces, waiting?.dueMs) {
+        val until = offer?.untilMs ?: waiting?.dueMs ?: return@LaunchedEffect
         while (true) {
             nowMs = System.currentTimeMillis()
             if (nowMs >= until) {
                 vm.reload()
-                break
+                // An ended offer needs one reload. A renewal that is due is read again each second
+                // until the worker has published it; the new status then restarts this effect.
+                if (offer != null) break
             }
             delay(1_000)
         }

@@ -2,6 +2,7 @@
 //! `se share discoverable` and `se share status`.
 use crate::share::{
     DiscoveryOfferStopReason, DiscoveryPublishTarget, OwnDiscoveryOffer, ShareProfiles,
+    WaitingRenewal,
 };
 
 pub(super) fn offer_value(
@@ -9,6 +10,9 @@ pub(super) fn offer_value(
     profiles: &ShareProfiles,
     now: i64,
 ) -> serde_json::Value {
+    let notice = offer.renewal_notice();
+    let hint = notice.as_ref().map(|notice| notice.hint());
+    let pin = notice.as_ref().and_then(|notice| notice.pin_text());
     serde_json::json!({
         "offer_id": offer.offer_id,
         "state": state_code(offer),
@@ -19,6 +23,53 @@ pub(super) fn offer_value(
         "remaining_secs": remaining_secs(offer, now),
         "rights": offer.rights.as_ref().map(super::rights_args::rights_value),
         "rights_summary": rights_summary(offer),
+        // The daemon published this offer again after too many failed
+        // attempts (E49): the hint and the new PIN to read out.
+        "renewed_after_failed_attempts": offer.renewed_after_failed_attempts,
+        "hint": hint,
+        "pin": pin,
+    })
+}
+
+/// The lines after the offer line of a renewed offer: `hint` and `pin`.
+pub(super) fn renewal_lines(offer: &OwnDiscoveryOffer) -> Vec<String> {
+    let Some(notice) = offer.renewal_notice() else {
+        return Vec::new();
+    };
+    let mut lines = vec![format!("hint\t{}", clean(notice.hint()))];
+    if let Some(pin) = notice.pin_text() {
+        lines.push(format!("pin\t{}", clean(&pin)));
+    }
+    lines
+}
+
+/// A renewal in its pause (E49) as a text line: the ended offer it replaces,
+/// the seconds until the offer with a new PIN goes out, and the stop that
+/// cancels it.
+pub(super) fn waiting_text(renewal: &WaitingRenewal, profiles: &ShareProfiles, now: i64) -> String {
+    format!(
+        "renewal\t{}\ttarget={}\tname={}\tdue_in={}\tstop=se share discoverable stop {}",
+        renewal.replaces,
+        target_text(&renewal.target, profiles),
+        clean(&renewal.display_alias),
+        renewal.due.saturating_sub(now).max(0),
+        renewal.replaces,
+    )
+}
+
+/// A renewal in its pause (E49) as JSON.
+pub(super) fn waiting_value(
+    renewal: &WaitingRenewal,
+    profiles: &ShareProfiles,
+    now: i64,
+) -> serde_json::Value {
+    serde_json::json!({
+        "replaces": renewal.replaces,
+        "target": target_value(&renewal.target, profiles),
+        "name": renewal.display_alias,
+        "due": renewal.due,
+        "due_local": local_time(renewal.due),
+        "due_in_secs": renewal.due.saturating_sub(now).max(0),
     })
 }
 
@@ -160,6 +211,8 @@ mod tests {
             discoverable_until: 1_299,
             published: true,
             rights: None,
+            renewed_after_failed_attempts: false,
+            pin: None,
         };
         let text = offer_text(&direct, &profiles, 1_000);
         assert!(text
@@ -175,6 +228,8 @@ mod tests {
             discoverable_until: 5_000,
             published: false,
             rights: None,
+            renewed_after_failed_attempts: false,
+            pin: None,
         };
         assert!(offer_text(&room, &profiles, 1_000).contains("\ttarget=room:Team\t"));
         assert!(offer_text(&room, &profiles, 1_000).ends_with("\trights=set with the room"));

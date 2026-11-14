@@ -170,8 +170,12 @@ pub(in crate::share) fn excluded() -> Vec<PathBuf> {
         .collect()
 }
 
+/// Whether `path` is host storage that no Share tree may reach: below an
+/// excluded place by its spelling, or (Windows, E35) an object of an unlocked
+/// vault drive by its identity, whatever spelling names it.
 pub(in crate::share) fn is_private(path: &Path) -> bool {
     excluded().iter().any(|excluded| path.starts_with(excluded))
+        || crate::share::fs_host_policy::identity_in_vault(path)
 }
 
 /// Canonicalize only the authorized export root. Descendants remain literal

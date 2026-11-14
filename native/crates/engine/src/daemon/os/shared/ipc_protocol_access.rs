@@ -39,7 +39,8 @@ pub enum AccessIpcRequest {
     },
     /// The open confirmations of this host.
     Approvals,
-    /// The answer of the host user to exactly one request.
+    /// The answer of the host user to one request; „Immer erlauben“ and
+    /// „Ablehnen“ also answer the open requests equal to it (E28).
     Decide {
         approval_id: String,
         decision: ApprovalDecision,
@@ -91,7 +92,13 @@ pub enum AccessIpcReply {
     ApprovalList {
         pending: Vec<ApprovalView>,
     },
-    Decided,
+    /// The answer was taken. `also_answered` counts the open requests equal to
+    /// the answered one that were answered too (E28); „Diesmal erlauben“ always
+    /// counts 0, and a worker that sends no count reads as 0.
+    Decided {
+        #[serde(default)]
+        also_answered: usize,
+    },
     /// `crate::share::exec_account_choices()` of the worker.
     AccountList {
         helper: HelperStatus,
@@ -122,3 +129,7 @@ pub struct ExecNoticeView {
     pub access: Option<ExecAccessView>,
     pub approval: Option<ExecApprovalPending>,
 }
+
+#[cfg(test)]
+#[path = "access_ipc_decided_task_tests.rs"]
+mod decided_task_tests;

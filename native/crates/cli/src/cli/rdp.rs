@@ -48,13 +48,15 @@ enum RdpCommand {
         #[arg(long)]
         json: bool,
     },
-    /// One fixed root step of this host's RDP self-setup, started through
-    /// `pkexec` by the setup itself (design 3.3). Prints `state=…` and exits
-    /// with 0 when done, 1 otherwise.
+    /// The fixed elevated steps of this host's RDP and login self-setup,
+    /// started through `pkexec` or UAC by the setup itself (design 3.3,
+    /// E44). `--system` once or several times: the steps run in this order in
+    /// this one process, one line each (`state=…`, `login_state=…`); the exit
+    /// code is the first one other than 0, otherwise 0.
     #[command(hide = true)]
     HostSetup {
-        #[arg(long)]
-        system: String,
+        #[arg(long, required = true)]
+        system: Vec<String>,
         /// Windows: the signed-in user's SID the elevated setup admits.
         #[arg(long)]
         user_sid: Option<String>,
@@ -201,9 +203,11 @@ pub(super) fn run(
             &json!({"id":id,"closed":crate::rdp::close(TunnelId::parse(&id)?)?}),
         ),
         RdpCommand::HostSetup { system, user_sid } => {
-            let (line, code) =
-                crate::rdp::host_setup::run_system_step(&system, user_sid.as_deref());
-            println!("{line}");
+            let (lines, code) =
+                crate::rdp::host_setup::run_system_steps(&system, user_sid.as_deref());
+            for line in lines {
+                println!("{line}");
+            }
             return Ok(code);
         }
     }

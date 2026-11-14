@@ -47,6 +47,7 @@ pub(super) fn request_label(request: &FsRequest) -> &'static str {
         FsRequest::FinishStage(_) => "finish_stage",
         FsRequest::SyncFilesystem(_) => "sync_filesystem",
         FsRequest::WatchExport(_) => "watch_export",
+        FsRequest::LoginTarget => "login_target",
     }
 }
 
@@ -165,6 +166,15 @@ pub(super) fn response_summary(response: &FsResponse) -> String {
         FsResponse::HashWalk { .. } => "pruefsummen".into(),
         FsResponse::Watch { .. } => "beobachtung".into(),
         FsResponse::RemoveTree { message } => format!("ordnerloeschen {message:?}"),
+        // Only the kind: the log names no target or account.
+        FsResponse::LoginTarget { message } => match message {
+            crate::share::login_transport::LoginTargetMessage::Offer { .. } => {
+                "anmeldeziel angebot".into()
+            }
+            crate::share::login_transport::LoginTargetMessage::Withdrawn { reason, .. } => {
+                format!("anmeldeziel zurueckgezogen {}", reason.key())
+            }
+        },
         FsResponse::Err { msg, .. } => format!("fehler={msg}"),
     }
 }

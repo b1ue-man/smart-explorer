@@ -10,11 +10,12 @@ use rmcp::model::CallToolResult;
 use serde_json::{json, Value};
 use std::time::Duration;
 
-pub(super) const DESCRIPTION: &str = "TCP to paired devices. `services` lists the locally listening services a device shares with this one because it granted „Bildschirm steuern“, each with its address on this computer (the device's own loopback address, same port); programs of this user reach them there directly, nothing to start. `start` opens a further tunnel to one service the device's TCP grant covers (its network, a DNS name or a port it does not share): only programs of this user account reach the local port, and it stays open until closed, unless `lifetime_secs` names a limit. `list`, `status` and `close` manage tunnels. No SOCKS, UDP, Layer 2, firewall or RDP configuration. Host approval is never answered by this tool.";
+pub(super) const DESCRIPTION: &str = "TCP to paired devices. `services` lists the locally listening services a device shares with this one because it granted „Bildschirm steuern“, each with its address on this computer (the device's own loopback address, same port); programs of this user reach them there directly, nothing to start. `start` opens a further tunnel to one service the device's TCP grant covers (its network, a DNS name or a port it does not share): only programs of this user account reach the local port, and it stays open until closed, unless `lifetime_secs` names a limit. `list`, `status` and `close` manage tunnels. `open_service` and `close_service` open and close one service of the device by its `port` on this computer; `close_service` keeps it closed until `open_service`. No SOCKS, UDP, Layer 2, firewall or RDP configuration. Host approval is never answered by this tool.";
 pub(super) fn properties() -> Value {
     json!({
-        "action": {"type":"string","enum":["services","start","list","status","close"]},
-        "device": {"type":"string","description":"services/start: share endpoint, saved device name, ID or fingerprint prefix"},
+        "action": {"type":"string","enum":["services","start","list","status","close","open_service","close_service"]},
+        "device": {"type":"string","description":"services/start/open_service/close_service: share endpoint, saved device name, ID or fingerprint prefix"},
+        "port": {"type":"integer","minimum":1,"maximum":65535,"description":"open_service/close_service: host port of a service the device shares"},
         "target_host": {"type":"string","description":"start: loopback (default), exact IP, or DNS name covered by the host grant"},
         "target_port": {"type":"integer","minimum":1,"maximum":65535},
         "local_port": {"type":"integer","minimum":0,"maximum":65535,"description":"0 (default) selects an ephemeral loopback port"},
@@ -27,6 +28,14 @@ pub(super) fn properties() -> Value {
 pub(super) fn tcp_forward(args: &Args) -> Result<CallToolResult, String> {
     let value = match args.string("action")?.as_str() {
         "services" => crate::cli::tcp::services(&args.string("device")?)?,
+        "open_service" => {
+            let device = args.string("device")?;
+            crate::cli::tcp::open_service(&device, port_arg(args)?)?
+        }
+        "close_service" => {
+            let device = args.string("device")?;
+            crate::cli::tcp::close_service(&device, port_arg(args)?)?
+        }
         "list" => json!({"tunnels": crate::daemon::tcp_list()?}),
         "status" => {
             let id = TunnelId::parse(&args.string("id")?)?;
@@ -50,11 +59,22 @@ pub(super) fn tcp_forward(args: &Args) -> Result<CallToolResult, String> {
         }
         action => {
             return Err(format!(
-                "Unknown TCP action {action}; use services, start, list, status or close"
+                "Unknown TCP action {action}; use services, start, list, status, close, open_service or close_service"
             ))
         }
     };
     Ok(response::ok(value))
+}
+
+/// The `port` of `open_service` and `close_service`: a host port 1..65535.
+fn port_arg(args: &Args) -> Result<u16, String> {
+    let port = args
+        .opt_u64("port")?
+        .ok_or_else(|| "port is required".to_string())?;
+    match u16::try_from(port) {
+        Ok(port) if port >= 1 => Ok(port),
+        _ => Err("port must be 1..65535".to_string()),
+    }
 }
 
 /// The start request of a call: no acknowledgement needed, no lifetime

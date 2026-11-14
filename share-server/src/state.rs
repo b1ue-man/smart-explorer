@@ -3,12 +3,21 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use iroh_base::PublicKey;
 
-use super::bindings::{BindOutcome, Bindings};
+use super::bindings::{persist_outside_lock, BindOutcome, Bindings, SaveOrder};
 use super::discovery_state::unix_seconds;
+use super::handshake_slots;
 use super::limits::{validate_identifier, ServerLimits, SourceKey};
 use super::rate_limits::NewBindingRateLimiter;
 use super::relay_access::RelayAdmissions;
 use super::{send, Out, PeerPresence, Writer};
+
+#[path = "bindings_registration_error.rs"]
+mod registration_error;
+pub(super) use registration_error::RegistrationError;
+
+#[path = "bindings_capacity.rs"]
+mod capacity;
+use capacity::{can_displace, displacement, Capacity};
 
 #[cfg(test)]
 pub(super) use super::rooms::join_room;
@@ -29,7 +38,8 @@ pub(super) struct Client {
 /// What a client proved at its Hello (FC4).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) enum ClientIdentity {
-    /// No key login (an older app); may use unbound entries only.
+    /// No key login (an older app); publishes no Direct presence and watches
+    /// unbound lookups only (E60).
     #[default]
     Legacy,
     /// An older app with the key its Hello names (unproven; the relay
@@ -82,6 +92,8 @@ pub(super) struct State {
     pub(super) policy: ServerPolicy,
     pub(super) bindings: Bindings,
     pub(super) binding_path: Option<std::path::PathBuf>,
+    /// Orders the writes of the binding copies (SEC-SERVER-BESITZER-60S Teil 3).
+    pub(super) binding_saves: Arc<SaveOrder>,
     pub(super) relay_admissions: Arc<RelayAdmissions>,
     /// Proof hash a proven watcher showed, by (client id, lookup id).
     pub(super) watch_access: HashMap<(u64, String), [u8; 32]>,
@@ -91,65 +103,12 @@ pub(super) struct State {
     pub(super) binding_rate: NewBindingRateLimiter,
 }
 
-impl State {
-    /// Called while the state lock serializes owner changes and their disk order.
-    /// Saves without copying the tables, and only when something is due
-    /// (`Bindings::save_pending`, R-SERVER-03).
-    pub(super) fn persist_bindings(&mut self) -> std::io::Result<()> {
-        let Some(path) = &self.binding_path else {
-            return Ok(());
-        };
-        self.bindings.save_pending(path, unix_seconds())
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum RegistrationError {
-    Full,
-    SourceFull,
-    InvalidDeviceId,
-    IdExhausted,
-    /// The device id belongs to another proven key.
-    DeviceBound,
-    /// The proven key already has its maximum of registrations.
-    KeyFull,
-    /// The server accepts only clients that log in with their key.
-    KeyLoginRequired,
-    BindingStateUnavailable,
-    /// The proven key already bound its maximum of device ids.
-    KeyDevicesFull,
-    /// Too many new device bindings from this source; retry later.
-    BindingRateLimited,
-}
-
-impl RegistrationError {
-    pub(super) fn message(self) -> &'static str {
-        match self {
-            Self::Full => "server client limit reached",
-            Self::SourceFull => "server source client limit reached",
-            Self::InvalidDeviceId => "invalid or oversized device id",
-            Self::IdExhausted => "server client id space exhausted",
-            Self::DeviceBound => "device id is bound to another device key",
-            Self::KeyFull => "too many connections for this device key",
-            Self::BindingStateUnavailable => {
-                "cannot persist device key binding; check server state file"
-            }
-            Self::KeyLoginRequired => {
-                "this server requires key login; update Smart Explorer \
-                 (the operator can admit older apps with --allow-legacy-clients)"
-            }
-            Self::KeyDevicesFull => "too many device ids for this device key",
-            Self::BindingRateLimited => {
-                "too many new device bindings from this network; retry later"
-            }
-        }
-    }
-}
-
 enum Registration {
     Done(u64),
     /// Displaced clients go first; then the registration is tried again.
     Retry,
+    /// The bindings are saved outside the lock first; then the registration is tried again.
+    Save,
     Failed(RegistrationError),
 }
 
@@ -177,10 +136,18 @@ pub(super) fn register_client(
     )
 }
 
+/// At most three evictions per registration: an impostor, a global slot, then a
+/// source or network slot.
+const MAX_EVICTION_ROUNDS: usize = 3;
+/// Saves one registration may wait for: its new binding, once (the next round finds it bound).
+const MAX_SAVE_ROUNDS: usize = 1;
+
 /// Registers a client. A proven key binds the device id (first key wins);
 /// older registrations that only named it are closed. When the server is
 /// full, a proven client displaces an older client without key login,
-/// preferring one without subscriptions (FC4).
+/// preferring one without subscriptions (FC4). The connection keeps its
+/// handshake place until its registration is over (O-S5); a refused
+/// registration gives the place back at once.
 pub(super) fn register_client_with_identity(
     state: &Arc<Mutex<State>>,
     writer: Writer,
@@ -192,17 +159,38 @@ pub(super) fn register_client_with_identity(
     if validate_identifier("device id", &device_id).is_err() {
         return Err(RegistrationError::InvalidDeviceId);
     }
-    // At most three evictions: an impostor, a global slot, then a source/network slot.
-    for _ in 0..4 {
+    handshake_slots::reserve_current();
+    let result = register_rounds(state, &writer, source, &device_id, &capabilities, &identity);
+    if result.is_err() {
+        handshake_slots::release_current();
+    }
+    result
+}
+
+fn register_rounds(
+    state: &Arc<Mutex<State>>,
+    writer: &Writer,
+    source: SourceKey,
+    device_id: &str,
+    capabilities: &HashSet<String>,
+    identity: &ClientIdentity,
+) -> Result<u64, RegistrationError> {
+    let mut evictions = 0_usize;
+    let mut saves = 0_usize;
+    // The copy generation the binding must reach on disk; fixed by the first round
+    // that binds, so a later change of another connection cannot force another save.
+    let mut need: Option<u64> = None;
+    loop {
         let (registration, displaced) = {
             let mut state = lock_state(state);
             try_register_locked(
                 &mut state,
-                &writer,
+                writer,
                 source,
-                &device_id,
-                &capabilities,
-                &identity,
+                device_id,
+                capabilities,
+                identity,
+                &mut need,
             )
         };
         for (client_id, displaced_writer) in displaced {
@@ -212,10 +200,23 @@ pub(super) fn register_client_with_identity(
         match registration {
             Registration::Done(id) => return Ok(id),
             Registration::Failed(error) => return Err(error),
-            Registration::Retry => {}
+            Registration::Retry => {
+                evictions += 1;
+                if evictions > MAX_EVICTION_ROUNDS {
+                    return Err(RegistrationError::Full);
+                }
+            }
+            Registration::Save => {
+                saves += 1;
+                if saves > MAX_SAVE_ROUNDS {
+                    return Err(RegistrationError::Full);
+                }
+                if persist_outside_lock(state).is_err() {
+                    return Err(RegistrationError::BindingStateUnavailable);
+                }
+            }
         }
     }
-    Err(RegistrationError::Full)
 }
 
 fn try_register_locked(
@@ -225,11 +226,39 @@ fn try_register_locked(
     device_id: &str,
     capabilities: &HashSet<String>,
     identity: &ClientIdentity,
+    need: &mut Option<u64>,
 ) -> (Registration, Vec<(u64, Writer)>) {
     let limits = state.policy.limits;
     match identity.proven() {
         Some(key) => {
             let key_text = key.to_string();
+            // A device id bound to another key is refused before anything else.
+            if state
+                .bindings
+                .device_key(device_id)
+                .is_some_and(|bound| bound != key_text.as_str())
+            {
+                return (
+                    Registration::Failed(RegistrationError::DeviceBound),
+                    Vec::new(),
+                );
+            }
+            // O-S3: the per-key connection limit is checked before a device id is bound.
+            let same_key = state
+                .clients
+                .values()
+                .filter(|client| client.identity.proven() == Some(key))
+                .count();
+            if same_key >= limits.max_clients_per_key {
+                return (Registration::Failed(RegistrationError::KeyFull), Vec::new());
+            }
+            // R2 (E-v2-1): a registration that a reached global, source or network limit
+            // refuses, and that no older client may displace, binds nothing, takes no
+            // token and saves nothing. The limits are checked again after the bindings.
+            let capacity = Capacity::of(state, source);
+            if capacity.any() && !can_displace(state, device_id, source, &capacity) {
+                return (Registration::Failed(capacity.refusal()), Vec::new());
+            }
             // Only a new entry takes a token; a bound one (own or another key's) does not.
             if state.bindings.is_new_device(device_id) && !state.binding_rate.try_take(source) {
                 return (
@@ -237,26 +266,37 @@ fn try_register_locked(
                     Vec::new(),
                 );
             }
-            let bound = state
+            match state
                 .bindings
-                .bind_device(device_id, &key_text, unix_seconds());
-            if bound == BindOutcome::Conflict {
-                return (
-                    Registration::Failed(RegistrationError::DeviceBound),
-                    Vec::new(),
-                );
+                .bind_device(device_id, &key_text, unix_seconds())
+            {
+                BindOutcome::Bound | BindOutcome::Confirmed => {}
+                BindOutcome::Conflict => {
+                    return (
+                        Registration::Failed(RegistrationError::DeviceBound),
+                        Vec::new(),
+                    );
+                }
+                BindOutcome::KeyFull => {
+                    return (
+                        Registration::Failed(RegistrationError::KeyDevicesFull),
+                        Vec::new(),
+                    );
+                }
+                BindOutcome::Full => {
+                    return (
+                        Registration::Failed(RegistrationError::BindingStateUnavailable),
+                        Vec::new(),
+                    );
+                }
             }
-            if bound == BindOutcome::KeyFull {
-                return (
-                    Registration::Failed(RegistrationError::KeyDevicesFull),
-                    Vec::new(),
-                );
-            }
-            if bound == BindOutcome::Full || state.persist_bindings().is_err() {
-                return (
-                    Registration::Failed(RegistrationError::BindingStateUnavailable),
-                    Vec::new(),
-                );
+            // The binding is acknowledged only once a copy holding it is on disk
+            // (SEC-SERVER-BESITZER-60S): the copy is written outside the lock first.
+            if state.binding_path.is_some() {
+                let ack = *need.get_or_insert_with(|| state.bindings.ack_generation());
+                if state.binding_saves.written() < ack {
+                    return (Registration::Save, Vec::new());
+                }
             }
             let impostors: Vec<(u64, Writer)> = state
                 .clients
@@ -268,14 +308,6 @@ fn try_register_locked(
                 .collect();
             if !impostors.is_empty() {
                 return (Registration::Retry, impostors);
-            }
-            let same_key = state
-                .clients
-                .values()
-                .filter(|client| client.identity.proven() == Some(key))
-                .count();
-            if same_key >= limits.max_clients_per_key {
-                return (Registration::Failed(RegistrationError::KeyFull), Vec::new());
             }
         }
         None => {
@@ -293,37 +325,16 @@ fn try_register_locked(
             }
         }
     }
-    let full = state.clients.len() >= limits.max_clients;
-    let source_full = source.has_internal_source_limit()
-        && state
-            .clients
-            .values()
-            .filter(|client| client.source == source)
-            .count()
-            >= limits.max_clients_per_source;
-    let network_full = source.network().is_some_and(|network| {
-        state
-            .clients
-            .values()
-            .filter(|client| client.source.network() == Some(network))
-            .count()
-            >= limits.max_clients_per_network
-    });
-    if full || source_full || network_full {
-        let victim = identity.proven().and_then(|_| {
-            eviction_candidate(
-                state,
-                (!full).then_some(source),
-                network_full && !source_full,
-            )
-        });
+    let capacity = Capacity::of(state, source);
+    if capacity.any() {
+        let victim = if identity.proven().is_some() {
+            displacement(state, source, &capacity)
+        } else {
+            None
+        };
         return match victim {
             Some(victim) => (Registration::Retry, vec![victim]),
-            None if full => (Registration::Failed(RegistrationError::Full), Vec::new()),
-            None => (
-                Registration::Failed(RegistrationError::SourceFull),
-                Vec::new(),
-            ),
+            None => (Registration::Failed(capacity.refusal()), Vec::new()),
         };
     }
     let Some(id) = state.next_id.checked_add(1) else {
@@ -352,43 +363,15 @@ fn try_register_locked(
     (Registration::Done(id), Vec::new())
 }
 
-/// An older client without key login, of `source` when given: one without
-/// subscriptions first, then the oldest.
-fn eviction_candidate(
-    state: &State,
-    source: Option<SourceKey>,
-    network: bool,
-) -> Option<(u64, Writer)> {
-    state
-        .clients
-        .iter()
-        .filter(|(_, client)| client.identity.proven().is_none())
-        .filter(|(_, client)| {
-            source.is_none_or(|source| {
-                if network {
-                    client.source.network() == source.network()
-                } else {
-                    client.source == source
-                }
-            })
-        })
-        .min_by_key(|(id, client)| {
-            let subscribed = !client.direct_lookup_ids.is_empty()
-                || !client.watched_lookup_ids.is_empty()
-                || !client.rooms.is_empty();
-            (subscribed, **id)
-        })
-        .map(|(id, client)| (*id, client.writer.clone()))
-}
-
-/// Whether a watcher may see a lookup's presence: older clients always (they
-/// cannot show proofs), proven ones with the owner's access hash.
+/// Whether a watcher may see a lookup's presence: a client without key login only an
+/// unbound lookup, because it cannot show a proof (E60); proven ones with the owner's
+/// access hash.
 pub(super) fn watcher_admitted(state: &State, watcher_id: u64, lookup_id: &str) -> bool {
     let Some(client) = state.clients.get(&watcher_id) else {
         return false;
     };
     if client.identity.proven().is_none() {
-        return true;
+        return state.bindings.lookup_key(lookup_id).is_none();
     }
     match state.bindings.lookup_access(lookup_id) {
         Some(hash) => state
@@ -457,3 +440,7 @@ pub(super) fn send_all(notifications: Vec<(Writer, Out)>) {
         send(&writer, &message);
     }
 }
+
+#[cfg(test)]
+#[path = "bindings_limit_task_tests.rs"]
+mod bindings_limit_task_tests;

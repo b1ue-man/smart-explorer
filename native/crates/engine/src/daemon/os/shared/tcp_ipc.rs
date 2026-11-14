@@ -31,6 +31,12 @@ impl ShareHost {
                 ..
             }
         );
+        // The service arms answer with the plain text of `auto_forward`, as
+        // Android does; the other arms keep the transport code.
+        let plain_error = matches!(
+            &request,
+            TcpIpcRequest::OpenService { .. } | TcpIpcRequest::CloseService { .. }
+        );
         let result = self.tcp_request(&mut stream, request);
         let opened = match &result {
             Ok(TcpIpcReply::Opened { tunnel }) => Some(tunnel.id.clone()),
@@ -38,6 +44,10 @@ impl ShareHost {
         };
         let response = match result {
             Ok(reply) => IpcResponse::Tcp(reply),
+            Err(error) if plain_error => IpcResponse::Err {
+                msg: error,
+                code: None,
+            },
             Err(error) => IpcResponse::Err {
                 msg: error,
                 code: Some("tcp_forward_failed".into()),
@@ -94,6 +104,22 @@ impl ShareHost {
                 closed: self
                     .tcp_service()
                     .is_some_and(|service| service.tcp_close(&id)),
+            }),
+            // The daemon-token check of the IPC router runs before every arm
+            // (module note above); `open` accepts only a port that the
+            // device's current feed names (E27).
+            TcpIpcRequest::OpenService {
+                device_id,
+                public_key,
+                port,
+            } => crate::share::auto_forward::open(&device_id, &public_key, port)
+                .map(|mapping| TcpIpcReply::Service { mapping }),
+            TcpIpcRequest::CloseService {
+                device_id,
+                public_key,
+                port,
+            } => Ok(TcpIpcReply::Closed {
+                closed: crate::share::auto_forward::close(&device_id, &public_key, port),
             }),
             TcpIpcRequest::BindProcess { .. } => {
                 Err("BindProcess gilt nur auf dem Strom eines Starts mit AwaitProcess".into())
@@ -242,3 +268,7 @@ fn await_binding(
         .ok_or_else(|| "Tunnel endete während der Prozessbindung".to_string())?;
     Ok(TcpIpcReply::Bound { tunnel })
 }
+
+#[cfg(test)]
+#[path = "dienste_oeffnen_task_tests.rs"]
+mod dienste_oeffnen_task_tests;

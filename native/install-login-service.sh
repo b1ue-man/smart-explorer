@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
-# Optional administrative login installation. Does not call the per-user updater.
+# Login service installation. Does not call the per-user updater.
+# Since E21 Smart Explorer runs this script itself, non-interactively and with
+# fixed arguments, when a device may steer the screen ("Bildschirm steuern:
+# Erlauben"): `self-install` from a new root-only directory after one polkit
+# approval per version (directly from a root worker), `uninstall` after the
+# last revocation. The explicit administrative use below stays unchanged.
 # Usage: sudo ./install-login-service.sh install IMAGE EXPECTED_SHA256 VERSION POLICY_JSON [MACHINE_IDENTITY_JSON] [GATEWAY_NETWORK_JSON]
+# Usage: sudo ./install-login-service.sh self-install IMAGE EXPECTED_SHA256 VERSION POLICY_JSON MACHINE_IDENTITY_JSON GATEWAY_NETWORK_JSON
+#        (as install, but the policy may hold no grant yet: the broker's local
+#        grant channel adds the granting account's grants after the start)
 # POLICY_JSON is an explicit administrative approval of machine/peer/users/rights.
 # First installation needs a freshly provisioned MachineIdentity JSON, unless
 # the private gateway machine-key.json already exists. Public key and machine ID
@@ -71,7 +79,9 @@ if [[ $operation == uninstall ]]; then
     echo 'Optional login services removed; administrative grants, network configuration and private machine identity retained.'
     exit 0
 fi
-[[ $operation == install && $# -ge 5 && $# -le 7 ]] || { echo 'Usage: install IMAGE EXPECTED_SHA256 VERSION POLICY_JSON [MACHINE_IDENTITY_JSON] [GATEWAY_NETWORK_JSON] | uninstall' >&2; exit 2; }
+allow_empty=0
+if [[ $operation == self-install ]]; then allow_empty=1; operation=install; [[ $# -eq 7 ]] || { echo 'Usage: self-install IMAGE EXPECTED_SHA256 VERSION POLICY_JSON MACHINE_IDENTITY_JSON GATEWAY_NETWORK_JSON' >&2; exit 2; }; fi
+[[ $operation == install && $# -ge 5 && $# -le 7 ]] || { echo 'Usage: install IMAGE EXPECTED_SHA256 VERSION POLICY_JSON [MACHINE_IDENTITY_JSON] [GATEWAY_NETWORK_JSON] | self-install … | uninstall' >&2; exit 2; }
 image=$2 expected=${3,,} version=$4 policy=$5 identity=${6:-$state/machine-key.json} network=${7:-$state/gateway-network.json}
 [[ $expected =~ ^[0-9a-f]{64}$ && $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'An explicit SHA256 and release version are required.' >&2; exit 2; }
 command -v python3 >/dev/null
@@ -179,16 +189,16 @@ uid=$(id -u smart-explorer-login) gid=$(id -g smart-explorer-login)
 account_shell=$(getent passwd smart-explorer-login | cut -d: -f7)
 [[ $account_shell == */nologin || $account_shell == */false ]] || { echo 'Gateway account must not permit interactive login.' >&2; exit 1; }
 [[ ! -e $state || $(stat -c %u "$state") == 0 || $(stat -c %u "$state") == "$uid" ]] || { echo 'Gateway state directory has an unexpected owner.' >&2; exit 1; }
-python3 - "$policy" "$stage/policy.json" "$uid" "$version" "$generation" "$expected" "$identity" "$stage/machine-key.json" "$network" "$stage/gateway-network.json" <<'PY'
+python3 - "$policy" "$stage/policy.json" "$uid" "$version" "$generation" "$expected" "$identity" "$stage/machine-key.json" "$network" "$stage/gateway-network.json" "$allow_empty" <<'PY'
 import json, os, sys, urllib.parse
-source, dest, uid, version, generation, sha, identity_source, identity_dest, network_source, network_dest = sys.argv[1:]
+source, dest, uid, version, generation, sha, identity_source, identity_dest, network_source, network_dest, allow_empty = sys.argv[1:]
 with open(source, 'rb') as f:
     raw = f.read(1024 * 1024 + 1)
 if len(raw) > 1024 * 1024: raise SystemExit('Policy exceeds one MiB.')
 p = json.loads(raw)
 if p.get('format') != 1 or not p.get('revision', 0) or not p.get('machine_public_key') or not p.get('machine_id'):
     raise SystemExit('Policy requires an explicit machine identity and revision.')
-if not p.get('grants') or any(not g.get('target_users') or not g.get('public_key') or not g.get('rights', {}).get('login') for g in p['grants']):
+if not isinstance(p.get('grants'), list) or (not p['grants'] and allow_empty != '1') or any(not g.get('target_users') or not g.get('public_key') or not g.get('rights', {}).get('login') for g in p['grants']):
     raise SystemExit('Policy requires explicit peer, target-user and login grants.')
 try:
     key_fd = os.open(identity_source, os.O_RDONLY | os.O_NOFOLLOW)
@@ -314,7 +324,9 @@ TimeoutStartSec=30
 User=root
 Group=smart-explorer-login
 ExecStart=$image_path --login-broker-service
-RuntimeDirectory=smart-explorer-login
+# smart-explorer-login-grants holds the local grant socket (E21); the broker
+# opens that directory to every local account, which SO_PEERCRED identifies.
+RuntimeDirectory=smart-explorer-login smart-explorer-login-grants
 RuntimeDirectoryMode=0750
 UMask=0027
 Restart=on-failure
@@ -322,7 +334,8 @@ TimeoutStopSec=15
 KillMode=mixed
 RestrictAddressFamilies=AF_UNIX
 ProtectSystem=strict
-ReadWritePaths=/run/smart-explorer-login $public_status
+# The grant channel replaces policy.json, self-grants.json and gateway-network.json.
+ReadWritePaths=/run/smart-explorer-login /run/smart-explorer-login-grants $public_status $config $state
 ProtectHome=read-only
 [Install]
 WantedBy=multi-user.target

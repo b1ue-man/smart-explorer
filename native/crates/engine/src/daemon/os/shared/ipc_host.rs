@@ -158,6 +158,7 @@ impl ShareHost {
         self.mounts.tick();
         self.lan_tick();
         self.drain_events();
+        self.renew_due_discovery_offers();
         // Rights an acceptance, the Direct code, a PIN offer or a room chose
         // are stored by the Exec-grant journal; a reload applies them.
         if self.periodic_reload_due() || self.exec_follow_ups_due() {

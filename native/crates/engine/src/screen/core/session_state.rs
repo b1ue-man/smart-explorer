@@ -164,6 +164,11 @@ pub enum EndReason {
     ConnectionLost,
     /// Capture, encoder or protocol failure; the detail travels in `ERROR`.
     Failed,
+    /// The host of a worker that follows the active session (E23) ended
+    /// because another session became active; the viewer builds the same
+    /// session again (E48). A viewer of an older version reads the key as
+    /// an unknown reason (`StateReport.reason` is a free string).
+    SessionChanged,
 }
 
 impl EndReason {
@@ -177,8 +182,52 @@ impl EndReason {
             Self::UpdateStop => "update_stop",
             Self::ConnectionLost => "connection_lost",
             Self::Failed => "failed",
+            Self::SessionChanged => "session_changed",
         }
     }
+
+    /// Every reason, in the order of the type.
+    pub const ALL: [Self; 9] = [
+        Self::ViewerClosed,
+        Self::HostStopped,
+        Self::CapabilityNarrowed,
+        Self::GrantExpired,
+        Self::HostShutdown,
+        Self::UpdateStop,
+        Self::ConnectionLost,
+        Self::Failed,
+        Self::SessionChanged,
+    ];
+
+    /// The reason of `key`; `None` for a key of another version.
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|reason| reason.key() == key)
+    }
+}
+
+/// The error a host process link gives once the active graphical session
+/// changed (E48): the session then ends as `EndReason::SessionChanged`.
+#[derive(Debug)]
+struct SessionChangedError;
+
+impl std::fmt::Display for SessionChangedError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("the active graphical session changed")
+    }
+}
+
+impl std::error::Error for SessionChangedError {}
+
+/// The error of a host whose session is no longer the active one.
+pub fn session_changed_error() -> io::Error {
+    io::Error::other(SessionChangedError)
+}
+
+/// Whether `error` is (or carries unchanged) `session_changed_error`.
+pub fn is_session_changed(error: &io::Error) -> bool {
+    error
+        .get_ref()
+        .is_some_and(|inner| inner.is::<SessionChangedError>())
 }
 
 /// Viewer side of `KEYFRAME_REQUEST`: at most one open request, because a

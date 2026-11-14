@@ -1,8 +1,11 @@
-//! Explicit pinned machine targets; this domain never mutates normal device grants.
+//! Machine login viewer of the app: targets of paired devices (E22, sent over
+//! the pinned Share session; no file, no pin acknowledgement) and explicit
+//! administrative targets. This domain never mutates normal device grants.
 use crate::{
     login::{FrameToken, GatewayTarget, ViewerSession},
     mobile::ApiError,
     screen::core::input_model::{key_usage, InputEvent, MAX_INPUT_EVENTS},
+    share::login_transport::{self, LoginSwitch, PairedLoginTarget, SwitchAction},
 };
 use serde_json::{json, Value};
 use std::{
@@ -14,6 +17,10 @@ use std::{
 };
 static SESSIONS: Mutex<BTreeMap<u64, Arc<ViewerSession>>> = Mutex::new(BTreeMap::new());
 static NEXT: AtomicU64 = AtomicU64::new(1);
+/// The automatic login switch of each open screen view (key chosen by the
+/// app, growing); the oldest makes room beyond `MAX_SWITCHES`.
+static SWITCHES: Mutex<BTreeMap<u64, LoginSwitch>> = Mutex::new(BTreeMap::new());
+const MAX_SWITCHES: usize = 64;
 #[cfg(all(target_os = "android", feature = "android-instrumentation-fixtures"))]
 pub(super) fn fixture_session_id() -> Result<u64, String> {
     NEXT.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |id| {
@@ -60,8 +67,84 @@ fn target(value: Value) -> Result<GatewayTarget, ApiError> {
     target.validate().map_err(invalid)?;
     Ok(target)
 }
+/// What the app shows of a paired target: the same fields as CLI and MCP.
+fn paired_json(paired: &PairedLoginTarget) -> Value {
+    json!({"device_id":paired.device_id,"device_name":paired.device_name,
+        "relation_id":paired.relation_id,"target_user":paired.target_user,
+        "received_at":paired.received_at,"target":paired.target})
+}
+fn selector(args: &Value) -> Result<&str, ApiError> {
+    args.get("device")
+        .and_then(Value::as_str)
+        .filter(|device| !device.trim().is_empty() && device.len() <= 512)
+        .ok_or_else(|| invalid("paired device is required"))
+}
+fn viewer_key(args: &Value) -> Result<u64, ApiError> {
+    args.get("viewer")
+        .and_then(Value::as_u64)
+        .filter(|key| *key != 0)
+        .ok_or_else(|| invalid("screen viewer key is required"))
+}
+fn action_name(action: SwitchAction) -> &'static str {
+    match action {
+        SwitchAction::Stay => "stay",
+        SwitchAction::EnterLogin => "enter_login",
+        SwitchAction::LeaveLogin => "leave_login",
+    }
+}
+/// `login.autoSwitch`: one observation of a screen view's stream state; on
+/// `enter_login` the answer carries the paired target to open.
+fn auto_switch(args: &Value) -> Result<Value, ApiError> {
+    let key = viewer_key(args)?;
+    let device = selector(args)?;
+    let state = args
+        .get("state")
+        .and_then(Value::as_str)
+        .ok_or_else(|| invalid("screen state is required"))?;
+    let paired = login_transport::paired_login_target(device).ok();
+    let mut switches = SWITCHES
+        .lock()
+        .map_err(|_| ApiError::internal("login switch registry is unavailable"))?;
+    if !switches.contains_key(&key) && switches.len() >= MAX_SWITCHES {
+        // Keys only grow: the oldest view is long closed.
+        switches.pop_first();
+    }
+    let action = switches
+        .entry(key)
+        .or_default()
+        .observe(state, paired.is_some());
+    let paired = paired
+        .filter(|_| action == SwitchAction::EnterLogin)
+        .map(|paired| paired_json(&paired));
+    Ok(json!({"action":action_name(action),"paired":paired}))
+}
 pub(super) fn handle(method: &str, args: &Value) -> Option<Result<Value, ApiError>> {
     Some((|| match method {
+        "login.paired" => login_transport::paired_login_target(selector(args)?)
+            .map(|paired| paired_json(&paired))
+            .map_err(|error| ApiError::new(error.code, error.message)),
+        "login.pairedList" => {
+            let book = login_transport::target_store::load().map_err(invalid)?;
+            let paired: Vec<Value> = book.targets().iter().map(paired_json).collect();
+            Ok(json!({"paired":paired}))
+        }
+        "login.autoSwitch" => auto_switch(args),
+        "login.autoFailed" => {
+            let key = viewer_key(args)?;
+            let action = SWITCHES
+                .lock()
+                .map_err(|_| ApiError::internal("login switch registry is unavailable"))?
+                .get_mut(&key)
+                .map_or(SwitchAction::Stay, LoginSwitch::login_failed);
+            Ok(json!({"action":action_name(action)}))
+        }
+        "login.autoEnd" => {
+            let key = viewer_key(args)?;
+            if let Ok(mut switches) = SWITCHES.lock() {
+                switches.remove(&key);
+            }
+            Ok(json!({}))
+        }
         "login.target" => Ok(
             json!({"target":target(args.get("target").cloned().ok_or_else(|| invalid("explicit public machine target is required"))?)?,"pinning_required":true}),
         ),

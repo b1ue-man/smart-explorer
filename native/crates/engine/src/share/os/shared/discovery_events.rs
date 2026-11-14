@@ -481,6 +481,8 @@ mod tests {
             discoverable_until: i64::MAX,
             published: true,
             rights: None,
+            renewed_after_failed_attempts: false,
+            pin: None,
         };
         state.retain_live_offers(std::slice::from_ref(&kept));
         let ids: Vec<_> = state

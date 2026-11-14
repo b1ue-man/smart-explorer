@@ -1,4 +1,5 @@
-//! Device-page entry point and a read-only local administrative host indicator.
+//! Device-page entry point (paired login screen, E22, or an administrative
+//! target file) and a read-only local administrative host indicator.
 use super::login_viewer::LoginViewerPane;
 use eframe::egui;
 use std::{
@@ -25,9 +26,33 @@ pub fn tick(ctx: &egui::Context) {
         ctx.request_repaint_after(Duration::from_millis(500));
     }
 }
-pub(super) fn device(ui: &mut egui::Ui, device: &str, ordinary_key: &str) {
-    // This key only scopes the UI draft. It never becomes a machine pin/grant.
-    let id = egui::Id::new(("explicit-login-machine", device, ordinary_key));
+/// The paired target of `device` with exactly its Share key, read at most
+/// every two seconds (the worker writes it when the device sends it).
+fn paired_target(
+    ctx: &egui::Context,
+    id: egui::Id,
+    device: &str,
+    key: &str,
+) -> Option<crate::share::login_transport::PairedLoginTarget> {
+    type Cached = (
+        Instant,
+        Option<crate::share::login_transport::PairedLoginTarget>,
+    );
+    let cached: Option<Cached> = ctx.data(|data| data.get_temp(id.with("paired")));
+    if let Some((at, target)) = cached {
+        if at.elapsed() < Duration::from_secs(2) {
+            return target;
+        }
+    }
+    let target = crate::share::login_transport::paired_login_target_bound(device, key);
+    ctx.data_mut(|data| data.insert_temp(id.with("paired"), (Instant::now(), target.clone())));
+    target
+}
+/// „Maschinenanmeldung“ on a device page: the login screen of the paired
+/// device opens with one button (E22); the administrative target file
+/// stays inside the window.
+pub(super) fn device(ui: &mut egui::Ui, device: &str, key: &str) {
+    let id = egui::Id::new(("explicit-login-machine", device, key));
     let pane: Arc<Mutex<LoginViewerPane>> = ui.ctx().data_mut(|data| {
         data.get_temp_mut_or_insert_with(id, || {
             let pane = Arc::new(Mutex::new(LoginViewerPane::default()));
@@ -38,12 +63,35 @@ pub(super) fn device(ui: &mut egui::Ui, device: &str, ordinary_key: &str) {
         })
         .clone()
     });
+    let paired = paired_target(ui.ctx(), id, device, key);
+    if let Ok(mut pane) = pane.lock() {
+        pane.set_paired(paired.clone());
+    }
     let mut open = ui
         .ctx()
         .data(|data| data.get_temp::<bool>(id.with("open")))
         .unwrap_or(false);
+    match &paired {
+        Some(paired) => {
+            ui.small(format!(
+                "Anmelde- und Sperrbildschirm von {} über die Kopplung (Maschine {}).",
+                paired.device_name, paired.target.machine_id
+            ));
+            if ui.button("Anmeldebildschirm öffnen").clicked() {
+                open = true;
+                if let Ok(mut pane) = pane.lock() {
+                    if pane.ended() {
+                        let _ = pane.start_paired();
+                    }
+                }
+            }
+        }
+        None => {
+            ui.small("Noch kein Anmeldeziel: Das Gerät sendet es selbst über die gekoppelte Verbindung, sobald es diesem Gerät „Bildschirm steuern: Erlauben“ gegeben hat.");
+        }
+    }
     if ui
-        .button("Administratives Maschinenziel übernehmen / Anmeldung öffnen")
+        .button("Administratives Maschinenziel als Datei übernehmen")
         .clicked()
     {
         open = true;

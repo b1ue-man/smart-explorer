@@ -242,7 +242,8 @@ mod transfer_job_ipc;
 #[cfg(any(target_os = "android", all(unix, any(test, feature = "test-support"))))]
 pub use tcp_ipc_client::tcp_start_with;
 pub use tcp_ipc_client::{
-    tcp_close, tcp_list, tcp_start, tcp_start_for_process, tcp_start_within, tcp_status,
+    tcp_close, tcp_close_service, tcp_list, tcp_open_service, tcp_start, tcp_start_for_process,
+    tcp_start_within, tcp_status,
 };
 #[path = "os/shared/apps_ipc.rs"]
 mod apps_ipc;
@@ -312,7 +313,9 @@ pub use ipc::{
     ShareWorkerSnapshot, WorkerHandoff,
 };
 pub use ipc_client::vault_status_peek;
-pub use ipc_client::{drive_devices_peek, drive_devices_watch_peek, share_worker_peek};
+pub use ipc_client::{
+    drive_devices_peek, drive_devices_watch_peek, share_worker_peek, worker_answers,
+};
 pub use ipc_protocol::screen::StreamRequest;
 #[allow(unused_imports)] // E17 surfaces: CLI/MCP, desktop GUI, Android bridge
 pub use ipc_protocol::CodeRenewalView;
