@@ -206,12 +206,22 @@ async fn pair_run(
             while Instant::now() < end {
                 frame_id += 1;
                 let capture_ts_us = now_us();
-                let started = Instant::now();
-                render(frame_id, &mut image)?;
-                let captured = started.elapsed();
-                let started = Instant::now();
-                let encoded = encoder.encode(&image, frame_id == 1, target_bps)?;
-                let encoding = started.elapsed();
+                // Picture and encoding block for up to a whole frame interval.
+                // `block_in_place` hands the other tasks of this worker (the
+                // connection driver among them) to another thread meanwhile,
+                // as the product does with `spawn_blocking`
+                // (`host_pipeline_produce.rs`). Without it a loop that never
+                // reaches its sleep kept the driver waiting: the suite run of
+                // 2026-11-14 measured 2.6 s to 4.7 s `network` at 3840x2160,
+                // a real session of the same build 53 ms.
+                let (captured, encoding, encoded) = tokio::task::block_in_place(|| {
+                    let started = Instant::now();
+                    render(frame_id, &mut image)?;
+                    let captured = started.elapsed();
+                    let started = Instant::now();
+                    let encoded = encoder.encode(&image, frame_id == 1, target_bps)?;
+                    Ok::<_, std::io::Error>((captured, started.elapsed(), encoded))
+                })?;
                 let started = Instant::now();
                 writer
                     .write_frame(frame_id, capture_ts_us, encoded.keyframe, encoded.records)
@@ -226,8 +236,10 @@ async fn pair_run(
                     samples.record_duration(stages::SEND, sending);
                 }
                 next += interval;
-                if let Some(wait) = next.checked_duration_since(Instant::now()) {
-                    tokio::time::sleep(wait).await;
+                match next.checked_duration_since(Instant::now()) {
+                    Some(wait) => tokio::time::sleep(wait).await,
+                    // Behind the cadence: the loop still lets other tasks run.
+                    None => tokio::task::yield_now().await,
                 }
             }
             writer.finish();

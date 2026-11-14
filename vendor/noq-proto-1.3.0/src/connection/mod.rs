@@ -1,6 +1,8 @@
 // Smart Explorer P28b/V3 patch (2026-10-25); see vendor/SMART_EXPLORER_ROUTE_POLICY.md.
 // Smart Explorer P1 patch (2026-11-14): send-batch limits read by noq; see
 // vendor/SMART_EXPLORER_QUIC_PROFILES.md.
+// Smart Explorer G1 patch (2026-11-14): ACK-only packets while the congestion
+// window is full, RTT samples to the controller; same document.
 use std::{
     cmp,
     collections::{BTreeMap, VecDeque, btree_map},
@@ -1580,10 +1582,15 @@ impl Connection {
             // We want to send on this space, check congestion control if we can. But only
             // if we will need to start a new datagram. If we are coalescing into an already
             // started datagram we do not need to check congestion control again.
+            // Smart Explorer G1: set when the congestion window is full but an ACK is
+            // due; the packet then carries ACK frames only (`ack_only_allowed`).
+            let mut acks_only = false;
             if transmit.datagram_remaining_mut() == 0 {
                 let path_blocked =
                     self.path_congestion_check(space_id, path_id, transmit, &can_send, now);
-                if path_blocked != PathBlocked::No {
+                acks_only = path_blocked == PathBlocked::Congestion
+                    && self.ack_only_allowed(space_id, transmit, &can_send, scheduling_info);
+                if path_blocked != PathBlocked::No && !acks_only {
                     // Previous iterations of this loop may have built packets already.
                     return match last_packet_number {
                         Some(pn) => PollPathSpaceStatus::WrotePacket {
@@ -1766,7 +1773,14 @@ impl Connection {
                 };
             }
 
-            self.populate_packet(now, space_id, path_id, scheduling_info, &mut builder);
+            self.populate_packet(
+                now,
+                space_id,
+                path_id,
+                scheduling_info,
+                acks_only,
+                &mut builder,
+            );
 
             // ACK-only packets should only be sent when explicitly allowed. If we write them due to
             // any other reason, there is a bug which leads to one component announcing write
@@ -1871,6 +1885,16 @@ impl Connection {
                     transmit.clip_segment_size();
                 }
             }
+
+            // Smart Explorer G1: the ACK-only packet is the whole transmit. The segment
+            // size is now the size of this short datagram, and the next round of the loop
+            // would test the congestion window against that size instead of the MTU: with
+            // more than one datagram allowed it would fill the rest of the window, which
+            // is less than one MTU, with datagrams of that size holding fragments of
+            // stream data or padding only.
+            if acks_only && let Some(last_packet_number) = last_packet_number {
+                return PollPathSpaceStatus::Send { last_packet_number };
+            }
         }
     }
 
@@ -1974,6 +1998,35 @@ impl Connection {
             }
         }
         false
+    }
+
+    /// Smart Explorer G1: whether a datagram the congestion window holds back may
+    /// still go out as one packet of ACK frames only.
+    ///
+    /// RFC 9002 §2 and §7: a packet with only ACK frames is not in flight and not
+    /// congestion controlled. RFC 9000 §13.2.1: ack-eliciting 1-RTT packets are
+    /// acknowledged within the advertised `max_ack_delay`. Without this, an endpoint
+    /// that has stream data and a full window keeps due ACKs back until its own window
+    /// opens; two such endpoints (a transfer in both directions on one connection)
+    /// wait on each other until a PTO, and the peer measures the wait as round trip.
+    ///
+    /// Only the Data space, only when an ACK is due (`can_send.acks`), only into an
+    /// empty transmit (no padding to an earlier datagram's GSO segment size) and not
+    /// with `pad_to_mtu`: a padded packet would count as in flight.
+    fn ack_only_allowed(
+        &self,
+        space_id: SpaceId,
+        transmit: &TransmitBuf<'_>,
+        can_send: &SendableFrames,
+        scheduling_info: &PathSchedulingInfo,
+    ) -> bool {
+        space_id == SpaceId::Data
+            && can_send.acks
+            && !can_send.close
+            && scheduling_info.may_send_data
+            && !scheduling_info.is_abandoned
+            && transmit.num_datagrams() == 0
+            && !self.config.pad_to_mtu
     }
 
     /// Checks if creating a new datagram would be blocked by congestion control
@@ -3101,6 +3154,8 @@ impl Connection {
             let path_data = self.path_data_mut(path);
             // TODO(@divma): should be a method of path, should be contained in a single place
             path_data.rtt.update(ack_delay, rtt);
+            // Smart Explorer G1: the same sample for delay-based controllers.
+            path_data.congestion.on_rtt_sample(now, rtt, ack_delay);
             if path_data.first_packet_after_rtt_sample.is_none() {
                 path_data.first_packet_after_rtt_sample = Some((space.kind(), next_pn));
             }
@@ -6144,6 +6199,7 @@ impl Connection {
         space_id: SpaceId,
         path_id: PathId,
         scheduling_info: &PathSchedulingInfo,
+        acks_only: bool,
         builder: &mut PacketBuilder<'a, 'b>,
     ) {
         let is_multipath_negotiated = self.is_multipath_negotiated();
@@ -6159,7 +6215,10 @@ impl Connection {
             .maybe_ack_non_eliciting();
 
         // HANDSHAKE_DONE
-        if !is_0rtt
+        // Smart Explorer G1: an ACK-only packet (`acks_only`) leaves every
+        // ack-eliciting frame pending for the next packet the window allows.
+        if !acks_only
+            && !is_0rtt
             && !scheduling_info.is_abandoned
             && scheduling_info.may_send_data
             && mem::replace(&mut space.pending.handshake_done, false)
@@ -6168,14 +6227,16 @@ impl Connection {
         }
 
         // PING
-        if !scheduling_info.is_abandoned
+        if !acks_only
+            && !scheduling_info.is_abandoned
             && mem::replace(&mut space.for_path(path_id).pending_ping, false)
         {
             builder.write_frame(frame::Ping, stats);
         }
 
         // IMMEDIATE_ACK
-        if !scheduling_info.is_abandoned
+        if !acks_only
+            && !scheduling_info.is_abandoned
             && mem::replace(&mut space.for_path(path_id).pending_immediate_ack, false)
         {
             debug_assert_eq!(
@@ -6207,6 +6268,9 @@ impl Connection {
                     space_has_keys,
                 );
             }
+        }
+        if acks_only {
+            return;
         }
 
         // ACK_FREQUENCY

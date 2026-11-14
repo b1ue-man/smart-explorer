@@ -636,8 +636,9 @@ BATCH_TESTS = {
         # Named by p-erg-7 (not changed there; it fails until the lan_presence_task_tests.rs fix outside
         # p-erg-19 is applied).
         "entdeckung_task_a_resolved_sealed_record_with_a_wrong_secret_or_changed_fields_is_refused",
-        # The gaps of the second integration pass (package E2 of plan 2026-11-14): N1, N2, N3, N6, N7, N9. None of
-        # these tests is bound to one operating system, so both must report them.
+        # The gaps of the second integration pass (package E2 of plan 2026-11-14): N1, N2, N3, N6, N7, N9. The
+        # tests listed here are bound to no operating system, so both must report them; the two tests of the
+        # mobile module of that package stand under "linux" (the module is not built on Windows).
         "rueckfragen_task_cli_always_names_the_answered_count",
         "rueckfragen_task_cli_deny_names_the_answered_count",
         "rueckfragen_task_decided_without_count_reads_as_zero",
@@ -646,8 +647,6 @@ BATCH_TESTS = {
         "fs_fehler_task_error_under_a_share_names_the_virtual_root",
         "pin_neu_task_stop_in_the_pause_cancels_the_renewal",
         "pin_neu_task_cli_lists_and_stops_the_waiting_renewal",
-        "pin_neu_task_android_status_names_the_waiting_renewal",
-        "dienste_oeffnen_task_android_close_of_an_unknown_service_names_the_port",
     ],
     "linux": [
         "batches_p13_legacy_profile_generation_serializes_with_terminal_updates",
@@ -701,6 +700,8 @@ BATCH_TESTS = {
         "bildschirm_kanal_task_the_token_ends_with_the_window_and_with_a_session_switch",
         "bildschirm_kanal_task_the_window_reads_address_and_token_from_variable_and_stdin",
         "rdp_netz_krdp_task_unit_without_loopback_address_gives_evidence_and_note",
+        "pin_neu_task_android_status_names_the_waiting_renewal",
+        "dienste_oeffnen_task_android_close_of_an_unknown_service_names_the_port",
     ],
     "windows": [
         "batches_p13_legacy_windows_profile_pins_cli_without_sidecar",
@@ -791,6 +792,7 @@ VERBINDUNGEN_TESTS = {
         "verbindungen_task_yield_full_window_survives_acknowledgements_in_batches",
         "verbindungen_task_yield_grows_back_below_target",
         "verbindungen_task_yield_inner_window_is_held_while_the_yielding_one_is_in_force",
+        "verbindungen_task_yield_ack_delay_is_not_queueing",
         "verbindungen_task_yield_loss_halves_once_per_round_trip",
         "verbindungen_task_yield_never_above_cubic",
         "verbindungen_task_yield_shrinks_only_with_presence",
@@ -843,20 +845,20 @@ VERBINDUNGEN_TESTS = {
         "verbindungen_task_zeiger_local_pointer_places_the_hot_spot_under_the_mouse",
         "verbindungen_task_zeiger_nothing_is_drawn_for_a_hidden_or_unknown_pointer",
         "verbindungen_task_zeiger_overlay_is_drawn_where_the_host_pointer_is",
-        "verbindungen_task_zeiger_mobile_events_carry_what_the_app_draws",
-        "verbindungen_task_zeiger_mobile_hidden_position_is_an_event_the_app_reads",
-        "verbindungen_task_zeiger_mobile_shape_repeats_only_after_the_pause",
         # K1 (corrections before the suite run).
         "verbindungen_task_relay_replays_the_set_mode_choices_after_session_changed",
         # The repair of the connection drops (relay candidates of one host).
         "verbindungen_task_abbruch_signalisierungsport_wird_nicht_per_qad_zum_relay",
-        "verbindungen_task_abbruch_heimrelay_ist_nie_ein_port_ohne_relay",
     ],
     "linux": [
         # P6: the X11 host (XFixes pointer without blending) exists on Linux only.
         # P6 (pointer overlay).
         "verbindungen_task_zeiger_x11_blends_without_the_overlay_and_not_with_it",
         "verbindungen_task_zeiger_x11_sends_the_shape_again_only_when_its_serial_changes",
+        "verbindungen_task_zeiger_mobile_events_carry_what_the_app_draws",
+        "verbindungen_task_zeiger_mobile_hidden_position_is_an_event_the_app_reads",
+        "verbindungen_task_zeiger_mobile_shape_repeats_only_after_the_pause",
+        "verbindungen_task_abbruch_heimrelay_ist_nie_ein_port_ohne_relay",
     ],
     "windows": [],
 }

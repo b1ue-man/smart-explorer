@@ -3,14 +3,12 @@
 //! ueber Loopback. Nur fuer `#[cfg(test)]`; die Tests stehen in `s4_messung_task_tests.rs`.
 
 use std::io;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-use crate::share::route_monitor;
-use iroh::endpoint::{presets, Connection};
-use iroh::{Endpoint, EndpointAddr, RelayMode, TransportAddr};
+use super::verbindungen_messung_support::{close_pair, Link, TransportPurpose};
+use iroh::endpoint::Connection;
 use ring::aead::{
     Aad, Algorithm, LessSafeKey, Nonce, UnboundKey, AES_128_GCM, AES_256_GCM, CHACHA20_POLY1305,
 };
@@ -28,10 +26,6 @@ const BLOCK_BYTES: usize = 64 * 1024;
 const COUNTED_RUNS: Duration = Duration::from_secs(42);
 /// Schwelle fuer den Anteil Share-Durchsatz zu AEAD-Durchsatz in Prozent (E30).
 pub(super) const THRESHOLD_PERCENT: f64 = 10.0;
-/// ALPN, den nur diese Messung verwendet.
-const S4_ALPN: &[u8] = b"smart-explorer/s4-messung/1";
-/// Frist der Routenzulassung je Verbindung (wie `ADMISSION` der Messungen M1 bis M9).
-const ADMISSION: Duration = Duration::from_secs(10);
 
 /// Die drei AEAD-Verfahren der TLS-1.3-Suiten des ring-Providers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -148,7 +142,7 @@ pub(super) struct ShareResult {
 /// (mindestens eines). Ein langsamer Runner misst dann trotzdem und meldet die gezaehlte
 /// Groesse, statt an `CASE_BUDGET` ohne Zeile zu enden (der Windows-Runner des ersten
 /// Suite-Laufs uebertrug 3 GiB nicht in 60 s; der Grund war nicht die Rate, sondern die fehlende
-/// Routenzulassung, `admit_routes`). Die Schwelle aendert das nicht: der Anteil bleibt
+/// Routenzulassung, jetzt Teil von `Link::connect`). Die Schwelle aendert das nicht: der Anteil bleibt
 /// Share-Durchsatz geteilt durch AEAD-Durchsatz.
 fn counted_bytes(warmup_mib_s: f64) -> u64 {
     let per_run = warmup_mib_s * COUNTED_RUNS.as_secs_f64() / 3.0 * 1024.0 * 1024.0;
@@ -291,127 +285,44 @@ fn median(mut values: [f64; 3]) -> f64 {
     values[1]
 }
 
-/// Endpunkt mit der Transportkonfiguration der Share-Verbindung, nur IPv4-Loopback, ohne
-/// Relay und ohne Adresssuche (gebunden wie in den Messungen M1 bis M9).
-async fn endpoint() -> Result<Endpoint, String> {
-    let transport = crate::share::keepalive::iroh_transport_config_for_routes(true);
-    Endpoint::builder(presets::Minimal)
-        .alpns(vec![S4_ALPN.to_vec()])
-        .clear_address_lookup()
-        .relay_mode(RelayMode::Disabled)
-        .clear_ip_transports()
-        .bind_addr("127.0.0.1:0")
-        .map_err(|error| format!("Bindadresse: {error:?}"))?
-        .transport_config(transport)
-        .bind()
-        .await
-        .map_err(|error| format!("Endpunkt: {error:?}"))
-}
-
-/// Verbindet `client` mit `server` ueber dessen IPv4-Loopback-Port und liefert beide Seiten
-/// der Verbindung, zuerst die des Clients.
-async fn connected_pair(
-    server: &Endpoint,
-    client: &Endpoint,
-) -> Result<(Connection, Connection), String> {
-    let port = server
-        .bound_sockets()
-        .into_iter()
-        .find_map(|socket| match socket {
-            SocketAddr::V4(addr) => Some(addr.port()),
-            SocketAddr::V6(_) => None,
-        })
-        .ok_or_else(|| "Server ohne IPv4-Socket".to_owned())?;
-    let target = EndpointAddr::from_parts(
-        server.id(),
-        vec![TransportAddr::Ip(SocketAddr::new(
-            IpAddr::V4(Ipv4Addr::LOCALHOST),
-            port,
-        ))],
-    );
-    let (dialled, accepted) = tokio::join!(client.connect(target, S4_ALPN), accept_one(server));
-    let client_side = dialled.map_err(|error| format!("Verbindung: {error:?}"))?;
-    Ok((client_side, accepted?))
-}
-
-/// Laesst die Routenueberwachung beider Seiten die Verbindung zu. Die Transportkonfiguration
-/// der Share-Verbindung schaltet die Nutzdaten-Policy ein (`application_path_policy`): bis ein
-/// Pfad zugelassen ist, sendet QUIC keinen einzigen STREAM-Frame (`vendor/
-/// SMART_EXPLORER_ROUTE_POLICY.md`: "enabled starts blocked"). Ohne diese Zulassung blieb
-/// schon der Aufwaermlauf stehen, auf jedem Runner bis `CASE_BUDGET`; produktive Verbindungen
-/// und die Messungen M1 bis M9 lassen sie ebenso zu.
-async fn admit_routes(
-    client: (&Endpoint, &Connection),
-    server: (&Endpoint, &Connection),
-) -> Result<(), String> {
-    for (side, (endpoint, connection)) in [("Client", client), ("Server", server)] {
-        route_monitor::start(
-            connection,
-            endpoint.id().to_string(),
-            false,
-            true,
-            Vec::new(),
-        )
-        .map_err(|error| format!("Routemonitor ({side}): {error}"))?;
-    }
-    let deadline = Some(Instant::now() + ADMISSION);
-    for (side, (_, connection)) in [("Client", client), ("Server", server)] {
-        route_monitor::wait_application_route(connection, deadline)
-            .await
-            .map_err(|error| format!("Routezulassung ({side}): {error}"))?;
-    }
-    Ok(())
-}
-
-async fn accept_one(server: &Endpoint) -> Result<Connection, String> {
-    let incoming = server
-        .accept()
-        .await
-        .ok_or_else(|| "Server ohne eingehende Verbindung".to_owned())?;
-    incoming
-        .await
-        .map_err(|error| format!("Annahme: {error:?}"))
-}
-
-/// Eine Uebertragung von `total` Bytes ueber einen neuen einseitigen Strom. Der Sender
-/// haelt den Strom offen, bis der Empfaenger alle Bytes hat; `stand` zaehlt mit.
+/// Eine Uebertragung von `total` Bytes ueber einen neuen bidirektionalen Strom, wie die
+/// Messung M1 (`verbindungen_messung_bulk.rs`, `one_stream`). Kein einseitiger Strom: die
+/// Transportkonfiguration der Share-Verbindung erlaubt keinen (`IROH_MAX_CONCURRENT_UNI_STREAMS`
+/// ist 0, `keepalive.rs`), `open_uni` wartete deshalb ohne Ende auf ein Stromlimit der Gegenseite
+/// und der Aufwaermlauf sendete kein Byte. Der Sender beendet den Strom nach dem letzten Byte,
+/// der Empfaenger liest bis zum Ende; `stand` zaehlt mit.
 async fn transfer(
     sender: &Connection,
     receiver: &Connection,
     total: u64,
     stand: &Stand,
 ) -> Result<(), String> {
-    let (done_tx, done_rx) = tokio::sync::oneshot::channel::<()>();
     let sending = async {
-        let mut stream = sender.open_uni().await.map_err(io::Error::other)?;
+        let (mut send, _recv) = sender.open_bi().await.map_err(io::Error::other)?;
         let chunk = vec![0x5au8; BLOCK_BYTES];
         let mut sent = 0u64;
         while sent < total {
             let count = (total - sent).min(BLOCK_BYTES as u64) as usize;
-            stream
-                .write_all(&chunk[..count])
+            send.write_all(&chunk[..count])
                 .await
                 .map_err(io::Error::other)?;
             sent += count as u64;
             stand.sent.fetch_add(count as u64, Ordering::Relaxed);
         }
-        let _ = done_rx.await;
+        send.finish().map_err(io::Error::other)?;
         Ok::<(), io::Error>(())
     };
     let receiving = async {
-        let mut stream = receiver.accept_uni().await.map_err(io::Error::other)?;
+        let (_send, mut recv) = receiver.accept_bi().await.map_err(io::Error::other)?;
         let mut buffer = vec![0u8; BLOCK_BYTES];
         let mut received = 0u64;
-        while received < total {
-            let count = stream
-                .read(&mut buffer)
-                .await
-                .map_err(io::Error::other)?
-                .ok_or_else(|| io::Error::other("Strom endet vor dem Ende der Messung"))?;
+        while let Some(count) = recv.read(&mut buffer).await.map_err(io::Error::other)? {
             received += count as u64;
             stand.received.fetch_add(count as u64, Ordering::Relaxed);
         }
-        let _ = done_tx.send(());
+        if received != total {
+            return Err(io::Error::other("Strom endet vor dem Ende der Messung"));
+        }
         Ok::<(), io::Error>(())
     };
     let (sent, received) = tokio::join!(sending, receiving);
@@ -419,29 +330,30 @@ async fn transfer(
     received.map_err(|error| format!("Empfangen: {error}"))
 }
 
+/// Aufbau wie M1: `Link` (zwei IPv4-Loopback-Endpunkte, Verbindung mit ALPN und Profil `Files`
+/// des Share-Knotens, Routenzulassung beider Seiten), danach Aufwaermlauf und drei Laeufe auf
+/// derselben Verbindung.
 async fn share_inner(stand: &Stand) -> Result<ShareResult, String> {
-    let server = endpoint().await?;
-    let client = endpoint().await?;
+    let link = Link::new().await?;
     stand.enter("verbindung");
-    let (sender, receiver) = connected_pair(&server, &client).await?;
-    stand.enter("routenzulassung");
-    admit_routes((&client, &sender), (&server, &receiver)).await?;
+    let pair = link
+        .connect(crate::share::node::ALPN, TransportPurpose::Files)
+        .await?;
+    let (sender, receiver) = (&pair.0, &pair.1);
     stand.enter("aufwaermlauf");
     let warmup = Instant::now();
-    transfer(&sender, &receiver, WARMUP_BYTES, stand).await?;
+    transfer(sender, receiver, WARMUP_BYTES, stand).await?;
     let counted = counted_bytes(mib_s(WARMUP_BYTES, warmup.elapsed()));
     let mut runs = [0.0; 3];
     for (index, run) in runs.iter_mut().enumerate() {
         stand.enter(["lauf1", "lauf2", "lauf3"][index]);
         let started = Instant::now();
-        transfer(&sender, &receiver, counted, stand).await?;
+        transfer(sender, receiver, counted, stand).await?;
         *run = mib_s(counted, started.elapsed());
     }
     stand.enter("schliessen");
-    sender.close(0u32.into(), b"s4 messung beendet");
-    receiver.close(0u32.into(), b"s4 messung beendet");
-    client.close().await;
-    server.close().await;
+    close_pair(&pair);
+    link.close().await;
     Ok(ShareResult {
         mib_s: median(runs),
         counted_mib: counted >> 20,

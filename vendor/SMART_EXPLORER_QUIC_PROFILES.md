@@ -115,3 +115,110 @@ On a pin change of noq / noq-proto / iroh:
    transmit, and that a datagram frame still carries 36 bytes besides its
    datagrams.
 3. Keep every changed file's header note; rerun the oracles above.
+
+## G1 (2026-11-14, after the third suite run): ACK-only packets while the window is full, RTT samples to the controller
+
+Written and reviewed without a local build or test run (`AGENTS.md`). Plan
+`docs/plaene/2026-11-14-verbindungen-je-zweck/plan.md`, E2.
+
+### Cause
+
+Measurement M2 of the third suite run: a download and an upload on one `Files`
+connection, both ends yielding (`yield_controller.rs`), moved 9.6 MiB/s of
+112 MiB/s on `lan` and 0.0 MiB/s on `wan`, nearly independent of the target delay.
+In `poll_transmit_path_space` a space with stream data (`can_send.other`) and a full
+congestion window returned `NothingToSend` before any packet was built, so ACKs that
+were due (`can_send.acks`, `immediate_ack_required`) stayed back as well, the
+`max_ack_delay` timer included. With small windows at both ends each end waited for
+the other's ACKs until a PTO, and the waiting time reached the peer as round trip,
+which a delay-based controller reads as queueing and answers with a smaller window.
+
+Review of this patch (2026-11-14): the withheld ACKs explain the standstill on `wan`
+(windows at their floor), not the `lan` figure. `path_congestion_check` of noq 1.3.0
+blocks a datagram when `in_flight + MTU >= window`, so a window of n MSS carries
+n − 1 packets, and the controller bound its window to that flight + 1 MSS on every
+ACK frame: the window could not pass the next multiple of the MSS above its start
+(12 000 bytes, Cubic's initial window; at an MTU of 1452 bytes that multiple is
+9 MSS, with 8 packets in flight). 8 packets per direction in a round trip of 2.3 ms
+are 9.6 MiB/s, the measured figure for the targets 25 and 50 ms (two assumptions,
+because M2 records neither value: MTU discovery had reached its default upper bound
+of 1452 bytes, and the round trip was 0.3 ms above the link's 2 ms). That cause is
+corrected in `native/crates/engine/src/share/core/yield_controller.rs`, not in the
+vendored code.
+
+References: RFC 9002 §2 (an ACK-only packet is not in flight), §7 (packets
+containing only ACK frames are not congestion controlled) and §7.7 (they should not
+be paced); RFC 9000 §13.2.1 (ack-eliciting 1-RTT packets are acknowledged within
+`max_ack_delay`; at most one ACK-only packet per ack-eliciting packet received).
+Upstream, read on 2026-11-14 (`n0-computer/noq`, branch `main`,
+`noq-proto/src/connection/mod.rs`): `path_congestion_check` still returns
+`Congestion` for a space with pending data, and no other place sends an ACK-only
+packet then, so this patch is not in upstream. Upstream compares with `>` instead
+of `>=` since commit `9612584d` ("fix(proto): Allow the cwnd to be filled exactly
+(#823)", 2026-10-15), which is not part of 1.3.0 and not taken over here.
+
+### Changed places
+
+1. `noq-proto-1.3.0/src/connection/mod.rs`:
+   - `Connection::ack_only_allowed` (new): a datagram held back by the congestion
+     window may go out as one ACK-only packet when the space is Data, an ACK is due,
+     no CONNECTION_CLOSE is pending, the path may send Data frames and is not
+     abandoned, the transmit is still empty (no padding to an earlier datagram's GSO
+     segment size) and `pad_to_mtu` is off (a padded packet would be in flight).
+   - `poll_transmit_path_space`: uses it after `path_congestion_check`; the packet
+     skips the pacer like every ACK-only packet (it consumes no pacing tokens,
+     `finish_and_track` with size 0). After that packet the function returns
+     `PollPathSpaceStatus::Send` (review, 2026-11-14): `clip_segment_size` has set
+     the segment size to the size of this short datagram, and the next round of the
+     loop tested the congestion window against that size instead of the MTU. With
+     more than one datagram per transmit (GSO) it then filled the rest of the window,
+     which is less than one MTU, with datagrams of that size: fragments of stream
+     data, or padding only where no STREAM frame fitted.
+   - `populate_packet`: new argument `acks_only`; when set, HANDSHAKE_DONE, PING and
+     IMMEDIATE_ACK stay pending and the packet ends after the ACK frames.
+   - After `path_data.rtt.update(ack_delay, rtt)`: `congestion.on_rtt_sample(now,
+     rtt, ack_delay)`.
+2. `noq-proto-1.3.0/src/congestion.rs`: `Controller::on_rtt_sample(now, latest_rtt,
+   ack_delay)` with an empty default body: the sample of RFC 9002 §5.1 (largest newly
+   acknowledged packet, one per ACK frame) and the ACK delay as `RttEstimator::update`
+   receives it (limited to the peer's `max_ack_delay`, zero outside the Data space).
+   Called after `on_ack` and `on_end_acks` of the same frame. Cubic, NewReno and BBRv3
+   keep the default; Smart Explorer's yielding controller uses it.
+
+### Contract
+
+- With the window open nothing changes. With it full, a due ACK leaves at once in a
+  packet of ACK frames only, which is the only datagram of its transmit; stream
+  data, PING, IMMEDIATE_ACK and HANDSHAKE_DONE wait for the window as before, so
+  bytes in flight never exceed the window by this patch.
+- The packet is not ack-eliciting, not padded and not in flight: it arms no loss
+  timer, takes no pacing tokens and no congestion window. The anti-amplification
+  limit is checked before the congestion window and still blocks it. One such
+  packet leaves per due ACK (`PendingAcks::acks_sent` clears the request).
+- Not changed: the Initial and Handshake spaces, a transmit that already holds a
+  datagram, `pad_to_mtu`, a pending CONNECTION_CLOSE, and a datagram the pacer holds
+  back (`PathBlocked::Pacing`): there a due ACK waits as in noq 1.3.0.
+- Controllers that do not implement `on_rtt_sample` behave as before.
+
+### Oracles (remote suite, not executed)
+
+- M2 (`verbindungen_messung_task_m2_rueckzug_*`): the transfer next to the picture
+  moves data on `wan` (it stood still) and on `lan` reaches the share of the
+  acceptance rule E2, with the picture latency still within it.
+- `yield_controller_tests.rs` `verbindungen_task_yield_ack_delay_is_not_queueing`
+  (the controller side of `on_rtt_sample`) and
+  `verbindungen_task_yield_full_window_survives_acknowledgements_in_batches` (the
+  window grows under the send gate of noq 1.3.0 and with several ACK frames per
+  driver pass).
+- Not observable through the public API: whether a single ACK-only packet left while
+  the window was full; no unit oracle in the vendored crate (its dev-dependencies do
+  not resolve in the workspace, see above).
+
+### Rebase and removal
+
+On a pin change: if upstream sends due ACKs while congestion blocked, drop the
+`acks_only` part; if upstream passes RTT samples or ACK delays to controllers, switch
+`yield_controller.rs` to that and drop `on_rtt_sample`. If the new pin contains
+upstream commit `9612584d` (`in_flight + MTU > window`, the window can be filled
+exactly), set `MIN_CWND` and `ALLOWED_INCREASE` in `yield_controller.rs` back to
+RFC 6817's 2 and 1: both carry one MSS for the send gate of noq 1.3.0.

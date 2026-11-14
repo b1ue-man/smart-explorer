@@ -12,8 +12,9 @@
 //!   "A simple MIN filter applied over a small window"; §2.5: samples "not
 //!   older than an RTT");
 //! - below the target the window grows by `GAIN · off_target · bytes · MSS /
-//!   window` with `GAIN` = 1, at most to flight size + `ALLOWED_INCREASE` MSS,
-//!   never below `MIN_CWND` = 2 MSS (§2.4.2, §2.5);
+//!   window` with `GAIN` = 1; an application-limited sender is held at its
+//!   flight size + 1 MSS, and the flight never falls below 2 MSS (§2.4.2,
+//!   §2.5; `ALLOWED_INCREASE` and `MIN_CWND` state both as noq windows);
 //! - above the target it shrinks multiplicatively once per round trip by
 //!   `W · (delay / T − 1)`, capped at `W / 2` (LEDBAT++,
 //!   draft-irtf-iccrg-ledbat-plus-plus-06 §4.2, retrieved 2026-11-14). RFC
@@ -28,13 +29,22 @@
 //!   interactive session ends.
 //!
 //! The flight size of `max_allowed_cwnd` is the data outstanding before an
-//! acknowledgement (§2.4.2). noq reports the bytes still in flight after it
-//! (`Controller::on_end_acks`), so the bytes acknowledged since the last
-//! report are added back.
+//! acknowledgement (§2.4.2). noq reports the bytes still in flight after an
+//! ACK frame (`Controller::on_end_acks`) and handles every received datagram
+//! before it sends again, so the bytes acknowledged since the last packet
+//! left are added back. The bound holds only while noq reports the path
+//! application limited (§2.4.2: "When the sender is application-limited, the
+//! sender's cwnd is clamped down"): applied to a window in use, it pinned
+//! that window to the next multiple of the MSS (measurement M2, third run).
 //!
-//! QUIC gives the controller round-trip samples only (`now − sent` of an
-//! acknowledged packet), not RFC 6817's one-way delay: queueing on the return
-//! path counts as delay too (a known limit of measurement M2).
+//! Delay samples (G1, 2026-11-14): RFC 6817 measures the one-way delay of the
+//! data (§2.4.1, §3.4.1), without the time the receiver holds its
+//! acknowledgement back. QUIC gives a round trip per ACK frame
+//! (`Controller::on_rtt_sample`, vendor patch G1, RFC 9002 §5.1). A sample is
+//! that round trip less the ACK delay the peer reported, by the rule of RFC
+//! 9002 §5.3. Without the subtraction a delayed ACK (up to the peer's
+//! `max_ack_delay`, 25 ms by default, as large as `T`) looked like queueing;
+//! queueing on the return path still counts (a known limit of M2).
 use std::any::Any;
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -53,10 +63,24 @@ pub(crate) const DEFAULT_TARGET: Duration = Duration::from_millis(25);
 const BASE_HISTORY: usize = 10;
 const BASE_INTERVAL: Duration = Duration::from_secs(60);
 const CURRENT_FILTER: usize = 4;
-const MIN_CWND: u64 = 2;
-const ALLOWED_INCREASE: u64 = 1;
+/// RFC 6817 §2.5 `MIN_CWND` (2) and `ALLOWED_INCREASE` (1) as noq windows,
+/// in MSS. noq 1.3.0 starts a datagram only while `in_flight + MSS < window`
+/// (`path_congestion_check`): a window of n MSS carries n − 1 packets, so
+/// each bound is one MSS above the flight it stands for.
+const MIN_CWND: u64 = 2 + 1;
+const ALLOWED_INCREASE: u64 = 1 + 1;
 /// The largest multiplicative decrease per round trip (LEDBAT++ §4.2).
 const MAX_DECREASE: f64 = 0.5;
+
+/// The delay sample of one ACK frame: its round trip `latest` less the
+/// reported `ack_delay`, unless that falls below `min_rtt` (RFC 9002 §5.3).
+pub(crate) fn network_delay(latest: Duration, ack_delay: Duration, min_rtt: Duration) -> Duration {
+    if latest >= min_rtt.saturating_add(ack_delay) {
+        latest - ack_delay
+    } else {
+        latest
+    }
+}
 
 /// Base and current delay of one path (RFC 6817 §2.4.2).
 #[derive(Clone, Debug, Default)]
@@ -116,9 +140,12 @@ pub(crate) struct YieldWindow {
     target: Duration,
     delays: DelayTracker,
     last_decrease: Option<Instant>,
-    /// Bytes acknowledged since the last `on_end_acks`: with the bytes still
-    /// in flight they give the flight size before these acknowledgements.
+    /// Bytes acknowledged since the last packet left (`on_sent`): with the
+    /// bytes still in flight they give the flight size at that send.
     acked: u64,
+    /// Growth below one byte not yet added: RFC 6817's increase is a real
+    /// number, under one byte per packet above a window of MSS² (2.1 MB).
+    carry: f64,
 }
 
 impl YieldWindow {
@@ -131,6 +158,7 @@ impl YieldWindow {
             delays: DelayTracker::default(),
             last_decrease: None,
             acked: 0,
+            carry: 0.0,
         }
     }
 
@@ -147,22 +175,24 @@ impl YieldWindow {
             .is_none_or(|at| now.saturating_duration_since(at) >= round_trip)
     }
 
-    /// One acknowledged packet: `sent` is its send time, `round_trip` the
-    /// smoothed round trip, `inner` the inner window, `engaged` whether the
-    /// window yields now. Delay history is kept also while not engaged, so
-    /// the base delay is known when an interactive session starts.
+    /// One delay sample (`network_delay`) of one ACK frame, recorded also
+    /// while not engaged: the base delay is known when a session starts.
+    pub(crate) fn on_delay_sample(&mut self, now: Instant, delay: Duration, round_trip: Duration) {
+        self.delays.record(now, delay, round_trip);
+    }
+
+    /// One acknowledged packet of `bytes`: `round_trip` is the smoothed round
+    /// trip, `inner` the inner window, `engaged` whether the window yields
+    /// now. The queueing delay is the one of the samples recorded so far.
     pub(crate) fn on_ack(
         &mut self,
         now: Instant,
-        sent: Instant,
         bytes: u64,
         round_trip: Duration,
         inner: u64,
         engaged: bool,
     ) {
         self.acked = self.acked.saturating_add(bytes);
-        self.delays
-            .record(now, now.saturating_duration_since(sent), round_trip);
         if !engaged {
             // Follows the inner window, so yielding starts from it.
             self.window = inner.max(self.floor());
@@ -176,28 +206,35 @@ impl YieldWindow {
         let delay = queuing.as_secs_f64();
         if delay <= target {
             let off_target = (target - delay) / target;
-            let grow = off_target * bytes as f64 * self.mss as f64 / self.window as f64;
-            self.window = self.window.saturating_add(grow as u64);
+            self.carry += off_target * bytes as f64 * self.mss as f64 / self.window as f64;
+            let whole = self.carry.floor();
+            self.carry -= whole;
+            self.window = self.window.saturating_add(whole as u64);
         } else if self.may_decrease(now, round_trip) {
             let share = (delay / target - 1.0).min(MAX_DECREASE);
             let cut = (self.window as f64 * share) as u64;
             self.window = self.window.saturating_sub(cut);
+            self.carry = 0.0;
             self.last_decrease = Some(now);
         }
         self.window = self.window.max(self.floor());
     }
 
-    /// The end of one batch of acknowledgements with `in_flight` bytes still
-    /// outstanding after it (RFC 6817 `max_allowed_cwnd`). The flight size of
-    /// that rule is the one before the batch: `in_flight` plus the bytes the
-    /// batch acknowledged. With the bytes after it alone, every batch of two
-    /// or more packets would shrink a fully used window to its floor.
-    pub(crate) fn on_end_acks(&mut self, in_flight: u64, engaged: bool) {
-        let flight = in_flight.saturating_add(std::mem::take(&mut self.acked));
-        if engaged {
+    /// The end of one ACK frame with `in_flight` bytes still outstanding
+    /// after it, while noq reports the path `app_limited` (RFC 6817
+    /// `max_allowed_cwnd`). The flight size of that rule is the one at the
+    /// last send (`on_sent`): `in_flight` plus the bytes acknowledged since.
+    pub(crate) fn on_end_acks(&mut self, in_flight: u64, engaged: bool, app_limited: bool) {
+        if engaged && app_limited {
+            let flight = in_flight.saturating_add(self.acked);
             let allowed = flight.saturating_add(ALLOWED_INCREASE * self.mss);
             self.window = self.window.min(allowed).max(self.floor());
         }
+    }
+
+    /// A packet that counts as in flight left.
+    pub(crate) fn on_sent(&mut self) {
+        self.acked = 0;
     }
 
     /// A congestion event: halve once per round trip.
@@ -247,6 +284,9 @@ pub(crate) struct YieldingController {
     engagement: Engagement,
     /// Smoothed round trip of the last acknowledgement.
     round_trip: Duration,
+    /// Smallest round trip sample so far, ACK delay included (RFC 9002
+    /// §5.2 `min_rtt`; the same samples as the connection's estimator).
+    min_rtt: Option<Duration>,
 }
 
 impl YieldingController {
@@ -262,22 +302,29 @@ impl YieldingController {
             yielding: YieldWindow::new(initial, mtu, target),
             engagement,
             round_trip: Duration::from_millis(333),
+            min_rtt: None,
         }
     }
 
     /// The part of `on_ack` that does not need an `RttEstimator` (tests).
-    pub(crate) fn observe_ack(
-        &mut self,
-        now: Instant,
-        sent: Instant,
-        bytes: u64,
-        round_trip: Duration,
-    ) {
+    pub(crate) fn observe_ack(&mut self, now: Instant, bytes: u64, round_trip: Duration) {
         self.round_trip = round_trip;
         let engaged = self.engagement.engaged();
         let inner = self.inner.window();
-        self.yielding
-            .on_ack(now, sent, bytes, round_trip, inner, engaged);
+        self.yielding.on_ack(now, bytes, round_trip, inner, engaged);
+    }
+
+    /// One round-trip sample of an ACK frame (`Controller::on_rtt_sample`).
+    pub(crate) fn observe_rtt_sample(
+        &mut self,
+        now: Instant,
+        latest_rtt: Duration,
+        ack_delay: Duration,
+    ) {
+        let min_rtt = self.min_rtt.map_or(latest_rtt, |min| min.min(latest_rtt));
+        self.min_rtt = Some(min_rtt);
+        let delay = network_delay(latest_rtt, ack_delay, min_rtt);
+        self.yielding.on_delay_sample(now, delay, self.round_trip);
     }
 
     /// Whether the yielding window is the one in force now. The inner
@@ -297,6 +344,7 @@ impl Clone for YieldingController {
             yielding: self.yielding.clone(),
             engagement: self.engagement.clone(),
             round_trip: self.round_trip,
+            min_rtt: self.min_rtt,
         }
     }
 }
@@ -308,6 +356,7 @@ impl Controller for YieldingController {
 
     fn on_packet_sent(&mut self, now: Instant, bytes: u16, pn: u64) {
         self.inner.on_packet_sent(now, bytes, pn);
+        self.yielding.on_sent();
     }
 
     fn on_cwnd_limited(&mut self) {
@@ -329,7 +378,12 @@ impl Controller for YieldingController {
         let held = self.holds_inner();
         self.inner
             .on_ack(now, sent, bytes, pn, app_limited || held, rtt);
-        self.observe_ack(now, sent, bytes, rtt.get());
+        self.observe_ack(now, bytes, rtt.get());
+    }
+
+    fn on_rtt_sample(&mut self, now: Instant, latest_rtt: Duration, ack_delay: Duration) {
+        self.inner.on_rtt_sample(now, latest_rtt, ack_delay);
+        self.observe_rtt_sample(now, latest_rtt, ack_delay);
     }
 
     fn on_end_acks(
@@ -347,7 +401,7 @@ impl Controller for YieldingController {
             largest_packet_num_acked,
         );
         let engaged = self.engagement.engaged();
-        self.yielding.on_end_acks(in_flight, engaged);
+        self.yielding.on_end_acks(in_flight, engaged, app_limited);
     }
 
     fn on_congestion_event(

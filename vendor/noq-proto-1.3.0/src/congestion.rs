@@ -57,6 +57,20 @@ pub trait Controller: Send + Sync + std::fmt::Debug {
     ) {
     }
 
+    /// One round-trip sample of an ACK frame (Smart Explorer G1 patch, 2026-11-14,
+    /// `vendor/SMART_EXPLORER_QUIC_PROFILES.md`)
+    ///
+    /// Called once per ACK frame that newly acknowledges its largest packet number and
+    /// at least one ack-eliciting packet (RFC 9002 §5.1), right after the connection's
+    /// [`RttEstimator`] took the sample, so after this frame's `on_ack` and `on_end_acks`.
+    /// `latest_rtt` is the time since that largest packet was sent; `ack_delay` is the
+    /// delay the peer reported for it, limited to the peer's `max_ack_delay` in the Data
+    /// space and zero in the Initial and Handshake spaces (RFC 9002 §5.3). Delay-based
+    /// controllers use `latest_rtt - ack_delay` to leave out the time the peer held
+    /// the acknowledgement back on purpose.
+    #[allow(unused_variables)]
+    fn on_rtt_sample(&mut self, now: Instant, latest_rtt: Duration, ack_delay: Duration) {}
+
     /// Packets were deemed lost or marked congested
     ///
     /// `in_persistent_congestion` indicates whether all packets sent within the persistent

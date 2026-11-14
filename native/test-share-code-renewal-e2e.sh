@@ -153,14 +153,21 @@ dump_diagnostics() {
   fi
   if [[ -d "$root" ]]; then
     local file
+    # -xdev: a worker's drive mount below a profile home is neither read nor followed.
     while IFS= read -r file; do
       echo "--- ${file#"$root"/}" >&2
       tail -n 60 "$file" >&2 || true
-    done < <(find "$root" -type f \( -name '*.log' -o -name '*.txt' \) -print | sort)
+    done < <(find "$root" -xdev -type f \( -name '*.log' -o -name '*.txt' \) -print 2>/dev/null | sort)
+    # The status documents the script wrote and the host's renewal file: what a failed stage saw.
+    for file in "$root"/*.json "$root"/*/data/smart_explorer/share_code_renewal.json; do
+      [[ -f "$file" ]] || continue
+      echo "--- ${file#"$root"/}" >&2
+      tail -n 80 "$file" >&2 || true
+    done
     echo "preserved diagnostics: $root" >&2
     if [[ -n "${SMART_EXPLORER_E2E_LOG_DIR:-}" ]]; then
       mkdir -p "$SMART_EXPLORER_E2E_LOG_DIR"
-      (cd "$root" && find . -type f \( -name '*.log' -o -name '*.txt' -o -name '*.json' \) -print0 \
+      (cd "$root" && find . -xdev -type f \( -name '*.log' -o -name '*.txt' -o -name '*.json' \) -print0 \
         | xargs -0 -r cp --parents -t "$SMART_EXPLORER_E2E_LOG_DIR") 2>/dev/null || true
     fi
   fi
@@ -343,8 +350,9 @@ lookup_of() {
 # profile_file PROFILE: the one share_profiles.json of a profile.
 profile_file() {
   local -a found=()
-  mapfile -t found < <(find "$1" -type f -name share_profiles.json -print)
-  [[ ${#found[@]} -eq 1 ]] || fail "expected one share_profiles.json below $1, found ${#found[@]}"
+  # Below the profile's data directory only: its home may hold a live drive mount of the worker.
+  mapfile -t found < <(find "$1/data" -xdev -type f -name share_profiles.json -print)
+  [[ ${#found[@]} -eq 1 ]] || fail "expected one share_profiles.json below $1/data, found ${#found[@]}"
   printf '%s\n' "${found[0]}"
 }
 
@@ -447,9 +455,15 @@ stage="the removed contact is refused at its first attempt (E4)"
 list_denied "$se_bin" "$gone" "${endpoint_of[gone]}" gone-first-attempt
 
 stage="the removal renews the host's direct code"
-renewal_filter='.code_renewal != null and .code_renewal.active == true and .code_renewal.pending_devices == 3
-  and (.code_renewal.pending_names | index("online") != null and index("offline") != null and index("old195") != null)
-  and (.code_renewal.pending_names | index("gone") == null)'
+# The removal renews at once and the online contact takes the new data over by itself within seconds
+# (the host's signed presence announces the renewal, `direct_reciprocal_renewal.rs`): it is pending
+# only until then, so the first sight shows two or three devices. The offline contact (worker stopped)
+# and the old peer (never confirms) are pending for certain; the removed one never is.
+renewal_filter='.code_renewal != null and .code_renewal.active == true and .code_renewal.generation >= 1
+  and (.code_renewal.pending_names | index("offline") != null and index("old195") != null and index("gone") == null)
+  and (.code_renewal.pending_names | all(. == "online" or . == "offline" or . == "old195"))
+  and .code_renewal.pending_devices == (.code_renewal.pending_names | length)
+  and .code_renewal.pending_devices >= 2 and .code_renewal.pending_devices <= 3'
 fallback="none"
 renewed=0
 for phase in worker-alone cli-load worker-restart; do
@@ -464,7 +478,8 @@ for phase in worker-alone cli-load worker-restart; do
   limit=45
   deadline=$((SECONDS + limit))
   while [[ $SECONDS -lt $deadline ]]; do
-    if host_status >"$root/host-renewal.json" 2>/dev/null && jq -e "$renewal_filter" >/dev/null <"$root/host-renewal.json"; then
+    if host_status >"$root/host-renewal.json" 2>"$root/host-renewal.err.txt" \
+      && jq -e "$renewal_filter" >/dev/null <"$root/host-renewal.json"; then
       renewed=1
       break
     fi
@@ -478,7 +493,7 @@ done
 [[ $renewed -eq 1 ]] || fail "no renewal appeared for the three remaining contacts (last: $root/host-renewal.json)"
 # A renewal the worker only learns after a CLI load or a restart is a finding for the evaluation of
 # this log; the contacts' outcome below is what fails the run.
-echo "E2E-RENEWAL started=$fallback"
+echo "E2E-RENEWAL started=$fallback online=$(jq -r 'if (.code_renewal.pending_names | index("online")) != null then "pending" else "taken-over" end' "$root/host-renewal.json")"
 
 new_identity="$(as "$se_bin" "$host" share identity --json)"
 printf '%s\n' "$new_identity" >"$root/host-identity-renewed.json"
@@ -525,13 +540,17 @@ list_denied "$se_bin" "$gone" "${endpoint_of[gone]}" gone-final
 
 # The search is meaningful only if the old lookup id is found where the new one would be: the
 # removed device's own profile still names the host's old data.
-grep -rqF "$old_lookup" "$gone" || fail "positive control failed: the removed device's profile does not hold the old lookup id"
-if grep -rqF "$new_lookup" "$gone"; then
-  fail "the removed device holds the host's new lookup id"
-fi
-if grep -rqF "$new_code" "$gone"; then
-  fail "the removed device holds the host's new direct code"
-fi
+# grep status: 0 found, 1 not found, 2 unreadable; only the status 1 proves the absence.
+profile_mentions() {
+  grep -rqsF -- "$1" "$2/data" "$2/config" "$2/cache"
+}
+profile_mentions "$old_lookup" "$gone" || fail "positive control failed: the removed device's profile does not hold the old lookup id"
+absent=0
+profile_mentions "$new_lookup" "$gone" || absent=$?
+[[ $absent -eq 1 ]] || fail "the removed device holds the host's new lookup id (or its profile is unreadable, grep status $absent)"
+absent=0
+profile_mentions "$new_code" "$gone" || absent=$?
+[[ $absent -eq 1 ]] || fail "the removed device holds the host's new direct code (or its profile is unreadable, grep status $absent)"
 final_status="$(host_status)"
 jq -e '(.code_renewal.pending_names | index("gone")) == null' >/dev/null <<<"$final_status" \
   || fail "the removed device is listed as pending"
