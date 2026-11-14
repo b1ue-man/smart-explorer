@@ -268,7 +268,12 @@ Android-Hosts mit eingeschalteter Bedienungshilfe (sie läuft im eigenen Prozess
 den Rest der App im Hintergrund nicht wach). Ein Android-Host nimmt keine Tastenereignisse
 an; die Systemtasten Zurück, Home, Übersicht, Benachrichtigungen, Schnelleinstellungen, Sperren
 und Ausschaltmenü gehen. Ohne grafische Sitzung auf dem Gerät gibt es kein Bild
-(`no_display`). Der Relay-Server verwirft Pakete, wenn die Warteschlange eines Ziels voll ist
+(`no_display`). Im Quellstand vom 2026-11-14 (noch nicht veröffentlicht) zeichnet der Betrachter den
+Zeiger des Gastgebers selbst über das Bild, wenn der Gastgeber das kann (Linux unter X11, Windows mit
+Graphics Capture ab Windows 10 Version 2004); beim Steuern liegt er an der eigenen Mausposition, sodass
+nur ein Zeiger zu sehen ist. Unter Wayland und bei jedem Gastgeber älterer Fassung steht der Zeiger
+weiter im Bild (Einzelheiten: [`docs/oberflaechen/bildschirm.md`](docs/oberflaechen/bildschirm.md)).
+`se screen bench` gibt in diesem Stand zusätzlich Stationszeiten (`stages_ms`) aus. Der Relay-Server verwirft Pakete, wenn die Warteschlange eines Ziels voll ist
 (512 Pakete oder 1 MiB); Smart Explorer begrenzt Bildpakete über den Relay-Pfad auf 768 KiB
 (Einzelheiten in [`docs/SHARE_SERVER.md`](docs/SHARE_SERVER.md)).
 
@@ -979,8 +984,12 @@ erste Wahl für Dateiaufgaben vor dessen eingebauten Datei-Werkzeugen und
 Shell-Dateibefehlen. Claude Code lädt die Datei-Tools dafür vorab, ohne
 Tool-Suche. `se exec @label[:/ordner] -- befehl` führt Befehle auch im
 Terminal über die SSH-Anmeldung einer gespeicherten SFTP-Verbindung aus.
-Eine kompatible laufende MCP-Sitzung behält ihre Generation und ihre Tools.
-Neue Fähigkeiten stehen nach einem tatsächlichen MCP-Neustart bereit.
+Seit 0.5.197 überdauert die Verbindung eines Agenten ein Update: Der vom Agenten
+gestartete `se-mcp-launcher` hält die Verbindung, startet die aktualisierte
+Laufzeit und meldet eine geänderte Werkzeugliste; ein Aufruf, der genau während
+des Wechsels lief, endet mit einem Fehler und wird nicht wiederholt. Eine Sitzung
+über einen Starter bis 0.5.196 endet beim nächsten Update noch einmal. Die
+Server-Anweisungen bleiben bis zu einer neuen Sitzung die der ersten Laufzeit.
 `se plugin status --json` zeigt Generation, Profilkonflikte und erforderliches
 Neuverbinden. Details: [`docs/AI_AGENT_PLUGIN.md`](docs/AI_AGENT_PLUGIN.md).
 
@@ -1163,17 +1172,7 @@ Danach aktualisiert sich `se` selbst mit `se update` (siehe
 legt dafür `update_source.txt` neben `se` an, falls dort noch keine liegt; eine
 vorhandene Update-Quelle einer Desktop-Installation bleibt unverändert.
 
-**Optionaler Zugriff auf den Anmeldebildschirm:** Der Release enthält
-`install-login-service.ps1` für Windows und `install-login-service.sh` für Linux.
-Der Windows-Installer legt das PowerShell-Skript zusätzlich neben `se.exe` ab.
-Beide Skripte sind auch als einzelne Dateien auf der
-[Releases-Seite](https://github.com/b1ue-man/smart-explorer/releases) verfügbar.
-Wähle Skript, App-Payload und SHA-256 aus derselben Releaseversion. Die normale
-App-Installation richtet keinen privilegierten Login-Dienst ein. Der ausdrückliche
-Administrationsschritt benötigt unter Windows Administratorrechte und unter Linux
-root; Rechte- und Netzwerkdateien entstehen zuvor mit `se login provision`.
-Installationsvertrag und Plattformgrenzen stehen in
-[`docs/RELEASING.md`](docs/RELEASING.md#optional-login-services).
+**Zugriff auf den Anmeldebildschirm:** Wer für ein Gerät „Bildschirm steuern: Erlauben“ gibt, erhält den Zugriff auf den Anmeldebildschirm dieses Geräts ohne zusätzlichen Befehl. Der Hintergrunddienst richtet den Login-Dienst dafür selbst ein und aktualisiert ihn je Version (E21). Die Auslösung durch das Bildschirmrecht ist im Arbeitsbaum verdrahtet (E42; Suite und Release stehen aus, TODO SELF-SETUP). Das Ziel der Maschinenanmeldung kommt über die gekoppelte Verbindung (E43); eine Betriebssystem-Freigabe für RDP und Login fragt einmal (E44). Der Skriptweg bleibt als Alternative: Der Release enthält `install-login-service.ps1` (Windows) und `install-login-service.sh` (Linux). Wähle Skript, App-Payload und SHA-256 aus derselben Releaseversion. Installationsvertrag: [`docs/RELEASING.md`](docs/RELEASING.md#optional-login-services).
 
 **Windows-Grundinstallation:** Die Smart-Explorer-Basis bleibt ohne Admin und
 ohne Setup-Zwang nutzbar. Die optionale systemweite Dokany-Laufzeit für echte
@@ -1250,7 +1249,7 @@ verfügbare Version (mit `--json` maschinenlesbar) und ändert nichts;
 `se update` installiert eine neuere Version. Fehlt eine Update-Quelle, sagt `se`
 das und nennt `se update --source <Feed-URL oder Ordner>` — das ist dieselbe
 Einstellung wie das UPDATE-Feld der App; gespeichert wird sie nur, wenn der Feed
-antwortet.
+antwortet. Lief vor dem Update ein Hintergrund-Worker, startet `se update` einer Terminalinstallation danach einen Worker der neuen Version (Ausgabe `replaced`); lief keiner, startet keiner (`not_running`) (E24). Der Altpfad (`legacy_launcher`) verweigert unsignierte `http://`-Feeds mit `legacy_http_unsigned_refused`; signierte `http://`-Feeds und unsignierte `https://`-Feeds bleiben erlaubt (E25).
 
 - **Nur-Terminal-Installation** (`--cli-only`): `se` lädt `se` und den
   MCP-Starter des Feeds, prüft ihre SHA-256 und bereitet eine unveränderliche

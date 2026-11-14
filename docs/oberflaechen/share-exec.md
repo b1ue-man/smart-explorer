@@ -85,6 +85,7 @@ Abkürzungen: `N/` = `native/crates/`, `A/` = `android/app/src/main/java/app/sma
 | Reihenfolge der Freigaben | – | „Nach oben/unten“ (`share_exports_ui.rs:94-99`) | – | Lücke: CLI, Android |
 | Gespeicherte Verbindungen freigeben | `se share export connections` | `N/gui/src/app/core/share_connections_ui.rs` | `A/ui/share/ShareConnectionDialog.kt` | – |
 | Auffindbar machen, Angebote, Stoppen | `se share discoverable` (`N/cli/src/cli/share/discoverable.rs:49-61`) | `share_discovery_publish_ui.rs` | `ShareDeviceCard.kt:96`, `ShareScreen.kt` | – |
+| Erneuerung nach fünf falschen PIN-Versuchen (E49): Hinweis und neue PIN, 30-Sekunden-Pause mit Restzeit, „Nicht erneuern“ | `se share discoverable list` und `se share status` (Zeilen `hint`, `pin`, `renewal … due_in=…`; JSON `renewals` bzw. `discoverable_renewals`), Abbruch mit `se share discoverable stop [ERSETZTES-ANGEBOT\|--all]` (`N/cli/src/cli/share/discoverable_stop.rs`); MCP über `se` | `share_discovery_publish_ui.rs` (`renewal_notice_ui`, `waiting_renewal_ui`, Knopf „Nicht erneuern“) | `ShareDeviceCard.kt` (`RenewedOfferNotice`, `RenewalWaitingNotice` mit „Nicht erneuern“); `share.status` `discovery.renewalWaiting` | – |
 | Geräte/Räume entdecken und per PIN verbinden | `se share discoverable` (Verbinden im Terminal) | `N/gui/src/app/core/share_discovery_ui.rs` | `A/ui/share/ShareConnectDialog.kt` | – |
 | LAN-Erkennung ein/aus | `se share lan presence` (`N/cli/src/cli/share/lan.rs:22`) | `N/gui/src/app/core/share_lan_ui.rs:32-45` | nur Anzeige `lanPresence` (`N/mobile/src/mobile/os/shared/domains/share_status.rs:301-313`) | Lücke: Android |
 | Internet teilen (ohne Router) | `se share lan uplink` (`lan.rs:24-50`) | `N/gui/src/app/core/share_lan_uplink_ui.rs` | – | Ausnahme: Android-Apps können keine Internetfreigabe einrichten (kein Root, keine Netzwerkkonfiguration) |
@@ -368,3 +369,17 @@ Grenzen: Der Kontakt des abgelehnten Geräts zeigt den Grund in der Karte „Zug
   Namensliste. Höchstens vier Übergänge laufen gleichzeitig; eine weitere Erneuerung wartet.
   Die bisherigen Texte „Freigaben pausieren, bis sie erneut bestätigt sind; ihr Exec wird ausgeschaltet“ gelten nicht mehr.
 - **Dienste und Räume:** siehe `fernzugriff.md`, Abschnitt „Stand 2026-11-07: Maschinenanmeldung, Dienste, Räume“.
+
+## Stand 2026-11-14: Exec mit Terminal als interaktive Sitzung (Quellstand, nicht gebaut, nicht veröffentlicht)
+
+Plan `docs/plaene/2026-11-14-verbindungen-je-zweck/plan.md` (E3). Ein Exec-Auftrag, dessen Start ein Terminal
+enthält (`ExecStart.terminal`, aus dem Quelltext `share/core/exec_server_presence.rs`; ein Beispiel ist `se shell`), zählt im Präsenzregister als
+interaktiv, solange er läuft, auf beiden Seiten: auf dem Client am `retainer` der Client-Aufgabe
+(`N/engine/src/share/core/node_routes.rs`) und auf dem Gastgeber ab dem Start des Auftrags in `serve_job`
+(`N/engine/src/share/core/exec_server_presence.rs`; vor dem Start, also während der Zugangsprüfung und der
+Rückfrage an den Gastgebernutzer, zählt der Auftrag noch nicht). Der Eintrag endet mit dem Ende des Auftrags,
+einem Fehler, dem Abbruch und der Panik-Abwicklung. Solange er besteht, ziehen sich alle Dateiübertragungen
+dieses Geräts nach der Warteschlangenverzögerung zurück (`docs/TRANSFER_ENGINE.md`, Abschnitt vom 2026-11-14).
+Die Exec-Verbindung hat das Profil `Exec` (Cubic, Sendebündel 10/20). Ein Auftrag ohne Terminal zählt nicht.
+Es gibt keine Einstellung; das Verhalten ist auf allen Oberflächen gleich, die einen Terminalauftrag
+starten.

@@ -96,7 +96,7 @@ and fails. Loopback listeners also permit plaintext for a TLS reverse proxy.
 With TLS configured, public plaintext connections remain disabled unless
 explicitly allowed. TLS failures never trigger a plaintext retry.
 
-New clients negotiate `key_login_v1`. Before registration the server sends a
+New clients negotiate `key_login_v1` (in German documentation „Schlüsselnachweis“: no account, no login, no user step; the protocol name stays unchanged). Before registration the server sends a
 fresh 16-byte nonce; the client signs a domain-separated digest of the nonce,
 device ID and public key with its Iroh key. The same ten-second registration
 deadline covers TLS, WebSocket upgrade, Hello and challenge response. Device
@@ -109,8 +109,8 @@ New Direct watchers present an HMAC-derived relation proof against the owner's
 stored hash. New Room members see only the partition with the same proof.
 These proofs reveal neither the relation secret nor a way to derive it. Older
 clients can use unbound entries and participate in mixed rooms, but cannot
-take over proven bindings. Compatibility mode allows legacy watchers without
-proofs and legacy room members across partitions.
+take over proven bindings. Compatibility mode allows legacy room members across
+partitions. A legacy client without key login publishes no Direct presence and watches only unbound Direct lookups (E60, see below).
 
 Key login is the default since 2026-11-07 (decision E18 in
 `docs/plaene/2026-11-07-sicherheit-direktweg/entscheidungen.md`). The server refuses a
@@ -123,10 +123,30 @@ app receives the text "this server requires key login; update Smart Explorer".
 changes nothing. Given together with `--allow-legacy-clients`, startup fails
 because the two options exclude each other.
 
+Compatibility mode, decision E60 (2026-11-14): a client without key login publishes no Direct
+presence, not even for an unbound lookup (`direct_presence.rs`, `publish`: the refusal comes before
+any content check). Such a client watches only unbound Direct lookups; a watch on a bound lookup is
+refused before the client is registered as a watcher (`direct_presence.rs`, `watch`; `state.rs`,
+`watcher_admitted`). It reaches no bound lookup on any request path either (S15): a legacy request
+(`In::RequestDirect`, `request_legacy`), a legacy decision (`In::DirectAccessAccepted`,
+`decision_legacy`), a signed request with or without the legacy bridge (`In::SubmitDirectRequest`,
+`route_request`) and a signed decision receipt (`In::SubmitDirectDecisionReceipt`,
+`route_decision_receipt`, routed by the target's device id) for a bound lookup are refused with the
+same text as a publication (`direct_presence.rs`, `admit_legacy_route`) and forward nothing; an
+unbound lookup stays reachable (mixed operation). The two signed paths of a lookup's owner
+(`In::SubmitDirectRequestReceipt`, `In::SubmitDirectDecision`) need `require_owner`, and only a
+client with key login owns a lookup (`publish_admit`). A client without key login cannot register
+with a device id that is bound to a key (`state.rs`, `RegistrationError::DeviceBound`), so messages
+routed by device id do not reach it under a proven device's id. The startup message of the
+compatibility mode (`main.rs`) says so:
+clients without key login are admitted for unbound lookups only, publish no Direct presence and
+reach no bound lookup. Status: implemented in the working tree, not yet confirmed by the remote
+suite.
+
 `--state-file` keeps key bindings across restarts with atomic replacement and
 restrictive creation permissions on Unix. Full binding tables refuse new owners
 instead of expiring or evicting existing ones. Save failures refuse the new
-registration/publication. Without a state file ownership is memory-only and
+registration/publication. A registration is confirmed only when its generation is on disk; the snapshot is taken under the lock and written outside it, and a direct publication writes its binding outside the lock in the same way before its entry becomes visible (`direct_presence.rs`, `publish`). Without a state file ownership is memory-only and
 startup warns that restart protection is unavailable.
 
 ## QUIC Address Discovery (QAD)
@@ -142,6 +162,26 @@ configuration. `se-share-server` answers it on the relay's IP at that port:
 - QAD needs TLS 1.3, so it exists only with `--tls-cert`/`--tls-key` (or the
   `SE_SHARE_TLS_*` variables). A relay without TLS logs "QAD needs TLS" and runs
   without QAD. Clients do not probe `http://` relays at all.
+- QAD answers for the host, not for one relay URL. A server address without a path
+  gives a client two relay candidates on one host, the next port (this relay) and
+  the origin (a reverse proxy; with `se-share-server` alone the signaling port).
+  Such candidates start without QAD, so only their HTTPS probe (`/ping`), which a
+  real relay answers, decides the home relay; the candidate that becomes the
+  connected home relay then gets QAD (`endpoint_routes.rs`, `relay_mode`,
+  `grant_qad_to_home_relay`). With QAD for both, the signaling port measured the
+  same latency, became the home relay and the published relay address, and the
+  device was unreachable over the relay until a later net report chose again
+  (connection drops reported on 2026-11-14 with v0.5.196).
+- A relay candidate becomes the home relay only through a latency measurement, and
+  besides QAD the one measurement is the HTTPS probe: `GET /ping` answered with a
+  2xx status (Iroh 1.3.0 `net_report/reportgen.rs`, `run_https_probe`). The
+  signaling port of `se-share-server` gives such a request no HTTP answer
+  (observed on 2026-11-14 with the v0.5.196 server), so this probe never measures
+  it. An origin behind a reverse proxy must not answer `/ping` with a 2xx
+  status unless it forwards that request to this relay: an origin that does (for
+  example a site that answers every path with its start page) is measured like a
+  relay and can become the home relay although it serves none. This rule is
+  independent of QAD and unchanged since before v0.5.196 (review 2026-11-14).
 - Behind a reverse proxy the proxy forwards TCP only, so QAD on UDP 7842 is not
   served through it. The operator then
   - opens UDP 7842 in the firewall and in any cloud security group to the server
@@ -283,10 +323,12 @@ Startup limits are positive integer environment values:
 
 Connections that have not registered yet use their own pool of handshake slots
 (`SE_SHARE_MAX_HANDSHAKES*`). When the pool is full, the server evicts the oldest
-waiting connection of that pool; a registered connection keeps its slot. A device
+waiting connection of that pool; a reserved place (from registration until the connection is released) is never evicted. A newcomer is refused only when its full scope contains reserved places alone; an evicted client reconnects and gets a place. A device
 key binds at most 64 device IDs and 4,096 Direct lookups (fixed limits, not
-configurable). New bindings from one source start with a burst of 512 and then
-continue at one per 10 seconds; the refusals read "too many new device bindings
+configurable). The key limit is checked before a device ID is bound; a registration refused for the key binds and stores nothing. New bindings from one source start with a burst of 512 and then
+continue at one per 10 seconds; the `/64` sources of one IPv6 `/56` additionally share one such
+budget (burst 512, then one per 10 seconds), and a binding takes a token only when both budgets
+have one; the refusals read "too many new device bindings
 from this network; retry later", "too many device ids for this device key" and
 "too many key bindings for this device key". `--state-file` stores a new owner
 immediately and fail-closed; a renewed access hash is written at most every 60
@@ -643,8 +685,9 @@ accepted devices keep their access: the old lookup ID and secret stay valid for
 each accepted or reconfirm-pending grant until that device has taken the new data
 over an authenticated, pinned session and this device has stored its confirmation.
 A device that does not announce the renewal keeps working on the old data, and its
-entry stays marked as legacy. At most four renewals run at a time; a fifth waits
-for one to end. The state lives in `share_code_renewal.json`.
+entry stays marked as legacy. At most 63 renewals run at a time (the server accepts 64
+published Direct IDs per client, and the current ID takes one of them); a further one
+waits for one to end. The state lives in `share_code_renewal.json`.
 
 During a transition the device publishes a second, reduced lookup ID (relay URL and
 node ID, no address list) next to the new one, within the existing limit of 64

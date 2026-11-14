@@ -948,6 +948,51 @@ den Weg selbst, das Lauf-Protokoll nennt je Seite „… Ordner gleich ihrem Ord
   Punktnamen und die Erstellzeit (`meta-list-v1`: `ListDirMeta`, `StatMeta`); ältere Gegenstellen wie
   bisher.
 
+## Stand 2026-11-14: Dateiverbindungen unter Rückzug, Priorität und Sendebündel (Quellstand, nicht gebaut, nicht veröffentlicht)
+
+Plan: `docs/plaene/2026-11-14-verbindungen-je-zweck/plan.md` (C2 E1 bis E5, C7, D2 P1 bis P3). Alle Aussagen
+stammen aus dem Quelltext; die Messungen M1 bis M4 und M9 laufen erst in der Remote-Suite, bis dahin sind
+die Zahlenwerte unten Schätzungen und als solche gekennzeichnet. Architekturübersicht:
+`docs/ARCHITEKTUR.md`, Abschnitt „Verbindungen je Zweck“.
+
+- **Profil `Files`.** Jede Dateiverbindung (erste Verbindung, Zusatzverbindungen nach KP5a, Räume,
+  Reparatur) wird beim Aufbau mit dem Profil `Files` (`share/core/transport_purpose.rs`) konfiguriert;
+  eingehende Verbindungen binden ihren Zweck nach dem Handshake aus der ALPN `share-fs/3`. Es unterscheidet
+  sich von den Endpunktwerten in genau zwei Punkten: dem Regler „Cubic mit Rückzug“ und den Sendebündeln
+  40 Segmente und 80 Datagramme (statt 10 und 20). Der Messschalter `SE_SHARE_QUIC_CC` wirkt unverändert auf
+  den inneren Regler: Cubic, mit `bbr3` BBRv3.
+- **Rückzug (E2).** Läuft im Prozess irgendeine interaktive Sitzung (Bildschirm als Gastgeber oder
+  Betrachter, Exec mit Terminal, TCP-Tunnel), begrenzen alle Dateiverbindungen ihr Fenster so, dass die
+  zusätzliche Warteschlangenverzögerung beim Ziel T bleibt (Vorgabe 25 ms, Schätzung; M2 wählt unter 15, 25
+  und 50 ms). Ohne interaktive Sitzung ist der Regler durchlässig, die Übertragung ist genau so schnell wie
+  mit Cubic allein; M2 prüft das mit der Variante `bulk_rueckzug` gegen `bulk_cubic` (Ziel: mindestens 95 %
+  des Durchsatzes von Cubic). Unter Rückzug wächst das Fenster höchstens um 1 MSS je Rundlaufzeit (RFC 6817);
+  eine neue Verbindung während einer Sitzung beginnt damit nicht mit dem Cubic-Anlauf. Eine Übertragung
+  verhungert dabei nicht: die Untergrenze ist 2 MSS je Rundlaufzeit, und die Messung M2 vergleicht den
+  Durchsatz der Rückzug-Varianten mit `cubic` (Zeilen `rueckzug_t15`, `rueckzug_t25`, `rueckzug_t50`,
+  Feld `bulk_mib_s`).
+- **Weitere Verbindungen (KP5a) unter Präsenz.** Solange eine interaktive Sitzung läuft, öffnet
+  `share/core/node_bulk.rs` keine weitere Zusatzverbindung und tastet die erste nicht mehr ab. Der
+  Schwellwert `DRIVER_RATE` (250 MiB/s) für das Öffnen einer weiteren Verbindung bleibt bestehen; ob er
+  gemessen stimmt, entscheidet M1 (Varianten mit einer und vier Verbindungen, mit und ohne große Bündel),
+  danach setzt der Manager den Wert (Nachsteuerung N1 im Plan).
+- **Priorität der Datenströme (E4).** Alle Ströme, die Dateidaten tragen, haben Priorität −1, alle Ströme ohne
+  Dateidaten der Verbindung 0: beim Client jeder Strom aus `open_transfer_stream_until` (Lesen, Schreiben,
+  Pakete), beim Gastgeber die Antworten auf `Read`, `ReadAt` und `GetBatch` (`share/core/server_priority.rs`).
+  Listen, Stat-, Kapazitäts-, Lösch- und Umbenennungsanfragen, Statusantworten auf Schreibzugriffe und die
+  Anfrage `Capabilities` laufen mit 0 und überholen damit die Datenströme (M3 misst die Listenzeit mit
+  und ohne Priorität). Ein Gerät der Fassung v0.5.196 setzt keine Prioritäten; dann gilt Priorität 0 wie
+  bisher und es ist keine Aushandlung nötig.
+- **Sendebündel (E5).** Das Bündel (40 Segmente, 80 Datagramme) gilt für `Files` und `Tcp` und für die
+  Richtung, in der die Verbindung gewählt wurde; eine eingehende Verbindung bekommt es nur, wenn die ALPN
+  im ersten Initial-Paket lesbar ist (`docs/GOTCHAS.md`, Abschnitt „Connections per purpose“). Der Wert ist
+  eine Schätzung nach den Messungen von noq PR #636 und #645; M1 und M9 (ACK-Frequenz) entscheiden.
+  Vendor-Patch und Relay-Grenze: `vendor/SMART_EXPLORER_QUIC_PROFILES.md`.
+- **Messausgabe.** Die Zeilen von M1 und M9 tragen `gezaehlt_mib`, die Größe eines gezählten Laufs: 1024
+  im Regelfall, kleiner, wenn die Aufwärmrate drei Läufe zu 1 GiB nicht in die 60 Sekunden je Fall passen
+  ließe. Die S4-Messung des Vorauftrags (`s4_messung_*`) hat denselben Aufbau ohne diese Anpassung und
+  braucht rund 55 MiB/s, um eine Zeile auszugeben.
+
 ## Was erhalten bleibt
 
 Stufen + Veröffentlichen ohne Ersetzen, keine halbfertigen Dateien unter dem Zielnamen,

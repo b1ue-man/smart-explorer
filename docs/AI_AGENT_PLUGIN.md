@@ -63,7 +63,13 @@ und damit keinen MCP-Server.
 - **Andere Clients** (Cursor, VS Code, Gemini CLI/Antigravity, OpenCode, Claude Desktop):
   `se plugin config generic|vscode|opencode` ausgeben und in deren MCP-Konfiguration eintragen.
 
-Ein normales Runtimeupdate ändert den registrierten Starterpfad nicht.
+Jedes Release bringt einen eigenen Starter (`mcp/launchers/<SHA-256>/`); nach
+dem Update lässt der Manifest nur noch dessen Hash zu (`allowed_launcher_hashes`),
+und die Profilauffrischung trägt ihn in die eigenen Profile ein. Ein vom Host
+gestarteter Starter startet seit 0.5.197 keine Runtime selbst: Er hält die
+stdio-Verbindung und startet den bestätigten Starter der Installation als Kind
+(Abschnitt „Updates“). Ein noch eingetragener älterer Starter ab 0.5.197 erreicht
+so ebenfalls die bestätigte Generation.
 Neue Serverprozesse wählen die bestätigte Generation der Installation.
 Die Basisskill-Datei bleibt versionsunabhängig; der laufende MCP-Server liefert
 seine maßgeblichen Anweisungen und seinen Werkzeugkatalog. Die Migration eines
@@ -383,10 +389,88 @@ außerhalb eines tatsächlichen Runtimeprozesses `null`.
 `new_process_for_new_capabilities` zeigt neue Fähigkeiten bei weiterhin
 kompatibler alter Sitzung. `busy` allein verlangt kein Neuverbinden.
 
-Neue Fähigkeiten benötigen einen tatsächlichen MCP-Prozessstart über den Host.
-Smart Explorer erzwingt keinen Austausch innerhalb einer laufenden
-stdio-Verbindung und startet bei einer administrativen Installation keinen
+Seit 0.5.197 überdauert die Verbindung eines Agenten ein Update (Ursache U2 der
+Pluginprüfung vom 2026-11-14). Grund: Claude Code startet einen
+stdio-Server, dessen Prozess in einer interaktiven Sitzung endet, nicht selbst
+neu, sondern markiert ihn als fehlgeschlagen; erst „Reconnect“ in `/mcp` startet
+ihn wieder (nur `claude -p` und das Agent SDK starten ihn beim nächsten
+Werkzeugaufruf neu). Für Codex dokumentiert die Herstellerseite keinen Neustart.
+Quelle: <https://code.claude.com/docs/en/mcp>, Abschnitte „Stdio servers that
+exit or fail to start“ und „Dynamic tool updates“, sowie
+<https://learn.chatgpt.com/docs/extend/mcp>, beide abgerufen 2026-11-14.
+
+Ablauf: Der vom Host gestartete Starter (`se-mcp-launcher mcp`) ist ein Relais
+(`native/crates/engine/src/mcp_launcher/os/shared/relay.rs`, Buchführung in
+`core/relay.rs`). Er startet den bestätigten Starter der Installation mit
+`SE_MCP_RELAY_CHILD=1` als Kind; dieses Kind lässt wie bisher genau eine
+Runtime zu (`launch`). Kind und Runtime lesen die Marke je einmal und entfernen
+sie aus ihrer Umgebung (`relay::relayed`, für die Runtime in
+`admit_cli_process`); das Kind gibt sie seiner Runtime ausdrücklich mit. Kein
+Prozess, den eine Runtime startet (Hintergrunddienst, Auftrag, ein darin
+gestartetes Agentenprogramm), erbt sie; sonst hielte sich dessen eingetragener
+Starter für das Kind eines Relais und endete wieder mit seiner Runtime. Das
+Relais reicht die zeilengetrennten JSON-RPC-Nachrichten
+unverändert durch und merkt sich nur offene Anfragen, Anfragen der Runtime an den
+Host und den `initialize`-Handshake. Das Ende der Runtime ist das Ende ihrer
+Ausgabe oder, wenn ein von ihr gestarteter Prozess diese Leitung noch hält, das
+Ende ihres Prozesses (die schon geschriebenen Zeilen werden dann noch 2 Sekunden
+gelesen). Endet die Runtime, während der Host verbunden bleibt (Update-Stopp
+oder Prozessende):
+- erhält jede an sie gegangene, unbeantwortete Anfrage eine Fehlerantwort (Code
+  -32001); sie wird nicht erneut gesendet, denn ihre Wirkung ist unbekannt;
+- wartet das Relais, solange die Installation `update_in_progress`,
+  `update_recovery_required` oder eine belegte Steuersperre meldet (höchstens
+  15 Minuten); in dieser Zeit beantwortet es `ping` selbst, andere Anfragen
+  warten und gehen an die nächste Runtime; zieht der Host eine wartende Anfrage
+  zurück (`notifications/cancelled` mit ihrer Kennung), erreicht weder sie noch
+  die Rücknahme eine Runtime;
+- startet es den dann bestätigten Starter, gibt dessen Runtime das
+  aufgezeichnete `initialize` unter eigener ID (die Antwort darauf verbraucht
+  das Relais) und `notifications/initialized` und meldet dem Host
+  `notifications/tools/list_changed`; der Server erklärt dafür
+  `tools.listChanged`, und das Relais sendet die Meldung nur, wenn eine an den
+  Host weitergeleitete Antwort diese Fähigkeit erklärt hat (nach einem Rollback
+  auf eine Runtime bis 0.5.196 also nicht). Ein Host im zustandslosen
+  Lebenszyklus 2026-07-28 braucht keine Wiederholung;
+- beendet es die Verbindung nach fünf schnellen Fehlstarts in Folge (Runtime
+  ohne Antwort in weniger als 10 Sekunden beendet, Wartezeit 1, 2, 4 und 8
+  Sekunden) oder, bevor der Host eine Anfrage gestellt hat, schon nach dem ersten.
+
+Grenzen: Claude Code holt nach `list_changed` die Werkzeugliste neu; ob Codex
+`list_changed` auswertet, belegt dessen Dokumentation nicht, er behält dann die
+alte Liste, Aufrufe gehen an die neue Runtime. Die Server-Anweisungen
+(`instructions`) liest ein Host nur beim Handshake; sie bleiben bis zu einer
+neuen Sitzung die der ersten Runtime. Ein Starter bis 0.5.196 kennt das Relais
+nicht; eine Sitzung, die einer dieser Starter trägt, endet beim nächsten Update
+wie bisher. Smart Explorer startet bei einer administrativen Installation keinen
 Benutzer-MCP-Server mit Administratorrechten.
+
+Profilauffrischung nach dem Update: Ein erhöhter Helfer (Administrator, unter
+Linux root) schreibt keine Profile eines anderen Kontos. Gehört die Installation
+dem Konto, unter dem der erhöhte Helfer läuft (root aktualisiert die
+Installation von root), frischt er sie seit 0.5.197 auf
+(`mcp_launcher::profile_refresh_deferred`); vorher blieb der Eintrag auf dem
+nicht mehr zugelassenen Starter, und kein MCP-Start über ihn erreichte die
+aufgeschobene Auffrischung. Die Auffrischung schreibt unter das Heimverzeichnis
+der Umgebung des Helfers; deshalb müssen auch dieses Verzeichnis und jede
+gesetzte Abweichung davon (`CODEX_HOME`, `CLAUDE_CONFIG_DIR`, `XDG_DATA_HOME`)
+dem Konto des Helfers gehören. Läuft root mit dem Heimverzeichnis eines anderen
+Kontos (etwa `sudo -E`), bleibt die Auffrischung aufgeschoben. Unter Windows
+bleibt ein erhöhter Helfer bei der Aufschiebung.
+
+Daemon außerhalb der Installation (Befund U1): Läuft der Hintergrunddienst des
+Kontos aus einer App-Kopie, neben der kein `mcp/` liegt (etwa ein von Hand nach
+`/usr/local/bin` kopiertes `smart_explorer`), antwortet er seit 0.5.197 auf
+`RuntimeHello` mit `daemon_outside_installation`; die Runtime wiederholt das
+Hello mit dem Stamm ihrer Installation (`installation_root`), und der Daemon
+lässt sie nach denselben Prüfungen wie `Installation::load` (Verzeichnisbaum,
+Besitzer, Installations-ID, `permits`) zu; der genannte Stamm muss ein absoluter
+Pfad sein, und eine Installation mit `mcp/uninstall.v1.json` lehnt er ab, wie
+ein Daemon aus der Installation es tut. Jede gebundene Anfrage trägt diesen
+Stamm, die Betriebssperre (`operations.lock`) nimmt der Daemon in dieser
+Installation. Bis 0.5.196 lehnte ein solcher Daemon jedes Hello mit
+`reconnect_required` ab; jeder Werkzeugaufruf, der den Hintergrunddienst
+braucht, scheiterte dann mit `reconnect_required: reconnect_required`.
 
 Die reguläre Windows-Deinstallation entfernt die nachgewiesen eigenen
 Runtimekopien, Launcher, Manifeste und Installationsmetadaten, bevor sie die

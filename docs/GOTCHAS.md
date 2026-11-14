@@ -1222,6 +1222,114 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
   registered, NetworkManager owning its bus name, `dnsmasq` present, polkit)
   is probed and reported as `nicht verfuegbar: <Grund>`; never assume it.
 
+## Connections per purpose (source state 2026-11-14, not built, not released)
+
+Plan `docs/plaene/2026-11-14-verbindungen-je-zweck/plan.md`; architecture summary in
+`docs/ARCHITEKTUR.md`, section „Verbindungen je Zweck“. Every statement below comes from reading the
+source and the vendored crates; no run has confirmed it yet (measurements M1 to M9 and the tests
+wait for the remote suite).
+
+- **`accept_with` replaces the endpoint's server configuration, so `node.rs` no longer decides which
+  ALPNs are accepted.** Every incoming connection is accepted with `Incoming::accept_with` and a
+  configuration of its own (`share/core/node_accept.rs`); the accepted protocols are
+  `transport_purpose::accepted_alpns()` (same list and order as the builder in `node.rs`). A new ALPN
+  must be added to `accepted_alpns()` and to `TransportPurpose::for_alpn`, or the endpoint refuses it
+  although the builder lists it. The purpose of an incoming connection is bound late: the profile of
+  the send batches comes from the ALPN of the first Initial packet when it is readable, the congestion
+  controller reads its purpose from a slot (`PurposeSlot`) that the accept path sets right after the
+  handshake (`connection.alpn()`). Until then the controller behaves like plain Cubic.
+- **Send batches above 10 segments must stay below the relay's 64 KiB frame, header included.** The
+  relay checks the encoded frame (1 byte type, 32 bytes endpoint id, 1 byte ECN, 2 bytes segment size,
+  then the datagrams: `vendor/iroh-relay-1.0.0/src/protos/relay.rs`). The vendored noq-proto therefore
+  caps a configured value at `(64 KiB − 36) / largest possible segment` and never below the old 10
+  (`vendor/noq-proto-1.3.0/src/config/transport.rs`, `RELAY_FRAME_OVERHEAD`). With 40 segments and a
+  1452-byte limit the cap does nothing; with a limit of 1456 bytes it gives 44. An incoming connection
+  gets the large batches (40/80) only if its ALPN is readable in the first Initial packet; a ClientHello
+  with a post-quantum key share often spans two packets, and then that direction runs with 10/20
+  (`transport_purpose.rs`, `for_incoming`). M1 measures only the dialing side.
+- **noq and iroh test targets do not build in the workspace.** `native/Cargo.lock` does not resolve
+  the dev-dependencies of the `[patch]` path crates (the entries `noq` and `noq-proto` list no `rcgen`,
+  `assert_matches` or `proptest`; `test-strategy` and `directories-next` are missing completely;
+  static finding, no run), so `cargo test -p noq-proto` cannot run. The tests inside the vendor crates
+  (`smart_explorer_transmit_batch_tests`) are rebase evidence only; the workspace checks the same
+  oracles through the public API in `engine/src/share/core/verbindungen_vendor_task_tests.rs`.
+- **LEDBAT needs the flight size from before the acknowledgement.** RFC 6817 §2.4.2 caps the window at
+  `flightsize + 1 MSS`, with `flightsize` = data outstanding before the ACK arrived. noq's
+  `Controller::on_end_acks` reports the bytes still in flight after it, so `yield_controller.rs` adds
+  the bytes acknowledged since the last report back. Without that a full window shrinks by
+  `(k − 1)` MSS at every acknowledgement of `k` packets and never grows again: a transfer would stay at
+  2 MSS per round trip for as long as an interactive session runs.
+- **While the yielding window is in force, the inner Cubic must not grow.** noq reports the connection
+  as window-limited, and Cubic would keep growing a window it never uses; when the interactive session
+  ends, that window would be sent as one burst. The yielding controller passes the acknowledgements to
+  the inner controller as application-limited and sends no `on_cwnd_limited` while its own window is
+  smaller. Decrease above the target is multiplicative once per round trip (LEDBAT++ §4.2); RFC 6817's
+  additive decrease would need thousands of round trips to drain a Cubic window of a fast link. The delay
+  samples are round-trip times (`now − sent`), not one-way delays: queueing on the return path counts too.
+- **A presence guard belongs to the future that covers every exit.** `InteractiveGuard` counts down in
+  `Drop`, so it is held by the task or future that ends with the session (exec host: `serve_job`; exec
+  client: the `retainer` of the client task; screen host: the pipeline actor; screen viewer: the writer
+  task; TCP: `both` of the pump), not by a helper that returns earlier. Screen sessions follow
+  `SET_MODE` (a preview raised to a full view counts from then on). `probe` sessions and the metadata
+  channel never count. All TCP tunnels count, so an RDP or remote-access tunnel makes every file
+  transfer of the process yield (by design; measurement M2).
+- **The route monitor sleeps while nobody asks.** Its actor wakes on transport path changes and when a
+  session waits for a route (`wait_application_route`). The old TCP pump woke it with every operation;
+  the new pump asks once per second (`OBSERVE_EVERY`) per copy direction, otherwise a running tunnel
+  would deliver no route samples and the order of validated paths would go stale. The idle limit (120
+  seconds) counts active time only: a route pause stops the clock. Do not add a timer or a subscription
+  per read or write.
+- **Pointer overlay: three things are easy to lose.** (1) `SET_MODE` with a source starts a new host
+  process; the new process blends the pointer into the picture again, so the session re-sends the
+  viewer's wish to the new source (`CursorLink::wanted`) and sends a position „nothing to draw“ first, or
+  the viewer shows a frozen pointer next to the one in the picture. (2) Windows creates the capture
+  session only with the first picture; a wish that arrives earlier must be kept by the host process and
+  applied when the capture can separate the pointer (`WorkerCursor::wanted`), not answered with `false`.
+  (3) Switching `IsCursorCaptureEnabled` on a still screen produces no new picture [assumption, no run];
+  `WgcCapture` therefore restarts its capture session if no picture came 150 ms after the switch.
+  Windows before 10 version 2004 has no such switch (`IGraphicsCaptureSession2`): the pointer stays in the
+  picture and the overlay is not offered.
+- **Pointer shape ids restart at 1 in every host process.** The desktop viewer keeps its texture per
+  shape, not per id (`Arc::ptr_eq` in `gui/src/app/core/screen_cursor.rs`); after a source change a
+  texture kept by id shows the old shape. Pointer points that invert the background (the text cursor)
+  come out solid white from a comparison on black and on white and vanish on a white document;
+  `screen/core/cursor_mask.rs` turns them black and their transparent neighbours white.
+- **The host process and the daemon must come from one installation.** The host process of a screen
+  session is the desktop program next to `se` (`host_worker_client.rs`, `desktop_program`). An older host
+  process does not know `CaptureRequest::CursorOverlay`; reading it fails, and the session ends with
+  `capture_failed` (derived from the source, not run). Updating only one of the two programs is
+  therefore not safe.
+- **A Wayland host still shows two pointers while the viewer steers.** The portal embeds the pointer
+  (`CursorMode::Embedded`, `screen/os/linux_os/portal_source_binding.rs`), and there is no PipeWire
+  metadata reader yet, so the host sends no overlay. The same is true for Graphics Capture before
+  Windows 10 version 2004 and for every host of v0.5.196 or older. The fix is in `bildkette.md`
+  (B-16, package BK8a).
+- **`se screen bench` against a device cannot split the host stations.** The viewer sees the capture time
+  stamp of each frame and its own clock only, so the report carries `decode` and `capture_to_arrival`
+  (capture, encode, send and network together, corrected by the `PING`/`PONG` clock offset). `capture`,
+  `encode`, `send` and `network` need a new field on the wire; `--local` fills `capture`, `encode` and
+  `decode`, and the measurement test M6 (`paar`) fills all five. `stages_ms` is left out of the JSON
+  while it is empty.
+- **The signaling port of `se-share-server` became the home relay through QAD (v0.5.196, connection
+  drops).** QAD answers for the host, not for one relay URL. A server address without a path gives two
+  candidates on one host (the next port, the origin), and with QAD on both the signaling port measured
+  the same latency, won the home relay choice and was published as the relay address. Candidates of one
+  host now start without QAD (`endpoint_routes.rs`, `deferred_qad`); only the HTTPS probe `GET /ping` with a
+  2xx answer measures them, and the one that becomes the connected home relay then gets QAD
+  (`grant_qad_to_home_relay`). A peer of v0.5.196 without this fix still publishes the signaling port
+  from time to time; `session::endpoint_addr` adds our own relay aliases to every dial, so with the fix
+  the real relay is always among the candidates. An origin behind a reverse proxy that answers `/ping`
+  with 2xx without being a relay is measured like a relay (`docs/SHARE_SERVER.md`).
+- **Measurement tests run in the suite only.** `verbindungen_messung_task_*` are `#[ignore]` tests that
+  print one line per case; they fail only when they cannot measure (60 s limit per case, no data in the
+  window, no picture). M1 and M9 pick the size of a counted run from the warm-up rate
+  (`counted_bytes`, 1 GiB or the largest multiple of 64 MiB that lets three runs fit in 42 s) and print
+  it as `gezaehlt_mib`; a runner slower than about 55 MiB/s would otherwise end without a line. The
+  `Mobile profile handshake on lo` group needs the `sch_netem` module, which hosted runners carry in
+  `linux-modules-extra-<release>`: its first command loads it or installs the package
+  (`NETEM_MODULE` in `native/test-crates-task.py`). The M2 picture stream (60 frames/s of 16 666 bytes)
+  and the M3 list request (9 bytes out, 4096 back) stand in for the real ones.
+
 ## Windows shell integration
 
 - **You cannot replace other apps' Open/Save dialogs system-wide.** No registered

@@ -337,6 +337,67 @@ group fails with the reason when one is missing). The other parts: `windows-gnu`
 workspace). A change needs no suite of its own for such tests; a suite of its own remains only
 where the test needs real servers, containers, a driver, a device or a desktop session.
 
+Since 2026-11-08 (plan `docs/plaene/2026-11-08-offene-punkte/`) `part=suite` also starts two more
+parts. `s4` measures the share of encryption in a Share transfer (the ignored tests
+`s4_messung_task_*`, decision E30) on `ubuntu-24.04`, `ubuntu-24.04-arm` and `windows-2025`, one
+job per platform; it builds with `--profile speed`, because the development profile measures the
+QUIC code several times slower, prints exactly one line `S4-MESSUNG` and fails with the line
+`S4-BEFUND` when encryption takes 10 % or more of a transfer. `e2e` (Linux) builds `se` and the
+share server and runs `native/test-share-code-renewal-e2e.sh`: the Direct-code renewal across real
+processes with an online contact, an offline contact that returns, the published v0.5.195 `se`
+without `code_renewal_v1` (downloaded from that GitHub Release, SHA-256 checked) and a removed
+contact. Part `workspace` additionally expects every test of that batch by name exactly once
+(`BATCH_TESTS`), runs the ignored login-records test as root on Linux with a system account the
+suite creates and removes again, and has two more Windows groups (a vault folder behind an NTFS
+junction; a vault folder by its 8.3 short name, with 8.3 names switched on for the volume of the
+temp folder). Part `servers` expects the share-server tests of that batch by name, and part
+`android` reads the JUnit reports and expects every method of `RdpDiagnosticsTaskTest` to pass.
+
+Since 2026-11-14 (plan `docs/plaene/2026-11-14-verbindungen-je-zweck/`, package P8) the suite also
+covers the batch "Verbindungen je Zweck". Part `workspace` expects the 67 new Rust tests of its
+packages, of the repair of the connection drops and of the two reviews by name exactly once, on the
+operating system they run on (`VERBINDUNGEN_TESTS`; two X11 tests on Linux only), and part `android`
+expects the four methods of `ScreenCursorEventTest`. Part `verbindungen` measures M1 to M4 and M6 to
+M9 of the plan (C7) with the ignored tests `verbindungen_messung_task_*` of the engine, built with
+`--profile speed` like `s4` and run alone on their runner, one job per platform on `ubuntu-24.04`,
+`ubuntu-24.04-arm` and `windows-2025` (job timeout 150 min). M1 (send bundle 10/20 and 40/80, one and
+four connections), M9 (ACK frequency), M4 (TCP tunnel) and M6 (stations of the picture path at 1080p,
+1440p and 2160p) run on every platform unshaped. On `ubuntu-24.04` the suite shapes the loopback with
+netem (the first command loads `sch_netem`, installing `linux-modules-extra` when needed) for M2
+(picture next to a transfer, Cubic against the yielding controller with T of 15, 25 and 50 ms), M3
+(list requests during a transfer) and M8 (20 short Exec jobs) on the links `lan` and `wan`, and for
+M7 (picture under loss) on `loss` and `loss1`; the links `lan`, `wan` and `loss` come unchanged from
+`PROFILES` in `native/rdt_task/speed_net.py`, `loss1` (1 % loss, 40 ms round trip, 100 Mbit/s) from
+`native/crates_task_verbindungen.py`. The H.264 cases use Cisco's OpenH264 from the pinned file of
+`openh264_pins.rs` (downloaded without redirects, size and SHA-256 checked, handed to the tests as
+`SE_SCREEN_TASK_OPENH264`) on Linux x86_64 and Windows; Windows measures them a second time with the
+Media Foundation software coder; Linux ARM64 has no pin, its H.264 lines say `nicht_verfuegbar`
+(B2 stays `unbekannt` there). Every case prints one line `VERBINDUNGEN-MESSUNG fall=<M> plattform=<os-arch>
+variante=<name> profil=<link> <size>=<value> ...`; the job writes them to the step summary and to
+`verbindungen-messung.txt` in the uploaded logs. A measurement that did not measure (a test that
+failed, a line missing or twice, `status=fehler`, a line of another link or platform) fails the job;
+a value beyond a threshold never does by itself. The evaluation prints `VERBINDUNGEN-BEFUND` lines.
+The acceptances fail the job when not passed, so that the next run of the same suite confirms the
+corrected value (plan D4, N1): E2 on `lan` and `wan` (picture latency p95 with a transfer at most
+50 ms above the picture alone, the transfer alone under the yielding controller at least 95 % of
+Cubic, and, fixed by P8 after the transport review, the transfer next to a picture at least 25 % of
+Cubic's with the picture, so that it is not starved) for the T the build ships (`DEFAULT_TARGET`,
+read from the source); E4 (list p95 with priority -1 at most 10 % above priority 0, a P8 assumption
+for the noise); E7 (tunnel at least 20 % faster, Linux x86_64). The conditions never fail it: B1 and B4
+(M7, with the round trips of the links; the line has no p99, so B1 may say `unbekannt`), B2 (encoding
+p95 at 1440p above 16.7 ms, decoding above 8 ms), B3 (setup at least 50 % of the time to the first
+byte on `wan`), B5 (ACK frequency at least 10 % faster), the control connection (list p95 above 2 x
+round trip + 50 ms), X-TCP (four connections below 2.5 Gbit/s on Linux x86_64) and MAX_EXTRA (four
+connections at least 15 % faster than one), each with the numbers it rests on. The job
+`verbindungen-gesamt` runs after the three platform jobs, reads their line files and prints what
+needs every platform: `DRIVER_RATE` (80 % of the single-connection rate of the slowest platform), the
+send bundle, MAX_EXTRA and B5 on at least two platforms; it fails when a platform delivered no lines.
+Thresholds the plan names are the plan's (C7, E2, E5 to E7, E10, E11, C5); three are this package's
+assumptions (the 25 % and the 10 % above, and that the send bundle 40/80 counts as a gain when it is not
+slower than 10/20, which E5 leaves to M1). The measurements M2 and M3 use stand-ins for the picture
+stream (60 frames of 16 666 bytes a second) and the list request (9 bytes out, 4096 back), the
+Exec measurement M8 leaves out hello, session proof and rights (`docs/TODO.md` VERB-MESSUNG).
+
 On 2026-11-07 the evaluation of the suites (TODO TESTS-BEWERTUNG) removed eight suites whose
 tests crates-task already ran: `fixes-2026-10-27`, `ideal`, `lan-cleanup`, `media-navigation`,
 `mount-recovery-cache`, `share-write-mount-save`, `sync-transparency` and `windows-direct`, with
@@ -952,6 +1013,8 @@ same compiler flags on every machine.
 
 ## Optional login services
 
+**Stand 2026-11-14 (E21 bis E23, E42 bis E45; im Arbeitsbaum, Suite und Release offen):** Der Hintergrunddienst richtet den Login-Dienst bei „Bildschirm steuern: Erlauben“ ein, aktualisiert ihn je Version und entfernt ihn nach dem letzten Entzug. Die steuernden Geräte werden dafür über `configuration_runtime.rs` eingespeist (E42). Das Ziel der Maschinenanmeldung kommt über die gekoppelte Share-Sitzung (E43). Eine Betriebssystem-Freigabe für den RDP- und den Login-Schritt fragt einmal; `se rdp host-setup --system <step>` darf mehrfach angegeben werden (E44). Der Windows-Grant-Kanal erhält einen zufälligen Pipe-Namen (E45). Die Skripte und `se login provision` bleiben als Alternative bestehen. Keine Änderung führt einen neuen manuellen Schritt ein.
+
 The exact publication map includes `install-login-service.ps1` and
 `install-login-service.sh` from `native/`. The Windows setup also embeds the
 PowerShell script next to `se.exe`; the release candidate check extracts it and
@@ -962,7 +1025,7 @@ administration assets, not additional auto-update payloads.
 Linux publication bytes agree independently of `core.autocrlf`.
 
 Neither the regular Windows setup nor `install-linux.sh` installs or enables the
-privileged login services. An administrator explicitly downloads the script and
+privileged login services. On the script path (the alternative to the self-setup), an administrator explicitly downloads the script and
 the platform app payload from the same `vX.Y.Z` release and checks the app against
 its matching `.sha256` file. `se login provision DIRECTORY --grants-file FILE
 --network-file FILE` creates the private configuration bundle and prints the
@@ -980,8 +1043,11 @@ identity to preserve the machine pin. This is a separate administrative
 transaction; the per-user app updater does not replace these services.
 
 An installed gateway whose `gateway-network.json` stores `use_default_relays: true`
-(written by an earlier `se login provision`) binds no relays. The gateway reads no
-user profile, so it keeps direct paths only until its network file is replaced.
+(written by an earlier `se login provision`) binds no relays until its network file is written
+again. With a steering device (E42, `configuration_runtime.rs`) the service writes the file for
+the account that holds the grant (E21, status in TODO SEC-UPDATE-GATEWAY-RELAYS). The gateway
+reads no user profile; without that write it keeps direct paths only until the file is replaced
+with `provision-network` below.
 To refresh only the network configuration, run on the machine whose `se` profile
 holds the configured Share server:
 
@@ -1288,6 +1354,8 @@ The update **source** the app points at (Sidebar → UPDATE or
 - a **local folder / `\\server\share`** path.
 
 ## How the app self-updates (`updater.rs`)
+
+Terminal installations (`se update`, E24): a background worker of the installed version that was running before the update is restarted in the new version (output `replaced`); without a running worker none is started (`not_running`). The legacy launcher refuses unsigned `http://` feeds with `legacy_http_unsigned_refused` (E25); signed `http://` feeds and unsigned `https://` feeds keep their checks.
 
 On every launch (and on "Jetzt prüfen"):
 1. resolve the update source; fetch the feed's `version.txt`;

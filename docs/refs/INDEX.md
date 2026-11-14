@@ -2,6 +2,24 @@
 
 Lokal gesicherte API-/Lib-Syntax (Abrufdatum im Kopf jeder Datei).
 
+- [Transport zwischen zwei Programmen (VPN, QUIC-Durchsatz, Bild- und Tunnelwege)](../plaene/2026-11-14-verbindungen-je-zweck/recherche.md):
+  Referenzuntersuchung des Auftrags „Verbindungen je Zweck“; kein Entscheid (der steht in `plan.md` C im selben
+  Ordner). Inhalt: VPN im Programm und mit Systemadapter (WireGuard-Whitepaper, boringtun, GotaTun, onetun,
+  Tailscale), Kosten der Verschlüsselung gegenüber QUIC/TLS 1.3, Durchsatztechniken von QUIC-Implementierungen
+  (Sendebündel, GSO/GRO, ACK-Frequenz; noq PR #636 und #645), Transport für Bildschirm- und Spielestreaming,
+  Portweiterleitung über QUIC oder VPN, Vergleich je Komponente; Kennzeichen [M]/[B]/[F]/[A]/[U], Quellen Q01 bis
+  Q58 mit URL, Version und Lesestatus in Abschnitt 10; abgerufen 2026-11-14. Stand: Quellen am Tag der Abfrage, Aussagen aus
+  `uebertragung-tempo-2026-10.md` und `bildschirm-streaming-2026-10-17.md` sind mit dem dortigen Abrufdatum übernommen.
+- [Bildkette: Weg eines Bildes, Referenzen, Potential, Arbeitsplan](../plaene/2026-11-14-verbindungen-je-zweck/bildkette.md):
+  Bestand des Weges eines Bildes je Gastgeber (Windows, Linux X11, Linux Wayland, Android) und Betrachter
+  (Desktop wgpu und glow, Android), Herkunft der „2 Mäuse“, tatsächlich benutzte Kodierer und Dekodierer;
+  Referenzuntersuchung Sunshine/Moonlight (Quelltext, Tag `v2026.914.233613` beziehungsweise `v6.2.0`), Parsec, Steam Remote Play,
+  Shadow (öffentliche Angaben), RustDesk 1.5.3, WebRTC-Dienste, Microsoft RDP (AVC444), Herstellerschnittstellen
+  (NVENC SDK 13.0, AMD AMF, VA-API, Vulkan Video, Media Foundation); Potential je Station und Entscheidungsplan
+  mit Paketen BK0 bis BK12 (nächster Batch, `docs/TODO.md` VERB-BILDKETTE). Quellen R01 bis R16 mit Version und
+  Abrufdatum in Abschnitt 2.0; Parsec- und Shadow-Hilfeseiten nur aus Suchauszügen (HTTP 403); Stand 2026-11-14,
+  nichts davon in der Umsetzung, Messwerte der Stationen fehlen.
+
 - [Lückenschließung se shell/se exec](luecken-2026-10-16.md): rustls 0.23.46 Schlüsselaustausch-API und
   Hybrid-Muster, ml-kem 0.3.2 über russh 0.64.1, iroh 1.0.1 → 1.3.0, russh 0.61.2 → 0.64.1 (Brüche,
   Anmeldung, Agent), OpenSSH known_hosts und `PerSourcePenalties`, systemd-creds(1), Android Keystore;
