@@ -4,7 +4,7 @@ use std::io::BufRead;
 
 use zeroize::Zeroize;
 
-use crate::share::{OwnDiscoveryOffer, RoomProfile};
+use crate::share::{OwnDiscoveryOffer, RoomProfile, WaitingRenewal};
 
 const PIN_PROMPT: &str = "PIN (input hidden): ";
 const PROMPT_WITHOUT_TERMINAL: &str =
@@ -175,6 +175,21 @@ fn room_list(rooms: &[RoomProfile]) -> String {
 
 /// Offers to stop: all, the one named by id or unique id prefix, or the only
 /// running offer when no selector is given.
+/// The replaced offers whose renewal in its pause a stop cancels (E49):
+/// every one without a selection and with `--all`, and exactly the one a
+/// selection names by its full id.
+pub(super) fn renewal_stops(
+    renewals: &[WaitingRenewal],
+    selector: Option<&str>,
+    all: bool,
+) -> Vec<String> {
+    renewals
+        .iter()
+        .filter(|renewal| all || selector.is_none_or(|selector| renewal.replaces == selector))
+        .map(|renewal| renewal.replaces.clone())
+        .collect()
+}
+
 pub(super) fn select_offers(
     offers: &[OwnDiscoveryOffer],
     selector: Option<&str>,
@@ -272,6 +287,8 @@ mod tests {
             discoverable_until: 1_900_000_000,
             published: true,
             rights: None,
+            renewed_after_failed_attempts: false,
+            pin: None,
         }
     }
 
@@ -373,3 +390,7 @@ mod tests {
         assert!(select_offers(&[], None, false).unwrap().is_empty());
     }
 }
+
+#[cfg(test)]
+#[path = "discoverable_renewal_task_tests.rs"]
+mod renewal_task_tests;

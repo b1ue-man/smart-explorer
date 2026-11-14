@@ -73,6 +73,11 @@ impl DecodeState {
                     };
                     let _ = (self.send)(&ViewerFrame::ControlRequest(take));
                 }
+                // The overlay pointer (P6): a new connection starts without it.
+                self.shared.update(|info| info.cursor = Default::default());
+                if self.shared.wants_cursor() {
+                    let _ = (self.send)(&ViewerFrame::CursorOverlay(true));
+                }
             }
             StreamEvent::Host(frame) => {
                 if let Some(result) =
@@ -200,6 +205,12 @@ impl DecodeState {
                 info.blocked = state.blocked;
             }),
             HostFrame::Stats(stats) => self.shared.update(|info| info.stats = Some(stats)),
+            HostFrame::CursorShape(shape) => {
+                self.shared.update(|info| info.cursor.set_shape(shape))
+            }
+            HostFrame::CursorPosition(position) => self
+                .shared
+                .update(|info| info.cursor.set_position(position)),
             HostFrame::Families(_)
             | HostFrame::FamilySnapshot(_)
             | HostFrame::FamilyOperation(_)

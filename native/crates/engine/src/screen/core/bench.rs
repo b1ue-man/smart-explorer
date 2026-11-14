@@ -8,7 +8,9 @@
 //! `PING`/`PONG`; a broken picture stream counts as a disruption until the
 //! next good frame (recovery time). `static_psnr_db` compares the static
 //! text block with the reference picture; JSON `null` means infinite, the
-//! block arrived identical (always so for the lossless `tiles`).
+//! block arrived identical (always so for the lossless `tiles`). `stages_ms`
+//! gives p50 and p95 per station of the picture path (`bench_stages.rs`).
+use std::collections::BTreeMap;
 use std::io;
 use std::time::{Duration, Instant};
 
@@ -28,6 +30,10 @@ use super::wire_binary::{
     FrameRecord, GopHeader, StreamKind, FLAG_KEYFRAME, FLAG_MORE, RECORD_HEADER_BYTES,
 };
 use super::wire_control::{HostFrame, KeyframeReason, KeyframeRequest, ViewerFrame};
+
+#[path = "bench_stages.rs"]
+pub mod stages;
+pub use stages::{StageMs, StageSamples};
 
 pub const DEFAULT_SIZE: FrameSize = FrameSize::new(1280, 720);
 pub const DEFAULT_FPS: u16 = 30;
@@ -123,6 +129,10 @@ pub struct BenchReport {
     pub corrupt_frames: u64,
     /// Lowest PSNR of the static text block; `null` = infinite.
     pub static_psnr_db: Option<f64>,
+    /// p50 and p95 in milliseconds per station of the picture path; left
+    /// out of the JSON while empty (P7).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub stages_ms: BTreeMap<String, StageMs>,
 }
 
 /// The measurements of one bench run.
@@ -142,6 +152,7 @@ struct Measure {
     psnr_at: Option<Instant>,
     codec: Option<CodecKind>,
     decoder: String,
+    stages: StageSamples,
 }
 
 impl Measure {
@@ -161,6 +172,7 @@ impl Measure {
             psnr_at: None,
             codec: None,
             decoder: "tiles".into(),
+            stages: StageSamples::default(),
         }
     }
 
@@ -231,6 +243,7 @@ impl Measure {
             recoveries: self.recovery.recoveries_ms(),
             corrupt_frames: self.corrupt,
             static_psnr_db: self.psnr.filter(|value| value.is_finite()),
+            stages_ms: self.stages.summary(),
         })
     }
 }
@@ -346,6 +359,15 @@ fn picture(
     let bytes = (record.payload.len() + RECORD_HEADER_BYTES) as u64;
     measure.received.record(received_us, bytes);
     measure.highest_frame = measure.highest_frame.max(record.frame_id);
+    if !record.has_more() {
+        // Capture to the last record's arrival; the host stations are not
+        // separable on this side of the wire.
+        if let Some(latency) = measure.clock.latency_us(record.capture_ts_us, received_us) {
+            measure
+                .stages
+                .record_us(stages::CAPTURE_TO_ARRIVAL, latency);
+        }
+    }
     let fresh = decoding
         .as_ref()
         .is_none_or(|(current, _)| current.gop_id < header.gop_id);
@@ -366,8 +388,10 @@ fn picture(
     if current.gop_id != header.gop_id {
         return None;
     }
+    let decode_started = Instant::now();
     match active.decode(&record) {
         Ok(true) => {
+            measure.stages.record_since(stages::DECODE, decode_started);
             measure.decoder = active.name();
             let shown_us = now_us();
             measure.shown(active.picture(), &record, shown_us, false);
@@ -425,8 +449,14 @@ pub fn run_local(options: BenchOptions, codecs: &CodecRegistry) -> io::Result<Be
     while Instant::now() < end {
         frame_id += 1;
         let capture_ts_us = now_us();
+        let capture_started = Instant::now();
         render(frame_id, &mut image)?;
+        measure
+            .stages
+            .record_since(stages::CAPTURE, capture_started);
+        let encode_started = Instant::now();
         let encoded = encoder.encode(&image, frame_id == 1, target_bps)?;
+        measure.stages.record_since(stages::ENCODE, encode_started);
         let count = encoded.records.len();
         for (index, payload) in encoded.records.into_iter().enumerate() {
             let mut flags = if encoded.keyframe { FLAG_KEYFRAME } else { 0 };
@@ -441,7 +471,10 @@ pub fn run_local(options: BenchOptions, codecs: &CodecRegistry) -> io::Result<Be
                 payload,
             };
             measure.received.record(now_us(), bytes);
-            if decoder.decode(&record)? {
+            let decode_started = Instant::now();
+            let decoded = decoder.decode(&record)?;
+            if decoded {
+                measure.stages.record_since(stages::DECODE, decode_started);
                 measure.shown(decoder.picture(), &record, now_us(), true);
             }
         }

@@ -6,10 +6,10 @@
 //! (`VIEWER_UNI_STREAMS`), waits through `APPROVAL_PENDING` without a time
 //! limit (C5) and then runs four tasks: the writer of the control stream,
 //! the reader of the host's frames, the acceptor of the picture streams
-//! (which acknowledges every frame) and the `PING` clock once a second. A
-//! device without the screen ALPN ends the TLS handshake with alert 120,
-//! seen as transport code `0x178`: `screen_unsupported` (NR N2); so does a
-//! host of another protocol version.
+//! (which acknowledges every frame) and the `PING` clock once a second
+//! (`viewer_client_tasks.rs`). A device without the screen ALPN ends the TLS
+//! handshake with alert 120, seen as transport code `0x178`:
+//! `screen_unsupported` (NR N2); so does a host of another protocol version.
 use std::io;
 use std::time::Duration;
 
@@ -17,19 +17,20 @@ use iroh::endpoint::{Connection, VarInt};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
-use super::gop_stream::{
-    accept_picture_streams_admitted, now_us, picture_channel, PictureEvent, VIEWER_UNI_STREAMS,
-};
+use super::gop_stream::{PictureEvent, VIEWER_UNI_STREAMS};
 use super::negotiate::CodecOffer;
 use super::pixel_convert::FrameSize;
 use super::window_list::SourceId;
 use super::wire::supports_version;
-use super::wire_control::{recv_host_frame, send_viewer_frame, HostFrame, Ping, ViewerFrame};
+use super::wire_control::{HostFrame, ViewerFrame};
 use super::wire_hello::{
     recv_hello_reply, recv_server_hello, send_client_hello, HelloReply, ScreenClientHello,
     ScreenErrorCode, ScreenHelloOk, ScreenServerHello, SessionMode,
 };
 use crate::share::access_grant::Capability;
+
+#[path = "viewer_client_tasks.rs"]
+mod tasks;
 
 /// Time for the host's `SERVER_HELLO` (the Exec handshake allows the same).
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(20);
@@ -137,6 +138,8 @@ pub struct ViewerSession {
     pub memory: super::frame_memory::MemoryHold,
     /// Local allocation evidence; never serialized as a remote frame contract.
     pub local_limits: Option<super::frame_budget::FrameLimits>,
+    /// The viewer asked for the pointer overlay (P6); a reconnect asks again.
+    pub cursor_wish: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl ViewerSession {
@@ -360,110 +363,37 @@ async fn handshake_for(
             })
             .transpose()?
     };
-    let (control, mut outgoing) = mpsc::channel::<ViewerFrame>(CONTROL_QUEUE);
-    let (host_tx, host) = mpsc::channel(CONTROL_QUEUE);
-    let (pictures_tx, pictures) = picture_channel();
-    let icons_supported = accepted.icon_version == Some(super::app_icon::ICON_VERSION);
-    let pending_icons = std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::<
-        super::app_icon::IconRequest,
-        std::time::Instant,
-    >::new()));
-    let sent_icons = pending_icons.clone();
-    let hidden = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let reported_hidden = hidden.clone();
-    let writer = tokio::spawn(async move {
-        while let Some(frame) = outgoing.recv().await {
-            if let ViewerFrame::Visibility(report) = &frame {
-                reported_hidden.store(report.hidden(), std::sync::atomic::Ordering::Release);
-            }
-            if let ViewerFrame::IconRequest(request) = &frame {
-                if !icons_supported {
-                    continue;
-                }
-                let admitted = {
-                    let mut pending = sent_icons
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner);
-                    pending.retain(|_, at| at.elapsed() < Duration::from_secs(30));
-                    if pending.len() >= 8 || pending.contains_key(request) {
-                        false
-                    } else {
-                        pending.insert(request.clone(), std::time::Instant::now());
-                        true
-                    }
-                };
-                if !admitted {
-                    continue;
-                }
-            }
-            if send_viewer_frame(&mut send, &frame).await.is_err() {
-                return;
-            }
-        }
-        let _ = send.finish();
-    });
-    let reader = tokio::spawn(async move {
-        loop {
-            let frame = recv_host_frame(&mut recv).await;
-            if let Ok(HostFrame::IconReply(response)) = &frame {
-                // At most eight correlated icon replies may enter the host-frame queue.
-                if pending_icons
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .remove(&response.request)
-                    .is_none()
-                {
-                    continue;
-                }
-            }
-            let failed = frame.is_err();
-            if host_tx.send(frame).await.is_err() || failed {
-                return;
-            }
-        }
-    });
-    let streams = if probe {
-        drop(pictures_tx);
-        tokio::spawn(async {})
-    } else {
-        tokio::spawn(accept_picture_streams_admitted(
-            connection.clone(),
-            pictures_tx,
-            control.clone(),
-            accepted.frame_contract,
-            memory.clone(),
+    let presence = super::gop_stream::PicturePresence::viewer(hello.mode, metadata);
+    let cursor_wish = std::sync::Arc::<std::sync::atomic::AtomicBool>::default();
+    let tasks::Running {
+        control,
+        host,
+        pictures,
+        tasks,
+    } = tasks::spawn(
+        tasks::Start {
+            connection: connection.clone(),
+            send,
+            recv,
+            probe,
+            presence,
+            memory: memory.clone(),
             local_limits,
-        ))
-    };
-    let pings = control.clone();
-    let clock = tokio::spawn(async move {
-        let mut sequence = 0u64;
-        loop {
-            sequence += 1;
-            let ping = Ping {
-                sequence,
-                sent_us: now_us(),
-            };
-            if pings.send(ViewerFrame::Ping(ping)).await.is_err() {
-                return;
-            }
-            let interval = if hidden.load(std::sync::atomic::Ordering::Acquire) {
-                HIDDEN_PING_INTERVAL
-            } else {
-                PING_INTERVAL
-            };
-            tokio::time::sleep(interval).await;
-        }
-    });
+            cursor_overlay: super::cursor_overlay::negotiated(&server, hello.mode, metadata),
+            cursor_wish: cursor_wish.clone(),
+        },
+        &accepted,
+    );
     Ok(ViewerSession {
         connection,
         hello: accepted,
         control,
         host,
         pictures,
-        tasks: vec![writer, reader, streams, clock],
+        tasks,
         memory,
         local_limits,
+        cursor_wish,
     })
 }
 

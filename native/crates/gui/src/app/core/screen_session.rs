@@ -114,6 +114,8 @@ pub struct SessionInfo {
     /// How often the host accepted this session (a connection counts once).
     pub accepted: u32,
     pub pictures: u64,
+    /// The host's pointer for the overlay (plan 2026-11-14 P6).
+    pub cursor: crate::screen::core::cursor_overlay::CursorView,
 }
 
 impl SessionInfo {
@@ -140,6 +142,7 @@ impl SessionInfo {
             latency: LatencyWindow::default(),
             accepted: 0,
             pictures: 0,
+            cursor: Default::default(),
         }
     }
 
@@ -196,6 +199,12 @@ impl Shared {
 
     pub fn info(&self) -> MutexGuard<'_, SessionInfo> {
         lock(&self.info)
+    }
+
+    /// A full view asks the host for the pointer overlay (P6).
+    pub(super) fn wants_cursor(&self) -> bool {
+        let full = lock(&self.decoder_mode).mode == StreamMode::Full;
+        full && self.info().family.is_none()
     }
 
     /// The newest picture since the last call.

@@ -1,13 +1,12 @@
 //! The running part of one host session (SCR-M2, decisions C3, C5): after
 //! `HELLO_OK` the session loop takes the viewer's control frames from a
-//! reader task, lets the pipeline produce pictures at the agreed rate,
-//! reports `STATE` and `STATS` once a second and watches the stop signal of
-//! the registry (host user, rights change, end of the grant). Input passes
-//! only while this session holds the control; a released control lets go of
-//! every pressed key and button. At the end the viewer gets the `ERROR` (if
-//! any) and `STATE` `ended` with the reason, the access log gets
-//! `session_ended` with reason, duration and bytes, and the connection
-//! closes.
+//! reader task, lets the pipeline produce pictures at the agreed rate, sends
+//! the overlay pointer on when its source reports it (P6), reports `STATE`,
+//! `STATS` once a second and watches the stop signal of the registry. Input
+//! passes only while this session holds the control; a released control lets
+//! go of every pressed key and button. At the end the viewer gets the
+//! `ERROR` (if any) and `STATE` `ended` with the reason, the access log gets
+//! `session_ended` (reason, duration, bytes) and the connection closes.
 use std::io;
 use std::time::{Duration, Instant};
 
@@ -86,6 +85,7 @@ pub(super) struct Session<'a> {
     icons_supported: bool,
     metadata: MetadataRequests,
     family: family::FamilyState,
+    cursor: control::CursorLink,
 }
 
 /// How a session ended: the reason and the `ERROR` the viewer gets first.
@@ -133,6 +133,7 @@ impl<'a> Session<'a> {
             icons_supported,
             metadata: MetadataRequests::new(FRAME_QUEUE),
             family: family::FamilyState::new(families_supported, family_source),
+            cursor: Default::default(),
         }
     }
 
@@ -152,9 +153,8 @@ impl<'a> Session<'a> {
         let mut second = tokio::time::interval(Duration::from_secs(1));
         let mut heard = crate::share::route_protocol::active_now();
         // A capture tick that found the previous picture operation still
-        // running is made up as soon as that operation ends, instead of one
-        // tick later (which halved the rate of every operation longer than
-        // one tick and added up to one tick of delay).
+        // running is made up as soon as it ends, not one tick later (that
+        // halved the rate of every operation longer than one tick).
         let mut missed_tick = false;
         let ending: Ending = loop {
             tokio::select! {
@@ -182,8 +182,7 @@ impl<'a> Session<'a> {
                     }
                     self.metadata.advance(self.context, self.principal);
                 }
-                // A hidden viewer gets no pictures: no capture tick until it is
-                // visible again, unless an acknowledgement or input release waits.
+                // Hidden viewer: no capture tick, unless an acknowledgement or release waits.
                 _ = capture.tick(), if self.visible || self.visibility_ack_pending || self.input_release.is_some() => {
                     let started = self.pipeline.work_started();
                     if let Some(ending) = self.produce().await {
@@ -191,6 +190,11 @@ impl<'a> Session<'a> {
                     }
                     let after = self.pipeline.work_started();
                     missed_tick = tick_missed(started, after, self.pipeline.working());
+                }
+                _ = self.cursor.changed() => {
+                    if self.poll_cursor().await.is_err() {
+                        break self.unwritable();
+                    }
                 }
                 _ = self.pipeline.finished(), if missed_tick => {
                     missed_tick = false;
@@ -202,10 +206,8 @@ impl<'a> Session<'a> {
                     if crate::share::route_protocol::active_now().saturating_duration_since(heard) > VIEWER_SILENCE {
                         break LOST;
                     }
-                    // A hidden viewer shows neither statistics nor family
-                    // changes: no frame every second that wakes its device.
-                    // Its pings (every 5 s) keep the silence check above
-                    // fed; showing again resumes this at the next second.
+                    // A hidden viewer shows neither statistics nor family changes: no frame
+                    // every second that wakes its device (its pings keep the check above fed).
                     if self.visible && self.second().await.is_err() {
                         break self.unwritable();
                     }
@@ -396,6 +398,9 @@ impl<'a> Session<'a> {
     /// capture noticed that first (the timer of the node wakes up to a second
     /// after the end, the capture check at the end itself).
     fn failed(&self, failure: PipelineError) -> Ending {
+        if crate::screen::core::session_state::is_session_changed(&failure.error) {
+            return (EndReason::SessionChanged, None);
+        }
         if failure.error.kind() == io::ErrorKind::PermissionDenied {
             if let Some(reason) = *self.handle.stop_signal().borrow() {
                 return (reason, None);

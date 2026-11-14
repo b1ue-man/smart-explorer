@@ -1,4 +1,6 @@
 // Smart Explorer P28b/V3 patch (2026-10-25); see vendor/SMART_EXPLORER_ROUTE_POLICY.md.
+// Smart Explorer P1 patch (2026-11-14): send-batch limits read by noq; see
+// vendor/SMART_EXPLORER_QUIC_PROFILES.md.
 use std::{
     cmp,
     collections::{BTreeMap, VecDeque, btree_map},
@@ -1024,6 +1026,22 @@ impl Connection {
         }
 
         &mut path.data
+    }
+
+    /// Segment limit per transmit of this connection's transport configuration
+    ///
+    /// Smart Explorer P1 (2026-11-14): read by the noq connection driver in place of
+    /// its former constant; see [`TransportConfig::effective_max_transmit_segments`].
+    pub fn max_transmit_segments(&self) -> NonZeroUsize {
+        self.config.effective_max_transmit_segments()
+    }
+
+    /// Datagram limit per driver pass of this connection's transport configuration
+    ///
+    /// Smart Explorer P1 (2026-11-14): read by the noq connection driver in place of
+    /// its former constant; see [`TransportConfig::max_transmit_datagrams`].
+    pub fn max_transmit_datagrams(&self) -> NonZeroUsize {
+        self.config.effective_max_transmit_datagrams()
     }
 
     /// Returns packets to transmit

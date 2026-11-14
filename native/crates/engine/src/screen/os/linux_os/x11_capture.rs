@@ -32,7 +32,6 @@ use x11rb::protocol::xproto::{
     Atom, AtomEnum, ConnectionExt as _, ImageFormat, ImageOrder, MapState, Window,
 };
 use x11rb::protocol::ErrorKind;
-use x11rb::rust_connection::RustConnection;
 #[path = "x11_admission_stream.rs"]
 pub(super) mod admission_stream;
 use admission_stream::{AdmissionStream, CaptureConnection, Gate};
@@ -123,9 +122,10 @@ fn compositor_running<C: Connection>(conn: &C, atoms: &Atoms) -> bool {
             .is_some()
 }
 
-/// Looks at the server of `DISPLAY`; `None` without a server.
+/// Looks at the server of `DISPLAY` (or of the followed session, E23);
+/// `None` without a server.
 pub fn probe() -> Option<ServerFacts> {
-    let (conn, screen) = RustConnection::connect(None).ok()?;
+    let (conn, screen) = super::session_detect::active_session::x11::connect().ok()?;
     let atoms = Atoms::intern(&conn, screen).ok()?;
     Some(ServerFacts {
         shm: shm_usable(&conn),
@@ -225,6 +225,10 @@ impl X11Source {
         let shm = shm_usable(&conn);
         let compositor = compositor_running(&conn, &atoms);
         let cursor = x11_cursor::enable(&conn).is_ok();
+        if cursor {
+            // The pointer can leave the picture (overlay, P6).
+            crate::screen::core::cursor_overlay::worker().set_supported();
+        }
         let mut opened = Self {
             conn,
             gate,

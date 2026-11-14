@@ -14,6 +14,10 @@ pub struct RouteBudget {
     pub validation_ms: u64,
     pub direct_deadline_ms: u64,
     pub frozen_candidates: usize,
+    /// Candidates the candidate cap refused in the last observation before the
+    /// freeze; LAN paths are never refused. Absent (0) from older writers.
+    #[serde(default)]
+    pub dropped_candidates: usize,
 }
 
 pub fn milliseconds(value: Duration) -> u64 {
@@ -41,3 +45,22 @@ pub struct RouteDiagnostics {
     pub budget: RouteBudget,
     pub measurements: Vec<RouteMeasurement>,
 }
+
+// E30 (M15): the cost of the share encryption against the share throughput.
+#[cfg(test)]
+#[path = "s4_messung_support.rs"]
+mod s4_messung_support;
+
+#[cfg(test)]
+#[path = "s4_messung_task_tests.rs"]
+mod s4_messung_task_tests;
+
+// P7 (plan 2026-11-14, C7): the measurements M1 to M4, M8 and M9 of the
+// connections per purpose; their support holds the loopback link.
+#[cfg(test)]
+#[path = "verbindungen_messung_support.rs"]
+pub(crate) mod verbindungen_messung_support;
+
+#[cfg(test)]
+#[path = "verbindungen_messung_task_tests.rs"]
+mod verbindungen_messung_task_tests;

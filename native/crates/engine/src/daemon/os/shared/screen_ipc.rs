@@ -14,18 +14,18 @@ use tokio::sync::mpsc;
 
 use crate::daemon::ipc_host::ShareHost;
 use crate::daemon::ipc_protocol::screen::{
-    encode_relay_record, read_relay, write_relay, BenchRequest, ProbeReport, RelayEnd, RelayHello,
-    ScreenIpcReply, ScreenIpcRequest, StreamRequest, MAX_RELAY_VIEWER_BYTES, RELAY_BROKEN,
-    RELAY_CLOCK, RELAY_END, RELAY_HELLO, RELAY_HOST, RELAY_RECORD, RELAY_VIEWER, WATCH_WAIT_SECS,
+    encode_relay_record, read_relay, write_relay, BenchRequest, ProbeReport, ScreenIpcReply,
+    ScreenIpcRequest, StreamRequest, MAX_RELAY_VIEWER_BYTES, RELAY_BROKEN, RELAY_CLOCK, RELAY_HOST,
+    RELAY_RECORD, RELAY_VIEWER, WATCH_WAIT_SECS,
 };
 use crate::daemon::ipc_protocol::{write_response, IpcResponse};
 use crate::screen::core::bench::{self, BenchOptions};
-use crate::screen::core::gop_stream::{now_us, path_of, PictureEvent};
+use crate::screen::core::gop_stream::{now_us, PictureEvent};
 use crate::screen::core::metrics::ClockSync;
 use crate::screen::core::negotiate::{CodecOffer, CodecPreference};
 use crate::screen::core::registry::{SessionView, StopSelector};
+use crate::screen::core::session_state::EndReason;
 use crate::screen::core::viewer_client::{ViewerError, ViewerRequest, ViewerSession};
-use crate::screen::core::wire;
 use crate::screen::core::wire_control::{
     decode_viewer_frame, encode_host_frame, HostFrame, ViewerFrame,
 };
@@ -33,6 +33,9 @@ use crate::screen::core::wire_hello::{ScreenErrorCode, SessionMode};
 use crate::screen::os::session_memory::handshake;
 use crate::share::access_grant::CapabilityDecision;
 use crate::share::{PeerOpenTarget, ShareService};
+
+#[path = "screen_ipc_reconnect.rs"]
+mod reconnect;
 
 /// How long the worker tries to reach a device that is not online yet.
 const CONNECT_WAIT: Duration = Duration::from_secs(20);
@@ -302,6 +305,7 @@ impl ShareHost {
         let (out_tx, mut out_rx) = mpsc::channel::<(u8, Vec<u8>)>(RELAY_QUEUE);
         let (in_tx, in_rx) = mpsc::channel::<Option<ViewerFrame>>(64);
         let memory = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let expected_node = request.expected_node.clone();
         let viewer = ViewerRequest {
             mode: request.mode,
             source: request.source,
@@ -310,8 +314,14 @@ impl ShareHost {
             max_fps: request.max_fps,
             frame_capabilities: request.frame_capabilities,
         };
-        service.screen_runtime().spawn(relay_session(
+        let redial = reconnect::Redial {
+            service: service.clone(),
+            target: target.clone(),
+            expected_node,
+        };
+        service.screen_runtime().spawn(reconnect::relay_session(
             link,
+            redial,
             viewer,
             out_tx,
             in_rx,
@@ -382,68 +392,13 @@ fn relay_input(input: &mut TcpStream, frames: &mpsc::Sender<Option<ViewerFrame>>
     let _ = frames.blocking_send(None);
 }
 
-/// Runs the relayed session on the share runtime.
-async fn relay_session(
-    link: crate::share::node_screen::ScreenLink,
-    request: ViewerRequest,
-    out: mpsc::Sender<(u8, Vec<u8>)>,
-    mut input: mpsc::Receiver<Option<ViewerFrame>>,
-    metadata: bool,
-    memory: std::sync::Arc<std::sync::Mutex<crate::screen::core::frame_memory::MemoryHold>>,
-) {
-    let connection = link.connection.clone();
-    let pending_out = out.clone();
-    let build = |server: &_| link.client_hello(server, &request);
-    let announce = |capability| {
-        if let Ok(json) = wire::to_json(&RelayHello::Pending { capability }) {
-            let _ = pending_out.try_send((RELAY_HELLO, json));
-        }
-    };
-    let opened = if metadata {
-        crate::screen::core::viewer_client::handshake_metadata(connection, build, announce).await
-    } else {
-        handshake(connection, build, announce).await
-    };
-    let mut session = match opened {
-        Ok(session) => session,
-        Err(error) => {
-            end(&out, error.code(), Some(error.detail())).await;
-            return;
-        }
-    };
-    *memory
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = session.memory.clone();
-    let path = path_of(&session.connection).0.key().to_string();
-    let accepted = RelayHello::Accepted {
-        hello: session.hello.clone(),
-        path,
-        local_limits: session.local_limits,
-    };
-    if let Ok(json) = wire::to_json(&accepted) {
-        if out.send((RELAY_HELLO, json)).await.is_err() {
-            session.close();
-            return;
-        }
-    }
-    let ended = relay_loop(&mut session, &out, &mut input).await;
-    session.close();
-    let (code, detail) = ended;
-    end(&out, code, detail).await;
-}
-
-async fn end(out: &mpsc::Sender<(u8, Vec<u8>)>, code: String, detail: Option<String>) {
-    if let Ok(json) = wire::to_json(&RelayEnd { code, detail }) {
-        let _ = out.send((RELAY_END, json)).await;
-    }
-}
-
 /// Forwards host frames and pictures to the client and its control frames
 /// to the host; returns the end code and detail.
 async fn relay_loop(
     session: &mut ViewerSession,
     out: &mpsc::Sender<(u8, Vec<u8>)>,
     input: &mut mpsc::Receiver<Option<ViewerFrame>>,
+    modes: &mut reconnect::ModeMemory,
 ) -> (String, Option<String>) {
     let mut clock = ClockSync::default();
     let mut offset = None;
@@ -451,6 +406,9 @@ async fn relay_loop(
         let forwarded = tokio::select! {
             frame = session.host.recv() => match frame {
                 Some(Ok(frame)) => {
+                    if reconnect::changed_session(&frame) {
+                        return (EndReason::SessionChanged.key().into(), None);
+                    }
                     if let HostFrame::Pong(pong) = &frame {
                         clock.on_pong(pong, now_us());
                         if clock.offset_us() != offset {
@@ -486,6 +444,7 @@ async fn relay_loop(
             },
             frame = input.recv() => match frame {
                 Some(Some(frame)) => {
+                    modes.note(&frame);
                     let _ = session.control.send(frame).await;
                     Ok(())
                 }

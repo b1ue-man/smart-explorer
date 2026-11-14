@@ -203,6 +203,9 @@ pub enum CaptureRequest {
         credit: CreditWire,
     },
     Activity(bool),
+    /// Switches the pointer overlay (`cursor_overlay.rs`, P6): the pointer
+    /// leaves the picture and travels as `CURSOR` frames.
+    CursorOverlay(bool),
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "result", content = "value", rename_all = "snake_case")]
@@ -214,6 +217,10 @@ pub enum CaptureReply {
     },
     Activated,
     Activity(bool),
+    /// Whether the overlay is on now (`false`: the pointer stays in the
+    /// picture, for good on a platform that cannot separate it, until the
+    /// capture starts on one that can).
+    CursorOverlay(bool),
 }
 
 #[path = "worker_capture_resource_wire.rs"]

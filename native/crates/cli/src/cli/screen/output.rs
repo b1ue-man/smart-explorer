@@ -5,7 +5,10 @@
 //! "encoder","decoder","path","frames_sent","frames_shown","fps_mean",
 //! "fps_min","latency_ms":{"p50","p95","max"},"bitrate_kbps":{"mean","max"},
 //! "keyframes","recoveries","corrupt_frames","static_psnr_db"}` (`null` =
-//! infinite), `sessions` `{"sessions":[…]}`, `stop` `{"stopped"}` and
+//! infinite; when the report carries the stations of the path, also
+//! `stages_ms`, an object `station -> {"p50","p95"}` in ms: the report is
+//! printed as it is, the text shows one `stage_ms` line per station),
+//! `sessions` `{"sessions":[…]}`, `stop` `{"stopped"}` and
 //! `devices` `{"devices":[{"target","device_id","name","relation","room",
 //! "online","probe"}]}`.
 use serde::Serialize;
@@ -68,6 +71,39 @@ fn number(value: f64) -> String {
     format!("{value:.1}")
 }
 
+/// The stations of the path in the order a picture passes them
+/// (`stages_ms` of a measurement); other stations follow alphabetically.
+const STAGE_ORDER: [&str; 5] = ["capture", "encode", "send", "network", "decode"];
+
+/// One `stage_ms` line per station of `report["stages_ms"]` with its `p50` and
+/// `p95` in ms; none when the report carries no stations (or none readable).
+pub(super) fn stage_lines(report: &Value) -> Vec<String> {
+    let Some(Value::Object(stages)) = report.get("stages_ms") else {
+        return Vec::new();
+    };
+    let mut names: Vec<&String> = stages.keys().collect();
+    let rank = |name: &str| {
+        STAGE_ORDER
+            .iter()
+            .position(|known| *known == name)
+            .unwrap_or(STAGE_ORDER.len())
+    };
+    names.sort_by(|a, b| rank(a).cmp(&rank(b)).then_with(|| a.cmp(b)));
+    names
+        .into_iter()
+        .filter_map(|name| {
+            let station = &stages[name];
+            let p50 = station.get("p50")?.as_f64()?;
+            let p95 = station.get("p95")?.as_f64()?;
+            Some(format!(
+                "stage_ms\t{name}\tp50={}\tp95={}",
+                number(p50),
+                number(p95)
+            ))
+        })
+        .collect()
+}
+
 pub(super) fn bench_text(report: &BenchReport) -> String {
     let recoveries: Vec<String> = report
         .recoveries
@@ -75,7 +111,8 @@ pub(super) fn bench_text(report: &BenchReport) -> String {
         .map(|value| number(*value))
         .collect();
     let psnr = report.static_psnr_db.map_or("inf".to_string(), number);
-    lines(vec![
+    let stages = serde_json::to_value(report).map_or_else(|_| Vec::new(), |v| stage_lines(&v));
+    let mut rows = vec![
         format!(
             "bench\tcodec={}\tencoder={}\tdecoder={}\tpath={}",
             report.codec, report.encoder, report.decoder, report.path
@@ -100,9 +137,11 @@ pub(super) fn bench_text(report: &BenchReport) -> String {
             number(report.bitrate_kbps.mean),
             number(report.bitrate_kbps.max)
         ),
-        format!("recoveries_ms\t{}", listed(&recoveries)),
-        format!("static_psnr_db\t{psnr}"),
-    ])
+    ];
+    rows.extend(stages);
+    rows.push(format!("recoveries_ms\t{}", listed(&recoveries)));
+    rows.push(format!("static_psnr_db\t{psnr}"));
+    lines(rows)
 }
 
 pub(super) fn sessions_json(sessions: &[SessionView]) -> Value {

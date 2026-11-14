@@ -84,6 +84,7 @@
     <string name="screen_end_update_stop">Das Gerät wird aktualisiert</string>
     <string name="screen_end_connection_lost">Die Verbindung zum Gerät ist abgebrochen</string>
     <string name="screen_end_failed">Die Sitzung ist fehlgeschlagen</string>
+    <string name="screen_end_session_changed">Die Benutzersitzung am Gerät hat gewechselt; die Ansicht konnte nicht neu aufgebaut werden</string>
     <string name="screen_end_ended">Sitzung beendet</string>
     <string name="screen_end_connection_failed">Die Verbindung zum Gerät ist fehlgeschlagen</string>
 

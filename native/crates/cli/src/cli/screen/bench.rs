@@ -2,7 +2,12 @@
 //! session with another device, measured by the background worker, or
 //! encoder and decoder of this device alone. The other device's user may be
 //! asked first („Fragen“); the command then waits without a time limit and
-//! says so on stderr.
+//! says so on stderr. The report carries the stations of the picture path
+//! the measuring side can time (`stages_ms`, each with `p50` and `p95` in ms:
+//! `capture`, `encode` and `decode` with `--local`; `decode` and
+//! `capture_to_arrival`, the host's capture until the last record arrived,
+//! for a session with another device); `--json` prints them with the report
+//! and the text shows one `stage_ms` line per station.
 use clap::Args;
 use clap_complete::ArgValueCandidates;
 

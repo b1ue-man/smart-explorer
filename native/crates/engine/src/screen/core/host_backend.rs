@@ -51,6 +51,17 @@ pub trait ScreenInputSink: Send + Sync {
         Err(ControlBlock::ControlUnavailable)
     }
     fn release(&self, events: &[InputEvent]) -> Result<(), ControlBlock>;
+    /// Takes the pointer out of the picture (`true`) or back into it (P6,
+    /// `cursor_overlay.rs`); `false` while this source does not separate it
+    /// (it cannot, or its capture has not started: the wish is kept).
+    /// Blocks while the source answers: call it off the async runtime.
+    fn set_cursor_overlay(&self, _on: bool) -> bool {
+        false
+    }
+    /// Where the separated pointer arrives, for a source that can.
+    fn cursor_feed(&self) -> Option<std::sync::Arc<super::cursor_overlay::CursorFeed>> {
+        None
+    }
     fn family_snapshot(&self) -> io::Result<Option<crate::remote_window::FamilySnapshot>> {
         Ok(None)
     }

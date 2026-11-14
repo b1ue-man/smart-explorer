@@ -57,7 +57,15 @@ impl ScreenSource for X11Source {
                 self.admission.authority(),
             ) {
                 let size = self.size;
-                x11_cursor::blend(image.pixels_mut(), size, x, y, &cursor.image);
+                x11_cursor::deliver(
+                    crate::screen::core::cursor_overlay::worker(),
+                    image.pixels_mut(),
+                    size,
+                    (x, y),
+                    &cursor.image,
+                    (cursor.hot_x, cursor.hot_y),
+                    cursor.serial,
+                );
             }
         }
         let image = image.freeze();

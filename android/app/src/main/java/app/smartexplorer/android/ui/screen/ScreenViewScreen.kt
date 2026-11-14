@@ -71,6 +71,9 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.currentStateAsState
 import app.smartexplorer.android.R
 import app.smartexplorer.android.core.CoreException
+import app.smartexplorer.android.ui.login.LoginViewScreen
+import app.smartexplorer.android.ui.login.PairedLogin
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.ceil
 import kotlin.math.roundToInt
 import kotlinx.coroutines.channels.Channel
@@ -80,6 +83,9 @@ import kotlinx.coroutines.delay
 
 /** Zero-width characters in front of the keyboard field, so deleting works on an empty field. */
 private const val FIELD_PAD = 32
+
+/** Keys of the automatic login switch (`login.autoSwitch`), one per open full view. */
+private val autoLoginKeys = AtomicLong(0)
 
 /**
  * The full view of one device (SCR-M9, U28-7): the picture in a full-screen dialog with zoom 1× to
@@ -196,6 +202,18 @@ fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, a
     }
     LaunchedEffect(ui.inputReady) { if (ui.inputReady) hiddenSinceFrame = false }
     LaunchedEffect(ui.ended) { if (ui.ended != null) releaseInputs() }
+    // E22: while the stream pauses with the secure desktop, the lock screen or no user session, the
+    // paired device's login screen opens without a tap; it closes when the user session shows again.
+    val autoLoginKey = remember { autoLoginKeys.incrementAndGet() }
+    var autoLogin by remember { mutableStateOf<PairedLogin?>(null) }
+    LaunchedEffect(ui.state, target.deviceId, target.relationId) {
+        val (action, paired) = try { PairedLogin.observe(autoLoginKey, target.deviceId ?: target.relationId, ui.state) }
+            catch (cancel: kotlinx.coroutines.CancellationException) { throw cancel } catch (failure: Exception) { "stay" to null }
+        when (action) {
+            "enter_login" -> if (paired != null) { releaseInputs(); autoLogin = paired }
+            "leave_login" -> autoLogin = null
+        }
+    }
     LifecycleEventEffect(Lifecycle.Event.ON_PAUSE) { releaseInputs() }
     DisposableEffect(Unit) {
         onDispose {
@@ -413,6 +431,9 @@ fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, a
                         }) { ready -> if (!ready) renderReady = false }
                 }
 
+                // The host's pointer, when it travels beside the picture (plan 2026-11-14 P6).
+                if (family == null) ScreenCursorOverlay(session?.id ?: 0L, left, top, w, h)
+
                 val gestures = if (sending && !zoomMode) {
                     Modifier.mapperTouchInput(mapper, longPressMs) { flush.trySend(Unit) }
                 } else {
@@ -485,6 +506,9 @@ fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, a
             // (new picture, visibility) must not close and reopen the IME.
             if (keyboardOn && controlOn && mode == "control") ScreenKeyboardField(mapper, flush)
         }
+    }
+    autoLogin?.let { paired ->
+        LoginViewScreen(paired.target, paired.user, onClose = { autoLogin = null; scope.launch { runCatching { PairedLogin.failed(autoLoginKey) } } })
     }
 }
 

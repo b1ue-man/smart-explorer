@@ -43,7 +43,7 @@ impl ShareService {
                     let local=node.routes.current(&node.endpoint);
                     let address=endpoint_addr(&endpoint.presence,&local,&node.transport_options)?;
                     let generation=node.policy.snapshot(PeerPrincipal::from_endpoint(&endpoint))?;
-                    let connection=tokio::time::timeout(Duration::from_secs(30),node.endpoint.connect(address,apps_wire::APPS_ALPN)).await
+                    let connection=tokio::time::timeout(Duration::from_secs(30),super::keepalive::transport_purpose::connect(&node.endpoint,address,apps_wire::APPS_ALPN,super::keepalive::transport_purpose::TransportPurpose::Apps)).await
                         .map_err(|_|eio("device command connect timed out"))?.map_err(eio)?;
                     let _close=super::node_tcp::CloseTcp(connection.clone());
                     super::node_tcp::require_policy(&connection)?;node.policy.bind(&connection,generation)?;

@@ -26,6 +26,10 @@ use windows::Win32::Graphics::Direct3D11::ID3D11Texture2D;
 use windows::Win32::System::WinRT::Direct3D11::IDirect3DDxgiInterfaceAccess;
 use windows::Win32::System::WinRT::Graphics::Capture::IGraphicsCaptureItemInterop;
 const POLL: Duration = Duration::from_millis(5);
+/// Time a session whose pointer capture was switched (pointer overlay, plan
+/// 2026-11-14 P6) gets to deliver a picture in the new state before it is
+/// started again: on a screen that stands still it delivers none.
+const POINTER_SWITCH_WAIT: Duration = Duration::from_millis(150);
 #[cfg(any(test, feature = "test-support", debug_assertions))]
 static FORCED_OFF: AtomicBool = AtomicBool::new(false);
 #[cfg(any(test, feature = "test-support", debug_assertions))]
@@ -164,6 +168,9 @@ pub(super) struct WgcCapture {
     size: FrameSize,
     budget: CaptureBudget,
     recovery: CaptureRecovery,
+    /// When the overlay switched this session's pointer capture, until a
+    /// picture taken after the switch was read.
+    pointer_switched: Option<Instant>,
 }
 impl WgcCapture {
     pub(super) fn open(target: PreparedWgc, budget: CaptureBudget) -> io::Result<Self> {
@@ -183,6 +190,7 @@ impl WgcCapture {
             size,
             budget,
             recovery: CaptureRecovery::active(),
+            pointer_switched: None,
         })
     }
     fn newest(&self) -> io::Result<Option<Direct3D11CaptureFrame>> {
@@ -288,9 +296,18 @@ impl Grabber for WgcCapture {
         if !recovery.ensure_live(self.live.is_some(), || self.restart(None))? {
             return Ok(SourceFrame::Unchanged);
         }
+        // The pictures delivered so far show the pointer as it was before the
+        // overlay switched it; one read in this call may still be from before.
+        let switched_now = super::cursor_overlay::take_switched();
+        if switched_now {
+            self.pointer_switched = Some(Instant::now());
+        }
         let deadline = Instant::now() + FIRST_FRAME_WAIT;
         loop {
             if let Some(frame) = self.newest()? {
+                if !switched_now {
+                    self.pointer_switched = None;
+                }
                 // A retained external result has its own immutable owner;
                 // the source cache must not force a third distinct CPU slot.
                 self.last = None;
@@ -319,6 +336,18 @@ impl Grabber for WgcCapture {
                 self.size = image.size();
                 self.last = Some(image.clone());
                 return Ok(SourceFrame::Frame(image));
+            }
+            // No picture since the switch: the screen stands still and the
+            // viewer keeps the pointer of before in its picture (or misses
+            // it). A new session starts with a complete picture.
+            if self.last.is_some()
+                && self
+                    .pointer_switched
+                    .is_some_and(|at| at.elapsed() >= POINTER_SWITCH_WAIT)
+            {
+                self.pointer_switched = None;
+                self.restart(None)?;
+                return Ok(SourceFrame::Unchanged);
             }
             if let Some(last) = &self.last {
                 return Ok(if keyframe {

@@ -101,6 +101,10 @@ pub struct ScreenServerHello {
     /// frame is its opt-in, so the client hello needs no field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub family_feed_version: Option<u16>,
+    /// Pointer overlay (plan 2026-11-14 P6, `cursor_overlay.rs`): `Some(1)`
+    /// when this host takes `CURSOR_REQUEST` after the hello.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor_overlay: Option<u16>,
 }
 
 impl ScreenServerHello {
@@ -122,6 +126,7 @@ impl ScreenServerHello {
             icon_version: Some(super::app_icon::ICON_VERSION),
             family_version: Some(super::family_protocol::FAMILY_PROTOCOL),
             family_feed_version: Some(super::wire::FAMILY_FEED_VERSION),
+            cursor_overlay: Some(super::cursor_overlay::CURSOR_OVERLAY_V1),
         }
     }
 

@@ -341,6 +341,13 @@ impl ViewWidget {
                 &Geometry { rect: dest, size },
                 nearest,
             );
+            if rendered {
+                // The host's pointer, when it travels beside the picture (P6);
+                // while this view steers it is the one pointer over the picture.
+                let over = response.contains_pointer() || response.dragged();
+                let steering = params.control && session.input_ready() && over;
+                super::screen_cursor::paint(&painter, dest, session, steering);
+            }
             if params.dimmed {
                 painter.rect_filled(dest, 0.0, Color32::from_black_alpha(128));
             }

@@ -1,6 +1,9 @@
 //! Tagged screen control encoding and decoding; domain types stay in the parent.
 use std::io;
 
+use super::super::cursor_overlay::{
+    CursorPosition, CursorShape, CURSOR_POSITION, CURSOR_REQUEST, CURSOR_SHAPE,
+};
 use super::super::input_model::{decode_batch, encode_batch};
 use super::super::wire::{
     from_json, invalid, to_json, CONTROL_REQUEST, CONTROL_STATE, ERROR, FRAME_ACK, ICON_REPLY,
@@ -52,6 +55,7 @@ pub fn encode_viewer_frame(frame: &ViewerFrame) -> io::Result<(u8, Vec<u8>)> {
         ViewerFrame::Snapshot(request) => (SNAPSHOT, to_json(request)?),
         ViewerFrame::ControlRequest(request) => (CONTROL_REQUEST, to_json(request)?),
         ViewerFrame::PreviewAck(ack) => (PREVIEW_ACK, ack.encode()),
+        ViewerFrame::CursorOverlay(on) => (CURSOR_REQUEST, vec![u8::from(*on)]),
     })
 }
 
@@ -114,6 +118,9 @@ pub fn decode_viewer_frame(tag: u8, payload: &[u8]) -> io::Result<ViewerFrame> {
         }
         CONTROL_REQUEST => ViewerFrame::ControlRequest(from_json(payload)?),
         PREVIEW_ACK => ViewerFrame::PreviewAck(FrameAck::decode(payload)?),
+        CURSOR_REQUEST if payload == [0] || payload == [1] => {
+            ViewerFrame::CursorOverlay(payload[0] != 0)
+        }
         _ => return Err(invalid("unknown screen frame from the viewer")),
     })
 }
@@ -159,6 +166,8 @@ pub fn encode_host_frame(frame: &HostFrame) -> io::Result<(u8, Vec<u8>)> {
         }
         HostFrame::ControlState(state) => (CONTROL_STATE, to_json(state)?),
         HostFrame::Error(error) => (ERROR, to_json(error)?),
+        HostFrame::CursorShape(shape) => (CURSOR_SHAPE, shape.encode()?),
+        HostFrame::CursorPosition(position) => (CURSOR_POSITION, position.encode()),
     })
 }
 
@@ -213,6 +222,8 @@ pub fn decode_host_frame(tag: u8, payload: &[u8]) -> io::Result<HostFrame> {
         }
         CONTROL_STATE => HostFrame::ControlState(from_json(payload)?),
         ERROR => HostFrame::Error(from_json(payload)?),
+        CURSOR_SHAPE => HostFrame::CursorShape(CursorShape::decode(payload)?),
+        CURSOR_POSITION => HostFrame::CursorPosition(CursorPosition::decode(payload)?),
         _ => return Err(invalid("unknown screen frame from the host")),
     })
 }

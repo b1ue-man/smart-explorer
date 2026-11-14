@@ -67,6 +67,13 @@ pub fn set_target(source: &SourceId) {
     };
 }
 
+/// The captured source's rectangle as it lies now, in virtual-desktop
+/// pixels (the pointer overlay maps the pointer onto it, P6).
+pub(super) fn source_area() -> Option<Area> {
+    let target = state().target.clone()?;
+    target_area(&target)
+}
+
 /// A rectangle in virtual-desktop pixels.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct Area {

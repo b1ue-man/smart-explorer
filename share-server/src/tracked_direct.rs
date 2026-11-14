@@ -48,6 +48,11 @@ pub(super) fn route_request(
     if !require_capability(origin_id, origin, state) {
         return;
     }
+    // E60, S15: a client without key login reaches no bound lookup, with the
+    // legacy bridge (its presence) and with the signed request alone.
+    if !super::direct_presence::admit_legacy_route(origin_id, origin, &request.lookup_id, state) {
+        return;
+    }
     if !super::direct_presence::require_identity(state, origin_id, origin, &request.requester) {
         return;
     }
@@ -144,6 +149,11 @@ pub(super) fn route_decision_receipt(
     if !require_capability(origin_id, origin, state) {
         return;
     }
+    // E60, S15: this receipt is routed by the target's device id, not by the
+    // lookup's owner; a client without key login sends none for a bound lookup.
+    if !super::direct_presence::admit_legacy_route(origin_id, origin, &receipt.lookup_id, state) {
+        return;
+    }
     if !super::direct_presence::require_identity(state, origin_id, origin, &receipt.requester) {
         return;
     }
@@ -158,11 +168,16 @@ pub(super) fn route_decision_receipt(
 }
 
 pub(super) fn request_legacy(
+    origin_id: u64,
     origin: &Writer,
     lookup_id: &str,
     presence: PeerPresence,
     state: &Arc<Mutex<State>>,
 ) {
+    // E60, S15: checked first, so the refusal does not depend on the presence.
+    if !super::direct_presence::admit_legacy_route(origin_id, origin, lookup_id, state) {
+        return;
+    }
     if let Err(error) = direct_validation::validate_legacy_request(lookup_id, &presence) {
         send_retain_error(origin, error);
         return;
@@ -187,7 +202,9 @@ pub(super) fn request_legacy(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn decision_legacy(
+    origin_id: u64,
     origin: &Writer,
     lookup_id: &str,
     requester_device_id: &str,
@@ -196,6 +213,10 @@ pub(super) fn decision_legacy(
     msg: Option<String>,
     state: &Arc<Mutex<State>>,
 ) {
+    // E60, S15: checked first, so the refusal does not depend on the decision.
+    if !super::direct_presence::admit_legacy_route(origin_id, origin, lookup_id, state) {
+        return;
+    }
     if let Err(error) = direct_validation::validate_legacy_decision(
         lookup_id,
         requester_device_id,
@@ -219,18 +240,8 @@ pub(super) fn decision_legacy(
     }
 }
 
-#[cfg(test)]
-pub(super) fn publish(id: u64, origin: &Writer, presence: PeerPresence, state: &Arc<Mutex<State>>) {
-    super::direct_presence::publish(id, origin, presence, None, state);
-}
-
 pub(super) fn unpublish(id: u64, lookup: &str, state: &Arc<Mutex<State>>) {
     super::direct_presence::unpublish(id, lookup, state);
-}
-
-#[cfg(test)]
-pub(super) fn watch(id: u64, origin: &Writer, lookup: &str, state: &Arc<Mutex<State>>) {
-    super::direct_presence::watch(id, origin, lookup, None, state);
 }
 
 pub(super) fn unwatch(id: u64, lookup: &str, state: &Arc<Mutex<State>>) {

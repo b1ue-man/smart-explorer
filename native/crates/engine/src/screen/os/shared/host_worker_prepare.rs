@@ -30,6 +30,9 @@ impl Worker {
                 self.capture_active = active;
                 Ok(CaptureReply::Activity(active))
             }
+            CaptureRequest::CursorOverlay(on) => Ok(CaptureReply::CursorOverlay(
+                crate::screen::core::cursor_overlay::worker().set_separate(on),
+            )),
             CaptureRequest::Prepare {
                 owner,
                 session,

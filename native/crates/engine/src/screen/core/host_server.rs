@@ -8,6 +8,8 @@
 //! second. It ends when the viewer closes or stays silent, the host user or
 //! a rights change stops it, or the picture side fails (`ERROR` with
 //! `capture_failed` or `encoder_failed`). Every step is an access-log entry.
+//! A session that streams the full view counts as interactive (plan
+//! 2026-11-14 E3; its picture pipeline holds the presence).
 use std::io;
 use std::sync::atomic::AtomicU32;
 use std::sync::Arc;

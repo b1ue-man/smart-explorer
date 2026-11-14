@@ -84,7 +84,12 @@ impl LanLinkTransport {
                 let _permit = permit;
                 let connected = tokio::time::timeout(
                     ROUND_DEADLINE,
-                    task_node.endpoint.connect(addr, LAN_LINK_ALPN),
+                    crate::share::keepalive::transport_purpose::connect(
+                        &task_node.endpoint,
+                        addr,
+                        LAN_LINK_ALPN,
+                        crate::share::keepalive::transport_purpose::TransportPurpose::LanLink,
+                    ),
                 )
                 .await;
                 let Ok(Ok(connection)) = connected else {

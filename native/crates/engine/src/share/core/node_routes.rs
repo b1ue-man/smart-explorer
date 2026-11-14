@@ -58,7 +58,14 @@ impl ShareIrohNode {
                 biased;
                 _ = cancelled => Err(io::Error::new(io::ErrorKind::Interrupted, "Exec-Verbindungsaufbau abgebrochen")),
                 result = super::io_deadline::run_for("peer exec connection", timeout, async {
-                    self.endpoint.connect(addr, super::exec_protocol::EXEC_ALPN).await.map_err(super::io_deadline::disconnected)
+                    super::keepalive::transport_purpose::connect(
+                        &self.endpoint,
+                        addr,
+                        super::exec_protocol::EXEC_ALPN,
+                        super::keepalive::transport_purpose::TransportPurpose::Exec,
+                    )
+                    .await
+                    .map_err(super::io_deadline::disconnected)
                 }) => result,
             }
         })?;
@@ -119,6 +126,14 @@ impl ShareIrohNode {
         if let Some(cancellation) = &cancellation {
             cancellation.check()?;
         }
+        // E3: a job with a terminal keeps the process interactive while it
+        // runs; the entry ends with the client task that holds the retainer.
+        let retainer = if start.terminal.is_some() {
+            use super::keepalive::interactive_presence::{retain_with, InteractiveKind};
+            Some(retain_with(InteractiveKind::ExecTerminal, retainer))
+        } else {
+            retainer
+        };
         let _runtime = self.rt.enter();
         let client = super::exec_client::spawn_connected_cancellable(
             connection,

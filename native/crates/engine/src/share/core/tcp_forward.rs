@@ -29,7 +29,12 @@ pub fn tcp_version_for_alpn(alpn: &[u8]) -> Option<u16> {
 /// buffers per node, in addition to the existing bounded QUIC buffers.
 pub const MAX_TCP_TUNNELS: usize = 64;
 pub const MAX_TCP_STREAMS: usize = 16;
+/// Base size of one copy buffer per pump direction (plan 2026-11-14, E7 b).
 pub const TCP_COPY_BYTES: usize = 8 * 1024;
+/// Size a base buffer grows to once a read has filled it, while the copy budget has room.
+pub const TCP_COPY_BYTES_GROWN: usize = 64 * 1024;
+/// Process-wide cap of all pump copy buffers (plan 2026-11-14, E7 b and C9): the 16 MiB above.
+pub const TCP_COPY_BUDGET_BYTES: u64 = 16 * 1024 * 1024;
 
 pub fn shown_error(value: &str) -> String {
     value

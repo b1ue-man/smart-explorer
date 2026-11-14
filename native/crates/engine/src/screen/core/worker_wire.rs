@@ -54,6 +54,8 @@ pub const PAUSED: u8 = 20;
 pub const FAILED: u8 = 21;
 pub const RAW: u8 = 22;
 pub const INPUT_DONE: u8 = 23;
+/// Unsolicited: the pointer's shape or position (`cursor_overlay.rs`, P6).
+pub const CURSOR: u8 = 27;
 
 /// Absolute private-worker allocation ceiling. Each PRODUCE retains its
 /// narrower negotiated contract; a packet length never increases that contract.
@@ -78,7 +80,9 @@ pub fn tag_limit(tag: u8) -> Option<usize> {
             .max(packet_budget().ok()?.raw_bytes)
             .checked_add(58),
         OPEN | OPEN_FAMILY | FAMILY_COMMAND | RELEASE_INPUT | PRODUCE | CAPTURE | INPUT
-        | BOUND_INPUT | OPENED | REFUSED | PAUSED | FAILED | INPUT_DONE => Some(MAX_CONTROL_BYTES),
+        | BOUND_INPUT | OPENED | REFUSED | PAUSED | FAILED | INPUT_DONE | CURSOR => {
+            Some(MAX_CONTROL_BYTES)
+        }
         CLOSE => Some(0),
         SET_CAPTURE_ACTIVE | CAPTURE_ACTIVE => Some(1),
         UNCHANGED => Some(8),

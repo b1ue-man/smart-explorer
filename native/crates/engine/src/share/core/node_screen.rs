@@ -44,6 +44,9 @@ use crate::share::access_grant::{Capability, CapabilityState};
 
 #[path = "node_screen_link.rs"]
 mod link;
+pub(crate) use super::keepalive::interactive_presence::{
+    enter as enter_interactive, InteractiveGuard, InteractiveKind,
+};
 pub use link::ScreenLink;
 
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(20);
@@ -275,6 +278,7 @@ impl ShareIrohNode {
         let (mut send, mut recv) = opened
             .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "screen handshake timeout"))?
             .map_err(eio)?;
+        crate::screen::core::gop_stream::prioritize_control(&send);
         let identity = self
             .auth
             .lock()

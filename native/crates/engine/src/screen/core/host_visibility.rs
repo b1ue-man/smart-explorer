@@ -120,6 +120,7 @@ impl Session<'_> {
                     self.handle.set_screen_content(content);
                     let name = source.to_string();
                     self.handle.update(|view| view.source = name);
+                    self.cursor_source_changed().await?;
                 }
                 Err(refusal) => {
                     return self.error(ScreenErrorCode::NoDisplay, refusal.reason).await;

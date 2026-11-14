@@ -31,6 +31,9 @@ const MAX_QUEUED_INPUT: usize = 16;
 
 #[path = "exec_admission.rs"]
 mod admission;
+// Plan 2026-11-14 E3 (P2b): the host side of an Exec job with a terminal.
+#[path = "exec_server_presence.rs"]
+mod presence;
 pub(super) use admission::handle_connection;
 #[cfg(any(test, feature = "test-support"))]
 pub(super) use admission::start_grant;
@@ -138,6 +141,9 @@ async fn serve_job(
     connection: Connection,
     mut grant_end: Option<GrantEndWatch>,
 ) -> io::Result<()> {
+    // A job with a terminal keeps the process interactive until this future
+    // ends or is dropped, whatever the end (E3).
+    let _interactive = presence::host_interactive(&launch.start);
     let exec_id = launch.start.exec_id.clone();
     let (input_tx, input_rx) = mpsc::channel(16);
     let (output_tx, mut output_rx) = mpsc::channel(16);

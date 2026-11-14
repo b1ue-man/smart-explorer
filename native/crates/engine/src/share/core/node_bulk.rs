@@ -19,6 +19,10 @@
 //! An extra connection is made in the background (r-weg-4, 2026-11-07): the
 //! transfer that asks for it never waits for its handshake and takes the
 //! first connection until the extra one is cached and off the relay.
+//! Plan 2026-11-14: every transfer stream gets priority −1 below the other
+//! streams of the session (E4), and while an interactive session runs in
+//! the process no further extra connection is added (E2: several
+//! controllers together push harder than one).
 use std::collections::{HashMap, HashSet};
 use std::io;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -26,6 +30,7 @@ use std::time::{Duration, Instant};
 
 use iroh::endpoint::Connection;
 
+use super::super::keepalive::{interactive_presence, transport_purpose};
 use super::super::route_policy::route_start::carries_relay;
 use super::{session_key, OpenedPeerStream, PeerEndpoint, ShareIdentity, ShareIrohNode};
 
@@ -39,7 +44,9 @@ const LOSS_SHARE: f64 = 0.01;
 /// Datagrams a sample needs before its loss counts.
 const LOSS_MIN_DATAGRAMS: u64 = 1000;
 /// Bytes per second (both directions) at which one connection's driver
-/// nears the rate of one core (estimate, Z-P6).
+/// nears the rate of one core (estimate, Z-P6). Plan 2026-11-14 E5/N1: set
+/// to 80 % of the single-connection rate measured by M1 on the slowest
+/// measured platform once that measurement exists.
 const DRIVER_RATE: f64 = 250.0 * 1024.0 * 1024.0;
 /// Time a background build of one extra connection may take (handshake,
 /// hello, session proof and path admission).
@@ -87,6 +94,14 @@ fn sample(bulk: &mut Bulk, connection: &Connection, now: Instant) -> bool {
     lossy || rate >= DRIVER_RATE
 }
 
+/// Whether the peer gets one more extra connection: never above
+/// `MAX_EXTRA`, never while an interactive session runs (`interactive`;
+/// then the first connection is not even sampled), otherwise when `asks`
+/// (the sample of the first connection) says so.
+fn wants_more(wanted: usize, interactive: bool, asks: impl FnOnce() -> bool) -> bool {
+    wanted < MAX_EXTRA && !interactive && asks()
+}
+
 /// The background build of extra connection `turn` under `key` ended.
 fn built(key: &str, turn: usize) {
     if let Ok(mut table) = table().lock() {
@@ -108,6 +123,19 @@ impl ShareIrohNode {
         deadline: Instant,
         bulk_offered: bool,
     ) -> io::Result<OpenedPeerStream> {
+        let opened = self.open_transfer_stream_on(endpoint, identity, deadline, bulk_offered)?;
+        transport_purpose::prioritize_transfer(&opened.send);
+        Ok(opened)
+    }
+
+    /// The stream of `open_transfer_stream_until`, before its priority.
+    fn open_transfer_stream_on(
+        self: &Arc<Self>,
+        endpoint: &PeerEndpoint,
+        identity: &ShareIdentity,
+        deadline: Instant,
+        bulk_offered: bool,
+    ) -> io::Result<OpenedPeerStream> {
         if !bulk_offered {
             return self.open_stream_until(endpoint, identity, deadline);
         }
@@ -122,7 +150,10 @@ impl ShareIrohNode {
         let turn = match table().lock() {
             Ok(mut table) => {
                 let bulk = table.entry(key.clone()).or_default();
-                if bulk.wanted < MAX_EXTRA && sample(bulk, &primary, Instant::now()) {
+                let interactive = interactive_presence::active();
+                if wants_more(bulk.wanted, interactive, || {
+                    sample(bulk, &primary, Instant::now())
+                }) {
                     bulk.wanted += 1;
                 }
                 bulk.next = bulk.next.wrapping_add(1);
@@ -225,4 +256,20 @@ impl ShareIrohNode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn verbindungen_task_bulk_no_growth_with_presence() {
+        // An interactive session stops growth without sampling.
+        assert!(!wants_more(0, true, || panic!(
+            "no sample while interactive"
+        )));
+        assert!(!wants_more(MAX_EXTRA - 1, true, || true));
+        // Without one, the sample decides as before, up to MAX_EXTRA.
+        assert!(wants_more(0, false, || true));
+        assert!(!wants_more(0, false, || false));
+        assert!(!wants_more(MAX_EXTRA, false, || panic!(
+            "no sample at the cap"
+        )));
+        assert_eq!(transport_purpose::TRANSFER_STREAM_PRIORITY, -1);
+    }
 }

@@ -1,6 +1,17 @@
 //! Worker lifetime and permanently active resource-control dispatcher.
 use super::*;
 use crate::screen::core::{capture_bytes::AdmittedBytes, capture_transport};
+use crate::screen::os::host_worker_client::session_queries as queries;
+#[cfg(target_os = "linux")]
+use crate::screen::os::session_detect::active_session::process as session_host;
+
+/// No other platform starts a host process in another account's session.
+#[cfg(not(target_os = "linux"))]
+mod session_host {
+    pub fn seal_host() -> std::io::Result<()> {
+        Ok(())
+    }
+}
 
 #[derive(Clone, Copy)]
 struct Reference {
@@ -136,10 +147,37 @@ impl Worker {
     }
 }
 
+/// Sends what changed of the pointer ahead of an answer (P6): nothing until
+/// the daemon switched the overlay on.
+fn flush_cursor(output: &dispatch::Output) -> io::Result<()> {
+    let cursor = crate::screen::core::cursor_overlay::worker();
+    if !cursor.has_pending() {
+        return Ok(());
+    }
+    let mut output = output
+        .lock()
+        .map_err(|_| io::Error::other("worker output poisoned"))?;
+    cursor.flush(&mut *output)
+}
+
 pub(super) fn run() -> i32 {
     if let Err(error) = super::super::worker_lifetime::arm_worker() {
         eprintln!("screen host process: {error}");
         return 1;
+    }
+    // A host started by a root daemon in an X11 session: only the daemon
+    // holds its pipes (E23, S3).
+    if let Err(error) = session_host::seal_host() {
+        eprintln!("screen host process: {error}");
+        return 1;
+    }
+    // One query of a worker that follows this session (E47): answered as
+    // this account, without a source and without the update-stop watch.
+    if queries::requested() {
+        let backend = super::super::platform_backend();
+        return queries::serve(io::stdin(), io::stdout(), &*backend, || {
+            codec_inventory::registry().encoder_offers()
+        });
     }
     let _stop =
         match crate::daemon::spawn_update_stop_watch(crate::daemon::UPDATE_STOP_POLL, || {
@@ -187,6 +225,10 @@ pub(super) fn run() -> i32 {
                 return 1;
             }
         };
+        // The pointer of the overlay goes out ahead of the answer, so the
+        // daemon has it when the picture is done. An input batch sends none:
+        // the next picture does (at most one position per picture).
+        let with_cursor = !matches!(request, WorkerRequest::Input(_));
         let reply = match worker.prepare_reply(request) {
             Ok(reply) => reply,
             Err(error) => {
@@ -194,7 +236,12 @@ pub(super) fn run() -> i32 {
                 return 1;
             }
         };
-        let sent = reply.write(&output);
+        let cursor = if with_cursor {
+            flush_cursor(&output)
+        } else {
+            Ok(())
+        };
+        let sent = cursor.and_then(|()| reply.write(&output));
         drop(reply);
         if let Err(error) = sent {
             eprintln!("screen host process: {error}");

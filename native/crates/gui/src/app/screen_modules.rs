@@ -113,6 +113,9 @@ mod screen_render_cpu;
 
 #[path = "core/screen_view_widget_render.rs"]
 mod screen_view_widget_render;
+// Plan 2026-11-14 P6: the host's pointer as an overlay over the picture.
+#[path = "core/screen_cursor.rs"]
+mod screen_cursor;
 
 // Family and login viewers share the private screen state and renderer owners.
 #[path = "core/family_viewer.rs"]

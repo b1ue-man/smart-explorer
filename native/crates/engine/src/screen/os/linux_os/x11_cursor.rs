@@ -1,7 +1,9 @@
 //! The mouse pointer in X11 pictures (SCR-M5, U19-6): the server does not
 //! draw it into the root window's pixels, so every picture gets the image
 //! from XFixes (`GetCursorImage`, ARGB32 with premultiplied alpha) blended
-//! onto the CPU copy. Outside the captured area nothing is drawn.
+//! onto the CPU copy. Outside the captured area nothing is drawn. With the
+//! pointer overlay switched on (plan 2026-11-14 P6, `cursor_overlay.rs`) the
+//! image is not blended: shape and position go to the viewer as frames.
 use super::x11_capture::admission_stream::{CaptureConnection, Gate};
 use crate::screen::core::capture_admission::{CaptureAuthority, CaptureGrant, CaptureSlice};
 use std::io;
@@ -11,6 +13,7 @@ use x11rb::connection::Connection;
 use x11rb::protocol::xfixes::ConnectionExt as _;
 use x11rb::protocol::xproto::ConnectionExt as _;
 
+use crate::screen::core::cursor_overlay::{CursorShape, WorkerCursor};
 use crate::screen::core::pixel_convert::FrameSize;
 
 /// The pointer's image and where its top-left corner is on the root window.
@@ -36,6 +39,11 @@ pub fn enable<C: Connection>(conn: &C) -> io::Result<()> {
 /// The parsed pixels are destroyed before their promise.
 pub struct AdmittedCursor {
     pub image: CursorImage,
+    /// The hot spot inside the image.
+    pub hot_x: i32,
+    pub hot_y: i32,
+    /// Names the pointer's shape (`GetCursorImage`): equal while it is the same.
+    pub serial: u32,
     _slice: CaptureSlice,
 }
 /// The actual dimensions arrive in the fixed reply header, before either
@@ -72,8 +80,49 @@ pub fn fetch(
             height: u32::from(reply.height),
             argb: reply.cursor_image,
         },
+        hot_x: i32::from(reply.xhot),
+        hot_y: i32::from(reply.yhot),
+        serial: reply.cursor_serial,
         _slice: slice,
     })
+}
+
+/// Puts the pointer into the picture, or hands it to the overlay when the
+/// viewer draws it itself (P6): the shape only when its serial changed, the
+/// position at every capture. The captured area of `size` starts at `origin`
+/// on the root window, the pointer's hot spot lies at `hot` in its image.
+pub fn deliver(
+    overlay: &WorkerCursor,
+    pixels: &mut [u8],
+    size: FrameSize,
+    origin: (i32, i32),
+    cursor: &CursorImage,
+    hot: (i32, i32),
+    serial: u32,
+) {
+    if !overlay.separated() {
+        blend(pixels, size, origin.0, origin.1, cursor);
+        return;
+    }
+    let serial = u64::from(serial);
+    if overlay.shape_serial() != Some(serial) {
+        let shape = CursorShape::from_argb(
+            overlay.next_shape_id(),
+            cursor.width,
+            cursor.height,
+            hot.0,
+            hot.1,
+            &cursor.argb,
+        );
+        overlay.publish_shape(serial, shape);
+    }
+    let x = cursor.x + hot.0 - origin.0;
+    let y = cursor.y + hot.1 - origin.1;
+    let inside = x >= 0
+        && y >= 0
+        && i64::from(x) < i64::from(size.width)
+        && i64::from(y) < i64::from(size.height);
+    overlay.publish_position(x, y, size, inside);
 }
 
 /// Blends `cursor` onto the BGRA picture `target` of `size`, whose top-left
@@ -118,3 +167,7 @@ pub fn blend(
         }
     }
 }
+
+#[cfg(test)]
+#[path = "x11_cursor_overlay_tests.rs"]
+mod overlay_tests;

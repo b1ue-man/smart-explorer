@@ -57,6 +57,7 @@ pub mod capture_transport;
 pub mod catalog_entries;
 pub mod codec_registry;
 pub mod control_sender;
+pub mod cursor_overlay;
 pub mod decoded_frame;
 pub mod feed_host;
 pub mod frame_budget;
@@ -140,3 +141,6 @@ pub mod batches_capture_pipeline_task_tests;
 
 #[cfg(test)]
 pub mod batches_capture_worker_task_tests;
+
+#[cfg(test)]
+mod verbindungen_bild_messung_task_tests;

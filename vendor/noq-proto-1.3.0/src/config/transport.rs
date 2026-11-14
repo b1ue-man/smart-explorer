@@ -1,10 +1,12 @@
 // Smart Explorer P28b/V3 patch (2026-10-25); see vendor/SMART_EXPLORER_ROUTE_POLICY.md.
+// Smart Explorer P1 patch (2026-11-14): configurable send batches; see
+// vendor/SMART_EXPLORER_QUIC_PROFILES.md.
 #[cfg(feature = "qlog")]
 use std::path::Path;
 use std::{
     fmt,
     net::SocketAddr,
-    num::{NonZeroU8, NonZeroU32},
+    num::{NonZeroU8, NonZeroU32, NonZeroUsize},
     sync::Arc,
 };
 
@@ -14,6 +16,31 @@ use crate::{
 };
 #[cfg(feature = "qlog")]
 use crate::{QlogFactory, QlogFileFactory};
+
+/// Upstream value of `MAX_TRANSMIT_SEGMENTS` in `noq::Connection::drive_transmit`
+/// (Smart Explorer P1).
+pub(crate) const DEFAULT_MAX_TRANSMIT_SEGMENTS: NonZeroUsize =
+    NonZeroUsize::new(10).expect("nonzero literal");
+
+/// Upstream value of `MAX_TRANSMIT_DATAGRAMS` in `noq::Connection::drive_transmit`
+/// (Smart Explorer P1).
+pub(crate) const DEFAULT_MAX_TRANSMIT_DATAGRAMS: NonZeroUsize =
+    NonZeroUsize::new(20).expect("nonzero literal");
+
+/// Largest batch, in bytes, that one transmit may carry when its segment count is
+/// raised above [`DEFAULT_MAX_TRANSMIT_SEGMENTS`] (Smart Explorer P1).
+///
+/// `iroh_relay::protos::relay::MAX_PACKET_SIZE` (64 KiB) less the framing the relay
+/// counts within that limit: Iroh hands a whole segmented transmit to the relay as one
+/// relay packet, and the relay refuses a packet whose encoded frame is larger
+/// (`ClientToRelayMsg::encoded_len`: 1 byte frame type, 32 bytes endpoint id, 1 byte
+/// ECN, 2 bytes segment size, then the datagrams). Noq does not depend on the relay
+/// crate, so the values are repeated here.
+pub(crate) const MAX_TRANSMIT_BATCH_BYTES: usize = 64 * 1024 - RELAY_FRAME_OVERHEAD;
+
+/// Bytes of a relay datagram frame that are not datagram contents (see
+/// [`MAX_TRANSMIT_BATCH_BYTES`]).
+pub(crate) const RELAY_FRAME_OVERHEAD: usize = 1 + 32 + 1 + 2;
 
 /// Parameters governing the core QUIC state machine
 ///
@@ -60,6 +87,8 @@ pub struct TransportConfig {
     pub(crate) congestion_controller_factory: Arc<dyn congestion::ControllerFactory + Send + Sync>,
 
     pub(crate) enable_segmentation_offload: bool,
+    pub(crate) max_transmit_segments: NonZeroUsize,
+    pub(crate) max_transmit_datagrams: NonZeroUsize,
 
     pub(crate) address_discovery_role: address_discovery::Role,
 
@@ -378,6 +407,65 @@ impl TransportConfig {
         self
     }
 
+    /// Maximum number of datagrams (GSO segments) sent in a single transmit
+    ///
+    /// Defaults to 10, the value noq used as a constant before (Smart Explorer P1).
+    ///
+    /// The value the connection driver applies is further limited by what the UDP
+    /// sender supports, and a value above the default is capped so that a whole
+    /// transmit of maximum-size segments, with the relay's framing, stays within
+    /// 64 KiB, the largest packet an Iroh relay forwards (see
+    /// [`Self::effective_max_transmit_segments`]). Larger batches need fewer system
+    /// calls per byte but send larger bursts.
+    pub fn max_transmit_segments(&mut self, value: NonZeroUsize) -> &mut Self {
+        self.max_transmit_segments = value;
+        self
+    }
+
+    /// Maximum number of datagrams one connection-driver pass produces before it
+    /// yields to other tasks (for example receiving ACKs)
+    ///
+    /// Defaults to 20, the value noq used as a constant before (Smart Explorer P1).
+    /// A pass ends after the transmit that reaches this count, so a value below
+    /// [`Self::max_transmit_segments`] still sends one full transmit per pass.
+    pub fn max_transmit_datagrams(&mut self, value: NonZeroUsize) -> &mut Self {
+        self.max_transmit_datagrams = value;
+        self
+    }
+
+    /// Segment limit the connection driver applies per transmit (Smart Explorer P1)
+    ///
+    /// Equals the configured [`Self::max_transmit_segments`] up to the default of 10,
+    /// so a configuration without the setter behaves as before. A larger value is
+    /// capped at `(64 KiB - 36 bytes of relay framing) / largest possible segment`,
+    /// where the largest segment is the greatest of `initial_mtu`, `min_mtu` and the
+    /// MTU discovery upper bound. The cap never goes below the default: where 10
+    /// segments of that size already exceed the limit (largest segment above 6550
+    /// bytes), the raised value falls back to the default, which is what noq sent
+    /// before this setter existed.
+    pub fn effective_max_transmit_segments(&self) -> NonZeroUsize {
+        if self.max_transmit_segments <= DEFAULT_MAX_TRANSMIT_SEGMENTS {
+            return self.max_transmit_segments;
+        }
+        let largest_segment = self
+            .mtu_discovery_config
+            .as_ref()
+            .map_or(self.initial_mtu, |mtud| mtud.upper_bound)
+            .max(self.initial_mtu)
+            .max(self.min_mtu)
+            .max(1);
+        let cap = NonZeroUsize::new(MAX_TRANSMIT_BATCH_BYTES / usize::from(largest_segment))
+            .map_or(DEFAULT_MAX_TRANSMIT_SEGMENTS, |cap| {
+                cap.max(DEFAULT_MAX_TRANSMIT_SEGMENTS)
+            });
+        self.max_transmit_segments.min(cap)
+    }
+
+    /// Datagram limit the connection driver applies per pass (Smart Explorer P1)
+    pub fn effective_max_transmit_datagrams(&self) -> NonZeroUsize {
+        self.max_transmit_datagrams
+    }
+
     /// Whether to send observed address reports to peers.
     ///
     /// This will aid peers in inferring their reachable address, which in most NATd networks
@@ -599,6 +687,8 @@ impl Default for TransportConfig {
             congestion_controller_factory: Arc::new(congestion::CubicConfig::default()),
 
             enable_segmentation_offload: true,
+            max_transmit_segments: DEFAULT_MAX_TRANSMIT_SEGMENTS,
+            max_transmit_datagrams: DEFAULT_MAX_TRANSMIT_DATAGRAMS,
 
             address_discovery_role: address_discovery::Role::default(),
 
@@ -647,6 +737,8 @@ impl fmt::Debug for TransportConfig {
                 deterministic_packet_numbers: _,
             congestion_controller_factory: _,
             enable_segmentation_offload,
+            max_transmit_segments,
+            max_transmit_datagrams,
             address_discovery_role,
             max_concurrent_multipath_paths,
             default_path_max_idle_timeout,
@@ -689,6 +781,8 @@ impl fmt::Debug for TransportConfig {
             .field("datagram_send_buffer_size", datagram_send_buffer_size)
             // congestion_controller_factory not debug
             .field("enable_segmentation_offload", enable_segmentation_offload)
+            .field("max_transmit_segments", max_transmit_segments)
+            .field("max_transmit_datagrams", max_transmit_datagrams)
             .field("address_discovery_role", address_discovery_role)
             .field(
                 "max_concurrent_multipath_paths",
@@ -946,5 +1040,71 @@ impl TryFrom<Duration> for IdleTimeout {
 impl fmt::Debug for IdleTimeout {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(f)
+    }
+}
+
+/// Smart Explorer P1 (2026-11-14): send-batch settings; see
+/// vendor/SMART_EXPLORER_QUIC_PROFILES.md.
+#[cfg(test)]
+mod smart_explorer_transmit_batch_tests {
+    use super::*;
+
+    fn nonzero(value: usize) -> NonZeroUsize {
+        NonZeroUsize::new(value).expect("nonzero test value")
+    }
+
+    #[test]
+    fn verbindungen_task_vendor_transmit_defaults_are_upstream_constants() {
+        let config = TransportConfig::default();
+        assert_eq!(config.effective_max_transmit_segments().get(), 10);
+        assert_eq!(config.effective_max_transmit_datagrams().get(), 20);
+    }
+
+    #[test]
+    fn verbindungen_task_vendor_transmit_setters_reach_effective_limits() {
+        let mut config = TransportConfig::default();
+        config
+            .max_transmit_segments(nonzero(40))
+            .max_transmit_datagrams(nonzero(80));
+        assert_eq!(config.effective_max_transmit_segments().get(), 40);
+        assert_eq!(config.effective_max_transmit_datagrams().get(), 80);
+
+        config
+            .max_transmit_segments(nonzero(4))
+            .max_transmit_datagrams(nonzero(1));
+        assert_eq!(config.effective_max_transmit_segments().get(), 4);
+        assert_eq!(config.effective_max_transmit_datagrams().get(), 1);
+    }
+
+    #[test]
+    fn verbindungen_task_vendor_raised_segments_stay_within_relay_packet() {
+        let mut config = TransportConfig::default();
+        config.max_transmit_segments(nonzero(64));
+        // Default MTU discovery upper bound: 1452 bytes.
+        let segments = config.effective_max_transmit_segments().get();
+        assert_eq!(segments, MAX_TRANSMIT_BATCH_BYTES / 1452);
+        assert!(segments * 1452 <= MAX_TRANSMIT_BATCH_BYTES);
+
+        // Without MTU discovery the largest segment is the initial MTU (1200 bytes).
+        config.mtu_discovery_config(None);
+        let segments = config.effective_max_transmit_segments().get();
+        assert_eq!(segments, MAX_TRANSMIT_BATCH_BYTES / 1200);
+        assert!(segments * 1200 <= MAX_TRANSMIT_BATCH_BYTES);
+
+        // Jumbo segments: a raised value never falls below the upstream default.
+        let mut jumbo = MtuDiscoveryConfig::default();
+        jumbo.upper_bound(9000);
+        config.mtu_discovery_config(Some(jumbo));
+        assert_eq!(
+            config.effective_max_transmit_segments(),
+            DEFAULT_MAX_TRANSMIT_SEGMENTS
+        );
+
+        // A value at or below the default is never capped (upstream behavior).
+        config.max_transmit_segments(DEFAULT_MAX_TRANSMIT_SEGMENTS);
+        assert_eq!(
+            config.effective_max_transmit_segments(),
+            DEFAULT_MAX_TRANSMIT_SEGMENTS
+        );
     }
 }

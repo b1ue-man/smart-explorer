@@ -88,6 +88,22 @@ impl crate::screen::core::host_backend::ScreenInputSink for WorkerInputSink {
             _ => Err(io::Error::other("unexpected family input response")),
         }
     }
+    fn set_cursor_overlay(&self, on: bool) -> bool {
+        use crate::screen::core::worker_capture_wire::{CaptureReply, CaptureRequest};
+        let Ok(mut link) = self.0.lock() else {
+            return false;
+        };
+        let request = WorkerRequest::CaptureControl(CaptureRequest::CursorOverlay(on));
+        matches!(
+            link.ask(&request, INPUT_TIMEOUT),
+            Ok(WorkerReply::CaptureControl(CaptureReply::CursorOverlay(
+                true
+            )))
+        )
+    }
+    fn cursor_feed(&self) -> Option<Arc<crate::screen::core::cursor_overlay::CursorFeed>> {
+        Some(self.1.cursor.clone())
+    }
     fn release(
         &self,
         events: &[crate::screen::core::input_model::InputEvent],

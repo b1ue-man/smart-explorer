@@ -64,6 +64,8 @@ pub struct PipelineActor {
         bool,
     )>,
     mode: QualityMode,
+    /// E3 (plan 2026-11-14): interactive while this pipeline streams the full view.
+    presence: crate::screen::core::gop_stream::PicturePresence,
     admission: Option<Arc<crate::screen::core::capture_admission::SessionAdmission>>,
     accepted: Option<crate::screen::core::frame_budget::FrameContract>,
     capture_codec: crate::screen::core::host_codec_adapters::HostCodecPlan,
@@ -122,6 +124,9 @@ impl PipelineActor {
             input_sink,
             route: None,
             mode,
+            presence: crate::screen::core::gop_stream::PicturePresence::host(
+                mode.kind == StreamKind::Video,
+            ),
             admission,
             accepted,
             capture_codec,
@@ -367,6 +372,7 @@ impl PipelineActor {
             return;
         }
         self.mode = mode;
+        self.presence.set_full(mode.kind == StreamKind::Video);
         self.interrupt();
         self.pending.mode = Some(mode);
         self.poll();

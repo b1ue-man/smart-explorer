@@ -1,5 +1,30 @@
-//! Viewer control frames, input authorization and control release for one session.
+//! Viewer control frames, input authorization, control release and the
+//! pointer overlay (P6) for one session.
 use super::*;
+use crate::screen::core::cursor_overlay::{CursorFeed, CursorPosition, CursorSeen, CursorUpdate};
+
+/// The pointer overlay of one session (plan 2026-11-14 P6).
+#[derive(Default)]
+pub(super) struct CursorLink {
+    /// The viewer asked for the overlay; every new source is asked again.
+    wanted: bool,
+    /// Where the pointer of the session's source arrives, and what of it
+    /// this session has sent on.
+    feed: Option<(std::sync::Arc<CursorFeed>, CursorSeen)>,
+    /// The last wish on its way to a source; the next one waits for it, so
+    /// a source hears the wishes in their order.
+    switching: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl CursorLink {
+    /// Resolves when the source's pointer changed; never without a feed.
+    pub(super) async fn changed(&self) {
+        match &self.feed {
+            Some((feed, _)) => feed.changed().await,
+            None => std::future::pending().await,
+        }
+    }
+}
 
 impl Session<'_> {
     pub(super) async fn on_frame(&mut self, frame: ViewerFrame) -> io::Result<()> {
@@ -91,7 +116,79 @@ impl Session<'_> {
             }
             ViewerFrame::Input(events) => self.input(&events).await,
             ViewerFrame::ControlRequest(request) => self.control(request.action).await,
+            ViewerFrame::CursorOverlay(on) => self.cursor_overlay(on).await,
         }
+    }
+
+    /// `CURSOR_REQUEST` (P6): when the source can separate the pointer it
+    /// leaves the picture and travels as `CURSOR_SHAPE`/`CURSOR_POSITION`
+    /// frames from now on; otherwise it stays in the picture and only the
+    /// one "nothing to draw" position below is ever sent.
+    pub(super) async fn cursor_overlay(&mut self, on: bool) -> io::Result<()> {
+        self.cursor.wanted = on;
+        self.apply_cursor().await
+    }
+
+    /// The session has a new source (`SET_MODE`), which starts with the
+    /// pointer in its picture: a viewer that asked for the overlay gets it
+    /// from this source too. A viewer that never asked hears nothing.
+    pub(super) async fn cursor_source_changed(&mut self) -> io::Result<()> {
+        if !self.cursor.wanted {
+            return Ok(());
+        }
+        self.apply_cursor().await
+    }
+
+    /// Hands the viewer's wish to the session's source. The viewer first
+    /// hears that there is nothing to draw: what it still holds belongs to
+    /// the state before (the other source, the overlay that was on). The
+    /// source answers only after its running picture operation (a capture
+    /// that starts may wait for the host's user) and may switch later than
+    /// it answers, so the wish travels beside this loop, which keeps hearing
+    /// the viewer, and the feed is read whatever the answer is; a source that
+    /// cannot separate the pointer never fills it. A window family keeps its
+    /// pointers in the picture.
+    async fn apply_cursor(&mut self) -> io::Result<()> {
+        let on = self.cursor.wanted && self.family.selected.is_none();
+        self.cursor.feed = None;
+        self.frame(HostFrame::CursorPosition(CursorPosition::hidden()))
+            .await?;
+        let Some(sink) = self.pipeline.input_sink() else {
+            return Ok(());
+        };
+        let feed = sink.cursor_feed();
+        if let Some(feed) = &feed {
+            feed.reset();
+        }
+        let before = self.cursor.switching.take();
+        self.cursor.switching = Some(tokio::spawn(async move {
+            if let Some(before) = before {
+                let _ = before.await;
+            }
+            // A failed switch leaves the pointer in the picture and the feed empty.
+            let _ = tokio::task::spawn_blocking(move || sink.set_cursor_overlay(on)).await;
+        }));
+        self.cursor.feed = feed
+            .filter(|_| on)
+            .map(|feed| (feed, CursorSeen::default()));
+        Ok(())
+    }
+
+    /// Sends on what the source's pointer changed (P6): the shape when it
+    /// changed, the newest position.
+    pub(super) async fn poll_cursor(&mut self) -> io::Result<()> {
+        let updates = match self.cursor.feed.as_mut() {
+            Some((feed, seen)) => feed.poll(seen),
+            None => return Ok(()),
+        };
+        for update in updates {
+            let frame = match update {
+                CursorUpdate::Shape(shape) => HostFrame::CursorShape(shape),
+                CursorUpdate::Position(position) => HostFrame::CursorPosition(position),
+            };
+            self.frame(frame).await?;
+        }
+        Ok(())
     }
 
     pub(super) async fn input(&mut self, events: &[InputEvent]) -> io::Result<()> {

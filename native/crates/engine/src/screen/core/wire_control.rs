@@ -1,7 +1,9 @@
 //! Control frames after the handshake (decision C3). The viewer sends
 //! `SET_MODE`, `INPUT`, `FRAME_ACK`, `KEYFRAME_REQUEST`, `PING`,
-//! `LIST_WINDOWS`, `SNAPSHOT`, `CONTROL_REQUEST` and `PREVIEW_ACK`; the host
-//! sends `STATE`, `PONG`, `WINDOWS`, `STATS`, `CONTROL_STATE` and `ERROR`.
+//! `LIST_WINDOWS`, `SNAPSHOT`, `CONTROL_REQUEST`, `PREVIEW_ACK` and
+//! `CURSOR_REQUEST`; the host sends `STATE`, `PONG`, `WINDOWS`, `STATS`,
+//! `CONTROL_STATE`, `ERROR`, `CURSOR_SHAPE` and `CURSOR_POSITION` (the
+//! pointer overlay of `cursor_overlay.rs`).
 //! Frames that come with every picture or input event have a fixed
 //! big-endian layout (`INPUT`; `FRAME_ACK` and `PREVIEW_ACK` 24 bytes;
 //! `PING` 16 bytes; `PONG` 32 bytes); the others are JSON. A tag of the
@@ -12,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncWrite};
 
 use super::app_icon::{IconRequest, IconResponse};
+use super::cursor_overlay::{CursorPosition, CursorShape};
 use super::input_model::InputEvent;
 use super::negotiate::{CodecKind, H264Profile};
 use super::pixel_convert::FrameSize;
@@ -280,6 +283,9 @@ pub enum ViewerFrame {
     Snapshot(SnapshotRequest),
     ControlRequest(ControlRequest),
     PreviewAck(FrameAck),
+    /// The viewer draws the pointer itself (`true`) or wants it in the
+    /// picture (`false`); only after the host announced `cursor_overlay`.
+    CursorOverlay(bool),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -296,6 +302,9 @@ pub enum HostFrame {
     Stats(HostStats),
     ControlState(ControlState),
     Error(ScreenWireError),
+    /// The pointer's image, after a request for the overlay (P6).
+    CursorShape(CursorShape),
+    CursorPosition(CursorPosition),
 }
 
 pub async fn send_viewer_frame<W: AsyncWrite + Unpin>(

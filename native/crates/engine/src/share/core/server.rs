@@ -33,6 +33,10 @@ mod batch_status;
 mod fs_dispatch;
 #[path = "server_hello_refusal.rs"]
 mod hello_refusal;
+// Plan 2026-11-14 E4 (P2b): the host's download streams share the client's
+// transfer priority.
+#[path = "server_priority.rs"]
+mod priority;
 
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(20);
 
@@ -427,6 +431,7 @@ async fn handle_peer_stream(
         Err(error) => return reply_err(&mut send, error).await,
     };
     let _transport_guard = access.stream_guard();
+    priority::prioritize_download(&send, &req);
     let stopped = send.stopped();
     let stream = fs_dispatch::FsStream {
         send,

@@ -18,6 +18,7 @@ use super::wire_binary::{
     StreamKind, FLAG_KEYFRAME, FLAG_MORE, RECORD_HEADER_BYTES,
 };
 use super::wire_control::{FrameAck, ViewerFrame};
+use crate::share::node_screen::{enter_interactive, InteractiveGuard, InteractiveKind};
 
 /// Code with which the host gives up a picture stream (stale, send error)
 /// and with which the viewer stops a broken one.
@@ -28,6 +29,76 @@ pub const VIEWER_UNI_STREAMS: u32 = 4;
 /// Picture events a reader may queue ahead of the decoder; a slower
 /// decoder makes the reader wait, so QUIC flow control throttles the host.
 const PICTURE_QUEUE: usize = 4;
+
+/// Priority of the host's control stream (plan 2026-11-14 E4): above the
+/// picture groups (0), so `PONG`, answers and state frames never wait
+/// behind picture data; the clock sync feeds the latency measurement.
+pub const CONTROL_STREAM_PRIORITY: i32 = 1;
+
+/// Gives the host's control stream `send` its priority (E4).
+pub fn prioritize_control(send: &SendStream) {
+    let _ = send.set_priority(CONTROL_STREAM_PRIORITY);
+}
+
+/// Whether a session streams pictures a user watches: `view` and `control`,
+/// not `probe`, `preview` or metadata. Only such a session counts as
+/// interactive (plan 2026-11-14 E3).
+pub fn picture_session(mode: super::wire_hello::SessionMode, metadata: bool) -> bool {
+    use super::wire_hello::SessionMode;
+    !metadata && matches!(mode, SessionMode::View | SessionMode::Control)
+}
+
+/// The interactive presence of one screen session (E3): held while the
+/// session streams the full view, so bulk transfers of this process yield.
+/// That is a `view` or `control` session from its start, and a preview while
+/// `SET_MODE` has raised it to the full view (the tile of the group view that
+/// became the view); back as a preview it gives the presence up.
+pub(crate) struct PicturePresence {
+    kind: InteractiveKind,
+    /// The session can stream pictures at all (no probe, no metadata channel).
+    pictures: bool,
+    guard: Option<InteractiveGuard>,
+}
+
+impl PicturePresence {
+    /// A viewer's session as its hello opened it.
+    pub(crate) fn viewer(mode: super::wire_hello::SessionMode, metadata: bool) -> Self {
+        let pictures = !metadata && mode != super::wire_hello::SessionMode::Probe;
+        let mut presence = Self {
+            kind: InteractiveKind::ScreenViewer,
+            pictures,
+            guard: None,
+        };
+        presence.set_full(picture_session(mode, metadata));
+        presence
+    }
+
+    /// A host's picture pipeline; `full`: it starts with the full view.
+    pub(crate) fn host(full: bool) -> Self {
+        let mut presence = Self {
+            kind: InteractiveKind::ScreenHost,
+            pictures: true,
+            guard: None,
+        };
+        presence.set_full(full);
+        presence
+    }
+
+    /// The stream is the full view now (`true`) or a preview.
+    pub(crate) fn set_full(&mut self, full: bool) {
+        if !(full && self.pictures) {
+            self.guard = None;
+        } else if self.guard.is_none() {
+            self.guard = Some(enter_interactive(self.kind));
+        }
+    }
+
+    /// Whether the session counts as interactive right now.
+    #[cfg(test)]
+    pub(crate) fn active(&self) -> bool {
+        self.guard.is_some()
+    }
+}
 
 /// Microseconds of the wall clock since 1970.
 pub fn now_us() -> u64 {
@@ -387,3 +458,7 @@ async fn read_picture_stream(
         })
         .await;
 }
+
+#[cfg(test)]
+#[path = "gop_stream_bild_tests.rs"]
+mod bild_tests;

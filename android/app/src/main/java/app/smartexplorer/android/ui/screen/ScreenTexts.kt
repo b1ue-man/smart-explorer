@@ -55,6 +55,7 @@ object ScreenTexts {
         "update_stop" -> R.string.screen_end_update_stop
         "connection_lost" -> R.string.screen_end_connection_lost
         "failed" -> R.string.screen_end_failed
+        "session_changed" -> R.string.screen_end_session_changed
         "ended" -> R.string.screen_end_ended
         "connection_failed" -> R.string.screen_end_connection_failed
         else -> null

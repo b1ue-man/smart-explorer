@@ -10,7 +10,8 @@ impl DiscoveryUiState {
     /// Folds the daemon's own-offer list in: drops offers the worker no
     /// longer runs (for example after a handover to a new version), takes up
     /// offers the interface does not know yet (it was restarted while the
-    /// offer lives) and copies the rights of every offer.
+    /// offer lives) and copies the rights and the renewal facts (hint and new
+    /// PIN after too many failed attempts, E37) of every offer.
     pub fn retain_live_offers(&mut self, live: &[crate::share::OwnDiscoveryOffer]) {
         let before = self.active_offers.len();
         self.active_offers
@@ -27,7 +28,19 @@ impl DiscoveryUiState {
                 self.adopt_live_offer(offer);
             }
             self.set_offer_rights(&offer.offer_id, offer.rights.clone());
+            self.adopt_live_renewal(offer);
         }
+    }
+
+    /// The worker's offers and its renewals in their pause (E49) in one
+    /// step, as Android takes them from each snapshot.
+    pub fn adopt_live(
+        &mut self,
+        live: &[crate::share::OwnDiscoveryOffer],
+        renewals: &[crate::share::WaitingRenewal],
+    ) {
+        self.retain_live_offers(live);
+        self.set_waiting_renewals(renewals);
     }
 
     /// The rights of one offer, as the worker announced them.

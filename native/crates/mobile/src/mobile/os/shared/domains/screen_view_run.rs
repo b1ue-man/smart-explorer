@@ -25,6 +25,9 @@ use crate::screen::os::viewer_sink::{PullQueue, SinkOutput, ViewerSink, PULL_END
 use crate::share::access_grant::{Capability, CapabilityDecision};
 use crate::share::PeerOpenTarget;
 
+#[path = "screen_view_cursor.rs"]
+mod cursor_events;
+
 pub(super) type SendFrame = Arc<dyn Fn(&ViewerFrame) -> io::Result<()> + Send + Sync>;
 type CloseFn = Arc<dyn Fn() -> io::Result<()> + Send + Sync>;
 
@@ -59,6 +62,8 @@ pub(super) struct ViewSession {
     pub family_presented: AtomicBool,
     family_picture: Mutex<Option<(u64, u64)>>,
     local_limits: Mutex<Option<crate::screen::core::frame_budget::FrameLimits>>,
+    /// The host's pointer beside the picture (plan 2026-11-14 P6).
+    cursor: cursor_events::CursorEvents,
 }
 
 impl ViewSession {
@@ -161,6 +166,7 @@ fn new_session(mode: SessionMode) -> Arc<ViewSession> {
         family_presented: AtomicBool::new(false),
         family_picture: Mutex::new(None),
         local_limits: Mutex::new(None),
+        cursor: Default::default(),
     });
     lock(&SESSIONS).insert(id, session.clone());
     session
@@ -298,6 +304,21 @@ fn on_event(
             let allowed = session.mode == SessionMode::Control
                 && hello.authorization.control != CapabilityDecision::Off;
             session.control_allowed.store(allowed, Ordering::SeqCst);
+            // A new connection starts without an overlay pointer: the app
+            // hides the one of the connection before (P6).
+            session.cursor.clear();
+            let nothing = crate::screen::core::cursor_overlay::CursorPosition::hidden();
+            emit(
+                id,
+                "cursorPosition",
+                cursor_events::position_fields(&nothing),
+            );
+            // The host draws its pointer into the picture unless it is asked
+            // to send it beside; the frame never leaves for a host that did
+            // not announce the overlay (`viewer_client_tasks.rs`).
+            if session.mode != SessionMode::Preview && lock(&session.family).is_none() {
+                let _ = session.send(&ViewerFrame::CursorOverlay(true));
+            }
             emit(
                 id,
                 "accepted",
@@ -423,6 +444,17 @@ fn on_host_frame(session: &ViewSession, encoder: &mut (String, bool), own: &str,
             emit(id, "error", fields);
         }
         HostFrame::Pong(_) => {}
+        HostFrame::CursorShape(shape) => emit(id, "cursorShape", session.cursor.shape(&shape)),
+        HostFrame::CursorPosition(position) => {
+            if let Some(shape) = session.cursor.repeat() {
+                emit(id, "cursorShape", shape);
+            }
+            emit(
+                id,
+                "cursorPosition",
+                cursor_events::position_fields(&position),
+            );
+        }
         HostFrame::Families(_)
         | HostFrame::FamilySnapshot(_)
         | HostFrame::FamilyOperation(_)

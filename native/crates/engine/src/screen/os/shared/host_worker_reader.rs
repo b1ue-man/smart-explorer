@@ -3,6 +3,7 @@
 use super::capture_broker::CaptureBroker;
 use crate::screen::core::{
     capture_transport,
+    cursor_overlay::{self, CursorFeed},
     worker_capture_wire::{self as wire, GrantReply, GrantRequest, Reduction},
     worker_wire::{self, WorkerReply},
 };
@@ -21,6 +22,7 @@ impl WorkerReader {
         mut output: impl Read + Send + 'static,
         input: Arc<Mutex<std::process::ChildStdin>>,
         broker: Arc<CaptureBroker>,
+        cursor: Arc<CursorFeed>,
     ) -> io::Result<Self> {
         let (sender, answers) = mpsc::sync_channel(1);
         std::thread::Builder::new()
@@ -83,6 +85,11 @@ impl WorkerReader {
                             }
                             wire::RETIRED => {
                                 broker.retired(crate::screen::core::wire::from_json(&payload)?)?;
+                                Ok(Some(None))
+                            }
+                            // The pointer of the overlay (P6) is no answer.
+                            worker_wire::CURSOR => {
+                                cursor.publish(cursor_overlay::decode_update(&payload)?);
                                 Ok(Some(None))
                             }
                             _ => Ok(Some(Some(WorkerReply::decode(tag, &payload)?))),

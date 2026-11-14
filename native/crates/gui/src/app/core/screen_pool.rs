@@ -152,6 +152,9 @@ pub fn to_view(
                 open.display,
                 &open.prefs,
             )));
+            // The full view draws the host's pointer itself again (P6); the
+            // frame only leaves for a host whose session negotiated that.
+            session.send(ViewerFrame::CursorOverlay(true));
             session.set_prefer_yuv(open.prefer_yuv);
             session.set_present_gap_ms(0);
             session.mode = SessionMode::View;
@@ -191,6 +194,9 @@ pub fn to_tile(
         };
         session.send(ViewerFrame::ControlRequest(release));
     }
+    // A tile draws no pointer overlay: the host's pointer goes back into
+    // the picture (P6).
+    session.send(ViewerFrame::CursorOverlay(false));
     session.send(ViewerFrame::SetMode(preview_set_mode(edge, interval_ms)));
     session.set_prefer_yuv(false);
     session.set_present_gap_ms(preview_gap_ms(interval_ms));

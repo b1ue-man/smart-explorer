@@ -15,7 +15,8 @@ use crate::screen::core::wire::{SCREEN_ALPN, SCREEN_PROTOCOL_VERSION};
 use crate::screen::core::wire_hello::{screen_transcript, ScreenClientHello, ScreenServerHello};
 use crate::share::core::{eio, hmac_proof, now_secs, random_token};
 use crate::share::io_deadline;
-use crate::share::node::{ShareIrohNode, ALPN};
+use crate::share::keepalive::transport_purpose::{self, TransportPurpose};
+use crate::share::node::ShareIrohNode;
 use crate::share::profiles::{fingerprint_matches, ShareProfiles};
 use crate::share::service::ShareService;
 use crate::share::session::{endpoint_addr, relation_kind_id, PeerPrincipal};
@@ -54,7 +55,8 @@ impl ShareIrohNode {
     /// while closed requires `validated`; only a refusal on the first Initial
     /// is answered by `Endpoint::accept`).
     async fn answers_file_alpn(&self, addr: iroh::EndpointAddr) -> bool {
-        match tokio::time::timeout(SCREEN_PROBE_TIMEOUT, self.endpoint.connect(addr, ALPN)).await {
+        let connect = transport_purpose::connect_files(&self.endpoint, addr);
+        match tokio::time::timeout(SCREEN_PROBE_TIMEOUT, connect).await {
             Ok(Ok(connection)) => {
                 connection.close(VarInt::from_u32(0), b"screen capability probe");
                 true
@@ -79,7 +81,12 @@ impl ShareIrohNode {
         let generation = self
             .policy
             .snapshot(PeerPrincipal::from_endpoint(endpoint))?;
-        let connecting = self.endpoint.connect(addr.clone(), SCREEN_ALPN);
+        let connecting = transport_purpose::connect(
+            &self.endpoint,
+            addr.clone(),
+            SCREEN_ALPN,
+            TransportPurpose::Screen,
+        );
         let connection = match tokio::time::timeout(io_deadline::PEER_OP_TIMEOUT, connecting).await
         {
             Ok(Ok(connection)) => connection,

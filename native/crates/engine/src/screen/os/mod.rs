@@ -175,6 +175,9 @@ mod capture_source;
 #[path = "windows/capture_wgc.rs"]
 mod capture_wgc;
 #[cfg(windows)]
+#[path = "windows/cursor_overlay.rs"]
+mod cursor_overlay;
+#[cfg(windows)]
 #[path = "windows/d3d_device.rs"]
 mod d3d_device;
 #[cfg(target_os = "linux")]

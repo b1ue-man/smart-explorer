@@ -21,7 +21,7 @@ use super::tcp_registry::{spawn_tunnel, ListenerOptions, Source, TunnelParts};
 use super::tcp_wire::{self, TcpClientHello, TcpHelloReply, TcpServerHello};
 use super::types::{PeerEndpoint, PeerOpenTarget};
 use crate::share::ShareIdentity;
-use iroh::endpoint::{ConnectOptions, Connection, RecvStream, SendStream};
+use iroh::endpoint::{Connection, RecvStream, SendStream};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::{io, sync::Arc, time::Duration};
 use tokio::net::{TcpListener, TcpStream};
@@ -82,7 +82,8 @@ impl ShareIrohNode {
         let generation = self
             .policy
             .snapshot(PeerPrincipal::from_endpoint(endpoint))?;
-        let options = ConnectOptions::new().with_additional_alpns(vec![TCP_ALPN_V1.to_vec()]);
+        let options = super::keepalive::transport_purpose::tcp_options()
+            .with_additional_alpns(vec![TCP_ALPN_V1.to_vec()]);
         let connect = async {
             let connecting = self
                 .endpoint

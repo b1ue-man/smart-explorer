@@ -117,6 +117,10 @@ fn end_reason_text(key: &str, detail: Option<&str>) -> String {
         "connection_lost" => "Die Verbindung zum Gerät ist abgebrochen".into(),
         "connection_failed" => with_detail("Die Verbindung zum Gerät ist fehlgeschlagen", detail),
         "failed" => with_detail("Die Sitzung ist fehlgeschlagen", detail),
+        "session_changed" => {
+            "Die Benutzersitzung am Gerät hat gewechselt; die Ansicht konnte nicht neu aufgebaut werden"
+                .into()
+        }
         other => error_text(other, detail),
     }
 }

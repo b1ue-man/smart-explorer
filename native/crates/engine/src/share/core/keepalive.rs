@@ -1,7 +1,16 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use iroh::endpoint::{ControllerFactory, QuicTransportConfig, VarInt};
+use iroh::endpoint::{ControllerFactory, QuicTransportConfig, QuicTransportConfigBuilder, VarInt};
+
+// Plan 2026-11-14 (E1 to E5): a transport profile per connection purpose,
+// built on `base_transport_builder` below.
+#[path = "interactive_presence.rs"]
+pub(crate) mod interactive_presence;
+#[path = "transport_purpose.rs"]
+pub(crate) mod transport_purpose;
+#[path = "yield_controller.rs"]
+pub(crate) mod yield_controller;
 
 pub(super) const IROH_CONNECTION_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(5);
 pub(super) const IROH_PATH_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(5);
@@ -125,6 +134,13 @@ pub(super) fn iroh_transport_config() -> QuicTransportConfig {
 }
 
 pub(super) fn iroh_transport_config_for_routes(enabled: bool) -> QuicTransportConfig {
+    base_transport_builder(enabled).build()
+}
+
+/// The endpoint values every connection shares; the purpose profiles
+/// (`transport_purpose.rs`) change only controller, send batches and ACK
+/// frequency on top of it.
+fn base_transport_builder(enabled: bool) -> QuicTransportConfigBuilder {
     let windows = transport_windows(crate::transfer::memory_budget());
     QuicTransportConfig::builder()
         .application_path_policy(enabled)
@@ -142,8 +158,12 @@ pub(super) fn iroh_transport_config_for_routes(enabled: bool) -> QuicTransportCo
         .stream_receive_window(VarInt::from_u32(windows.stream))
         .receive_window(VarInt::from_u32(windows.connection))
         .send_window(windows.send)
-        .build()
 }
+
+// P1 (2026-11-14): vendor patch oracles through the public API.
+#[cfg(test)]
+#[path = "verbindungen_vendor_task_tests.rs"]
+mod verbindungen_vendor_task_tests;
 
 #[cfg(test)]
 mod tests {

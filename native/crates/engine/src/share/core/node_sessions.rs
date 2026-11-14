@@ -15,7 +15,7 @@ use super::direct_reciprocal_wire::DIRECT_RECIPROCAL_CAPABILITY;
 use super::framing::{recv_ctrl, send_ctrl};
 use super::identity::ShareIdentity;
 use super::io_deadline;
-use super::node::{ShareIrohNode, ALPN};
+use super::node::ShareIrohNode;
 use super::session::denial::client_rejection;
 use super::session::{
     endpoint_addr, peer_denials, relation_kind_id, session_key, session_payload, transport_label,
@@ -383,11 +383,10 @@ impl ShareIrohNode {
             "peer session handshake",
             timeout,
             async {
-                let connection = self
-                    .endpoint
-                    .connect(addr, ALPN)
-                    .await
-                    .map_err(io_deadline::disconnected)?;
+                let connection =
+                    super::keepalive::transport_purpose::connect_files(&self.endpoint, addr)
+                        .await
+                        .map_err(io_deadline::disconnected)?;
                 self.await_route(&connection, Some(endpoint), Some(deadline))
                     .await?;
                 let (mut send, mut recv) = connection
@@ -423,6 +422,7 @@ impl ShareIrohNode {
                 }
             },
         ))
+        .map(|connection| self.with_login_target(endpoint, connection))
     }
 
     #[cfg(any(test, feature = "test-support"))]

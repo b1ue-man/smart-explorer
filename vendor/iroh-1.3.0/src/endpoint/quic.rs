@@ -1,4 +1,6 @@
 // Smart Explorer P28b/V3 patch (2026-10-25); see vendor/SMART_EXPLORER_ROUTE_POLICY.md.
+// Smart Explorer P1 patch (2026-11-14): send-batch setters; see
+// vendor/SMART_EXPLORER_QUIC_PROFILES.md.
 //! Exporting and encapsulating structs from noq
 //!
 //! Co-locates all iroh-noq exports.
@@ -9,7 +11,7 @@
 
 #[cfg(feature = "qlog")]
 use std::path::Path;
-use std::{sync::Arc, time::Duration};
+use std::{num::NonZeroUsize, sync::Arc, time::Duration};
 
 /// `noq` types that are used in the public iroh API.
 // Each type is notated with the iroh type or noq type that uses it.
@@ -454,6 +456,27 @@ impl QuicTransportConfigBuilder {
         self
     }
 
+    /// Maximum number of datagrams (GSO segments) sent in a single transmit.
+    ///
+    /// Defaults to 10 (Smart Explorer P1). The applied value is further limited by
+    /// the UDP sender, and a value above 10 is capped so that one transmit of
+    /// maximum-size segments stays within 64 KiB, the largest packet a relay
+    /// forwards. See `noq::TransportConfig::max_transmit_segments`.
+    pub fn max_transmit_segments(mut self, value: NonZeroUsize) -> Self {
+        self.0.max_transmit_segments(value);
+        self
+    }
+
+    /// Maximum number of datagrams one connection-driver pass produces before it
+    /// yields to other tasks.
+    ///
+    /// Defaults to 20 (Smart Explorer P1). See
+    /// `noq::TransportConfig::max_transmit_datagrams`.
+    pub fn max_transmit_datagrams(mut self, value: NonZeroUsize) -> Self {
+        self.0.max_transmit_datagrams(value);
+        self
+    }
+
     /// Whether to send observed address reports to peers.
     ///
     /// This will aid peers in inferring their reachable address, which in most NATd networks
@@ -727,5 +750,28 @@ impl ServerConfigBuilder {
     pub fn set_time_source(mut self, time_source: Arc<dyn TimeSource>) -> Self {
         self.inner.time_source(time_source);
         self
+    }
+}
+
+/// Smart Explorer P1 (2026-11-14): send-batch setters reach the noq configuration.
+#[cfg(test)]
+mod smart_explorer_transmit_batch_tests {
+    use std::num::NonZeroUsize;
+
+    use super::QuicTransportConfig;
+
+    #[test]
+    fn verbindungen_task_vendor_iroh_transmit_setters_reach_noq_config() {
+        let default = QuicTransportConfig::default().to_inner_arc();
+        assert_eq!(default.effective_max_transmit_segments().get(), 10);
+        assert_eq!(default.effective_max_transmit_datagrams().get(), 20);
+
+        let raised = QuicTransportConfig::builder()
+            .max_transmit_segments(NonZeroUsize::new(40).expect("nonzero"))
+            .max_transmit_datagrams(NonZeroUsize::new(80).expect("nonzero"))
+            .build()
+            .to_inner_arc();
+        assert_eq!(raised.effective_max_transmit_segments().get(), 40);
+        assert_eq!(raised.effective_max_transmit_datagrams().get(), 80);
     }
 }

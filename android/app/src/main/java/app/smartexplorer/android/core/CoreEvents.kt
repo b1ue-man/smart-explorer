@@ -62,7 +62,7 @@ internal object CoreEvents {
                 "screenSession" -> (event["session"] as? JsonPrimitive)?.longOrNull?.let { session ->
                     ScreenSessionChanged(session, event.text("state").orEmpty(), event.text("reason"))
                 }
-                "screenView" -> decodeScreenView(event)
+                "screenView" -> decodeScreenCursor(event) ?: decodeScreenView(event)
                 "vault" -> event.text("site")?.let { VaultChanged(it, event.text("state").orEmpty(), event.text("reason")) }
                 "docs.changed" -> DocsChanged(
                     roots = (event["roots"] as? JsonPrimitive)?.booleanOrNull ?: false,

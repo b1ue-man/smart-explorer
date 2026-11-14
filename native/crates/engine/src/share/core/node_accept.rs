@@ -9,6 +9,7 @@ use super::core::eio;
 use super::exec_protocol::EXEC_ALPN;
 use super::handshake_limits::{ApplicationHandshakePermit, TlsAdmission, TlsSource};
 use super::identity::code_renewal_registry::is_withdrawn;
+use super::keepalive::transport_purpose::AcceptProfiles;
 use super::node::{ShareIrohNode, ALPN};
 use crate::screen::core::wire::SCREEN_ALPN;
 
@@ -16,6 +17,9 @@ impl ShareIrohNode {
     pub(super) fn spawn_accept_loop(self: &Arc<Self>) {
         let node = self.clone();
         self.rt.spawn(async move {
+            // E1: every incoming connection gets the profile of its purpose
+            // (`transport_purpose.rs`); the checks below keep their order.
+            let profiles = Arc::new(AcceptProfiles::new(&node.endpoint));
             while let Some(incoming) = node.endpoint.accept().await {
                 if node.require_sharing_active().is_err() {
                     incoming.refuse();
@@ -53,9 +57,19 @@ impl ShareIrohNode {
                     }
                 };
                 let node = node.clone();
+                let profiles = profiles.clone();
                 tokio::spawn(async move {
+                    let (config, purpose) = profiles.for_incoming(&incoming);
+                    let accepting = match incoming.accept_with(config) {
+                        Ok(accepting) => accepting,
+                        Err(error) => {
+                            drop(permit);
+                            node.emit_connection_error(ConnectionErrorKind::Accept, error.to_string());
+                            return;
+                        }
+                    };
                     // TLS identity is not known before this bounded phase.
-                    let connected = tokio::time::timeout(UNKNOWN_HANDSHAKE, incoming).await;
+                    let connected = tokio::time::timeout(UNKNOWN_HANDSHAKE, accepting).await;
                     drop(permit);
                     let connection = match connected {
                         Ok(Ok(connection)) => connection,
@@ -65,6 +79,9 @@ impl ShareIrohNode {
                         }
                         Err(_) => return,
                     };
+                    // The late-bound purpose: the controller yields (or not)
+                    // by the negotiated ALPN from now on.
+                    purpose.bind_alpn(connection.alpn());
                     let remote = connection.remote_id().to_string();
                     let known = node.known_endpoint(&remote);
                     if connection.alpn() == super::lan_link_wire::LAN_LINK_ALPN && !known {
@@ -259,3 +276,7 @@ async fn dispatch_connection(
 #[cfg(test)]
 #[path = "node_accept_withdrawn_tests.rs"]
 mod withdrawn_tests;
+
+#[cfg(test)]
+#[path = "unbelegt_handshake_mobile_task_tests.rs"]
+mod unbelegt_handshake_mobile_tests;

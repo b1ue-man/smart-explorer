@@ -9,7 +9,13 @@
 //! its answer; a process that died, ended for an update (exit 75, V8) or
 //! broke the protocol ends the session with `host_shutdown` or
 //! `capture_failed`. Dropping the source sends `CLOSE`, waits briefly and
-//! kills what is left.
+//! kills what is left. A worker without session variables (a Linux root
+//! service, E23) starts the host process in the active graphical session of
+//! `seat0` with that session's variables and account; once logind names
+//! another active session, the next request ends that host and its session
+//! with `session_changed` (E48: the viewer builds it again in the new one).
+//! Window list, icons and the encoder offer of such a worker come from a
+//! short host process of the session's account (`session_queries`, E47).
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
@@ -37,7 +43,35 @@ mod capture_broker;
 mod capture_lifetime;
 #[path = "family_backend.rs"]
 pub mod family_backend;
+#[path = "host_worker_session_queries.rs"]
+pub mod session_queries;
+#[cfg(target_os = "linux")]
+use crate::screen::os::session_detect::active_session::{
+    process as session_mark, spawn as session_target,
+};
 pub use backend::{watch_registry, WorkerBackend, WorkerProgram};
+
+/// No other platform runs a worker outside the user's session.
+#[cfg(not(target_os = "linux"))]
+#[allow(dead_code)]
+mod session_target {
+    pub struct ActiveSession;
+    impl ActiveSession {
+        pub fn generation(&self) -> &str {
+            ""
+        }
+    }
+    pub fn for_worker() -> Option<ActiveSession> {
+        None
+    }
+    pub fn apply(_: &ActiveSession, _: &mut std::process::Command) {}
+    pub fn still_current(_: &str) -> bool {
+        true
+    }
+    pub fn mark_host(_: Option<&ActiveSession>, _: &mut std::process::Command) {}
+}
+#[cfg(not(target_os = "linux"))]
+use session_target as session_mark;
 
 /// The V9 start switch of the host process (`StartRequest::ScreenHostWorker`).
 pub const SCREEN_HOST_WORKER_SWITCH: &str = "--screen-host-worker";
@@ -120,6 +154,8 @@ struct SourceFacts {
     limits: Mutex<FrameLimits>,
     family_layout_revision: AtomicU64,
     legacy_reconnect: AtomicBool,
+    /// The pointer of the overlay (P6), published by the reader thread.
+    cursor: Arc<crate::screen::core::cursor_overlay::CursorFeed>,
 }
 impl Default for SourceFacts {
     fn default() -> Self {
@@ -129,6 +165,7 @@ impl Default for SourceFacts {
             limits: Mutex::new(FrameLimits::LEGACY),
             family_layout_revision: AtomicU64::new(0),
             legacy_reconnect: AtomicBool::new(false),
+            cursor: Arc::default(),
         }
     }
 }
@@ -140,6 +177,9 @@ pub(super) struct WorkerLink {
     input: Arc<Mutex<ChildStdin>>,
     broker: Arc<capture_broker::CaptureBroker>,
     reader: WorkerReader,
+    /// Generation of the followed session the process runs in (E23);
+    /// `None` for a worker with own session variables.
+    session: Option<String>,
 }
 
 impl WorkerLink {
@@ -154,6 +194,11 @@ impl WorkerLink {
         broker: Arc<capture_broker::CaptureBroker>,
     ) -> io::Result<Self> {
         let mut command = Command::new(program);
+        let followed = session_target::for_worker();
+        if let Some(session) = &followed {
+            session_target::apply(session, &mut command);
+        }
+        session_mark::mark_host(followed.as_ref(), &mut command);
         command.envs(env.iter().map(|(key, value)| (key, value)));
         command
             .arg(SCREEN_HOST_WORKER_SWITCH)
@@ -162,7 +207,9 @@ impl WorkerLink {
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit());
         super::worker_lifetime::prepare(&mut command);
-        Self::with_command_admitted(command, broker)
+        let mut link = Self::with_command_admitted(command, broker)?;
+        link.session = followed.map(|session| session.generation().to_string());
+        Ok(link)
     }
 
     fn with_command(_command: Command) -> io::Result<Self> {
@@ -186,7 +233,13 @@ impl WorkerLink {
             return Err(io::Error::other("screen host process has no pipes"));
         };
         let input = Arc::new(Mutex::new(input));
-        let reader = match WorkerReader::start(output, input.clone(), broker.clone()) {
+        let facts = Arc::new(SourceFacts::default());
+        let reader = match WorkerReader::start(
+            output,
+            input.clone(),
+            broker.clone(),
+            facts.cursor.clone(),
+        ) {
             Ok(reader) => reader,
             Err(error) => {
                 let _ = child.kill();
@@ -195,11 +248,12 @@ impl WorkerLink {
             }
         };
         Ok(Self {
-            facts: Arc::new(SourceFacts::default()),
+            facts,
             child: Some(child),
             input,
             broker,
             reader,
+            session: None,
         })
     }
 
@@ -209,6 +263,15 @@ impl WorkerLink {
         request: &WorkerRequest,
         limit: Duration,
     ) -> Result<WorkerReply, StageError> {
+        if let Some(generation) = &self.session {
+            if !session_target::still_current(generation) {
+                self.kill();
+                return Err(StageError::new(
+                    ScreenErrorCode::HostShutdown,
+                    crate::screen::core::session_state::session_changed_error(),
+                ));
+            }
+        }
         let sent = self
             .input
             .lock()

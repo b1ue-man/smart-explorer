@@ -24,6 +24,10 @@ use tokio::sync::{watch, Notify};
 mod network_wait;
 #[path = "route_monitor_samples.rs"]
 mod samples;
+// Test fixture: a route whose admission a test sets (pauses of consumers).
+#[cfg(test)]
+#[path = "route_monitor_test_route.rs"]
+pub(super) mod test_route;
 
 const MAX_CONNECTIONS: usize = 256;
 const TICK: Duration = Duration::from_millis(25);

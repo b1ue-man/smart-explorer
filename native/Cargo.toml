@@ -38,6 +38,10 @@ version = "0.5.196"
 # P28: application frames require a validated path/policy generation before
 # serialization. Keep these three upstream pins together; provenance, API and
 # rebase/removal conditions are in vendor/SMART_EXPLORER_ROUTE_POLICY.md.
+# Per-connection send batches (max_transmit_segments, max_transmit_datagrams;
+# plan 2026-11-14 P1) are a second patch in the same three crates; their
+# provenance, API, relay cap and rebase conditions are in
+# vendor/SMART_EXPLORER_QUIC_PROFILES.md.
 [patch.crates-io]
 iroh = { path = "../vendor/iroh-1.3.0" }
 noq = { path = "../vendor/noq-1.3.0" }

@@ -74,7 +74,10 @@ impl CaptureResources {
         if let Some(pending) = &mut resources.pending {
             pending.session = Some(session.clone());
         }
-        let _ = session.SetIsCursorCaptureEnabled(true);
+        // The pointer stays in the picture unless the viewer draws it itself
+        // (overlay, plan 2026-11-14 P6): `attach` sets the session's pointer
+        // capture and lets the overlay switch it.
+        super::cursor_overlay::attach(&session);
         session.StartCapture().map_err(io::Error::other)?;
         Ok(resources)
     }

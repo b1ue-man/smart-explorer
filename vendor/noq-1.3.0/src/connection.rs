@@ -1,4 +1,6 @@
 // Smart Explorer P28b/V3 patch (2026-10-25); see vendor/SMART_EXPLORER_ROUTE_POLICY.md.
+// Smart Explorer P1 patch (2026-11-14): send batches from the transport configuration;
+// see vendor/SMART_EXPLORER_QUIC_PROFILES.md.
 use std::{
     any::Any,
     fmt,
@@ -1699,14 +1701,25 @@ impl State {
         }
     }
 
+    /// Send-batch limits of this connection: segments per transmit (also bounded by
+    /// the UDP sender) and datagrams per driver pass.
+    ///
+    /// Smart Explorer P1 (2026-11-14): the limits come from the connection's transport
+    /// configuration instead of the former constants `MAX_TRANSMIT_SEGMENTS` (10) and
+    /// `MAX_TRANSMIT_DATAGRAMS` (20), which remain its defaults.
+    fn transmit_batch(&self) -> (NonZeroUsize, usize) {
+        let segments = self
+            .sender
+            .max_transmit_segments()
+            .min(self.inner.max_transmit_segments());
+        (segments, self.inner.max_transmit_datagrams().get())
+    }
+
     fn drive_transmit(&mut self, cx: &mut Context<'_>) -> io::Result<bool> {
         let now = self.runtime.now();
         let mut transmits = 0;
 
-        let max_datagrams = self
-            .sender
-            .max_transmit_segments()
-            .min(MAX_TRANSMIT_SEGMENTS);
+        let (max_datagrams, max_transmit_datagrams) = self.transmit_batch();
 
         loop {
             // Retry the last transmit, or get a new one.
@@ -1754,7 +1767,7 @@ impl State {
                 Poll::Ready(Ok(())) => {}
             }
 
-            if transmits >= MAX_TRANSMIT_DATAGRAMS {
+            if transmits >= max_transmit_datagrams {
                 // TODO: What isn't ideal here yet is that if we don't poll all
                 // datagrams that could be sent we don't go into the `app_limited`
                 // state and CWND continues to grow until we get here the next time.
@@ -2116,15 +2129,119 @@ pub enum SendDatagramError {
     ConnectionLost(#[from] ConnectionError),
 }
 
-/// The maximum amount of datagrams which will be produced in a single `drive_transmit` call
-///
-/// This limits the amount of CPU resources consumed by datagram generation,
-/// and allows other tasks (like receiving ACKs) to run in between.
-const MAX_TRANSMIT_DATAGRAMS: usize = 20;
+// Smart Explorer P1 (2026-11-14): the former constants `MAX_TRANSMIT_DATAGRAMS` (20)
+// and `MAX_TRANSMIT_SEGMENTS` (10) are now `TransportConfig::max_transmit_datagrams`
+// and `TransportConfig::max_transmit_segments`, with these values as defaults; see
+// `State::transmit_batch` and vendor/SMART_EXPLORER_QUIC_PROFILES.md.
 
-/// The maximum amount of datagrams that are sent in a single transmit
-///
-/// This can be lower than the maximum platform capabilities, to avoid excessive
-/// memory allocations when calling `poll_transmit()`. Benchmarks have shown
-/// that numbers around 10 are a good compromise.
-const MAX_TRANSMIT_SEGMENTS: NonZeroUsize = NonZeroUsize::new(10).expect("known");
+#[cfg(all(
+    test,
+    feature = "rustls",
+    feature = "runtime-tokio",
+    any(feature = "aws-lc-rs", feature = "ring")
+))]
+mod smart_explorer_transmit_batch_tests {
+    use std::{
+        net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket},
+        num::NonZeroUsize,
+        sync::Arc,
+    };
+
+    use rustls::{
+        RootCertStore,
+        pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer},
+    };
+
+    use crate::{ClientConfig, Endpoint, EndpointConfig, ServerConfig, TransportConfig};
+
+    /// One endpoint that serves and dials itself with `transport` on both sides.
+    fn self_dialing_endpoint(transport: TransportConfig) -> Endpoint {
+        let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()])
+            .expect("self-signed test certificate");
+        let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(cert.signing_key.serialize_der()));
+        let transport = Arc::new(transport);
+        let mut server_config = ServerConfig::with_single_cert(vec![cert.cert.der().clone()], key)
+            .expect("server config from test certificate");
+        server_config.transport_config(transport.clone());
+        let socket = UdpSocket::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))
+            .expect("bind loopback UDP socket");
+        let endpoint = Endpoint::new(
+            EndpointConfig::default(),
+            Some(server_config),
+            socket,
+            Arc::new(crate::TokioRuntime),
+        )
+        .expect("endpoint on loopback");
+        let mut roots = RootCertStore::empty();
+        roots
+            .add(cert.cert.der().clone())
+            .expect("test certificate as root");
+        let mut client_config = ClientConfig::with_root_certificates(Arc::new(roots))
+            .expect("client config from test root");
+        client_config.transport_config(transport);
+        endpoint.set_default_client_config(client_config);
+        endpoint
+    }
+
+    /// Connects the endpoint to itself and returns the driver's batch limits of the
+    /// dialing and the accepting connection.
+    async fn connected_batches(
+        transport: TransportConfig,
+    ) -> [(NonZeroUsize, usize, NonZeroUsize); 2] {
+        let endpoint = self_dialing_endpoint(transport);
+        let addr = endpoint.local_addr().expect("endpoint address");
+        let (client, server) = tokio::join!(
+            async {
+                endpoint
+                    .connect(addr, "localhost")
+                    .expect("start connection")
+                    .await
+                    .expect("client handshake")
+            },
+            async {
+                endpoint
+                    .accept()
+                    .await
+                    .expect("incoming connection")
+                    .await
+                    .expect("server handshake")
+            }
+        );
+        let batch = |connection: &crate::Connection| {
+            let state = connection.0.state.lock("transmit batch test");
+            let (segments, datagrams) = state.transmit_batch();
+            (segments, datagrams, state.sender.max_transmit_segments())
+        };
+        let batches = [batch(&client), batch(&server)];
+        client.close(0u32.into(), b"done");
+        batches
+    }
+
+    #[tokio::test]
+    async fn verbindungen_task_vendor_transmit_defaults_reach_drive_transmit() {
+        for (segments, datagrams, sender_segments) in
+            connected_batches(TransportConfig::default()).await
+        {
+            assert_eq!(
+                segments,
+                sender_segments.min(NonZeroUsize::new(10).unwrap())
+            );
+            assert_eq!(datagrams, 20);
+        }
+    }
+
+    #[tokio::test]
+    async fn verbindungen_task_vendor_transmit_setters_reach_drive_transmit() {
+        let mut transport = TransportConfig::default();
+        transport
+            .max_transmit_segments(NonZeroUsize::new(40).unwrap())
+            .max_transmit_datagrams(NonZeroUsize::new(80).unwrap());
+        for (segments, datagrams, sender_segments) in connected_batches(transport).await {
+            assert_eq!(
+                segments,
+                sender_segments.min(NonZeroUsize::new(40).unwrap())
+            );
+            assert_eq!(datagrams, 80);
+        }
+    }
+}
