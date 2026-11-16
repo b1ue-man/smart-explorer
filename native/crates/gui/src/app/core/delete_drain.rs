@@ -155,7 +155,9 @@ impl App {
 
     fn mark_unconfirmed_delete_state(&mut self, origin: Option<DeleteOrigin>) {
         match origin {
-            Some(DeleteOrigin::Explorer) => self.rescan(),
+            // The delete ended without a confirmed result: the view reads
+            // itself again, nobody navigated (E4c).
+            Some(DeleteOrigin::Explorer) => self.rescan_background(),
             Some(DeleteOrigin::Reclaim) => {
                 self.reclaim_state = StorageRunState::Partial;
                 self.reclaim_issues.push(

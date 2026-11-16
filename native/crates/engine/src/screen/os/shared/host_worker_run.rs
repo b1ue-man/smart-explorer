@@ -1,9 +1,14 @@
-//! Worker lifetime and permanently active resource-control dispatcher.
+//! Worker lifetime and permanently active resource-control dispatcher. The
+//! worker sits behind one lock that this loop (control requests and
+//! `PRODUCE`), the capture stage of the picture stream (`host_worker_clock`)
+//! and the input thread (`host_worker_input`) share; capture holds it only
+//! for the capture call, encoding never.
 use super::*;
 use crate::screen::core::{capture_bytes::AdmittedBytes, capture_transport};
 use crate::screen::os::host_worker_client::session_queries as queries;
 #[cfg(target_os = "linux")]
 use crate::screen::os::session_detect::active_session::process as session_host;
+use std::sync::{mpsc, Mutex, PoisonError};
 
 /// No other platform starts a host process in another account's session.
 #[cfg(not(target_os = "linux"))]
@@ -14,14 +19,14 @@ mod session_host {
 }
 
 #[derive(Clone, Copy)]
-struct Reference {
-    generation: u64,
-    regions: bool,
-    limits: FrameLimits,
-    family_layout_revision: Option<u64>,
+pub(super) struct Reference {
+    pub(super) generation: u64,
+    pub(super) regions: bool,
+    pub(super) limits: FrameLimits,
+    pub(super) family_layout_revision: Option<u64>,
 }
 impl Reference {
-    fn of(worker: &Worker) -> Self {
+    pub(super) fn of(worker: &Worker) -> Self {
         Self {
             generation: worker
                 .source
@@ -41,7 +46,7 @@ impl Reference {
                 .and_then(|source| source.family_layout_revision()),
         }
     }
-    fn wrap(self, reply: WorkerReply) -> WorkerReply {
+    pub(super) fn wrap(self, reply: WorkerReply) -> WorkerReply {
         WorkerReply::Reference {
             generation: self.generation,
             regions: self.regions,
@@ -149,7 +154,7 @@ impl Worker {
 
 /// Sends what changed of the pointer ahead of an answer (P6): nothing until
 /// the daemon switched the overlay on.
-fn flush_cursor(output: &dispatch::Output) -> io::Result<()> {
+pub(super) fn flush_cursor(output: &dispatch::Output) -> io::Result<()> {
     let cursor = crate::screen::core::cursor_overlay::worker();
     if !cursor.has_pending() {
         return Ok(());
@@ -189,6 +194,9 @@ pub(super) fn run() -> i32 {
                 return 1;
             }
         };
+    // Merge W2: GPU pictures from the capture to the encoder (Linux: the
+    // DMA-BUF offer of the PipeWire streams, BK8b).
+    super::super::enable_gpu_pictures();
     let output: dispatch::Output = Arc::new(std::sync::Mutex::new(Box::new(io::stdout())));
     let remote = dispatch::RemoteAuthority::new(output.clone());
     let requests = match dispatch::start(io::stdin(), remote.clone()) {
@@ -198,7 +206,7 @@ pub(super) fn run() -> i32 {
             return 1;
         }
     };
-    let mut worker = Worker {
+    let worker = Arc::new(Mutex::new(Worker {
         admitted: None,
         backend: super::super::platform_backend(),
         source: None,
@@ -215,7 +223,50 @@ pub(super) fn run() -> i32 {
         capture_session: None,
         remote: remote.clone(),
         release_sink: None,
+    }));
+    let stream = super::clock::Stream::new(
+        worker.clone(),
+        output.clone(),
+        remote.clone(),
+        Arc::new(super::clock::Registry),
+    );
+    let lane = match super::input::InputLane::start(worker.clone(), output.clone(), remote) {
+        Ok(lane) => lane,
+        Err(error) => {
+            eprintln!("screen host process: {error}");
+            return 1;
+        }
     };
+    let (requests, router) = match super::input::route(requests, lane.clone(), stream.clone()) {
+        Ok(routed) => routed,
+        Err(error) => {
+            eprintln!("screen host process: {error}");
+            return 1;
+        }
+    };
+    let code = serve(&worker, &stream, &lane, &output, requests);
+    if code != 0 {
+        return code;
+    }
+    // Stages, input and router end before the worker, its source and its
+    // encoders are torn down; the Parent still retains unretired grants
+    // until its wait confirms the actual exit.
+    stream.stop();
+    lane.stop();
+    let _ = router.join();
+    drop((stream, lane));
+    drop(worker);
+    0
+}
+
+/// Answers the requests the router leaves to this loop, one after another.
+fn serve(
+    worker: &Mutex<Worker>,
+    stream: &super::clock::Stream,
+    lane: &super::input::InputLane,
+    output: &dispatch::Output,
+    requests: mpsc::Receiver<io::Result<WorkerRequest>>,
+) -> i32 {
     for request in requests {
         let request = match request {
             Ok(WorkerRequest::Close) => break,
@@ -225,32 +276,32 @@ pub(super) fn run() -> i32 {
                 return 1;
             }
         };
-        // The pointer of the overlay goes out ahead of the answer, so the
-        // daemon has it when the picture is done. An input batch sends none:
-        // the next picture does (at most one position per picture).
-        let with_cursor = !matches!(request, WorkerRequest::Input(_));
-        let reply = match worker.prepare_reply(request) {
+        // A request that takes pictures or ends their production rests the
+        // stages of the picture stream first (their memory is the same).
+        let quiet = super::clock::quiet_for(&request).map(|reset| stream.quiesce(reset));
+        let reply = {
+            let mut worker = worker.lock().unwrap_or_else(PoisonError::into_inner);
+            let reply = worker.prepare_reply(request);
+            lane.publish(&worker);
+            reply
+        };
+        let reply = match reply {
             Ok(reply) => reply,
             Err(error) => {
                 eprintln!("screen host process: {error}");
                 return 1;
             }
         };
-        let cursor = if with_cursor {
-            flush_cursor(&output)
-        } else {
-            Ok(())
-        };
-        let sent = cursor.and_then(|()| reply.write(&output));
+        // The pointer of the overlay goes out ahead of the answer, so the
+        // daemon has it when the picture is done.
+        let sent = flush_cursor(output).and_then(|()| reply.write(output));
         drop(reply);
+        drop(quiet);
         if let Err(error) = sent {
             eprintln!("screen host process: {error}");
             return 1;
         }
     }
-    // Worker/source/encoder teardown runs before process exit; the Parent still
-    // retains unretired grants until its wait confirms the actual exit.
-    drop(worker);
     0
 }
 

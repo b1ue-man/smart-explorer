@@ -12,6 +12,10 @@ use crate::vfs::{DeleteDisposition, VfsMeta};
 use serde_json::{json, Value};
 
 pub(crate) fn list(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
+    // `background` (E4c): an operation ended and nobody navigated; the view
+    // reads itself again, which is work of the app, not a person's request
+    // (no metadata presence at a Share device). Held until the function ends.
+    let _background = bool_or(args, "background", false).then(crate::vfs::BackgroundScope::enter);
     let loc = Loc::parse(str_arg(args, "location")?)?;
     if loc.kind == LocKind::Trash {
         return super::trash::listing();

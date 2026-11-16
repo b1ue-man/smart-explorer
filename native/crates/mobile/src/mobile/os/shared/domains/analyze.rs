@@ -78,6 +78,8 @@ fn checked_location(args: &Value) -> Result<String, ApiError> {
 /// since a full walk must not fill the browsing cache.
 fn resolve_remote(location: &str) -> Result<(crate::vfs::BackendHandle, String), ApiError> {
     let (backend, root) = Runtime::get()?.resolve_live(&Loc::parse(location)?)?;
+    // The walk is a job, not browsing: its own handle (E4, metadata presence).
+    let backend = crate::daemon::job_handle(&backend);
     Ok((crate::vfs::sync_backend(backend), root))
 }
 

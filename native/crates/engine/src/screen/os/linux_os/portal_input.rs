@@ -124,6 +124,34 @@ pub fn inject(events: &[InputEvent]) -> Result<(), ControlBlock> {
     send_input(&lease, events)
 }
 
+/// Sends compensating release events through the current portal lease.
+pub fn release(events: &[InputEvent]) -> Result<(), ControlBlock> {
+    if !release_only(events) {
+        return Err(ControlBlock::ControlUnavailable);
+    }
+    let lease = INPUT
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone()
+        .ok_or(ControlBlock::ControlUnavailable)?;
+    let identity = lease
+        .binding
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone()
+        .ok_or(ControlBlock::ControlUnavailable)?;
+    if events.is_empty() {
+        return Ok(());
+    }
+    lease
+        .sender
+        .send(Batch::Release {
+            identity,
+            events: events.to_vec(),
+        })
+        .map_err(|_| ControlBlock::ControlUnavailable)
+}
+
 pub(super) fn send_input(lease: &InputLease, events: &[InputEvent]) -> Result<(), ControlBlock> {
     let binding = lease.binding.lock().unwrap_or_else(PoisonError::into_inner);
     if !binding.as_ref().is_some_and(|binding| binding.connected()) {

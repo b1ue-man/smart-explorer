@@ -3,7 +3,8 @@ use super::mf_buffer_lease;
 use super::mf_capture_media::sample_with_buffer;
 use super::mf_media::Output;
 use crate::screen::core::capture_admission::{CaptureGrant, CaptureOwner};
-use crate::screen::core::capture_image::{AdmittedBytes, CapturedImage};
+use crate::screen::core::capture_image::AdmittedBytes;
+use crate::screen::core::capture_picture::Picture;
 use crate::screen::core::capture_records::CapturedRecords;
 use crate::screen::core::host_backend::CapturedEncodedFrame;
 use crate::screen::core::host_stage::StageRequest;
@@ -18,12 +19,12 @@ use windows::Win32::Media::MediaFoundation::{
 
 pub(super) fn capture_limit(
     grant: &CaptureGrant,
-    image: &CapturedImage,
+    picture: &Picture,
     request: &StageRequest,
     size: FrameSize,
 ) -> io::Result<usize> {
-    grant.check_identity(image.source(), image.generation())?;
-    if image.size() != size || request.size != size {
+    grant.check_identity(picture.source(), picture.generation())?;
+    if picture.size() != size || request.size != size {
         return Err(invalid("capture geometry differs from the MF encoder"));
     }
     if grant.plan().contract_binding() != Some(request.frame_contract) {
@@ -117,8 +118,11 @@ pub(super) fn append_sample(bytes: &mut AdmittedBytes, sample: &IMFSample) -> io
     Ok(())
 }
 
+/// The checked access unit of `codec` (H.264, and HEVC/AV1 by merge W1:
+/// their parameter sets are checked as the decoder will check them).
 pub(super) fn finish(
     bytes: AdmittedBytes,
+    codec: crate::screen::core::negotiate::CodecKind,
     size: FrameSize,
     keyframe: bool,
     wanted: bool,
@@ -129,7 +133,8 @@ pub(super) fn finish(
     if wanted && !keyframe {
         return Err(invalid("Media Foundation gave no key frame on request"));
     }
-    crate::screen::core::frame_size_caps::check_avc_dimensions(
+    crate::screen::core::frame_size_caps::check_video_dimensions(
+        codec,
         bytes.as_slice(),
         size,
         crate::screen::core::frame_budget::FrameLimits::RESOURCE,

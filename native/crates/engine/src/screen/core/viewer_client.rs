@@ -54,6 +54,12 @@ pub struct ViewerRequest {
     pub display_size: Option<FrameSize>,
     pub max_fps: u16,
     pub frame_capabilities: Option<super::frame_budget::FrameCapabilities>,
+    /// Announce `gop_continue_v1` (B-36): only for a decoding side that
+    /// keeps its decoder over a continuation stream (`gop_continue.rs`).
+    pub gop_continue: bool,
+    /// The decoders that keep their references over a continuation
+    /// (`gop_continue_decoders`, B-36 per codec); empty names none.
+    pub gop_continue_decoders: Vec<CodecOffer>,
 }
 
 /// Why a session did not start or ended.
@@ -140,6 +146,13 @@ pub struct ViewerSession {
     pub local_limits: Option<super::frame_budget::FrameLimits>,
     /// The viewer asked for the pointer overlay (P6); a reconnect asks again.
     pub cursor_wish: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// The host announced `rate_ceiling_v1` (plan 2026-11-14 „Bildkette“
+    /// BK6): only then does `RATE_CEILING` leave this viewer.
+    pub rate_ceiling: bool,
+    /// The host announced `set_decoders_v1` (P1): only then does
+    /// `SET_DECODERS` leave this viewer; without it a new „Codec“ or
+    /// „Dekodierer“ opens the session again.
+    pub set_decoders: bool,
 }
 
 impl ViewerSession {
@@ -222,6 +235,10 @@ async fn handshake_for(
         return Err(ViewerError::Unsupported);
     }
     let (mut hello, mut memory) = build(&server)?;
+    // B-31: H.264 and the tiles in `decoders`, HEVC and AV1 in
+    // `decoders_v2` only for a host that announced `codecs_v2`.
+    let decoders = hello.all_decoders();
+    hello.offer_decoders(&decoders, &server);
     hello.frame_capabilities = hello
         .frame_capabilities
         .map(|caps| caps.for_server(server.frame_memory_class))
@@ -267,14 +284,8 @@ async fn handshake_for(
             let mut wanted = limits.fit(hello.display_size.unwrap_or(FrameSize::MAX));
             if limits.max_pixels < 256 || limits.max_size.width < 16 || limits.max_size.height < 16
             {
-                hello
-                    .decoders
-                    .retain(|offer| offer.codec != super::negotiate::CodecKind::H264);
-            } else if hello
-                .decoders
-                .iter()
-                .any(|offer| offer.codec == super::negotiate::CodecKind::H264)
-            {
+                hello.decoders.retain(|offer| !offer.codec.is_video());
+            } else if hello.decoders.iter().any(|offer| offer.codec.is_video()) {
                 wanted = super::frame_size_caps::fit_macroblocks(wanted, limits.max_pixels / 256);
             }
             hello.display_size = Some(wanted);
@@ -381,9 +392,13 @@ async fn handshake_for(
             local_limits,
             cursor_overlay: super::cursor_overlay::negotiated(&server, hello.mode, metadata),
             cursor_wish: cursor_wish.clone(),
+            rate_ceiling: super::wire_hello::rate_ceiling_negotiated(&server) && !metadata,
+            set_decoders: super::set_decoders::negotiated(&server) && !metadata,
         },
         &accepted,
     );
+    let rate_ceiling = super::wire_hello::rate_ceiling_negotiated(&server) && !metadata;
+    let set_decoders = super::set_decoders::negotiated(&server) && !metadata;
     Ok(ViewerSession {
         connection,
         hello: accepted,
@@ -394,6 +409,8 @@ async fn handshake_for(
         memory,
         local_limits,
         cursor_wish,
+        rate_ceiling,
+        set_decoders,
     })
 }
 

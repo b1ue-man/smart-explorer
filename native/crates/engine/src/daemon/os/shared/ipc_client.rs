@@ -327,18 +327,40 @@ fn worker_version_is_current(version: &str) -> bool {
 pub(super) fn share_backend_identity(
     label: String,
     target: crate::share::PeerOpenTarget,
+    origin: crate::share::OperationOrigin,
 ) -> crate::vfs::BackendHandle {
-    Arc::new(UnavailableBackend { label, target })
+    Arc::new(UnavailableBackend {
+        label,
+        target,
+        origin,
+    })
 }
+
+/// How a Share device is opened (`open_share_backend_for`). `'a` is the
+/// lifetime of what the opener borrows: an alias without it names
+/// `dyn Fn(..) + 'static`, which a closure that borrows a local is not.
+type OpenShare<'a> = dyn Fn(
+        crate::share::PeerOpenTarget,
+        crate::share::OperationOrigin,
+    ) -> Result<(String, crate::vfs::BackendHandle, crate::share::ShareStatus), String>
+    + 'a;
 
 pub(super) struct UnavailableBackend {
     label: String,
     target: crate::share::PeerOpenTarget,
+    /// The origin of the handle this one stands for; a reopened handle keeps
+    /// it (metadata presence, E4).
+    origin: crate::share::OperationOrigin,
 }
 
 impl UnavailableBackend {
     pub(super) fn live_backend(&self) -> io::Result<crate::vfs::BackendHandle> {
-        open_share_backend(self.target.clone())
+        self.reopen_with(&open_share_backend_for)
+    }
+
+    /// Opens the device again with the origin of the handle this one stands for.
+    fn reopen_with(&self, open: &OpenShare<'_>) -> io::Result<crate::vfs::BackendHandle> {
+        open(self.target.clone(), self.origin)
             .map(|(_, backend, _)| backend)
             .map_err(io::Error::other)
     }
@@ -465,3 +487,7 @@ mod tests {
         assert!(replacement.accepts("11111111111111111111111111111111"));
     }
 }
+
+#[cfg(test)]
+#[path = "ipc_client_origin_tests.rs"]
+mod origin_tests;

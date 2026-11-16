@@ -21,6 +21,8 @@ pub mod share_screen_portal_ui;
 // SCR-M7: the desktop viewer and the group view (`--screen-view`,
 // `--screen-grid`, V5); the pages of „Geräte & Freigaben“ start it through
 // `screen_launch`.
+#[path = "core/screen_decode_local.rs"]
+mod screen_decode_local;
 #[path = "core/screen_decode_thread.rs"]
 mod screen_decode_thread;
 #[path = "core/screen_devices.rs"]
@@ -32,22 +34,29 @@ mod screen_input_map;
 #[path = "core/screen_launch.rs"]
 pub mod screen_launch;
 pub use screen_launch::{run_screen_grid, run_screen_view};
+#[path = "core/screen_chain_window.rs"]
+mod screen_chain_window;
 #[path = "core/screen_icon_requests.rs"]
 mod screen_icon_requests;
 #[path = "core/screen_icons.rs"]
 mod screen_icons;
 #[path = "core/screen_pool.rs"]
 mod screen_pool;
+// Public for `se screen view --max-rate` (plan 2026-11-14 „Bildkette“ B-09).
 #[path = "core/screen_prefs.rs"]
-mod screen_prefs;
+pub mod screen_prefs;
 #[path = "core/screen_presented.rs"]
 mod screen_presented;
+#[path = "core/screen_refresh.rs"]
+mod screen_refresh;
 #[path = "core/screen_render_caps.rs"]
 pub mod screen_render_caps;
 #[path = "core/screen_scaling.rs"]
 mod screen_scaling;
 #[path = "core/screen_session.rs"]
 mod screen_session;
+#[path = "core/screen_stats_chain.rs"]
+mod screen_stats_chain;
 #[path = "core/screen_stats_overlay.rs"]
 mod screen_stats_overlay;
 #[path = "core/screen_target.rs"]
@@ -89,6 +98,8 @@ mod screen_viewer_tests;
 
 #[path = "core/screen_decode_run.rs"]
 mod screen_decode_run;
+#[path = "core/screen_present.rs"]
+mod screen_present;
 #[path = "core/screen_render_app.rs"]
 pub mod screen_render_app;
 #[path = "core/screen_render_glow.rs"]

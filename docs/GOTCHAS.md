@@ -661,6 +661,130 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
   Measured 2026-10-28 on a LightDM/unity-greeter X server: an ordinary window and one with the
   input hint off took the focus; a NOTIFICATION window did not.
 
+## Picture chain (source state 2026-11-15: implemented, not compiled, not run on hardware, waits for suite and release)
+
+Plan `docs/plaene/2026-11-14-verbindungen-je-zweck/bildkette.md`; paths, ranks and settings in
+`docs/oberflaechen/bildschirm.md`, architecture in `docs/ARCHITEKTUR.md`, section „Bildkette“. Every
+statement below comes from reading the source, the vendored crates and the cited headers; no run has
+confirmed it. Paths are below `native/crates/engine/src/screen/os/` unless noted.
+
+**Run-time loading (no link dependency; a missing piece leaves the codec list empty, the next stage applies)**
+
+- **Windows NVENC and AMF load from System32 first, then from the driver store.** `nvEncodeAPI64.dll` and
+  `amfrt64.dll` are opened with `LOAD_LIBRARY_SEARCH_SYSTEM32` (Sunshine and FFmpeg do the same). A
+  DCH-style driver that keeps them only in its driver-store folder is found through the kernel: the
+  adapter's `D3DKMT` registry query `DRIVERSTOREPATH` (`windows/dxgi_adapters.rs`, `driver_library`)
+  names the folder; only paths below `\system32\driverstore\filerepository\` without `\..` count, the
+  file must lie in that folder or one level below, and the full path is loaded with
+  `LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32`, so its dependencies come from the
+  same folder and System32. The NVENC session opens only on the adapter of the capture with the
+  matching PCI vendor (NVIDIA, AMD); a laptop with two GPUs therefore uses NVENC or AMF only when the
+  capture runs on that GPU, otherwise Media Foundation or OpenH264. AMF is built against SDK 1.4.35 and
+  takes the minimum of the runtime and that version; AV1 needs runtime 1.4.30 or later. NVENC API 12.1
+  needs a driver of branch 530 or later; an older driver reports a smaller version and NVENC stays
+  unused (`windows/nvenc_ffi.rs`, `windows/vendor_codecs.rs`).
+- **Linux libraries and their sonames** (`linux_os/nvenc_ffi.rs`, `vaapi_ffi.rs`, `native_ffi/av1_soft.rs`):
+  `libnvidia-encode.so.1` with `libcuda.so.1` (CUDA context must be current before each NVENC call),
+  `libva.so.2` with `libva-drm.so.2` (`vaCreateSurfaces` is versioned; libva 2.20.0 headers were
+  read), `libSvtAv1Enc.so.1` (SVT-AV1 1.5 up to, not including, 2.0), `libdav1d.so.7` and, if that is
+  missing, `libdav1d.so.6`. On Ubuntu 24.04 the packages are `libsvtav1enc1d1` (1.7.0, not
+  `libsvtav1enc1`) and `libdav1d7`; no `-dev` package is needed because nothing is linked. A
+  render node needs the session user's access to `/dev/dri/renderD*` (assumption: the host process
+  runs in the session account, so it has it). libva messages are muted.
+- **Probes run once per process (`OnceLock`).** A GPU or a driver that appears after the first codec
+  query shows up only after the process restarts. The first codec list in the GUI thread waits for the
+  probe (opening each render node and one NVENC session; the time is unmeasured), and a process that
+  builds the register without being a host process (the daemon for `se screen bench`, the codec list of
+  the GUI) loads the VA driver and initializes CUDA (`cuInit`) at its first query.
+- **The H.264 licence question of hardware encoders without the Cisco binary is not examined legally**
+  (plan section 6, point 9); only OpenH264 needs the user's consent.
+
+**Timer resolution on Windows (`windows/timer_resolution.rs`)**
+
+- The session clock uses a high-resolution waitable timer (`CREATE_WAITABLE_TIMER_HIGH_RESOLUTION`,
+  Windows 10 1803 or later; a plain waitable timer otherwise), `timeBeginPeriod` with the smallest
+  period of `timeGetDevCaps` for the session, and `PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION`.
+  Since Windows 10 2004 the resolution is per process, and on Windows 11 it does not hold for
+  processes whose windows are hidden or minimized (Microsoft `timeBeginPeriod`); whether the windowless daemon keeps the raised resolution on Windows
+  11 is not verified (plan section 6, point 19). `winmm` is linked with an own `#[link(name = "winmm")]`
+  because the `windows-sys` feature `Win32_Media` is not enabled. Without a measurement the tick error
+  stays unknown (measurement MB1).
+
+**PipeWire DMA-BUF (Linux Wayland; `linux_os/hw_codecs.rs` `dmabuf_import_target`, `spa_pod_dmabuf.rs`, `pipewire_dmabuf_stream.rs`)**
+
+- **It is offered only when the encoder can import it.** A VA-API encoder with a video processor must
+  exist and no NVENC encoder may rank before it (NVENC takes CPU pictures; a DMA-BUF would be read
+  back). Layouts and modifiers are probed from that render node (`vaapi_dmabuf::probe_node`). Without
+  such an encoder the stream negotiates shared memory from the start.
+- **The buffer request is a range of 4 to 16, wish 4.** Three buffers are held at once (newest picture,
+  the picture waiting in the capture stage, the one imported by the encoder) plus one for the
+  compositor. mutter 47.0 offers 2 to 16 and xdg-desktop-portal-wlr 0.7.1 up to 32, so both overlap; a
+  compositor whose range ends below 4 would refuse the negotiation (KWin not read; assumption). Before
+  the change the pod asked for no number at all and a compositor with three or fewer buffers could
+  stall.
+- **Any CPU consumer ends DMA-BUF for the session.** OpenH264, SVT-AV1, the tiles and NVENC read the
+  picture back (`GpuSurface::read_back`, cause `dmabuf_consumer_cpu`); an import or conversion error
+  skips only that picture and keeps the encoder (`dmabuf_import`, `dmabuf_conversion`). The stream
+  renegotiates shared memory without a new dialog; the first cause stays in the report. A still image
+  and the first key frame of a new encoder on a quiet screen read once without leaving DMA-BUF.
+- **A still image reads the BGRx surface as it is** (`vaGetImage` into an image of the same RGB32
+  fourcc; assumption: no colour conversion happens, so the PNG stays exact).
+- **The stored portal grant and the cursor mode.** `SelectSources` carries the restore token and the
+  mode `Metadata` in the same call; whether a portal asks again after the mode changed is not
+  documented (assumption: no). If it does, one dialog appears at the first Wayland start after the
+  update.
+
+**Assumptions to check first when a device misbehaves (each has a visible effect; none was run)**
+
+- *VA-API.* The driver takes packed sequence and picture headers but writes the slice headers itself
+  (`VA_ENC_PACKED_HEADER_*`); a driver without packed headers writes SPS and PPS itself, and if they
+  are missing in the first IDR the encoder fails and the next stage opens. `VAConfigAttribEncQualityRange`
+  is read as highest value = fastest and sent as `quality_level` on every sequence (wrong: slower
+  encoding than intended). H.264 decoding passes the scaling lists in zigzag order and
+  `slice_data_bit_offset` without emulation-prevention bytes (wrong: a decoded picture with grey or
+  garbled blocks, then the decoder is locked for the process). libva 2.20.0 reports no bit-rate
+  limit; the ceiling comes from the pairing and the level.
+- *NVENC.* Structure sizes and bit-field positions were counted by hand from `nvEncodeAPI.h` (12.1 and
+  the nv-codec-headers tag `n12.1.14.0`), checked only by the tests `bildkette_task_*_struct_sizes`;
+  `NV_ENC_CAPS_WIDTH_MAX` = 16 and `HEIGHT_MAX` = 17 are counted from the enumeration; the NV12 input
+  starts its chroma plane at `pitch × height`; `nvEncReconfigureEncoder` without reset takes a new
+  CBR rate. Reference invalidation works only where the driver reports
+  `NV_ENC_CAPS_SUPPORT_REF_PIC_INVALIDATION`.
+- *AMF.* Property names and enumeration values follow SDK 1.4.35; the capability `MaxBitrate` is read from
+  the opened component (`windows/amf_caps.rs`) and, if missing, the level or the pairing limits; the
+  long-term-reference slots come every quarter second and at each IDR.
+- *Media Foundation.* `MFT_ENUM_ADAPTER_LUID` is a `LUID` blob, not a 64-bit integer; enumeration
+  per adapter needs `MFTEnum2` (Windows 10 1703 or later), otherwise `MFTEnumEx` lists all.
+  HEVC and AV1 encoders accept only 4:2:0 Main. Whether the hardware H.264 decoder conceals a
+  `frame_num` gap silently (a damaged picture without an error) is not documented, so it does not
+  continue without a key frame.
+- *Windows capture.* `DuplicateOutput` must run on the adapter that owns the output (hybrid-graphics
+  laptops: the fallback to Graphics Capture exists, its effect is not tried); the video processor's
+  BGRA to NV12 result is checked against the CPU reference only within ±2 (luma) and ±3 (chroma) on
+  single-colour areas, and only on a device with a D3D11 video processor (no hosted runner has one);
+  `MinUpdateInterval` is documented from the Windows SDK moniker `winrt-26100` (the first Windows version that has it is not stated); where `IGraphicsCaptureSession5` is missing the session reports `capture_rate_capped` and Graphics Capture may deliver no more than 60 pictures per second (Sunshine warns the same).
+- *Wayland cursor.* The layout of `spa_meta_cursor` (28 bytes) and `spa_meta_bitmap` (20 bytes) comes
+  from the PipeWire master header, not from the 0.3.x headers of the devices; whether mutter and KWin
+  premultiply the bitmap alpha and in which byte order they send it is unknown (wrong: dark edges or
+  swapped colours on the pointer); an id of 0 hides the pointer; the size request is 64 × 64 up to
+  256 × 256.
+- *Android.* `KEY_I_FRAME_INTERVAL` negative means no key frames after the first (API 16
+  documentation), but encoders that multiply the value by the frame rate are not excluded; only an
+  explicit key-frame request recovers a lost picture then. `KEY_LATENCY` 1 now applies to the normal
+  path (before: hybrid only) and may or may not shorten the output delay on a device. The HEVC and AV1
+  parameter sets and key-frame marks are read from `csd-0` and checked against the stream's first
+  group only. `PointerIcon.TYPE_NULL` hides the system pointer while the host overlay shows; whether
+  Android draws its own mouse pointer over the view is assumed, not tried. The Kotlin code was never
+  compiled.
+- *Rate and recovery.* The reset threshold factors 4 and 3, the hold of 3 s after a metadata operation,
+  the target of 25 ms of the yielding controller and the start rates 6 and 2 Mbit/s are plan values
+  without a measurement. A continuation without a key frame assumes that the host references only
+  pictures the viewer holds; a reference to a lost picture ends in a decode error and a key frame,
+  not in a wrong picture.
+- *Windows display.* The viewer's window draws with Vulkan (eframe 0.29.1 enables only `metal` and
+  `webgpu` for wgpu, `dx12` is off); on a machine without a Vulkan adapter it draws with wgpu on GL
+  or with glow, and the `Anzeige` line of the statistics names the backend.
+
 ## Cryptomator vaults (0.5.183)
 
 - **Vault comparison lives in memory, in the service only.** One entry per vault job and

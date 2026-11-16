@@ -50,13 +50,17 @@ pub mod capture_bytes;
 pub mod capture_grant;
 pub mod capture_image;
 pub mod capture_import;
+pub mod capture_picture;
 pub mod capture_plan;
 pub mod capture_records;
+pub mod capture_route;
 pub mod capture_source_contract;
 pub mod capture_transport;
 pub mod catalog_entries;
+pub mod chain_meter;
 pub mod codec_registry;
 pub mod control_sender;
+pub mod convert_clock;
 pub mod cursor_overlay;
 pub mod decoded_frame;
 pub mod feed_host;
@@ -66,6 +70,8 @@ pub mod frame_protocol;
 pub mod frame_reference;
 pub mod frame_regions;
 pub mod frame_size_caps;
+pub mod frame_timing;
+pub mod gop_continue;
 pub mod gop_stream;
 pub mod host_admission;
 pub mod host_backend;
@@ -106,12 +112,14 @@ pub mod pixel_convert;
 // Not yet used by SCR-M2: `RateController::receive_rate_bps`.
 #[allow(dead_code)]
 pub mod rate_control;
+pub mod ref_recovery;
 pub mod registry;
 pub mod sender_budget;
 // Not yet used by SCR-M2: `SessionTracker`, `SessionState::can_move_to`,
 // `SessionState::is_terminal` and `KeyframeRequester::is_open`.
 #[allow(dead_code)]
 pub mod session_state;
+pub mod set_decoders;
 pub mod snapshot;
 pub mod synthetic;
 pub mod tiles_codec;

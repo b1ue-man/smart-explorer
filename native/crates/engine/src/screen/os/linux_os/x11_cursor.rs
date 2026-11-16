@@ -116,8 +116,10 @@ pub fn deliver(
         );
         overlay.publish_shape(serial, shape);
     }
-    let x = cursor.x + hot.0 - origin.0;
-    let y = cursor.y + hot.1 - origin.1;
+    let x = (i64::from(cursor.x) + i64::from(hot.0) - i64::from(origin.0))
+        .clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32;
+    let y = (i64::from(cursor.y) + i64::from(hot.1) - i64::from(origin.1))
+        .clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32;
     let inside = x >= 0
         && y >= 0
         && i64::from(x) < i64::from(size.width)

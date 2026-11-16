@@ -117,6 +117,26 @@ impl Session<'_> {
             ViewerFrame::Input(events) => self.input(&events).await,
             ViewerFrame::ControlRequest(request) => self.control(request.action).await,
             ViewerFrame::CursorOverlay(on) => self.cursor_overlay(on).await,
+            // „Höchste Datenrate“ of the viewer (B-09, `rate_ceiling_v1`).
+            ViewerFrame::RateCeiling(ceiling) => {
+                self.pipeline.set_rate_ceiling(ceiling);
+                Ok(())
+            }
+            // New decoders after „Codec“/„Dekodierer“ (`set_decoders_v1`):
+            // a changed pairing starts a group in the new codec.
+            ViewerFrame::SetDecoders(set) => {
+                self.pipeline.set_decoders(set);
+                Ok(())
+            }
+            // Station times on/off or one input probe (BK0, `frame_timing_v1`).
+            ViewerFrame::FrameTiming(request) => {
+                let mut meter = crate::screen::core::chain_meter::lock(self.pipeline.chain_meter());
+                match request.probe_us {
+                    Some(sent_us) => meter.on_input_probe(sent_us, now_us()),
+                    None => meter.request_throttled(request.on),
+                }
+                Ok(())
+            }
         }
     }
 
@@ -234,11 +254,18 @@ impl Session<'_> {
         }
         let owned = events.to_vec();
         let (backend, target) = (self.context.backend.clone(), sink.clone());
+        let injecting = Instant::now();
         let applied = super::input_release::inject_off_runtime(move || match target {
             Some(sink) => sink.inject(&owned, reference, presented),
             None => backend.inject(&owned),
         })
         .await;
+        // Station `input_inject` (BK0): the injection of this batch.
+        let micros = u64::try_from(injecting.elapsed().as_micros()).unwrap_or(u64::MAX);
+        crate::screen::core::chain_meter::lock(self.pipeline.chain_meter()).record_us(
+            crate::screen::core::chain_meter::Station::InputInject,
+            micros,
+        );
         match applied {
             Ok(()) => {
                 for event in events {

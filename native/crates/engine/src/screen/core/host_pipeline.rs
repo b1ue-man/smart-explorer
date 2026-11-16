@@ -28,6 +28,7 @@ use super::negotiate::{CodecChoice, CodecKind};
 use super::pacing::{FrameClock, PaceDecision, Pacer, SentFrame, STALE_STREAM_US};
 use super::pixel_convert::FrameSize;
 use super::rate_control::{Quality, RateController};
+use super::ref_recovery::ConfirmedReference;
 use super::session_state::SessionState;
 use super::wire_binary::{GopHeader, StreamKind};
 use super::wire_control::StreamInfo;
@@ -35,11 +36,14 @@ use super::wire_hello::ScreenErrorCode;
 
 #[path = "host_capture.rs"]
 mod capture;
+#[cfg(test)]
+pub(in crate::screen) use capture::{encode_stage_frame, Stage as TestStage};
 use capture::{produce, Captured, Stage, StageOutput};
 #[path = "host_mode.rs"]
 mod mode;
 #[path = "host_quality.rs"]
 mod quality;
+pub use quality::codec_fallbacks;
 use quality::{QualityMode, QualityPolicy};
 #[path = "host_capture_pause.rs"]
 mod capture_pause;
@@ -50,6 +54,8 @@ mod reference;
 use reference::ReferencePresentation;
 #[path = "host_pipeline_actor.rs"]
 mod actor;
+#[path = "host_pairing.rs"]
+mod pairing;
 #[path = "host_work_control.rs"]
 mod work_control;
 pub use actor::{PipelineActor, WorkCompletion};
@@ -146,6 +152,11 @@ pub struct Pipeline {
     rate: RateController,
     clock: FrameClock,
     codec_fps: u32,
+    /// The stage paces itself (`HostStage::self_paced`, BK3b).
+    self_paced: bool,
+    /// The last tick reached the self-paced stage and got its answer (or
+    /// ended in a state change): the next tick may start at once.
+    chain_ready: bool,
     quality: Quality,
     max_fps: u32,
     /// The viewer's display from its hello.
@@ -166,11 +177,27 @@ pub struct Pipeline {
     running: Option<(StageEncoder, FrameSize)>,
     memory: super::frame_memory::MemoryHold,
     admission: Option<Arc<super::capture_admission::SessionAdmission>>,
+    /// The negotiated pairing, what `SET_DECODERS` needs to negotiate again
+    /// and the viewer's continuation announcement (P1, B-36).
+    pairing: pairing::PairingState,
+    /// The newest picture the viewer can decode (B-36).
+    confirmed: ConfirmedReference,
+    /// After a stale stream: the next stream continues from this frame.
+    continue_from: Option<u64>,
+    /// The newest picture group that starts with a key frame (0: none).
+    key_gop: u64,
+    /// Station times and chain facts (BK0); the stage records into it too.
+    chain: super::chain_meter::SharedChain,
 }
 
 impl Pipeline {
     pub fn next_frame_id(&self) -> u64 {
         self.next_frame_id
+    }
+    /// Whether the stage paces itself, and whether the next tick may start
+    /// as soon as the last one ended (BK3b).
+    pub fn chain(&self) -> (bool, bool) {
+        (self.self_paced, self.chain_ready)
     }
     pub fn set_visible_rects(&mut self, rects: Option<Vec<super::visibility::VisibleRect>>) {
         // The viewer projects its visible area into the picture it decodes,
@@ -222,6 +249,7 @@ impl Pipeline {
             size: *size,
             encoder: encoder.name.clone(),
             hardware: encoder.hardware,
+            decoder_hardware: Some(self.choice.decoder_hardware),
         })
     }
 
@@ -260,7 +288,7 @@ impl Pipeline {
         }
         limits.max_pixels = limits.max_pixels.min(self.choice.max_pixels);
         let fitted = limits.fit(size);
-        if self.choice.codec == CodecKind::H264 {
+        if self.choice.codec.is_video() {
             super::frame_size_caps::fit_macroblocks(fitted, limits.max_pixels / 256)
         } else {
             fitted
@@ -273,7 +301,9 @@ impl Pipeline {
         let fitted = self.fitted_size();
         match self.choice.codec {
             CodecKind::Tiles => fitted,
-            CodecKind::H264 => self.quality.size.fit_within(fitted).even(),
+            CodecKind::H264 | CodecKind::Hevc | CodecKind::Av1 => {
+                self.quality.size.fit_within(fitted).even()
+            }
         }
     }
 
@@ -293,6 +323,8 @@ impl Pipeline {
         if let Some(gop) = self.gop.take() {
             gop.finish();
         }
+        self.confirmed.restart();
+        self.continue_from = None;
         self.pacer.request_keyframe();
     }
 
@@ -316,6 +348,45 @@ impl Pipeline {
         self.pacer.on_stream_reset();
         self.sender.reset();
         self.drop_encoder();
+    }
+
+    /// The oldest frame of the stream waited beyond the stale time (B-35).
+    /// With a decoder that continues (`gop_continue`, or the pairing's
+    /// decoder in `gop_continue_decoders`), a confirmed picture, a video
+    /// stream without hybrid regions, no key frame due and a stage that
+    /// passes the wish on to its encoder, the stream goes but the encoder stays: the next
+    /// stream continues from the confirmed picture (B-36). Otherwise as
+    /// before: a new encoder and a key frame. Either way the path did not
+    /// carry the target (`RateController::on_stale_stream`).
+    fn reset_stale_stream(&mut self) {
+        self.rate.on_stale_stream(now_us());
+        let facts = super::gop_continue::ResetFacts {
+            negotiated: self.continuation_offered(),
+            video: self.kind == StreamKind::Video
+                && self.choice.codec.is_video()
+                && !self.frame_contract.is_some_and(|c| c.hybrid_regions),
+            keyframe_due: self.pacer.keyframe_due(),
+            encoder_running: self.running.is_some(),
+            stage_continues: self.stage.as_mut().is_some_and(|stage| {
+                stage
+                    .source
+                    .host_stage()
+                    .is_none_or(|host| host.continues_references())
+            }),
+            last_good: self.confirmed.last_good(),
+        };
+        let Some(last_good) = facts.continue_from() else {
+            return self.reset_stream();
+        };
+        if let Some(gop) = self.gop.take() {
+            gop.reset();
+        }
+        self.confirmed.stream_reset();
+        self.pacer.on_stream_reset_continued();
+        self.sender.reset();
+        self.work.invalidate_reference();
+        self.presentation.invalidate(self.next_frame_id);
+        self.continue_from = Some(last_good);
     }
 }
 

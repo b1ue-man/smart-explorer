@@ -102,7 +102,7 @@ internal class BrowserTab(
     }
 
     /** Reloads the current place and keeps the list position. */
-    fun reload() = load(scrollTo = null)
+    fun reload(background: Boolean = false) = load(scrollTo = null, background = background)
 
     fun pullRefresh() {
         refreshing = true
@@ -181,7 +181,8 @@ internal class BrowserTab(
         load(scrollTo = restore)
     }
 
-    private fun load(scrollTo: HistoryItem?) {
+    /** [background]: an operation ended and nobody navigated (the core counts it as its own work). */
+    private fun load(scrollTo: HistoryItem?, background: Boolean = false) {
         loadJob?.cancel()
         stopScan()
         stale = false
@@ -196,7 +197,7 @@ internal class BrowserTab(
                 val recursive = filter.open && filter.recursive
                 // The flat listing carries title, path bar and permissions; in recursive mode the
                 // filter applies to the scan only.
-                val result = FilesApi.list(location, opts.showHidden, if (recursive) null else valid, opts.sort)
+                val result = FilesApi.list(location, opts.showHidden, if (recursive) null else valid, opts.sort, background)
                 listing = result
                 location = result.location
                 error = null

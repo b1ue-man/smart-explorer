@@ -178,6 +178,17 @@ impl Runtime {
         self.resolve_loc(&loc)
     }
 
+    /// [`Self::resolve`] for a background run (a mirror): a Share device is
+    /// reached by a handle of the origin `Job`, not the one the file views
+    /// browse with (metadata presence, E4).
+    pub(crate) fn resolve_for_job(
+        &self,
+        location: &str,
+    ) -> Result<(BackendHandle, String), ApiError> {
+        let (backend, path) = self.resolve(location)?;
+        Ok((crate::daemon::job_handle(&backend), path))
+    }
+
     pub(crate) fn resolve_loc(&self, loc: &Loc) -> Result<(BackendHandle, String), ApiError> {
         if loc.kind == LocKind::Trash {
             return Err(ApiError::unsupported("Der Papierkorb ist kein Dateiort"));

@@ -64,6 +64,8 @@ pub(super) struct ViewSession {
     local_limits: Mutex<Option<crate::screen::core::frame_budget::FrameLimits>>,
     /// The host's pointer beside the picture (plan 2026-11-14 P6).
     cursor: cursor_events::CursorEvents,
+    /// The host takes `SET_DECODERS` (P1, `screen.viewSetDecoders`).
+    pub set_decoders: AtomicBool,
 }
 
 impl ViewSession {
@@ -167,6 +169,7 @@ fn new_session(mode: SessionMode) -> Arc<ViewSession> {
         family_picture: Mutex::new(None),
         local_limits: Mutex::new(None),
         cursor: Default::default(),
+        set_decoders: AtomicBool::new(false),
     });
     lock(&SESSIONS).insert(id, session.clone());
     session
@@ -276,7 +279,13 @@ fn on_event(
             };
             emit(id, "pending", json!({ "capability": name }));
         }
-        StreamEvent::Accepted { hello, path } => {
+        StreamEvent::Accepted {
+            hello,
+            path,
+            rate_ceiling,
+            set_decoders,
+        } => {
+            session.set_decoders.store(set_decoders, Ordering::SeqCst);
             if lock(&session.family).is_some()
                 && (hello.family_version != Some(1)
                     || hello.frame_contract.is_none_or(|contract| {
@@ -319,11 +328,14 @@ fn on_event(
             if session.mode != SessionMode::Preview && lock(&session.family).is_none() {
                 let _ = session.send(&ViewerFrame::CursorOverlay(true));
             }
-            emit(
-                id,
-                "accepted",
-                accepted_fields_with_limits(&hello, &path, *lock(&session.local_limits)),
-            );
+            let mut fields =
+                accepted_fields_with_limits(&hello, &path, *lock(&session.local_limits));
+            // „Höchste Datenrate“ (BK6): `unsupported_by_host` lets the app
+            // say that the host cannot take it.
+            fields["rateCeiling"] = json!(rate_ceiling.key());
+            // P1: `screen.viewSetDecoders` changes codec and decoder in place.
+            fields["setDecoders"] = json!(set_decoders);
+            emit(id, "accepted", fields);
         }
         StreamEvent::Host(frame) => on_host_frame(session, encoder, own, frame),
         StreamEvent::Record { header, record } => {
@@ -350,6 +362,11 @@ fn on_event(
             if let Some(output) = sink.broken(gop_id, now_us()) {
                 on_sink_output(session, encoder, output);
             }
+        }
+        // „Höchste Datenrate“ changed during the session (P1): what the
+        // host did with it, as the `rateCeiling` of `accepted` names it.
+        StreamEvent::RateCeiling(state) => {
+            emit(id, "rateCeiling", json!({ "rateCeiling": state.key() }));
         }
         StreamEvent::Clock(_) | StreamEvent::End(_) => {}
     }

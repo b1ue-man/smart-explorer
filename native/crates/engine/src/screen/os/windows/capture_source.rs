@@ -5,17 +5,34 @@
 //! out of a pause on the secure desktop or in an inactive session starts
 //! its capture session anew, because both APIs can be invalid after the
 //! desktop changed.
+//!
+//! Plan 2026-11-14 bildkette, BK2b: a monitor is captured with Desktop
+//! Duplication first and Graphics Capture as its fallback (`capture_rank`,
+//! `fallback_cause`, B-12); an activated source captures on its own thread,
+//! woken by the compositor (`capture_thread.rs`, B-10); the session's capture
+//! path and rate limit are kept in `CaptureReport`.
+//!
+//! BK3b: a picture may stay on the GPU (`capture_picture`); `capture` gives
+//! CPU pixels (merge W1: exact BGRA). Input has its own way (`WindowsInput`).
 use std::io;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use windows::Win32::Foundation::HWND;
+use windows::core::HRESULT;
+use windows::Win32::Foundation::{E_ACCESSDENIED, HWND};
+use windows::Win32::Graphics::Dxgi::{
+    DXGI_ERROR_NOT_CURRENTLY_AVAILABLE, DXGI_ERROR_SESSION_DISCONNECTED, DXGI_ERROR_UNSUPPORTED,
+};
 use windows::Win32::UI::WindowsAndMessaging::{IsIconic, IsWindow};
 
 use super::secure_desktop;
 use crate::screen::core::capture_admission::CaptureGrant;
-use crate::screen::core::host_backend::{ScreenSource, SourceFrame};
+use crate::screen::core::capture_picture::SourcePicture;
+use crate::screen::core::host_backend::{ScreenInputSink, ScreenSource, SourceFrame};
+use crate::screen::core::input_model::InputEvent;
 use crate::screen::core::pixel_convert::FrameSize;
 use crate::screen::core::session_state::SessionState;
+use crate::screen::core::wire_control::ControlBlock;
 
 /// How long the first picture of a capture may take: Graphics Capture
 /// delivers it within one display refresh, a few multiples of that are
@@ -46,6 +63,42 @@ pub(super) trait Grabber: Send {
     /// needs none, the last picture again with `keyframe`, `Paused(Starting)`
     /// when there is none yet after `FIRST_FRAME_WAIT`.
     fn capture(&mut self, keyframe: bool) -> io::Result<SourceFrame>;
+    /// Like `capture`, but waits up to `wait` for the compositor's next
+    /// picture (B-10). `release` runs right before a picture is read back and
+    /// lets the capture thread drop a superseded picture first; it answers
+    /// whether the previous picture was handed out (otherwise this picture's
+    /// regions would describe a change against a picture nobody saw).
+    fn capture_waiting(
+        &mut self,
+        keyframe: bool,
+        _wait: Duration,
+        _release: &mut dyn FnMut() -> bool,
+    ) -> io::Result<SourceFrame> {
+        self.capture(keyframe)
+    }
+    /// Like `capture`, but the picture may stay on the GPU (BK3b).
+    fn capture_picture(&mut self, keyframe: bool) -> io::Result<SourcePicture> {
+        self.capture(keyframe).map(SourcePicture::from)
+    }
+    /// CPU pixels of `picture`; merge W1: the threaded grabber captures a
+    /// GPU picture anew as exact BGRA (still images), others read it back.
+    fn exact_frame(&mut self, picture: SourcePicture) -> io::Result<SourceFrame> {
+        picture.into_source_frame()
+    }
+    /// Like `capture_waiting`, but the picture may stay on the GPU (BK3b).
+    fn capture_waiting_picture(
+        &mut self,
+        keyframe: bool,
+        wait: Duration,
+        release: &mut dyn FnMut() -> bool,
+    ) -> io::Result<SourcePicture> {
+        self.capture_waiting(keyframe, wait, release)
+            .map(SourcePicture::from)
+    }
+    /// Reads the current reference generation without the grabber (input).
+    fn generation_reader(&self) -> Option<GenerationReader> {
+        None
+    }
     /// Creates the capture session anew.
     fn reopen(&mut self) -> io::Result<()>;
     fn source_available(&self) -> bool {
@@ -53,6 +106,204 @@ pub(super) trait Grabber: Send {
     }
     fn set_capture_active(&mut self, _active: bool) -> io::Result<()> {
         Ok(())
+    }
+    /// The frame interval the pipeline asks at (B-11); false when the capture
+    /// cannot limit its delivery to it (`capture_rate_capped`).
+    fn set_frame_interval(&mut self, _interval: Duration) -> bool {
+        true
+    }
+    /// The API this grabber captures with.
+    fn path(&self) -> Option<CapturePath> {
+        None
+    }
+    /// Why Desktop Duplication should give way to Graphics Capture now.
+    fn fallback_cause(&self) -> Option<FallbackCause> {
+        None
+    }
+}
+
+/// Reads a grabber's reference generation from any thread.
+pub(super) type GenerationReader = Arc<dyn Fn() -> u64 + Send + Sync>;
+
+/// Input of a Windows source on its own way (BK3b, plan B-28): the same
+/// check as `ScreenSource::inject_input` (the viewer's reference generation
+/// is the source's) and the same `SendInput`, without the source.
+struct WindowsInput {
+    generation: GenerationReader,
+}
+
+impl ScreenInputSink for WindowsInput {
+    fn inject(
+        &self,
+        events: &[InputEvent],
+        reference_generation: u64,
+        _presented: bool,
+    ) -> Result<(), ControlBlock> {
+        if reference_generation != (self.generation)() {
+            return Err(ControlBlock::ControlUnavailable);
+        }
+        super::input_send::inject(events)
+    }
+    fn release(&self, events: &[InputEvent]) -> Result<(), ControlBlock> {
+        super::input_send::release(events)
+    }
+}
+
+/// The capture API of a source (B-12).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum CapturePath {
+    DesktopDuplication,
+    GraphicsCapture,
+}
+
+impl CapturePath {
+    pub(super) fn key(self) -> &'static str {
+        match self {
+            Self::DesktopDuplication => "desktop_duplication",
+            Self::GraphicsCapture => "graphics_capture",
+        }
+    }
+}
+
+/// The order a source tries the capture APIs in: a monitor with Desktop
+/// Duplication first (separate pointer, dirty and move rectangles, no yellow
+/// border), Graphics Capture after it; a window only with Graphics Capture.
+pub(super) fn capture_rank(monitor: bool, graphics_capture: bool) -> Vec<CapturePath> {
+    let mut rank = Vec::with_capacity(2);
+    if monitor {
+        rank.push(CapturePath::DesktopDuplication);
+    }
+    if graphics_capture {
+        rank.push(CapturePath::GraphicsCapture);
+    }
+    rank
+}
+
+/// Why a monitor left Desktop Duplication for Graphics Capture.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum FallbackCause {
+    /// `DXGI_ERROR_UNSUPPORTED` or `DXGI_ERROR_NOT_CURRENTLY_AVAILABLE`.
+    Unsupported,
+    /// `DXGI_ERROR_ACCESS_LOST`, and the new duplication failed.
+    AccessLost,
+    /// The output is no longer the one of its adapter (no result code).
+    AdapterChanged,
+    /// Any other refused duplication.
+    Failed,
+}
+
+impl FallbackCause {
+    pub(super) fn key(self) -> &'static str {
+        match self {
+            Self::Unsupported => "dxgi_unsupported",
+            Self::AccessLost => "dxgi_access_lost",
+            Self::AdapterChanged => "dxgi_adapter_changed",
+            Self::Failed => "dxgi_failed",
+        }
+    }
+}
+
+/// How long a duplication refused with a documented passing result
+/// (`DXGI_ERROR_UNSUPPORTED` during a desktop or mode switch) is retried
+/// before Graphics Capture takes over [P: the first-picture wait].
+pub(super) const FALLBACK_AFTER: Duration = FIRST_FRAME_WAIT;
+
+/// The fallback a duplication that has been failing for `failing_for` with
+/// `code` (`None`: an error without result code) asks for; `lost` when the
+/// duplication was lost before. The secure desktop (`E_ACCESSDENIED`) and an
+/// inactive session pause instead, as before.
+pub(super) fn fallback_cause(
+    code: Option<HRESULT>,
+    lost: bool,
+    failing_for: Duration,
+) -> Option<FallbackCause> {
+    let Some(code) = code else {
+        return Some(FallbackCause::AdapterChanged);
+    };
+    if code == E_ACCESSDENIED || code == DXGI_ERROR_SESSION_DISCONNECTED {
+        return None;
+    }
+    let lost_or = |cause| {
+        Some(if lost {
+            FallbackCause::AccessLost
+        } else {
+            cause
+        })
+    };
+    if code == DXGI_ERROR_UNSUPPORTED || code == DXGI_ERROR_NOT_CURRENTLY_AVAILABLE {
+        return if failing_for >= FALLBACK_AFTER {
+            lost_or(FallbackCause::Unsupported)
+        } else {
+            None
+        };
+    }
+    lost_or(FallbackCause::Failed)
+}
+
+/// The Windows result code inside an I/O error, if there is one.
+pub(super) fn result_code(error: &io::Error) -> Option<HRESULT> {
+    error
+        .get_ref()
+        .and_then(|inner| inner.downcast_ref::<windows::core::Error>())
+        .map(windows::core::Error::code)
+}
+
+/// What the session of this host process captures with (one process serves
+/// one session, like the pointer overlay).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct CaptureReport {
+    pub path: Option<CapturePath>,
+    /// Graphics Capture cannot limit its delivery to the frame interval.
+    pub rate_capped: bool,
+    pub fallback: Option<FallbackCause>,
+}
+
+impl CaptureReport {
+    /// The session's limits in the strings of `host_backend.rs`:
+    /// `capture_border` only under Graphics Capture, `capture_rate_capped`
+    /// when its rate could not be set.
+    pub(super) fn limits(&self) -> Vec<&'static str> {
+        let mut limits = Vec::new();
+        if self.path == Some(CapturePath::GraphicsCapture) {
+            limits.push(super::host_backend::LIMIT_CAPTURE_BORDER);
+            if self.rate_capped {
+                limits.push(super::host_backend::LIMIT_CAPTURE_RATE_CAPPED);
+            }
+        }
+        limits
+    }
+}
+
+static REPORT: Mutex<CaptureReport> = Mutex::new(CaptureReport {
+    path: None,
+    rate_capped: false,
+    fallback: None,
+});
+
+/// The report of this process's session (error output and tests; its way to
+/// `se screen sessions --json` is open, bk2b-bericht.md Ungeklärtes 1).
+#[cfg_attr(not(test), allow(dead_code))]
+pub(super) fn report() -> CaptureReport {
+    *REPORT
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Changes the report; a changed path or limit goes to the host process's
+/// error output.
+pub(super) fn update_report(change: impl FnOnce(&mut CaptureReport)) {
+    let mut report = REPORT
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let before = *report;
+    change(&mut report);
+    if *report != before {
+        eprintln!(
+            "screen capture: path {}, limits [{}], fallback {}",
+            report.path.map_or("none", CapturePath::key),
+            report.limits().join(","),
+            report.fallback.map_or("none", FallbackCause::key)
+        );
     }
 }
 
@@ -132,17 +383,20 @@ pub(super) struct WindowsSource {
     /// session: the capture session is made anew before the next picture.
     renew: bool,
     capture_active: bool,
+    input: Option<Arc<WindowsInput>>,
 }
 
 impl WindowsSource {
+    /// The source of an activated grabber, which captures on its own thread
+    /// from now on (B-10); without a thread it captures per request as before.
     pub(super) fn activated(grabber: Box<dyn Grabber>, window: Option<usize>) -> Self {
-        Self::with(
+        let handle = window.unwrap_or(0);
+        let grabber = thread::start(
             grabber,
-            SystemProbe {
-                window: window.unwrap_or(0),
-            },
+            Box::new(SystemProbe { window: handle }),
             window.is_some(),
-        )
+        );
+        Self::with(grabber, SystemProbe { window: handle }, window.is_some())
     }
 
     fn with(
@@ -150,12 +404,16 @@ impl WindowsSource {
         probe: impl StateProbe + Send + 'static,
         window: bool,
     ) -> Self {
+        let input = grabber
+            .generation_reader()
+            .map(|generation| Arc::new(WindowsInput { generation }));
         Self {
             grabber,
             probe: Box::new(probe),
             window,
             renew: false,
             capture_active: true,
+            input,
         }
     }
 }
@@ -166,6 +424,11 @@ impl ScreenSource for WindowsSource {
     }
     fn reference_generation(&self) -> u64 {
         self.grabber.reference_generation()
+    }
+    fn input_sink(&self) -> Option<Arc<dyn ScreenInputSink>> {
+        self.input
+            .clone()
+            .map(|input| input as Arc<dyn ScreenInputSink>)
     }
     fn frame_limits(&self) -> crate::screen::core::frame_budget::FrameLimits {
         self.grabber.frame_limits()
@@ -191,25 +454,46 @@ impl ScreenSource for WindowsSource {
         self.grabber.size()
     }
 
-    fn capture(&mut self, _frame_id: u64, keyframe: bool) -> io::Result<SourceFrame> {
+    /// CPU pixels (still images): a GPU picture is captured anew exactly.
+    fn capture(&mut self, frame_id: u64, keyframe: bool) -> io::Result<SourceFrame> {
+        let picture = self.capture_picture(frame_id, keyframe)?;
+        self.grabber.exact_frame(picture)
+    }
+
+    fn capture_picture(&mut self, _frame_id: u64, keyframe: bool) -> io::Result<SourcePicture> {
         if !self.capture_active {
-            return Ok(SourceFrame::Unchanged);
+            return Ok(SourcePicture::Unchanged);
         }
         if let Some(state) = state_before_capture(self.window, self.probe.as_mut())? {
             self.renew |= matches!(
                 state,
                 SessionState::SecureDesktop | SessionState::SessionInactive
             );
-            return Ok(SourceFrame::Paused(state));
+            return Ok(SourcePicture::Paused(state));
         }
         if self.renew {
             self.grabber.reopen()?;
             self.renew = false;
         }
-        self.grabber.capture(keyframe)
+        self.grabber.capture_picture(keyframe)
     }
 }
+
+#[path = "capture_thread.rs"]
+mod thread;
 
 #[cfg(test)]
 #[path = "capture_state_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "bildkette_capture_task_tests.rs"]
+mod bildkette_tests;
+
+#[cfg(test)]
+#[path = "bildkette_capture_thread_task_tests.rs"]
+mod bildkette_thread_tests;
+
+#[cfg(test)]
+#[path = "bildkette_input_task_tests.rs"]
+mod bildkette_input_tests;

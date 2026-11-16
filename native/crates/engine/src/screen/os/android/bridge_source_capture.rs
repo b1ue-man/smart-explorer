@@ -1,6 +1,36 @@
 //! Epoch-bound Tiles and MediaCodec output for the existing Android source.
 use super::*;
 
+/// The `configure` message of one encoder epoch. `codec` names the MediaCodec encoder the app opens
+/// (`h264`, `hevc`, `av1`); `profile` is `cb`/`high` for H.264 and `main` (4:2:0) for HEVC and AV1,
+/// the names of `CodecKind::profile_name`.
+fn configure_message(request: &StageRequest, hybrid: bool) -> serde_json::Value {
+    let codec = request.choice.codec;
+    let profile = match codec {
+        CodecKind::H264 => request.choice.profile.map(|profile| profile.key()),
+        _ => Some(codec.profile_name(request.choice.profile)),
+    };
+    json!({
+        "op": "configure",
+        "epoch": request.encoder_epoch & 0xFFFF,
+        "codec": codec.key(),
+        "profile": profile,
+        "width": request.size.width,
+        "height": request.size.height,
+        "fps": request.fps,
+        "bitrate": request.target_bps,
+        "hybrid": hybrid,
+    })
+}
+
+/// An HEVC or AV1 encoder the app failed to open leaves the offers of this host: the pipeline falls
+/// back for the running session, the next one negotiates H.264.
+fn note_refusal(codec: CodecKind, reason: &str) {
+    if reason.starts_with("encoder_failed:") {
+        super::super::bridge_channels::refuse_codec(codec);
+    }
+}
+
 impl BridgeSource {
     pub(super) fn tiles_frame(&mut self, request: &StageRequest) -> Result<StageFrame, StageError> {
         let projected = matches!(
@@ -104,23 +134,17 @@ impl BridgeSource {
         encoder: StageEncoder,
     ) -> Result<StageFrame, StageError> {
         let source_size = self.size;
-        let hybrid = request.frame_contract.is_some_and(|c| c.hybrid_regions) && !self.synthetic();
+        // The hybrid pair (raw RGBA beside the video) exists for H.264 only; HEVC and AV1 pictures
+        // go out as the encoder's access units.
+        let hybrid = request.choice.codec == CodecKind::H264
+            && request.frame_contract.is_some_and(|c| c.hybrid_regions)
+            && !self.synthetic();
         let fresh = self.epoch != Some(request.encoder_epoch);
         if fresh {
             self.hybrid = None;
             self.tiles = None;
             self.channel.clear_pictures();
-            self.channel.send(json!({
-                "op": "configure",
-                "epoch": request.encoder_epoch & 0xFFFF,
-                "codec": "h264",
-                "profile": request.choice.profile.map(|profile| profile.key()),
-                "width": request.size.width,
-                "height": request.size.height,
-                "fps": request.fps,
-                "bitrate": request.target_bps,
-                "hybrid": hybrid,
-            }));
+            self.channel.send(configure_message(request, hybrid));
             self.epoch = Some(request.encoder_epoch);
             self.bitrate = request.target_bps;
         } else {
@@ -159,7 +183,10 @@ impl BridgeSource {
         let picture = self
             .channel
             .next_picture(timeout, accept)
-            .map_err(ended_error)?;
+            .map_err(|reason| {
+                note_refusal(request.choice.codec, &reason);
+                ended_error(reason)
+            })?;
         // Kotlin admits the first paired capture only after publishing the actual encoder.
         let encoder = match self.channel.phase() {
             Phase::Ready {

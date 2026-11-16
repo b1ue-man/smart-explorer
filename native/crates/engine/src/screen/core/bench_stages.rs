@@ -16,12 +16,23 @@
 //! | `capture_to_arrival` | capture (host clock) until the last record arrived | no | yes |
 //!
 //! The viewer of a session with another device sees only what the wire
-//! carries: the capture time stamp of each frame and its own clock. It
-//! cannot split the host stations, so it reports `decode` and the sum
-//! `capture_to_arrival` (capture, encode, send and network together, corrected
-//! by the clock offset of `PING`/`PONG`). The tests of
-//! `verbindungen_bild_messung_task_tests.rs` play the host in the same
-//! process and fill every station.
+//! carries: the capture time stamp of each frame and its own clock. Without
+//! more it reports `decode` and the sum `capture_to_arrival` (capture,
+//! encode, send and network together, corrected by the clock offset of
+//! `PING`/`PONG`). The tests of `verbindungen_bild_messung_task_tests.rs`
+//! play the host in the same process and fill every station.
+//!
+//! Since BK0 (plan 2026-11-14 „Bildkette“) a host that announces
+//! `frame_timing_v1` reports its stations on request (`bench_host.rs`):
+//! `capture`, `encode` (with scaling; with the conversion where `convert`
+//! is absent), `worker_handoff`
+//! (host process to daemon), `send`, `tick_jitter` (capture times against
+//! the cadence), `input_inject` (injection of an `INPUT` batch, only with
+//! control), `network` (host send until the viewer's arrival) and `input`
+//! (a probe from the viewer until the host handled it; both with the clock
+//! offset). `convert` appears where the conversion is a synchronous call
+//! of its own (`convert_clock`; also with `--local`), otherwise it is part
+//! of `encode`. Without the announcement only the viewer's stations appear.
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
@@ -35,6 +46,11 @@ pub const SEND: &str = "send";
 pub const NETWORK: &str = "network";
 pub const DECODE: &str = "decode";
 pub const CAPTURE_TO_ARRIVAL: &str = "capture_to_arrival";
+pub const CONVERT: &str = "convert";
+pub const WORKER_HANDOFF: &str = "worker_handoff";
+pub const TICK_JITTER: &str = "tick_jitter";
+pub const INPUT: &str = "input";
+pub const INPUT_INJECT: &str = "input_inject";
 
 /// Percentiles of one station in milliseconds.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -119,6 +135,9 @@ mod tests {
             corrupt_frames: 0,
             static_psnr_db: None,
             stages_ms,
+            source: None,
+            host_timing: None,
+            host_chain: None,
         }
     }
 

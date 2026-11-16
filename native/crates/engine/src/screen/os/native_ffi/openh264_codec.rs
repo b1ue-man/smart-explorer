@@ -114,6 +114,7 @@ impl DecoderFactory for OpenH264DecoderFactory {
             limits,
             yuv: false,
             yuv_out: None,
+            spare: (None, None),
             frames: 0,
             identities: FrameIdentities::default(),
             decoded: None,
@@ -131,6 +132,9 @@ struct OpenH264Decoder {
     /// `prefer_yuv(true)`: hand the planes out instead of converting.
     yuv: bool,
     yuv_out: Option<YuvPicture>,
+    /// Storage of shown pictures given back (`recycle_*`, plan „Bildkette“
+    /// V1): planes and BGRA of the next hand-over without an allocation.
+    spare: (Option<YuvPicture>, Option<BgraImage>),
     frames: u64,
     identities: FrameIdentities,
     decoded: Option<DecodedFrame>,
@@ -284,19 +288,25 @@ impl ScreenDecoder for OpenH264Decoder {
         };
         copy_picture(slices, strides, size, &mut self.planes)?;
         if self.yuv {
-            // The copied planes become the output; the output's old buffers
-            // serve the next copy.
-            let out = self.yuv_out.get_or_insert_with(|| YuvPicture {
-                y: Vec::new(),
-                y_stride: 0,
-                uv: Vec::new(),
-                uv_stride: 0,
-                chroma: Chroma::I420 {
-                    u: Vec::new(),
-                    v: Vec::new(),
-                },
-                matrix: YuvMatrix::Bt709,
-            });
+            // The copied planes become the output; the old buffers of the
+            // output (a returned one first, else one nobody took) serve the
+            // next copy.
+            let mut out = self
+                .spare
+                .0
+                .take()
+                .or_else(|| self.yuv_out.take())
+                .unwrap_or_else(|| YuvPicture {
+                    y: Vec::new(),
+                    y_stride: 0,
+                    uv: Vec::new(),
+                    uv_stride: 0,
+                    chroma: Chroma::I420 {
+                        u: Vec::new(),
+                        v: Vec::new(),
+                    },
+                    matrix: YuvMatrix::Bt709,
+                });
             out.y_stride = size.width as usize;
             out.uv_stride = size.chroma().width as usize;
             std::mem::swap(&mut out.y, &mut self.planes.y);
@@ -304,6 +314,7 @@ impl ScreenDecoder for OpenH264Decoder {
                 std::mem::swap(u, &mut self.planes.u);
                 std::mem::swap(v, &mut self.planes.v);
             }
+            self.yuv_out = Some(out);
             self.decoded = Some(identity);
             return Ok(true);
         }
@@ -330,6 +341,38 @@ impl ScreenDecoder for OpenH264Decoder {
     fn yuv_picture(&self) -> Option<YuvPicture> {
         self.yuv_out.clone().filter(|_| self.yuv)
     }
+
+    /// OpenH264 copied its planes into `yuv_out` already; they go as they are.
+    fn take_yuv_picture(&mut self) -> Option<YuvPicture> {
+        self.yuv_out.take().filter(|_| self.yuv)
+    }
+
+    /// The BGRA picture is no reference (the decoder keeps its own), so it
+    /// goes; a returned buffer of the same size takes its place.
+    fn take_picture(&mut self) -> BgraImage {
+        match self.spare.1.take() {
+            Some(next) if next.size() == self.picture.size() && next.regions().is_none() => {
+                std::mem::replace(&mut self.picture, next)
+            }
+            _ => self.picture.clone(),
+        }
+    }
+
+    fn recycle_yuv(&mut self, planes: YuvPicture) {
+        if matches!(planes.chroma, Chroma::I420 { .. }) {
+            self.spare.0 = Some(planes);
+        }
+    }
+
+    fn recycle_picture(&mut self, image: BgraImage) {
+        self.spare.1 = Some(image);
+    }
+
+    // `keeps_references` stays `false`: OpenH264 reports a gap in
+    // `frame_num` (the frames lost after the confirmed one) as `dsRefLost`
+    // unless the stream allows gaps (upstream `decoder_core.cpp`,
+    // `DecodeCurrentAccessUnit`, subclause 8.2.5.2), so a continuation ends
+    // in a decode error; the viewer asks for a key frame at once instead.
 }
 
 /// Serializes the task tests that load OpenH264 in this test process (one

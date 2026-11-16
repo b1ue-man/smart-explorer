@@ -156,6 +156,9 @@ mod upload_queue;
 #[cfg(test)]
 #[path = "core/vault_scheduler_task_tests.rs"]
 mod vault_scheduler_task_tests;
+// E4d: a request that waits for the engine's own fetch keeps its presence.
+#[path = "core/waiting_presence.rs"]
+mod waiting_presence;
 #[path = "core/windows_access.rs"]
 mod windows_access;
 #[path = "core/windows_case.rs"]
@@ -219,6 +222,10 @@ mod optimization_cache_tests;
 #[cfg(any(test, feature = "test-support"))]
 #[path = "core/optimization_fixture.rs"]
 pub mod optimization_fixture;
+// E4c: what a drive's engine asks the device by itself is background work.
+#[cfg(test)]
+#[path = "core/background_presence_task_tests.rs"]
+mod background_presence_task_tests;
 #[cfg(test)]
 #[path = "core/optimization_metadata_tests.rs"]
 mod optimization_metadata_tests;

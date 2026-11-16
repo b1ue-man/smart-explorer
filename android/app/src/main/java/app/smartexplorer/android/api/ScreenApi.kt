@@ -68,12 +68,13 @@ data class ScreenPrereqs(
     val appWindowCapture: Boolean = false,
 )
 
-/** One H.264 encoder of MediaCodec: `cb` or `high`. */
+/** One encoder of MediaCodec: H.264 with [profile] `cb` or `high`, HEVC and AV1 4:2:0 with `main` ([codec] names which). */
 @Serializable
 data class ScreenEncoderOffer(
     val profile: String, val hardware: Boolean,
     val maxWidth: Int? = null, val maxHeight: Int? = null,
     val maxMacroblocks: Long? = null, val maxMacroblocksPerSecond: Long? = null,
+    val codec: String = "h264",
 )
 
 /** A running app as the viewer's window list shows it. */
@@ -133,6 +134,7 @@ object ScreenApi {
                     JsonArray(
                         list.map {
                             buildJsonObject {
+                                put("codec", it.codec)
                                 put("profile", it.profile)
                                 put("hardware", it.hardware)
                                 it.maxWidth?.let { value -> put("maxWidth",value) }
@@ -247,6 +249,11 @@ object ScreenApi {
         maxFps: Int,
         rendererLimit: Pair<Int, Int>? = null,
         expectedNodeId: String? = null,
+        maxRate: Long? = null,
+        /** „Codec“ of the viewer: `h264`, `hevc`, `av1` or `lossless`; `null` or `auto` leaves the choice to the negotiation. */
+        codec: String? = null,
+        /** „Dekodierer“: `hardware` or `software`; `null` or `auto` is automatic. */
+        decoder: String? = null,
     ): Long {
         val args = buildJsonObject {
             put("relation", relation)
@@ -255,6 +262,9 @@ object ScreenApi {
             put("mode", mode)
             put("workingBytes", app.smartexplorer.android.screen.ScreenFrameLimits.workingBytes())
             expectedNodeId?.let { put("expectedNodeId", it) }
+            maxRate?.let { put("maxRate", it) }
+            codec?.takeIf { it != "auto" }?.let { put("codec", it) }
+            decoder?.takeIf { it != "auto" }?.let { put("decoder", it) }
             if (source != null) put("source", source)
             putJsonArray("decoders") {
                 decoders.forEach { offer ->
@@ -273,7 +283,7 @@ object ScreenApi {
         return answer?.get("session")?.toString()?.toLongOrNull() ?: 0L
     }
 
-    /** `preview` or `full`; the other fields keep the host's choice when `null`. */
+    /** `preview` or `full`; the other fields keep the host's choice when `null`. `maxRate` (bit/s) is the highest data rate of this viewer: 0 is automatic, `null` leaves it as it is. */
     suspend fun viewSetMode(
         session: Long,
         mode: String,
@@ -283,6 +293,7 @@ object ScreenApi {
         fps: Int? = null,
         sharpness: Boolean = false,
         lossless: Boolean = false,
+        maxRate: Long? = null,
     ) {
         Core.call(
             "screen.viewSetMode",
@@ -297,6 +308,7 @@ object ScreenApi {
                 if (fps != null) put("fps", fps)
                 put("sharpness", sharpness)
                 put("lossless", lossless)
+                maxRate?.let { put("maxRate", it) }
             },
         )
     }
@@ -428,9 +440,9 @@ data class ScreenWindows(
 /** One decoder of this phone offered to the host (`decoders` of `screen.viewOpen`). */
 @Serializable
 data class DecoderOffer(
-    /** `h264` or `tiles`. */
+    /** `h264`, `hevc`, `av1` or `tiles`. */
     val codec: String,
-    /** `cb` or `high` for H.264. */
+    /** `cb` or `high` for H.264, `main` for HEVC and AV1 (4:2:0). */
     val profile: String? = null,
     val hardware: Boolean = false,
     val maxWidth: Int? = null,

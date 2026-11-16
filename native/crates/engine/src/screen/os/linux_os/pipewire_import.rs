@@ -4,6 +4,7 @@ use super::super::pipewire_abi::memory::{
     fd_facts, CoreEvents, FdFacts, MemBlock, MemMap, MemoryApi, MempoolEvents,
 };
 use super::super::pipewire_abi::{CoreMethods, SpaInterface};
+use super::super::spa_pod::dmabuf::DATA_DMABUF;
 use super::*;
 use crate::screen::core::capture_admission::CaptureSlice;
 use crate::screen::core::capture_import::{
@@ -31,6 +32,8 @@ pub(super) struct Inspected {
 pub(super) struct ImportBacking {
     pub next: Option<Box<ImportBacking>>,
     pub mem_id: u32,
+    /// `spa_data_type` of the block; a DMA-BUF (3) is admitted, never mapped.
+    pub kind: u32,
     pub id: CaptureImportId,
     pub block: usize,
     pub fd: c_int,
@@ -142,6 +145,17 @@ impl ImportController {
         drop(state);
         let facts = fd_facts(pending.fd)?;
         let rights = pending.flags & 3;
+        // A DMA-BUF is never mapped (BK8b), so the mapping rights are not
+        // compared with its open mode [assumption: compositors may export a
+        // writable buffer through a descriptor opened read-only].
+        if pending.kind == DATA_DMABUF {
+            return Ok(Inspected {
+                pending,
+                block: block as usize,
+                facts,
+                rights,
+            });
+        }
         if rights == 0
             || rights & 2 != 0 && facts.access == libc::O_RDONLY
             || rights & 1 != 0 && facts.access == libc::O_WRONLY
@@ -212,6 +226,7 @@ impl ImportController {
         let mut owner = Box::new(ImportBacking {
             next: None,
             mem_id: inspected.pending.mem_id,
+            kind: inspected.pending.kind,
             id: inspected.pending.id,
             block: inspected.block,
             fd: inspected.pending.fd,
@@ -225,6 +240,25 @@ impl ImportController {
             mapping_slice: Some(mapping_slice),
             metadata_slice: Some(metadata_slice),
         });
+        if inspected.pending.kind == DATA_DMABUF {
+            // BK8b: a DMA-BUF is admitted with its object size as a native
+            // surface of the session (the same need as a mapping, so the
+            // session's ceiling counts it) but never mapped: tiled GPU memory
+            // has no linear CPU view (PipeWire dma-buf.dox, "Mapping Warning");
+            // the VA driver imports the descriptor.
+            owner.next = state.head.take();
+            state.head = Some(owner);
+            state.pending = None;
+            drop(state);
+            self.latest.block_import(false);
+            let result = (self.api.set_paused)(self.core.load(Ordering::Acquire), false);
+            if result < 0 {
+                return Err(io::Error::other(format!(
+                    "pipewire core resume failed: {result}"
+                )));
+            }
+            return Ok(());
+        }
         let map = (self.api.map)(
             inspected.block as *mut MemBlock,
             inspected.rights,

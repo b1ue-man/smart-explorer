@@ -11,6 +11,13 @@
 //! with the daemon (parent-death signal). A source opened for a controlling
 //! viewer (SCR-M6) takes `INPUT` and injects it with the platform backend;
 //! any other session refuses input with `control_unavailable`.
+//!
+//! Plan 2026-11-14 „Bildkette“: input and its release run on a thread of
+//! their own (`host_worker_input`, B-28); a daemon that sends `STREAM`
+//! orders gets its pictures from two stages of their own, capture at the
+//! session's cadence and encoding after it (`host_worker_clock`, B-27), with
+//! raised thread priority on Windows (B-29); `PRODUCE` still answers one
+//! picture per request.
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -34,7 +41,7 @@ const OPENH264_CHECK: Duration = Duration::from_secs(1);
 const OPENH264: &str = "openh264";
 /// Test hook of the task suite (development builds only): the process
 /// aborts after this many pictures, like a crashing codec.
-#[cfg(debug_assertions)]
+#[cfg_attr(not(any(debug_assertions, test)), allow(dead_code))]
 pub const CRASH_AFTER_ENV: &str = "SE_SCREEN_WORKER_CRASH_AFTER";
 
 /// This process serves a session that may control (`OPEN` with `control`);
@@ -100,6 +107,23 @@ fn capture_failed(error: &io::Error) -> WorkerReply {
     failed(code, error)
 }
 
+/// Whether `events` only let go (keys and buttons up, touches ended):
+/// what a release may inject.
+fn release_only(events: &[crate::screen::core::input_model::InputEvent]) -> bool {
+    use crate::screen::core::input_model::{InputEvent, TouchPhase};
+    events.iter().all(|event| {
+        matches!(
+            event,
+            InputEvent::Key { down: false, .. }
+                | InputEvent::Button { down: false, .. }
+                | InputEvent::Touch {
+                    phase: TouchPhase::End | TouchPhase::Cancel,
+                    ..
+                }
+        )
+    })
+}
+
 /// `--screen-host-worker` as the only argument (V9) runs the host process;
 /// the result is its exit code. The entry of both programs
 /// (`smart_explorer` in `run_gui`, `se` in its `main`).
@@ -115,8 +139,14 @@ pub fn run_host_worker() -> i32 {
     run::run()
 }
 
+#[path = "host_worker_clock.rs"]
+mod clock;
+#[cfg(all(test, windows))]
+pub(in crate::screen::os) use clock::{EncoderOpener, Encoding};
 #[path = "capture_dispatch.rs"]
 mod dispatch;
+#[path = "host_worker_input.rs"]
+mod input;
 #[path = "host_worker_prepare.rs"]
 mod prepare;
 #[path = "host_worker_run.rs"]
@@ -161,39 +191,7 @@ impl Worker {
                     Err(error) => capture_failed(&error),
                 }
             }
-            WorkerRequest::Release(events) => {
-                let allowed = events.iter().all(|event| {
-                    matches!(
-                        event,
-                        crate::screen::core::input_model::InputEvent::Key { down: false, .. }
-                            | crate::screen::core::input_model::InputEvent::Button {
-                                down: false,
-                                ..
-                            }
-                            | crate::screen::core::input_model::InputEvent::Touch {
-                                phase: crate::screen::core::input_model::TouchPhase::End
-                                    | crate::screen::core::input_model::TouchPhase::Cancel,
-                                ..
-                            }
-                    )
-                });
-                let blocked = if !allowed || !self.control {
-                    Some(crate::screen::core::wire_control::ControlBlock::ControlUnavailable)
-                } else if let Some(family) = self.family.as_mut() {
-                    family.release().err()
-                } else if let Some(sink) = self.release_sink.as_ref() {
-                    sink.release(&events).err()
-                } else {
-                    self.backend.release_input(&events).err()
-                };
-                WorkerReply::InputDone {
-                    blocked,
-                    legacy_reconnect: self
-                        .source
-                        .as_ref()
-                        .is_some_and(|s| s.legacy_input_invalid()),
-                }
-            }
+            WorkerRequest::Release(events) => self.release(events),
             WorkerRequest::SetCaptureActive(active) => {
                 self.capture_active = false;
                 self.encoder = None;
@@ -215,34 +213,69 @@ impl Worker {
                 frame_id,
                 frame_contract,
             } => self.raw(frame_id, frame_contract),
-            WorkerRequest::Input(input) => {
-                let blocked = if !self.control
-                    || self.source.is_none()
-                    || self.family.is_some()
-                    || self.remote.is_closed()
-                {
-                    Some(crate::screen::core::wire_control::ControlBlock::ControlUnavailable)
-                } else {
-                    self.source.as_mut().and_then(|source| {
-                        source
-                            .inject_input(
-                                self.backend.as_ref(),
-                                input.reference_generation,
-                                input.presented,
-                                &input.events,
-                            )
-                            .err()
-                    })
-                };
-                WorkerReply::InputDone {
-                    blocked,
-                    legacy_reconnect: self
-                        .source
-                        .as_ref()
-                        .is_some_and(|s| s.legacy_input_invalid()),
-                }
-            }
+            WorkerRequest::Input(input) => self.input(input),
+            // Orders reach the stream (`host_worker_clock`), never this.
+            WorkerRequest::Stream(_) => failed(
+                ScreenErrorCode::CaptureFailed,
+                "stream order outside the picture stream",
+            ),
             WorkerRequest::Close => failed(ScreenErrorCode::CaptureFailed, "closed"),
+        }
+    }
+
+    /// `RELEASE_INPUT`: lets go of what the viewer still held pressed.
+    pub(super) fn release(
+        &mut self,
+        events: Vec<crate::screen::core::input_model::InputEvent>,
+    ) -> WorkerReply {
+        let allowed = release_only(&events);
+        let blocked = if !allowed || !self.control {
+            Some(crate::screen::core::wire_control::ControlBlock::ControlUnavailable)
+        } else if let Some(family) = self.family.as_mut() {
+            family.release().err()
+        } else if let Some(sink) = self.release_sink.as_ref() {
+            sink.release(&events).err()
+        } else {
+            self.backend.release_input(&events).err()
+        };
+        WorkerReply::InputDone {
+            blocked,
+            legacy_reconnect: self
+                .source
+                .as_ref()
+                .is_some_and(|s| s.legacy_input_invalid()),
+        }
+    }
+
+    /// `INPUT` of a controlling viewer, injected with the source's backend.
+    pub(super) fn input(
+        &mut self,
+        input: crate::screen::core::worker_wire::BoundInput,
+    ) -> WorkerReply {
+        let blocked = if !self.control
+            || self.source.is_none()
+            || self.family.is_some()
+            || self.remote.is_closed()
+        {
+            Some(crate::screen::core::wire_control::ControlBlock::ControlUnavailable)
+        } else {
+            self.source.as_mut().and_then(|source| {
+                source
+                    .inject_input(
+                        self.backend.as_ref(),
+                        input.reference_generation,
+                        input.presented,
+                        &input.events,
+                    )
+                    .err()
+            })
+        };
+        WorkerReply::InputDone {
+            blocked,
+            legacy_reconnect: self
+                .source
+                .as_ref()
+                .is_some_and(|s| s.legacy_input_invalid()),
         }
     }
 

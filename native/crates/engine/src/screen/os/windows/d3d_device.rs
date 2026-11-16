@@ -1,9 +1,16 @@
 //! Direct3D 11 for the Windows capture (SCR-M4, decision U16-3): the device
-//! of one source and the read-back of its pictures. There is no GPU path to
-//! the encoder in this strand: every picture is copied into a staging
-//! texture and from there into immutable grant-owned capture storage.
-//! Readback and band resampling live in `capture_readback`; encoders borrow
-//! the compatible `BgraImage` view without copying its pixels.
+//! of one source and the read-back of its pictures. Readback and band
+//! resampling live in `capture_readback`; encoders borrow the compatible
+//! `BgraImage` view without copying its pixels.
+//!
+//! Plan 2026-11-14 bildkette B-17/B-20 (package BK2a): while a hardware
+//! encoder takes textures (`mf_d3d_input.rs`), the picture stays on this
+//! device: the D3D11 video processor converts it to NV12 and the encoder
+//! gets the texture through the device manager of the same device. The
+//! device is therefore created with video support where the driver has it
+//! (`D3D11_CREATE_DEVICE_VIDEO_SUPPORT`, which Media Foundation requires of
+//! a device behind `MFT_MESSAGE_SET_D3D_MANAGER`); without it the capture
+//! keeps the CPU readback.
 use std::io;
 
 use windows::core::Interface;
@@ -13,13 +20,14 @@ use windows::Win32::Graphics::Direct3D::{
     D3D_FEATURE_LEVEL_10_0, D3D_FEATURE_LEVEL_10_1, D3D_FEATURE_LEVEL_11_0,
 };
 use windows::Win32::Graphics::Direct3D11::{
-    D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Multithread,
-    D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_SDK_VERSION,
+    D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Multithread, ID3D11VideoDevice,
+    D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_CREATE_DEVICE_FLAG, D3D11_CREATE_DEVICE_VIDEO_SUPPORT,
+    D3D11_SDK_VERSION,
 };
 use windows::Win32::Graphics::Dxgi::{IDXGIAdapter, IDXGIDevice};
 use windows::Win32::System::WinRT::Direct3D11::CreateDirect3D11DeviceFromDXGIDevice;
 
-pub(super) use super::capture_readback::Readback;
+pub(super) use super::capture_readback::{Read, Readback};
 use crate::screen::core::frame_budget::{FrameLimits, MAX_WORKING_BYTES};
 use crate::screen::core::pixel_convert::FrameSize;
 
@@ -36,9 +44,10 @@ pub(super) struct DeviceSet {
 // thread at a time uses it.
 unsafe impl Send for DeviceSet {}
 
-fn created(
+fn created_with(
     adapter: Option<&IDXGIAdapter>,
     driver: D3D_DRIVER_TYPE,
+    flags: D3D11_CREATE_DEVICE_FLAG,
 ) -> windows::core::Result<(ID3D11Device, ID3D11DeviceContext)> {
     let levels = [
         D3D_FEATURE_LEVEL_11_0,
@@ -54,7 +63,7 @@ fn created(
             adapter,
             driver,
             HMODULE(std::ptr::null_mut()),
-            D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+            flags,
             Some(&levels),
             D3D11_SDK_VERSION,
             Some(&mut device),
@@ -66,6 +75,17 @@ fn created(
         (Some(device), Some(context)) => Ok((device, context)),
         _ => Err(windows::core::Error::from(E_POINTER)),
     }
+}
+
+/// With video support first (GPU path, B-17), else as before: a driver
+/// without the video flag still captures through the CPU readback.
+fn created(
+    adapter: Option<&IDXGIAdapter>,
+    driver: D3D_DRIVER_TYPE,
+) -> windows::core::Result<(ID3D11Device, ID3D11DeviceContext)> {
+    let video = D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_VIDEO_SUPPORT;
+    created_with(adapter, driver, video)
+        .or_else(|_| created_with(adapter, driver, D3D11_CREATE_DEVICE_BGRA_SUPPORT))
 }
 
 /// A device on the default adapter: hardware, and when that fails WARP.
@@ -98,6 +118,20 @@ pub(super) fn create_on(adapter: Option<&IDXGIAdapter>) -> windows::core::Result
 }
 
 impl DeviceSet {
+    /// Whether the D3D11 video processor and a device manager can use this
+    /// device (created with video support).
+    pub(super) fn has_video(&self) -> bool {
+        self.device.cast::<ID3D11VideoDevice>().is_ok()
+    }
+    /// The LUID of the adapter this device runs on, `HighPart` in the upper
+    /// 32 bits (the packing `MFT_ENUM_ADAPTER_LUID` is compared with).
+    pub(super) fn adapter_luid(&self) -> Option<u64> {
+        let dxgi: IDXGIDevice = self.device.cast().ok()?;
+        // SAFETY: plain queries of the live DXGI device and its adapter.
+        let desc = unsafe { dxgi.GetAdapter().and_then(|adapter| adapter.GetDesc()) }.ok()?;
+        let luid = desc.AdapterLuid;
+        Some((u64::from(luid.HighPart as u32) << 32) | u64::from(luid.LowPart))
+    }
     pub(super) fn frame_limits(&self) -> FrameLimits {
         // SAFETY: immutable query on this live D3D11 device.
         let side = if unsafe { self.device.GetFeatureLevel() }.0 >= D3D_FEATURE_LEVEL_11_0.0 {

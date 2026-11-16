@@ -37,6 +37,16 @@ pub struct SessionView {
     pub codec: Option<String>,
     #[serde(default)]
     pub encoder: Option<String>,
+    /// Stage of the encoder, `hardware` or `software` (plan 2026-11-14
+    /// „Bildkette“ 4.10a, BK6).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub encoder_stage: Option<String>,
+    /// Stage of the viewer's decoder as the pairing chose it (BK6).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decoder_stage: Option<String>,
+    /// The codec's profile by its name in the standard (`high`, `main`, …).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
     /// `direct` or `relay`.
     pub path: String,
     /// Unix seconds.
@@ -45,6 +55,13 @@ pub struct SessionView {
     pub fps: u32,
     pub controlling: bool,
     pub state: SessionState,
+    /// Stage of every station and what limits the rate (plan 2026-11-14
+    /// „Bildkette“ BK0, 4.10a); absent before the first statistics.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chain: Option<super::frame_timing::ChainReport>,
+    /// p50/p95 per station in µs on this host (BK0).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stations: Option<super::frame_timing::HostStations>,
 }
 
 /// What a new session registers with.
@@ -80,6 +97,20 @@ struct Entry {
     needs: Vec<Capability>,
     screen_content: bool,
     stop: watch::Sender<Option<EndReason>>,
+}
+
+impl SessionView {
+    /// What `se screen sessions` names of the running picture stream:
+    /// codec, profile, encoder and the stages of encoder and decoder (BK6).
+    pub fn set_stream(&mut self, stream: &super::wire_control::StreamInfo) {
+        let stage = |hardware: bool| if hardware { "hardware" } else { "software" };
+        let profile = stream.codec.profile_name(stream.profile);
+        self.codec = Some(stream.codec.key().into());
+        self.profile = (!profile.is_empty()).then(|| profile.to_string());
+        self.encoder = Some(stream.encoder.clone());
+        self.encoder_stage = Some(stage(stream.hardware).into());
+        self.decoder_stage = stream.decoder_hardware.map(|on| stage(on).into());
+    }
 }
 
 impl Entry {
@@ -155,12 +186,17 @@ impl ScreenRegistry {
             source: new.source,
             codec: None,
             encoder: None,
+            encoder_stage: None,
+            decoder_stage: None,
+            profile: None,
             path: new.path,
             started_at: new.started_at,
             bitrate_kbps: 0,
             fps: 0,
             controlling: false,
             state: new.state,
+            chain: None,
+            stations: None,
         };
         let (stop, receiver) = watch::channel(None);
         let entry = Entry {

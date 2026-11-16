@@ -277,6 +277,9 @@ impl DeviceTree {
     /// Reads the shared folders of a device again, when they were read
     /// before; added and removed folders become changes.
     pub(super) fn refresh_roots(&self, key: &str) {
+        // The tree's own refresh, nobody waits for it: its read of the
+        // device is work of the engine, not of a program (E4c).
+        let _background = crate::vfs::BackgroundScope::enter();
         let Some(old) = guard(&self.roots).get(key).cloned() else {
             return;
         };

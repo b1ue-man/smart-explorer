@@ -14,9 +14,9 @@ use tokio::sync::mpsc;
 
 use crate::daemon::ipc_host::ShareHost;
 use crate::daemon::ipc_protocol::screen::{
-    encode_relay_record, read_relay, write_relay, BenchRequest, ProbeReport, ScreenIpcReply,
+    self, encode_relay_record, read_relay, write_relay, BenchRequest, ProbeReport, ScreenIpcReply,
     ScreenIpcRequest, StreamRequest, MAX_RELAY_VIEWER_BYTES, RELAY_BROKEN, RELAY_CLOCK, RELAY_HOST,
-    RELAY_RECORD, RELAY_VIEWER, WATCH_WAIT_SECS,
+    RELAY_RATE_CEILING, RELAY_RECORD, RELAY_VIEWER, WATCH_WAIT_SECS,
 };
 use crate::daemon::ipc_protocol::{write_response, IpcResponse};
 use crate::screen::core::bench::{self, BenchOptions};
@@ -128,6 +128,11 @@ impl ShareHost {
                     display_size: None,
                     max_fps: 1,
                     frame_capabilities: None,
+                    max_rate_bps: None,
+                    codec: None,
+                    decoder: None,
+                    gop_continue: false,
+                    gop_continue_decoders: Vec::new(),
                     expected_node: metadata_pin,
                 };
                 return self.screen_stream(stream, &target, request, true);
@@ -217,7 +222,7 @@ impl ShareHost {
                     control: hello.authorization.control,
                     monitors: hello.monitors.clone(),
                     input: hello.input.clone(),
-                    codecs: hello.encoders.clone(),
+                    codecs: hello.all_encoders(),
                     limits: hello.limits.clone(),
                 })
             }
@@ -235,8 +240,12 @@ impl ShareHost {
         target: &PeerOpenTarget,
         request: &BenchRequest,
     ) -> Result<bench::BenchReport, Failure> {
-        let codec = CodecPreference::parse(&request.codec)
-            .ok_or_else(|| format!("unknown codec {:?}; auto, h264 or tiles", request.codec))?;
+        let codec = CodecPreference::parse(&request.codec).ok_or_else(|| {
+            format!(
+                "unknown codec {:?}; auto, h264, hevc, av1 or tiles",
+                request.codec
+            )
+        })?;
         let options = BenchOptions {
             codec,
             size: request.size,
@@ -246,9 +255,11 @@ impl ShareHost {
         options.validate()?;
         let codecs = crate::screen::os::codec_inventory::registry();
         let decoders = options.decoders(&codecs)?;
+        // `--source` (BK0): the host's real capture instead of the test picture.
+        let source = screen::bench_source(request.source.as_deref())?;
+        let named = request.source.clone();
         let (service, link) = self.screen_link(target)?;
-        let source = Some(crate::screen::core::window_list::SourceId::Synthetic);
-        let mut viewer = viewer_request(SessionMode::View, source, decoders);
+        let mut viewer = viewer_request(SessionMode::View, Some(source.clone()), decoders);
         viewer.display_size = Some(options.size);
         viewer.max_fps = options.fps;
         let mut pending = stream.try_clone().map_err(|error| error.to_string())?;
@@ -260,7 +271,11 @@ impl ShareHost {
                 let _ = write_response(&mut pending, &reply);
             };
             let session = handshake(connection, build, announce).await?;
-            bench::run(session, options, &codecs).await
+            if screen::monitor_missing(&source, &session.hello.monitors) {
+                session.close();
+                return Err(ViewerError::Refused(screen::BENCH_SOURCE_NOT_FOUND.into()));
+            }
+            bench::run_source(session, options, &codecs, named).await
         });
         measured.map_err(Failure::from)
     }
@@ -306,13 +321,25 @@ impl ShareHost {
         let (in_tx, in_rx) = mpsc::channel::<Option<ViewerFrame>>(64);
         let memory = std::sync::Arc::new(std::sync::Mutex::new(None));
         let expected_node = request.expected_node.clone();
+        // „Codec“ and „Dekodierer“ of the viewer (BK6) narrow the offers;
+        // „Höchste Datenrate“ goes out as `RATE_CEILING` once open.
+        let decoders = request.chosen_decoders();
+        let max_rate_bps = request.max_rate_bps;
         let viewer = ViewerRequest {
             mode: request.mode,
             source: request.source,
-            decoders: request.decoders,
+            decoders,
             display_size: request.display_size,
             max_fps: request.max_fps,
             frame_capabilities: request.frame_capabilities,
+            // B-36: only a client that keeps its decoder over a
+            // continuation asks for it: the desktop viewer when its decoders
+            // can (`gui/.../screen_decode_local.rs` `announces`); the Android
+            // sink refuses a group without a key frame
+            // (`os/android/viewer_sink.rs` `record`) and never asks.
+            gop_continue: request.gop_continue,
+            // B-36 per codec: the decoders of the client that continue.
+            gop_continue_decoders: request.gop_continue_decoders,
         };
         let redial = reconnect::Redial {
             service: service.clone(),
@@ -327,6 +354,7 @@ impl ShareHost {
             in_rx,
             metadata,
             memory.clone(),
+            max_rate_bps,
         ));
         let mut input = stream.try_clone()?;
         let reader = std::thread::Builder::new()
@@ -364,6 +392,8 @@ fn viewer_request(
         display_size: None,
         max_fps: 30,
         frame_capabilities: None,
+        gop_continue: false,
+        gop_continue_decoders: Vec::new(),
     }
 }
 
@@ -445,8 +475,14 @@ async fn relay_loop(
             frame = input.recv() => match frame {
                 Some(Some(frame)) => {
                     modes.note(&frame);
+                    // What became of „Höchste Datenrate“ changed during the
+                    // session (P1): applied, or dropped for an old host.
+                    let state = reconnect::rate_state(&frame, session.rate_ceiling);
                     let _ = session.control.send(frame).await;
-                    Ok(())
+                    match state {
+                        Some(json) => out.send((RELAY_RATE_CEILING, json)).await,
+                        None => Ok(()),
+                    }
                 }
                 Some(None) | None => return ("viewer_closed".into(), None),
             },

@@ -64,10 +64,19 @@ impl PeerBackend {
         self
     }
 
+    /// The origin of an operation the calling thread makes now: work the
+    /// program started by itself (`crate::vfs::BackgroundScope`: a cache
+    /// refresh, a preload, an upload) is `Job` whatever the handle was
+    /// opened for; nobody waits for its answer (E4c). Read on the calling
+    /// thread, before a request moves to the runtime.
+    pub(super) fn effective_origin(&self) -> super::OperationOrigin {
+        metadata_presence::in_this_thread(self.origin)
+    }
+
     /// Metadata presence for one operation to `endpoint` while the guard
     /// lives; `None` for the job engine (`metadata_presence.rs`).
     pub(super) fn metadata_presence(&self, endpoint: &PeerEndpoint) -> Option<MetadataGuard> {
-        metadata_presence::begin_for_node(&endpoint.presence.node_id, self.origin)
+        metadata_presence::begin_for_node(&endpoint.presence.node_id, self.effective_origin())
     }
 
     pub(super) fn request(&self, req: FsRequest) -> io::Result<FsResponse> {
@@ -189,6 +198,7 @@ impl PeerBackend {
         absolute: bool,
     ) -> io::Result<FsResponse> {
         let expected = req.clone();
+        let origin = self.effective_origin();
         let timeout = match io_deadline::remaining(deadline, "peer filesystem request") {
             Ok(timeout) => timeout,
             Err(error) => {
@@ -207,7 +217,7 @@ impl PeerBackend {
                 absolute.then_some(deadline),
                 async {
                     let ctrl = Ctrl::Fs { req, lease };
-                    send_fs_ctrl(&mut opened.send, &ctrl, self.origin).await?;
+                    send_fs_ctrl(&mut opened.send, &ctrl, origin).await?;
                     recv_resp_wire(&mut opened.recv).await
                 },
             ),

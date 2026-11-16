@@ -1,7 +1,7 @@
 //! Android as screen host (SCR-M8, C1 Android, C5): the screen host of the
 //! share node in the app process. Capture (MediaProjection, the
 //! accessibility service's stills, the app's own test picture) and H.264
-//! (MediaCodec) run in the app; this backend names what the app reported
+//! (MediaCodec; since BK7b also HEVC and AV1) run in the app; this backend names what the app reported
 //! (`screen.hostPrereqs`), opens a bridge source per session
 //! (`bridge_source.rs`) and hands the controlling viewer's input to the
 //! accessibility service.
@@ -89,10 +89,20 @@ impl ScreenHostBackend for BridgeBackend {
         }]
     }
 
+    /// H.264 and the tiles, then the HEVC and AV1 encoders the app reported that it has not
+    /// refused to open (BK7b, B-26); `wire_hello_codecs` places them in the hello's two lists.
     fn encoders(&self) -> Vec<CodecOffer> {
-        let mut offers = channels::prereqs().encoders;
-        offers.truncate(crate::screen::core::negotiate::MAX_CODEC_OFFERS - 1);
+        use crate::screen::core::negotiate::MAX_CODEC_OFFERS;
+        let prereqs = channels::prereqs();
+        let (mut offers, mut newer): (Vec<_>, Vec<_>) = prereqs
+            .encoders
+            .into_iter()
+            .filter(|offer| !prereqs.refused.contains(&offer.codec))
+            .partition(|offer| offer.codec.is_legacy());
+        offers.truncate(MAX_CODEC_OFFERS - 1);
         offers.push(CodecOffer::tiles());
+        newer.truncate(MAX_CODEC_OFFERS);
+        offers.extend(newer);
         offers
     }
 
@@ -214,9 +224,9 @@ impl ScreenHostBackend for BridgeBackend {
     ) -> io::Result<Box<dyn ScreenEncoder>> {
         match choice.codec {
             CodecKind::Tiles => Ok(Box::new(TilesScreenEncoder::new(size)?)),
-            CodecKind::H264 => Err(io::Error::new(
+            CodecKind::H264 | CodecKind::Hevc | CodecKind::Av1 => Err(io::Error::new(
                 io::ErrorKind::Unsupported,
-                "H.264 runs in the app's MediaCodec encoder",
+                "H.264, HEVC and AV1 run in the app's MediaCodec encoder",
             )),
         }
     }
@@ -229,7 +239,7 @@ impl ScreenHostBackend for BridgeBackend {
         if request.choice.codec != CodecKind::Tiles {
             return Err(io::Error::new(
                 io::ErrorKind::Unsupported,
-                "H.264 runs in the app's admitted MediaCodec encoder",
+                "H.264, HEVC and AV1 run in the app's admitted MediaCodec encoder",
             ));
         }
         let limits = request.frame_contract.map_or(

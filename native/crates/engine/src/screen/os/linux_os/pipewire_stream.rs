@@ -1,7 +1,10 @@
 //! The PipeWire video stream of a portal screen cast (SCR-M5, U19-5): joins
 //! the portal's PipeWire remote with its file descriptor, connects an input
 //! stream to the portal's node, negotiates raw video as shared memory
-//! (`spa_pod::enum_format_pod`) and copies every picture into `LatestFrame`.
+//! (`spa_pod::enum_format_pod`) and copies every picture into `LatestFrame`,
+//! or, where the GPU encoder imports it, as DMA-BUF with the shared memory
+//! offer as fallback, holding the newest buffer for the encoder without a
+//! copy (BK8b, `pipewire_dmabuf.rs`).
 //! All calls on the stream and the core run between `lock` and `unlock` of a
 //! `pw_thread_loop`; the callbacks run on the loop's thread. `capture` of
 //! the source takes the picture from `LatestFrame` on another thread.
@@ -10,7 +13,8 @@ use super::pipewire_abi::{
     PW_STREAM_FLAG_AUTOCONNECT, PW_STREAM_STATE_ERROR, PW_VERSION_STREAM_EVENTS,
     SPA_CHUNK_FLAG_CORRUPTED, SPA_PARAM_FORMAT,
 };
-use super::spa_pod::{enum_format_pod, parse_video_format, VideoFormat};
+use super::spa_pod::dmabuf::{parse_negotiated, Negotiated};
+use super::spa_pod::VideoFormat;
 use crate::screen::core::capture_admission::CaptureGrant;
 use crate::screen::core::capture_image::{CaptureImageBuilder, CapturedImage};
 use crate::screen::core::frame_budget::FrameLimits;
@@ -28,6 +32,12 @@ use memory::CaptureMemory;
 #[path = "pipewire_buffers.rs"]
 mod buffers;
 use buffers::BufferOwners;
+#[path = "pipewire_cursor.rs"]
+mod cursor;
+#[path = "pipewire_dmabuf.rs"]
+pub(super) mod dmabuf;
+#[path = "pipewire_dmabuf_stream.rs"]
+mod dmabuf_stream;
 #[path = "pipewire_frame_copy.rs"]
 mod frame_copy;
 #[path = "pipewire_import.rs"]
@@ -51,6 +61,8 @@ pub enum Taken {
 #[path = "pipewire_pause.rs"]
 mod pause;
 pub use pause::LatestFrame;
+// Merge W2: the GPU route of the portal source (`portal_capture.rs`).
+pub(super) use dmabuf_stream::GpuCapture;
 
 #[cfg(any(test, feature = "test-support"))]
 pub use memory::convert_rows;
@@ -65,6 +77,10 @@ struct CallbackData {
     memory: Arc<CaptureMemory>,
     owners: Mutex<BufferOwners>,
     imports: Box<imports::ImportController>,
+    /// The pointer metadata of the stream (BK8a, `pipewire_cursor.rs`).
+    cursor: cursor::PointerFeed,
+    /// Gives held DMA-BUF buffers back from the encoder's thread (BK8b).
+    returner: Arc<dyn dmabuf::BufferReturn>,
 }
 
 impl CallbackData {
@@ -126,11 +142,12 @@ unsafe extern "C" fn on_param_changed(data: *mut c_void, id: u32, param: *const 
                 return;
             }
             let bytes = unsafe { std::slice::from_raw_parts(param.cast::<u8>(), 8 + size) };
-            parse_video_format(bytes)
+            parse_negotiated(bytes)
         };
         if param.is_null() {
             data.latest.trace.format("none");
             data.latest.pending_format();
+            data.cursor.reset();
             *lock_format(data) = None;
             if let Err(error) = data.memory.format(None) {
                 data.fail(error.to_string());
@@ -138,39 +155,37 @@ unsafe extern "C" fn on_param_changed(data: *mut c_void, id: u32, param: *const 
             return;
         }
         match negotiated {
-            Some((format, size)) if FrameLimits::RESOURCE.check(size).is_ok() => {
+            Some(negotiated) if FrameLimits::RESOURCE.check(negotiated.size).is_ok() => {
+                let (format, size) = (negotiated.format, negotiated.size);
                 data.latest
                     .trace
                     .format(&format!("{format:?} {}x{}", size.width, size.height));
                 data.latest.pending_format();
+                data.cursor.reset();
                 *lock_format(data) = Some((format, size));
                 if let Err(error) = data.memory.format(Some((format, size))) {
                     data.fail(error.to_string());
                     return;
                 }
-                // Functional size request only: native imports are separately
-                // admitted at Core.add_mem before their first local mapping.
-                let bytes = match super::spa_pod::consumer_buffers_pod(size) {
-                    Ok(bytes) => bytes,
+                // `Buffers` for the negotiated memory (DMA-BUF or shared
+                // memory, BK8b) and the `Meta` parameters (pointer, B-16;
+                // damage for DMA-BUF); a producer without a meta ignores it.
+                let pods = match unsafe { dmabuf_stream::format_params(data, &negotiated) } {
+                    Ok(Some(pods)) => pods,
+                    Ok(None) => return,
                     Err(error) => {
                         data.fail(error.to_string());
                         return;
                     }
                 };
-                let mut words = vec![0u64; bytes.len().div_ceil(8)];
-                unsafe {
-                    std::ptr::copy_nonoverlapping(
-                        bytes.as_ptr(),
-                        words.as_mut_ptr().cast::<u8>(),
-                        bytes.len(),
-                    );
-                }
-                let mut params = [words.as_ptr().cast::<SpaPod>()];
+                let words: Vec<Vec<u64>> = pods.iter().map(|pod| pod_words(pod)).collect();
+                let mut params: Vec<*const SpaPod> =
+                    words.iter().map(|word| word.as_ptr().cast()).collect();
                 let result = unsafe {
                     (data.api.stream_update_params)(
                         data.stream.load(Ordering::Acquire),
                         params.as_mut_ptr(),
-                        1,
+                        params.len() as u32,
                     )
                 };
                 if result < 0 {
@@ -179,13 +194,23 @@ unsafe extern "C" fn on_param_changed(data: *mut c_void, id: u32, param: *const 
                     ));
                 }
             }
-            Some((_, size)) => data.fail(format!(
+            Some(Negotiated { size, .. }) => data.fail(format!(
                 "pipewire_size: {}x{} is outside the 4096 x 2304 frame limit",
                 size.width, size.height
             )),
             None => data.fail("pipewire_format".into()),
         }
     });
+}
+
+/// A pod copied into 8-byte aligned storage, as PipeWire reads pods.
+fn pod_words(bytes: &[u8]) -> Vec<u64> {
+    let mut words = vec![0u64; bytes.len().div_ceil(8)];
+    // SAFETY: `words` holds at least `bytes.len()` bytes and does not overlap.
+    unsafe {
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), words.as_mut_ptr().cast::<u8>(), bytes.len());
+    }
+    words
 }
 
 fn lock_format(data: &CallbackData) -> MutexGuard<'_, Option<(VideoFormat, FrameSize)>> {
@@ -216,8 +241,22 @@ unsafe extern "C" fn on_process(data: *mut c_void) {
             if last.is_null() {
                 return;
             }
-            if data.latest.is_capture_active() && data.identity.connected() {
-                if let Some(image) = copy_picture(data, last) {
+            if data.latest.is_capture_active()
+                && data.identity.connected()
+                && data.latest.dmabuf.dmabuf().is_some()
+            {
+                // BK8b: the stream keeps the newest DMA-BUF buffer for the
+                // encoder; it goes back when the encoder dropped it.
+                if dmabuf_stream::process(data, last) {
+                    return;
+                }
+            } else if data.latest.is_capture_active() && data.identity.connected() {
+                // The pointer metadata of the buffer decides whether the
+                // picture goes on as it is, with the pointer mixed in, or
+                // the pointer goes to the overlay (`pipewire_cursor.rs`). A
+                // buffer without a picture can still move the pointer.
+                let picture = copy_picture(data, last);
+                if let Some(image) = data.cursor.process(data, last, picture) {
                     data.latest.publish(image);
                 }
             }
@@ -264,6 +303,8 @@ impl PwStream {
         }
         latest.suspend_before_connect();
         let imports = imports::ImportController::new(api.memory, latest.clone(), memory.clone())?;
+        let returner: Arc<dyn dmabuf::BufferReturn> =
+            Arc::new(pause::Returner(Arc::downgrade(&latest)));
         let mut data = Box::new(CallbackData {
             api: api.clone(),
             latest,
@@ -273,6 +314,8 @@ impl PwStream {
             memory,
             owners: Mutex::new(BufferOwners::default()),
             imports,
+            cursor: cursor::PointerFeed::default(),
+            returner,
         });
         let mut events = Box::new(PwStreamEvents {
             version: PW_VERSION_STREAM_EVENTS,
@@ -289,6 +332,12 @@ impl PwStream {
             trigger_done: None,
         });
         let mut hook = Box::new(SpaHook::zeroed());
+        // The DMA-BUF offer probes NVENC and VA-API once per process (driver
+        // loads, test surfaces); it runs here, before `create` takes the loop
+        // lock, so `make_stream` finds the cached answer.
+        if dmabuf::gpu_pipeline_ready() {
+            let _ = super::linux_hw_codecs::dmabuf_import_target();
+        }
         // SAFETY: the calls follow the documented PipeWire order; every
         // object is checked for null and given back on failure.
         let created =
@@ -359,6 +408,7 @@ impl Drop for PwStream {
     fn drop(&mut self) {
         self._data.identity.invalidate();
         self._data.latest.close_copy();
+        self._data.cursor.reset();
         self._data.imports.close();
         self._data.memory.stop();
         // Both Parent frame and import waits are cancelled before join. Never

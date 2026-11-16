@@ -18,6 +18,7 @@ test-support = ["smart_explorer_transfer/test-support"]
 [dependencies]
 smart_explorer_transfer = { path = "../transfer" }
 rayon.workspace = true
+bytes.workspace = true
 png.workspace = true
 crossbeam-channel.workspace = true
 ctrlc.workspace = true

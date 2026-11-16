@@ -96,12 +96,17 @@ fn screen_task_completions_screen() {
         source: "synthetic".into(),
         codec: Some("tiles".into()),
         encoder: Some("tiles".into()),
+        encoder_stage: None,
+        decoder_stage: None,
+        profile: None,
         path: "direct".into(),
         started_at: NOW,
         bitrate_kbps: 900,
         fps: 30,
         controlling: false,
         state: SessionState::Streaming,
+        chain: None,
+        stations: None,
     };
     let ids = session_candidates_from(&[session]);
     assert_eq!(values(&ids), ["3"]);

@@ -99,6 +99,10 @@ iroh = { version = "=1.3.0", default-features = true, features = ["test-utils"] 
 # uses with `name.workspace = true`.
 [workspace.dependencies]
 rayon = "1.10"
+# Screen pictures go to the QUIC send buffer as `Bytes` without a copy
+# (`SendStream::write_chunk`, plan bildkette BK3b); already in the lock through
+# noq, so no new crate is built.
+bytes = "1.11"
 # Screen still pictures (SCR-M4): PNG encoder and decoder of `screen::core::snapshot`.
 png = "0.18"
 crossbeam-channel = "0.5"

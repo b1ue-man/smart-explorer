@@ -88,6 +88,10 @@ pub fn tag_limit(tag: u8) -> usize {
         ICON_REQUEST => super::app_icon::MAX_ICON_REQUEST_BYTES,
         ICON_REPLY => super::app_icon::MAX_ICON_REPLY_BYTES,
         PRESENTED => 16,
+        super::wire_control::RATE_CEILING => 8,
+        super::cursor_overlay::CURSOR_REQUEST => 1,
+        super::cursor_overlay::CURSOR_POSITION => 21,
+        super::frame_timing::FRAME_TIMING => 256,
         _ => MAX_CONTROL_BYTES,
     }
 }

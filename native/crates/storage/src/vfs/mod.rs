@@ -18,6 +18,10 @@
 
 #[path = "core/backend_defaults.rs"]
 mod backend_defaults;
+// Work a program started by itself (E4c): never interactive presence.
+#[path = "core/background.rs"]
+mod background;
+pub use self::background::{in_background, BackgroundScope};
 #[path = "core/batch.rs"]
 mod batch;
 #[path = "core/cache.rs"]

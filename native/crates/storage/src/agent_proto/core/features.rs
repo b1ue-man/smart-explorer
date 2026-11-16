@@ -149,6 +149,8 @@ pub struct ServerFeatures {
     pub ranges: bool,
     /// LZ4 content blocks (`lz4-v1`).
     pub lz4: bool,
+    /// The background mark of a request (`origin-v1`, `request_origin.rs`).
+    pub origin: bool,
     /// Requests the server admits at once, when it announced them.
     pub slots: Option<usize>,
     /// The background service (announces itself with a trailing `worker`).
@@ -185,6 +187,7 @@ impl ServerFeatures {
                 LABEL_CAPACITY => features.capacity = true,
                 LABEL_RANGE => features.ranges = true,
                 LABEL_LZ4 => features.lz4 = true,
+                super::request_origin::LABEL_ORIGIN => features.origin = true,
                 other => {
                     if let Some(slots) = other.strip_prefix(LABEL_SLOTS) {
                         features.slots = slots.parse().ok().filter(|slots| *slots > 0);

@@ -51,6 +51,14 @@ pub(super) fn resolve(config: &MountConfig, host: &ShareHost) -> Result<BackendH
             // open_share_backend would create a loopback IPC proxy back into this
             // same process and would split transport fallback state in two.
             // A drive serves a person's file manager: metadata presence (E4).
+            // Every request counts, also an indexer's or a backup program's:
+            // FUSE (`Request::pid`) and Dokany (`process_id`) name only the
+            // calling process, no host callback passes it to this handle (the
+            // engine's caches and loaders sit between), and a process says
+            // nothing about a person without a list of program names. What
+            // the host's engine does by itself (refresh, preload, upload,
+            // retry) marks each of its requests (`origin-v1`, E4d); the
+            // daemon answers those as `Job` on this one connection.
             host.open_share(target, crate::share::OperationOrigin::User)
                 .map(|(_, backend, _)| backend)
         }

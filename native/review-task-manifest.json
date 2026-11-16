@@ -276,7 +276,9 @@
       "app.smartexplorer.android.screen.ScreenEncoderOwnershipTest",
       "app.smartexplorer.android.ui.settings.DeviceNavigationRegressionTest",
       "app.smartexplorer.android.screen.ScreenSessionBudgetRegressionTest",
-      "app.smartexplorer.android.ui.screen.ScreenTextsTest"
+      "app.smartexplorer.android.ui.screen.ScreenTextsTest",
+      "app.smartexplorer.android.ui.screen.BildketteTaskAndroidTest",
+      "app.smartexplorer.android.ui.screen.BildketteCodecAndroidTest"
     ],
     "device_classes": [
       "app.smartexplorer.android.task.BatchesPresentationTaskTest",

@@ -1,7 +1,11 @@
-//! The statistics field of the desktop viewer (SCR-M7, U25-7): codec and
-//! encoder, picture size and rate, bit rate, path, round trip, drops, key
-//! frames, resets and the latency of the latest pictures in the corner of
-//! the picture. A value that is not known shows „–“.
+//! The statistics field of the desktop viewer (SCR-M7, U25-7): codec with
+//! profile, encoder and decoder with their stage (Hardware/Software, plan
+//! 2026-11-14 „Bildkette“ 4.10a), picture size and rate, bit rate, path,
+//! round trip, drops, key frames, resets, the latency of the latest
+//! pictures and, when the host cannot take it, that „Höchste Datenrate“
+//! does not apply, in the corner of the picture. A value that is not known
+//! shows „–“. The chain lines of BK0 (stages, limits, station times) follow
+//! from `screen_stats_chain.rs`.
 use eframe::egui::{self, Color32, FontId};
 
 use super::screen_session::SessionInfo;
@@ -17,17 +21,32 @@ fn value<T: std::fmt::Display>(value: Option<T>) -> String {
 pub fn stats_lines(info: &SessionInfo, unmapped_keys: u64) -> Vec<String> {
     let stream = info.stream.as_ref();
     let stats = info.stats.as_ref();
+    // Codec with profile, encoder and decoder with their stages (plan
+    // 2026-11-14 „Bildkette“ 4.10a: the statistics name the stage in use).
+    let stage = |hardware: bool| if hardware { "Hardware" } else { "Software" };
     let codec = stream.map_or_else(
         || MISSING.to_string(),
         |stream| {
-            format!(
-                "{}/{}{}",
-                stream.codec.key(),
-                stream.encoder,
-                if stream.hardware { " (Hardware)" } else { "" }
-            )
+            let profile = stream.codec.profile_name(stream.profile);
+            if profile.is_empty() {
+                stream.codec.key().to_string()
+            } else {
+                format!("{} ({profile})", stream.codec.key())
+            }
         },
     );
+    let encoder = stream.map_or_else(
+        || MISSING.to_string(),
+        |stream| format!("{} ({})", stream.encoder, stage(stream.hardware)),
+    );
+    let decoder = match (
+        info.decoder.as_deref(),
+        stream.and_then(|s| s.decoder_hardware),
+    ) {
+        (Some(name), Some(hardware)) => format!("{name} ({})", stage(hardware)),
+        (Some(name), None) => name.to_string(),
+        (None, _) => MISSING.to_string(),
+    };
     let size = stream.map_or_else(
         || MISSING.to_string(),
         |stream| format!("{}×{}", stream.size.width, stream.size.height),
@@ -46,6 +65,8 @@ pub fn stats_lines(info: &SessionInfo, unmapped_keys: u64) -> Vec<String> {
     );
     let mut lines = vec![
         format!("Codec {codec}"),
+        format!("Kodierer {encoder}"),
+        format!("Dekodierer {decoder}"),
         format!("{size} @ {} B/s", value(stats.map(|stats| stats.fps))),
         format!(
             "{} kbit/s (Ziel {})",
@@ -68,8 +89,12 @@ pub fn stats_lines(info: &SessionInfo, unmapped_keys: u64) -> Vec<String> {
         ),
         latency,
     ];
+    lines.extend(super::screen_stats_chain::chain_lines(info));
     if unmapped_keys > 0 {
         lines.push(format!("Tasten ohne Abbildung {unmapped_keys}"));
+    }
+    if info.rate_ceiling == crate::daemon::RateCeilingState::UnsupportedByHost {
+        lines.push("Höchste Datenrate: vom Gerät nicht unterstützt (ältere Version)".into());
     }
     lines
 }

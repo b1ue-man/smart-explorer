@@ -1,32 +1,58 @@
-//! Codec negotiation (decision C2 „Aushandlung“). The host lists its encoders
-//! `{codec, profile, hardware, max_width, max_height}`, the viewer its
-//! decoders `{codec, profile, hardware}`. The ranking is hardware/hardware,
-//! hardware/software, software/hardware, software/software; within one tier
-//! `high` before `cb`; the lossless tile codec always last. The tile codec is
-//! part of protocol version 1 and lives in this platform-neutral core, so
-//! every pair of peers has it as the last choice even when a list omits it.
+//! Codec negotiation (decision C2 „Aushandlung“, plan 2026-11-14 „Bildkette“
+//! B-30 to B-32). The host lists its encoders `{codec, profile, hardware,
+//! max_width, max_height}`, the viewer its decoders `{codec, profile,
+//! hardware}`. The ranking is hardware/hardware, hardware/software,
+//! software/hardware, software/software; within the hardware/hardware tier
+//! AV1 before HEVC before H.264, within every other tier H.264 before HEVC
+//! before AV1 (B-30: H.264 before a software AV1); within one codec H.264
+//! `high` before `cb`, HEVC and AV1 4:2:0 before 4:4:4; the lossless tile
+//! codec always last. The tile codec is part of protocol version 1 and lives
+//! in this platform-neutral core, so every pair of peers has it as the last
+//! choice even when a list omits it.
+//!
+//! HEVC and AV1 travel only in the v2 lists of the hellos (`wire_hello`
+//! `codecs_v2`, B-31): a peer of v0.5.196 fails on an unknown `CodecKind`.
+//! Their `profile` reuses `H264Profile`: absent is the 4:2:0 profile (HEVC
+//! Main, AV1 Main), `high` the 4:4:4 profile (HEVC Main 4:4:4 of the range
+//! extensions, AV1 High, B-32); `cb` is never valid for them.
 use serde::{Deserialize, Serialize};
 
 use super::pixel_convert::FrameSize;
 
-/// Most offers one side may list: codec × profile × hardware gives 4 H.264
-/// entries plus `tiles` in version 1; 32 leaves room for later codecs and
-/// several devices per kind, and bounds the pairing to 1024 candidates.
+#[path = "codec_preference.rs"]
+mod preference;
+pub use preference::{
+    decoder_preference, set_decoder_preference, CodecPreference, CodecSetting, DecoderPreference,
+};
+
+/// Most offers one list of a hello may carry: codec × profile × hardware
+/// gives 4 H.264 entries plus `tiles` in version 1; 32 leaves room for later
+/// codecs and several devices per kind. The legacy and the v2 list each
+/// hold at most this many, so a negotiation pairs at most
+/// `MAX_COMBINED_OFFERS` of each side (4096 candidates).
 pub const MAX_CODEC_OFFERS: usize = 32;
+pub const MAX_COMBINED_OFFERS: usize = 2 * MAX_CODEC_OFFERS;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CodecKind {
     H264,
     Tiles,
+    /// ITU-T H.265; only after `codecs_v2` (B-31).
+    Hevc,
+    /// AOMedia Video 1; only after `codecs_v2` (B-31).
+    Av1,
 }
 
 impl CodecKind {
-    /// Code in the head of a picture stream; 3 stays reserved for AV1 (C2 L5).
+    /// Code in the head of a picture stream; 3 was reserved for AV1 since
+    /// C2 L5, HEVC takes 4.
     pub fn wire_code(self) -> u8 {
         match self {
             Self::H264 => 1,
             Self::Tiles => 2,
+            Self::Av1 => 3,
+            Self::Hevc => 4,
         }
     }
 
@@ -34,6 +60,8 @@ impl CodecKind {
         match code {
             1 => Some(Self::H264),
             2 => Some(Self::Tiles),
+            3 => Some(Self::Av1),
+            4 => Some(Self::Hevc),
             _ => None,
         }
     }
@@ -42,6 +70,54 @@ impl CodecKind {
         match self {
             Self::H264 => "h264",
             Self::Tiles => "tiles",
+            Self::Hevc => "hevc",
+            Self::Av1 => "av1",
+        }
+    }
+
+    /// A video codec (motion-compensated, one record per picture).
+    pub fn is_video(self) -> bool {
+        self != Self::Tiles
+    }
+
+    /// Known to a peer of v0.5.196: only these may enter the legacy lists.
+    pub fn is_legacy(self) -> bool {
+        matches!(self, Self::H264 | Self::Tiles)
+    }
+
+    /// Whether `profile` is a valid profile of this codec on the wire.
+    pub fn profile_valid(self, profile: Option<H264Profile>) -> bool {
+        match self {
+            Self::H264 => profile.is_some(),
+            Self::Tiles => profile.is_none(),
+            Self::Hevc | Self::Av1 => matches!(profile, None | Some(H264Profile::High)),
+        }
+    }
+
+    /// Whether a stream of this codec in `profile` has 4:4:4 chroma (B-32).
+    pub fn chroma_444(self, profile: Option<H264Profile>) -> bool {
+        matches!(self, Self::Hevc | Self::Av1) && profile == Some(H264Profile::High)
+    }
+
+    /// The standard's name of `profile` for this codec (`se screen codec`).
+    pub fn profile_name(self, profile: Option<H264Profile>) -> &'static str {
+        match (self, profile) {
+            (Self::H264, Some(profile)) => profile.key(),
+            (Self::Hevc, Some(H264Profile::High)) => "main_444",
+            (Self::Av1, Some(H264Profile::High)) => "high",
+            (Self::Hevc | Self::Av1, _) => "main",
+            _ => "",
+        }
+    }
+
+    /// Order within a tier (B-30): the newer codecs first only when both
+    /// sides run in hardware, otherwise H.264 first.
+    fn rank(self, both_hardware: bool) -> u8 {
+        match (self, both_hardware) {
+            (Self::Av1, true) | (Self::H264, false) => 0,
+            (Self::Hevc, _) => 1,
+            (Self::H264, true) | (Self::Av1, false) => 2,
+            (Self::Tiles, _) => 3,
         }
     }
 }
@@ -122,6 +198,31 @@ impl CodecOffer {
         }
     }
 
+    /// An HEVC or AV1 offer: 4:2:0 (Main), or 4:4:4 (B-32) with `chroma_444`.
+    pub fn video(codec: CodecKind, chroma_444: bool, hardware: bool) -> Self {
+        Self {
+            profile: chroma_444.then_some(H264Profile::High),
+            codec,
+            ..Self::h264(H264Profile::High, hardware)
+        }
+    }
+
+    /// Whether a decoder of this offer decodes a stream of `codec` in
+    /// `profile`: H.264 by `H264Profile::decodes`, HEVC and AV1 4:4:4
+    /// decoders also 4:2:0.
+    pub fn decodes(&self, codec: CodecKind, profile: Option<H264Profile>) -> bool {
+        self.codec == codec
+            && match codec {
+                CodecKind::H264 => self.profile.zip(profile).is_some_and(|(d, s)| d.decodes(s)),
+                CodecKind::Tiles => true,
+                CodecKind::Hevc | CodecKind::Av1 => {
+                    codec.profile_valid(self.profile)
+                        && codec.profile_valid(profile)
+                        && (self.profile == profile || self.profile == Some(H264Profile::High))
+                }
+            }
+    }
+
     pub fn tiles() -> Self {
         Self {
             codec: CodecKind::Tiles,
@@ -198,51 +299,19 @@ impl CodecOffer {
 }
 
 impl CodecOffer {
-    pub fn max_size_for_contract(
-        &self,
-        contract: super::frame_budget::FrameContract,
-    ) -> FrameSize {
+    pub fn max_size_for_contract(&self, contract: super::frame_budget::FrameContract) -> FrameSize {
         let legacy = self.max_size();
         let explicit = match (self.max_width, self.max_height) {
             (Some(width), Some(height)) if width > 0 && height > 0 => FrameSize::new(width, height),
             _ if self.codec == CodecKind::Tiles => contract.limits.max_size,
             _ => legacy,
         };
-        let evidenced = if self.codec == CodecKind::H264 && self.max_macroblocks.is_none() {
+        let evidenced = if self.codec.is_video() && self.max_macroblocks.is_none() {
             smaller(explicit, legacy)
         } else {
             explicit
         };
         smaller(evidenced, contract.limits.max_size)
-    }
-}
-
-/// `--codec auto|h264|tiles` and the menu „Kodierung“; „Verlustfrei“ and the
-/// group preview use `Tiles`.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub enum CodecPreference {
-    #[default]
-    Auto,
-    H264,
-    Tiles,
-}
-
-impl CodecPreference {
-    pub fn parse(text: &str) -> Option<Self> {
-        match text {
-            "auto" => Some(Self::Auto),
-            "h264" => Some(Self::H264),
-            "tiles" => Some(Self::Tiles),
-            _ => None,
-        }
-    }
-
-    pub fn key(self) -> &'static str {
-        match self {
-            Self::Auto => "auto",
-            Self::H264 => "h264",
-            Self::Tiles => "tiles",
-        }
     }
 }
 
@@ -273,8 +342,21 @@ fn tier(encoder_hardware: bool, decoder_hardware: bool) -> u8 {
     }
 }
 
-/// All usable pairings in rank order; empty only when `preference` is `H264`
-/// and no H.264 pairing exists. Offers beyond `MAX_CODEC_OFFERS` are ignored.
+/// The 4:4:4 pairing of `choice`'s codec and stages among `choices` (B-32):
+/// the host switches to it under „Schärfe vor Flüssigkeit“.
+pub fn sharp_alternative(choices: &[CodecChoice], choice: &CodecChoice) -> Option<CodecChoice> {
+    choices.iter().copied().find(|other| {
+        other.codec == choice.codec
+            && other.codec.chroma_444(other.profile)
+            && !choice.codec.chroma_444(choice.profile)
+            && other.encoder_hardware == choice.encoder_hardware
+            && other.decoder_hardware == choice.decoder_hardware
+    })
+}
+
+/// All usable pairings in rank order; empty only when `preference` names
+/// one video codec and no pairing of it exists. Offers beyond
+/// `MAX_COMBINED_OFFERS` are ignored.
 pub fn negotiate(
     encoders: &[CodecOffer],
     decoders: &[CodecOffer],
@@ -291,8 +373,8 @@ pub fn negotiate_for_contract(
     if contract.is_some_and(|c| c.validate().is_err()) {
         return Vec::new();
     }
-    let encoders = &encoders[..encoders.len().min(MAX_CODEC_OFFERS)];
-    let decoders = &decoders[..decoders.len().min(MAX_CODEC_OFFERS)];
+    let encoders = &encoders[..encoders.len().min(MAX_COMBINED_OFFERS)];
+    let decoders = &decoders[..decoders.len().min(MAX_COMBINED_OFFERS)];
     let dimensions = |offer: &CodecOffer| {
         contract.map_or_else(|| offer.max_size(), |c| offer.max_size_for_contract(c))
     };
@@ -300,12 +382,12 @@ pub fn negotiate_for_contract(
     if preference != CodecPreference::Tiles {
         let mut ranked = Vec::new();
         for (ei, encoder) in encoders.iter().enumerate() {
-            let (CodecKind::H264, Some(profile)) = (encoder.codec, encoder.profile) else {
+            let (codec, profile) = (encoder.codec, encoder.profile);
+            if !codec.is_video() || !codec.profile_valid(profile) || !preference.admits(codec) {
                 continue;
-            };
+            }
             for (di, decoder) in decoders.iter().enumerate() {
-                if decoder.codec != CodecKind::H264
-                    || !decoder.profile.is_some_and(|p| p.decodes(profile))
+                if !decoder.decodes(codec, profile)
                     || (contract.is_some_and(|c| c.hybrid_regions)
                         && decoder.pixel_access != Some(true))
                 {
@@ -325,18 +407,26 @@ pub fn negotiate_for_contract(
                     continue;
                 }
                 let choice = CodecChoice {
-                    codec: CodecKind::H264,
-                    profile: Some(profile),
+                    codec,
+                    profile,
                     encoder_hardware: encoder.hardware,
                     decoder_hardware: decoder.hardware,
                     max_size: smaller(dimensions(encoder), dimensions(decoder)),
                     max_pixels,
                     max_macroblocks_per_second,
                 };
+                // H.264 `high` before `cb`; HEVC and AV1 4:2:0 before 4:4:4.
+                let profile_rank = if codec == CodecKind::H264 {
+                    u8::from(profile != Some(H264Profile::High))
+                } else {
+                    u8::from(codec.chroma_444(profile))
+                };
+                let both = encoder.hardware && decoder.hardware;
                 ranked.push((
                     (
                         tier(encoder.hardware, decoder.hardware),
-                        u8::from(profile != H264Profile::High),
+                        codec.rank(both),
+                        profile_rank,
                     ),
                     ei,
                     di,
@@ -358,7 +448,7 @@ pub fn negotiate_for_contract(
             }
         }
     }
-    if preference != CodecPreference::H264 {
+    if preference.admits(CodecKind::Tiles) {
         let initial = contract.map_or(FrameSize::MAX, |c| c.limits.max_size);
         let limit = |offers: &[CodecOffer]| {
             offers

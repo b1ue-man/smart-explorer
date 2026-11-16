@@ -161,11 +161,13 @@ impl ViewWidget {
                     picture.memory.clone(),
                 );
                 self.cpu.update_frame(ctx, &image, picture.presented);
+                session.recycle_bgra(image);
                 self.current = Some(Current::Cpu(picture.size));
             }
             PictureData::Yuv(planes) => {
                 let mut frame = YuvFrame::new(picture.size, planes);
                 frame.memory = picture.memory;
+                frame.pool = Some(session.picture_pool());
                 let fits_texture = super::screen_render_owner::get(ctx)
                     .and_then(|owner| owner.texture_limit())
                     .is_some_and(|limit| frame.size.width <= limit && frame.size.height <= limit);
@@ -250,6 +252,11 @@ impl ViewWidget {
         self.mapper.get_or_insert_with(|| InputMapper::new(caps))
     }
 
+    /// Whether the shown picture came as planes (GPU) or as BGRA (BK9).
+    pub fn planes_drawn(&self) -> Option<bool> {
+        Some(matches!(self.current.as_ref()?, Current::Gpu(..)))
+    }
+
     pub fn unmapped_keys(&self) -> u64 {
         self.mapper
             .as_ref()
@@ -289,14 +296,18 @@ impl ViewWidget {
             // Keep measured source geometry while waiting for the visibility ACK's frame.
         }
         session.refresh_visibility();
-        if let Some(picture) = session.take_picture() {
-            if !window.hidden() && !session.is_ended() {
+        match session.take_picture() {
+            Some(picture) if !window.hidden() && !session.is_ended() => {
                 if session.can_present(picture.presented.clone()) {
                     self.accept(&ctx, session, picture);
                 } else {
                     session.keep_if_awaiting_floor(picture);
                 }
             }
+            Some(_) => {}
+            // The shown picture is drawn again (r1, „wiederholt gezeichnet“).
+            None if self.current.is_some() && !window.hidden() => session.note_repeated(),
+            None => {}
         }
         let ppp = ctx.pixels_per_point();
         let available = ui.available_size();

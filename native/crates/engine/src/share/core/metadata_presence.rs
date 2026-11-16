@@ -126,6 +126,19 @@ impl MetadataPresence {
     }
 }
 
+/// The origin of an operation that a handle opened for `opened` makes on
+/// the calling thread: work the program started by itself
+/// (`crate::vfs::BackgroundScope`: a cache refresh, a preload, an upload)
+/// is `Job` whatever the handle was opened for, because nobody waits for
+/// its answer (E4c).
+pub(crate) fn in_this_thread(opened: OperationOrigin) -> OperationOrigin {
+    if crate::vfs::in_background() {
+        OperationOrigin::Job
+    } else {
+        opened
+    }
+}
+
 /// The register of this process.
 pub(crate) fn global() -> &'static MetadataPresence {
     static PRESENCE: OnceLock<MetadataPresence> = OnceLock::new();

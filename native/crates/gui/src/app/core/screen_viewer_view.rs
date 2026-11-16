@@ -234,12 +234,7 @@ impl ViewState {
 
     /// Carries out a choice of the toolbar that concerns this view; the
     /// others (device, all devices, full screen) are the app's.
-    pub fn apply(
-        &mut self,
-        action: &ToolbarAction,
-        common: &mut Common,
-        display: FrameSize,
-    ) {
+    pub fn apply(&mut self, action: &ToolbarAction, common: &mut Common, display: FrameSize) {
         match action {
             ToolbarAction::Source(source) => {
                 self.source = source.clone();
@@ -255,10 +250,17 @@ impl ViewState {
                 }
             }
             ToolbarAction::Control(on) => self.take_control(common, display, *on),
-            ToolbarAction::Sharpness(_) | ToolbarAction::Lossless(_) => {
+            ToolbarAction::Sharpness(_) | ToolbarAction::Codec(_) => {
                 if let Some(session) = &self.session {
                     let mode = full_set_mode(None, display, &common.prefs);
                     session.send(ViewerFrame::SetMode(mode));
+                }
+            }
+            // „Höchste Datenrate“ at once; the relay drops it for a host
+            // without `rate_ceiling_v1` and the statistics say so (BK6).
+            ToolbarAction::MaxRate(rate) => {
+                if let Some(session) = &self.session {
+                    session.send(ViewerFrame::RateCeiling(*rate));
                 }
             }
             ToolbarAction::Key(usage) => self.send_keys(vec![

@@ -7,6 +7,8 @@ impl MountEngine {
     /// mounted and visible for manual recovery; an I/O failure aborts startup
     /// without discarding the durable spool so Retry can try again later.
     pub fn retry_pending_changes(&self) -> io::Result<()> {
+        // A replay of what an earlier run left behind: nobody waits (E4c).
+        let _background = crate::vfs::BackgroundScope::enter();
         self.retry_pending(true)
     }
 

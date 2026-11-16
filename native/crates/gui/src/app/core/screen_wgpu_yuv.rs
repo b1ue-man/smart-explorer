@@ -10,6 +10,8 @@
 //! cubic convolution when enlarging, and exact luma texels at native size.
 //! `install` puts the resources into the renderer; without them (no wgpu
 //! surface, a shader the device refuses) the viewer draws BGRA on the CPU.
+//! The planes upload in the frame that takes them (`upload_now`, BK9);
+//! why no decoded texture is drawn directly: `screen_present.rs`.
 use super::screen_render_owner::{lock, Backend, Native, RenderSlot};
 use super::screen_render_upload::{Generation, UploadTicket};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -37,6 +39,18 @@ pub struct YuvFrame {
     pub size: FrameSize,
     pub picture: YuvPicture,
     pub memory: Option<Arc<crate::screen::core::frame_memory::MemoryLease>>,
+    /// Where the planes go when the last holder lets the picture go
+    /// (plan „Bildkette“ V1: the decoder reads its next picture into them).
+    pub pool: Option<super::screen_decode_local::PicturePool>,
+}
+
+impl Drop for YuvFrame {
+    fn drop(&mut self) {
+        if let Some(pool) = self.pool.take() {
+            let empty = super::screen_decode_local::empty_planes();
+            pool.give_yuv(std::mem::replace(&mut self.picture, empty));
+        }
+    }
 }
 
 impl YuvFrame {
@@ -46,6 +60,7 @@ impl YuvFrame {
             size,
             picture,
             memory: None,
+            pool: None,
         }
     }
 
@@ -279,6 +294,8 @@ pub fn paint(
         return false;
     };
     owner.attach(slot);
+    // BK9: the newest planes draw in this frame, not one frame later.
+    owner.upload_now(slot);
     let state = super::screen_render_owner::lock(&slot.state);
     let Some(resident) = state.resident.as_ref().filter(|r| {
         r.package.active() && matches!(r.native, super::screen_render_owner::Native::Yuv(_))

@@ -5,10 +5,14 @@ use super::mf_common;
 use super::{openh264_codec, openh264_install, openh264_pins};
 use super::{Arc, DecoderFactory, EncoderFactory, Factories, OpenH264Report, Path};
 
-/// The Media Foundation transforms of this host (Windows); none elsewhere.
+/// The encoders and decoders of this Windows host in the rank of plan
+/// 2026-11-14 „Bildkette“ 4.10a: NVENC, AMF (BK12, found at run time),
+/// then the Media Foundation transforms (hardware MFTs, software MFT);
+/// none elsewhere.
 #[cfg(windows)]
 pub(super) fn media_foundation_codecs() -> Factories {
-    mf_common::codecs()
+    let (encoders, decoders) = mf_common::codecs();
+    (super::vendor_codecs::vendor_encoders(encoders), decoders)
 }
 
 #[cfg(not(windows))]
@@ -16,13 +20,39 @@ pub(super) fn media_foundation_codecs() -> Factories {
     (Vec::new(), Vec::new())
 }
 
+/// The GPU vendor coders of a Linux host and viewer (BK4: NVENC, VA-API),
+/// found at run time; none elsewhere (Windows lists NVENC, AMF and the
+/// Media Foundation transforms in `media_foundation_codecs`, Android has
+/// its coders in the app).
+#[cfg(target_os = "linux")]
+pub(super) fn hardware_codecs() -> Factories {
+    super::linux_hw_codecs::codecs()
+}
+
+#[cfg(not(target_os = "linux"))]
+pub(super) fn hardware_codecs() -> Factories {
+    (Vec::new(), Vec::new())
+}
+
+/// The software AV1 coders of a Linux host and viewer (BK6, B-25:
+/// SVT-AV1, dav1d) where the system has them; none elsewhere.
+#[cfg(target_os = "linux")]
+pub(super) fn software_av1_codecs() -> Factories {
+    super::linux_hw_codecs::software_codecs()
+}
+
+#[cfg(not(target_os = "linux"))]
+pub(super) fn software_av1_codecs() -> Factories {
+    (Vec::new(), Vec::new())
+}
+
 /// Whether Media Foundation runs here with an H.264 encoder (task tests).
-#[cfg(all(windows, any(test, feature = "test-support")))]
+#[cfg(all(windows, test))]
 pub(super) fn media_foundation_present() -> bool {
     mf_common::available()
 }
 
-#[cfg(all(not(windows), any(test, feature = "test-support")))]
+#[cfg(all(not(windows), test))]
 pub(super) fn media_foundation_present() -> bool {
     false
 }

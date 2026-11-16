@@ -32,6 +32,10 @@ impl Choice {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ModeMemory {
     last: Option<Folded>,
+    /// The last `RATE_CEILING` of the viewer (BK6), replayed like a mode.
+    ceiling: Option<Option<u64>>,
+    /// The last `SET_DECODERS` of the viewer (P1), replayed like a mode.
+    decoders: Option<crate::screen::core::set_decoders::SetDecoders>,
 }
 
 #[derive(Clone, Debug)]
@@ -47,6 +51,14 @@ struct Folded {
 impl ModeMemory {
     /// Takes `frame` in when it is a `SET_MODE`.
     pub(crate) fn note(&mut self, frame: &ViewerFrame) {
+        if let ViewerFrame::RateCeiling(ceiling) = frame {
+            self.ceiling = Some(*ceiling);
+            return;
+        }
+        if let ViewerFrame::SetDecoders(set) = frame {
+            self.decoders = Some(set.clone());
+            return;
+        }
         let ViewerFrame::SetMode(set) = frame else {
             return;
         };
@@ -74,6 +86,16 @@ impl ModeMemory {
         }
         folded.sharpness = set.sharpness;
         folded.lossless = set.lossless;
+    }
+
+    /// The ceiling a new session gets again; `None` when none was sent.
+    pub(crate) fn rate_ceiling(&self) -> Option<Option<u64>> {
+        self.ceiling
+    }
+
+    /// The decoders a new session gets again; `None` when none were sent.
+    pub(crate) fn decoders(&self) -> Option<crate::screen::core::set_decoders::SetDecoders> {
+        self.decoders.clone()
     }
 
     /// The frames that put a new session where the viewer left the old one,

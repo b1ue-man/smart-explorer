@@ -85,6 +85,9 @@ fn bench() -> BenchReport {
         corrupt_frames: 0,
         static_psnr_db: None,
         stages_ms: Default::default(),
+        source: None,
+        host_timing: None,
+        host_chain: None,
     }
 }
 
@@ -99,12 +102,17 @@ fn session() -> SessionView {
         source: "synthetic".into(),
         codec: Some("tiles".into()),
         encoder: Some("tiles".into()),
+        encoder_stage: None,
+        decoder_stage: None,
+        profile: None,
         path: "relay".into(),
         started_at: 1_760_000_000,
         bitrate_kbps: 900,
         fps: 30,
         controlling: false,
         state: SessionState::WaitingForApproval,
+        chain: None,
+        stations: None,
     }
 }
 

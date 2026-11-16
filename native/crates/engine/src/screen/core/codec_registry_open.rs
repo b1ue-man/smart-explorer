@@ -3,12 +3,66 @@ use std::io;
 use std::sync::Arc;
 
 use super::super::host_backend::{ScreenDecoder, TilesScreenDecoder, TilesScreenEncoder};
-use super::super::negotiate::{CodecChoice, CodecKind, H264Profile};
+use super::super::negotiate::{CodecChoice, CodecKind};
 use super::super::pixel_convert::FrameSize;
 use super::super::wire_binary::GopHeader;
-use super::{offers_stream, CodecRegistry, EncoderFactory, OpenedEncoder, TILES_NAME};
+use super::{encodes_stream, CodecRegistry, EncoderFactory, OpenedEncoder, TILES_NAME};
 
 impl CodecRegistry {
+    fn matching_encoders(
+        &self,
+        choice: &CodecChoice,
+        size: FrameSize,
+        fps: u32,
+        refused: &[String],
+        contract: Option<super::super::frame_budget::FrameContract>,
+    ) -> Vec<(bool, &Arc<dyn EncoderFactory>)> {
+        let mut seen: Vec<String> = Vec::new();
+        let mut candidates: Vec<(bool, bool, &Arc<dyn EncoderFactory>)> = Vec::new();
+        for factory in &self.encoders {
+            let name = factory.name();
+            if refused.contains(&name) || seen.contains(&name) {
+                continue;
+            }
+            let best = factory
+                .offers()
+                .into_iter()
+                .filter_map(|offer| {
+                    let exact = encodes_stream(&offer, choice.codec, choice.profile)?;
+                    offer
+                        .supports_size_rate(size, fps, contract)
+                        .then_some((exact, offer.hardware))
+                })
+                .min_by_key(|(exact, hardware)| (!*exact, *hardware != choice.encoder_hardware));
+            if let Some((exact, hardware)) = best {
+                seen.push(name);
+                candidates.push((exact, hardware, factory));
+            }
+        }
+        candidates
+            .sort_by_key(|(exact, hardware, _)| (!*exact, *hardware != choice.encoder_hardware));
+        candidates
+            .into_iter()
+            .map(|(_, hardware, factory)| (hardware, factory))
+            .collect()
+    }
+
+    /// Number of distinct encoder stages available in this registry for
+    /// `request` before session refusals (W4, B3).
+    pub fn encoder_stage_count(&self, request: &super::super::host_stage::StageRequest) -> usize {
+        if request.choice.codec == CodecKind::Tiles {
+            return 1;
+        }
+        self.matching_encoders(
+            &request.choice,
+            request.size,
+            request.fps,
+            &[],
+            request.frame_contract,
+        )
+        .len()
+    }
+
     /// The worker and in-process capture use the same negotiated wrapper.
     pub fn open_encoder_for_stage(
         &self,
@@ -86,28 +140,13 @@ impl CodecRegistry {
                 hardware: false,
             }
         } else {
-            let mut candidates: Vec<_> = self
-                .encoders
-                .iter()
-                .filter_map(|factory| {
-                    if refused.contains(&factory.name()) {
-                        return None;
-                    }
-                    factory
-                        .offers()
-                        .into_iter()
-                        .find(|offer| {
-                            offers_stream(offer, request.choice.codec, request.choice.profile)
-                                && offer.supports_size_rate(
-                                    request.size,
-                                    request.fps,
-                                    request.frame_contract,
-                                )
-                        })
-                        .map(|offer| (offer.hardware, factory))
-                })
-                .collect();
-            candidates.sort_by_key(|(hardware, _)| *hardware != request.choice.encoder_hardware);
+            let candidates = self.matching_encoders(
+                &request.choice,
+                request.size,
+                request.fps,
+                refused,
+                request.frame_contract,
+            );
             let mut selected = None;
             let mut refusals = Vec::new();
             for (hardware, factory) in candidates {
@@ -194,20 +233,7 @@ impl CodecRegistry {
                 hardware: false,
             });
         }
-        let mut candidates: Vec<(bool, &Arc<dyn EncoderFactory>)> = Vec::new();
-        for factory in &self.encoders {
-            if refused.contains(&factory.name()) {
-                continue;
-            }
-            let fitting = factory.offers().into_iter().find(|offer| {
-                offers_stream(offer, choice.codec, choice.profile)
-                    && offer.supports_size_rate(size, fps, contract)
-            });
-            if let Some(offer) = fitting {
-                candidates.push((offer.hardware, factory));
-            }
-        }
-        candidates.sort_by_key(|(hardware, _)| *hardware != choice.encoder_hardware);
+        let candidates = self.matching_encoders(choice, size, fps, refused, contract);
         let mut refusals: Vec<String> = Vec::new();
         for (hardware, factory) in candidates {
             match factory.open(choice, size, fps) {
@@ -223,7 +249,7 @@ impl CodecRegistry {
             }
         }
         let codec = choice.codec.key();
-        let profile = choice.profile.map_or("", H264Profile::key);
+        let profile = choice.codec.profile_name(choice.profile);
         Err(io::Error::new(
             io::ErrorKind::Unsupported,
             if refusals.is_empty() {
@@ -263,10 +289,10 @@ impl CodecRegistry {
             } else {
                 raw
             };
-        let guarded = if header.codec == CodecKind::H264
+        let guarded = if header.codec.is_video()
             && !header.frame_contract.is_some_and(|c| c.hybrid_regions)
         {
-            super::super::frame_reference::ReferenceDecoder::new_video(decoder)
+            super::super::frame_reference::ReferenceDecoder::new_for_codec(decoder, header.codec)
         } else {
             super::super::frame_reference::ReferenceDecoder::new(decoder)
         };
@@ -281,14 +307,15 @@ impl CodecRegistry {
                 TilesScreenDecoder::new(header.size)?
             }));
         }
+        // „Dekodierer“ of the viewer (4.10): only implementations with a
+        // stage of the chosen kind; one of both kinds (Media Foundation)
+        // picks its stage itself from the same choice.
+        let preference = super::super::negotiate::decoder_preference();
         let mut refusals: Vec<String> = Vec::new();
         for factory in &self.decoders {
             let decodes = factory.offers().iter().any(|offer| {
-                offer.codec == header.codec
-                    && match (offer.profile, header.profile) {
-                        (Some(decoder), Some(stream)) => decoder.decodes(stream),
-                        _ => false,
-                    }
+                offer.decodes(header.codec, header.profile)
+                    && preference.allows(offer.hardware)
                     && offer.supports_size_rate(header.size, 0, header.frame_contract)
             });
             if !decodes {
@@ -302,7 +329,7 @@ impl CodecRegistry {
         Err(io::Error::new(
             io::ErrorKind::Unsupported,
             if refusals.is_empty() {
-                format!("no decoder for {}", header.codec.key())
+                format!("no {} decoder for {}", preference.key(), header.codec.key())
             } else {
                 format!("no decoder opened: {}", refusals.join("; "))
             },

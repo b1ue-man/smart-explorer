@@ -190,6 +190,20 @@ impl ScreenSource for AdmittedSource {
             .ok_or_else(|| io::Error::other("capture source did not activate"))?
             .capture(id, keyframe)
     }
+    fn capture_picture(
+        &mut self,
+        id: u64,
+        keyframe: bool,
+    ) -> io::Result<crate::screen::core::capture_picture::SourcePicture> {
+        use crate::screen::core::capture_picture::SourcePicture;
+        if let Some(state) = self.ensure()? {
+            return Ok(SourcePicture::Paused(state));
+        }
+        self.active
+            .as_mut()
+            .ok_or_else(|| io::Error::other("capture source did not activate"))?
+            .capture_picture(id, keyframe)
+    }
     fn capture_snapshot(
         &mut self,
         id: u64,

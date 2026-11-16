@@ -103,7 +103,9 @@ pub fn check_avc_dimensions(
             continue;
         }
         let from = at + 3;
-        at = from + 1;
+        // From the unit's first byte: a start code right after this one
+        // (an empty unit) is the next unit, not part of this one.
+        at = from;
         while at + 3 < data.len() && !start(at) {
             at += 1;
         }

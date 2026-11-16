@@ -44,6 +44,8 @@ mod capture_memory;
 mod capture_read;
 #[path = "x11_capture_source.rs"]
 mod capture_source;
+#[path = "x11_input_lane.rs"]
+mod input_lane;
 use crate::screen::core::frame_budget::FrameLimits;
 use crate::screen::core::session_state::SessionState;
 use crate::screen::core::window_list::SourceId;
@@ -175,6 +177,8 @@ pub struct X11Source {
     segment: Option<Segment>,
     last_hash: Option<u64>,
     last_image: Option<CapturedImage>,
+    /// What input checks, published after every capture (merge W2).
+    input_facts: Arc<input_lane::SharedFacts>,
 }
 fn refuse(reason: &str) -> SourceRefusal {
     SourceRefusal::new(reason)
@@ -254,6 +258,7 @@ impl X11Source {
             segment: None,
             last_hash: None,
             last_image: None,
+            input_facts: Arc::default(),
         };
         opened.aim(source)?;
         if family {
@@ -305,6 +310,18 @@ impl X11Source {
         };
         self.grant = Some(grant);
         self.output = output;
+        // The capture path for the statistics (r1): MIT-SHM or `GetImage`;
+        // with XFixes the pointer stays apart from the picture (overlay or
+        // blended by choice of the viewer), without it the picture has none.
+        use crate::screen::core::capture_route::{self, CaptureRoute};
+        capture_route::note_route(if self.shm {
+            CaptureRoute::X11Shm
+        } else {
+            CaptureRoute::X11GetImage
+        });
+        if self.cursor {
+            capture_route::note_cursor_embedded(false);
+        }
         Ok(self)
     }
 

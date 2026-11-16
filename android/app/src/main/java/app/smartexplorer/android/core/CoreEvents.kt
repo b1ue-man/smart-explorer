@@ -107,6 +107,7 @@ internal object CoreEvents {
                 familyLayoutRevision = (event["familyLayoutRevision"] as? JsonPrimitive)?.longOrNull,
             )
             "stats" -> ScreenViewEvent.Stats(session, event)
+            "rateCeiling" -> ScreenViewEvent.RateCeiling(session, event.text("rateCeiling") ?: return null)
             "controlState" -> ScreenViewEvent.ControlState(session, event.text("holder"), event.text("blocked"))
             "visibilityAck" -> ScreenViewEvent.VisibilityAck(
                 session,
@@ -192,6 +193,12 @@ sealed interface ScreenViewEvent : CoreEvent {
     ) : ScreenViewEvent
 
     data class Stats(override val session: Long, val body: JsonObject) : ScreenViewEvent
+
+    /**
+     * The answer to a „Höchste Datenrate“ changed during the session (P1, r1): [state] `applied`,
+     * `unsupported_by_host` or `automatic`, as the `rateCeiling` of [Accepted] names it.
+     */
+    data class RateCeiling(override val session: Long, val state: String) : ScreenViewEvent
 
     /** [holder] `viewer`, `other` or `null`; [blocked] a `ControlBlock` key. */
     data class ControlState(override val session: Long, val holder: String?, val blocked: String?) : ScreenViewEvent

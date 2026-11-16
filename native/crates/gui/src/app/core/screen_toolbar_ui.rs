@@ -1,9 +1,11 @@
 //! The toolbar of the desktop viewer (SCR-M7, U25-7): device and source
-//! choice, „Steuern“, fit and full screen, sharpness, lossless and lowest
-//! latency, the keys egui cannot deliver (only those the host offers), the
-//! system actions of an Android host and the statistics switch. It changes
-//! nothing itself: `show` returns the user's choices, and the viewer app
-//! carries them out.
+//! choice, „Steuern“, fit and full screen, sharpness and lowest latency,
+//! the keys egui cannot deliver (only those the host offers), the system
+//! actions of an Android host, the statistics switch, and „Codec“,
+//! „Dekodierer“ and „Höchste Datenrate“ (`screen_toolbar_codec.rs`, plan
+//! 2026-11-14 „Bildkette“ 4.10). Apart from „Höchste Datenrate“, which it
+//! stores itself, it changes nothing: `show` returns the user's choices, and
+//! the viewer app carries them out.
 use eframe::egui::{self, RichText};
 
 use super::screen_devices::DeviceEntry;
@@ -79,7 +81,12 @@ pub enum ToolbarAction {
     Fit(Fit),
     Fullscreen,
     Sharpness(bool),
-    Lossless(bool),
+    /// „Codec“ (BK6, 4.10); `Lossless` keeps the old switch's meaning.
+    Codec(super::screen_prefs::CodecSetting),
+    /// „Dekodierer“ (BK6, 4.10).
+    Decoder(super::screen_prefs::DecoderPreference),
+    /// „Höchste Datenrate“ in bit/s, `None` automatic (B-09).
+    MaxRate(Option<u64>),
     LowLatency(bool),
     Stats(bool),
     Key(u16),
@@ -434,12 +441,6 @@ fn view_row(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Vec<ToolbarAction
     );
     toggle(
         ui,
-        input.prefs.lossless,
-        "Verlustfrei",
-        ToolbarAction::Lossless,
-    );
-    toggle(
-        ui,
         input.prefs.low_latency,
         "Niedrigste Latenz (Bildrisse möglich)",
         ToolbarAction::LowLatency,
@@ -448,7 +449,14 @@ fn view_row(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Vec<ToolbarAction
         ui.label(RichText::new("Wirkt beim nächsten Start des Betrachters.").small());
     }
     toggle(ui, input.stats_on, "Statistik", ToolbarAction::Stats);
+    // „Codec“ (replaces „Verlustfrei“), „Dekodierer“, „Höchste Datenrate“.
+    codec_rows::codec_rows(ui, out);
+    codec_rows::max_rate_row(ui, input, out);
 }
+
+#[path = "screen_toolbar_codec.rs"]
+mod codec_rows;
+pub use codec_rows::apply_codec;
 
 /// Draws the toolbar and returns what the user chose.
 pub fn show(ui: &mut egui::Ui, input: &ToolbarInput) -> Vec<ToolbarAction> {

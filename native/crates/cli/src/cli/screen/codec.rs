@@ -152,7 +152,13 @@ pub(super) fn licenses(name: Option<&str>, json: bool) -> Result<String, String>
 }
 
 fn row(entry: &CodecEntry) -> String {
-    let profiles: Vec<&str> = entry.profiles.iter().map(|profile| profile.key()).collect();
+    // The names of the standard (BK6: HEVC `main`/`main_444`, AV1
+    // `main`/`high`); a report of an older `se` has the wire keys only.
+    let profiles: Vec<&str> = if entry.profile_names.is_empty() {
+        entry.profiles.iter().map(|profile| profile.key()).collect()
+    } else {
+        entry.profile_names.iter().map(String::as_str).collect()
+    };
     let codec = if profiles.is_empty() {
         entry.codec.key().to_string()
     } else {
@@ -163,7 +169,12 @@ fn row(entry: &CodecEntry) -> String {
     } else {
         "Software"
     };
-    format!("  {codec:<18} {kind:<8}  {}\n", entry.name)
+    let refused = if entry.refused_settings.is_empty() {
+        String::new()
+    } else {
+        format!("  abgelehnt: {}", entry.refused_settings.join(", "))
+    };
+    format!("  {codec:<18} {kind:<8}  {}{refused}\n", entry.name)
 }
 
 /// The text of `se screen codec`.

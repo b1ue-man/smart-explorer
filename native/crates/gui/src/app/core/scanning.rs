@@ -7,15 +7,22 @@ impl App {
     }
 
     pub(in crate::app) fn start_scan_navigated(&mut self, root: PathBuf, record_history: bool) {
-        self.start_scan_with(root, record_history, false);
+        self.start_scan_with(root, record_history, false, false);
     }
 
     /// Start listing `root`. A refresh of the current folder keeps the typed
     /// name filter (`keep_name_filter`); navigating elsewhere clears it so the
     /// new folder is fully visible. Type/size/date filters are kept either
     /// way. In recursive mode an active filter prunes the scan (see
-    /// `scan_scope`).
-    fn start_scan_with(&mut self, root: PathBuf, record_history: bool, keep_name_filter: bool) {
+    /// `scan_scope`). `background` (E4c): nobody navigated, the view reads
+    /// itself again; a Share device is listed over a `Job` handle.
+    fn start_scan_with(
+        &mut self,
+        root: PathBuf,
+        record_history: bool,
+        keep_name_filter: bool,
+        background: bool,
+    ) {
         let requested = root.to_string_lossy();
         if self.remote.is_none()
             && self.disconnected_drive(&requested)
@@ -94,6 +101,17 @@ impl App {
             .copied()
             .unwrap_or(DEFAULT_DIRS_FIRST);
         let handle = match self.remote.as_ref() {
+            Some(rs) if background => {
+                let explorer = rs.backend.clone();
+                crate::rscan::start_scan_backend_with(
+                    // Opened on the scan's thread, never on the frame loop.
+                    Box::new(move || crate::daemon::job_handle(&explorer)),
+                    self.root_path.clone(),
+                    scope.max_depth,
+                    scope.retention,
+                    tx,
+                )
+            }
             Some(rs) => crate::rscan::start_scan_backend(
                 rs.backend.clone(),
                 self.root_path.clone(),
@@ -156,6 +174,15 @@ impl App {
     }
 
     pub(in crate::app) fn rescan(&mut self) {
+        self.rescan_with(false);
+    }
+
+    /// [`Self::rescan`] after background work ended (a transfer, a delete).
+    pub(in crate::app) fn rescan_background(&mut self) {
+        self.rescan_with(true);
+    }
+
+    fn rescan_with(&mut self, background: bool) {
         if self.root_path.is_empty() {
             return;
         }
@@ -164,7 +191,7 @@ impl App {
             rs.backend.invalidate_cache();
         }
         let p = PathBuf::from(self.root_path.replace('/', std::path::MAIN_SEPARATOR_STR));
-        self.start_scan_with(p, false, true);
+        self.start_scan_with(p, false, true, background);
     }
 
     pub(in crate::app) fn cancel_scan(&mut self) {

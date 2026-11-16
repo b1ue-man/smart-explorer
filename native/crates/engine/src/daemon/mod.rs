@@ -66,6 +66,9 @@ mod host_state;
 pub use host_state::{register_storage_run, StorageRunGuard};
 #[path = "os/shared/ipc.rs"]
 mod ipc;
+#[path = "os/shared/job_handles.rs"]
+mod job_handles;
+pub use job_handles::job_handle;
 #[path = "os/shared/ipc_analysis.rs"]
 mod ipc_analysis;
 #[path = "os/shared/ipc_backend_extensions.rs"]
@@ -189,6 +192,9 @@ mod android_platform;
 mod direct_open_task_bridge;
 #[path = "os/shared/problem_notify.rs"]
 mod problem_notify;
+#[cfg(test)]
+#[path = "os/shared/request_origin_task_tests.rs"]
+mod request_origin_task_tests;
 #[path = "os/shared/request_workers.rs"]
 mod request_workers;
 #[cfg(test)]
@@ -316,7 +322,7 @@ pub use ipc_client::vault_status_peek;
 pub use ipc_client::{
     drive_devices_peek, drive_devices_watch_peek, share_worker_peek, worker_answers,
 };
-pub use ipc_protocol::screen::StreamRequest;
+pub use ipc_protocol::screen::{RateCeilingState, StreamRequest};
 #[allow(unused_imports)] // E17 surfaces: CLI/MCP, desktop GUI, Android bridge
 pub use ipc_protocol::CodeRenewalView;
 pub use ipc_protocol::ExecNoticeView;

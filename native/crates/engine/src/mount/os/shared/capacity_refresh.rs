@@ -77,6 +77,9 @@ pub fn start(cache: Arc<CapacityCache>, backend: BackendHandle, root: String) {
     let _ = std::thread::Builder::new()
         .name("mount-capacity".into())
         .spawn(move || {
+            // The snapshot is a background refresh, not an answer a
+            // program waits for (readers get the cached one) (E4c).
+            let _background = crate::vfs::BackgroundScope::enter();
             while cache.next_request() {
                 let snapshot = crate::vfs::capacity(&*backend, &root).unwrap_or_else(|error| {
                     crate::vfs::capacity_failure(

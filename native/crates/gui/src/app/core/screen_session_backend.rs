@@ -56,7 +56,14 @@ impl Backend {
     /// The daemon's relay and the codecs of this process.
     pub fn production(ctx: &egui::Context) -> Self {
         let registry = Arc::new(crate::screen::os::codec_inventory::registry());
+        // „Dekodierer“ of the viewer (BK6, 4.10): every decoder of this
+        // process opens under it; the toolbar changes it at run time.
+        crate::screen::core::negotiate::set_decoder_preference(
+            super::screen_prefs::decoder_choice(),
+        );
         let offers = registry.decoder_offers();
+        // B-36 announcement and the decoder switch without a new session.
+        super::screen_decode_local::install_registry(registry.clone());
         let renderer = ctx.clone();
         let open: Opener = Arc::new(
             move |target: PeerOpenTarget,

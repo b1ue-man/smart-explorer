@@ -326,8 +326,12 @@ fn device_source(key: &str) -> io::Result<Source> {
             .find(|contact| contact.id == *contact_id)
             .is_none_or(|contact| device_view::granted_write(&profiles, contact) != Some(false)),
     };
-    let (_, backend, _) = crate::daemon::open_share_backend(open_target_of(&row.target))
-        .map_err(|_| io::Error::new(io::ErrorKind::HostUnreachable, OFFLINE_TEXT))?;
+    // The documents provider answers other apps for a person (a file picker,
+    // a viewer): metadata presence of a person, as for a drive (E4).
+    let origin = crate::share::OperationOrigin::User;
+    let (_, backend, _) =
+        crate::daemon::open_share_backend_for(open_target_of(&row.target), origin)
+            .map_err(|_| io::Error::new(io::ErrorKind::HostUnreachable, OFFLINE_TEXT))?;
     Ok(source(backend, BackendRoot::parse("/")?, allowed))
 }
 

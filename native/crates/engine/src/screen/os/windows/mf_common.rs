@@ -5,28 +5,35 @@
 //! without the feature, N editions). Media Foundation counts as present
 //! when `MFStartup` succeeds and `MFTEnumEx` finds an H.264 encoder; nothing
 //! is derived from the edition. The transforms are enumerated once per
-//! process: hardware encoders (asynchronous, `mf_encoder`), the software
-//! encoder (synchronous, `mf_encoder_sync`) and the decoder (`mf_decoder`);
-//! each opens from its enumeration entry anew. Encoders take NV12 in system
-//! memory (the GPU path follows with SCR-M4) and run in low-latency mode
-//! without B frames, CBR at the session's target. Values an encoder refuses
-//! stay at its default.
+//! process (`mf_enum.rs`): hardware encoders (asynchronous, `mf_encoder`),
+//! the software encoder (synchronous, `mf_encoder_sync`) and the decoders
+//! (`mf_decoder`); each opens from its enumeration entry anew. Hardware
+//! encoders take textures of the capture device where they can
+//! (`mf_d3d_input.rs`, BK2a), else NV12 in system memory, and run in
+//! low-latency mode without B frames, CBR at the session's target. Values
+//! an encoder refuses stay at its default and are listed in `se screen
+//! codec --json` (`refused_settings`, a probe of the MFT, merge W1).
+//!
+//! HEVC and AV1 (plan 2026-11-14 „Bildkette“ BK6, B-23): the decoders of
+//! both are registered wherever an MFT decodes them; hardware encoders of
+//! both are enumerated and registered with the codec in `EncoderSetup`,
+//! whose output subtype and profile `mf_encoder_sync::output_type` writes (merge
+//! W1, `MF_VIDEO_ENCODERS_CONNECTED`).
+//!
+//! Hybrid laptops (merge W1, plan 4.10a): hardware encoders carry their
+//! adapter (`mf_enum::Entry`); with an admitted capture, an MFT of another
+//! adapter gives way while the capture's adapter has an MFT of the codec.
 use std::cell::Cell;
 use std::ffi::c_void;
 use std::io;
 use std::sync::{Arc, OnceLock};
 
 use libloading::os::windows::{Library, LOAD_LIBRARY_SEARCH_SYSTEM32};
-use windows::core::{GUID, HRESULT, PWSTR};
+use windows::core::{GUID, HRESULT};
 use windows::Win32::Media::MediaFoundation::{
-    eAVEncH264VProfile_Base, eAVEncH264VProfile_ConstrainedBase, eAVEncH264VProfile_High,
-    IMFActivate, IMFTransform, MFMediaType_Video, MFT_FRIENDLY_NAME_Attribute, MFVideoFormat_H264,
-    MFVideoFormat_NV12, MFSTARTUP_NOSOCKET, MFT_CATEGORY_VIDEO_DECODER, MFT_CATEGORY_VIDEO_ENCODER,
-    MFT_ENUM_FLAG, MFT_ENUM_FLAG_HARDWARE, MFT_ENUM_FLAG_SORTANDFILTER, MFT_ENUM_FLAG_SYNCMFT,
-    MFT_REGISTER_TYPE_INFO, MF_MT_FRAME_SIZE, MF_MT_MPEG2_LEVEL, MF_MT_MPEG2_PROFILE,
-    MF_MT_SUBTYPE, MF_VERSION,
+    IMFActivate, MFSTARTUP_NOSOCKET, MFT_REGISTER_TYPE_INFO, MF_VERSION,
 };
-use windows::Win32::System::Com::{CoInitializeEx, CoTaskMemFree, COINIT_MULTITHREADED};
+use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
 
 use super::mf_decoder::MfDecoder;
 use super::mf_encoder::AsyncEncoder;
@@ -34,9 +41,23 @@ use super::mf_encoder_sync::SyncEncoder;
 use crate::screen::core::capture_admission::CaptureGrant;
 use crate::screen::core::codec_registry::{DecoderFactory, EncoderFactory};
 use crate::screen::core::host_backend::{ScreenDecoder, ScreenEncoder};
-use crate::screen::core::negotiate::{CodecChoice, CodecOffer, H264Profile};
+use crate::screen::core::negotiate::{CodecChoice, CodecKind, CodecOffer, H264Profile};
 use crate::screen::core::pixel_convert::FrameSize;
 use crate::screen::core::wire_binary::GopHeader;
+
+#[path = "mf_enum.rs"]
+mod mf_enum;
+#[cfg(any(test, feature = "test-support"))]
+pub(super) use mf_enum::available;
+use mf_enum::confirmed_offers;
+pub(super) use mf_enum::{
+    activate_codec, adapter_of, prefer_capture_adapter, subtype, Entry, Kind,
+};
+
+/// Whether the encoders write HEVC and AV1 output types (B-23): since merge
+/// W1 `mf_encoder_sync::output_type` chooses the output subtype and profile by
+/// `EncoderSetup::codec`, so HEVC and AV1 hardware MFTs offer their codec.
+pub(super) const MF_VIDEO_ENCODERS_CONNECTED: bool = true;
 
 type StartupFn = unsafe extern "system" fn(u32, u32) -> HRESULT;
 type EnumFn = unsafe extern "system" fn(
@@ -49,10 +70,26 @@ type EnumFn = unsafe extern "system" fn(
 ) -> HRESULT;
 type CreateFn = unsafe extern "system" fn(*mut *mut c_void) -> HRESULT;
 type CreateBufferFn = unsafe extern "system" fn(u32, *mut *mut c_void) -> HRESULT;
+/// `MFTEnum2` (Windows 10 1703 and later) and `MFCreateAttributes`, as the
+/// crate `windows` 0.58.0 binds them (`link!` lines of
+/// `Win32::Media::MediaFoundation`).
+type Enum2Fn = unsafe extern "system" fn(
+    GUID,
+    u32,
+    *const MFT_REGISTER_TYPE_INFO,
+    *const MFT_REGISTER_TYPE_INFO,
+    *mut c_void,
+    *mut *mut Option<IMFActivate>,
+    *mut u32,
+) -> HRESULT;
+type CreateAttributesFn = unsafe extern "system" fn(*mut *mut c_void, u32) -> HRESULT;
 
 /// The functions of `mfplat.dll`, loaded once and never unloaded.
 pub(super) struct MediaFoundation {
     pub(super) enum_ex: EnumFn,
+    /// Per-adapter enumeration (merge W1); `None` before Windows 10 1703.
+    pub(super) enum2: Option<Enum2Fn>,
+    pub(super) create_attributes: Option<CreateAttributesFn>,
     pub(super) create_media_type: CreateFn,
     pub(super) create_sample: CreateFn,
     pub(super) create_memory_buffer: CreateBufferFn,
@@ -73,6 +110,8 @@ fn load() -> io::Result<MediaFoundation> {
     let startup: StartupFn = symbol(&library, b"MFStartup\0")?;
     let platform = MediaFoundation {
         enum_ex: symbol(&library, b"MFTEnumEx\0")?,
+        enum2: symbol(&library, b"MFTEnum2\0").ok(),
+        create_attributes: symbol(&library, b"MFCreateAttributes\0").ok(),
         create_media_type: symbol(&library, b"MFCreateMediaType\0")?,
         create_sample: symbol(&library, b"MFCreateSample\0")?,
         create_memory_buffer: symbol(&library, b"MFCreateMemoryBuffer\0")?,
@@ -111,170 +150,57 @@ pub(super) fn ensure_com() {
     });
 }
 
-/// The three kinds of transform this strand uses.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Kind {
-    HardwareEncoder,
-    SoftwareEncoder,
-    Decoder,
-}
-
-impl Kind {
-    fn query(self) -> (GUID, MFT_ENUM_FLAG, GUID, GUID) {
-        let sorted = MFT_ENUM_FLAG_SORTANDFILTER;
-        match self {
-            Self::HardwareEncoder => (
-                MFT_CATEGORY_VIDEO_ENCODER,
-                MFT_ENUM_FLAG_HARDWARE | sorted,
-                MFVideoFormat_NV12,
-                MFVideoFormat_H264,
-            ),
-            Self::SoftwareEncoder => (
-                MFT_CATEGORY_VIDEO_ENCODER,
-                MFT_ENUM_FLAG_SYNCMFT | sorted,
-                MFVideoFormat_NV12,
-                MFVideoFormat_H264,
-            ),
-            Self::Decoder => (
-                MFT_CATEGORY_VIDEO_DECODER,
-                MFT_ENUM_FLAG_SYNCMFT | sorted,
-                MFVideoFormat_H264,
-                MFVideoFormat_NV12,
-            ),
-        }
-    }
-}
-
-/// The registered transforms of `kind` in the order of their merit.
-fn enumerate(kind: Kind) -> io::Result<Vec<IMFActivate>> {
-    let platform = platform()?;
-    ensure_com();
-    let (category, flags, input, output) = kind.query();
-    let input = MFT_REGISTER_TYPE_INFO {
-        guidMajorType: MFMediaType_Video,
-        guidSubtype: input,
-    };
-    let output = MFT_REGISTER_TYPE_INFO {
-        guidMajorType: MFMediaType_Video,
-        guidSubtype: output,
-    };
-    let mut array: *mut Option<IMFActivate> = std::ptr::null_mut();
-    let mut count = 0u32;
-    // SAFETY: both type infos outlive the call; the array is freed below.
-    unsafe {
-        (platform.enum_ex)(
-            category,
-            flags.0 as u32,
-            &input,
-            &output,
-            &mut array,
-            &mut count,
-        )
-    }
-    .ok()
-    .map_err(io::Error::other)?;
-    if array.is_null() {
-        return Ok(Vec::new());
-    }
-    // SAFETY: MFTEnumEx returned `count` entries at `array`; each reference
-    // is taken out once, so it is released exactly once.
-    let entries = unsafe { std::slice::from_raw_parts_mut(array, count as usize) };
-    let found = entries.iter_mut().filter_map(Option::take).collect();
-    // SAFETY: MFTEnumEx allocated the array with CoTaskMemAlloc.
-    unsafe { CoTaskMemFree(Some(array.cast_const().cast())) };
-    Ok(found)
-}
-
-fn friendly_name(activate: &IMFActivate) -> String {
-    let mut value = PWSTR::null();
-    let mut length = 0u32;
-    // SAFETY: the string comes from CoTaskMemAlloc and is freed below.
-    let read = unsafe {
-        activate.GetAllocatedString(&MFT_FRIENDLY_NAME_Attribute, &mut value, &mut length)
-    };
-    if read.is_err() || value.is_null() {
-        return "Media Foundation".into();
-    }
-    // SAFETY: `value` is a terminated wide string of `length` characters.
-    let name = unsafe { value.to_string() }.unwrap_or_else(|_| "Media Foundation".into());
-    // SAFETY: allocated by GetAllocatedString.
-    unsafe { CoTaskMemFree(Some(value.0.cast_const().cast())) };
-    name
-}
-
-/// The transform `index` of `kind`, activated, when it still is `name`.
-pub(super) fn activate(kind: Kind, index: usize, name: &str) -> io::Result<IMFTransform> {
-    let entries = enumerate(kind)?;
-    let entry = entries
-        .get(index)
-        .filter(|entry| friendly_name(entry) == name)
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, format!("{name} is gone")))?;
-    // SAFETY: activates a registered transform in the multithreaded
-    // apartment of this thread.
-    unsafe { entry.ActivateObject::<IMFTransform>() }.map_err(io::Error::other)
-}
-
-/// The names of the transforms found, per kind, once per process.
-struct Found {
-    hardware: Vec<String>,
-    software: Vec<String>,
-    decoders: Vec<String>,
-}
-
-fn names(kind: Kind) -> Vec<String> {
-    enumerate(kind)
-        .map(|entries| entries.iter().map(friendly_name).collect())
-        .unwrap_or_default()
-}
-
-fn found() -> &'static Found {
-    static FOUND: OnceLock<Found> = OnceLock::new();
-    FOUND.get_or_init(|| Found {
-        hardware: names(Kind::HardwareEncoder),
-        software: names(Kind::SoftwareEncoder),
-        decoders: names(Kind::Decoder),
-    })
-}
-
-/// Media Foundation runs here and has an H.264 encoder (task tests).
-#[cfg(any(test, feature = "test-support"))]
-pub(super) fn available() -> bool {
-    let found = found();
-    !found.hardware.is_empty() || !found.software.is_empty()
-}
-
 /// The factories of the transforms found: hardware encoders before the
-/// software encoder, then the decoder.
+/// software encoder, then the decoders; HEVC and AV1 after H.264 (BK6).
 pub(super) fn codecs() -> (Vec<Arc<dyn EncoderFactory>>, Vec<Arc<dyn DecoderFactory>>) {
-    let found = found();
+    let found = mf_enum::found();
     let mut encoders: Vec<Arc<dyn EncoderFactory>> = Vec::new();
-    for (kind, list) in [
-        (Kind::HardwareEncoder, &found.hardware),
-        (Kind::SoftwareEncoder, &found.software),
-    ] {
-        for (index, name) in list.iter().enumerate() {
-            let name = name.clone();
+    let software: Vec<Entry> = found
+        .software
+        .iter()
+        .map(|name| Entry {
+            name: name.clone(),
+            adapter: None,
+        })
+        .collect();
+    let h264 = [
+        (Kind::HardwareEncoder, CodecKind::H264, &found.hardware),
+        (Kind::SoftwareEncoder, CodecKind::H264, &software),
+    ];
+    let newer = found
+        .video_encoders
+        .iter()
+        .map(|(codec, list)| (Kind::HardwareEncoder, *codec, list));
+    for (kind, codec, list) in h264.into_iter().chain(newer) {
+        for (index, entry) in list.iter().enumerate() {
             encoders.push(Arc::new(MfEncoderFactory {
                 kind,
+                codec,
                 index,
-                name,
+                name: entry.name.clone(),
+                adapter: entry.adapter,
+                caps: OnceLock::new(),
+                refused: OnceLock::new(),
+            }));
+        }
+    }
+    let mut decoders: Vec<Arc<dyn DecoderFactory>> = Vec::new();
+    let all = std::iter::once((CodecKind::H264, &found.decoders)).chain(
+        found
+            .video_decoders
+            .iter()
+            .map(|(codec, list)| (*codec, list)),
+    );
+    for (codec, list) in all {
+        for (index, name) in list.iter().enumerate() {
+            decoders.push(Arc::new(MfDecoderFactory {
+                codec,
+                index,
+                name: name.clone(),
                 caps: OnceLock::new(),
             }));
         }
     }
-    let decoders: Vec<Arc<dyn DecoderFactory>> = found
-        .decoders
-        .iter()
-        .enumerate()
-        .map(|(index, name)| {
-            let name = name.clone();
-            Arc::new(MfDecoderFactory {
-                index,
-                name,
-                caps: OnceLock::new(),
-            }) as Arc<dyn DecoderFactory>
-        })
-        .collect();
     (encoders, decoders)
 }
 
@@ -285,13 +211,21 @@ pub(super) struct EncoderSetup {
     pub profile: H264Profile,
     pub size: FrameSize,
     pub fps: u32,
+    /// H.264, or HEVC/AV1 once `MF_VIDEO_ENCODERS_CONNECTED` (BK6, B-23).
+    pub codec: CodecKind,
+    /// The adapter of a hardware MFT (packed LUID, merge W1), `None` when
+    /// unknown.
+    pub adapter: Option<u64>,
 }
 
 struct MfEncoderFactory {
     kind: Kind,
+    codec: CodecKind,
     index: usize,
     name: String,
+    adapter: Option<u64>,
     caps: OnceLock<Vec<CodecOffer>>,
+    refused: OnceLock<Vec<String>>,
 }
 
 impl EncoderFactory for MfEncoderFactory {
@@ -299,8 +233,31 @@ impl EncoderFactory for MfEncoderFactory {
         self.name.clone()
     }
 
+    /// B-21 on a probe of the hardware MFT (`mf_encoder_sync::probe_refused`): the
+    /// settings it leaves at its default, once per process.
+    fn refused_settings(&self) -> Vec<String> {
+        if self.kind != Kind::HardwareEncoder {
+            return Vec::new();
+        }
+        self.refused
+            .get_or_init(|| {
+                ensure_com();
+                activate_codec(self.kind, self.codec, self.index, &self.name)
+                    .map(|transform| super::mf_encoder_sync::probe_refused(&transform))
+                    .unwrap_or_default()
+            })
+            .clone()
+    }
+
     fn offers(&self) -> Vec<CodecOffer> {
         let hardware = self.kind == Kind::HardwareEncoder;
+        if self.codec != CodecKind::H264 {
+            return if MF_VIDEO_ENCODERS_CONNECTED {
+                vec![CodecOffer::video(self.codec, false, hardware)]
+            } else {
+                Vec::new()
+            };
+        }
         self.caps
             .get_or_init(|| {
                 let mut offers = vec![
@@ -336,6 +293,25 @@ impl EncoderFactory for MfEncoderFactory {
 }
 
 impl MfEncoderFactory {
+    /// Plan 4.10a for hybrid laptops (merge W1): an admitted capture runs on
+    /// one adapter; a hardware MFT of another adapter gives way while that
+    /// adapter has an MFT of the codec (the texture path stays on one GPU),
+    /// with the reason; `None` opens.
+    fn other_adapter(&self, admitted: bool) -> Option<String> {
+        if !admitted || self.kind != Kind::HardwareEncoder {
+            return None;
+        }
+        let capture = super::mf_encoder::d3d_input::capture_adapter()?;
+        let entries = mf_enum::found().encoders(self.codec);
+        prefer_capture_adapter(self.adapter, capture, entries).then(|| {
+            format!(
+                "{}: the capture's adapter has its own encoder of {}",
+                self.name,
+                self.codec.key()
+            )
+        })
+    }
+
     fn create(
         &self,
         choice: &CodecChoice,
@@ -343,9 +319,35 @@ impl MfEncoderFactory {
         fps: u32,
         grant: Option<CaptureGrant>,
     ) -> io::Result<Box<dyn ScreenEncoder>> {
-        let profile = choice
-            .profile
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "H.264 needs a profile"))?;
+        if choice.codec != self.codec
+            || (self.codec != CodecKind::H264 && !MF_VIDEO_ENCODERS_CONNECTED)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                format!("{} does not encode {}", self.name, choice.codec.key()),
+            ));
+        }
+        let profile = match (self.codec, choice.profile) {
+            (CodecKind::H264, Some(profile)) => profile,
+            (CodecKind::H264, None) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "H.264 needs a profile",
+                ))
+            }
+            // HEVC and AV1: 4:2:0 Main only (`profile` High would be 4:4:4,
+            // which these MFTs do not offer); `codec` names the stream.
+            (_, None) => H264Profile::High,
+            (_, Some(_)) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    format!("{} encodes 4:2:0 only", self.name),
+                ))
+            }
+        };
+        if let Some(reason) = self.other_adapter(grant.is_some()) {
+            return Err(io::Error::new(io::ErrorKind::Unsupported, reason));
+        }
         crate::screen::core::frame_budget::FrameLimits::RESOURCE.check(size)?;
         if size.pixels() > choice.max_pixels {
             return Err(io::Error::other(
@@ -359,12 +361,14 @@ impl MfEncoderFactory {
             ));
         }
         ensure_com();
-        let transform = activate(self.kind, self.index, &self.name)?;
+        let transform = activate_codec(self.kind, self.codec, self.index, &self.name)?;
         let setup = EncoderSetup {
             name: self.name.clone(),
             profile,
             size,
             fps: fps.max(1),
+            codec: self.codec,
+            adapter: self.adapter,
         };
         match (self.kind == Kind::HardwareEncoder, grant) {
             (true, Some(grant)) => Ok(Box::new(AsyncEncoder::new_admitted(
@@ -380,6 +384,7 @@ impl MfEncoderFactory {
 }
 
 struct MfDecoderFactory {
+    codec: CodecKind,
     index: usize,
     name: String,
     caps: OnceLock<Vec<CodecOffer>>,
@@ -390,96 +395,49 @@ impl DecoderFactory for MfDecoderFactory {
         self.name.clone()
     }
 
+    /// The decoder opens on D3D11VA where this host's GPU decodes the codec
+    /// (BK5w) and falls back to software itself, so it lists both stages:
+    /// the viewer's choice „Dekodierer“ (BK6, 4.10) keeps one of them.
     fn offers(&self) -> Vec<CodecOffer> {
         self.caps
             .get_or_init(|| {
-                let mut offers = vec![
-                    CodecOffer::h264(H264Profile::High, false).with_max(FrameSize::MAX),
-                    CodecOffer::h264(H264Profile::ConstrainedBaseline, false)
-                        .with_max(FrameSize::MAX),
-                ];
-                offers.extend(confirmed_offers(
-                    Kind::Decoder,
-                    self.index,
-                    &self.name,
-                    false,
-                ));
+                let hardware = super::mf_decoder::hardware_offered(self.codec);
+                let mut offers = Vec::new();
+                for stage in [true, false].into_iter().filter(|on| hardware || !on) {
+                    if self.codec == CodecKind::H264 {
+                        for profile in [H264Profile::High, H264Profile::ConstrainedBaseline] {
+                            offers.push(CodecOffer::h264(profile, stage).with_max(FrameSize::MAX));
+                        }
+                    } else {
+                        offers.push(
+                            CodecOffer::video(self.codec, false, stage).with_max(FrameSize::MAX),
+                        );
+                    }
+                }
+                if self.codec == CodecKind::H264 {
+                    offers.extend(confirmed_offers(
+                        Kind::Decoder,
+                        self.index,
+                        &self.name,
+                        hardware,
+                    ));
+                }
                 offers
             })
             .clone()
     }
 
     fn open(&self, header: &GopHeader) -> io::Result<Box<dyn ScreenDecoder>> {
-        ensure_com();
-        let transform = activate(Kind::Decoder, self.index, &self.name)?;
-        Ok(Box::new(MfDecoder::new(
-            transform,
-            self.name.clone(),
-            header,
+        // The viewer's choice „Dekodierer“ (BK6, 4.10).
+        let preference = crate::screen::core::negotiate::decoder_preference();
+        Ok(Box::new(MfDecoder::open(
+            self.index, &self.name, header, preference,
         )?))
     }
-}
 
-/// Only a complete advertised H.264 type is evidence for an extended dimension.
-/// Partial/absent types leave the historical offer intact; SetType at open remains decisive.
-fn confirmed_offers(kind: Kind, index: usize, name: &str, hardware: bool) -> Vec<CodecOffer> {
-    let Ok(transform) = activate(kind, index, name) else {
-        return Vec::new();
-    };
-    let mut offers = Vec::new();
-    for index in 0..64 {
-        // SAFETY: enumerating types on a newly activated transform, without streaming.
-        let media = unsafe {
-            if kind == Kind::Decoder {
-                transform.GetInputAvailableType(0, index)
-            } else {
-                transform.GetOutputAvailableType(0, index)
-            }
-        };
-        let Ok(media) = media else {
-            break;
-        };
-        if unsafe { media.GetGUID(&MF_MT_SUBTYPE) }.ok() != Some(MFVideoFormat_H264) {
-            continue;
-        }
-        let read = || -> windows::core::Result<(u32, u32, u64)> {
-            unsafe {
-                Ok((
-                    media.GetUINT32(&MF_MT_MPEG2_PROFILE)?,
-                    media.GetUINT32(&MF_MT_MPEG2_LEVEL)?,
-                    media.GetUINT64(&MF_MT_FRAME_SIZE)?,
-                ))
-            }
-        };
-        let Ok((profile, level, packed)) = read() else {
-            continue;
-        };
-        let profile = if profile == eAVEncH264VProfile_High.0 as u32 {
-            H264Profile::High
-        } else if profile == eAVEncH264VProfile_Base.0 as u32
-            || profile == eAVEncH264VProfile_ConstrainedBase.0 as u32
-        {
-            H264Profile::ConstrainedBaseline
-        } else {
-            continue;
-        };
-        let Some(level) = crate::screen::core::frame_size_caps::avc_limits(level) else {
-            continue;
-        };
-        let size = FrameSize::new((packed >> 32) as u32, packed as u32);
-        if !level.supports(size, 0) {
-            continue;
-        }
-        let max = crate::screen::core::frame_budget::FrameLimits::RESOURCE.max_size;
-        let mut offer = CodecOffer::h264(profile, hardware).with_max(FrameSize::new(
-            size.width.min(max.width),
-            size.height.min(max.height),
-        ));
-        offer.max_macroblocks = Some(level.macroblocks);
-        offer.max_macroblocks_per_second = Some(level.macroblocks_per_second);
-        if !offers.contains(&offer) {
-            offers.push(offer);
-        }
+    /// B-36: HEVC and AV1 name their references explicitly, H.264 not
+    /// (`mf_decoder::keeps_references`).
+    fn keeps_references(&self, codec: CodecKind) -> bool {
+        codec == self.codec && super::mf_decoder::keeps_references(codec)
     }
-    offers
 }

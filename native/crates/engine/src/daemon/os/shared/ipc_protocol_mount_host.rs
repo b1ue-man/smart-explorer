@@ -43,10 +43,17 @@ pub(in crate::daemon) enum MountHostRequest {
     Capacity {
         capacity: crate::mount::MountCapacityReport,
     },
-    /// DRV-M6: opens `root` of a device for the device tree.
+    /// DRV-M6: opens `root` of a device for the device tree. `background`
+    /// (E4d): the tree's own work asks (its refresh of a device's shared
+    /// folders), so the opening sets no metadata presence at the device;
+    /// the connection still serves programs with the origin `User`. Sent
+    /// only when set; a daemon of v0.5.196 ignores it (no
+    /// `deny_unknown_fields`) and opens as before.
     ChildBackend {
         target: crate::mount::PeerMountTarget,
         root: String,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        background: bool,
     },
     /// DRV-M6: the device list, once it differs from revision `since`.
     DeviceWatch { since: u64 },
@@ -139,6 +146,7 @@ mod tests {
                 contact_id: "c1".into(),
             },
             root: "/Docs".into(),
+            background: false,
         };
         let encoded = serde_json::to_string(&child).unwrap();
         assert_eq!(
@@ -148,6 +156,23 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<MountHostRequest>(&encoded).unwrap(),
             child
+        );
+        // E4d: the mark of the tree's own work; without it, as before.
+        let background = MountHostRequest::ChildBackend {
+            target: PeerMountTarget::Direct {
+                contact_id: "c1".into(),
+            },
+            root: "/".into(),
+            background: true,
+        };
+        let encoded = serde_json::to_string(&background).unwrap();
+        assert_eq!(
+            encoded,
+            r#"{"op":"child_backend","target":{"Direct":{"contact_id":"c1"}},"root":"/","background":true}"#
+        );
+        assert_eq!(
+            serde_json::from_str::<MountHostRequest>(&encoded).unwrap(),
+            background
         );
         let watch = MountHostRequest::DeviceWatch { since: 7 };
         let encoded = serde_json::to_string(&watch).unwrap();

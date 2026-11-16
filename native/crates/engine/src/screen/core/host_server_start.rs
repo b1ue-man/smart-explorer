@@ -13,6 +13,10 @@ pub(super) struct Ready {
     pub source: Box<dyn ScreenSource>,
     pub contract: Option<FrameContract>,
     pub choice: super::super::negotiate::CodecChoice,
+    /// The 4:4:4 pairing for „Schärfe vor Flüssigkeit“ (B-32), if any.
+    pub sharp: Option<super::super::negotiate::CodecChoice>,
+    /// The pairings of the other video codecs, best first (merge W2).
+    pub fallbacks: Vec<super::super::negotiate::CodecChoice>,
     pub admission: Arc<SessionAdmission>,
 }
 pub(super) enum Failure {
@@ -149,30 +153,32 @@ pub(super) async fn prepare(
     host.hybrid_regions = info.supports_regions;
     let mut contract =
         FrameContract::negotiate(Some(host), hello.frame_capabilities).map_err(Failure::Capture)?;
+    // HEVC and AV1 only from a viewer that named them in `decoders_v2`
+    // (B-31); `HELLO_OK` named the host's in `encoders_v2` for it.
+    let decoders = hello.all_decoders();
     let mut choices = negotiate_for_contract(
         &metadata.encoders,
-        &hello.decoders,
+        &decoders,
         CodecPreference::Auto,
         contract,
     );
     if choices.is_empty()
         && contract.is_some_and(|contract| contract.hybrid_regions)
-        && hello
-            .decoders
-            .iter()
-            .any(|offer| offer.codec == super::super::negotiate::CodecKind::H264)
+        && decoders.iter().any(|offer| offer.codec.is_video())
     {
         if let Some(contract) = contract.as_mut() {
             contract.hybrid_regions = false;
         }
         choices = negotiate_for_contract(
             &metadata.encoders,
-            &hello.decoders,
+            &decoders,
             CodecPreference::Auto,
             contract,
         );
     }
     let choice = choices.first().copied().ok_or(Failure::Encoder)?;
+    let sharp = super::super::negotiate::sharp_alternative(&choices, &choice);
+    let fallbacks = super::super::host_pipeline::codec_fallbacks(&choices, &choice);
     admission
         .bind_contract(contract)
         .map_err(Failure::Capture)?;
@@ -183,15 +189,7 @@ pub(super) async fn prepare(
     };
     // This is the encoder envelope, not a fabricated native source size.
     let size = limits.fit(limits.max_size);
-    let codec = if choice.codec == super::super::negotiate::CodecKind::Tiles {
-        HostCodecPlan::Tiles
-    } else if metadata.platform == super::super::wire_hello::HostPlatform::Windows {
-        HostCodecPlan::MediaFoundation {
-            output_buffer_bytes: 64 * 1024 * 1024,
-        }
-    } else {
-        HostCodecPlan::OpenH264
-    };
+    let codec = HostCodecPlan::for_session(choice.codec, metadata.platform);
     let output = HostOutputPlan::new(
         contract.map_or(HostContract::Legacy, HostContract::Versioned),
         size,
@@ -217,6 +215,8 @@ pub(super) async fn prepare(
         source,
         contract,
         choice,
+        sharp,
+        fallbacks,
         admission,
     })
 }

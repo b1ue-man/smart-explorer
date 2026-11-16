@@ -33,8 +33,13 @@ import app.smartexplorer.android.api.ScreenWindows
 import app.smartexplorer.android.screen.ScreenIconRef
 import app.smartexplorer.android.screen.ScreenIconTarget
 
-/** What the viewer asks the host for besides the picture: the shown source and the two quality switches. */
-data class ViewSettings(val source: String? = null, val sharpness: Boolean = false, val lossless: Boolean = false)
+/**
+ * What the viewer asks the host for besides the picture: the shown source, the switch „Schärfe vor Flüssigkeit“ and
+ * the [choice] of codec, decoder and highest data rate. The old switch „Verlustfrei“ is the codec choice `lossless`.
+ */
+data class ViewSettings(val source: String? = null, val sharpness: Boolean = false, val choice: ViewerCodecChoice = ViewerCodecChoice()) {
+    val lossless: Boolean get() = choice.lossless
+}
 
 private val ACTION_LABELS = mapOf(
     "back" to R.string.screen_action_back,
@@ -80,6 +85,8 @@ internal fun ScreenTopBar(
     onSettings: (ViewSettings) -> Unit,
     onStatus: (() -> Unit)?,
     onClose: () -> Unit,
+    /** Codec, decoder stage and the answer to „Höchste Datenrate“ of the running picture chain (one line, may be empty). */
+    info: String = "",
     nativePixels: Boolean = false,
     onNativePixels: () -> Unit = {},
     immersive: Boolean = false,
@@ -107,6 +114,7 @@ internal fun ScreenTopBar(
             }
             if (immersive) Text("Zurück oder Randgeste · Strg+Alt+Pause · Strg+Alt+Umschalt+F · F11", style = MaterialTheme.typography.bodySmall)
             ui.codecFallback?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+            if (info.isNotEmpty()) Text(info, style = MaterialTheme.typography.bodySmall, modifier = Modifier.testTag("screen_view_info"))
             if (status.isNotEmpty()) {
                 val modifier = if (onStatus != null) Modifier.clickable(onClick = onStatus) else Modifier
                 Text(status, style = MaterialTheme.typography.bodySmall, modifier = modifier)
@@ -204,6 +212,12 @@ private fun ActionsMenu(
 @Composable
 private fun SettingsMenu(settings: ViewSettings, onSettings: (ViewSettings) -> Unit) {
     var open by remember { mutableStateOf(false) }
+    var rateDialog by remember { mutableStateOf(false) }
+    // The dialog lives beside the menu: closing the menu must not remove it.
+    if (rateDialog) MaxRateDialog(settings.choice.maxRateBps, onDismiss = { rateDialog = false }) { bps ->
+        rateDialog = false
+        onSettings(settings.copy(choice = settings.choice.copy(maxRateBps = bps)))
+    }
     Box {
         TextButton(onClick = { open = true }) { Text("⋮") }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
@@ -212,11 +226,8 @@ private fun SettingsMenu(settings: ViewSettings, onSettings: (ViewSettings) -> U
                 trailingIcon = { Checkbox(checked = settings.sharpness, onCheckedChange = null) },
                 onClick = { onSettings(settings.copy(sharpness = !settings.sharpness)) },
             )
-            DropdownMenuItem(
-                text = { Text(stringResource(R.string.screen_view_lossless)) },
-                trailingIcon = { Checkbox(checked = settings.lossless, onCheckedChange = null) },
-                onClick = { onSettings(settings.copy(lossless = !settings.lossless)) },
-            )
+            // „Codec“ (with „Verlustfrei“ in its place), „Dekodierer“ and „Höchste Datenrate“ (BK7b).
+            CodecMenuItems(settings, onSettings, onRate = { open = false; rateDialog = true })
         }
     }
 }

@@ -2,6 +2,7 @@ package app.smartexplorer.android.ui.screen
 
 import android.graphics.Bitmap
 import android.view.KeyEvent
+import android.view.PointerIcon
 import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.SurfaceView
@@ -70,14 +71,22 @@ import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.currentStateAsState
 import app.smartexplorer.android.R
+import app.smartexplorer.android.core.Core
 import app.smartexplorer.android.core.CoreException
+import app.smartexplorer.android.core.ScreenCursorEvent
 import app.smartexplorer.android.ui.login.LoginViewScreen
 import app.smartexplorer.android.ui.login.PairedLogin
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.ceil
 import kotlin.math.roundToInt
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 
@@ -96,16 +105,22 @@ private val autoLoginKeys = AtomicLong(0)
 @Composable
 fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, adopted: ScreenSession? = null, family: FamilySession? = null) {
     val context = LocalContext.current
+    // The pointer that hides the phone's own pointer over the picture (API 24, TYPE_NULL: no bitmap).
+    val hiddenPointer = remember(context) { PointerIcon.getSystemIcon(context, PointerIcon.TYPE_NULL) }
     val backend = LocalScreenBackend.current
     val scope = rememberCoroutineScope()
     val owned = remember { mutableListOf<ScreenSession>() }
+    val switchJobs = remember { arrayOfNulls<Job>(1) }
     val viewerExtent = remember { intArrayOf(0,0) }
     var current by remember(family, adopted) { mutableStateOf(adopted) }
     var familyMenuOpen by remember { mutableStateOf(false) }
     var mode by remember { mutableStateOf(if (adopted != null) "preview" else if (target.control) "control" else "view") }
     var controlOn by remember { mutableStateOf(target.control) }
     var failure by remember { mutableStateOf<String?>(null) }
-    var settings by remember { mutableStateOf(ViewSettings(source = target.source)) }
+    // „Codec“, „Dekodierer“ and „Höchste Datenrate“ are kept between sessions (BK7b); the old switch „Verlustfrei“ is the codec `lossless`.
+    var settings by remember { mutableStateOf(ViewSettings(source = target.source, choice = ScreenViewPrefs.load(context))) }
+    // The MediaCodec decoder that runs the picture group (hardware or software), reported by the decoder thread.
+    var decoderStage by remember { mutableStateOf<DecoderStage?>(null) }
     var zoomMode by remember { mutableStateOf(false) }
     var keyboardOn by remember { mutableStateOf(false) }
     var barVisible by remember { mutableStateOf(true) }
@@ -120,6 +135,8 @@ fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, a
     var surfaceFrame by remember { mutableStateOf<ScreenPresentedFrame?>(null) }
     var sourceAfterGop by remember { mutableStateOf<Long?>(null) }
     var hiddenSinceFrame by remember { mutableStateOf(false) }
+    // True while the host's pointer overlay is drawn over the picture (see the pointer effect below).
+    var hostPointerShown by remember { mutableStateOf(false) }
     var renderReady by remember { mutableStateOf(false) }
     var pictures by remember { mutableIntStateOf(0) }
     var failures by remember { mutableIntStateOf(0) }
@@ -134,7 +151,7 @@ fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, a
     suspend fun openOwn(newMode: String) {
         val opened = ScreenSession(target, backend)
         try {
-            opened.open(newMode, settings.source, viewerExtent[0].takeIf { it > 0 } ?: metrics.widthPixels, viewerExtent[1].takeIf { it > 0 } ?: metrics.heightPixels, maxFps, backend.offers())
+            opened.open(newMode, settings.source, viewerExtent[0].takeIf { it > 0 } ?: metrics.widthPixels, viewerExtent[1].takeIf { it > 0 } ?: metrics.heightPixels, maxFps, backend.offers(settings.choice), settings.choice)
         } catch (e: CoreException) {
             failure = e.message
             return
@@ -208,7 +225,7 @@ fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, a
     var autoLogin by remember { mutableStateOf<PairedLogin?>(null) }
     LaunchedEffect(ui.state, target.deviceId, target.relationId) {
         val (action, paired) = try { PairedLogin.observe(autoLoginKey, target.deviceId ?: target.relationId, ui.state) }
-            catch (cancel: kotlinx.coroutines.CancellationException) { throw cancel } catch (failure: Exception) { "stay" to null }
+            catch (cancel: CancellationException) { throw cancel } catch (_: Exception) { "stay" to null } catch (_: LinkageError) { "stay" to null }
         when (action) {
             "enter_login" -> if (paired != null) { releaseInputs(); autoLogin = paired }
             "leave_login" -> autoLogin = null
@@ -219,8 +236,10 @@ fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, a
         onDispose {
             // First what is pressed, then the sessions (the queued input goes out before a session ends).
             releaseInputs()
+            switchJobs[0]?.cancel()
             owned.forEach { it.close() }
             if (family == null) adopted?.setMode("preview",settings.source)
+            CoroutineScope(Dispatchers.IO).launch { try { PairedLogin.end(autoLoginKey) } catch (_: Throwable) { Unit } }
         }
     }
     val view = LocalView.current
@@ -228,7 +247,18 @@ fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, a
         view.keepScreenOn = true
         onDispose { view.keepScreenOn = false }
     }
-    LaunchedEffect(session) { bitmap = null; bitmapGop = null; bitmapFrame = null; surfaceFrame = null; sourceAfterGop = null; renderReady = false }
+    LaunchedEffect(session) { bitmap = null; bitmapGop = null; bitmapFrame = null; surfaceFrame = null; sourceAfterGop = null; renderReady = false; decoderStage = null }
+    // The host's pointer overlay (ScreenCursorOverlay) is drawn only while its shape and position are visible,
+    // and only in the own full view (family == null). Only then the phone's own pointer is hidden (plan 4.9).
+    LaunchedEffect(session?.id, family) {
+        val id = session?.id ?: 0L
+        hostPointerShown = false
+        if (id == 0L || family != null) return@LaunchedEffect
+        val visibility = HostPointerVisibility()
+        Core.events.filterIsInstance<ScreenCursorEvent>().filter { it.session == id }.collect { event ->
+            hostPointerShown = visibility.update(event)
+        }
+    }
     LaunchedEffect(session, ui.accepted) {
         if(ui.accepted && session!=null && owned.any {it===session}) {
             session.setMode("full",settings.source,sharpness=settings.sharpness,lossless=settings.lossless)
@@ -248,6 +278,9 @@ fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, a
         if (active == null || active.id == 0L || !decoding) return@DisposableEffect onDispose { }
         val activeDecoder = java.util.concurrent.atomic.AtomicBoolean(true)
         val main = android.os.Handler(android.os.Looper.getMainLooper())
+        // The stream's own picture rate (decoded pictures per second) and the surface it is drawn on.
+        val pictureRate = PictureRateMeter(System::nanoTime)
+        val drawing = surface
         val decoder = ScreenDecoder(
             sessionId = active.id,
             source = backend.pictures(active.id),
@@ -256,6 +289,7 @@ fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, a
             presentationEpoch = active::presentationEpoch,
             bufferBudget = {active.state.value.bufferBudget},
             pullBuffers = active.decoderBuffers,
+            choice = { active.choice },
             listener = object : ScreenDecoder.Listener {
                 override fun onSize(width: Int, height: Int) = Unit
                 override fun onBitmap(picture: Bitmap) = Unit
@@ -297,7 +331,14 @@ fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, a
                     if (!continues) renderReady = false
                     failures = 0
                 }
-                override fun onPicture() = Unit
+                override fun onDecoderStage(codec: String, name: String, hardware: Boolean) {
+                    main.post { if (activeDecoder.get()) decoderStage = DecoderStage(codec, name, hardware) }
+                }
+                override fun onPicture() {
+                    // Called on the decoding thread for every picture; the rate goes to the surface on the main thread.
+                    val hz = pictureRate.picture() ?: return
+                    main.post { if (activeDecoder.get()) drawing?.setStreamFrameRate(hz) }
+                }
                 override fun onHybridUnavailable(gopId: Long, reason: String) {
                     if (activeDecoder.get()) active.hybridUnavailable(gopId, reason, "full")
                 }
@@ -314,15 +355,64 @@ fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, a
         decoder.start()
         // A decoder that starts in the middle of a picture group needs a key frame.
         active.call { keyframe(it) }
-        onDispose { activeDecoder.set(false); decoder.stop(); active.invalidateDisplay(false) }
+        onDispose { activeDecoder.set(false); decoder.stop(); active.invalidateDisplay(false); drawing?.setStreamFrameRate(0) }
     }
 
     fun applySettings(next: ViewSettings) {
         if (settings.source != next.source) { releaseInputs(); session?.invalidateDisplay(); sourceAfterGop = ui.stream?.gop; bitmap = null; bitmapFrame = null; surfaceFrame = null; renderReady = false }
+        val previous = settings
         settings = next
+        if (previous.choice != next.choice) ScreenViewPrefs.save(context, next.choice)
+        // Another codec or decoder changes the negotiation: a new session (E6 of BK6). „Verlustfrei“ and the data rate go live.
+        val opened = session?.choice
+        if (opened != null && ViewerCodecChoice.needsReopen(opened, next.choice)) {
+            releaseInputs()
+            // P1: a host with `set_decoders_v1` changes codec and decoder within the session (`screen.viewSetDecoders`), so an
+            // Android host does not ask for its screen again; an older host or a failed call opens a new session as before.
+            val own = session
+            switchJobs[0]?.cancel()
+            switchJobs[0] = scope.launch {
+                val prior = own?.prepareDecoderSwitch(next.choice)
+                val switched = if (own != null && own.id != 0L) {
+                    try {
+                        val offers = backend.offers(next.choice).map {
+                            Core.json.encodeToJsonElement(app.smartexplorer.android.api.DecoderOffer.serializer(), it)
+                        }
+                        val answer = Core.call("screen.viewSetDecoders", kotlinx.serialization.json.JsonObject(mapOf(
+                            "session" to kotlinx.serialization.json.JsonPrimitive(own.id),
+                            "codec" to kotlinx.serialization.json.JsonPrimitive(next.choice.codec),
+                            "decoder" to kotlinx.serialization.json.JsonPrimitive(next.choice.decoder),
+                            "decoders" to kotlinx.serialization.json.JsonArray(offers),
+                        )))
+                        ((answer as? kotlinx.serialization.json.JsonObject)?.get("switched") as? kotlinx.serialization.json.JsonPrimitive)?.content == "true"
+                    } catch (cancel: CancellationException) {
+                        if (prior != null && own.choice == next.choice) own.restoreChoice(prior)
+                        throw cancel
+                    } catch (_: Exception) {
+                        false
+                    } catch (_: LinkageError) {
+                        false
+                    }
+                } else false
+                if (settings.choice != next.choice) return@launch
+                if (switched && own != null) {
+                    // „Verlustfrei“ is a live switch beside the negotiation: leaving it for another codec turns it off here,
+                    // because the host keeps a new pairing under „Verlustfrei“ until that switch goes off.
+                    own.setMode("full", next.source, sharpness = next.sharpness, lossless = next.lossless)
+                    if (previous.choice.maxRateBps != next.choice.maxRateBps) own.setMaxRate(next.choice.maxRateBps)
+                } else {
+                    if (own != null && prior != null && own.choice == next.choice) own.restoreChoice(prior)
+                    openOwn(mode)
+                }
+            }
+            return
+        }
         session?.setMode("full",next.source,sharpness=next.sharpness,lossless=next.lossless)
+        if (previous.choice.maxRateBps != next.choice.maxRateBps) session?.setMaxRate(next.choice.maxRateBps)
     }
     val ended = ui.ended
+    val openedRate = session?.openedMaxRateBps?.takeIf { ui.rateSends == 0 }
+    val info = chainInfoLine(ui.stream?.codec, decoderStage, ScreenChainInfo.rateNote(ui.rateCeiling, openedRate, settings.choice.maxRateBps, ui.rateAnswered))
     val status = when {
         ended != null -> ScreenTexts.endText(context, ended.code, ended.detail)
         failure != null -> failure.orEmpty()
@@ -414,7 +504,11 @@ fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, a
                 val shown = bitmap.takeIf { bitmapGop == ui.stream?.gop && showFresh && bitmapFrame?.let { session?.isDisplayable(it) } == true }
                 val familyImageMissing = family != null && shown == null && surfaceFrame?.let { session?.isDisplayable(it) } != true
                 AndroidView(factory = { ctx -> surfaceView(ctx) { surface = it } },
-                    update = { nativeView -> ui.stream?.let { if (it.width > 0 && it.height > 0) nativeView.holder.setFixedSize(it.width,it.height) } },
+                    update = { nativeView ->
+                        ui.stream?.let { if (it.width > 0 && it.height > 0) nativeView.holder.setFixedSize(it.width,it.height) }
+                        // While the host's pointer overlay is drawn, the phone's own pointer over the picture is hidden: one pointer.
+                        nativeView.setPointerIcon(if (hostPointerShown) hiddenPointer else null)
+                    },
                     modifier = placed.alpha(if (shown == null) 1f else 0f).drawWithContent {
                         drawContent()
                         if (shown == null && sourceAfterGop == null && showFresh) {
@@ -475,8 +569,9 @@ fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, a
                         onKeyboard = { keyboardOn = !keyboardOn },
                         onZoomMode = { zoomMode = !zoomMode },
                         onSettings = { applySettings(it) },
-                        onStatus = if (failures > 3 && !settings.lossless) ({ failures = 0; applySettings(settings.copy(lossless = true)) }) else null,
+                        onStatus = if (failures > 3 && !settings.lossless) ({ failures = 0; applySettings(settings.copy(choice = settings.choice.copy(codec = ViewerCodecChoice.CODEC_LOSSLESS))) }) else null,
                         onClose = { releaseInputs(); onClose() },
+                        info = info,
                         nativePixels = nativePixels,
                         onNativePixels = { nativePixels = !nativePixels },
                         immersive = immersive,
@@ -572,4 +667,71 @@ private fun ScreenKeyboardField(mapper: ScreenInputMapper, flush: Channel<Unit>)
             flush.trySend(Unit)
         }),
     )
+}
+
+/**
+ * Hands the picture rate of the stream to the surface: `Surface.setFrameRate` with
+ * `FRAME_RATE_COMPATIBILITY_DEFAULT` (API 30, the app's minSdk), because a screen stream is no fixed-rate
+ * video; `0` gives the choice back to the system.
+ */
+private fun Surface.setStreamFrameRate(hz: Int) {
+    if (!isValid) return
+    try {
+        setFrameRate(hz.toFloat(), Surface.FRAME_RATE_COMPATIBILITY_DEFAULT)
+    } catch (_: RuntimeException) {
+        // The surface refuses the rate (IllegalArgumentException), was released meanwhile (IllegalStateException) or its
+        // native call failed (RuntimeException): the system keeps its choice. The rate is a hint; it never ends the view.
+    }
+}
+
+/**
+ * Pictures per second of a decoded stream, counted in windows of one second. The first picture only
+ * opens a window; a window that ends yields its rounded rate, so a stream that stops keeps its last rate.
+ * Called from the decoding thread only.
+ */
+internal class PictureRateMeter(private val nowNs: () -> Long) {
+    private var windowStart = -1L
+    private var pictures = 0L
+
+    /** Counts one picture; the rate of a window that ended with it, otherwise `null`. */
+    fun picture(): Int? {
+        val now = nowNs()
+        if (windowStart < 0L) {
+            windowStart = now
+            return null
+        }
+        pictures++
+        val elapsed = now - windowStart
+        if (elapsed < WINDOW_NS) return null
+        val rate = (pictures * NS_PER_S + elapsed / 2) / elapsed
+        windowStart = now
+        pictures = 0L
+        return rate.toInt().takeIf { it > 0 }
+    }
+
+    private companion object {
+        const val WINDOW_NS = 1_000_000_000L
+        const val NS_PER_S = 1_000_000_000L
+    }
+}
+
+/**
+ * Whether [ScreenCursorOverlay] draws the host's pointer after the events seen so far: a shape and a
+ * position are known, the position is visible and it names the current shape. Only then the phone's
+ * own pointer over the picture is hidden, so exactly one pointer remains.
+ */
+internal class HostPointerVisibility {
+    private var shape: ScreenCursorEvent.Shape? = null
+    private var position: ScreenCursorEvent.Position? = null
+
+    /** Records [event] and tells whether the overlay is drawn now. */
+    fun update(event: ScreenCursorEvent): Boolean {
+        when (event) {
+            is ScreenCursorEvent.Shape -> shape = event
+            is ScreenCursorEvent.Position -> position = event
+        }
+        val known = shape ?: return false
+        val where = position ?: return false
+        return where.visible && where.shapeId == known.id
+    }
 }

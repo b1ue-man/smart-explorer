@@ -16,6 +16,8 @@ pub(super) fn run(
     take_control: bool,
 ) {
     let wake = backend.wake.clone();
+    // B-36: the decoder waits for the continuation only when announced.
+    let continues = request.gop_continue || !request.gop_continue_decoders.is_empty();
     let link = match (backend.open)(peer, request, &shared) {
         Ok(link) => link,
         Err(message) => {
@@ -46,6 +48,7 @@ pub(super) fn run(
     }
     spawn_sender(inbox, send.clone(), close, shared.clone());
     let mut state = DecodeState::new(shared, backend.decoder.clone(), send, take_control);
+    state.announce_continuation(continues);
     loop {
         match next() {
             Ok(event) => {

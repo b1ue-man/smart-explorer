@@ -14,11 +14,18 @@ impl DecodeState {
             self.gop = None;
             return true;
         }
+        self.check_awaiting();
+        self.poll_switch();
         match event {
             StreamEvent::Pending(_) => self
                 .shared
                 .update(|info| info.state = SessionState::WaitingForApproval),
-            StreamEvent::Accepted { hello, path } => {
+            StreamEvent::Accepted {
+                hello,
+                path,
+                rate_ceiling,
+                set_decoders,
+            } => {
                 let exceeds = self
                     .shared
                     .memory
@@ -56,9 +63,15 @@ impl DecodeState {
                             hello.icon_version == Some(crate::screen::core::app_icon::ICON_VERSION),
                         );
                 }
+                // P1: a new „Codec“/„Dekodierer“ goes out as `SET_DECODERS`.
+                self.shared
+                    .local
+                    .set_decoders
+                    .store(set_decoders, std::sync::atomic::Ordering::Release);
                 self.shared.update(|info| {
                     info.hello = Some(hello);
                     info.path = Some(path);
+                    info.rate_ceiling = rate_ceiling;
                     info.accepted += 1;
                     if matches!(
                         info.state,
@@ -93,6 +106,7 @@ impl DecodeState {
                         }
                         Ok(true) => {
                             self.shared.cancel_presentation();
+                            self.chain.continuity.broken();
                             self.gop = None;
                             self.request_keyframe(KeyframeReason::Reset, self.latest_gop);
                         }
@@ -108,9 +122,12 @@ impl DecodeState {
                     return false;
                 }
                 // Only the rest of the group is lost: the shown picture stays
-                // (without receipts, input blocked) until the key frame.
+                // (without receipts, input blocked) until the key frame, or
+                // (B-36) until the continuation the host sends after it
+                // reset the stream; the decoder then stays.
                 self.shared.suspend_presentation();
-                if self.gop.as_ref().is_some_and(|gop| gop.id == gop_id) {
+                let waits = self.waits_for_stream(gop_id);
+                if !waits && self.gop.as_ref().is_some_and(|gop| gop.id == gop_id) {
                     self.gop = None;
                 }
                 self.broken = Some(gop_id);
@@ -118,9 +135,14 @@ impl DecodeState {
                     .last_record
                     .filter(|(group, _)| *group == gop_id)
                     .map(|(_, frame)| frame);
-                self.request_keyframe(KeyframeReason::Reset, gop_id);
+                if !waits {
+                    self.request_keyframe(KeyframeReason::Reset, gop_id);
+                }
             }
             StreamEvent::Clock(offset) => self.shared.update(|info| info.clock_offset_us = offset),
+            // A „Höchste Datenrate“ changed during the session (P1): the
+            // statistics say whether the host took it.
+            StreamEvent::RateCeiling(state) => self.shared.update(|info| info.rate_ceiling = state),
             StreamEvent::End(end) => {
                 self.gop = None;
                 self.shared.stop_presentation();
@@ -204,7 +226,18 @@ impl DecodeState {
                 info.controller = state.holder;
                 info.blocked = state.blocked;
             }),
-            HostFrame::Stats(stats) => self.shared.update(|info| info.stats = Some(stats)),
+            HostFrame::Stats(stats) => {
+                // BK0: a host announcing `frame_timing_v1` is asked for its
+                // station times, again every `TIMING_RENEW`.
+                let ask = stats.frame_timing
+                    == Some(crate::screen::core::frame_timing::FRAME_TIMING_VERSION)
+                    && self.shared.info().latency.timing_due();
+                self.shared.update(|info| info.stats = Some(stats));
+                if ask {
+                    let request = crate::screen::core::frame_timing::FrameTimingRequest::start();
+                    let _ = (self.send)(&ViewerFrame::FrameTiming(request));
+                }
+            }
             HostFrame::CursorShape(shape) => {
                 self.shared.update(|info| info.cursor.set_shape(shape))
             }

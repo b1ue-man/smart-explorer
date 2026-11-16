@@ -219,11 +219,15 @@ unsafe fn make_stream(
     data.stream.store(stream, Ordering::Release);
     let data_pointer: *mut CallbackData = data;
     (api.stream_add_listener)(stream, hook, events, data_pointer.cast());
-    // The pod lives in 8-byte words, as PipeWire reads it.
-    let bytes = enum_format_pod();
-    let mut words = vec![0u64; bytes.len().div_ceil(8)];
-    std::ptr::copy_nonoverlapping(bytes.as_ptr(), words.as_mut_ptr().cast::<u8>(), bytes.len());
-    let mut params: [*const SpaPod; 1] = [words.as_ptr().cast()];
+    // The pods live in 8-byte words, as PipeWire reads them: the shared
+    // memory offer, preceded by the DMA-BUF offers where the GPU encoder
+    // imports them (BK8b, `pipewire_dmabuf.rs`).
+    let pods = crate::screen::os::pipewire_stream::dmabuf_stream::connect_pods(&data.latest);
+    let words: Vec<Vec<u64>> = pods
+        .iter()
+        .map(|bytes| crate::screen::os::pipewire_stream::pod_words(bytes))
+        .collect();
+    let mut params: Vec<*const SpaPod> = words.iter().map(|word| word.as_ptr().cast()).collect();
     // Active negotiation must work before a producer publishes fixed buffers.
     // No MAP_BUFFERS, ALLOC_BUFFERS or RT_PROCESS: Core import gates mapping.
     let flags = connection_flags(data.latest.desired_active());
@@ -233,7 +237,7 @@ unsafe fn make_stream(
         node_id,
         flags,
         params.as_mut_ptr(),
-        1,
+        params.len() as u32,
     );
     if result < 0 {
         (api.stream_destroy)(stream);

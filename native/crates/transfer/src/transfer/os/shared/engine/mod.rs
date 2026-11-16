@@ -102,10 +102,36 @@ pub fn run_job(job: TransferJob, tx: &crossbeam_channel::Sender<TransferMsg>, ca
 /// proxy, and a crash of this process does not end a recoverable job.
 /// Everything else, and every worker without the job service, runs here.
 pub fn run_view(view: JobView<'_>, report: &(dyn Fn(TransferMsg) + Sync), cancel: &AtomicBool) {
-    if crate::transfer::ports::worker().run_in_worker(&view, report, cancel) {
+    let worker = crate::transfer::ports::worker();
+    if worker.run_in_worker(&view, report, cancel) {
         return;
     }
-    run_view_here(view, report, cancel)
+    // A side a person browses with does not carry its presence into the job
+    // (`TransferWorker::job_sides`); the browsing handle's cache is refreshed
+    // at the end, as after a job of the worker.
+    let sides = worker.job_sides(&view);
+    if sides.is_empty() {
+        return run_view_here(view, report, cancel);
+    }
+    let here = JobView {
+        source: replaced_side(&sides.source, view.source),
+        target: replaced_side(&sides.target, view.target),
+        ..view
+    };
+    run_view_here(here, report, cancel);
+    for (own, replaced) in [(view.source, &sides.source), (view.target, &sides.target)] {
+        if let (Some(backend), Some(_)) = (own.backend(), replaced) {
+            backend.invalidate_cache();
+        }
+    }
+}
+
+/// `own`, or the handle that replaces it.
+fn replaced_side<'a>(replaced: &'a Option<crate::vfs::BackendHandle>, own: Side<'a>) -> Side<'a> {
+    match replaced {
+        Some(backend) => Side::Remote(&**backend),
+        None => own,
+    }
 }
 
 /// Runs a borrowed job in this process (the worker's job service, Android,

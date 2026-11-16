@@ -33,11 +33,15 @@ pub(in crate::daemon) fn serve(
         MountHostRequest::PrepareLock { deadline_ms } => {
             host.mounts.serve_prepare_lock(stream, id, deadline_ms)
         }
-        MountHostRequest::ChildBackend { target, root } => {
+        MountHostRequest::ChildBackend {
+            target,
+            root,
+            background,
+        } => {
             if id.as_str() != DEVICES_MOUNT_ID {
                 return refuse(&mut stream);
             }
-            super::devices_host::serve_child(host, stream, target, root)
+            super::devices_host::serve_child(host, stream, target, root, background)
         }
         MountHostRequest::DeviceWatch { since } => {
             if id.as_str() != DEVICES_MOUNT_ID {

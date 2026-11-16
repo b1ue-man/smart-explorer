@@ -1,0 +1,232 @@
+//! What the user chooses of the codecs (plan 2026-11-14 „Bildkette“ 4.10):
+//! „Codec: Automatisch / H.264 / HEVC / AV1 / Verlustfrei“ (`CodecSetting`,
+//! it replaces the switch „Verlustfrei“ and keeps its meaning: the lossless
+//! tile codec through `SET_MODE`), „Dekodierer: Automatisch / Hardware /
+//! Software“ (`DecoderPreference`, default automatic with fallback on
+//! failure), and the negotiation filter both map to (`CodecPreference`,
+//! also `se screen bench --codec`).
+//!
+//! The decoder choice of this process lives in one place
+//! (`set_decoder_preference`): the desktop viewer, the Android viewer and
+//! `se screen view` each set it before they open decoders, and every
+//! decoder factory of the register reads it when it opens.
+use std::sync::atomic::{AtomicU8, Ordering};
+
+use serde::{Deserialize, Serialize};
+
+use super::{CodecKind, CodecOffer};
+
+/// `--codec` of `se screen bench` and the filter of the negotiation.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum CodecPreference {
+    #[default]
+    Auto,
+    H264,
+    Hevc,
+    Av1,
+    Tiles,
+}
+
+impl CodecPreference {
+    pub fn parse(text: &str) -> Option<Self> {
+        match text {
+            "auto" => Some(Self::Auto),
+            "h264" => Some(Self::H264),
+            "hevc" => Some(Self::Hevc),
+            "av1" => Some(Self::Av1),
+            "tiles" => Some(Self::Tiles),
+            _ => None,
+        }
+    }
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::H264 => "h264",
+            Self::Hevc => "hevc",
+            Self::Av1 => "av1",
+            Self::Tiles => "tiles",
+        }
+    }
+
+    /// The one video codec this preference names.
+    pub fn codec(self) -> Option<CodecKind> {
+        match self {
+            Self::H264 => Some(CodecKind::H264),
+            Self::Hevc => Some(CodecKind::Hevc),
+            Self::Av1 => Some(CodecKind::Av1),
+            Self::Auto | Self::Tiles => None,
+        }
+    }
+
+    /// Whether a pairing of `codec` may come out of the negotiation: a named
+    /// video codec excludes the others and the tiles (`se screen bench`).
+    pub fn admits(self, codec: CodecKind) -> bool {
+        match (self, codec) {
+            (Self::Auto, _) => true,
+            (Self::Tiles, kind) => kind == CodecKind::Tiles,
+            (named, kind) => named.codec() == Some(kind),
+        }
+    }
+
+    /// The viewer's decoder offers for this choice: the named codec and the
+    /// tiles (every peer's last fallback stays), only the tiles, or all.
+    pub fn filter_decoders(self, offers: &[CodecOffer]) -> Vec<CodecOffer> {
+        offers
+            .iter()
+            .filter(|offer| offer.codec == CodecKind::Tiles || self.admits(offer.codec))
+            .copied()
+            .collect()
+    }
+}
+
+/// „Codec“ of the viewer (4.10); stored, sent through IPC and the CLI.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CodecSetting {
+    #[default]
+    Auto,
+    H264,
+    Hevc,
+    Av1,
+    /// „Verlustfrei“: the tile codec through `SET_MODE` `lossless`.
+    Lossless,
+}
+
+impl CodecSetting {
+    pub const ALL: [Self; 5] = [
+        Self::Auto,
+        Self::H264,
+        Self::Hevc,
+        Self::Av1,
+        Self::Lossless,
+    ];
+
+    pub fn parse(text: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|setting| setting.key() == text)
+    }
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::H264 => "h264",
+            Self::Hevc => "hevc",
+            Self::Av1 => "av1",
+            Self::Lossless => "lossless",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Auto => "Automatisch",
+            Self::H264 => "H.264",
+            Self::Hevc => "HEVC",
+            Self::Av1 => "AV1",
+            Self::Lossless => "Verlustfrei",
+        }
+    }
+
+    /// The setting of a viewer that stored only the switch „Verlustfrei“.
+    pub fn from_lossless(lossless: bool) -> Self {
+        if lossless {
+            Self::Lossless
+        } else {
+            Self::Auto
+        }
+    }
+
+    /// `SET_MODE` `lossless`: unchanged meaning of the old switch.
+    pub fn lossless(self) -> bool {
+        self == Self::Lossless
+    }
+
+    /// The negotiation filter: „Verlustfrei“ negotiates like „Automatisch“
+    /// and switches to the tiles at run time, as the old switch did.
+    pub fn preference(self) -> CodecPreference {
+        match self {
+            Self::Auto | Self::Lossless => CodecPreference::Auto,
+            Self::H264 => CodecPreference::H264,
+            Self::Hevc => CodecPreference::Hevc,
+            Self::Av1 => CodecPreference::Av1,
+        }
+    }
+}
+
+/// „Dekodierer“ of the viewer (4.10, the stages of 4.10a).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DecoderPreference {
+    /// Hardware first, software when it fails (4.10a).
+    #[default]
+    #[serde(rename = "auto")]
+    Automatic,
+    Hardware,
+    Software,
+}
+
+impl DecoderPreference {
+    pub const ALL: [Self; 3] = [Self::Automatic, Self::Hardware, Self::Software];
+
+    pub fn parse(text: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|choice| choice.key() == text)
+    }
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Automatic => "auto",
+            Self::Hardware => "hardware",
+            Self::Software => "software",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Automatic => "Automatisch",
+            Self::Hardware => "Hardware",
+            Self::Software => "Software",
+        }
+    }
+
+    /// Whether a decoder stage that runs in `hardware` may be used.
+    pub fn allows(self, hardware: bool) -> bool {
+        match self {
+            Self::Automatic => true,
+            Self::Hardware => hardware,
+            Self::Software => !hardware,
+        }
+    }
+
+    /// The decoder offers of the hello under this choice; the tiles stay.
+    /// A decoder that runs in both stages lists an offer for each.
+    pub fn filter_offers(self, offers: &[CodecOffer]) -> Vec<CodecOffer> {
+        offers
+            .iter()
+            .filter(|offer| offer.codec == CodecKind::Tiles || self.allows(offer.hardware))
+            .copied()
+            .collect()
+    }
+
+    fn code(self) -> u8 {
+        match self {
+            Self::Automatic => 0,
+            Self::Hardware => 1,
+            Self::Software => 2,
+        }
+    }
+}
+
+static DECODER_PREFERENCE: AtomicU8 = AtomicU8::new(0);
+
+/// Sets the decoder choice of this process (viewer start, a change).
+pub fn set_decoder_preference(preference: DecoderPreference) {
+    DECODER_PREFERENCE.store(preference.code(), Ordering::Release);
+}
+
+/// The decoder choice of this process; automatic until one is set.
+pub fn decoder_preference() -> DecoderPreference {
+    match DECODER_PREFERENCE.load(Ordering::Acquire) {
+        1 => DecoderPreference::Hardware,
+        2 => DecoderPreference::Software,
+        _ => DecoderPreference::Automatic,
+    }
+}

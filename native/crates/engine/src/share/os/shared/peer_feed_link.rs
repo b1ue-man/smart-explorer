@@ -68,6 +68,8 @@ fn viewer_request(mode: SessionMode) -> ViewerRequest {
         display_size: None,
         max_fps: 1,
         frame_capabilities: None,
+        gop_continue: false,
+        gop_continue_decoders: Vec::new(),
     }
 }
 

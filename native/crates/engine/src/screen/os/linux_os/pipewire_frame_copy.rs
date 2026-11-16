@@ -1,6 +1,7 @@
 //! Every pointer read uses the already admitted whole Core mapping.
 use super::super::pipewire_abi::memory::fd_facts;
 use super::super::pipewire_abi::{SpaChunk, SpaData};
+use super::super::spa_pod::dmabuf::DATA_DMABUF;
 use super::imports::{ImportBacking, ImportController};
 use super::*;
 use crate::screen::core::capture_admission::CaptureOwner;
@@ -20,6 +21,7 @@ impl ImportController {
                     .grant
                     .check_identity(self.memory.source(), &owner.id)?;
                 if owner.rights & 1 == 0
+                    || owner.base == 0
                     || !contained(owner.base, owner.facts.length as usize, pointer, bytes)
                     || fd_facts(owner.fd)? != owner.facts
                 {
@@ -83,12 +85,39 @@ impl ImportController {
             .checked_add(offset)
             .ok_or_else(|| io::Error::other("pipewire data pointer overflow"))?;
         if owner.rights & 1 == 0
+            || owner.base == 0
             || !contained(owner.base, owner.facts.length as usize, pointer, length)
             || fd_facts(fd)? != owner.facts
         {
             return Err(io::Error::other("pipewire data FD range changed"));
         }
         Ok((pointer as *const u8, length))
+    }
+    /// A DMA-BUF plane (BK8b) must be a descriptor of an admitted Core
+    /// import of the DMA-BUF kind with the same identity as at admission:
+    /// the GPU path uses no buffer the import admission did not count.
+    pub(super) unsafe fn dmabuf_owner(&self, data: &SpaData) -> io::Result<()> {
+        let fd = c_int::try_from(data.fd)
+            .map_err(|_| io::Error::other("pipewire invalid DMA-BUF FD"))?;
+        let block = (self.api.find_fd)(self.pool.load(Ordering::Acquire), fd);
+        if block.is_null() {
+            return Err(io::Error::other("pipewire DMA-BUF FD has no Core import"));
+        }
+        let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut node = state.head.as_ref();
+        while let Some(owner) = node {
+            if owner.block == block as usize && !owner.removed {
+                owner
+                    .grant
+                    .check_identity(self.memory.source(), &owner.id)?;
+                if owner.kind != DATA_DMABUF || fd_facts(fd)? != owner.facts {
+                    return Err(io::Error::other("pipewire DMA-BUF identity changed"));
+                }
+                return Ok(());
+            }
+            node = owner.next.as_ref();
+        }
+        Err(io::Error::other("pipewire DMA-BUF FD is unadmitted"))
     }
     pub(super) unsafe fn validate_buffer(&self, buffer: *mut PwBuffer) -> io::Result<()> {
         let spa = buffer
@@ -102,7 +131,10 @@ impl ImportController {
         // and metadata range is validated against its actual import owner.
         for data in std::slice::from_raw_parts(spa.datas, spa.n_datas as usize) {
             self.pointer_range(data.chunk.cast(), std::mem::size_of::<SpaChunk>())?;
-            if data.maxsize != 0 {
+            if data.type_ == DATA_DMABUF {
+                // BK8b: never mapped; `maxsize` may be 0 (dma-buf.dox).
+                self.dmabuf_owner(data)?;
+            } else if data.maxsize != 0 {
                 self.data_range(data)?;
             }
         }
@@ -177,6 +209,9 @@ pub(super) unsafe fn copy_picture(
         if chunk.flags & SPA_CHUNK_FLAG_CORRUPTED != 0 || chunk.size == 0 {
             data.latest.trace.empty_chunk();
             return Ok(None);
+        }
+        if chunk.stride < 0 {
+            return Err(io::Error::other("pipewire negative picture stride"));
         }
         let stride = if chunk.stride > 0 {
             chunk.stride as usize

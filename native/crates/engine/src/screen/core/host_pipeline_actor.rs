@@ -9,7 +9,8 @@ pub enum WorkCompletion {
     Snapshot(Result<(), PipelineError>),
 }
 enum Receipt {
-    Ack(FrameAck),
+    /// With its arrival time: it may wait for a running picture operation.
+    Ack(FrameAck, u64),
     Presented(u64, u64),
 }
 #[derive(Default)]
@@ -21,6 +22,11 @@ struct Pending {
     invalidate: bool,
     keyframe: bool,
     second: bool,
+    /// `RATE_CEILING` while the picture operation runs (B-09).
+    ceiling: Option<Option<u64>>,
+    /// `SET_DECODERS` while the picture operation runs (P1).
+    decoders: Option<crate::screen::core::set_decoders::SetDecoders>,
+    decoders_at: Option<std::time::Instant>,
     snapshot: Option<Option<FrameSize>>,
     receipts: VecDeque<Receipt>,
 }
@@ -37,6 +43,9 @@ struct Facts {
     stream: Option<StreamInfo>,
     totals: Totals,
     stats: HostStats,
+    chain: wait::Chain,
+    /// Station times and chain facts (BK0), shared with the pipeline.
+    meter: crate::screen::core::chain_meter::SharedChain,
 }
 pub struct PipelineActor {
     pipeline: Option<Pipeline>,
@@ -75,17 +84,10 @@ impl PipelineActor {
         let stats = pipeline.second(&connection);
         let admission = pipeline.admission.clone();
         let accepted = pipeline.negotiated_contract;
-        let capture_codec = if pipeline.choice.codec == CodecKind::Tiles {
-            crate::screen::core::host_codec_adapters::HostCodecPlan::Tiles
-        } else if pipeline.backend.platform()
-            == crate::screen::core::wire_hello::HostPlatform::Windows
-        {
-            crate::screen::core::host_codec_adapters::HostCodecPlan::MediaFoundation {
-                output_buffer_bytes: 64 * 1024 * 1024,
-            }
-        } else {
-            crate::screen::core::host_codec_adapters::HostCodecPlan::OpenH264
-        };
+        let capture_codec = crate::screen::core::host_codec_adapters::HostCodecPlan::for_session(
+            pipeline.choice.codec,
+            pipeline.backend.platform(),
+        );
         let work = pipeline.work.clone();
         let input_sink = pipeline
             .stage
@@ -104,6 +106,8 @@ impl PipelineActor {
             stream: pipeline.stream_info(),
             totals: pipeline.totals(),
             stats,
+            chain: wait::Chain::default(),
+            meter: pipeline.chain.clone(),
         };
         Self {
             pipeline: Some(pipeline),
@@ -151,6 +155,7 @@ impl PipelineActor {
             self.facts.keyframe = p.pacer.keyframe_due();
             self.facts.stream = p.stream_info();
             self.facts.totals = p.totals();
+            (self.facts.chain.self_paced, self.facts.chain.ready) = p.chain();
         }
     }
     fn interrupt(&mut self) {
@@ -214,14 +219,19 @@ impl PipelineActor {
         if std::mem::take(&mut self.pending.keyframe) {
             p.request_keyframe();
         }
+        if let Some(ceiling) = self.pending.ceiling.take() {
+            p.set_rate_ceiling(ceiling);
+        }
+        self.apply_decoders(&mut p);
         if std::mem::take(&mut self.pending.second) {
             self.facts.stats = p.second(&self.connection);
         }
         while let Some(receipt) = self.pending.receipts.pop_front() {
             match receipt {
-                Receipt::Ack(ack) => {
-                    if p.on_ack(ack) {
+                Receipt::Ack(ack, arrived) => {
+                    if p.on_ack_at(ack, arrived) {
                         self.known_ack = Some(ack.frame_id);
+                        self.facts.chain.freed = true;
                     }
                 }
                 Receipt::Presented(gop, frame) => {
@@ -402,35 +412,13 @@ impl PipelineActor {
         self.pending.keyframe = true;
         self.poll();
     }
-    pub fn on_ack(&mut self, ack: FrameAck) -> bool {
-        self.poll();
-        if let Some(p) = self.pipeline.as_mut() {
-            let known = p.on_ack(ack);
-            if known {
-                self.known_ack = Some(ack.frame_id);
-            }
-            self.refresh();
-            known
-        } else {
-            self.receipt(Receipt::Ack(ack));
-            false
-        }
-    }
-    pub fn on_presented(&mut self, gop: u64, frame: u64) -> bool {
-        self.poll();
-        if let Some(p) = self.pipeline.as_mut() {
-            let accepted = p.on_presented(gop, frame);
-            self.refresh();
-            accepted
-        } else {
-            self.receipt(Receipt::Presented(gop, frame));
-            false
-        }
-    }
     pub fn second(&mut self, _connection: &Connection) -> HostStats {
         self.pending.second = true;
         self.poll();
-        self.facts.stats
+        self.facts.stats.clone()
+    }
+    pub fn chain_meter(&self) -> &crate::screen::core::chain_meter::SharedChain {
+        &self.facts.meter
     }
     pub fn next_frame_id(&self) -> u64 {
         self.facts.next

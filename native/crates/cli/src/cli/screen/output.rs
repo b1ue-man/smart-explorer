@@ -7,8 +7,12 @@
 //! "keyframes","recoveries","corrupt_frames","static_psnr_db"}` (`null` =
 //! infinite; when the report carries the stations of the path, also
 //! `stages_ms`, an object `station -> {"p50","p95"}` in ms: the report is
-//! printed as it is, the text shows one `stage_ms` line per station),
-//! `sessions` `{"sessions":[…]}`, `stop` `{"stopped"}` and
+//! printed as it is, the text shows one `stage_ms` line per station; since
+//! BK0 of plan 2026-11-14 „Bildkette“ also `source`, `host_timing` and
+//! `host_chain` when present), `sessions` `{"sessions":[…]}` (each session
+//! with `chain` and `stations` once the host has statistics; the text adds a
+//! `session_chain` and one `session_stage_us` line per station), `stop`
+//! `{"stopped"}` and
 //! `devices` `{"devices":[{"target","device_id","name","relation","room",
 //! "online","probe"}]}`.
 use serde::Serialize;
@@ -17,6 +21,7 @@ use serde_json::{json, Value};
 use super::DeviceChoice;
 use crate::daemon::ScreenProbeReport;
 use crate::screen::core::bench::BenchReport;
+use crate::screen::core::frame_timing::{ChainReport, HostStations, StationUs};
 use crate::screen::core::registry::SessionView;
 
 /// JSON (pretty) or the text of `text`.
@@ -73,7 +78,19 @@ fn number(value: f64) -> String {
 
 /// The stations of the path in the order a picture passes them
 /// (`stages_ms` of a measurement); other stations follow alphabetically.
-const STAGE_ORDER: [&str; 5] = ["capture", "encode", "send", "network", "decode"];
+const STAGE_ORDER: [&str; 11] = [
+    "tick_jitter",
+    "capture",
+    "convert",
+    "encode",
+    "worker_handoff",
+    "send",
+    "network",
+    "decode",
+    "capture_to_arrival",
+    "input",
+    "input_inject",
+];
 
 /// One `stage_ms` line per station of `report["stages_ms"]` with its `p50` and
 /// `p95` in ms; none when the report carries no stations (or none readable).
@@ -139,9 +156,69 @@ pub(super) fn bench_text(report: &BenchReport) -> String {
         ),
     ];
     rows.extend(stages);
+    if let Some(source) = &report.source {
+        rows.push(format!("source\t{source}"));
+    }
+    match report.host_timing.as_deref() {
+        Some("unsupported_by_host") => rows.push(
+            "host_timing\tunsupported_by_host\tthe host reports no stations (older version)".into(),
+        ),
+        Some(state) => rows.push(format!("host_timing\t{state}")),
+        None => {}
+    }
+    if let Some(chain) = &report.host_chain {
+        rows.push(format!("host_chain\t{}", chain_text(chain)));
+    }
     rows.push(format!("recoveries_ms\t{}", listed(&recoveries)));
     rows.push(format!("static_psnr_db\t{psnr}"));
     lines(rows)
+}
+
+/// `key=value` of every stage and limit; `-` where the host reports none.
+pub(super) fn chain_text(chain: &ChainReport) -> String {
+    let text = |value: &Option<String>| value.clone().unwrap_or_else(|| "-".into());
+    let flag = |value: Option<bool>| value.map_or("-".to_string(), |on| on.to_string());
+    let count = |value: Option<u64>| value.map_or("-".to_string(), |n| n.to_string());
+    let fps = |value: Option<u32>| value.map_or("-".to_string(), |n| n.to_string());
+    [
+        format!("capture={}", text(&chain.capture_path)),
+        format!("fallback={}", text(&chain.capture_fallback)),
+        format!("convert={}", text(&chain.convert)),
+        format!("rate_capped={}", flag(chain.capture_rate_capped)),
+        format!("cursor_embedded={}", flag(chain.cursor_embedded)),
+        format!("readbacks={}", count(chain.readbacks)),
+        format!("recoveries_continued={}", count(chain.recoveries_continued)),
+        format!("recoveries_keyframe={}", count(chain.recoveries_keyframe)),
+        format!("fps={}/{}", fps(chain.target_fps), fps(chain.wanted_fps)),
+        format!("encode_capacity_fps={}", fps(chain.encode_capacity_fps)),
+        format!("fps_limit={}", text(&chain.fps_limit)),
+        format!("rate_limit={}", text(&chain.rate_limit)),
+        format!("rate_ceiling_kbps={}", count(chain.rate_ceiling_kbps)),
+    ]
+    .join("\t")
+}
+
+/// One `session_stage_us` line per station of `stations` in path order.
+fn station_lines(id: &str, stations: &HostStations) -> Vec<String> {
+    let named: [(&str, Option<StationUs>); 7] = [
+        ("tick_jitter", stations.tick_jitter),
+        ("capture", stations.capture),
+        ("convert", stations.convert),
+        ("encode", stations.encode),
+        ("worker_handoff", stations.worker_handoff),
+        ("send", stations.send),
+        ("input_inject", stations.input_inject),
+    ];
+    named
+        .into_iter()
+        .filter_map(|(name, station)| {
+            let station = station?;
+            Some(format!(
+                "session_stage_us\t{id}\t{name}\tp50={}\tp95={}",
+                station.p50_us, station.p95_us
+            ))
+        })
+        .collect()
 }
 
 pub(super) fn sessions_json(sessions: &[SessionView]) -> Value {
@@ -169,6 +246,19 @@ pub(super) fn sessions_text(sessions: &[SessionView]) -> String {
         ]
         .join("\t")
     }));
+    // BK0: stages, limits and station times of each session.
+    for session in sessions {
+        if let Some(chain) = &session.chain {
+            rows.push(format!(
+                "session_chain\t{}\t{}",
+                session.id,
+                chain_text(chain)
+            ));
+        }
+        if let Some(stations) = &session.stations {
+            rows.extend(station_lines(&session.id, stations));
+        }
+    }
     lines(rows)
 }
 

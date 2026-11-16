@@ -114,10 +114,7 @@ impl BgraImage {
         self.regions.as_ref()
     }
 
-    pub fn set_regions(
-        &mut self,
-        regions: super::frame_regions::FrameRegions,
-    ) -> io::Result<()> {
+    pub fn set_regions(&mut self, regions: super::frame_regions::FrameRegions) -> io::Result<()> {
         regions.validate(self.size)?;
         self.regions = Some(regions);
         Ok(())
@@ -313,6 +310,7 @@ pub fn bgra_to_i420_with_limits(
     matrix: YuvMatrix,
     limits: FrameLimits,
 ) -> io::Result<I420Image> {
+    let _convert = super::convert_clock::Timed::start();
     let size = src.size();
     limits.check(size)?;
     let k = matrix.coefficients();
@@ -370,11 +368,7 @@ fn yuv_to_bgra(k: &Coefficients, luma: u8, u: u8, v: u8, out: &mut [u8]) {
 }
 
 /// I420 → BGRA into `dst` of the same size.
-pub fn i420_to_bgra(
-    src: &I420Image,
-    matrix: YuvMatrix,
-    dst: &mut BgraImage,
-) -> io::Result<()> {
+pub fn i420_to_bgra(src: &I420Image, matrix: YuvMatrix, dst: &mut BgraImage) -> io::Result<()> {
     let size = src.size;
     let chroma = size.chroma();
     if dst.size() != size
@@ -398,11 +392,7 @@ pub fn i420_to_bgra(
 }
 
 /// NV12 → BGRA into `dst` of the same size.
-pub fn nv12_to_bgra(
-    src: &Nv12View,
-    matrix: YuvMatrix,
-    dst: &mut BgraImage,
-) -> io::Result<()> {
+pub fn nv12_to_bgra(src: &Nv12View, matrix: YuvMatrix, dst: &mut BgraImage) -> io::Result<()> {
     if dst.size() != src.size {
         return Err(invalid("NV12 frame does not match the target frame"));
     }
@@ -463,6 +453,10 @@ pub fn downscale_bgra_with_limits(
     }
     Ok(out)
 }
+
+#[path = "pixel_convert_parallel.rs"]
+mod parallel;
+pub use parallel::{bgra_to_i420_parallel, bgra_to_nv12_parallel, nv12_to_bgra_resampled};
 
 #[cfg(test)]
 #[path = "pixel_convert_tests.rs"]

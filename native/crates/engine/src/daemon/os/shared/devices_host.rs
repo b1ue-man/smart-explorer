@@ -214,11 +214,14 @@ pub(super) fn writable_for(
 
 /// `MountHostRequest::ChildBackend`: opens `root` of the device, answers
 /// `ChildReady` and then serves the backend protocol on the stream.
+/// `background` (E4d): the tree's own work asked; the opening runs as
+/// background work, the connection keeps the origin `User`.
 pub(super) fn serve_child(
     host: &ShareHost,
     mut stream: TcpStream,
     target: PeerMountTarget,
     root: String,
+    background: bool,
 ) -> io::Result<()> {
     if let Some(refusal) = child_gate(super::run_start_reason::share_allowed()) {
         return write_response(&mut stream, &refusal);
@@ -228,6 +231,8 @@ pub(super) fn serve_child(
         .map_err(|error| error.to_string())
         .and_then(|()| BackendRoot::parse(&root).map_err(|error| error.to_string()))
         .and_then(|root| {
+            // The probe and the lease of the opening (this thread) only.
+            let _background = background.then(crate::vfs::BackgroundScope::enter);
             // The devices drive serves a person's file manager (E4).
             let origin = crate::share::OperationOrigin::User;
             let (_, backend, _) = host.open_share(open_target_of(&target), origin)?;

@@ -1,6 +1,7 @@
 //! Decoder safety boundary shared by v1 and v2. Errors poison references.
 use super::decoded_frame::{DecodedFrame, FrameIdentities};
 use super::host_backend::{ScreenDecoder, YuvPicture};
+use super::negotiate::CodecKind;
 use super::pixel_convert::BgraImage;
 use super::wire::invalid;
 use super::wire_binary::FrameRecord;
@@ -10,7 +11,7 @@ pub struct ReferenceDecoder {
     inner: Box<dyn ScreenDecoder>,
     valid: bool,
     primed: bool,
-    require_idr: bool,
+    video_codec: Option<CodecKind>,
     last_frame: Option<u64>,
     pending: Option<DecodedFrame>,
     submitted: FrameIdentities,
@@ -23,7 +24,7 @@ impl ReferenceDecoder {
             inner,
             valid: false,
             primed: false,
-            require_idr: false,
+            video_codec: None,
             last_frame: None,
             pending: None,
             submitted: FrameIdentities::default(),
@@ -32,20 +33,22 @@ impl ReferenceDecoder {
         }
     }
     pub fn new_video(inner: Box<dyn ScreenDecoder>) -> Self {
+        Self::new_for_codec(inner, CodecKind::H264)
+    }
+    pub fn new_for_codec(inner: Box<dyn ScreenDecoder>, codec: CodecKind) -> Self {
         let mut decoder = Self::new(inner);
-        decoder.require_idr = true;
+        decoder.video_codec = codec.is_video().then_some(codec);
         decoder
     }
     fn apply(&mut self, record: &FrameRecord) -> io::Result<bool> {
         let input = DecodedFrame::from_record(record);
-        if self.require_idr
-            && record.is_keyframe()
-            && !record
-                .payload
-                .windows(4)
-                .any(|nal| nal[..3] == [0, 0, 1] && nal[3] & 31 == 5)
-        {
-            return Err(invalid("H.264 keyframe has no Annex-B IDR"));
+        if let Some(codec) = self.video_codec.filter(|_| record.is_keyframe()) {
+            if !super::frame_size_caps::video_keyframe(codec, &record.payload) {
+                return Err(invalid(match codec {
+                    CodecKind::H264 => "H.264 keyframe has no Annex-B IDR",
+                    _ => "video keyframe has no random-access picture",
+                }));
+            }
         }
         if !self.valid && !self.primed && !input.keyframe {
             return Err(invalid("decoder awaits a complete keyframe reference"));
@@ -63,7 +66,7 @@ impl ReferenceDecoder {
         if !record.has_more() {
             self.last_frame = Some(input.frame_id);
             self.pending = None;
-            if self.require_idr {
+            if self.video_codec.is_some() {
                 self.primed |= input.keyframe;
             }
         }
@@ -86,7 +89,7 @@ impl ReferenceDecoder {
             self.decoded = Some(output);
             return Ok(true);
         }
-        if record.has_more() || self.require_idr {
+        if record.has_more() || self.video_codec.is_some() {
             return Ok(false);
         }
         Err(invalid("decoder did not complete reference picture"))
@@ -118,5 +121,24 @@ impl ScreenDecoder for ReferenceDecoder {
     }
     fn yuv_picture(&self) -> Option<YuvPicture> {
         self.valid.then(|| self.inner.yuv_picture()).flatten()
+    }
+    fn take_yuv_picture(&mut self) -> Option<YuvPicture> {
+        if self.valid {
+            self.inner.take_yuv_picture()
+        } else {
+            None
+        }
+    }
+    fn take_picture(&mut self) -> BgraImage {
+        self.inner.take_picture()
+    }
+    fn recycle_yuv(&mut self, planes: YuvPicture) {
+        self.inner.recycle_yuv(planes);
+    }
+    fn recycle_picture(&mut self, image: BgraImage) {
+        self.inner.recycle_picture(image);
+    }
+    fn keeps_references(&self) -> bool {
+        self.inner.keeps_references()
     }
 }

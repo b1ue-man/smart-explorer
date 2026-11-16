@@ -28,10 +28,15 @@ pub(super) const LIMIT_ONE_MONITOR_PER_SESSION: &str = "one_monitor_per_session"
 pub(super) const LIMIT_CAPTURE_BORDER: &str = "capture_border";
 /// Without Graphics Capture (before Windows 10 1903) no window is captured.
 pub(super) const LIMIT_WINDOW_CAPTURE_UNSUPPORTED: &str = "window_capture_unsupported";
-/// Without Graphics Capture the pointer is not part of the picture.
-pub(super) const LIMIT_NO_CURSOR_CAPTURE: &str = "no_cursor_capture";
+/// Graphics Capture of a session cannot limit its delivery to the frame
+/// interval (`GraphicsCaptureSession.MinUpdateInterval` missing, plan
+/// 2026-11-14 bildkette B-11); a session limit (`capture_source::CaptureReport`).
+pub(super) const LIMIT_CAPTURE_RATE_CAPPED: &str = "capture_rate_capped";
 
 /// The limits of this host for `wgc` (Graphics Capture available or not).
+/// `capture_border` concerns windows only since monitors use Desktop
+/// Duplication first (B-12); without Graphics Capture the duplication now
+/// delivers the pointer (B-13), so `no_cursor_capture` no longer applies.
 pub(super) fn limits_for(wgc: bool) -> Vec<String> {
     let mut limits = vec![
         LIMIT_SECURE_DESKTOP_PAUSED,
@@ -43,7 +48,6 @@ pub(super) fn limits_for(wgc: bool) -> Vec<String> {
         limits.push(LIMIT_CAPTURE_BORDER);
     } else {
         limits.push(LIMIT_WINDOW_CAPTURE_UNSUPPORTED);
-        limits.push(LIMIT_NO_CURSOR_CAPTURE);
     }
     limits.into_iter().map(String::from).collect()
 }
@@ -191,9 +195,21 @@ impl ScreenHostBackend for WindowsBackend {
         request: &crate::screen::core::host_stage::StageRequest,
         grant: crate::screen::core::capture_admission::CaptureGrant,
     ) -> io::Result<Box<dyn ScreenEncoder>> {
-        Ok(crate::screen::os::codec_inventory::registry()
-            .open_encoder_for_stage_admitted(request, &[], grant)?
-            .encoder)
+        Ok(self.open_stage_encoder(request, &[], grant)?.encoder)
+    }
+
+    fn open_stage_encoder(
+        &self,
+        request: &crate::screen::core::host_stage::StageRequest,
+        refused: &[String],
+        grant: crate::screen::core::capture_admission::CaptureGrant,
+    ) -> io::Result<crate::screen::core::codec_registry::OpenedEncoder> {
+        crate::screen::os::codec_inventory::registry()
+            .open_encoder_for_stage_admitted(request, refused, grant)
+    }
+
+    fn encoder_stages(&self, request: &crate::screen::core::host_stage::StageRequest) -> usize {
+        crate::screen::os::codec_inventory::registry().encoder_stage_count(request)
     }
 
     fn inject(&self, events: &[InputEvent]) -> Result<(), ControlBlock> {
@@ -234,8 +250,7 @@ mod tests {
                 "one_monitor_per_session",
                 "no_ctrl_alt_del",
                 "elevated_windows_blocked",
-                "window_capture_unsupported",
-                "no_cursor_capture"
+                "window_capture_unsupported"
             ]
         );
         for limit in limits_for(true).into_iter().chain(limits_for(false)) {

@@ -261,12 +261,17 @@ mod tests {
             source: source.into(),
             codec: None,
             encoder: None,
+            encoder_stage: None,
+            decoder_stage: None,
+            profile: None,
             path: "direct".into(),
             started_at: 0,
             bitrate_kbps: 0,
             fps: 0,
             controlling: false,
             state,
+            chain: None,
+            stations: None,
         }
     }
 

@@ -304,6 +304,7 @@ pub fn convert_rows(
     }
     Ok(image)
 }
+#[cfg(test)]
 pub(super) use super::frame_copy::convert_rows_admitted;
 #[cfg(test)]
 #[path = "batches_capture_pipewire_task_tests.rs"]

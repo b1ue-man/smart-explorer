@@ -18,13 +18,11 @@ use crate::screen::core::wire_binary::{
 use crate::screen::core::wire_control::*;
 use crate::screen::core::wire_hello::*;
 use crate::share::access_grant::{Capability, CapabilityDecision};
+use tokio::runtime::Builder;
 
 fn run<F: std::future::Future>(future: F) -> F::Output {
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap()
-        .block_on(future)
+    let runtime = Builder::new_current_thread().enable_all().build();
+    runtime.unwrap().block_on(future)
 }
 
 fn server_hello() -> ScreenServerHello {
@@ -42,6 +40,9 @@ fn client_hello() -> ScreenClientHello {
         family_version: None,
         icon_version: None,
         metadata_only: false,
+        decoders_v2: None,
+        gop_continue: None,
+        gop_continue_decoders: None,
         frame_capabilities: None,
         protocol_version: SCREEN_PROTOCOL_VERSION,
         relation_kind: "direct".into(),
@@ -68,6 +69,7 @@ fn replies() -> Vec<HelloReply> {
     let accepted = ScreenHelloOk {
         family_version: None,
         icon_version: None,
+        encoders_v2: None,
         frame_contract: None,
         authorization: ScreenAuthorization {
             view: CapabilityDecision::Allow,
@@ -180,6 +182,7 @@ fn host_frames() -> Vec<HostFrame> {
                 size: FrameSize::new(1920, 1080),
                 encoder: "openh264".into(),
                 hardware: false,
+                decoder_hardware: None,
             }),
         }),
         HostFrame::Pong(Pong {
@@ -211,8 +214,8 @@ fn host_frames() -> Vec<HostFrame> {
             path: PathKind::Relay,
             keyframes: 2,
             dropped_before_encode: 1,
-            stream_resets: 0,
             unacked_bytes: 4096,
+            ..HostStats::default()
         }),
         HostFrame::ControlState(ControlState {
             holder: Some(ControlHolder {
@@ -462,8 +465,7 @@ fn screen_task_frame_limits_reject_oversize() {
         assert!(decode_batch(&[0, 1, 5, 0x10, 0x01]).is_err());
         assert!(decode_batch(&[0, 1, 5, 0, 9, b'a']).is_err());
 
-        // Picture streams: a record above its codec's limit fails before
-        // its payload is allocated, on both sides.
+        // Records above their codec's limit fail on both sides before allocation.
         let mut head = [0u8; RECORD_HEADER_BYTES];
         head[..4].copy_from_slice(&(MAX_RECORD_BYTES as u32 + 1).to_be_bytes());
         let error = read_frame_record(&mut head.as_slice(), &video_header())

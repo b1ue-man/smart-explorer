@@ -105,11 +105,13 @@ pub fn screen_probe(target: PeerOpenTarget) -> Result<ScreenProbeReport, String>
     }
 }
 
-/// `se screen bench` with `target`; `pending` hears each confirmation the
+/// `se screen bench` with `target`, of the host's `source` (`--source`,
+/// BK0; `None` is the test picture); `pending` hears each confirmation the
 /// other device's user is asked for.
 pub fn screen_bench(
     target: PeerOpenTarget,
     options: &BenchOptions,
+    source: Option<String>,
     pending: impl FnMut(Capability),
 ) -> Result<BenchReport, String> {
     crate::daemon::ensure_worker_ready()?;
@@ -118,6 +120,7 @@ pub fn screen_bench(
         size: options.size,
         fps: options.fps,
         seconds: options.seconds,
+        source,
     };
     match exchange(ScreenIpcRequest::Bench { target, options }, None, pending)? {
         ScreenIpcReply::Bench(report) => Ok(report),
@@ -180,7 +183,15 @@ pub enum StreamEvent {
     Accepted {
         hello: ScreenHelloOk,
         path: String,
+        /// What became of „Höchste Datenrate“ (BK6, B-09).
+        rate_ceiling: super::ipc_protocol::screen::RateCeilingState,
+        /// The host takes `SET_DECODERS` (P1): a new „Codec“ or
+        /// „Dekodierer“ needs no new session.
+        set_decoders: bool,
     },
+    /// What became of a „Höchste Datenrate“ changed during the session
+    /// (`RELAY_RATE_CEILING`, P1).
+    RateCeiling(super::ipc_protocol::screen::RateCeilingState),
     Host(HostFrame),
     Record {
         header: GopHeader,
@@ -387,8 +398,22 @@ fn decode_event(tag: u8, payload: &[u8]) -> io::Result<StreamEvent> {
     match tag {
         RELAY_HELLO => Ok(match from_json::<RelayHello>(payload)? {
             RelayHello::Pending { capability } => StreamEvent::Pending(capability),
-            RelayHello::Accepted { hello, path, .. } => StreamEvent::Accepted { hello, path },
+            RelayHello::Accepted {
+                hello,
+                path,
+                rate_ceiling,
+                set_decoders,
+                ..
+            } => StreamEvent::Accepted {
+                hello,
+                path,
+                rate_ceiling,
+                set_decoders,
+            },
         }),
+        super::ipc_protocol::screen::RELAY_RATE_CEILING => {
+            from_json(payload).map(StreamEvent::RateCeiling)
+        }
         RELAY_HOST => {
             let (wire_tag, body) = payload
                 .split_first()
@@ -447,3 +472,7 @@ mod tests {
         assert!(decode_event(99, &[]).is_err());
     }
 }
+
+#[cfg(test)]
+#[path = "screen_ipc_client_switch_tests.rs"]
+mod switch_tests;

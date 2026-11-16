@@ -78,6 +78,8 @@ mod range_space;
 mod range_stage;
 #[path = "core/relative_path.rs"]
 mod relative_path;
+#[path = "core/request_origin.rs"]
+mod request_origin;
 #[path = "os/shared/run_digests.rs"]
 mod run_digests;
 #[cfg(target_os = "linux")]
@@ -173,6 +175,9 @@ pub use range_space::space_test_lock;
 pub use range_space::{merge_in, overlaps};
 pub use range_stage::{random_stage_name, Claim, Pending, RangeStages};
 pub use relative_path::ValidatedRelativePath;
+pub use request_origin::{
+    is_background_request, request_id, request_scope, BACKGROUND_REQUEST, LABEL_ORIGIN,
+};
 pub use run_digests::RunDigests;
 #[cfg(target_os = "linux")]
 pub use sandbox::restrict_filesystem;

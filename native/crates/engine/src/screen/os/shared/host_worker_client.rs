@@ -16,10 +16,14 @@
 //! with `session_changed` (E48: the viewer builds it again in the new one).
 //! Window list, icons and the encoder offer of such a worker come from a
 //! short host process of the session's account (`session_queries`, E47).
+//! A host process that announces the picture stream (plan 2026-11-14
+//! „Bildkette“ B-27) gets `STREAM` orders instead of `PRODUCE` requests
+//! (`host_worker_stream`); its answers arrive on a channel of their own, so
+//! a picture never holds the link that input and control requests use.
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
@@ -45,6 +49,8 @@ mod capture_lifetime;
 pub mod family_backend;
 #[path = "host_worker_session_queries.rs"]
 pub mod session_queries;
+#[path = "host_worker_stream.rs"]
+mod stream;
 #[cfg(target_os = "linux")]
 use crate::screen::os::session_detect::active_session::{
     process as session_mark, spawn as session_target,
@@ -156,6 +162,11 @@ struct SourceFacts {
     legacy_reconnect: AtomicBool,
     /// The pointer of the overlay (P6), published by the reader thread.
     cursor: Arc<crate::screen::core::cursor_overlay::CursorFeed>,
+    /// The picture stream version the process announced (0: `PRODUCE`).
+    stream_version: AtomicU32,
+    /// The pipe ends of the picture stream.
+    stream_port: Mutex<Option<Arc<stream::StreamPort>>>,
+    stream: Mutex<stream::StreamClient>,
 }
 impl Default for SourceFacts {
     fn default() -> Self {
@@ -166,7 +177,44 @@ impl Default for SourceFacts {
             family_layout_revision: AtomicU64::new(0),
             legacy_reconnect: AtomicBool::new(false),
             cursor: Arc::default(),
+            stream_version: AtomicU32::new(0),
+            stream_port: Mutex::new(None),
+            stream: Mutex::new(stream::StreamClient::default()),
         }
+    }
+}
+impl SourceFacts {
+    /// Takes the source facts an answer carries; `Err` when the source's
+    /// reference went back (the process broke its contract).
+    fn accept(&self, reply: WorkerReply) -> Result<WorkerReply, ()> {
+        let reply = if let WorkerReply::Reference {
+            generation,
+            regions,
+            limits,
+            family_layout_revision,
+            reply,
+        } = reply
+        {
+            if generation < self.generation.load(Ordering::Acquire) {
+                return Err(());
+            }
+            *self.limits.lock().unwrap_or_else(PoisonError::into_inner) = limits;
+            self.family_layout_revision
+                .store(family_layout_revision.unwrap_or(0), Ordering::Release);
+            self.regions.store(regions, Ordering::Release);
+            self.generation.store(generation, Ordering::Release);
+            *reply
+        } else {
+            reply
+        };
+        if let WorkerReply::InputDone {
+            legacy_reconnect, ..
+        } = &reply
+        {
+            self.legacy_reconnect
+                .store(*legacy_reconnect, Ordering::Release);
+        }
+        Ok(reply)
     }
 }
 
@@ -234,11 +282,20 @@ impl WorkerLink {
         };
         let input = Arc::new(Mutex::new(input));
         let facts = Arc::new(SourceFacts::default());
+        let (streamed, stream_answers) = mpsc::channel();
+        *facts
+            .stream_port
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(Arc::new(stream::StreamPort {
+            input: input.clone(),
+            answers: Mutex::new(stream_answers),
+        }));
         let reader = match WorkerReader::start(
             output,
             input.clone(),
             broker.clone(),
             facts.cursor.clone(),
+            streamed,
         ) {
             Ok(reader) => reader,
             Err(error) => {
@@ -257,12 +314,8 @@ impl WorkerLink {
         })
     }
 
-    /// Sends `request` and waits up to `limit` for the answer.
-    pub(super) fn ask(
-        &mut self,
-        request: &WorkerRequest,
-        limit: Duration,
-    ) -> Result<WorkerReply, StageError> {
+    /// Ends the process once logind names another active session (E48).
+    fn check_session(&mut self) -> Result<(), StageError> {
         if let Some(generation) = &self.session {
             if !session_target::still_current(generation) {
                 self.kill();
@@ -272,6 +325,28 @@ impl WorkerLink {
                 ));
             }
         }
+        Ok(())
+    }
+
+    /// An answer with its source facts taken; a regressed reference ends
+    /// the process.
+    fn accept(&mut self, reply: WorkerReply) -> Result<WorkerReply, StageError> {
+        self.facts.accept(reply).map_err(|()| {
+            self.kill();
+            StageError::new(
+                ScreenErrorCode::CaptureFailed,
+                io::Error::other("worker source generation regressed"),
+            )
+        })
+    }
+
+    /// Sends `request` and waits up to `limit` for the answer.
+    pub(super) fn ask(
+        &mut self,
+        request: &WorkerRequest,
+        limit: Duration,
+    ) -> Result<WorkerReply, StageError> {
+        self.check_session()?;
         let sent = self
             .input
             .lock()
@@ -281,46 +356,7 @@ impl WorkerLink {
             return Err(self.lost(error));
         }
         match self.reader.receive(limit) {
-            Ok(Ok(Some(reply))) => {
-                let reply = if let WorkerReply::Reference {
-                    generation,
-                    regions,
-                    limits,
-                    family_layout_revision,
-                    reply,
-                } = reply
-                {
-                    if generation < self.facts.generation.load(Ordering::Acquire) {
-                        self.kill();
-                        return Err(StageError::new(
-                            ScreenErrorCode::CaptureFailed,
-                            io::Error::other("worker source generation regressed"),
-                        ));
-                    }
-                    *self
-                        .facts
-                        .limits
-                        .lock()
-                        .unwrap_or_else(PoisonError::into_inner) = limits;
-                    self.facts
-                        .family_layout_revision
-                        .store(family_layout_revision.unwrap_or(0), Ordering::Release);
-                    self.facts.regions.store(regions, Ordering::Release);
-                    self.facts.generation.store(generation, Ordering::Release);
-                    *reply
-                } else {
-                    reply
-                };
-                if let WorkerReply::InputDone {
-                    legacy_reconnect, ..
-                } = &reply
-                {
-                    self.facts
-                        .legacy_reconnect
-                        .store(*legacy_reconnect, Ordering::Release);
-                }
-                Ok(reply)
-            }
+            Ok(Ok(Some(reply))) => self.accept(reply),
             Ok(Ok(None)) | Err(RecvTimeoutError::Disconnected) => {
                 Err(self.lost(io::Error::from(io::ErrorKind::UnexpectedEof)))
             }

@@ -26,7 +26,7 @@ pub(super) fn walk_peer(
     let _presence = backend.metadata_presence(&endpoint);
     let mut opened = backend.node.open_stream(&endpoint, &backend.identity)?;
     let lease = backend.mount_lease_token()?;
-    let origin = backend.origin;
+    let origin = backend.effective_origin();
     let result = backend.node.block_on_route(
         opened.generation,
         receive_walk(

@@ -236,10 +236,13 @@ internal class FilesViewModel : ViewModel() {
         displayedTabs().filter { it.listing?.isLocal == true && !it.loading && it.scan == null }.forEach { it.reload() }
     }
 
-    /** Reloads what a finished operation may have changed. */
-    fun refreshAfterChange() {
+    /**
+     * Reloads what a finished operation may have changed. [background]: a transfer, delete or import
+     * ended on its own and nobody navigated; the reload counts as work of the core, not of a person.
+     */
+    fun refreshAfterChange(background: Boolean = false) {
         val shown = displayedTabs()
-        shown.forEach { if (!it.loading) it.reload() }
+        shown.forEach { if (!it.loading) it.reload(background) }
         tabs.filter { it !in shown }.forEach { it.stale = true }
     }
 

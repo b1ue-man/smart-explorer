@@ -16,6 +16,38 @@ internal object ScreenCodecLatency {
         "Codec-Fallback (${codec.take(256)}): $detail"
     )
 
+    /** Constants of the phone's encoder and decoder hints (B-26, B-39); the API levels are those of the Android reference. */
+    const val NO_PERIODIC_KEYFRAMES = -1
+    /** `KEY_INTRA_REFRESH_PERIOD` and `CodecCapabilities.FEATURE_IntraRefresh`: API 24. */
+    const val SDK_INTRA_REFRESH = 24
+    /** `KEY_LATENCY` (encoder): API 26. The app's minSdk is 30, so this check is true on every device that runs the app. */
+    const val SDK_ENCODER_LATENCY = 26
+    /** `KEY_LOW_LATENCY` and `CodecCapabilities.FEATURE_LowLatency` (decoder): API 30. */
+    const val SDK_DECODER_LATENCY = 30
+
+    /** One attempt of the encoder configuration. MODERN adds the new hints; the other two are today's settings. */
+    enum class EncoderHints { MODERN, TODAY_REALTIME, TODAY_PLAIN }
+
+    /**
+     * The attempts in their order; a refused attempt moves on to the next one without ending the session.
+     * Hybrid pictures (one input per access unit) keep today's attempts only.
+     */
+    fun encoderHintTiers(hybrid: Boolean): List<EncoderHints> =
+        if (hybrid) listOf(EncoderHints.TODAY_REALTIME, EncoderHints.TODAY_PLAIN)
+        else listOf(EncoderHints.MODERN, EncoderHints.TODAY_REALTIME, EncoderHints.TODAY_PLAIN)
+
+    /** `KEY_I_FRAME_INTERVAL`: a negative value means no key frame after the first one (API 16); today's attempts keep [todayS]. */
+    fun keyframeIntervalS(tier: EncoderHints, todayS: Int): Int =
+        if (tier == EncoderHints.MODERN) NO_PERIODIC_KEYFRAMES else todayS
+
+    /** `KEY_INTRA_REFRESH_PERIOD` in frames: one second of frames; `null` without the codec feature or below API 24. */
+    fun intraRefreshPeriod(fps: Int, sdk: Int, featureSupported: Boolean): Int? =
+        if (sdk >= SDK_INTRA_REFRESH && featureSupported) fps.coerceAtLeast(1) else null
+
+    fun encoderLatencyAllowed(sdk: Int): Boolean = sdk >= SDK_ENCODER_LATENCY
+
+    fun decoderLatencyAllowed(sdk: Int): Boolean = sdk >= SDK_DECODER_LATENCY
+
     fun requestEncoder(format: MediaFormat) {
         format.setInteger(MediaFormat.KEY_LATENCY,1)
         format.setInteger(MediaFormat.KEY_MAX_B_FRAMES,0)
@@ -26,8 +58,9 @@ internal object ScreenCodecLatency {
         if (frames !in 0..1) throw Unavailable(codec,"bestätigte Encoderlatenz $frames Eingaben passt nicht zum Einzelinputvertrag")
         return frames
     }
+    /** `KEY_LOW_LATENCY` (decoder, API 30) when the decoder reports `FEATURE_LowLatency`; returns whether it was set. */
     fun requestDecoder(caps: MediaCodecInfo.CodecCapabilities, format: MediaFormat): Boolean {
-        val supported=Build.VERSION.SDK_INT>=30 && caps.isFeatureSupported(MediaCodecInfo.CodecCapabilities.FEATURE_LowLatency)
+        val supported=decoderLatencyAllowed(Build.VERSION.SDK_INT) && caps.isFeatureSupported(MediaCodecInfo.CodecCapabilities.FEATURE_LowLatency)
         if (supported) format.setInteger(MediaFormat.KEY_LOW_LATENCY,1)
         return supported
     }

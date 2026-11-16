@@ -254,12 +254,17 @@ mod tests {
             source: "synthetic".into(),
             codec: Some("tiles".into()),
             encoder: Some("tiles".into()),
+            encoder_stage: None,
+            decoder_stage: None,
+            profile: None,
             path: "relay".into(),
             started_at: 0,
             bitrate_kbps: 1200,
             fps: 30,
             controlling: true,
             state: SessionState::Streaming,
+            chain: None,
+            stations: None,
         };
         assert_eq!(session_row(&session), "Laptop · steuert · verbunden");
         let request: ApprovalView = serde_json::from_value(serde_json::json!({

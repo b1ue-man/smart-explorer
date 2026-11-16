@@ -1,4 +1,5 @@
 use super::*;
+use crate::screen::core::pixel_convert::FrameSize;
 
 const FRAME_US: u64 = 33_333;
 const FRAME_BYTES: u64 = 25_000;
@@ -26,8 +27,9 @@ fn screen_task_rate_control_backs_off_on_delay_gradient() {
         START_RELAY_BPS
     );
 
-    // Constant delivery permits probing, bounded by 1.25 times the measured
-    // receive rate rather than unbounded growth on a quiet screen.
+    // Constant delivery permits probing. The start ramp (B-05) doubles per
+    // interval; a sender that fills the target stays within twice what was
+    // delivered (slow start), not unbounded.
     let signals: Vec<DelaySignal> = (0..60)
         .map(|index| frame(&mut rate, index, 20_000, false))
         .collect();
@@ -40,7 +42,7 @@ fn screen_task_rate_control_backs_off_on_delay_gradient() {
     let grown = rate.target_bps();
     assert!(grown > START_DIRECT_BPS, "target grew to {grown}");
     assert!(
-        grown <= rate.receive_rate_bps().unwrap() * 5 / 4,
+        grown <= rate.receive_rate_bps().unwrap() * 2,
         "probe must stay within measured delivery headroom"
     );
 

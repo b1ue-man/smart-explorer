@@ -83,6 +83,9 @@ fn screen_task_viewer_launch_args() {
             source: Some("monitor:2".into()),
             control: true,
             fullscreen: true,
+            max_rate: None,
+            codec: None,
+            decoder: None,
             json: true,
         }
     );
@@ -151,4 +154,66 @@ fn screen_task_viewer_launch_args() {
         room: Some("profile-1".into()),
     };
     assert_eq!(start_request::parse(&grid.to_args()).unwrap(), grid);
+}
+
+/// B-09: `se screen view --max-rate` takes „Höchste Datenrate“ as `auto` or
+/// bit/s with an SI prefix and refuses anything else before it opens.
+#[test]
+fn bildkette_task_rate_cli_max_rate_option() {
+    use super::{parse_max_rate, MaxRate};
+    assert_eq!(parse_max_rate("auto"), Ok(MaxRate::Auto));
+    assert_eq!(parse_max_rate("AUTO"), Ok(MaxRate::Auto));
+    assert_eq!(parse_max_rate("20M"), Ok(MaxRate::Bps(20_000_000)));
+    assert_eq!(parse_max_rate("1.5G"), Ok(MaxRate::Bps(1_500_000_000)));
+    assert_eq!(parse_max_rate("500k"), Ok(MaxRate::Bps(500_000)));
+    assert_eq!(parse_max_rate("8000000"), Ok(MaxRate::Bps(8_000_000)));
+    for wrong in ["", "0", "-5M", "fast", "M", "NaN"] {
+        assert!(parse_max_rate(wrong).is_err(), "{wrong}");
+    }
+    let view = Wrapper::try_parse_from(["screen", "view", "Laptop", "--max-rate", "20M"]).unwrap();
+    let ScreenCommand::View(args) = view.command else {
+        panic!("not the view command");
+    };
+    assert_eq!(args.max_rate, Some(MaxRate::Bps(20_000_000)));
+    assert!(Wrapper::try_parse_from(["screen", "view", "Laptop", "--max-rate", "x"]).is_err());
+}
+
+/// 4.10 (BK6): `--codec auto|h264|hevc|av1|lossless` and `--decoder
+/// auto|hardware|software`; anything else is refused before the window.
+#[test]
+fn bildkette_task_codec_cli_codec_and_decoder_options() {
+    use crate::screen::core::negotiate::{CodecSetting, DecoderPreference};
+    let view = Wrapper::try_parse_from([
+        "screen",
+        "view",
+        "Laptop",
+        "--codec",
+        "av1",
+        "--decoder",
+        "software",
+    ])
+    .unwrap();
+    let ScreenCommand::View(args) = view.command else {
+        panic!("not the view command");
+    };
+    assert_eq!(args.codec, Some(CodecSetting::Av1));
+    assert_eq!(args.decoder, Some(DecoderPreference::Software));
+    for (text, setting) in [
+        ("auto", CodecSetting::Auto),
+        ("h264", CodecSetting::H264),
+        ("hevc", CodecSetting::Hevc),
+        ("lossless", CodecSetting::Lossless),
+    ] {
+        assert_eq!(super::parse_codec(text), Ok(setting));
+    }
+    assert_eq!(
+        super::parse_decoder("hardware"),
+        Ok(DecoderPreference::Hardware)
+    );
+    assert_eq!(
+        super::parse_decoder("auto"),
+        Ok(DecoderPreference::Automatic)
+    );
+    assert!(Wrapper::try_parse_from(["screen", "view", "Laptop", "--codec", "vp9"]).is_err());
+    assert!(Wrapper::try_parse_from(["screen", "view", "Laptop", "--decoder", "gpu"]).is_err());
 }

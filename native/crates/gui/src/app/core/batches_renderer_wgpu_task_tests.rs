@@ -48,6 +48,7 @@ fn owner(ctx: &egui::Context, state: egui_wgpu::RenderState) -> Arc<RendererOwne
         closed: false.into(),
         limit,
         yuv: false,
+        window: super::super::super::screen_present::WindowBackend::Other,
     });
     ctx.data_mut(|d| d.insert_temp(egui::Id::new(KEY), Arc::downgrade(&owner)));
     owner

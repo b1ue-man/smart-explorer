@@ -75,6 +75,11 @@ pub struct PreparedInfoWire {
     pub regions: bool,
     pub state: SessionState,
     pub generation: u64,
+    /// The picture stream version of the host process (plan 2026-11-14
+    /// „Bildkette“ B-27, `worker_wire::STREAM_VERSION`); a process without
+    /// the field answers `PRODUCE` only, and a daemon without it ignores it.
+    #[serde(default)]
+    pub stream: u32,
 }
 impl PreparedInfoWire {
     pub fn new(source: &SourceKey, info: PreparedSourceInfo) -> Self {
@@ -85,6 +90,7 @@ impl PreparedInfoWire {
             regions: info.supports_regions,
             state: info.state,
             generation: info.generation.value(),
+            stream: super::worker_wire::STREAM_VERSION,
         }
     }
     pub fn info(&self) -> io::Result<PreparedSourceInfo> {
@@ -225,6 +231,4 @@ pub enum CaptureReply {
 
 #[path = "worker_capture_resource_wire.rs"]
 mod resources;
-pub use resources::{
-    CreditWire, GrantReply, GrantRequest, GrantValue, ImportNeedWire, Reduction,
-};
+pub use resources::{CreditWire, GrantReply, GrantRequest, GrantValue, ImportNeedWire, Reduction};

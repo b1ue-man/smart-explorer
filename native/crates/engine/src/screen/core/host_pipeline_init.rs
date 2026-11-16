@@ -13,10 +13,12 @@ impl Pipeline {
     ) -> Self {
         let source_size = source.size();
         let source_generation = source.reference_generation();
+        let viewer_fps = max_fps;
         let quality_policy = QualityPolicy::new(choice, max_fps);
         let max_fps = quality_policy.max_fps();
         let (path, _) = path_of(connection);
         let display = display.unwrap_or(FrameSize::MAX);
+        let chain = super::super::chain_meter::SharedChain::default();
         let mut pipeline = Self {
             work: Arc::new(work_control::WorkControl::default()),
             backend,
@@ -42,6 +44,8 @@ impl Pipeline {
                 source,
                 encoder: None,
                 encoder_book: None,
+                refused: Vec::new(),
+                chain: chain.clone(),
             }),
             choice,
             quality_policy,
@@ -55,6 +59,8 @@ impl Pipeline {
             rate: RateController::new(path, now_us()),
             clock: FrameClock::new(max_fps),
             codec_fps: 0,
+            self_paced: false,
+            chain_ready: false,
             quality: Quality {
                 fps: max_fps,
                 size: FrameSize::MAX,
@@ -71,6 +77,11 @@ impl Pipeline {
             inject_resets,
             encoder_epoch: 0,
             running: None,
+            pairing: pairing::PairingState::new(choice, viewer_fps),
+            confirmed: ConfirmedReference::default(),
+            continue_from: None,
+            key_gop: 0,
+            chain,
         };
         pipeline.quality.size = pipeline.fitted_size();
         pipeline.resize();
@@ -84,10 +95,7 @@ impl Pipeline {
         self.admission = Some(admission);
     }
 
-    pub fn hold_memory(
-        &mut self,
-        memory: std::sync::Arc<super::super::frame_memory::MemoryLease>,
-    ) {
+    pub fn hold_memory(&mut self, memory: std::sync::Arc<super::super::frame_memory::MemoryLease>) {
         if let Some(stage) = &mut self.stage {
             stage.memory = Some(memory.clone());
         }

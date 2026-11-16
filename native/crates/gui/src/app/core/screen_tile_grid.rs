@@ -108,10 +108,7 @@ impl ScreenTileGrid {
     }
 
     /// The preview connection of a tile, for the full view of the same device.
-    pub fn take_session(
-        &mut self,
-        target: &ScreenTarget,
-    ) -> Option<(ViewerSession, CpuTexture)> {
+    pub fn take_session(&mut self, target: &ScreenTarget) -> Option<(ViewerSession, CpuTexture)> {
         let tile = self
             .tiles
             .iter_mut()
@@ -271,6 +268,9 @@ impl ScreenTileGrid {
                 tile.picture = Some(size);
                 tile.wait_frame = false;
             }
+        } else if tile.picture.is_some() {
+            // The tile draws its picture again (r1).
+            session.note_repeated();
         }
         let (ended, accepted) = {
             let info = session.info();
@@ -419,6 +419,7 @@ fn accept_preview_picture(
     };
     super::screen_render_caps::bind_texture(texture, session, picture.memory.clone());
     texture.update_frame(ctx, &image, picture.presented);
+    session.recycle_bgra(image);
     (!texture.failed()).then_some(picture.size)
 }
 #[cfg(test)]

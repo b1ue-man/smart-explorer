@@ -120,8 +120,16 @@ impl Rect {
 
 #[path = "frame_size_avc.rs"]
 mod avc;
+#[path = "hevc_av1_bits.rs"]
+mod bits;
+#[path = "frame_size_hevc_av1.rs"]
+mod hevc_av1;
 #[path = "frame_size_packet.rs"]
 mod packet;
 
 pub use avc::{avc_limits, check_avc_dimensions, fit_macroblocks, macroblocks, AvcLimits};
+pub use hevc_av1::{
+    av1_level_for, check_video_dimensions, hevc_level_for, video_keyframe, video_max_bitrate_bps,
+    video_parameter_sets, Av1Level, HevcLevel, AV1_LEVELS, HEVC_LEVELS,
+};
 pub use packet::{validate_encoded_budget, PacketBudget, RECORD_BUFFER_OVERHEAD};

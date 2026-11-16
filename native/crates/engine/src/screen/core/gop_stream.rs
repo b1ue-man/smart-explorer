@@ -9,15 +9,13 @@
 use std::io;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use iroh::endpoint::{Connection, RecvStream, SendStream, VarInt};
-use tokio::sync::mpsc;
+use iroh::endpoint::{Connection, SendStream, VarInt};
 
 use super::rate_control::PathKind;
 use super::wire_binary::{
-    read_gop_header, write_frame_record, write_gop_header, FrameRecord, GopHeader, RecordSequence,
-    StreamKind, FLAG_KEYFRAME, FLAG_MORE, RECORD_HEADER_BYTES,
+    write_frame_record, write_gop_header, FrameRecord, GopHeader, FLAG_CONTINUE, FLAG_KEYFRAME,
+    FLAG_MORE, RECORD_HEADER_BYTES,
 };
-use super::wire_control::{FrameAck, ViewerFrame};
 use crate::share::node_screen::{enter_interactive, InteractiveGuard, InteractiveKind};
 
 /// Code with which the host gives up a picture stream (stale, send error)
@@ -26,9 +24,6 @@ pub const STREAM_RESET_CODE: VarInt = VarInt::from_u32(0x5352);
 /// Uni streams a viewer allows: one running and one new picture group per
 /// kind (`video`, `preview`), C3.
 pub const VIEWER_UNI_STREAMS: u32 = 4;
-/// Picture events a reader may queue ahead of the decoder; a slower
-/// decoder makes the reader wait, so QUIC flow control throttles the host.
-const PICTURE_QUEUE: usize = 4;
 
 /// Priority of the host's control stream (plan 2026-11-14 E4): above the
 /// picture groups (0), so `PONG`, answers and state frames never wait
@@ -155,17 +150,39 @@ pub async fn write_with_route<T>(
 pub struct GopWriter {
     send: SendStream,
     header: GopHeader,
+    /// The next frame is the first of a continuation (B-36).
+    continues: bool,
 }
 
 impl GopWriter {
     pub async fn open(connection: &Connection, header: GopHeader) -> io::Result<Self> {
         let mut send = connection.open_uni().await.map_err(io::Error::other)?;
         write_gop_header(&mut send, &header).await?;
-        Ok(Self { send, header })
+        Ok(Self {
+            send,
+            header,
+            continues: false,
+        })
     }
 
     pub fn header(&self) -> &GopHeader {
         &self.header
+    }
+
+    /// Marks the stream, opened and still empty, as a continuation: its
+    /// first frame (no key frame) carries `FLAG_CONTINUE` (B-36).
+    pub fn mark_continuation(&mut self) {
+        self.continues = true;
+    }
+
+    /// The flag of the next frame besides `FLAG_KEYFRAME`: `FLAG_CONTINUE`
+    /// on the first frame of a continuation, once.
+    fn first_flag(&mut self, keyframe: bool) -> u8 {
+        if std::mem::take(&mut self.continues) && !keyframe {
+            FLAG_CONTINUE
+        } else {
+            0
+        }
     }
 
     /// Writes the records of one frame (all but the last with `FLAG_MORE`)
@@ -199,8 +216,9 @@ impl GopWriter {
         }
         let count = records.len();
         let mut bytes = 0u64;
+        let first = self.first_flag(keyframe);
         for (index, payload) in records.into_iter().enumerate() {
-            let mut flags = if keyframe { FLAG_KEYFRAME } else { 0 };
+            let mut flags = if keyframe { FLAG_KEYFRAME } else { first };
             if index + 1 < count {
                 flags |= FLAG_MORE;
             }
@@ -239,27 +257,50 @@ impl GopWriter {
         let count = records.len();
         records.reverse();
         let mut written = 0u64;
+        let first = self.first_flag(keyframe);
         for index in 0..count {
             let bytes = records
                 .pop()?
                 .ok_or_else(|| super::wire::invalid("admitted record disappeared"))?;
             let (payload, lease) = bytes.into_parts();
-            let mut flags = if keyframe { FLAG_KEYFRAME } else { 0 };
+            let mut flags = if keyframe { FLAG_KEYFRAME } else { first };
             if index + 1 < count {
                 flags |= FLAG_MORE;
             }
             written += (payload.len() + RECORD_HEADER_BYTES) as u64;
-            let record = FrameRecord {
-                frame_id,
-                capture_ts_us,
-                flags,
-                payload,
-            };
-            write_frame_record(&mut self.send, &self.header, &record).await?;
-            drop(record);
+            self.write_admitted(frame_id, capture_ts_us, flags, payload)
+                .await?;
             drop(lease);
         }
         Ok(written)
+    }
+
+    /// One record of an admitted frame. The payload goes into the QUIC send
+    /// buffer as it is (`write_chunk`, plan bildkette BK3b, copy 16 of the
+    /// BK3 table) instead of being copied there; only the 21 bytes of the
+    /// header are copied. Its admission ends when the stream took it, as
+    /// before: the bytes the stream holds are bounded by the pacer's queue
+    /// guard, not by the capture grant.
+    async fn write_admitted(
+        &mut self,
+        frame_id: u64,
+        capture_ts_us: u64,
+        flags: u8,
+        payload: Vec<u8>,
+    ) -> io::Result<()> {
+        if payload.len() > self.header.record_limit()
+            || flags & !super::wire_binary::KNOWN_FLAGS != 0
+        {
+            return Err(super::wire::invalid(
+                "frame record exceeds its limit or has unknown flags",
+            ));
+        }
+        let head = super::wire_binary::record_head(payload.len(), frame_id, capture_ts_us, flags);
+        self.send.write_all(&head).await.map_err(io::Error::from)?;
+        self.send
+            .write_chunk(bytes::Bytes::from(payload))
+            .await
+            .map_err(io::Error::from)
     }
 
     /// Gives the stream up: the viewer drops what it has of it.
@@ -273,191 +314,12 @@ impl GopWriter {
     }
 }
 
-/// What the viewer's readers deliver.
-pub enum PictureEvent {
-    /// One record of a picture group; `received_us` right after it arrived.
-    Record {
-        header: GopHeader,
-        record: FrameRecord,
-        received_us: u64,
-    },
-    /// The stream of `gop_id` broke off; its partial frame is lost.
-    Broken { gop_id: u64 },
-}
-
-/// The viewer's channel of picture events.
-pub fn picture_channel() -> (mpsc::Sender<PictureEvent>, mpsc::Receiver<PictureEvent>) {
-    mpsc::channel(PICTURE_QUEUE)
-}
-
-/// Accepts the host's picture streams until the connection ends; each runs
-/// in a task of its own. `acks` takes the acknowledgements for the control
-/// stream's writer.
-pub async fn accept_picture_streams(
-    connection: Connection,
-    events: mpsc::Sender<PictureEvent>,
-    acks: mpsc::Sender<ViewerFrame>,
-) {
-    accept_picture_streams_with_contract(connection, events, acks, None).await;
-}
-
-pub async fn accept_picture_streams_with_contract(
-    connection: Connection,
-    events: mpsc::Sender<PictureEvent>,
-    acks: mpsc::Sender<ViewerFrame>,
-    contract: Option<super::frame_budget::FrameContract>,
-) {
-    accept_picture_streams_with_memory(connection, events, acks, contract, None).await;
-}
-pub async fn accept_picture_streams_with_memory(
-    connection: Connection,
-    events: mpsc::Sender<PictureEvent>,
-    acks: mpsc::Sender<ViewerFrame>,
-    contract: Option<super::frame_budget::FrameContract>,
-    memory: super::frame_memory::MemoryHold,
-) {
-    let local = match contract {
-        Some(contract) => Some(contract.limits),
-        None => match memory
-            .as_ref()
-            .map(|lease| super::frame_budget::legacy_limits(lease.bytes(), None))
-            .transpose()
-        {
-            Ok(limits) => limits,
-            Err(_) => return,
-        },
-    };
-    accept_picture_streams_admitted(connection, events, acks, contract, memory, local).await;
-}
-pub async fn accept_picture_streams_admitted(
-    connection: Connection,
-    events: mpsc::Sender<PictureEvent>,
-    acks: mpsc::Sender<ViewerFrame>,
-    contract: Option<super::frame_budget::FrameContract>,
-    memory: super::frame_memory::MemoryHold,
-    local: Option<super::frame_budget::FrameLimits>,
-) {
-    let readers = std::sync::Arc::new(tokio::sync::Semaphore::new(VIEWER_UNI_STREAMS as usize));
-    while let Ok(recv) = connection.accept_uni().await {
-        let Ok(permit) = readers.clone().acquire_owned().await else {
-            return;
-        };
-        let (events, acks) = (events.clone(), acks.clone());
-        let memory = memory.clone();
-        tokio::spawn(async move {
-            let _permit = permit;
-            let bytes = memory.as_ref().map(|lease| lease.bytes());
-            let _memory = memory;
-            read_picture_stream(recv, events, acks, contract, bytes, local).await;
-        });
-    }
-}
-
-async fn read_picture_stream(
-    mut recv: RecvStream,
-    events: mpsc::Sender<PictureEvent>,
-    acks: mpsc::Sender<ViewerFrame>,
-    contract: Option<super::frame_budget::FrameContract>,
-    memory_bytes: Option<u64>,
-    local: Option<super::frame_budget::FrameLimits>,
-) {
-    let header = match read_gop_header(&mut recv).await {
-        Ok(header) => header,
-        Err(_) => {
-            let _ = recv.stop(STREAM_RESET_CODE);
-            return;
-        }
-    };
-    let contract_matches = super::frame_budget::contract_matches(header.frame_contract, contract);
-    let exceeds = memory_bytes.is_some_and(|bytes| {
-        let owners = if header.frame_contract.is_some() {
-            super::frame_budget::VERSIONED_WORKING_IMAGES
-        } else {
-            super::frame_budget::WORKING_IMAGES
-        };
-        header.size.pixels().saturating_mul(4 * owners) > bytes
-    });
-    if !contract_matches
-        || exceeds
-        || local.is_some_and(|limits| limits.check(header.size).is_err())
-    {
-        let _ = recv.stop(STREAM_RESET_CODE);
-        return;
-    }
-    let Ok(budget) =
-        super::frame_size_caps::PacketBudget::for_receive(header.frame_contract, local)
-    else {
-        let _ = recv.stop(STREAM_RESET_CODE);
-        return;
-    };
-    let mut sequence = RecordSequence::default();
-    let mut allocation_budget = super::wire_binary::FrameReadBudget::default();
-    let mut current = 0;
-    let mut records = 0usize;
-    let mut bytes = 0usize;
-    loop {
-        let record = match super::wire_binary::read_frame_record_admitted(
-            &mut recv,
-            &header,
-            &mut allocation_budget,
-            budget,
-        )
-        .await
-        {
-            Ok(Some(record)) => record,
-            Ok(None) if !sequence.is_open() => return,
-            Ok(None) | Err(_) => break,
-        };
-        if current != record.frame_id {
-            current = record.frame_id;
-            records = 0;
-            bytes = 0;
-        }
-        records = records.saturating_add(1);
-        bytes = bytes
-            .saturating_add(record.payload.len())
-            .saturating_add(RECORD_HEADER_BYTES);
-        if records > budget.records || bytes > budget.encoded_bytes {
-            break;
-        }
-        let received_us = now_us();
-        if sequence.accept(&header, &record).is_err() {
-            break;
-        }
-        if !record.has_more() {
-            let ack = FrameAck {
-                gop_id: header.gop_id,
-                frame_id: record.frame_id,
-                received_us,
-            };
-            let frame = match header.kind {
-                StreamKind::Video => Some(ViewerFrame::FrameAck(ack)),
-                StreamKind::Preview => Some(ViewerFrame::PreviewAck(ack)),
-                StreamKind::Snapshot => None,
-            };
-            if let Some(frame) = frame {
-                if acks.send(frame).await.is_err() {
-                    break;
-                }
-            }
-        }
-        let event = PictureEvent::Record {
-            header,
-            record,
-            received_us,
-        };
-        if events.send(event).await.is_err() {
-            break;
-        }
-    }
-    // A broken stream is stopped at once, so its slot comes free (NR N1).
-    let _ = recv.stop(STREAM_RESET_CODE);
-    let _ = events
-        .send(PictureEvent::Broken {
-            gop_id: header.gop_id,
-        })
-        .await;
-}
+#[path = "gop_stream_read.rs"]
+mod read;
+pub use read::{
+    accept_picture_streams, accept_picture_streams_admitted, accept_picture_streams_with_contract,
+    accept_picture_streams_with_memory, picture_channel, PictureEvent,
+};
 
 #[cfg(test)]
 #[path = "gop_stream_bild_tests.rs"]

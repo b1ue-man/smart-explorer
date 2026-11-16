@@ -139,6 +139,10 @@ impl crate::transfer::TransferWorker for WorkerTransfers {
     ) -> bool {
         run_transfer_in_worker(view, report, cancel)
     }
+
+    fn job_sides(&self, view: &JobView<'_>) -> crate::transfer::JobSides {
+        super::job_handles::job_sides(view)
+    }
 }
 
 crate::provide_port!(
@@ -368,22 +372,28 @@ fn failure(view: &JobView<'_>, message: String, canceled: bool) -> TransferMsg {
 /// Opens `target` with the embedded worker's own Share host in this process
 /// (Android, Z-A1): no loopback proxy into the same process. Jobs on the
 /// backend record the identity the proxy handle reports, so records stay
-/// exchangeable. `None` without an embedded worker that serves.
+/// exchangeable. `None` without an embedded worker that serves. `origin`
+/// says who browses with the handle (metadata presence, E4).
 #[cfg_attr(not(target_os = "android"), allow(dead_code))]
 pub fn open_share_in_process(
     target: &PeerOpenTarget,
+    origin: crate::share::OperationOrigin,
 ) -> Option<Result<(String, BackendHandle, crate::share::ShareStatus), String>> {
     let host = super::live::embedded_host()?;
     Some(
-        host.open_share(target.clone(), crate::share::OperationOrigin::Job)
+        host.open_share(target.clone(), origin)
             .map(|(label, backend, status)| {
-                let proxy =
-                    super::ipc_client::share_backend_identity(label.clone(), target.clone());
+                let proxy = super::ipc_client::share_backend_identity(
+                    label.clone(),
+                    target.clone(),
+                    origin,
+                );
                 crate::transfer::remember_identity(
                     &backend,
                     proxy.namespace_identity(),
                     proxy.state_identity(),
                 );
+                super::job_handles::remember_origin(&backend, target, origin);
                 (label, backend, status)
             }),
     )

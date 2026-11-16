@@ -62,6 +62,8 @@ fn request(mode: SessionMode, source: SourceId, size: FrameSize, fps: u16) -> Vi
         decoders: vec![CodecOffer::tiles()],
         display_size: Some(size),
         max_fps: fps,
+        gop_continue: false,
+        gop_continue_decoders: Vec::new(),
     }
 }
 

@@ -68,6 +68,7 @@ pub struct RendererOwner {
     closed: std::sync::atomic::AtomicBool,
     limit: u32,
     yuv: bool,
+    window: super::screen_present::WindowBackend,
 }
 const KEY: &str = "screen_renderer_owner";
 pub fn get(ctx: &egui::Context) -> Option<Arc<RendererOwner>> {
@@ -80,7 +81,10 @@ impl RendererOwner {
         shader: Option<eframe::egui_glow::ShaderVersion>,
         dithering: bool,
     ) -> Arc<Self> {
+        use super::screen_present::WindowBackend;
+        let mut window = WindowBackend::Other;
         let (backend, limit, yuv) = if let Some(state) = &cc.wgpu_render_state {
+            window = WindowBackend::of_wgpu(state.adapter.get_info().backend);
             let yuv = super::screen_wgpu_yuv::install(state);
             let limit = state.device.limits().max_texture_dimension_2d;
             (
@@ -91,6 +95,7 @@ impl RendererOwner {
         } else if let Some(gl) = &cc.gl {
             match GlowBackend::new(gl.clone(), cc.get_proc_address, shader, dithering) {
                 Ok(backend) => {
+                    window = WindowBackend::Glow;
                     let limit = backend.texture_limit();
                     (Backend::Glow(backend), limit, false)
                 }
@@ -108,6 +113,7 @@ impl RendererOwner {
             closed: false.into(),
             limit,
             yuv,
+            window,
         });
         cc.egui_ctx
             .data_mut(|d| d.insert_temp(egui::Id::new(KEY), Arc::downgrade(&owner)));
@@ -128,6 +134,44 @@ impl RendererOwner {
     }
     pub fn yuv(&self) -> bool {
         self.yuv && self.available()
+    }
+    pub fn window_backend(&self) -> super::screen_present::WindowBackend {
+        self.window
+    }
+    /// BK9: uploads the slot's new planes in the frame that queued them, so
+    /// that frame draws them (before, the next pre-update service uploaded
+    /// them and every picture reached the screen one frame later). Only a
+    /// candidate that fits the resident's textures, after the previous
+    /// upload's proof; any other case stays with `service`.
+    pub fn upload_now(&self, slot: &RenderSlot) {
+        if self.closed() {
+            return;
+        }
+        let backend = lock(&self.backend);
+        let Backend::Wgpu(b) = &*backend else {
+            return;
+        };
+        let mut s = lock(&slot.state);
+        let ready = b.available()
+            && !s.closed
+            && s.retiring.is_none()
+            && s.next_upload.is_none()
+            && s.candidate.as_ref().is_some_and(|candidate| {
+                candidate.active()
+                    && matches!(candidate, Package::Yuv { .. })
+                    && s.resident.as_ref().is_none_or(|r| {
+                        r.package.active()
+                            && r.upload.drain.confirmed()
+                            && compatible(&r.native, candidate)
+                            && !r.package.same_image(candidate)
+                    })
+            });
+        if !ready {
+            return;
+        }
+        if let Some(package) = s.candidate.take() {
+            b.upload(&mut s, package);
+        }
     }
     pub fn attach(&self, slot: &Arc<RenderSlot>) {
         let mut slots = lock(&self.slots);

@@ -245,7 +245,7 @@ private suspend fun FilesViewModel.transferNow(request: TransferRequest, conflic
     val rule = FilesApi.resultOf(task, TransferResult.serializer())?.ruleText()
     val done = "$verb: ${elements(request.sources.size)}" + (rule?.let { " ($it)" } ?: "")
     reportTask(task, done, transferFailure(request))
-    refreshAfterChange()
+    refreshAfterChange(background = true)
 }
 
 private fun transferFailure(request: TransferRequest) =
@@ -288,7 +288,7 @@ internal fun FilesViewModel.delete(tabId: Long, locations: List<String>, permane
     val task = FilesApi.awaitTask(taskId)
     val done = if (permanent) "Endgültig gelöscht" else "In den Papierkorb verschoben"
     reportTask(task, "$done: ${elements(locations.size)}", "Löschen fehlgeschlagen")
-    refreshAfterChange()
+    refreshAfterChange(background = true)
 }
 
 internal fun FilesViewModel.requestRename(tab: BrowserTab, entry: Entry) {
@@ -401,7 +401,7 @@ internal fun FilesViewModel.extract(tabId: Long, location: String, targetDir: St
     val task = FilesApi.awaitTask(FilesApi.extract(location, targetDir))
     tab(tabId)?.selection?.clear()
     reportTask(task, "Entpackt", "Entpacken fehlgeschlagen")
-    refreshAfterChange()
+    refreshAfterChange(background = true)
 }
 
 internal fun FilesViewModel.toggleFavorite(location: String) = launchAction("Favorit nicht geändert") {
@@ -440,7 +440,7 @@ internal fun FilesViewModel.uploadEdit(edit: EditInfo, mode: String, force: Bool
         dialog = FilesDialog.EditConflict(edit)
     } else {
         reportTask(task, "Hochgeladen: ${edit.name}", "Hochladen fehlgeschlagen")
-        refreshAfterChange()
+        refreshAfterChange(background = true)
     }
     reloadEdits()
 }
@@ -454,7 +454,7 @@ internal fun FilesViewModel.discardEdit(edit: EditInfo) = launchAction("Verwerfe
 internal fun FilesViewModel.importShared(targetDir: String, count: Int) = launchAction("Speichern fehlgeschlagen") {
     val task = FilesApi.awaitTask(ShareIntentHandler.importInto(targetDir))
     reportTask(task, if (count == 1) "Gespeichert" else "Gespeichert: $count Dateien", "Speichern fehlgeschlagen")
-    refreshAfterChange()
+    refreshAfterChange(background = true)
 }
 
 /** [Details] of "n Ordner nicht lesbar" in the recursive view. */

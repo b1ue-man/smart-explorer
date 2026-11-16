@@ -29,6 +29,12 @@ struct Inner {
     reads: AtomicUsize,
     streamed_bytes: AtomicUsize,
     stats: AtomicUsize,
+    /// `stat` and `list_dir` calls made outside / inside a
+    /// `crate::vfs::BackgroundScope` (E4c).
+    foreground_calls: AtomicUsize,
+    background_calls: AtomicUsize,
+    /// Answers as a Share device (`Scheme::Peer`) instead of SFTP (E4d).
+    share_device: AtomicBool,
     read_override: Mutex<Option<Vec<u8>>>,
     stat_gate: Mutex<Option<StatGate>>,
     fail_upload: AtomicBool,
@@ -46,6 +52,9 @@ impl OptimizationBackend {
             reads: AtomicUsize::new(0),
             streamed_bytes: AtomicUsize::new(0),
             stats: AtomicUsize::new(0),
+            foreground_calls: AtomicUsize::new(0),
+            background_calls: AtomicUsize::new(0),
+            share_device: AtomicBool::new(false),
             read_override: Mutex::new(None),
             stat_gate: Mutex::new(None),
             fail_upload: AtomicBool::new(false),
@@ -93,6 +102,30 @@ impl OptimizationBackend {
 
     pub fn stat_count(&self) -> usize {
         self.0.stats.load(Ordering::SeqCst)
+    }
+
+    /// Metadata calls a program's request made (outside a background scope).
+    pub fn foreground_calls(&self) -> usize {
+        self.0.foreground_calls.load(Ordering::SeqCst)
+    }
+
+    /// Metadata calls the engine made by itself (inside a background scope).
+    pub fn background_calls(&self) -> usize {
+        self.0.background_calls.load(Ordering::SeqCst)
+    }
+
+    /// From now on the fixture is a Share device (`Scheme::Peer`).
+    pub fn as_share_device(&self) {
+        self.0.share_device.store(true, Ordering::SeqCst);
+    }
+
+    fn note_call(&self) {
+        let counter = if crate::vfs::in_background() {
+            &self.0.background_calls
+        } else {
+            &self.0.foreground_calls
+        };
+        counter.fetch_add(1, Ordering::SeqCst);
     }
 
     pub fn read_byte_count(&self) -> usize {
@@ -190,7 +223,13 @@ impl OptimizationBackend {
 }
 
 impl Backend for OptimizationBackend {
-    fn scheme(&self) -> Scheme { Scheme::Sftp }
+    fn scheme(&self) -> Scheme {
+        if self.0.share_device.load(Ordering::SeqCst) {
+            Scheme::Peer
+        } else {
+            Scheme::Sftp
+        }
+    }
     fn root_display(&self) -> String { "/".into() }
     fn parallelism(&self) -> usize { 8 }
     fn case_sensitive_paths(&self, _: &str) -> bool { true }
@@ -202,6 +241,7 @@ impl Backend for OptimizationBackend {
 
     fn stat(&self, path: &str) -> io::Result<VfsMeta> {
         self.0.stats.fetch_add(1, Ordering::SeqCst);
+        self.note_call();
         let result = self.lookup(path).map(|node| {
             let state = node.lock().unwrap();
             metadata(path, &state)
@@ -223,6 +263,7 @@ impl Backend for OptimizationBackend {
     }
 
     fn list_dir(&self, path: &str) -> io::Result<Vec<VfsMeta>> {
+        self.note_call();
         let directory = self.lookup(path)?;
         if !directory.lock().unwrap().directory { return Err(invalid()); }
         let nodes = self.0.nodes.lock().unwrap();

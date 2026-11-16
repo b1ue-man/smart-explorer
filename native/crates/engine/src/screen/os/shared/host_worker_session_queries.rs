@@ -224,7 +224,19 @@ static OFFERS: Mutex<Option<CachedOffers>> = Mutex::new(None);
 /// The encoder offer of the account of the followed session for host
 /// processes of `program`; `None` for a worker that follows no session.
 pub fn followed_offers(program: &Path) -> Option<Vec<CodecOffer>> {
-    let session = session_target::for_worker()?;
+    let Some(session) = session_target::for_worker() else {
+        #[cfg(target_os = "linux")]
+        {
+            let root = unsafe { libc::geteuid() } == 0;
+            let own = crate::screen::os::session_detect::active_session::spawn::has_own_session(
+                &|name| std::env::var(name).ok(),
+            );
+            if root && !own {
+                return Some(vec![CodecOffer::tiles()]);
+            }
+        }
+        return None;
+    };
     let generation = session.generation().to_string();
     let mut slot = OFFERS.lock().unwrap_or_else(PoisonError::into_inner);
     if let Some((_, _, offers)) = slot

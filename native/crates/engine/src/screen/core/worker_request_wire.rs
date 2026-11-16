@@ -16,7 +16,129 @@ pub enum WorkerRequest {
     /// The controlling viewer's input (SCR-M6).
     Input(BoundInput),
     SetCaptureActive(bool),
+    /// Settings and credit of the self-paced picture stream (B-27).
+    Stream(StreamOrder),
     Close,
+}
+
+/// `STREAM` (plan 2026-11-14 „Bildkette“ B-27): the daemon tells a host
+/// process that announced `STREAM_VERSION` what to stream and how much.
+/// `request` carries the settings of the picture stream (size, codec,
+/// encoder epoch, contract, target rate, visible parts) and in `frame_id`
+/// the id of the next frame the daemon sends; its `keyframe` is not used,
+/// `key_serial` is. `granted` counts the answers the daemon asked for so
+/// far: the process answers each one exactly once (a picture, unchanged,
+/// paused or failed). `ahead` (0 or 1) pictures may be captured and encoded
+/// before their credit arrives; they wait in the process until it does.
+/// A higher `key_serial` asks for a key frame. `cadence_fps` is the capture
+/// clock of the process. A higher `recover_serial` (plan „Bildkette“ B-36)
+/// asks that the next picture reference only `last_good` (a frame the viewer
+/// confirmed) or older: the encoding stage calls
+/// `ScreenEncoder::recover_references` and encodes without a key frame when
+/// the encoder continued, else a key frame of a new encoder; pictures
+/// encoded before the wish are dropped. Both are 0 from a daemon without it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StreamOrder {
+    pub request: StageRequest,
+    pub granted: u64,
+    pub ahead: u32,
+    pub key_serial: u64,
+    pub cadence_fps: u32,
+    pub recover_serial: u64,
+    pub last_good: u64,
+}
+
+/// Pictures a host process may encode ahead of their credit.
+pub const MAX_AHEAD: u32 = 1;
+
+#[derive(Serialize, Deserialize)]
+struct StreamWire {
+    request: ProduceWire,
+    granted: u64,
+    #[serde(default)]
+    ahead: u32,
+    #[serde(default)]
+    key_serial: u64,
+    cadence_fps: u32,
+    #[serde(default)]
+    recover_serial: u64,
+    #[serde(default)]
+    last_good: u64,
+}
+
+fn produce_wire(request: &StageRequest) -> ProduceWire {
+    ProduceWire {
+        frame_id: request.frame_id,
+        frame_contract: request.frame_contract,
+        visible_rects: request.visible_rects.clone(),
+        keyframe: request.keyframe,
+        target_bps: request.target_bps,
+        size: request.size,
+        codec: request.choice.codec,
+        profile: request.choice.profile,
+        encoder_hardware: request.choice.encoder_hardware,
+        decoder_hardware: request.choice.decoder_hardware,
+        max_size: request.choice.max_size,
+        max_pixels: request.choice.max_pixels,
+        max_macroblocks_per_second: request.choice.max_macroblocks_per_second,
+        encoder_epoch: request.encoder_epoch,
+        fps: request.fps,
+    }
+}
+
+/// A `PRODUCE` (or the settings of a `STREAM`) within the bounds of its
+/// contract and codec.
+fn stage_request(wire: ProduceWire) -> io::Result<StageRequest> {
+    if let Some(contract) = wire.frame_contract {
+        contract.validate()?;
+        contract.limits.check(wire.size)?;
+    } else {
+        wire.size.check_frame()?;
+    }
+    if wire.max_pixels == 0
+        || wire.max_pixels > FrameLimits::RESOURCE.max_pixels
+        || wire.max_macroblocks_per_second == Some(0)
+        || wire.size.pixels() > wire.max_pixels
+        || wire.size.width > wire.max_size.width
+        || wire.size.height > wire.max_size.height
+    {
+        return Err(invalid(
+            "worker frame exceeds codec pixel or dimension bound",
+        ));
+    }
+    if wire.visible_rects.as_ref().is_some_and(|rects| {
+        rects.len() > super::super::visibility::MAX_VISIBLE_RECTS
+            || rects.iter().any(|r| {
+                !super::super::pixel_convert::Rect {
+                    x: r.x,
+                    y: r.y,
+                    width: r.width,
+                    height: r.height,
+                }
+                .fits(wire.size)
+            })
+    }) {
+        return Err(invalid("invalid visible rectangles"));
+    }
+    Ok(StageRequest {
+        frame_id: wire.frame_id,
+        frame_contract: wire.frame_contract,
+        visible_rects: wire.visible_rects,
+        keyframe: wire.keyframe,
+        target_bps: wire.target_bps,
+        size: wire.size,
+        choice: CodecChoice {
+            codec: wire.codec,
+            profile: wire.profile,
+            encoder_hardware: wire.encoder_hardware,
+            decoder_hardware: wire.decoder_hardware,
+            max_size: wire.max_size,
+            max_pixels: wire.max_pixels,
+            max_macroblocks_per_second: wire.max_macroblocks_per_second,
+        },
+        encoder_epoch: wire.encoder_epoch,
+        fps: wire.fps,
+    })
 }
 
 impl WorkerRequest {
@@ -35,26 +157,19 @@ impl WorkerRequest {
                 })?,
             ),
             Self::Open(open) => (OPEN, to_json(open)?),
-            Self::Produce(request) => {
-                let wire = ProduceWire {
-                    frame_id: request.frame_id,
-                    frame_contract: request.frame_contract,
-                    visible_rects: request.visible_rects.clone(),
-                    keyframe: request.keyframe,
-                    target_bps: request.target_bps,
-                    size: request.size,
-                    codec: request.choice.codec,
-                    profile: request.choice.profile,
-                    encoder_hardware: request.choice.encoder_hardware,
-                    decoder_hardware: request.choice.decoder_hardware,
-                    max_size: request.choice.max_size,
-                    max_pixels: request.choice.max_pixels,
-                    max_macroblocks_per_second: request.choice.max_macroblocks_per_second,
-                    encoder_epoch: request.encoder_epoch,
-                    fps: request.fps,
-                };
-                (PRODUCE, to_json(&wire)?)
-            }
+            Self::Produce(request) => (PRODUCE, to_json(&produce_wire(request))?),
+            Self::Stream(order) => (
+                STREAM,
+                to_json(&StreamWire {
+                    request: produce_wire(&order.request),
+                    granted: order.granted,
+                    ahead: order.ahead,
+                    key_serial: order.key_serial,
+                    cadence_fps: order.cadence_fps,
+                    recover_serial: order.recover_serial,
+                    last_good: order.last_good,
+                })?,
+            ),
             Self::Capture {
                 frame_id,
                 frame_contract,
@@ -83,57 +198,20 @@ impl WorkerRequest {
                 Ok(Self::Release(wire.events))
             }
             OPEN => Ok(Self::Open(from_json(payload)?)),
-            PRODUCE => {
-                let wire: ProduceWire = from_json(payload)?;
-                if let Some(contract) = wire.frame_contract {
-                    contract.validate()?;
-                    contract.limits.check(wire.size)?;
-                } else {
-                    wire.size.check_frame()?;
+            PRODUCE => Ok(Self::Produce(stage_request(from_json(payload)?)?)),
+            STREAM => {
+                let wire: StreamWire = from_json(payload)?;
+                if wire.ahead > MAX_AHEAD {
+                    return Err(invalid("stream order asks for too many pictures ahead"));
                 }
-                if wire.max_pixels == 0
-                    || wire.max_pixels > FrameLimits::RESOURCE.max_pixels
-                    || wire.max_macroblocks_per_second == Some(0)
-                    || wire.size.pixels() > wire.max_pixels
-                    || wire.size.width > wire.max_size.width
-                    || wire.size.height > wire.max_size.height
-                {
-                    return Err(invalid(
-                        "worker frame exceeds codec pixel or dimension bound",
-                    ));
-                }
-                if wire.visible_rects.as_ref().is_some_and(|rects| {
-                    rects.len() > super::super::visibility::MAX_VISIBLE_RECTS
-                        || rects.iter().any(|r| {
-                            !super::super::pixel_convert::Rect {
-                                x: r.x,
-                                y: r.y,
-                                width: r.width,
-                                height: r.height,
-                            }
-                            .fits(wire.size)
-                        })
-                }) {
-                    return Err(invalid("invalid visible rectangles"));
-                }
-                Ok(Self::Produce(StageRequest {
-                    frame_id: wire.frame_id,
-                    frame_contract: wire.frame_contract,
-                    visible_rects: wire.visible_rects,
-                    keyframe: wire.keyframe,
-                    target_bps: wire.target_bps,
-                    size: wire.size,
-                    choice: CodecChoice {
-                        codec: wire.codec,
-                        profile: wire.profile,
-                        encoder_hardware: wire.encoder_hardware,
-                        decoder_hardware: wire.decoder_hardware,
-                        max_size: wire.max_size,
-                        max_pixels: wire.max_pixels,
-                        max_macroblocks_per_second: wire.max_macroblocks_per_second,
-                    },
-                    encoder_epoch: wire.encoder_epoch,
-                    fps: wire.fps,
+                Ok(Self::Stream(StreamOrder {
+                    request: stage_request(wire.request)?,
+                    granted: wire.granted,
+                    ahead: wire.ahead,
+                    key_serial: wire.key_serial,
+                    cadence_fps: wire.cadence_fps.clamp(1, super::super::pacing::MAX_FPS),
+                    recover_serial: wire.recover_serial,
+                    last_good: wire.last_good,
                 }))
             }
             CAPTURE => {

@@ -12,7 +12,9 @@ name: Crate split and shared task setup
 #                (IGNORED_GROUPS in the script): isolated app data and the suite
 #                switches (direct opening, sync paths and links; Linux and Windows),
 #                the egui layout harness (Linux), real ACL, token and junction
-#                fixtures with the runner's administrator token (Windows); on
+#                fixtures with the runner's administrator token (Windows), the SVT-AV1
+#                and dav1d round trip and the host process crash with the development
+#                `se` (Linux, plan 2026-11-14 "Bildkette"); on
 #                Linux last the program test that needs a systemd manager
 #                (se_cli containment self-test)
 #   windows-gnu  link every test binary and program for x86_64-pc-windows-gnu
@@ -128,12 +130,16 @@ jobs:
 
       # libxcb1-dev provides libxcb.so, the file `-lxcb` of the engine's test binary needs (see `s4`).
       # This job linked without it (run 2026-11-14, ubuntu-24.04); the package is a safety margin.
+      # libsvtav1enc1d1 and libdav1d7 (Ubuntu 24.04 universe: 1.7.0 and 1.4.1) provide the SONAMEs
+      # libSvtAv1Enc.so.1 and libdav1d.so.7 that the ignored test bildkette_task_linux_hw_av1_roundtrip_psnr
+      # opens at run time (native/crates/engine/src/screen/os/native_ffi/av1_soft.rs); no -dev package is
+      # needed because the engine loads them with dlopen and does not link them. Not yet run on the runner.
       - name: Linux test packages
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential pkg-config libxcb1-dev xvfb libegl1 libgl1 libx11-6 libx11-xcb1 \
-            libxcursor1 libxi6 libxkbcommon0 libxkbcommon-x11-0 libxrandr2
+            libxcursor1 libxi6 libxkbcommon0 libxkbcommon-x11-0 libxrandr2 libsvtav1enc1d1 libdav1d7
 
       - name: Runner resources and Defender state
         if: runner.os == 'Windows'

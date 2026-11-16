@@ -1,7 +1,7 @@
 use crate::vfs::VfsMeta;
 use std::collections::BTreeMap;
 use std::io;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::time::{Duration, Instant};
 use super::{order, support::{lookup_metadata_at, parent_and_name},
@@ -62,6 +62,23 @@ pub(in crate::mount) struct LoadSlot {
     gate: Mutex<()>,
     revision: AtomicU64,
     completed: Mutex<Option<CompletedDirectory>>,
+    /// The holder of `gate` is a fetch the engine started by itself (E4c).
+    background: AtomicBool,
+}
+
+/// The gate of a fetch nobody waits for (a refresh or a preload); a request
+/// that a program waits for and that meets it notes its wait
+/// ([`LoadSlot::lock_waiting`]).
+pub(in crate::mount) struct BackgroundLoad<'a> {
+    _gate: MutexGuard<'a, ()>,
+    slot: &'a LoadSlot,
+}
+
+impl Drop for BackgroundLoad<'_> {
+    fn drop(&mut self) {
+        // Cleared while the gate is still held (fields drop after this).
+        self.slot.background.store(false, Ordering::Release);
+    }
 }
 
 struct CompletedDirectory {
@@ -118,6 +135,7 @@ impl LoadSlot {
             gate: Mutex::new(()),
             revision: AtomicU64::new(0),
             completed: Mutex::new(None),
+            background: AtomicBool::new(false),
         }
     }
 
@@ -125,6 +143,42 @@ impl LoadSlot {
         self.gate
             .lock()
             .map_err(|_| io::Error::other("metadata load slot is unavailable"))
+    }
+
+    /// The gate for a fetch the engine started by itself.
+    pub(in crate::mount) fn lock_background(&self) -> io::Result<BackgroundLoad<'_>> {
+        let gate = self.lock()?;
+        self.background.store(true, Ordering::Release);
+        Ok(BackgroundLoad {
+            _gate: gate,
+            slot: self,
+        })
+    }
+
+    /// The gate for a request a program waits for. When a background fetch
+    /// holds it, `waiting` runs once before the wait starts and what it
+    /// returns is held until the gate is ours: that fetch sets no metadata
+    /// presence, so the wait has to, for as long as it lasts (E4d).
+    pub(in crate::mount) fn lock_waiting<P>(
+        &self,
+        waiting: impl FnOnce() -> P,
+    ) -> io::Result<MutexGuard<'_, ()>> {
+        match self.gate.try_lock() {
+            Ok(gate) => Ok(gate),
+            Err(std::sync::TryLockError::WouldBlock) => {
+                let _presence = self.background.load(Ordering::Acquire).then(waiting);
+                self.lock()
+            }
+            Err(std::sync::TryLockError::Poisoned(_)) => {
+                Err(io::Error::other("metadata load slot is unavailable"))
+            }
+        }
+    }
+
+    /// Whether a background fetch holds the gate now.
+    #[cfg(test)]
+    pub(in crate::mount) fn held_by_background(&self) -> bool {
+        self.background.load(Ordering::Acquire)
     }
 
     pub(in crate::mount) fn revision(&self) -> u64 {

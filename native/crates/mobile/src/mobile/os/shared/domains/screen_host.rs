@@ -3,7 +3,7 @@
 //! `screenControl`, `native/android-bridge/src/screen_jni.rs`).
 //!
 //! - `screen.hostPrereqs {accessibility?, usageAccess?, appWindowCapture?,
-//!   display?, encoders?, apps?}` registers the app as host and stores what
+//!   display?, encoders?, apps?}` (`encoders`: `screen_host_encoders.rs`) registers the app as host and stores what
 //!   it reports; answers `{"accessibility":"on|off|restricted",
 //!   "usageAccess":bool,"appWindowCapture":bool}`.
 //! - `screen.hostSessions` → `{"sessions":[…]}`.
@@ -158,43 +158,11 @@ fn prereqs(args: &Value) -> Result<Value, ApiError> {
         None | Some(Value::Null) => None,
         Some(display) => Some((size_arg(display, "width")?, size_arg(display, "height")?)),
     };
-    let encoders = match args.get("encoders").and_then(Value::as_array) {
-        None => None,
-        Some(list) => Some(
-            list.iter()
-                .filter_map(|entry| {
-                    use crate::screen::core::negotiate::{CodecOffer, H264Profile};
-                    let profile = match entry.get("profile").and_then(Value::as_str)? {
-                        "cb" => H264Profile::ConstrainedBaseline,
-                        "high" => H264Profile::High,
-                        _ => return None,
-                    };
-                    let mut offer = CodecOffer::h264(profile, opt_bool(entry, "hardware", false));
-                    let side = |key| {
-                        entry
-                            .get(key)
-                            .and_then(Value::as_u64)
-                            .and_then(|n| u32::try_from(n).ok())
-                            .filter(|n| *n > 0 && *n <= 16_384)
-                    };
-                    if let (Some(width), Some(height)) = (side("maxWidth"), side("maxHeight")) {
-                        offer = offer.with_max(crate::screen::core::pixel_convert::FrameSize::new(
-                            width, height,
-                        ));
-                    }
-                    offer.max_macroblocks = entry
-                        .get("maxMacroblocks")
-                        .and_then(Value::as_u64)
-                        .filter(|n| *n > 0);
-                    offer.max_macroblocks_per_second = entry
-                        .get("maxMacroblocksPerSecond")
-                        .and_then(Value::as_u64)
-                        .filter(|n| *n > 0);
-                    Some(offer)
-                })
-                .collect::<Vec<_>>(),
-        ),
-    };
+    // H.264, HEVC and AV1 encoders of MediaCodec (`screen_host_encoders.rs`).
+    let encoders = args
+        .get("encoders")
+        .and_then(Value::as_array)
+        .map(|list| encoders::encoders_arg(list));
     let apps = args.get("apps").and_then(Value::as_array).map(|list| {
         list.iter()
             .filter_map(|app| {
@@ -254,6 +222,10 @@ fn prereqs(args: &Value) -> Result<Value, ApiError> {
             stored.display = display;
         }
         if let Some(encoders) = encoders {
+            // Other encoders than before: a refusal of the earlier ones no longer holds.
+            if stored.encoders != encoders {
+                stored.refused.clear();
+            }
             stored.encoders = encoders;
         }
         if let Some(apps) = apps {
@@ -358,6 +330,9 @@ fn ended(args: &Value) -> Result<Value, ApiError> {
     channels::ended(id, reason).map_err(|message| ApiError::new("not_found", message))?;
     Ok(json!({}))
 }
+
+#[path = "screen_host_encoders.rs"]
+mod encoders;
 
 #[cfg(test)]
 #[path = "screen_host_tests.rs"]

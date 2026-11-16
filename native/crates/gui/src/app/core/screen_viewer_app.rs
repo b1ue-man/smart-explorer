@@ -3,13 +3,12 @@
 //! view; both switch to the other in the same window, over the same
 //! connection where the host allows it (`screen_pool`). The window draws
 //! with wgpu: `AutoVsync` and one frame of latency (decision C4); „Niedrigste
-//! Latenz“ chooses `AutoNoVsync`, which only the next start of the viewer
-//! applies. `Mailbox` is never set: eframe does not ask the surface first,
-//! and a surface without it ends the program.
+//! Latenz“ chooses `AutoNoVsync`, which only the next opening of the window
+//! applies (eframe 0.29 cannot reconfigure the surface; evidence and the
+//! display path in `screen_present.rs`, BK9).
 use std::time::{Duration, Instant};
 
 use eframe::egui::{self, ViewportCommand};
-use eframe::egui_wgpu::{self, wgpu};
 
 use super::login_viewer::AutoLoginView;
 use super::screen_devices::GridScope;
@@ -17,7 +16,6 @@ use super::screen_input_keys::{local_keys, LocalKey};
 use super::screen_pool::{preview_edge, to_tile, to_view, DEFAULT_PREVIEW_INTERVAL_MS};
 use super::screen_prefs::ViewerPrefs;
 use super::screen_session::Backend;
-use super::screen_stats_overlay::stats_lines;
 use super::screen_target::ScreenTarget;
 use super::screen_tile_grid::ScreenTileGrid;
 use super::screen_toolbar_ui::{self, ToolbarAction, ToolbarInput};
@@ -46,20 +44,7 @@ enum Transition {
     Close,
 }
 
-/// The wgpu settings of the viewer: with the vertical blank (no tearing)
-/// and at most one frame queued, or without the blank for the lowest
-/// latency. The settings take effect when the window opens.
-pub fn wgpu_configuration(low_latency: bool) -> egui_wgpu::WgpuConfiguration {
-    egui_wgpu::WgpuConfiguration {
-        present_mode: if low_latency {
-            wgpu::PresentMode::AutoNoVsync
-        } else {
-            wgpu::PresentMode::AutoVsync
-        },
-        desired_maximum_frame_latency: Some(1),
-        ..Default::default()
-    }
-}
+pub use super::screen_present::wgpu_configuration;
 
 pub struct ScreenViewerApp {
     common: Common,
@@ -269,9 +254,14 @@ impl ScreenViewerApp {
                     let info = session.info();
                     (info.state, info.end.is_some())
                 };
-                let stats = common
-                    .stats_on
-                    .then(|| stats_lines(&session.info(), view.widget.unmapped_keys()));
+                let stats = common.stats_on.then(|| {
+                    super::screen_present::view_lines(
+                        ui.ctx(),
+                        &session.info(),
+                        view.widget.planes_drawn(),
+                        view.widget.unmapped_keys(),
+                    )
+                });
                 let params = ViewParams {
                     fit: common.prefs.fit,
                     control: view.control_on && !has_end,
@@ -326,7 +316,21 @@ impl ScreenViewerApp {
                 ToolbarAction::Fullscreen => out.push(Transition::Fullscreen),
                 ToolbarAction::Fit(fit) => self.change_prefs(|prefs| prefs.fit = *fit),
                 ToolbarAction::Sharpness(on) => self.change_prefs(|prefs| prefs.sharpness = *on),
-                ToolbarAction::Lossless(on) => self.change_prefs(|prefs| prefs.lossless = *on),
+                ToolbarAction::Codec(_) | ToolbarAction::Decoder(_) => {
+                    let again = screen_toolbar_ui::apply_codec(&action, &mut self.common.prefs);
+                    if let (true, Mode::View(view)) = (again, &self.mode) {
+                        // V1: a decoder that decodes the running stream takes
+                        // over at the next key frame, without a new session.
+                        let local = matches!(action, ToolbarAction::Decoder(_))
+                            && view.session.as_ref().is_some_and(|s| s.switch_decoder());
+                        // P1: the host negotiates again (`SET_DECODERS`).
+                        let frame = super::screen_pool::decoders_frame(&self.common.backend.offers);
+                        let sent = view.session.as_ref().is_some_and(|s| s.set_decoders(frame));
+                        if !local && !sent {
+                            out.push(Transition::View(view.target.clone()));
+                        }
+                    }
+                }
                 ToolbarAction::LowLatency(on) => {
                     self.change_prefs(|prefs| prefs.low_latency = *on);
                     self.common.low_latency_changed = true;

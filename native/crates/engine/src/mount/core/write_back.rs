@@ -71,6 +71,9 @@ impl MountEngine {
 
     /// One background upload attempt of `entry`.
     pub(super) fn upload_once(&self, entry: &Arc<Entry>) -> Uploaded {
+        // A `mount-upload` thread: the program that saved the file has gone
+        // on, nobody waits for this (E4c).
+        let _background = crate::vfs::BackgroundScope::enter();
         let _reap = self.operation_reaper();
         match self.flush_entry_with(entry, true) {
             Ok(FlushOutcome::NoChanges | FlushOutcome::Committed) => Uploaded::Done,

@@ -1,13 +1,17 @@
 //! Windows Graphics Capture: metadata and an exact grant precede pool creation.
 //! Cached and returned pictures are aliases of immutable admitted storage.
+//! Plan 2026-11-14 bildkette: the capture waits for the pool's `FrameArrived`
+//! instead of polling (B-10) and limits the session to the pipeline's frame
+//! interval with `MinUpdateInterval` where Windows has it (B-11); for whole
+//! monitors it is the fallback of Desktop Duplication (B-12).
 use super::capture_prepared::recovery::CaptureRecovery;
 use super::capture_retirement::CaptureResources;
 use super::capture_slots::{CaptureBudget, CaptureGeometry, CaptureKind};
-use super::capture_source::{Grabber, FIRST_FRAME_WAIT};
-use super::d3d_device::{self, DeviceSet, Readback};
+use super::capture_source::{CapturePath, Grabber, FIRST_FRAME_WAIT};
+use super::d3d_device::{self, DeviceSet, Read, Readback};
 use super::monitors;
 use crate::screen::core::capture_admission::CaptureGrant;
-use crate::screen::core::capture_image::CapturedImage;
+use crate::screen::core::capture_picture::{Picture, SourcePicture};
 use crate::screen::core::host_backend::SourceFrame;
 use crate::screen::core::pixel_convert::FrameSize;
 use crate::screen::core::session_state::SessionState;
@@ -25,7 +29,6 @@ use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::Direct3D11::ID3D11Texture2D;
 use windows::Win32::System::WinRT::Direct3D11::IDirect3DDxgiInterfaceAccess;
 use windows::Win32::System::WinRT::Graphics::Capture::IGraphicsCaptureItemInterop;
-const POLL: Duration = Duration::from_millis(5);
 /// Time a session whose pointer capture was switched (pointer overlay, plan
 /// 2026-11-14 P6) gets to deliver a picture in the new state before it is
 /// started again: on a screen that stands still it delivers none.
@@ -164,13 +167,16 @@ pub(super) struct WgcCapture {
     live: Option<Live>,
     target: PreparedWgc,
     readback: Readback,
-    last: Option<CapturedImage>,
+    /// The newest picture, CPU pixels or on the GPU (BK3b).
+    last: Option<Picture>,
     size: FrameSize,
     budget: CaptureBudget,
     recovery: CaptureRecovery,
     /// When the overlay switched this session's pointer capture, until a
     /// picture taken after the switch was read.
     pointer_switched: Option<Instant>,
+    /// The pipeline's frame interval, set again on every new session.
+    interval: Option<Duration>,
 }
 impl WgcCapture {
     pub(super) fn open(target: PreparedWgc, budget: CaptureBudget) -> io::Result<Self> {
@@ -191,7 +197,16 @@ impl WgcCapture {
             budget,
             recovery: CaptureRecovery::active(),
             pointer_switched: None,
+            interval: None,
         })
+    }
+    /// Applies the frame interval to the live session; false where it lacks
+    /// `MinUpdateInterval`.
+    fn apply_interval(&self) -> bool {
+        match (self.interval, &self.live) {
+            (Some(interval), Some(live)) => live.resources.set_min_update_interval(interval),
+            _ => true,
+        }
     }
     fn newest(&self) -> io::Result<Option<Direct3D11CaptureFrame>> {
         let mut newest: Option<Direct3D11CaptureFrame> = None;
@@ -232,6 +247,8 @@ impl WgcCapture {
         self.budget.replace(geometry)?;
         self.live = Some(create(&self.target, &self.budget)?);
         self.size = geometry.displayed();
+        // A missing property was reported when the interval was first set.
+        let _ = self.apply_interval();
         Ok(())
     }
     fn stop(&mut self) -> io::Result<()> {
@@ -248,10 +265,7 @@ impl WgcCapture {
     }
     /// The picture of `frame`, or `Err(size)` with its `ContentSize` when
     /// that differs from the pool.
-    fn read(
-        &mut self,
-        frame: &Direct3D11CaptureFrame,
-    ) -> io::Result<Result<CapturedImage, FrameSize>> {
+    fn read(&mut self, frame: &Direct3D11CaptureFrame) -> io::Result<Result<Picture, FrameSize>> {
         let content = frame.ContentSize().map_err(io::Error::other)?;
         if content.Width <= 0 || content.Height <= 0 {
             return Err(io::Error::other("capture frame has no content"));
@@ -265,11 +279,18 @@ impl WgcCapture {
         // SAFETY: a WGC surface is a D3D11 texture of this frame's device.
         let texture: ID3D11Texture2D =
             unsafe { access.GetInterface() }.map_err(io::Error::other)?;
+        // `texture` is a BGRA texture on `self.target.devices.device`, the
+        // device the texture encoder shares (`MFT_MESSAGE_SET_D3D_MANAGER`);
+        // it stays valid until `frame.Close()` in `capture_waiting`. While a
+        // texture encoder is armed the picture stays on the GPU (BK2a, BK3b).
         let devices = &self.target.devices;
-        let image = self
+        let read = self
             .readback
             .read(devices, &texture, size.width, size.height, &self.budget)?;
-        Ok(Ok(image.freeze()))
+        Ok(Ok(match read {
+            Read::Cpu(image) => Picture::Cpu(image.freeze()),
+            Read::Gpu(picture) => Picture::Gpu(picture),
+        }))
     }
 }
 impl Grabber for WgcCapture {
@@ -288,13 +309,45 @@ impl Grabber for WgcCapture {
     fn size(&self) -> FrameSize {
         self.size
     }
+    fn path(&self) -> Option<CapturePath> {
+        Some(CapturePath::GraphicsCapture)
+    }
+    fn set_frame_interval(&mut self, interval: Duration) -> bool {
+        self.interval = Some(interval);
+        self.apply_interval()
+    }
     fn capture(&mut self, keyframe: bool) -> io::Result<SourceFrame> {
+        self.capture_picture(keyframe)?.into_source_frame()
+    }
+    fn capture_picture(&mut self, keyframe: bool) -> io::Result<SourcePicture> {
+        let wait = if self.last.is_none() {
+            FIRST_FRAME_WAIT
+        } else {
+            Duration::ZERO
+        };
+        self.capture_waiting_picture(keyframe, wait, &mut || true)
+    }
+    fn capture_waiting(
+        &mut self,
+        keyframe: bool,
+        wait: Duration,
+        release: &mut dyn FnMut() -> bool,
+    ) -> io::Result<SourceFrame> {
+        self.capture_waiting_picture(keyframe, wait, release)?
+            .into_source_frame()
+    }
+    fn capture_waiting_picture(
+        &mut self,
+        keyframe: bool,
+        wait: Duration,
+        release: &mut dyn FnMut() -> bool,
+    ) -> io::Result<SourcePicture> {
         if !self.source_available() {
             return Err(io::Error::new(io::ErrorKind::NotFound, "WGC source closed"));
         }
         let recovery = self.recovery;
         if !recovery.ensure_live(self.live.is_some(), || self.restart(None))? {
-            return Ok(SourceFrame::Unchanged);
+            return Ok(SourcePicture::Unchanged);
         }
         // The pictures delivered so far show the pointer as it was before the
         // overlay switched it; one read in this call may still be from before.
@@ -302,14 +355,24 @@ impl Grabber for WgcCapture {
         if switched_now {
             self.pointer_switched = Some(Instant::now());
         }
-        let deadline = Instant::now() + FIRST_FRAME_WAIT;
+        let deadline = Instant::now() + wait;
         loop {
+            // Counted before draining: a picture arriving in between wakes
+            // the wait below at once.
+            let arrivals = self
+                .live
+                .as_ref()
+                .map(|live| live.resources.arrivals().clone());
+            let seen = arrivals.as_ref().map_or(0, |arrivals| arrivals.seen());
             if let Some(frame) = self.newest()? {
                 if !switched_now {
                     self.pointer_switched = None;
                 }
                 // A retained external result has its own immutable owner;
                 // the source cache must not force a third distinct CPU slot.
+                // WGC has no regions, so whether the previous picture was
+                // handed out changes nothing here.
+                let _ = release();
                 self.last = None;
                 let image = self.read(&frame);
                 let closed = frame.Close();
@@ -319,7 +382,7 @@ impl Grabber for WgcCapture {
                 // frame, closing the old pool and obtaining the next grant.
                 let image = match image {
                     Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                        return Ok(SourceFrame::Unchanged)
+                        return Ok(SourcePicture::Unchanged)
                     }
                     result => result?,
                 };
@@ -330,12 +393,12 @@ impl Grabber for WgcCapture {
                         // matches cannot spin this loop. The new generation
                         // makes the caller discard this call anyway.
                         self.restart(Some(content))?;
-                        return Ok(SourceFrame::Unchanged);
+                        return Ok(SourcePicture::Unchanged);
                     }
                 };
                 self.size = image.size();
                 self.last = Some(image.clone());
-                return Ok(SourceFrame::Frame(image));
+                return Ok(SourcePicture::Frame(image));
             }
             // No picture since the switch: the screen stands still and the
             // viewer keeps the pointer of before in its picture (or misses
@@ -347,19 +410,26 @@ impl Grabber for WgcCapture {
             {
                 self.pointer_switched = None;
                 self.restart(None)?;
-                return Ok(SourceFrame::Unchanged);
+                return Ok(SourcePicture::Unchanged);
             }
-            if let Some(last) = &self.last {
-                return Ok(if keyframe {
-                    SourceFrame::Frame(last.clone())
-                } else {
-                    SourceFrame::Unchanged
+            let now = Instant::now();
+            if now >= deadline {
+                return Ok(match &self.last {
+                    Some(last) if keyframe => SourcePicture::Frame(last.clone()),
+                    Some(_) => SourcePicture::Unchanged,
+                    None => SourcePicture::Paused(SessionState::Starting),
                 });
             }
-            if Instant::now() >= deadline {
-                return Ok(SourceFrame::Paused(SessionState::Starting));
+            // Until the compositor delivers (`FrameArrived`), the deadline,
+            // or the moment a pointer switch needs a new session.
+            let mut until = deadline;
+            if let (Some(at), Some(_)) = (self.pointer_switched, &self.last) {
+                until = until.min(at + POINTER_SWITCH_WAIT);
             }
-            std::thread::sleep(POLL);
+            match arrivals {
+                Some(arrivals) => arrivals.wait_after(seen, until.saturating_duration_since(now)),
+                None => return Ok(SourcePicture::Unchanged),
+            }
         }
     }
     fn set_capture_active(&mut self, active: bool) -> io::Result<()> {

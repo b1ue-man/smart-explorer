@@ -217,8 +217,20 @@ impl ViewerSink {
                 .map(|contract| contract.limits)
                 .or(self.local_limits)
                 .unwrap_or(crate::screen::core::frame_budget::FrameLimits::LEGACY);
+            // HEVC and AV1 groups open with their in-band parameter sets; they must name the
+            // picture the group announces before MediaCodec sees them (the app's
+            // `ScreenFrameLimits.checkAvc` does the same for H.264).
+            let video_sets_invalid = matches!(header.codec, CodecKind::Hevc | CodecKind::Av1)
+                && crate::screen::core::frame_size_caps::check_video_dimensions(
+                    header.codec,
+                    &record.payload,
+                    header.size,
+                    limits,
+                )
+                .is_err();
             if header.frame_contract.is_some_and(|c| c.validate().is_err())
                 || limits.check(header.size).is_err()
+                || video_sets_invalid
                 || self
                     .queue
                     .set_frame_limits(
@@ -236,7 +248,7 @@ impl ViewerSink {
             }
             let hybrid = header.frame_contract.is_some_and(|c| c.hybrid_regions);
             let tiles: Option<Box<dyn ScreenDecoder>> = match header.codec {
-                CodecKind::H264 => None,
+                CodecKind::H264 | CodecKind::Hevc | CodecKind::Av1 => None,
                 CodecKind::Tiles if hybrid => None,
                 CodecKind::Tiles => {
                     match TilesScreenDecoder::new_with_limits(header.size, limits) {

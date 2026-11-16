@@ -248,6 +248,12 @@ pub(crate) fn deliver(
         decoders: vec![CodecOffer::tiles()],
         display_size: None,
         max_fps: 1,
+        max_rate_bps: None,
+        codec: None,
+        decoder: None,
+        // Input only: no picture is decoded.
+        gop_continue: false,
+        gop_continue_decoders: Vec::new(),
     };
     let mut stream = screen_stream(target, request)?;
     let control = stream.control();

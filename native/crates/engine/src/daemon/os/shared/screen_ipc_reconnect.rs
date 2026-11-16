@@ -28,7 +28,9 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::mpsc;
 
-use crate::daemon::ipc_protocol::screen::{RelayEnd, RelayHello, RELAY_END, RELAY_HELLO};
+use crate::daemon::ipc_protocol::screen::{
+    RateCeilingState, RelayEnd, RelayHello, RELAY_END, RELAY_HELLO,
+};
 use crate::screen::core::frame_budget::FrameContract;
 use crate::screen::core::frame_memory::MemoryHold;
 use crate::screen::core::gop_stream::path_of;
@@ -85,6 +87,15 @@ pub(super) fn changed_session(frame: &HostFrame) -> bool {
             if report.state == SessionState::Ended
                 && report.reason.as_deref() == Some(EndReason::SessionChanged.key())
     )
+}
+
+/// The relay event of a `RATE_CEILING` (`RELAY_RATE_CEILING`); `None` for
+/// every other frame.
+pub(super) fn rate_state(frame: &ViewerFrame, host_takes_it: bool) -> Option<Vec<u8>> {
+    let ViewerFrame::RateCeiling(ceiling) = frame else {
+        return None;
+    };
+    wire::to_json(&RateCeilingState::of(*ceiling, host_takes_it)).ok()
 }
 
 /// What the reconnection does next.
@@ -324,6 +335,7 @@ pub(super) async fn relay_session(
     mut input: mpsc::Receiver<Option<ViewerFrame>>,
     metadata: bool,
     memory: Arc<Mutex<MemoryHold>>,
+    max_rate_bps: Option<u64>,
 ) {
     let mut session = match open(link, &request, metadata, Some(out.clone())).await {
         Ok(session) => session,
@@ -333,12 +345,24 @@ pub(super) async fn relay_session(
         }
     };
     hold(&memory, &session);
+    let mut modes = ModeMemory::default();
+    // „Höchste Datenrate“ (B-09): `RATE_CEILING` only to a host that
+    // announced `rate_ceiling_v1`; the viewer hears what became of it.
+    if max_rate_bps.is_some() && !metadata {
+        let frame = ViewerFrame::RateCeiling(max_rate_bps);
+        modes.note(&frame);
+        if session.rate_ceiling {
+            let _ = session.control.send(frame).await;
+        }
+    }
     let contract = session.hello.frame_contract;
     let path = path_of(&session.connection).0.key().to_string();
     let accepted = RelayHello::Accepted {
         hello: session.hello.clone(),
         path,
         local_limits: session.local_limits,
+        rate_ceiling: RateCeilingState::of(max_rate_bps, session.rate_ceiling),
+        set_decoders: session.set_decoders,
     };
     if let Ok(json) = wire::to_json(&accepted) {
         if out.send((RELAY_HELLO, json)).await.is_err() {
@@ -348,7 +372,6 @@ pub(super) async fn relay_session(
     }
     let mut plan: Option<Schedule> = None;
     let mut opened = Instant::now();
-    let mut modes = ModeMemory::default();
     loop {
         let (code, detail) = super::relay_loop(&mut session, &out, &mut input, &mut modes).await;
         session.close();
@@ -385,6 +408,14 @@ pub(super) async fn relay_session(
                 // overlay (P6), a wish of the viewer, not of the host.
                 for mode in modes.replay() {
                     let _ = next.control.send(ViewerFrame::SetMode(mode)).await;
+                }
+                if let Some(ceiling) = modes.rate_ceiling() {
+                    let _ = next.control.send(ViewerFrame::RateCeiling(ceiling)).await;
+                }
+                // The decoders of the viewer's last „Codec“/„Dekodierer“
+                // (P1): the new session opened with the first request's.
+                if let Some(set) = modes.decoders() {
+                    let _ = next.control.send(ViewerFrame::SetDecoders(set)).await;
                 }
                 if session
                     .cursor_wish

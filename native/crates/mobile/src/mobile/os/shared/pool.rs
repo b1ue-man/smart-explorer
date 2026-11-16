@@ -205,10 +205,14 @@ fn open(plan: Plan) -> Result<Opened, ApiError> {
             // Z-A1: the embedded worker's own Share host in this process,
             // without the loopback proxy back into the same process; jobs
             // still record the proxy's identity. Before the embedded worker
-            // serves, through the worker as before.
-            let (_, backend, _) = match crate::daemon::open_share_in_process(&target) {
+            // serves, through the worker as before. The app's file views
+            // browse with this handle: metadata presence of a person (E4);
+            // its jobs and background runs take a handle of their own
+            // (`daemon::job_handle`, `TransferWorker::job_sides`).
+            let origin = crate::share::OperationOrigin::User;
+            let (_, backend, _) = match crate::daemon::open_share_in_process(&target, origin) {
                 Some(opened) => opened,
-                None => crate::daemon::open_share_backend(target),
+                None => crate::daemon::open_share_backend_for(target, origin),
             }
             .map_err(ApiError::connection)?;
             (backend, path)
@@ -282,3 +286,7 @@ fn archive_stamp(archive: &str) -> Result<(u64, Option<SystemTime>), ApiError> {
     }
     Ok((metadata.len(), metadata.modified().ok()))
 }
+
+#[cfg(test)]
+#[path = "pool_origin_tests.rs"]
+mod origin_tests;

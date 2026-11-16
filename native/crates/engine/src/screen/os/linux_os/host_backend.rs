@@ -398,9 +398,21 @@ impl ScreenHostBackend for LinuxBackend {
         request: &crate::screen::core::host_stage::StageRequest,
         grant: crate::screen::core::capture_admission::CaptureGrant,
     ) -> io::Result<Box<dyn ScreenEncoder>> {
-        Ok(crate::screen::os::codec_inventory::registry()
-            .open_encoder_for_stage_admitted(request, &[], grant)?
-            .encoder)
+        Ok(self.open_stage_encoder(request, &[], grant)?.encoder)
+    }
+
+    fn open_stage_encoder(
+        &self,
+        request: &crate::screen::core::host_stage::StageRequest,
+        refused: &[String],
+        grant: crate::screen::core::capture_admission::CaptureGrant,
+    ) -> io::Result<crate::screen::core::codec_registry::OpenedEncoder> {
+        crate::screen::os::codec_inventory::registry()
+            .open_encoder_for_stage_admitted(request, refused, grant)
+    }
+
+    fn encoder_stages(&self, request: &crate::screen::core::host_stage::StageRequest) -> usize {
+        crate::screen::os::codec_inventory::registry().encoder_stage_count(request)
     }
 
     fn inject(&self, events: &[InputEvent]) -> Result<(), ControlBlock> {
@@ -425,7 +437,7 @@ impl ScreenHostBackend for LinuxBackend {
         match self.session() {
             SessionKind::X11 => super::x11_input::release(events),
             // Keep the actual portal session/device grant boundary unchanged.
-            SessionKind::Wayland => super::portal_input::inject(events),
+            SessionKind::Wayland => super::portal_input::release(events),
             SessionKind::None => Err(ControlBlock::UnsupportedOnHost),
         }
     }
@@ -467,30 +479,7 @@ fn x11_rb_monitors() -> io::Result<Vec<MonitorInfo>> {
 #[path = "linux_tests.rs"]
 mod tests;
 
-/// Keep the host gate's admitted member geometry through the final XTest
-/// boundary. A movement/resize after that gate is denied by inject_bound.
-fn inject_x11_family(
-    member: &crate::remote_window::CaptureMember,
-    events: &[InputEvent],
-    inject: impl FnOnce(&SourceId, super::x11_input::Area, &[InputEvent]) -> Result<(), ControlBlock>,
-) -> Result<(), ControlBlock> {
-    if !member.input || !member.geometry.valid() {
-        return Err(ControlBlock::ControlUnavailable);
-    }
-    let window = u32::try_from(member.binding.native.0)
-        .ok()
-        .filter(|id| *id > 1)
-        .ok_or(ControlBlock::ControlUnavailable)?;
-    let area = super::x11_input::Area {
-        x: member.geometry.x,
-        y: member.geometry.y,
-        width: i32::try_from(member.geometry.width)
-            .map_err(|_| ControlBlock::ControlUnavailable)?,
-        height: i32::try_from(member.geometry.height)
-            .map_err(|_| ControlBlock::ControlUnavailable)?,
-    };
-    inject(&SourceId::Window(window.to_string()), area, events)
-}
+use super::x11_input::inject_x11_family;
 
 #[cfg(test)]
 #[path = "host_backend_family_task_tests.rs"]

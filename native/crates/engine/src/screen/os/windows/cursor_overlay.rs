@@ -12,7 +12,7 @@
 //! in every picture and this host never sends it beside.
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use windows::Graphics::Capture::GraphicsCaptureSession;
@@ -323,6 +323,21 @@ fn start_sampler() {
     if spawned.is_err() {
         SAMPLING.store(false, Ordering::Release);
     }
+}
+
+/// Hands the overlay's switch to a Desktop Duplication (plan 2026-11-14
+/// bildkette B-13). The duplication never draws the pointer itself: it
+/// publishes shape and position from its frames (`dxgi_pointer.rs`) and
+/// blends the pointer into its pictures while the overlay is off. A switch
+/// sets `switched`, so the duplication delivers a picture in the new state;
+/// the `GetCursorInfo` sampler is not needed.
+pub(super) fn attach_duplication(switched: Arc<AtomicBool>) {
+    let overlay = worker();
+    let flag = switched.clone();
+    overlay.set_hook(Box::new(move |_on| flag.store(true, Ordering::Release)));
+    overlay.set_supported();
+    // No picture was delivered yet: nothing switched needs a new one.
+    switched.store(false, Ordering::Release);
 }
 
 /// Sets a new capture session's pointer capture to the overlay's state and

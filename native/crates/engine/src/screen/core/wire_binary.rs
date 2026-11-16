@@ -5,8 +5,17 @@
 //! frame_id u64, capture_ts_us u64, flags u8` and `len` payload bytes, all
 //! big-endian. A record carries at most 16 MiB (`MAX_FRAME` of the share
 //! framing), a record of the tile codec at most 4 MiB. Every stream starts
-//! with a key frame; frame ids rise across the session; the records of one
+//! with a key frame, or with a continuation (`FLAG_CONTINUE`, B-36) for a
+//! viewer that announced it; frame ids rise across the session; the records of one
 //! tile frame share its id and all but the last carry `FLAG_MORE`.
+//!
+//! Codec codes: 1 H.264, 2 tiles, 3 AV1, 4 HEVC (`CodecKind::wire_code`).
+//! A host sends 3 and 4 only to a viewer that offered them in its
+//! `decoders_v2` (plan 2026-11-14 „Bildkette“ B-31), so a viewer of
+//! v0.5.196 never sees a code it does not know. An HEVC picture is an
+//! Annex B access unit (ITU-T H.265 Annex B), an AV1 picture a temporal
+//! unit of OBUs in the low-overhead format (AV1 specification 5.2, the
+//! format of the ISOBMFF and WebRTC payloads), one record per picture.
 use std::io;
 
 use serde::{Deserialize, Serialize};
@@ -27,7 +36,13 @@ pub const MAX_RECORD_BYTES: usize = 16 * 1024 * 1024;
 pub const FLAG_KEYFRAME: u8 = 0x01;
 /// More records of the same tile frame follow.
 pub const FLAG_MORE: u8 = 0x02;
-const KNOWN_FLAGS: u8 = FLAG_KEYFRAME | FLAG_MORE;
+/// The first frame of a video stream that continues the previous stream's
+/// decoder: it references only pictures the viewer acknowledged (plan
+/// 2026-11-14 „Bildkette“ B-36). A host sets it only for a viewer that
+/// announced `gop_continue` (`gop_continue.rs`); a viewer of v0.5.196
+/// refuses unknown flags and therefore never gets it.
+pub const FLAG_CONTINUE: u8 = 0x04;
+pub(crate) const KNOWN_FLAGS: u8 = FLAG_KEYFRAME | FLAG_MORE | FLAG_CONTINUE;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -67,7 +82,8 @@ pub struct GopHeader {
     pub family_layout_revision: Option<u64>,
     pub kind: StreamKind,
     pub codec: CodecKind,
-    /// Set exactly for H.264.
+    /// Always set for H.264, never for tiles; for HEVC and AV1 absent
+    /// (4:2:0) or `high` (4:4:4, `CodecKind::profile_valid`).
     pub profile: Option<H264Profile>,
     pub size: FrameSize,
 }
@@ -88,9 +104,10 @@ impl GopHeader {
         } else {
             self.size.check_frame()?;
         }
-        match (self.codec, self.profile) {
-            (CodecKind::H264, Some(_)) | (CodecKind::Tiles, None) => Ok(()),
-            _ => Err(invalid("picture stream profile does not match its codec")),
+        if self.codec.profile_valid(self.profile) {
+            Ok(())
+        } else {
+            Err(invalid("picture stream profile does not match its codec"))
         }
     }
 
@@ -158,10 +175,7 @@ impl GopHeader {
             {
                 return Err(invalid("invalid v2 picture dimensions"));
             }
-            if !matches!(
-                (codec, profile),
-                (CodecKind::H264, Some(_)) | (CodecKind::Tiles, None)
-            ) {
+            if !codec.profile_valid(profile) {
                 return Err(invalid("picture stream profile does not match its codec"));
             }
         }
@@ -174,7 +188,7 @@ impl GopHeader {
             MAX_RECORD_BYTES
         } else {
             match self.codec {
-                CodecKind::H264 => MAX_RECORD_BYTES,
+                CodecKind::H264 | CodecKind::Hevc | CodecKind::Av1 => MAX_RECORD_BYTES,
                 CodecKind::Tiles => MAX_TILES_RECORD_BYTES,
             }
         };
@@ -203,11 +217,18 @@ impl FrameRecord {
     pub fn has_more(&self) -> bool {
         self.flags & FLAG_MORE != 0
     }
+
+    /// The first frame of a stream that continues the previous decoder (B-36).
+    pub fn is_continuation(&self) -> bool {
+        self.flags & FLAG_CONTINUE != 0
+    }
 }
 
 /// Order rules of the records of one picture stream: the first frame is a
-/// key frame; frame ids rise; the records of a tile frame keep its id and
-/// flags, and only tile frames have more than one record.
+/// key frame, or for a video codec a continuation (`FLAG_CONTINUE`, never
+/// together with `FLAG_KEYFRAME` and never later in the stream); frame ids
+/// rise; the records of a tile frame keep its id and flags, and only tile
+/// frames have more than one record.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RecordSequence {
     last_frame: Option<u64>,
@@ -234,7 +255,13 @@ impl RecordSequence {
                 if !rises {
                     return Err(invalid("frame ids of a picture stream must rise"));
                 }
-                if self.last_frame.is_none() && !record.is_keyframe() {
+                let first = self.last_frame.is_none();
+                if record.is_continuation()
+                    && (!first || record.is_keyframe() || !header.codec.is_video())
+                {
+                    return Err(invalid("only a video stream starts with a continuation"));
+                }
+                if first && !record.is_keyframe() && !record.is_continuation() {
                     return Err(invalid("a picture stream must start with a key frame"));
                 }
                 self.last_frame = Some(record.frame_id);
@@ -309,14 +336,30 @@ pub async fn write_frame_record<W: AsyncWrite + Unpin>(
             "frame record exceeds its limit or has unknown flags",
         ));
     }
-    let mut head = [0u8; RECORD_HEADER_BYTES];
-    head[..4].copy_from_slice(&(record.payload.len() as u32).to_be_bytes());
-    head[4..12].copy_from_slice(&record.frame_id.to_be_bytes());
-    head[12..20].copy_from_slice(&record.capture_ts_us.to_be_bytes());
-    head[20] = record.flags;
+    let head = record_head(
+        record.payload.len(),
+        record.frame_id,
+        record.capture_ts_us,
+        record.flags,
+    );
     writer.write_all(&head).await?;
     writer.write_all(&record.payload).await?;
     writer.flush().await
+}
+
+/// The header of one record whose payload has `length` bytes.
+pub fn record_head(
+    length: usize,
+    frame_id: u64,
+    capture_ts_us: u64,
+    flags: u8,
+) -> [u8; RECORD_HEADER_BYTES] {
+    let mut head = [0u8; RECORD_HEADER_BYTES];
+    head[..4].copy_from_slice(&(length as u32).to_be_bytes());
+    head[4..12].copy_from_slice(&frame_id.to_be_bytes());
+    head[12..20].copy_from_slice(&capture_ts_us.to_be_bytes());
+    head[20] = flags;
+    head
 }
 
 /// Reads the next record; `None` when the stream ended cleanly between two

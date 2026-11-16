@@ -190,10 +190,19 @@ impl ScreenHostBackend for WorkerBackend {
         request: &crate::screen::core::host_stage::StageRequest,
         grant: crate::screen::core::capture_admission::CaptureGrant,
     ) -> io::Result<Box<dyn ScreenEncoder>> {
-        Ok(self
-            .codecs()
-            .open_encoder_for_stage_admitted(request, &[], grant)?
-            .encoder)
+        Ok(self.open_stage_encoder(request, &[], grant)?.encoder)
+    }
+    fn open_stage_encoder(
+        &self,
+        request: &crate::screen::core::host_stage::StageRequest,
+        refused: &[String],
+        grant: crate::screen::core::capture_admission::CaptureGrant,
+    ) -> io::Result<crate::screen::core::codec_registry::OpenedEncoder> {
+        self.codecs()
+            .open_encoder_for_stage_admitted(request, refused, grant)
+    }
+    fn encoder_stages(&self, request: &crate::screen::core::host_stage::StageRequest) -> usize {
+        self.codecs().encoder_stage_count(request)
     }
     fn memory_facts(&self) -> Option<crate::screen::core::frame_memory::MemoryFacts> {
         self.inner.memory_facts()

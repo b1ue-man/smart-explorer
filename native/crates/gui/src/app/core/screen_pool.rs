@@ -12,6 +12,7 @@ use super::screen_session::{Backend, ViewerSession};
 use super::screen_target::ScreenTarget;
 use crate::screen::core::negotiate::CodecOffer;
 use crate::screen::core::pixel_convert::FrameSize;
+use crate::screen::core::set_decoders::SetDecoders;
 use crate::screen::core::window_list::SourceId;
 use crate::screen::core::wire_control::{
     ControlAction, ControlRequest, SetMode, StreamMode, ViewerFrame,
@@ -27,8 +28,12 @@ pub const PREVIEW_STEP: u32 = 160;
 pub const PREVIEW_MIN_EDGE: u32 = 320;
 /// „Aktualisierung“ of the group view at the start, in ms.
 pub const DEFAULT_PREVIEW_INTERVAL_MS: u64 = 1000;
-/// Frames per second of the full view.
-pub const FULL_FPS: u16 = 60;
+
+/// Frames per second of the full view: the refresh rate of the monitor the
+/// viewer's window is on (plan 2026-11-14 „Bildkette“ B-01).
+pub fn full_fps() -> u16 {
+    super::screen_refresh::wanted_fps()
+}
 
 /// The long edge of a preview for a tile `width_points` wide.
 pub fn preview_edge(width_points: f32, pixels_per_point: f32) -> u32 {
@@ -55,7 +60,7 @@ pub fn preview_gap_ms(interval_ms: u64) -> u64 {
 }
 
 pub fn preview_request(offers: &[CodecOffer], edge: u32, interval_ms: u64) -> StreamRequest {
-    StreamRequest {
+    announced(StreamRequest {
         expected_node: None,
         mode: SessionMode::Preview,
         source: None,
@@ -63,7 +68,29 @@ pub fn preview_request(offers: &[CodecOffer], edge: u32, interval_ms: u64) -> St
         display_size: Some(FrameSize::new(edge, edge)),
         max_fps: preview_fps(interval_ms),
         frame_capabilities: None,
-    }
+        max_rate_bps: super::screen_prefs::max_rate_bps(),
+        codec: Some(super::screen_prefs::codec_setting()),
+        decoder: Some(super::screen_prefs::decoder_choice()),
+        gop_continue: false,
+        gop_continue_decoders: Vec::new(),
+    })
+}
+
+/// B-36: `gop_continue` only when every decoder that may open for the
+/// request's offers keeps its references, and per codec the offers whose
+/// decoders do (`screen_decode_local`); a preview raised to the full view
+/// keeps its session, so both ask.
+fn announced(mut request: StreamRequest) -> StreamRequest {
+    request.gop_continue = super::screen_decode_local::announces(&request);
+    request.gop_continue_decoders = super::screen_decode_local::continuing(&request);
+    request
+}
+
+/// `SET_DECODERS` with the viewer's current „Codec“ and „Dekodierer“ for
+/// `offers` (P1): the decoders and the announcement a new session's hello
+/// would carry.
+pub fn decoders_frame(offers: &[CodecOffer]) -> SetDecoders {
+    preview_request(offers, PREVIEW_MIN_EDGE, DEFAULT_PREVIEW_INTERVAL_MS).decoders_frame()
 }
 
 pub fn full_request(
@@ -72,7 +99,7 @@ pub fn full_request(
     display: FrameSize,
     control: bool,
 ) -> StreamRequest {
-    StreamRequest {
+    announced(StreamRequest {
         expected_node: None,
         mode: if control {
             SessionMode::Control
@@ -82,26 +109,29 @@ pub fn full_request(
         source,
         decoders: offers.to_vec(),
         display_size: Some(display),
-        max_fps: FULL_FPS,
+        max_fps: full_fps(),
         frame_capabilities: None,
-    }
+        max_rate_bps: super::screen_prefs::max_rate_bps(),
+        // „Codec“ and „Dekodierer“ (plan 2026-11-14 „Bildkette“ 4.10, BK6).
+        codec: Some(super::screen_prefs::codec_setting()),
+        decoder: Some(super::screen_prefs::decoder_choice()),
+        gop_continue: false,
+        gop_continue_decoders: Vec::new(),
+    })
 }
 
 // The production opener binds capabilities to its concrete renderer and lease.
 
 /// `SET_MODE` to the full view with the viewer's settings.
-pub fn full_set_mode(
-    source: Option<SourceId>,
-    display: FrameSize,
-    prefs: &ViewerPrefs,
-) -> SetMode {
+pub fn full_set_mode(source: Option<SourceId>, display: FrameSize, prefs: &ViewerPrefs) -> SetMode {
     SetMode {
         mode: StreamMode::Full,
         source,
         size: Some(display),
-        fps: Some(FULL_FPS),
+        fps: Some(full_fps()),
         sharpness: prefs.sharpness,
-        lossless: prefs.lossless,
+        // „Codec: Verlustfrei“ keeps the meaning of the old switch (4.10).
+        lossless: prefs.codec_setting().lossless(),
     }
 }
 
@@ -179,11 +209,7 @@ pub fn to_view(
 
 /// View → group: the full session stays connected as the preview of its
 /// tile when the host allows viewing without asking; otherwise it ends.
-pub fn to_tile(
-    mut session: ViewerSession,
-    edge: u32,
-    interval_ms: u64,
-) -> Option<ViewerSession> {
+pub fn to_tile(mut session: ViewerSession, edge: u32, interval_ms: u64) -> Option<ViewerSession> {
     if !view_allowed(&session) {
         session.close();
         return None;

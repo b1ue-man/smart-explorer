@@ -236,7 +236,7 @@ pub fn validate_encoded_budget(
     });
     if records.len() > budget.records
         || total.is_none_or(|n| n > budget.encoded_bytes)
-        || ((contract.hybrid_regions || codec == super::super::negotiate::CodecKind::H264)
+        || ((contract.hybrid_regions || codec.is_video())
             && records.iter().any(|r| r.len() > budget.record_bytes))
     {
         return Err(invalid("encoder exceeds negotiated frame-buffer budget"));

@@ -4,6 +4,7 @@ import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaCodecList
 import android.media.MediaFormat
+import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.view.Surface
@@ -24,18 +25,21 @@ internal data class EncoderConfig(
     val height: Int,
     val fps: Int,
     val bitrate: Int,
-    /** `cb` or `high`. */
+    /** `cb` or `high` for H.264, `main` for HEVC and AV1. */
     val profile: String,
     val hybrid: Boolean = false,
     val codec: String = "h264",
 )
 
 /**
- * H.264 of this phone as screen host (C2 Android): the MediaCodec encoder with an input surface
+ * H.264, HEVC and AV1 of this phone as screen host (C2 Android, B-26): the MediaCodec encoder with an input surface
  * that the virtual display of MediaProjection or the test picture draws into. Hardware encoders
- * first (`isHardwareAccelerated`), then the system's software encoder. Every key frame carries
- * SPS and PPS in front, so each picture group starts decodable; key frames come when the core asks
- * (`requestKeyFrame`) and at most every [KEYFRAME_INTERVAL_S]. Nothing of a picture is logged.
+ * first (`isHardwareAccelerated`), then the system's software encoder (H.264 only; HEVC and AV1 run on hardware
+ * encoders, [ScreenEncoderCodecs]). Every key frame carries
+ * its parameter sets in front (H.264 SPS and PPS, HEVC VPS, SPS and PPS, AV1 the sequence header), so each picture group starts decodable; key frames come when the core asks
+ * (`requestKeyFrame`) and at most every [KEYFRAME_INTERVAL_S] in today's attempts; the MODERN attempt of B-26 sends none after
+ * the first one (negative `KEY_I_FRAME_INTERVAL`) or refreshes intra macroblocks (`KEY_INTRA_REFRESH_PERIOD`).
+ * Nothing of a picture is logged.
  */
 internal class ScreenEncoder(private val config: EncoderConfig, private val budget: ScreenCaptureBudget, private val sink: PictureSink) {
     // All allocating bookkeeping precedes the first platform/native resource.
@@ -48,8 +52,11 @@ internal class ScreenEncoder(private val config: EncoderConfig, private val budg
     val name: String
     val hardware: Boolean
 
+    private val codecLock = Any()
     @Volatile
     private var running = true
+    @Volatile
+    private var released = false
     @Volatile private var failureHandler: ((String) -> Unit)? = null
     @Volatile private var lastFailure: String? = null
     fun setFailureHandler(handler: (String) -> Unit) { failureHandler=handler; lastFailure?.let(handler) }
@@ -103,28 +110,43 @@ internal class ScreenEncoder(private val config: EncoderConfig, private val budg
     fun setBitrate(bps: Int) = parameters { putInt(MediaCodec.PARAMETER_KEY_VIDEO_BITRATE, bps.coerceIn(bitrateRange.lower, bitrateRange.upper)) }
 
     private fun parameters(fill: Bundle.() -> Unit) {
-        try {
-            codec.setParameters(Bundle().apply(fill))
-        } catch (e: RuntimeException) {
-            Log.w(TAG, "Kodiererparameter nicht gesetzt: ${e.message}")
+        synchronized(codecLock) {
+            if (!running || released) return
+            try {
+                codec.setParameters(Bundle().apply(fill))
+            } catch (e: RuntimeException) {
+                Log.w(TAG, "Kodiererparameter nicht gesetzt: ${e.message}")
+            }
         }
     }
 
     fun release() {
         surfaceOwners.beginRelease()
         running = false
-        try {
-            codec.signalEndOfInputStream()
-        } catch (e: IllegalStateException) {
-            // Already stopped.
+        if (!config.hybrid) {
+            synchronized(codecLock) {
+                if (!released) {
+                    try {
+                        codec.signalEndOfInputStream()
+                    } catch (_: IllegalStateException) {
+                        // Already stopped.
+                    }
+                }
+            }
         }
-        if(Thread.currentThread()!==drain) drain.join(DRAIN_JOIN_MS)
-        try {
-            codec.stop()
-        } catch (e: IllegalStateException) {
-            // Already stopped.
+        if (Thread.currentThread() !== drain) drain.join(DRAIN_JOIN_MS)
+        if (drain.isAlive) {
+            synchronized(codecLock) {
+                if (!released) {
+                    try {
+                        codec.stop()
+                    } catch (_: IllegalStateException) {
+                        // Already stopped.
+                    }
+                }
+            }
+            if (Thread.currentThread() !== drain) drain.join(DRAIN_JOIN_MS)
         }
-        if(Thread.currentThread()!==drain) drain.join(DRAIN_JOIN_MS)
         check(!drain.isAlive) {"MediaCodec-Ausgabethread hat nicht angehalten; Bildbesitz bleibt bis Threadende bestehen"}
     }
 
@@ -132,7 +154,14 @@ internal class ScreenEncoder(private val config: EncoderConfig, private val budg
         // A Codec error can finish this drain before the source is stopped.
         // Keep every platform resource and its claim until its real worker ends.
         surfaceOwners.awaitEnded()
-        try {codec.release()} finally {
+        try {
+            synchronized(codecLock) {
+                if (!released) {
+                    released = true
+                    codec.release()
+                }
+            }
+        } finally {
             inputSurface?.release()
             pending.clear()
             lastPixels?.close();lastPixels=null
@@ -153,13 +182,16 @@ internal class ScreenEncoder(private val config: EncoderConfig, private val budg
             if (index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
                 val output=codec.outputFormat
                 if(config.hybrid) ScreenCodecLatency.encoderFormat(name,output)
+                // H.264: csd-0 = SPS and csd-1 = PPS; HEVC: csd-0 = VPS, SPS and PPS; AV1: csd-0 = av1C.
                 val sps=output.getByteBuffer("csd-0")
-                val pps=output.getByteBuffer("csd-1")
+                val pps=if(config.codec==ScreenEncoderCodecs.H264) output.getByteBuffer("csd-1") else null
                 if (sps != null) {
-                    val a=sps.duplicate(); val b=pps?.duplicate()
+                    val a=if(config.codec==ScreenEncoderCodecs.AV1) ScreenEncoderCodecs.av1ConfigObus(sps) else sps.duplicate()
+                    val b=pps?.duplicate()
                     val configBytes=Math.addExact(a.remaining(),b?.remaining() ?: 0)
                     require(configBytes<=MAX_ACCESS_UNIT) {"MediaCodec-Parameter überschreiten das AU-Budget"}
-                    replaceHeaders(configBytes) {target -> target.put(a);if(b!=null) target.put(b)}
+                    // An AV1 record without configuration OBUs stores nothing: the key frame carries its own sequence header.
+                    if(configBytes>0 || config.codec!=ScreenEncoderCodecs.AV1) replaceHeaders(configBytes) {target -> target.put(a);if(b!=null) target.put(b)}
                 }
             }
             if (index < 0) continue
@@ -180,7 +212,9 @@ internal class ScreenEncoder(private val config: EncoderConfig, private val budg
         if (info.size <= 0) return
         require(info.offset >= 0 && info.size <= MAX_ACCESS_UNIT && info.offset.toLong() + info.size <= buffer.capacity()) { "Ungültiger MediaCodec-Ausgabebereich" }
         if (info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0) {
-            replaceHeaders(info.size) {target -> target.put(buffer.duplicate().apply {position(info.offset);limit(info.offset+info.size)})}
+            val whole=buffer.duplicate().apply {position(info.offset);limit(info.offset+info.size)}
+            val headers=if(config.codec==ScreenEncoderCodecs.AV1) ScreenEncoderCodecs.av1ConfigObus(whole) else whole
+            if(headers.hasRemaining() || config.codec!=ScreenEncoderCodecs.AV1) replaceHeaders(headers.remaining()) {target -> target.put(headers)}
             return
         }
         val complete=accessUnits.complete(buffer,info) ?: return
@@ -190,32 +224,36 @@ internal class ScreenEncoder(private val config: EncoderConfig, private val budg
         val key = info.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME != 0
         if(key) {
             val unit=buffer.duplicate().apply {position(info.offset);limit(info.offset+info.size)}.slice()
-            require(nal(unit,5)!=null) { "Schlüsselbild enthält kein IDR" }
+            require(ScreenEncoderCodecs.isKeyUnit(config.codec,unit)) { "Schlüsselbild enthält kein IDR" }
             if(codecConfig==null) validateHeaders(unit)
         }
         if(config.hybrid) admission.output(info.presentationTimeUs,pending.peek(info.presentationTimeUs)?.frameId)
         if (waitingKeyframe && !key) {pending.take(info.presentationTimeUs)?.close();throw IllegalStateException("MediaCodec lieferte kein IDR für die erste Capturereferenz")}
         if (key) { waitingKeyframe = false; forceKeyframe=false }
-        val config = codecConfig
-        if (!key || config == null) {
+        val stored = codecConfig
+        val unit = buffer.duplicate().apply {limit(info.offset+info.size);position(info.offset)}
+        val at = if (!key || stored == null) null else ScreenEncoderCodecs.configOffset(this.config.codec,unit)
+        if (at == null || stored == null) {
             push(buffer, info.offset, info.size, info.presentationTimeUs, key)
             return
         }
-        val total = Math.addExact(config.capacity, info.size)
-        require(total <= MAX_ACCESS_UNIT) { "H.264-Referenz größer als 16 MiB" }
+        val total = Math.addExact(stored.capacity, info.size)
+        require(total <= MAX_ACCESS_UNIT) { "Schlüsselbild mit Parametern größer als 16 MiB" }
         val output=joined?.takeIf {it.capacity>=total} ?: budget.buffer(ScreenCaptureBudget.CODEC_OUTPUT,total).also {
             joined?.close();joined=it
         }
         output.access {target ->
-            config.access {target.put(it)}
-            target.put(buffer.duplicate().apply {limit(info.offset+info.size);position(info.offset)})
+            // The parameter sets go in front of the unit (AV1: behind its temporal delimiter).
+            target.put(unit.duplicate().apply {limit(position()+at)})
+            stored.access {target.put(it)}
+            target.put(unit.duplicate().apply {position(position()+at)})
             push(target,0,total,info.presentationTimeUs,true)
         }
     }
 
     private fun replaceHeaders(length: Int, fill:(ByteBuffer)->Unit) {
         val next=budget.buffer(ScreenCaptureBudget.CODEC_OUTPUT,length)
-        try {next.access {target -> fill(target);target.flip();validateHeaders(target)}}
+        try {next.access {target -> fill(target);target.flip();validateHeaders(target, spliceable = true)}}
         catch(error: Throwable) {next.close();throw error}
         val previous=codecConfig;codecConfig=next;previous?.close()
     }
@@ -230,7 +268,15 @@ internal class ScreenEncoder(private val config: EncoderConfig, private val budg
         return null
     }
 
-    private fun validateHeaders(bytes: ByteBuffer) {
+    private fun validateHeaders(bytes: ByteBuffer, spliceable: Boolean = false) {
+        if (config.codec != ScreenEncoderCodecs.H264) {
+            // HEVC: VPS, SPS and PPS; AV1: the sequence header. The native viewer checks their dimensions (`check_video_dimensions`).
+            require(ScreenEncoderCodecs.hasParameterSets(config.codec, bytes, spliceable)) {
+                "${config.codec}-Strom ohne vollständige Parametersätze"
+            }
+            Log.i(TAG, "${config.codec}-Parametersätze erkannt (${bytes.limit()} Bytes)")
+            return
+        }
         // This is the local capture encoder; accepted viewer limits are checked by the native producer.
         budget.claim(ScreenCaptureBudget.METADATA,131_080).use {
             ScreenFrameLimits.checkAvc(bytes,0,bytes.limit(),config.width,config.height,null)
@@ -245,7 +291,7 @@ internal class ScreenEncoder(private val config: EncoderConfig, private val budg
 
     /** One request, one encoder input and the exact RGBA reference of that input. */
     @Synchronized fun queueRgba(rgba: ScreenCaptureBuffer, frameId: Long): Boolean {
-        if (!config.hybrid || !running || pending.isPending()) return false
+        if (!config.hybrid || !running || released || pending.isPending()) return false
         require(rgba.capacity.toLong()==config.width.toLong()*config.height*4 && rgba.budget===budget)
         if(!forceKeyframe && lastPixels?.samePixels(rgba)==true) {
             val pts=nextCapturePts()
@@ -256,7 +302,7 @@ internal class ScreenEncoder(private val config: EncoderConfig, private val budg
             return true
         }
         var index=-1
-        repeat(100) { if(index<0 && running) index=codec.dequeueInputBuffer(10_000) }
+        repeat(100) { if(index<0 && running && !released) index=codec.dequeueInputBuffer(10_000) }
         if(index<0) return false
         val image=codec.getInputImage(index) ?: error("Kodierer bietet kein beschreibbares YUV-Bild")
         // MediaCodec's Image.getPlanes() copies its array on every call: read it once.
@@ -309,19 +355,21 @@ internal class ScreenEncoder(private val config: EncoderConfig, private val budg
         private const val DRAIN_JOIN_MS = 1_000L
         private const val REPEAT_AFTER_US = 500_000L
 
-        private fun profileOf(key: String): Int = when (key) {
-            "cb" -> MediaCodecInfo.CodecProfileLevel.AVCProfileConstrainedBaseline
-            else -> MediaCodecInfo.CodecProfileLevel.AVCProfileHigh
+        /** The encoders of [codec], hardware first; HEVC and AV1 only the hardware ones (`isHardwareAccelerated`, API 29). */
+        private fun encoders(codec: String = ScreenEncoderCodecs.H264): List<MediaCodecInfo> {
+            val mime = ScreenEncoderCodecs.mime(codec) ?: return emptyList()
+            return MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos
+                .filter { it.isEncoder && mime in it.supportedTypes.map(String::lowercase) && !it.isAlias }
+                .filter { it.isHardwareAccelerated || !ScreenEncoderCodecs.hardwareOnly(codec) }
+                .sortedByDescending { it.isHardwareAccelerated }
         }
 
-        private fun encoders(): List<MediaCodecInfo> = MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos
-            .filter { it.isEncoder && MediaFormat.MIMETYPE_VIDEO_AVC in it.supportedTypes.map(String::lowercase) && !it.isAlias }
-            .sortedByDescending { it.isHardwareAccelerated }
-
-        private fun supports(info: MediaCodecInfo, profile: String): Boolean {
-            val levels = info.getCapabilitiesForType(MediaFormat.MIMETYPE_VIDEO_AVC).profileLevels
-            return when (profile) {
-                "cb" -> levels.any {
+        private fun supports(info: MediaCodecInfo, profile: String, codec: String = ScreenEncoderCodecs.H264): Boolean {
+            val levels = info.getCapabilitiesForType(ScreenEncoderCodecs.mime(codec) ?: return false).profileLevels
+            return when {
+                codec != ScreenEncoderCodecs.H264 ->
+                    ScreenEncoderCodecs.profile(codec, profile)?.let { wanted -> levels.any { it.profile == wanted } } == true
+                profile == "cb" -> levels.any {
                     it.profile == MediaCodecInfo.CodecProfileLevel.AVCProfileConstrainedBaseline ||
                         it.profile == MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline
                 }
@@ -335,9 +383,15 @@ internal class ScreenEncoder(private val config: EncoderConfig, private val budg
         private fun open(config: EncoderConfig, construction: ScreenCaptureConstruction<MediaCodec,Surface>): Triple<MediaCodec, MediaCodecInfo, android.util.Range<Int>> {
             ScreenFrameLimits.checkedBytes(config.width,config.height)
             require(config.fps in 1..240)
+            val codecName = config.codec
+            val mime = ScreenEncoderCodecs.mime(codecName) ?: throw IllegalStateException("Unbekannter Codec: $codecName")
+            val wantedProfile = ScreenEncoderCodecs.profile(codecName, config.profile)
+                ?: throw IllegalStateException("Profil ${config.profile} gibt es für $codecName nicht")
+            // Raw RGBA beside the pictures is an H.264 pair; the core sends no hybrid for HEVC and AV1.
+            check(!config.hybrid || codecName == ScreenEncoderCodecs.H264) { "Hybridbilder gibt es nur mit H.264" }
             val refusals = mutableListOf<String>()
-            for (info in encoders().filter { supports(it, config.profile) }) {
-                val caps = info.getCapabilitiesForType(MediaFormat.MIMETYPE_VIDEO_AVC)
+            for (info in encoders(codecName).filter { supports(it, config.profile, codecName) }) {
+                val caps = info.getCapabilitiesForType(mime)
                 val video = caps.videoCapabilities ?: continue
                 val color=if(config.hybrid) MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible else MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface
                 if(!caps.colorFormats.contains(color)) { refusals += "${info.name}: Eingabefarbformat nicht unterstützt"; continue }
@@ -345,39 +399,57 @@ internal class ScreenEncoder(private val config: EncoderConfig, private val budg
                     refusals += "${info.name}: ${config.width}x${config.height}@${config.fps} nicht unterstützt"
                     continue
                 }
-                val requestedProfile = profileOf(config.profile)
-                val profile = if(config.profile=="cb" && caps.profileLevels.none {it.profile==requestedProfile})
+                val requestedProfile = wantedProfile
+                val profile = if(codecName==ScreenEncoderCodecs.H264 && config.profile=="cb" && caps.profileLevels.none {it.profile==requestedProfile})
                     MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline else requestedProfile
-                val bitrate=config.bitrate.coerceIn(video.bitrateRange.lower,video.bitrateRange.upper)
-                val supportedLevel = caps.profileLevels.filter { it.profile == profile }.sortedBy { it.level }.firstOrNull {
-                    val level=MediaCodecInfo.CodecCapabilities.createFromProfileLevel(MediaFormat.MIMETYPE_VIDEO_AVC, profile, it.level)?.videoCapabilities
-                    level != null && level.areSizeAndRateSupported(config.width,config.height,config.fps.toDouble()) && level.bitrateRange.contains(bitrate)
-                }?.level
-                if (supportedLevel == null) { refusals += "${info.name}: kein belegtes Profil/Level für Größe und Rate"; continue }
-                val level = supportedLevel
-                val levelRange=MediaCodecInfo.CodecCapabilities.createFromProfileLevel(MediaFormat.MIMETYPE_VIDEO_AVC,profile,level)?.videoCapabilities?.bitrateRange ?: continue
-                val acceptedBitrate=android.util.Range(maxOf(video.bitrateRange.lower,levelRange.lower),minOf(video.bitrateRange.upper,levelRange.upper))
+                val wantedBitrate=config.bitrate.coerceIn(video.bitrateRange.lower,video.bitrateRange.upper)
+                // The levels of the profile that carry size and rate, lowest first, each with its bit rate range.
+                val levels = caps.profileLevels.filter { it.profile == profile }.sortedBy { it.level }.mapNotNull { entry ->
+                    val limits=MediaCodecInfo.CodecCapabilities.createFromProfileLevel(mime, profile, entry.level)?.videoCapabilities
+                    if(limits != null && limits.areSizeAndRateSupported(config.width,config.height,config.fps.toDouble())) entry.level to limits.bitrateRange else null
+                }
+                // The lowest level whose range holds the wanted bit rate. A bit rate above every level runs at the limit of the
+                // highest level instead of refusing the encoder: the core's ceiling for HEVC and AV1 is the highest level of the
+                // standard (the app reports no rate), so a new encoder epoch may ask for more than this encoder's level carries.
+                val chosen = levels.firstOrNull { it.second.contains(wantedBitrate) } ?: levels.lastOrNull()
+                if (chosen == null) { refusals += "${info.name}: kein belegtes Profil/Level für Größe und Rate"; continue }
+                val level = chosen.first
+                val levelRange = chosen.second
+                val lowestBitrate = maxOf(video.bitrateRange.lower,levelRange.lower)
+                val highestBitrate = minOf(video.bitrateRange.upper,levelRange.upper)
+                if (lowestBitrate > highestBitrate) { refusals += "${info.name}: Datenratenbereiche von Kodierer und Level überschneiden sich nicht"; continue }
+                val acceptedBitrate=android.util.Range(lowestBitrate,highestBitrate)
+                val bitrate=wantedBitrate.coerceIn(lowestBitrate,highestBitrate)
                 val mode = listOf(MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR, MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR)
                     .firstOrNull { caps.encoderCapabilities.isBitrateModeSupported(it) }
 
                 if (mode == null) { refusals += "${info.name}: weder CBR noch VBR unterstützt"; continue }
-                // Optional real-time hints are retried without them; the negotiated profile is never removed.
-                for (realtime in listOf(true, false)) {
-                    val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, config.width, config.height).apply {
+                // Attempts of B-26 (ScreenCodecLatency.encoderHintTiers); the negotiated profile is never removed.
+                for (tier in ScreenCodecLatency.encoderHintTiers(config.hybrid)) {
+                    val realtime = tier != ScreenCodecLatency.EncoderHints.TODAY_PLAIN
+                    val modern = tier == ScreenCodecLatency.EncoderHints.MODERN
+                    val format = MediaFormat.createVideoFormat(mime, config.width, config.height).apply {
                         setInteger(MediaFormat.KEY_COLOR_FORMAT, if(config.hybrid) MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible else MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
                         setInteger(MediaFormat.KEY_BIT_RATE, bitrate)
                         setInteger(MediaFormat.KEY_BITRATE_MODE, mode)
                         setInteger(MediaFormat.KEY_FRAME_RATE, config.fps)
-                        setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, KEYFRAME_INTERVAL_S)
+                        setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, ScreenCodecLatency.keyframeIntervalS(tier, KEYFRAME_INTERVAL_S))
                         setInteger(MediaFormat.KEY_PROFILE, profile)
                         setInteger(MediaFormat.KEY_LEVEL, level)
                         if(config.hybrid) ScreenCodecLatency.requestEncoder(this)
+                        if (modern) {
+                            // B-26 hints, each only where the codec (FEATURE_IntraRefresh) or the platform (API 26) has it.
+                            ScreenCodecLatency.intraRefreshPeriod(config.fps, Build.VERSION.SDK_INT,
+                                caps.isFeatureSupported(MediaCodecInfo.CodecCapabilities.FEATURE_IntraRefresh))
+                                ?.let { setInteger(MediaFormat.KEY_INTRA_REFRESH_PERIOD, it) }
+                            if (ScreenCodecLatency.encoderLatencyAllowed(Build.VERSION.SDK_INT)) setInteger(MediaFormat.KEY_LATENCY, 1)
+                        }
                         if (realtime) { setInteger(MediaFormat.KEY_PRIORITY, 0); setFloat(MediaFormat.KEY_OPERATING_RATE, config.fps.toFloat()) }
                         setInteger(MediaFormat.KEY_COLOR_STANDARD, MediaFormat.COLOR_STANDARD_BT709)
                         setInteger(MediaFormat.KEY_COLOR_RANGE, MediaFormat.COLOR_RANGE_LIMITED)
                         if(!config.hybrid) setLong(MediaFormat.KEY_REPEAT_PREVIOUS_FRAME_AFTER, REPEAT_AFTER_US)
                     }
-                    if (!caps.isFormatSupported(format)) { refusals += "${info.name}: Format abgelehnt (Echtzeit=$realtime)"; continue }
+                    if (!caps.isFormatSupported(format)) { refusals += "${info.name}: Format abgelehnt (Hinweise=$tier)"; continue }
                     try {
                         val candidate = construction.ownProducer(MediaCodec.createByCodecName(info.name))
                         candidate.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
@@ -387,7 +459,7 @@ internal class ScreenEncoder(private val config: EncoderConfig, private val budg
                             require(accepted.containsKey(MediaFormat.KEY_PRIORITY) && accepted.getInteger(MediaFormat.KEY_PRIORITY)==0
                                 && accepted.containsKey(MediaFormat.KEY_OPERATING_RATE)) { "Echtzeithinweise nicht bestätigt" }
                         }
-                        Log.i(TAG, "Kodierer ${info.name}: ${config.width}x${config.height}@${config.fps}, Profil=$profile Level=$level Modus=$mode Echtzeit=$realtime")
+                        Log.i(TAG, "Kodierer ${info.name} ($codecName): ${config.width}x${config.height}@${config.fps}, Profil=$profile Level=$level Modus=$mode Hinweise=$tier")
                         return Triple(candidate,info,acceptedBitrate)
                     } catch (e: Throwable) {
                         try {construction.discardProducer()} catch(cleanup:Throwable) {
@@ -395,18 +467,46 @@ internal class ScreenEncoder(private val config: EncoderConfig, private val budg
                             throw e
                         }
                         if(e !is RuntimeException) throw e
-                        refusals += "${info.name}: ${(e.message ?: e.javaClass.simpleName).take(512)} (Echtzeit=$realtime)"
+                        refusals += "${info.name}: ${(e.message ?: e.javaClass.simpleName).take(512)} (Hinweise=$tier)"
                     }
                 }
             }
-            throw IllegalStateException("Kein passender H.264-Kodierer: ${refusals.joinToString("; ")}")
+            throw IllegalStateException("Kein passender ${codecName.uppercase()}-Kodierer: ${refusals.joinToString("; ")}")
         }
 
         /** Name and hardware flag of the encoder [profile] would take, `null` without one. */
         fun best(profile: String = "high"): Pair<String, Boolean>? = pick(profile)?.let { it.name to it.isHardwareAccelerated }
 
-        /** The offers this phone reports to the core (`screen.hostPrereqs`). */
-        fun offers(): List<ScreenEncoderOffer> = buildList {
+        /** The offers this phone reports to the core (`screen.hostPrereqs`): H.264, then HEVC and AV1 on hardware encoders. */
+        fun offers(): List<ScreenEncoderOffer> = h264Offers().take(31) + videoOffers().take(8)
+
+        /**
+         * HEVC and AV1 4:2:0 (`main`): one offer per hardware encoder of MediaCodec that names the profile, takes a
+         * Surface as input and reports its size limits (B-26). A phone without such an encoder reports none, so the
+         * host never offers a codec it cannot run.
+         */
+        private fun videoOffers(): List<ScreenEncoderOffer> = try {
+            buildList {
+                for (codec in ScreenEncoderCodecs.VIDEO) {
+                    val mime = ScreenEncoderCodecs.mime(codec) ?: continue
+                    for (info in encoders(codec).filter { supports(it, "main", codec) }) {
+                        val caps = info.getCapabilitiesForType(mime)
+                        val video = caps.videoCapabilities ?: continue
+                        if (!caps.colorFormats.contains(MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)) continue
+                        add(ScreenEncoderOffer(
+                            ScreenEncoderCodecs.offerProfile(codec), info.isHardwareAccelerated,
+                            minOf(video.supportedWidths.upper, ScreenFrameLimits.MAX_SIDE),
+                            minOf(video.supportedHeights.upper, ScreenFrameLimits.MAX_SIDE),
+                            codec = codec,
+                        ))
+                    }
+                }
+            }.distinct()
+        } catch (e: RuntimeException) {
+            emptyList()
+        }
+
+        private fun h264Offers(): List<ScreenEncoderOffer> = buildList {
             for (profile in listOf("high", "cb")) {
                 for(info in encoders().filter { supports(it,profile) }) {
                     val caps=info.getCapabilitiesForType(MediaFormat.MIMETYPE_VIDEO_AVC)
@@ -416,6 +516,6 @@ internal class ScreenEncoder(private val config: EncoderConfig, private val budg
                         profile,info.isHardwareAccelerated,limit.width,limit.height,limit.avc?.blocks,limit.avc?.blocksPerSecond))
                 }
             }
-        }.distinct().take(31)
+        }.distinct()
     }
 }

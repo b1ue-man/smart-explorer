@@ -7,7 +7,9 @@
 //! factories that offer the chosen codec and profile, first those with the
 //! chosen hardware flag, then the others (a hardware MFT that refuses `cb`
 //! falls back to the software MFT, C2). `se screen codec --json` shows the
-//! register as `CodecReport`.
+//! register as `CodecReport`. A decoder opens under the viewer's choice
+//! „Dekodierer“ (`negotiate::decoder_preference`, plan 2026-11-14
+//! „Bildkette“ 4.10): only implementations with a stage of that kind.
 use std::io;
 use std::sync::Arc;
 
@@ -18,6 +20,8 @@ use super::negotiate::{CodecChoice, CodecKind, CodecOffer, H264Profile, MAX_CODE
 use super::pixel_convert::FrameSize;
 use super::wire_binary::GopHeader;
 
+#[path = "codec_registry_continue.rs"]
+mod continuation;
 #[path = "codec_registry_open.rs"]
 mod open;
 
@@ -46,6 +50,12 @@ pub trait EncoderFactory: Send + Sync {
     fn name(&self) -> String;
     /// What it encodes: codec, profile, hardware and largest frame.
     fn offers(&self) -> Vec<CodecOffer>;
+    /// Settings the encoder refused and left at its default (plan
+    /// 2026-11-14 „Bildkette“ B-21), as `se screen codec --json` shows them,
+    /// e.g. `CODECAPI_AVEncVideoLTRBufferControl`; none by default.
+    fn refused_settings(&self) -> Vec<String> {
+        Vec::new()
+    }
     /// Opens an encoder for `choice` at `size` with `fps` frames per second.
     fn open(
         &self,
@@ -61,6 +71,12 @@ pub trait DecoderFactory: Send + Sync {
     fn offers(&self) -> Vec<CodecOffer>;
     /// Opens a decoder for the picture group of `header`.
     fn open(&self, header: &GopHeader) -> io::Result<Box<dyn ScreenDecoder>>;
+    /// B-36: whether the decoders it opens for `codec` go on over a
+    /// continuation (`ScreenDecoder::keeps_references`); the viewer
+    /// announces `gop_continue` only then (`codec_registry_continue.rs`).
+    fn keeps_references(&self, _codec: CodecKind) -> bool {
+        false
+    }
 }
 
 /// An opened encoder, its factory and whether it runs on hardware.
@@ -70,14 +86,23 @@ pub struct OpenedEncoder {
     pub hardware: bool,
 }
 
-/// One row of `se screen codec`: an implementation and what it covers.
+/// One row of `se screen codec`: an implementation and one codec it covers
+/// (an implementation of several codecs has a row for each).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CodecEntry {
     pub codec: CodecKind,
-    /// The H.264 profiles; empty for `tiles`.
+    /// The wire profiles (`cb`, `high`); empty for `tiles` and for HEVC and
+    /// AV1 in 4:2:0 only (contract of v0.5.196, unchanged).
     pub profiles: Vec<H264Profile>,
     pub name: String,
     pub hardware: bool,
+    /// The profiles by their names in the standard (`cb`, `high`, `main`,
+    /// `main_444`, …), BK6.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub profile_names: Vec<String>,
+    /// Settings the encoder refused (B-21), BK6.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub refused_settings: Vec<String>,
 }
 
 /// State of the OpenH264 library of this user.
@@ -130,39 +155,84 @@ pub struct CodecRegistry {
     decoders: Vec<Arc<dyn DecoderFactory>>,
 }
 
-/// Whether `offer` encodes or decodes `choice`'s codec and profile.
-fn offers_stream(offer: &CodecOffer, codec: CodecKind, profile: Option<H264Profile>) -> bool {
-    offer.codec == codec && offer.profile == profile
+/// Whether `offer` encodes `codec` and `profile`: `Some(true)` for the
+/// exact profile, `Some(false)` for a Baseline H.264 stream every `High`
+/// decoder accepts (`OpenH264` behind `High` encoders, W4).
+pub(super) fn encodes_stream(
+    offer: &CodecOffer,
+    codec: CodecKind,
+    profile: Option<H264Profile>,
+) -> Option<bool> {
+    if offer.codec != codec {
+        return None;
+    }
+    if offer.profile == profile {
+        return Some(true);
+    }
+    (codec == CodecKind::H264
+        && profile
+            .zip(offer.profile)
+            .is_some_and(|(wanted, offered)| wanted.decodes(offered)))
+    .then_some(false)
 }
 
-/// Offers of `factories` in order, each once, then `tiles`; at most
-/// `MAX_CODEC_OFFERS`, the tile codec always included.
+/// Offers of `factories` in order, each once, then `tiles`. H.264 and the
+/// tiles fill the legacy list of a hello (at most `MAX_CODEC_OFFERS`, the
+/// tile codec always included), HEVC and AV1 its v2 list (at most
+/// `MAX_CODEC_OFFERS` more, plan 2026-11-14 „Bildkette“ B-31).
 fn ordered_offers(lists: impl Iterator<Item = Vec<CodecOffer>>) -> Vec<CodecOffer> {
-    let mut offers: Vec<CodecOffer> = Vec::new();
+    let mut legacy: Vec<CodecOffer> = Vec::new();
+    let mut newer: Vec<CodecOffer> = Vec::new();
     for offer in lists.flatten() {
-        if offer.codec != CodecKind::Tiles && !offers.contains(&offer) {
-            offers.push(offer);
+        let list = if offer.codec.is_legacy() {
+            &mut legacy
+        } else {
+            &mut newer
+        };
+        if offer.codec != CodecKind::Tiles && !list.contains(&offer) {
+            list.push(offer);
         }
     }
-    offers.truncate(MAX_CODEC_OFFERS - 1);
-    offers.push(CodecOffer::tiles());
-    offers
+    legacy.truncate(MAX_CODEC_OFFERS - 1);
+    legacy.push(CodecOffer::tiles());
+    newer.truncate(MAX_CODEC_OFFERS);
+    legacy.extend(newer);
+    legacy
 }
 
-fn entry(name: String, offers: &[CodecOffer]) -> Option<CodecEntry> {
-    let first = offers.first()?;
-    let mut profiles: Vec<H264Profile> = Vec::new();
-    for offer in offers.iter().filter(|offer| offer.codec == first.codec) {
-        if let Some(profile) = offer.profile.filter(|profile| !profiles.contains(profile)) {
-            profiles.push(profile);
+/// The rows of one implementation: one per codec it offers, in the order
+/// of its offers.
+fn entries(name: String, offers: &[CodecOffer], refused: Vec<String>) -> Vec<CodecEntry> {
+    let mut rows: Vec<CodecEntry> = Vec::new();
+    for offer in offers {
+        let index = match rows.iter().position(|row| row.codec == offer.codec) {
+            Some(index) => index,
+            None => {
+                rows.push(CodecEntry {
+                    codec: offer.codec,
+                    profiles: Vec::new(),
+                    name: name.clone(),
+                    hardware: false,
+                    profile_names: Vec::new(),
+                    refused_settings: refused.clone(),
+                });
+                rows.len() - 1
+            }
+        };
+        let row = &mut rows[index];
+        row.hardware |= offer.hardware;
+        if let Some(profile) = offer
+            .profile
+            .filter(|profile| !row.profiles.contains(profile))
+        {
+            row.profiles.push(profile);
+        }
+        let named = offer.codec.profile_name(offer.profile).to_string();
+        if !named.is_empty() && !row.profile_names.contains(&named) {
+            row.profile_names.push(named);
         }
     }
-    Some(CodecEntry {
-        codec: first.codec,
-        profiles,
-        name,
-        hardware: first.hardware,
-    })
+    rows
 }
 
 fn tiles_entry() -> CodecEntry {
@@ -171,6 +241,8 @@ fn tiles_entry() -> CodecEntry {
         profiles: Vec::new(),
         name: TILES_NAME.into(),
         hardware: false,
+        profile_names: Vec::new(),
+        refused_settings: Vec::new(),
     }
 }
 
@@ -207,14 +279,17 @@ impl CodecRegistry {
 
     /// The register as `se screen codec` shows it.
     pub fn report(&self, openh264: OpenH264Report) -> CodecReport {
-        let encoders = self
-            .encoders
-            .iter()
-            .filter_map(|factory| entry(factory.name(), &factory.offers()));
+        let encoders = self.encoders.iter().flat_map(|factory| {
+            entries(
+                factory.name(),
+                &factory.offers(),
+                factory.refused_settings(),
+            )
+        });
         let decoders = self
             .decoders
             .iter()
-            .filter_map(|factory| entry(factory.name(), &factory.offers()));
+            .flat_map(|factory| entries(factory.name(), &factory.offers(), Vec::new()));
         CodecReport {
             encoders: encoders.chain(std::iter::once(tiles_entry())).collect(),
             decoders: decoders.chain(std::iter::once(tiles_entry())).collect(),

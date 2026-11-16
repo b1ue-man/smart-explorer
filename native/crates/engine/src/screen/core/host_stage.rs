@@ -6,6 +6,13 @@
 //! reports the source size with every answer, so a changed screen size
 //! reaches the quality ladder. A crash of the host process ends only the
 //! session: the error carries the code the viewer gets.
+//!
+//! A stage that paces capture and encoding itself (plan 2026-11-14
+//! „Bildkette“ B-27, the host process of `os::host_worker_client`) gets the
+//! session's cadence and whether one picture may be encoded ahead of its
+//! frame (`StreamHint`, decided from the pacer's queue) before each
+//! `produce`, and reports afterwards what the process measured for the
+//! picture it delivered (`StreamReport`).
 use std::io;
 
 use super::negotiate::CodecChoice;
@@ -71,8 +78,60 @@ impl StageError {
     }
 }
 
+/// What the pipeline tells a self-paced stage before a frame.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct StreamHint {
+    /// Frames per second of the session's cadence; 0 means `request.fps`.
+    pub cadence_fps: u32,
+    /// One more picture may be captured and encoded before its frame is due:
+    /// the pacer's queue holds room for this frame and the next one.
+    pub ahead: bool,
+}
+
+/// What a self-paced stage measured for the answer of its last `produce`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct StreamReport {
+    /// The frame id the picture was captured with (the test picture draws it).
+    pub frame_id: Option<u64>,
+    /// Duration of the capture call of the picture.
+    pub capture_us: u64,
+    /// Duration of scaling, conversion and encoding of the picture.
+    pub encode_us: u64,
+    /// Pictures captured and dropped before encoding since the last report
+    /// (a newer capture replaced them).
+    pub dropped_before_encode: u64,
+}
+
 /// A source whose capture and encoding run in the host process.
 pub trait HostStage: Send {
     /// Captures, scales and encodes one frame as `request` says.
     fn produce(&mut self, request: &StageRequest) -> Result<StageFrame, StageError>;
+    /// Whether the stage paces capture and encoding itself (B-27): the
+    /// pipeline then asks for the next picture as soon as the previous one
+    /// is written (or an acknowledgement frees the queue), not per tick of
+    /// the session loop (plan „Bildkette“ BK3b).
+    fn self_paced(&self) -> bool {
+        false
+    }
+    /// The cadence and the credit ahead for the next `produce`; a stage that
+    /// captures on request ignores it.
+    fn set_stream_hint(&mut self, _hint: StreamHint) {}
+    /// What the last `produce` measured in the host process, once.
+    fn take_stream_report(&mut self) -> Option<StreamReport> {
+        None
+    }
+    /// Hands the station times and capture facts measured in the host
+    /// process since the last call to the session's meter (plan 2026-11-14
+    /// „Bildkette“ BK0); a stage without a host process has none.
+    fn drain_chain(&mut self, _meter: &mut super::chain_meter::ChainMeter) {}
+    /// B-36: whether the stage passes `recover_references` on to its
+    /// encoder (`ScreenEncoder::recover_references`). A stage that does not
+    /// keeps the old reset: a new encoder and a key frame.
+    fn continues_references(&self) -> bool {
+        false
+    }
+    /// B-36: the next picture continues a reset stream and may reference
+    /// only `last_good` or older; the encoder answers with a key frame when
+    /// it cannot. Only called when `continues_references` holds.
+    fn recover_references(&mut self, _last_good: u64) {}
 }

@@ -1,5 +1,9 @@
 //! Permanently active Parent reader. Resource requests never acquire the
 //! serialized picture/input ask mutex, including during idle source resize.
+//! An answer of the picture stream (plan 2026-11-14 „Bildkette“ B-27) comes
+//! after its `STREAMED` mark and goes with it to the stream's own channel,
+//! so a waiting input answer never queues behind a picture; the end of the
+//! process reaches both channels.
 use super::capture_broker::CaptureBroker;
 use crate::screen::core::{
     capture_transport,
@@ -14,6 +18,8 @@ use std::sync::{
 };
 use std::time::Duration;
 type Answer = io::Result<Option<WorkerReply>>;
+/// An answer of the picture stream with its mark.
+pub(super) type StreamAnswer = io::Result<Option<(worker_wire::StreamMark, WorkerReply)>>;
 pub(super) struct WorkerReader {
     answers: Receiver<Answer>,
 }
@@ -23,11 +29,13 @@ impl WorkerReader {
         input: Arc<Mutex<std::process::ChildStdin>>,
         broker: Arc<CaptureBroker>,
         cursor: Arc<CursorFeed>,
+        stream: mpsc::Sender<StreamAnswer>,
     ) -> io::Result<Self> {
         let (sender, answers) = mpsc::sync_channel(1);
         std::thread::Builder::new()
             .name("screen-host-reader".into())
             .spawn(move || {
+                let mut mark: Option<worker_wire::StreamMark> = None;
                 loop {
                     let answer = (|| {
                         let Some((tag, length)) = capture_transport::read_header(&mut output)?
@@ -35,15 +43,14 @@ impl WorkerReader {
                             return Ok(None);
                         };
                         if tag == wire::OWNED_REFERENCE {
+                            // The records go from the pipe straight into
+                            // their own buffers (BK3b, no transport copy).
                             let contract = broker.contract()?;
-                            let (_, grant, payload) = capture_transport::read_owned(
+                            return Ok(Some(Some(capture_transport::read_owned_reply(
                                 &mut output,
                                 length,
                                 contract,
                                 |id| broker.grant(id),
-                            )?;
-                            return Ok(Some(Some(capture_transport::decode_owned(
-                                &payload, &grant, contract,
                             )?)));
                         }
                         let payload =
@@ -92,21 +99,35 @@ impl WorkerReader {
                                 cursor.publish(cursor_overlay::decode_update(&payload)?);
                                 Ok(Some(None))
                             }
+                            worker_wire::STREAMED => {
+                                if mark.is_some() {
+                                    return Err(io::Error::other("stream mark without answer"));
+                                }
+                                mark = Some(worker_wire::StreamMark::decode(&payload)?);
+                                Ok(Some(None))
+                            }
                             _ => Ok(Some(Some(WorkerReply::decode(tag, &payload)?))),
                         }
                     })();
                     match answer {
                         Ok(Some(None)) => continue,
                         Ok(Some(Some(reply))) => {
-                            if sender.send(Ok(Some(reply))).is_err() {
+                            if let Some(mark) = mark.take() {
+                                // Nobody waits for the stream any more: the
+                                // answer goes, the link still reads.
+                                let _ = stream.send(Ok(Some((mark, reply))));
+                            } else if sender.send(Ok(Some(reply))).is_err() {
                                 break;
                             }
                         }
                         Ok(None) => {
+                            let _ = stream.send(Ok(None));
                             let _ = sender.send(Ok(None));
                             break;
                         }
                         Err(error) => {
+                            let copy = io::Error::new(error.kind(), error.to_string());
+                            let _ = stream.send(Err(copy));
                             let _ = sender.send(Err(error));
                             break;
                         }

@@ -1,7 +1,11 @@
 //! A failed WGC Close keeps the native objects and their credit alive.
+//! The pool reports every delivered picture (`FrameArrived`, plan 2026-11-14
+//! bildkette B-10) and the session takes the frame interval
+//! (`MinUpdateInterval`, B-11) where Windows has it.
 use std::io;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::time::Duration;
+use windows::Foundation::{EventRegistrationToken, TimeSpan, TypedEventHandler};
 use windows::Graphics::Capture::{
     Direct3D11CaptureFramePool, GraphicsCaptureItem, GraphicsCaptureSession,
 };
@@ -12,9 +16,45 @@ use windows::Win32::Foundation::RO_E_CLOSED;
 
 use crate::screen::core::capture_admission::CaptureSlice;
 
+/// Pictures the compositor delivered into a pool.
+#[derive(Default)]
+pub(super) struct Arrivals {
+    count: Mutex<u64>,
+    signal: Condvar,
+}
+
+impl Arrivals {
+    /// The number of pictures delivered so far.
+    pub(super) fn seen(&self) -> u64 {
+        *self.count.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn arrived(&self) {
+        let mut count = self.count.lock().unwrap_or_else(PoisonError::into_inner);
+        *count = count.wrapping_add(1);
+        self.signal.notify_all();
+    }
+
+    /// Waits until a picture arrived after `seen` pictures, at most `timeout`.
+    pub(super) fn wait_after(&self, seen: u64, timeout: Duration) {
+        let count = self.count.lock().unwrap_or_else(PoisonError::into_inner);
+        let _ = self
+            .signal
+            .wait_timeout_while(count, timeout, |count| *count == seen);
+    }
+}
+
+/// `MinUpdateInterval` in the 100-ns ticks of a `TimeSpan`.
+pub(super) fn time_span(interval: Duration) -> TimeSpan {
+    TimeSpan {
+        Duration: i64::try_from(interval.as_nanos() / 100).unwrap_or(i64::MAX),
+    }
+}
+
 struct Pending {
     session: Option<GraphicsCaptureSession>,
     pool: Option<Direct3D11CaptureFramePool>,
+    arrived: Option<EventRegistrationToken>,
     // Every native interface is released before its product memory credit.
     _slice: CaptureSlice,
 }
@@ -34,6 +74,10 @@ impl Pending {
             self.session = None;
         }
         if let Some(pool) = &self.pool {
+            if let Some(token) = self.arrived.take() {
+                // A pool that refuses the removal is closed right after.
+                let _ = pool.RemoveFrameArrived(token);
+            }
             closed(pool.Close())?;
             self.pool = None;
         }
@@ -43,6 +87,7 @@ impl Pending {
 
 pub(super) struct CaptureResources {
     pending: Option<Pending>,
+    arrivals: Arc<Arrivals>,
 }
 
 impl CaptureResources {
@@ -64,9 +109,27 @@ impl CaptureResources {
             pending: Some(Pending {
                 session: None,
                 pool: Some(pool),
+                arrived: None,
                 _slice: slice,
             }),
+            arrivals: Arc::new(Arrivals::default()),
         };
+        // The free-threaded pool raises FrameArrived on a system thread; it
+        // only counts and wakes the capture thread.
+        let signal = resources.arrivals.clone();
+        let token = resources
+            .pool()?
+            .FrameArrived(&TypedEventHandler::<
+                Direct3D11CaptureFramePool,
+                windows::core::IInspectable,
+            >::new(move |_, _| {
+                signal.arrived();
+                Ok(())
+            }))
+            .map_err(io::Error::other)?;
+        if let Some(pending) = &mut resources.pending {
+            pending.arrived = Some(token);
+        }
         let session = resources
             .pool()?
             .CreateCaptureSession(item)
@@ -87,6 +150,19 @@ impl CaptureResources {
             .as_ref()
             .and_then(|pending| pending.pool.as_ref())
             .ok_or_else(|| io::Error::other("WGC frame pool already closed"))
+    }
+
+    pub(super) fn arrivals(&self) -> &Arc<Arrivals> {
+        &self.arrivals
+    }
+
+    /// Sets the session's `MinUpdateInterval` (`IGraphicsCaptureSession5`);
+    /// false where Windows lacks the property or refuses the value.
+    pub(super) fn set_min_update_interval(&self, interval: Duration) -> bool {
+        self.pending
+            .as_ref()
+            .and_then(|pending| pending.session.as_ref())
+            .is_some_and(|session| session.SetMinUpdateInterval(time_span(interval)).is_ok())
     }
 
     pub(super) fn close(mut self) -> io::Result<()> {

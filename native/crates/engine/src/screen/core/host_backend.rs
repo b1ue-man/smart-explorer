@@ -11,10 +11,10 @@ use std::io;
 
 use super::capture_admission::CaptureGrant;
 use super::capture_image::CapturedImage;
+use super::capture_picture::{Picture, SourcePicture};
 use super::capture_records::CapturedRecords;
-pub use super::capture_source_contract::{
-    HostOutputPlan, PreparedSource, PreparedSourceInfo,
-};
+pub use super::capture_source_contract::{HostOutputPlan, PreparedSource, PreparedSourceInfo};
+use super::host_stage::StageRequest;
 use super::input_model::{InputCapabilities, InputEvent};
 use super::negotiate::{CodecChoice, CodecOffer};
 use super::pixel_convert::{BgraImage, FrameSize, YuvMatrix};
@@ -24,9 +24,6 @@ use super::window_list::{MonitorInfo, SourceId, WindowList};
 use super::wire_binary::FrameRecord;
 use super::wire_control::ControlBlock;
 use super::wire_hello::HostPlatform;
-use crate::share::access_approval::{ApprovalBroker, ApprovalSummary, ApprovalTicket};
-use crate::share::access_grant::Capability;
-use crate::share::relation_proof::ProvenPrincipal;
 
 /// What one capture delivered.
 pub enum SourceFrame {
@@ -160,6 +157,11 @@ pub trait ScreenSource: Send {
     /// the id into its barcode). With `keyframe` a source delivers its last
     /// picture even when nothing changed, so a key frame always has one.
     fn capture(&mut self, frame_id: u64, keyframe: bool) -> io::Result<SourceFrame>;
+    /// Like `capture`, but the picture may stay on the GPU (BK3b); only the
+    /// host process's picture stream takes such pictures.
+    fn capture_picture(&mut self, frame_id: u64, keyframe: bool) -> io::Result<SourcePicture> {
+        self.capture(frame_id, keyframe).map(SourcePicture::from)
+    }
     /// A still image leaves the capture adapter only within the session's
     /// geometry. The raw source allocation retains its separate capture limit.
     fn capture_snapshot(
@@ -208,6 +210,7 @@ pub struct CapturedEncodedFrame {
     pub records: CapturedRecords,
     pub keyframe: bool,
 }
+type Encoded = CapturedEncodedFrame;
 
 pub trait ScreenEncoder: Send {
     fn encode_captured(
@@ -220,12 +223,23 @@ pub trait ScreenEncoder: Send {
             "encoder_has_no_capture_admission",
         ))
     }
+    /// A picture that may lie on the GPU; an encoder that takes no GPU
+    /// pictures gets its CPU pixels through the readback (BK3b).
+    fn encode_picture(&mut self, picture: &Picture, request: &StageRequest) -> io::Result<Encoded> {
+        super::capture_picture::encode_on_cpu(self, picture, request)
+    }
     /// Encoder name for statistics (`tiles`, an MFT, `openh264`).
     fn name(&self) -> String;
     fn size(&self) -> FrameSize;
     /// A pending lossless correction needs one repeated capture after motion stops.
     fn needs_refresh(&self) -> bool {
         false
+    }
+    /// B-36: after a stream reset the next picture may reference only
+    /// `last_good` (a frame id the viewer confirmed) or older; an encoder
+    /// without reference control needs a key frame, as before.
+    fn recover_references(&mut self, _last_good: u64) -> super::ref_recovery::Recovery {
+        super::ref_recovery::Recovery::KeyframeNeeded
     }
     fn encode_frame(
         &mut self,
@@ -241,30 +255,6 @@ pub trait ScreenEncoder: Send {
         keyframe: bool,
         target_bps: u64,
     ) -> io::Result<EncodedFrame>;
-}
-
-/// How the chroma planes of a decoded picture are stored.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Chroma {
-    /// One plane with interleaved U and V samples (`YuvPicture::uv`).
-    Nv12,
-    /// Separate planes of the same row pitch (`YuvPicture::uv_stride`);
-    /// `YuvPicture::uv` stays empty.
-    I420 { u: Vec<u8>, v: Vec<u8> },
-}
-
-/// The planes of a decoded picture in limited range, as the decoder made
-/// them (SCR-M7, decision C4: the viewer converts them to RGB on the GPU).
-/// Rows are `y_stride` and `uv_stride` bytes apart; the picture's size is
-/// the one of its picture stream.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct YuvPicture {
-    pub y: Vec<u8>,
-    pub y_stride: usize,
-    pub uv: Vec<u8>,
-    pub uv_stride: usize,
-    pub chroma: Chroma,
-    pub matrix: YuvMatrix,
 }
 
 pub trait ScreenDecoder: Send {
@@ -289,19 +279,28 @@ pub trait ScreenDecoder: Send {
     fn yuv_picture(&self) -> Option<YuvPicture> {
         None
     }
-}
-
-/// Why a source cannot be opened; the key is the reason of `no_display`.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SourceRefusal {
-    pub reason: String,
-}
-
-impl SourceRefusal {
-    pub fn new(reason: &str) -> Self {
-        Self {
-            reason: reason.into(),
-        }
+    /// Hands the planes of the last completed picture over instead of
+    /// copying them (plan „Bildkette“ BK9 U1, V1); afterwards
+    /// `yuv_picture` is unspecified until the next picture. The default
+    /// copies (`yuv_picture`).
+    fn take_yuv_picture(&mut self) -> Option<YuvPicture> {
+        self.yuv_picture()
+    }
+    /// Hands the last completed BGRA picture over; the default copies it.
+    /// A decoder whose picture is its own reference (tiles) copies into a
+    /// returned buffer.
+    fn take_picture(&mut self) -> BgraImage {
+        self.picture().clone()
+    }
+    /// Gives the storage of a shown picture back, so the next one needs no
+    /// new allocation while size and format stay; the default drops it.
+    fn recycle_yuv(&mut self, _planes: YuvPicture) {}
+    fn recycle_picture(&mut self, _image: BgraImage) {}
+    /// B-36: whether this decoder may go on over a continuation
+    /// (`FLAG_CONTINUE`) and decode it correctly from its kept references;
+    /// `false` makes the viewer ask for a key frame instead (`gop_continue`).
+    fn keeps_references(&self) -> bool {
+        false
     }
 }
 
@@ -433,6 +432,33 @@ pub trait ScreenHostBackend: Send + Sync {
             "encoder_has_no_capture_admission",
         ))
     }
+    /// Opens the next admitted stage encoder not in `refused` (W4, B3).
+    fn open_stage_encoder(
+        &self,
+        request: &super::host_stage::StageRequest,
+        refused: &[String],
+        grant: CaptureGrant,
+    ) -> io::Result<super::codec_registry::OpenedEncoder> {
+        let encoder = self.open_encoder_for_stage_admitted(request, grant)?;
+        let factory = encoder.name();
+        if request.choice.codec != super::negotiate::CodecKind::Tiles
+            && refused.iter().any(|name| name == &factory)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                format!("encoder {factory} was refused in this session"),
+            ));
+        }
+        Ok(super::codec_registry::OpenedEncoder {
+            encoder,
+            factory,
+            hardware: request.choice.encoder_hardware,
+        })
+    }
+    /// Number of rank stages available for `request` (W4, B3).
+    fn encoder_stages(&self, _request: &super::host_stage::StageRequest) -> usize {
+        1
+    }
     /// Injects the input of the controlling viewer.
     fn inject(&self, events: &[InputEvent]) -> Result<(), ControlBlock>;
     /// Family coordinates are relative to the exact admitted capture geometry.
@@ -449,39 +475,12 @@ pub trait ScreenHostBackend: Send + Sync {
     }
 }
 
-/// The host user's sign that the screen is watched (C7): the window
-/// `smart_explorer --screen-indicator` on desktops.
-pub trait SessionIndicator: Send + Sync {
-    /// Whether the indicator can be shown at all (desktop app present).
-    fn available(&self) -> bool;
-    /// Shows it, or keeps it shown; an error ends the session with
-    /// `indicator_unavailable`.
-    fn show(&self) -> Result<(), String>;
-}
-
-/// The screen strand's view of the S1 confirmation service (V7).
-pub trait ConsentBroker: Send + Sync {
-    /// Opens a request for `capability`; the ticket answers at once when
-    /// nobody can be asked.
-    fn request(
-        &self,
-        principal: &ProvenPrincipal,
-        capability: Capability,
-        summary: ApprovalSummary,
-    ) -> ApprovalTicket;
-}
-
-impl ConsentBroker for ApprovalBroker {
-    fn request(
-        &self,
-        principal: &ProvenPrincipal,
-        capability: Capability,
-        summary: ApprovalSummary,
-    ) -> ApprovalTicket {
-        ApprovalBroker::request(self, principal, capability, summary)
-    }
-}
+#[path = "host_backend_consent.rs"]
+mod consent;
+pub use consent::{ConsentBroker, SessionIndicator};
 
 #[path = "host_backend_codecs.rs"]
 mod tile_adapters;
-pub use tile_adapters::{TilesScreenDecoder, TilesScreenEncoder};
+pub use tile_adapters::{
+    Chroma, SourceRefusal, TilesScreenDecoder, TilesScreenEncoder, YuvPicture,
+};

@@ -169,3 +169,26 @@ fn verbindungen_task_metadata_presence_origin_on_the_wire() {
     );
     assert_eq!(origin_of(b"kein json"), OperationOrigin::Job);
 }
+
+/// E4c: the background refresh of a drive sets no presence, a request an
+/// operating-system call waits for does, on the same handle (`User`).
+#[test]
+fn verbindungen_task_metadata_presence_background_refresh_sets_no_presence() {
+    let register = register();
+    let peer = device(9);
+    let activity = register.activity(peer);
+    let opened = OperationOrigin::User;
+    assert_eq!(in_this_thread(opened), OperationOrigin::User);
+    let scope = crate::vfs::BackgroundScope::enter();
+    let background = in_this_thread(opened);
+    assert_eq!(background, OperationOrigin::Job, "the refresh is a job");
+    assert!(register.begin(peer, background).is_none());
+    assert!(!activity.running(), "a refresh sets no presence");
+    drop(scope);
+    let waiting = register.begin(peer, in_this_thread(opened));
+    assert!(waiting.is_some(), "a request a program waits for does");
+    assert!(activity.running());
+    drop(waiting);
+    assert!(!activity.running());
+    assert_eq!(in_this_thread(OperationOrigin::Job), OperationOrigin::Job);
+}

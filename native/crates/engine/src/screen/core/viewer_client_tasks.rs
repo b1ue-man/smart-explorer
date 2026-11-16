@@ -43,6 +43,12 @@ pub(super) struct Start {
     pub(super) cursor_overlay: bool,
     /// What the viewer last asked of the overlay (a reconnect asks again).
     pub(super) cursor_wish: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// The host announced `rate_ceiling_v1`: only then may `RATE_CEILING`
+    /// leave the viewer (an old host ends the session on an unknown frame).
+    pub(super) rate_ceiling: bool,
+    /// The host announced `set_decoders_v1`: only then may `SET_DECODERS`
+    /// leave the viewer (P1).
+    pub(super) set_decoders: bool,
 }
 
 pub(super) fn spawn(start: Start, accepted: &ScreenHelloOk) -> Running {
@@ -56,6 +62,8 @@ pub(super) fn spawn(start: Start, accepted: &ScreenHelloOk) -> Running {
         local_limits,
         cursor_overlay,
         cursor_wish,
+        rate_ceiling,
+        set_decoders,
     } = start;
     let (control, mut outgoing) = mpsc::channel::<ViewerFrame>(CONTROL_QUEUE);
     let (host_tx, host) = mpsc::channel(CONTROL_QUEUE);
@@ -68,6 +76,8 @@ pub(super) fn spawn(start: Start, accepted: &ScreenHelloOk) -> Running {
     let sent_icons = pending_icons.clone();
     let hidden = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let reported_hidden = hidden.clone();
+    let frame_timing = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let frame_timing_supported = frame_timing.clone();
     let writer = tokio::spawn(async move {
         while let Some(frame) = outgoing.recv().await {
             if let ViewerFrame::Visibility(report) = &frame {
@@ -83,6 +93,17 @@ pub(super) fn spawn(start: Start, accepted: &ScreenHelloOk) -> Running {
                     continue;
                 }
                 cursor_wish.store(*on, std::sync::atomic::Ordering::Release);
+            }
+            if matches!(frame, ViewerFrame::RateCeiling(_)) && !rate_ceiling {
+                continue;
+            }
+            if matches!(frame, ViewerFrame::SetDecoders(_)) && !set_decoders {
+                continue;
+            }
+            if matches!(frame, ViewerFrame::FrameTiming(_))
+                && !frame_timing_supported.load(std::sync::atomic::Ordering::Acquire)
+            {
+                continue;
             }
             if let ViewerFrame::IconRequest(request) = &frame {
                 if !icons_supported {
@@ -113,6 +134,11 @@ pub(super) fn spawn(start: Start, accepted: &ScreenHelloOk) -> Running {
     let reader = tokio::spawn(async move {
         loop {
             let frame = recv_host_frame(&mut recv).await;
+            if let Ok(HostFrame::Stats(stats)) = &frame {
+                if stats.frame_timing == Some(super::super::frame_timing::FRAME_TIMING_VERSION) {
+                    frame_timing.store(true, std::sync::atomic::Ordering::Release);
+                }
+            }
             if let Ok(HostFrame::IconReply(response)) = &frame {
                 // At most eight correlated icon replies may enter the host-frame queue.
                 if pending_icons

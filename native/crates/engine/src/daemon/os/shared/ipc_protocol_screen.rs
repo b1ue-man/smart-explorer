@@ -21,17 +21,25 @@ use serde::{Deserialize, Serialize};
 
 use crate::screen::core::bench::BenchReport;
 use crate::screen::core::input_model::InputCapabilities;
-use crate::screen::core::negotiate::CodecOffer;
+use crate::screen::core::negotiate::{CodecOffer, CodecSetting, DecoderPreference};
 use crate::screen::core::pixel_convert::FrameSize;
 use crate::screen::core::registry::SessionView;
 use crate::screen::core::window_list::{MonitorInfo, SourceId};
-use crate::screen::core::wire::BeReader;
-use crate::screen::core::wire_binary::{
-    FrameRecord, GopHeader, GOP_HEADER_BYTES, RECORD_HEADER_BYTES,
-};
 use crate::screen::core::wire_hello::{HostPlatform, SessionMode};
 use crate::share::access_grant::{Capability, CapabilityDecision};
 use crate::share::PeerOpenTarget;
+
+#[path = "ipc_protocol_screen_bench.rs"]
+mod bench;
+pub use bench::{bench_source, monitor_missing, BenchRequest, BENCH_SOURCE_NOT_FOUND};
+#[path = "ipc_protocol_screen_relay.rs"]
+mod relay;
+#[path = "ipc_protocol_screen_switch.rs"]
+mod switch;
+pub use relay::{
+    decode_relay_record, encode_relay_record, read_relay, read_relay_budgeted, write_relay,
+};
+pub use switch::{RateCeilingState, RELAY_RATE_CEILING};
 
 /// Longest a `HostWatch` waits for a change before it answers anyway.
 pub const WATCH_WAIT_SECS: u64 = 25;
@@ -52,16 +60,37 @@ pub struct StreamRequest {
     #[serde(default)]
     pub frame_capabilities: Option<crate::screen::core::frame_budget::FrameCapabilities>,
     pub max_fps: u16,
+    /// „Höchste Datenrate“ in bit/s (plan 2026-11-14 „Bildkette“ B-09);
+    /// absent is automatic. A daemon of v0.5.196 ignores the field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_rate_bps: Option<u64>,
+    /// „Codec“ of the viewer (plan 2026-11-14 „Bildkette“ 4.10, BK6): the
+    /// worker offers the named codec and the tiles only; absent is
+    /// automatic. „Verlustfrei“ travels as `SET_MODE` `lossless`, as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codec: Option<CodecSetting>,
+    /// „Dekodierer“ of the viewer (4.10): the worker offers only decoder
+    /// stages of that kind; absent is automatic.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decoder: Option<DecoderPreference>,
+    /// B-36: the client keeps its decoder over a continuation
+    /// (`screen::core::gop_continue`); the daemon announces `gop_continue`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub gop_continue: bool,
+    /// B-36 per codec: the client's decoders that keep their references
+    /// over a continuation (`gop_continue_decoders` of the hello).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gop_continue_decoders: Vec<CodecOffer>,
 }
 
-/// `se screen bench` options as the worker takes them.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct BenchRequest {
-    /// `auto`, `h264` or `tiles`.
-    pub codec: String,
-    pub size: FrameSize,
-    pub fps: u16,
-    pub seconds: u32,
+impl StreamRequest {
+    /// The decoders the hello names under the viewer's codec and decoder
+    /// choice; the tiles always stay (every peer's last fallback).
+    pub fn chosen_decoders(&self) -> Vec<CodecOffer> {
+        let codec = self.codec.unwrap_or_default().preference();
+        let offers = codec.filter_decoders(&self.decoders);
+        self.decoder.unwrap_or_default().filter_offers(&offers)
+    }
 }
 
 /// One request of the screen strand.
@@ -179,167 +208,22 @@ pub enum RelayHello {
         /// Private daemon allocation evidence; absent from the peer HELLO_OK.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         local_limits: Option<crate::screen::core::frame_budget::FrameLimits>,
+        /// „Höchste Datenrate“ of this session (`StreamRequest`).
+        #[serde(default)]
+        rate_ceiling: RateCeilingState,
+        /// The host announced `set_decoders_v1` (P1): a new „Codec“ or
+        /// „Dekodierer“ goes out as `SET_DECODERS` instead of a new session.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        set_decoders: bool,
     },
-}
-
-/// Same flattened v2 extension as the remote picture stream. Legacy v2 JSON
-/// without a family revision retains exactly its existing meaning.
-#[derive(Serialize, Deserialize)]
-struct RelayGopExtension {
-    #[serde(flatten)]
-    contract: crate::screen::core::frame_budget::FrameContract,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    family_layout_revision: Option<u64>,
-}
-
-/// The relay payload of one picture record: its picture group's head, the
-/// record head and the payload.
-pub fn encode_relay_record(
-    header: &GopHeader,
-    record: &FrameRecord,
-) -> std::io::Result<Vec<u8>> {
-    let len = u32::try_from(record.payload.len())
-        .map_err(|_| std::io::Error::other("picture record is too large"))?;
-    let head = header.encode()?;
-    if record.payload.len() > header.record_limit() {
-        return Err(std::io::Error::other(
-            "picture record exceeds its frame contract",
-        ));
-    }
-    let extension = if let Some(contract) = header.frame_contract {
-        let extension = RelayGopExtension {
-            contract,
-            family_layout_revision: header.family_layout_revision,
-        };
-        let bytes = serde_json::to_vec(&extension).map_err(std::io::Error::other)?;
-        if bytes.len() > 1024 {
-            return Err(std::io::Error::other("screen relay contract exceeds 1 KiB"));
-        }
-        Some(bytes)
-    } else {
-        None
-    };
-    let overhead = GOP_HEADER_BYTES
-        + RECORD_HEADER_BYTES
-        + extension.as_ref().map_or(0, |bytes| bytes.len() + 2);
-    let capacity = record
-        .payload
-        .len()
-        .checked_add(overhead)
-        .ok_or_else(|| std::io::Error::other("screen relay record length overflow"))?;
-    let mut body = Vec::with_capacity(capacity);
-    body.extend_from_slice(&head);
-    if let Some(bytes) = extension {
-        body.extend_from_slice(&(bytes.len() as u16).to_be_bytes());
-        body.extend_from_slice(&bytes);
-    }
-    body.extend_from_slice(&len.to_be_bytes());
-    body.extend_from_slice(&record.frame_id.to_be_bytes());
-    body.extend_from_slice(&record.capture_ts_us.to_be_bytes());
-    body.push(record.flags);
-    body.extend_from_slice(&record.payload);
-    Ok(body)
-}
-
-/// The inverse of `encode_relay_record`; the record length must match and
-/// stay within the limit of its codec.
-pub fn decode_relay_record(payload: &[u8]) -> std::io::Result<(GopHeader, FrameRecord)> {
-    let invalid = |text: &'static str| std::io::Error::new(std::io::ErrorKind::InvalidData, text);
-    let (head, rest) = payload
-        .split_at_checked(GOP_HEADER_BYTES)
-        .ok_or_else(|| invalid("screen relay record is too short"))?;
-    let mut bytes = [0u8; GOP_HEADER_BYTES];
-    bytes.copy_from_slice(head);
-    let (mut header, extended) = GopHeader::decode_prefix(&bytes)?;
-    let rest = if extended {
-        let (length, data) = rest
-            .split_at_checked(2)
-            .ok_or_else(|| invalid("screen relay contract length is missing"))?;
-        let length = u16::from_be_bytes([length[0], length[1]]) as usize;
-        if length > 1024 {
-            return Err(invalid("screen relay contract exceeds 1 KiB"));
-        }
-        let (json, remaining) = data
-            .split_at_checked(length)
-            .ok_or_else(|| invalid("screen relay contract is truncated"))?;
-        let extension: RelayGopExtension =
-            serde_json::from_slice(json).map_err(std::io::Error::other)?;
-        header.frame_contract = Some(extension.contract);
-        header.family_layout_revision = extension.family_layout_revision;
-        // Reuse the header's full validation, including a nonzero family
-        // revision bound to a v2 contract, without altering the received values.
-        header.encode()?;
-        remaining
-    } else {
-        rest
-    };
-    let (fields, data) = rest
-        .split_at_checked(RECORD_HEADER_BYTES)
-        .ok_or_else(|| invalid("screen relay record is too short"))?;
-    let mut reader = BeReader::new(fields);
-    let len = reader.u32()? as usize;
-    let frame_id = reader.u64()?;
-    let capture_ts_us = reader.u64()?;
-    let flags = reader.u8()?;
-    if len != data.len() || len > header.record_limit() {
-        return Err(invalid("screen relay record length does not match"));
-    }
-    let record = FrameRecord {
-        frame_id,
-        capture_ts_us,
-        flags,
-        payload: data.to_vec(),
-    };
-    Ok((header, record))
-}
-
-/// Writes one relay frame.
-pub fn write_relay(
-    writer: &mut impl std::io::Write,
-    tag: u8,
-    payload: &[u8],
-) -> std::io::Result<()> {
-    let len = u32::try_from(payload.len())
-        .map_err(|_| std::io::Error::other("screen relay frame is too large"))?;
-    writer.write_all(&[tag])?;
-    writer.write_all(&len.to_be_bytes())?;
-    writer.write_all(payload)?;
-    writer.flush()
-}
-
-/// Reads one relay frame of at most `limit` payload bytes; the length is
-/// checked before memory for it is requested.
-pub fn read_relay(
-    reader: &mut impl std::io::Read,
-    limit: usize,
-) -> std::io::Result<(u8, Vec<u8>)> {
-    read_relay_budgeted(reader, limit, limit)
-}
-
-/// Picture records have the accepted session's tighter allocation ceiling;
-/// control frames retain their existing independent protocol limit.
-pub fn read_relay_budgeted(
-    reader: &mut impl std::io::Read,
-    limit: usize,
-    record_limit: usize,
-) -> std::io::Result<(u8, Vec<u8>)> {
-    let mut head = [0u8; 5];
-    reader.read_exact(&mut head)?;
-    let len = u32::from_be_bytes([head[1], head[2], head[3], head[4]]) as usize;
-    if len > limit || (head[0] == RELAY_RECORD && len > record_limit) {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "screen relay frame exceeds its limit",
-        ));
-    }
-    let mut payload = vec![0u8; len];
-    reader.read_exact(&mut payload)?;
-    Ok((head[0], payload))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::screen::core::wire_binary::{
+        FrameRecord, GopHeader, GOP_HEADER_BYTES, RECORD_HEADER_BYTES,
+    };
 
     #[test]
     fn batches_task_b6_session_budget_private_relay_keeps_v1_and_rejects_oversize_before_read() {
@@ -354,6 +238,8 @@ mod tests {
             hello,
             path: "direct".into(),
             local_limits: Some(local),
+            rate_ceiling: RateCeilingState::Automatic,
+            set_decoders: false,
         };
         let bytes = serde_json::to_vec(&accepted).unwrap();
         let accepted: RelayHello = serde_json::from_slice(&bytes).unwrap();
@@ -376,6 +262,89 @@ mod tests {
             error.kind(),
             std::io::ErrorKind::InvalidData,
             "no payload was supplied"
+        );
+    }
+
+    /// 4.10 (BK6): „Codec“ and „Dekodierer“ travel in `StreamRequest` and
+    /// narrow the offers; the relay says what became of the data rate.
+    #[test]
+    fn bildkette_task_codec_stream_request_and_ceiling_state() {
+        use crate::screen::core::negotiate::{CodecKind, H264Profile};
+        // A request of v0.5.196 without `codec`/`decoder`: automatic, and
+        // automatic writes no field.
+        let old = serde_json::json!({"mode":"view","decoders":[],"max_fps":60});
+        let mut request: StreamRequest = serde_json::from_value(old).unwrap();
+        assert_eq!((request.codec, request.decoder), (None, None));
+        let back = serde_json::to_value(&request).unwrap();
+        assert!(back.get("codec").is_none() && back.get("decoder").is_none());
+        request.decoders = vec![
+            CodecOffer::video(CodecKind::Av1, false, true),
+            CodecOffer::video(CodecKind::Av1, false, false),
+            CodecOffer::h264(H264Profile::High, true),
+            CodecOffer::tiles(),
+        ];
+        assert_eq!(request.chosen_decoders(), request.decoders);
+        request.codec = Some(CodecSetting::Av1);
+        request.decoder = Some(DecoderPreference::Software);
+        let chosen = request.chosen_decoders();
+        assert_eq!(
+            chosen,
+            vec![
+                CodecOffer::video(CodecKind::Av1, false, false),
+                CodecOffer::tiles()
+            ]
+        );
+        // „Verlustfrei“ negotiates like „Automatisch“ (SET_MODE switches).
+        request.codec = Some(CodecSetting::Lossless);
+        request.decoder = None;
+        assert_eq!(request.chosen_decoders(), request.decoders);
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(json["codec"], "lossless");
+        assert_eq!(
+            serde_json::from_value::<StreamRequest>(json).unwrap(),
+            request
+        );
+        // What became of „Höchste Datenrate“: said, not silent.
+        assert_eq!(
+            RateCeilingState::of(None, false),
+            RateCeilingState::Automatic
+        );
+        assert_eq!(
+            RateCeilingState::of(Some(8_000_000), true),
+            RateCeilingState::Applied
+        );
+        assert_eq!(
+            RateCeilingState::of(Some(8_000_000), false),
+            RateCeilingState::UnsupportedByHost
+        );
+        let hello = serde_json::json!({"kind":"accepted","hello":{"authorization":
+            {"view":"allow","control":"allow"},"platform":"linux","approval":"not_required"},
+            "path":"direct"});
+        let RelayHello::Accepted { rate_ceiling, .. } = serde_json::from_value(hello).unwrap()
+        else {
+            panic!("not Accepted");
+        };
+        assert_eq!(rate_ceiling, RateCeilingState::Automatic);
+    }
+
+    /// B-09: „Höchste Datenrate“ travels in `StreamRequest`; a request of
+    /// v0.5.196 without it means automatic, and automatic adds no field.
+    #[test]
+    fn bildkette_task_rate_stream_request_carries_the_max_rate() {
+        let old = serde_json::json!({"mode":"view","decoders":[],"max_fps":60});
+        let request: StreamRequest = serde_json::from_value(old).unwrap();
+        assert_eq!(request.max_rate_bps, None);
+        let back = serde_json::to_value(&request).unwrap();
+        assert!(back.get("max_rate_bps").is_none());
+        let limited = StreamRequest {
+            max_rate_bps: Some(20_000_000),
+            ..request
+        };
+        let json = serde_json::to_value(&limited).unwrap();
+        assert_eq!(json["max_rate_bps"], 20_000_000);
+        assert_eq!(
+            serde_json::from_value::<StreamRequest>(json).unwrap(),
+            limited
         );
     }
 
@@ -416,6 +385,7 @@ mod tests {
                 size: FrameSize::new(1280, 720),
                 fps: 30,
                 seconds: 10,
+                source: None,
             },
         };
         let json = serde_json::to_value(&request).unwrap();

@@ -8,6 +8,7 @@ use super::*;
 use crate::screen::core::host_backend::ScreenEncoder;
 use crate::screen::core::host_backend::TilesScreenEncoder;
 use crate::screen::core::pixel_convert::BgraImage;
+use crate::screen::core::session_state::SessionState;
 use crate::screen::os::pipewire_stream::convert_rows;
 use crate::screen::os::spa_pod::VideoFormat;
 

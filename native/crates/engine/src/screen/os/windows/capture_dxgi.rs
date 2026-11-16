@@ -1,72 +1,36 @@
 //! Retained-output DXGI duplication. Prepare enumerates metadata; activation,
 //! reopen and mode changes acquire an exact grant before DuplicateOutput.
+//! Plan 2026-11-14 bildkette: first path of a monitor (B-12), waits for the
+//! next due picture on the capture thread (B-10, `dxgi_wait.rs`), "unchanged"
+//! from dirty and move rectangles (`dxgi_regions.rs`), pointer (B-13).
 use super::capture_prepared::recovery::CaptureRecovery;
 use super::capture_slots::{CaptureBudget, CaptureGeometry, CaptureKind};
-use super::capture_source::{Grabber, FIRST_FRAME_WAIT};
-use super::d3d_device::{self, DeviceSet, Readback};
+use super::capture_source::{self, CapturePath, FallbackCause, Grabber, FIRST_FRAME_WAIT};
+use super::d3d_device::{self, DeviceSet, Read, Readback};
 use crate::screen::core::capture_admission::{CaptureGrant, CaptureOwner, CaptureSlice};
-use crate::screen::core::capture_image::{AdmittedRegions, CaptureImageBuilder, CapturedImage};
-use crate::screen::core::frame_regions::MoveRect;
+use crate::screen::core::capture_picture::{Picture, SourcePicture};
 use crate::screen::core::host_backend::SourceFrame;
-use crate::screen::core::pixel_convert::{BgraRotation, FrameSize, Rect};
+use crate::screen::core::pixel_convert::{BgraRotation, FrameSize};
 use crate::screen::core::session_state::SessionState;
 use std::io;
-use std::time::Duration;
-use windows::core::Interface;
-use windows::Win32::Foundation::RECT;
+use std::time::{Duration, Instant};
+use windows::core::{Interface, HRESULT};
 use windows::Win32::Graphics::Direct3D11::{ID3D11Texture2D, D3D11_TEXTURE2D_DESC};
-use windows::Win32::Graphics::Dxgi::Common::{
-    DXGI_MODE_ROTATION, DXGI_MODE_ROTATION_IDENTITY, DXGI_MODE_ROTATION_ROTATE180,
-    DXGI_MODE_ROTATION_ROTATE270, DXGI_MODE_ROTATION_ROTATE90, DXGI_MODE_ROTATION_UNSPECIFIED,
-};
 use windows::Win32::Graphics::Dxgi::{
-    CreateDXGIFactory1, IDXGIAdapter, IDXGIFactory1, IDXGIOutput1, IDXGIOutputDuplication,
-    IDXGIResource, DXGI_ERROR_ACCESS_LOST, DXGI_ERROR_WAIT_TIMEOUT, DXGI_OUTDUPL_FRAME_INFO,
-    DXGI_OUTDUPL_MOVE_RECT,
+    IDXGIOutput1, IDXGIOutputDuplication, IDXGIResource, DXGI_ERROR_ACCESS_LOST,
+    DXGI_ERROR_WAIT_TIMEOUT, DXGI_OUTDUPL_FRAME_INFO,
 };
 
-fn find_output(device: &str) -> io::Result<(IDXGIAdapter, IDXGIOutput1)> {
-    // SAFETY: plain owned DXGI enumeration; no capture surface is opened.
-    unsafe {
-        let factory: IDXGIFactory1 = CreateDXGIFactory1().map_err(io::Error::other)?;
-        let mut adapter_index = 0;
-        while let Ok(adapter) = factory.EnumAdapters1(adapter_index) {
-            let mut output_index = 0;
-            while let Ok(output) = adapter.EnumOutputs(output_index) {
-                let desc = output.GetDesc().map_err(io::Error::other)?;
-                let end = desc
-                    .DeviceName
-                    .iter()
-                    .position(|u| *u == 0)
-                    .unwrap_or(desc.DeviceName.len());
-                if String::from_utf16_lossy(&desc.DeviceName[..end]) == device {
-                    return Ok((
-                        adapter.cast().map_err(io::Error::other)?,
-                        output.cast().map_err(io::Error::other)?,
-                    ));
-                }
-                output_index += 1;
-            }
-            adapter_index += 1;
-        }
-    }
-    Err(io::Error::new(
-        io::ErrorKind::NotFound,
-        "original DXGI output unavailable",
-    ))
-}
-fn rotation(value: DXGI_MODE_ROTATION) -> io::Result<BgraRotation> {
-    match value {
-        DXGI_MODE_ROTATION_UNSPECIFIED | DXGI_MODE_ROTATION_IDENTITY => Ok(BgraRotation::Identity),
-        DXGI_MODE_ROTATION_ROTATE90 => Ok(BgraRotation::Clockwise90),
-        DXGI_MODE_ROTATION_ROTATE180 => Ok(BgraRotation::Clockwise180),
-        DXGI_MODE_ROTATION_ROTATE270 => Ok(BgraRotation::Clockwise270),
-        _ => Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "unknown DXGI desktop rotation",
-        )),
-    }
-}
+#[path = "dxgi_output.rs"]
+mod output;
+#[path = "dxgi_pointer.rs"]
+pub(super) mod pointer;
+#[path = "dxgi_regions.rs"]
+pub(super) mod regions;
+#[path = "dxgi_wait.rs"]
+pub(super) mod wait;
+use output::{find_output, rotation};
+
 pub(super) struct PreparedDxgi {
     output: IDXGIOutput1,
     devices: DeviceSet,
@@ -185,10 +149,17 @@ pub(super) struct DxgiCapture {
     live: Option<Live>,
     prepared: PreparedDxgi,
     readback: Readback,
-    last: Option<CapturedImage>,
+    /// The newest picture, CPU pixels or on the GPU (BK3b).
+    last: Option<Picture>,
     size: FrameSize,
     budget: CaptureBudget,
     recovery: CaptureRecovery,
+    /// Pointer for overlay and blending; the login helper captures without.
+    pointer: Option<pointer::DxgiPointer>,
+    /// `DXGI_ERROR_ACCESS_LOST` since the last picture.
+    lost: bool,
+    /// Since when, and with which result, rebuilding the duplication fails.
+    failing: Option<(Instant, Option<HRESULT>)>,
 }
 impl DxgiCapture {
     pub(super) fn open(prepared: PreparedDxgi, budget: CaptureBudget) -> io::Result<Self> {
@@ -202,7 +173,20 @@ impl DxgiCapture {
             size,
             budget,
             recovery: CaptureRecovery::active(),
+            pointer: None,
+            lost: false,
+            failing: None,
         })
+    }
+    /// Delivers the pointer to the overlay or into the pictures (B-13).
+    pub(super) fn with_pointer(mut self) -> Self {
+        self.pointer = Some(pointer::DxgiPointer::attach());
+        self
+    }
+    fn note_failure(&mut self, error: &io::Error) {
+        let code = capture_source::result_code(error);
+        let since = self.failing.map_or_else(Instant::now, |(since, _)| since);
+        self.failing = Some((since, code));
     }
     fn live_duplication(&self) -> io::Result<&IDXGIOutputDuplication> {
         self.live
@@ -244,63 +228,18 @@ impl DxgiCapture {
             attached: output.AttachedToDesktop.as_bool(),
         })
     }
-    fn again(&self, keyframe: bool) -> SourceFrame {
+    fn again(&self, keyframe: bool) -> SourcePicture {
         match (&self.last, keyframe) {
-            (Some(last), true) => SourceFrame::Frame(last.clone()),
-            (Some(_), false) => SourceFrame::Unchanged,
-            (None, _) => SourceFrame::Paused(SessionState::Starting),
+            (Some(last), true) => SourcePicture::Frame(last.clone()),
+            (Some(_), false) => SourcePicture::Unchanged,
+            (None, _) => SourcePicture::Paused(SessionState::Starting),
         }
     }
-    /// Optional native metadata may fail independently of full pixel capture.
-    fn regions(&self, metadata_bytes: u32, size: FrameSize) -> Option<AdmittedRegions> {
-        if self.budget.geometry().kind != CaptureKind::Dxgi(BgraRotation::Identity)
-            || self.budget.geometry().native != size
-            || metadata_bytes == 0
-        {
-            return None;
-        }
-        let count = u64::from(size.width.div_ceil(64)) * u64::from(size.height.div_ceil(64)) * 2;
-        if u64::from(metadata_bytes)
-            > count.checked_mul(std::mem::size_of::<DXGI_OUTDUPL_MOVE_RECT>() as u64)?
-        {
-            return None;
-        }
-        let grant = self.budget.grant().ok()?;
-        let mut moved = NativeRects::<DXGI_OUTDUPL_MOVE_RECT>::new(count, grant).ok()?;
-        let mut dirty = NativeRects::<RECT>::new(count, grant).ok()?;
-        let mut used_moves = 0;
-        let mut used_dirty = 0;
-        // SAFETY: admitted aligned typed buffers; all returned lengths are
-        // validated before indexing or constructing immutable core metadata.
-        unsafe {
-            self.live_duplication()
-                .ok()?
-                .GetFrameMoveRects(moved.bytes, moved.values.as_mut_ptr(), &mut used_moves)
-                .ok()?;
-            self.live_duplication()
-                .ok()?
-                .GetFrameDirtyRects(dirty.bytes, dirty.values.as_mut_ptr(), &mut used_dirty)
-                .ok()?;
-        }
-        let moves = moved.used(used_moves)?;
-        let dirt = dirty.used(used_dirty)?;
-        let mut result =
-            AdmittedRegions::new(size, grant, moves.len() as u64, dirt.len() as u64).ok()?;
-        for moved in moves {
-            result
-                .push_move(MoveRect {
-                    source_x: u32::try_from(moved.SourcePoint.x).ok()?,
-                    source_y: u32::try_from(moved.SourcePoint.y).ok()?,
-                    destination: rect(moved.DestinationRect)?,
-                })
-                .ok()?;
-        }
-        for dirty in dirt {
-            result.push_dirty(rect(*dirty)?).ok()?;
-        }
-        Some(result)
-    }
-    fn read(&mut self, resource: &IDXGIResource) -> io::Result<Option<CaptureImageBuilder>> {
+    fn read(&mut self, resource: &IDXGIResource) -> io::Result<Option<Read>> {
+        // Handover point of BK2a (GPU path): BGRA `texture` on
+        // `self.prepared.devices.device` (the device for the encoder's
+        // `MFT_MESSAGE_SET_D3D_MANAGER`), valid until `ReleaseFrame` in
+        // `capture_waiting` on the capture thread; BK2a copies it on the GPU.
         let texture: ID3D11Texture2D = resource.cast().map_err(io::Error::other)?;
         let mut desc = D3D11_TEXTURE2D_DESC::default();
         unsafe { texture.GetDesc(&mut desc) };
@@ -326,6 +265,15 @@ impl DxgiCapture {
         self.last = None;
         self.budget.suspend();
     }
+    fn rebuild(&mut self) -> io::Result<()> {
+        self.recovery.request(true);
+        self.stop();
+        let geometry = self.prepared.geometry()?;
+        self.budget.replace(geometry)?;
+        self.live = Some(duplicate(&self.prepared, &self.budget)?);
+        self.size = geometry.displayed();
+        Ok(())
+    }
 }
 impl Grabber for DxgiCapture {
     fn capture_grant(&self) -> Option<CaptureGrant> {
@@ -343,106 +291,180 @@ impl Grabber for DxgiCapture {
     fn size(&self) -> FrameSize {
         self.size
     }
+    fn path(&self) -> Option<CapturePath> {
+        Some(CapturePath::DesktopDuplication)
+    }
+    fn fallback_cause(&self) -> Option<FallbackCause> {
+        let (since, code) = self.failing?;
+        capture_source::fallback_cause(code, self.lost, since.elapsed())
+    }
     fn capture(&mut self, keyframe: bool) -> io::Result<SourceFrame> {
-        let recovery = self.recovery;
-        match recovery.ensure_live(self.live.is_some(), || self.reopen()) {
-            Ok(true) => {}
-            Ok(false) => return Ok(SourceFrame::Unchanged),
-            Err(error) => return CaptureRecovery::paused_by_duplication(error),
-        }
+        self.capture_picture(keyframe)?.into_source_frame()
+    }
+    fn capture_picture(&mut self, keyframe: bool) -> io::Result<SourcePicture> {
         let wait = if self.last.is_none() {
             FIRST_FRAME_WAIT
         } else {
             Duration::ZERO
         };
+        self.capture_waiting_picture(keyframe, wait, &mut || true)
+    }
+    fn capture_waiting(
+        &mut self,
+        keyframe: bool,
+        wait: Duration,
+        release: &mut dyn FnMut() -> bool,
+    ) -> io::Result<SourceFrame> {
+        self.capture_waiting_picture(keyframe, wait, release)?
+            .into_source_frame()
+    }
+    fn capture_waiting_picture(
+        &mut self,
+        keyframe: bool,
+        wait: Duration,
+        release: &mut dyn FnMut() -> bool,
+    ) -> io::Result<SourcePicture> {
+        let paused = |error| CaptureRecovery::paused_by_duplication(error).map(SourcePicture::from);
+        let recovery = self.recovery;
+        match recovery.ensure_live(self.live.is_some(), || self.reopen()) {
+            Ok(true) => {}
+            Ok(false) => return Ok(SourcePicture::Unchanged),
+            Err(error) => return paused(error),
+        }
+        // The overlay switched: a new duplication starts with a whole picture
+        // in the new state (with or without the blended pointer).
+        if self.last.is_some() && self.pointer.as_ref().is_some_and(|p| p.take_switched()) {
+            return match self.reopen() {
+                Ok(()) => Ok(SourcePicture::Unchanged),
+                Err(error) => paused(error),
+            };
+        }
+        let duplication = self.live_duplication()?.clone();
         let mut info = DXGI_OUTDUPL_FRAME_INFO::default();
         let mut resource = None;
+        // SAFETY: a live duplication; the out pointers address locals.
         let acquired = unsafe {
-            self.live_duplication()?.AcquireNextFrame(
-                wait.as_millis() as u32,
-                &mut info,
-                &mut resource,
-            )
+            duplication.AcquireNextFrame(wait::timeout_ms(wait), &mut info, &mut resource)
         };
         match acquired {
-            Ok(()) => {
-                let had_reference = self.last.is_some();
-                let picture = match resource.as_ref() {
-                    Some(resource) if info.AccumulatedFrames > 0 || !had_reference => {
-                        self.last = None;
-                        Some(self.read(resource))
-                    }
-                    _ => None,
-                };
-                let regions = if had_reference {
-                    self.regions(info.TotalMetadataBufferSize, self.size)
-                } else {
-                    None
-                };
-                drop(resource);
-                let released = unsafe { self.live_duplication()?.ReleaseFrame() };
-                if let Err(error) = released {
-                    drop(picture);
-                    drop(regions);
-                    if error.code() == DXGI_ERROR_ACCESS_LOST {
-                        self.stop();
-                        return Ok(SourceFrame::Paused(SessionState::Starting));
-                    }
-                    return Err(io::Error::other(error));
-                }
-                match picture {
-                    Some(Ok(Some(mut builder))) => {
-                        if let Some(regions) = regions {
-                            builder.set_regions(regions)?;
-                        }
-                        let image = builder.freeze();
-                        let rotation = match self.budget.geometry().kind {
-                            CaptureKind::Dxgi(r) => r,
-                            _ => BgraRotation::Identity,
-                        };
-                        let image = match image.rotate(
-                            rotation,
-                            self.budget.geometry().limits,
-                            self.budget.grant()?,
-                            CaptureOwner::SourcePixels,
-                        ) {
-                            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                                return Ok(SourceFrame::Unchanged)
-                            }
-                            result => result?,
-                        };
-                        self.size = image.size();
-                        self.last = Some(image.clone());
-                        Ok(SourceFrame::Frame(image))
-                    }
-                    Some(Ok(None)) => {
-                        self.stop();
-                        Ok(SourceFrame::Paused(SessionState::Starting))
-                    }
-                    Some(Err(error)) if error.kind() == io::ErrorKind::WouldBlock => {
-                        Ok(SourceFrame::Unchanged)
-                    }
-                    Some(Err(error)) => Err(error),
-                    None => Ok(self.again(keyframe)),
-                }
+            Ok(()) => {}
+            Err(error) if error.code() == DXGI_ERROR_WAIT_TIMEOUT => {
+                return Ok(self.again(keyframe))
             }
-            Err(error) if error.code() == DXGI_ERROR_WAIT_TIMEOUT => Ok(self.again(keyframe)),
             Err(error) if error.code() == DXGI_ERROR_ACCESS_LOST => {
                 drop(resource);
+                self.lost = true;
                 self.stop();
-                Ok(SourceFrame::Paused(SessionState::Starting))
+                return Ok(SourcePicture::Paused(SessionState::Starting));
             }
-            Err(error) => Err(io::Error::other(error)),
+            Err(error) => return Err(io::Error::other(error)),
+        }
+        self.lost = false;
+        self.failing = None;
+        let had_reference = self.last.is_some();
+        let geometry = self.budget.geometry();
+        // Pointer and rectangles belong to this frame: read before ReleaseFrame.
+        let pointer_moved = match self.pointer.as_mut() {
+            Some(pointer) => pointer.update(&duplication, &info, geometry.native_displayed()),
+            None => false,
+        };
+        let (verdict, mut regions) = if had_reference && info.AccumulatedFrames > 0 {
+            regions::read(
+                &duplication,
+                info.TotalMetadataBufferSize,
+                &self.budget,
+                self.size,
+            )
+        } else {
+            (regions::Verdict::Unknown, None)
+        };
+        let changed = !had_reference
+            || pointer_moved
+            || (info.AccumulatedFrames > 0 && verdict != regions::Verdict::Unchanged);
+        if pointer_moved {
+            // The regions do not name the pointer's old and new place.
+            regions = None;
+        }
+        let picture = match resource.as_ref() {
+            Some(resource) if changed => {
+                if !release() {
+                    regions = None;
+                }
+                self.last = None;
+                Some(self.read(resource))
+            }
+            _ => None,
+        };
+        drop(resource);
+        // SAFETY: the frame acquired above, released once.
+        let released = unsafe { duplication.ReleaseFrame() };
+        if let Err(error) = released {
+            drop(picture);
+            drop(regions);
+            if error.code() == DXGI_ERROR_ACCESS_LOST {
+                self.lost = true;
+                self.stop();
+                return Ok(SourcePicture::Paused(SessionState::Starting));
+            }
+            return Err(io::Error::other(error));
+        }
+        match picture {
+            // The GPU route has the overlay and no rotation: the regions and
+            // the pointer belong to CPU pixels only (BK3b).
+            Some(Ok(Some(Read::Gpu(picture)))) => {
+                drop(regions);
+                let picture = Picture::Gpu(picture);
+                self.size = picture.size();
+                self.last = Some(picture.clone());
+                Ok(SourcePicture::Frame(picture))
+            }
+            Some(Ok(Some(Read::Cpu(mut builder)))) => {
+                if let Some(regions) = regions {
+                    builder.set_regions(regions)?;
+                }
+                let rotation = match geometry.kind {
+                    CaptureKind::Dxgi(r) => r,
+                    _ => BgraRotation::Identity,
+                };
+                if let Some(pointer) = &self.pointer {
+                    let delivered = builder.size();
+                    pointer.blend_into(builder.pixels_mut(), delivered, geometry.native, rotation);
+                }
+                let image = builder.freeze();
+                let image = match image.rotate(
+                    rotation,
+                    geometry.limits,
+                    self.budget.grant()?,
+                    CaptureOwner::SourcePixels,
+                ) {
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                        return Ok(SourcePicture::Unchanged)
+                    }
+                    result => result?,
+                };
+                self.size = image.size();
+                let picture = Picture::Cpu(image);
+                self.last = Some(picture.clone());
+                Ok(SourcePicture::Frame(picture))
+            }
+            Some(Ok(None)) => {
+                self.stop();
+                Ok(SourcePicture::Paused(SessionState::Starting))
+            }
+            Some(Err(error)) if error.kind() == io::ErrorKind::WouldBlock => {
+                Ok(SourcePicture::Unchanged)
+            }
+            Some(Err(error)) => Err(error),
+            None => Ok(self.again(keyframe)),
         }
     }
     fn reopen(&mut self) -> io::Result<()> {
-        self.recovery.request(true);
-        self.stop();
-        let geometry = self.prepared.geometry()?;
-        self.budget.replace(geometry)?;
-        self.live = Some(duplicate(&self.prepared, &self.budget)?);
-        self.size = geometry.displayed();
-        Ok(())
+        let result = self.rebuild();
+        match &result {
+            Ok(()) => self.failing = None,
+            Err(error) => self.note_failure(error),
+        }
+        result
     }
     fn set_capture_active(&mut self, active: bool) -> io::Result<()> {
         self.recovery.request(active);
@@ -453,47 +475,5 @@ impl Grabber for DxgiCapture {
                 .activate(self.live.is_some(), || self.reopen())?;
         }
         Ok(())
-    }
-}
-fn rect(r: RECT) -> Option<Rect> {
-    Some(Rect {
-        x: u32::try_from(r.left).ok()?,
-        y: u32::try_from(r.top).ok()?,
-        width: u32::try_from(r.right.checked_sub(r.left)?).ok()?,
-        height: u32::try_from(r.bottom.checked_sub(r.top)?).ok()?,
-    })
-}
-struct NativeRects<T> {
-    values: Vec<T>,
-    bytes: u32,
-    _slice: CaptureSlice,
-}
-impl<T: Default + Clone> NativeRects<T> {
-    fn new(count: u64, grant: &CaptureGrant) -> io::Result<Self> {
-        let bytes = count
-            .checked_mul(std::mem::size_of::<T>() as u64)
-            .ok_or_else(|| io::Error::other("DXGI metadata overflow"))?;
-        let length = usize::try_from(count)
-            .map_err(|_| io::Error::other("DXGI metadata count exceeds address space"))?;
-        let capacity = u32::try_from(bytes)
-            .map_err(|_| io::Error::other("DXGI metadata exceeds API capacity"))?;
-        let slice = grant.claim(CaptureOwner::Metadata, bytes)?;
-        let mut values = Vec::new();
-        values
-            .try_reserve_exact(length)
-            .map_err(|_| io::Error::other("DXGI metadata allocation failed"))?;
-        values.resize(length, T::default());
-        Ok(Self {
-            values,
-            bytes: capacity,
-            _slice: slice,
-        })
-    }
-    fn used(&self, bytes: u32) -> Option<&[T]> {
-        let length = bytes as usize;
-        if bytes > self.bytes || length % std::mem::size_of::<T>() != 0 {
-            return None;
-        }
-        self.values.get(..length / std::mem::size_of::<T>())
     }
 }

@@ -414,6 +414,9 @@ pub fn hello(mode: SessionMode, metadata: bool) -> ScreenClientHello {
         icon_version: Some(super::app_icon::ICON_VERSION),
         family_version: Some(FAMILY_PROTOCOL),
         metadata_only: metadata,
+        decoders_v2: None,
+        gop_continue: None,
+        gop_continue_decoders: None,
     }
 }
 

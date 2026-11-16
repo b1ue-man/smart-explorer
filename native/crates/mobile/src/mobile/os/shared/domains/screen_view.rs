@@ -11,13 +11,19 @@
 //! - `screen.probe {relation, relationId, deviceId}` and `screen.windows
 //!   {…}` answer like `ProbeReport` and `WindowList` with camelCase keys.
 //! - `screen.viewOpen {…, mode, source?, decoders, displayWidth,
-//!   displayHeight, maxFps}` → `{"session"}`; progress comes as events
+//!   displayHeight, maxFps, maxRate?, codec?, decoder?}` → `{"session"}`
+//!   (`maxRate`: „Höchste Datenrate“ in bit/s, absent = automatic; `codec`
+//!   and `decoder`: `screen_view_codecs.rs`; the event `accepted` carries
+//!   `rateCeiling`: `automatic`, `applied` or `unsupported_by_host`);
+//!   progress comes as events
 //!   `{"type":"screenView","session","kind":"pending|accepted|state|stream|
 //!   stats|controlState|windows|error|ended", …}`.
-//! - `screen.viewSetMode`, `viewInput {session, events}` (an event is the
+//! - `screen.viewSetMode {…, maxRate?}` (`maxRate`: „Höchste Datenrate“ changed live, 0 =
+//!   automatic), `viewInput {session, events}` (an event is the
 //!   serde form of `InputEvent`; a `key` event may name the key instead of its
 //!   `hid_usage`), `viewControl {session, action}`, `viewListWindows`,
-//!   `viewKeyframe`, `viewClose` (idempotent).
+//!   `viewKeyframe`, `viewClose` (idempotent), `viewSetDecoders` (a new
+//!   „Codec“/„Dekodierer“ in the session, `screen_view_switch.rs`).
 use std::collections::BTreeMap;
 use std::sync::atomic::Ordering;
 use std::sync::Mutex;
@@ -31,7 +37,6 @@ use crate::daemon::StreamRequest;
 use crate::mobile::{ApiError, Runtime};
 use crate::screen::core::gop_stream::now_us;
 use crate::screen::core::input_model::{key_usage, InputEvent, MAX_INPUT_EVENTS};
-use crate::screen::core::negotiate::{CodecKind, CodecOffer, H264Profile};
 use crate::screen::core::pixel_convert::FrameSize;
 use crate::screen::core::window_list::SourceId;
 use crate::screen::core::wire_control::{
@@ -41,6 +46,8 @@ use crate::screen::core::wire_control::{
 use crate::screen::core::wire_hello::{SessionMode, MAX_DISPLAY_SIDE};
 use crate::share::{PeerOpenTarget, ShareProfiles};
 
+#[path = "screen_view_codecs.rs"]
+mod codecs;
 #[path = "screen_family.rs"]
 mod family;
 #[path = "screen_feed.rs"]
@@ -53,6 +60,8 @@ mod json_shapes;
 mod presented;
 #[path = "screen_view_run.rs"]
 mod run;
+#[path = "screen_view_switch.rs"]
+mod switch;
 use json_shapes::{camel, devices_json, probe_key, ProbeFacts};
 use run::{find, lock, ViewSession};
 
@@ -78,6 +87,7 @@ pub(super) fn handle(method: &str, args: &Value) -> Option<Result<Value, ApiErro
         "screen.viewIcon" => session_arg(args).and_then(|session| icons::request(&session, args)),
         "screen.viewOpen" => view_open(args),
         "screen.viewSetMode" => set_mode(args),
+        "screen.viewSetDecoders" => switch::set_decoders(args),
         "screen.viewInput" => input(args),
         "screen.viewVisibility" => visibility(args),
         "screen.viewPresented" => presented::confirm(args),
@@ -253,49 +263,6 @@ fn fps_arg(args: &Value, key: &str) -> Result<Option<u16>, ApiError> {
         .ok_or_else(|| invalid(format!("„{key}“ liegt zwischen 1 und 65535.")))
 }
 
-fn decoders_arg(args: &Value, mode: SessionMode) -> Result<Vec<CodecOffer>, ApiError> {
-    let mut offers = Vec::new();
-    for entry in args
-        .get("decoders")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-    {
-        let offer = match opt_str(entry, "codec") {
-            Some("tiles") => CodecOffer::tiles(),
-            Some("h264") => {
-                let profile = match opt_str(entry, "profile") {
-                    Some("cb") => H264Profile::ConstrainedBaseline,
-                    Some("high") => H264Profile::High,
-                    _ => return Err(invalid("Decoder: „profile“ ist cb oder high.")),
-                };
-                let offer = CodecOffer::h264(profile, opt_bool(entry, "hardware", false))
-                    .with_pixel_access(opt_bool(entry, "pixelAccess", false));
-                let mut offer = size_args(entry, "maxWidth", "maxHeight")
-                    .map_or(offer, |max| offer.with_max(max));
-                offer.max_macroblocks = entry
-                    .get("maxMacroblocks")
-                    .and_then(Value::as_u64)
-                    .filter(|n| *n > 0);
-                offer.max_macroblocks_per_second = entry
-                    .get("maxMacroblocksPerSecond")
-                    .and_then(Value::as_u64)
-                    .filter(|n| *n > 0);
-                offer
-            }
-            _ => return Err(invalid("Decoder: „codec“ ist h264 oder tiles.")),
-        };
-        offers.push(offer);
-    }
-    if !offers.iter().any(|offer| offer.codec == CodecKind::Tiles) {
-        offers.push(CodecOffer::tiles());
-    }
-    if mode == SessionMode::Preview {
-        offers.retain(|offer| offer.codec == CodecKind::Tiles);
-    }
-    Ok(offers)
-}
-
 fn view_open(args: &Value) -> Result<Value, ApiError> {
     if Runtime::installed().is_none() {
         return Err(ApiError::internal("Die Kernlaufzeit läuft nicht."));
@@ -336,14 +303,30 @@ fn view_open(args: &Value) -> Result<Value, ApiError> {
         )
         .map_err(|error| invalid(error.to_string()))?;
     }
+    // „Codec“ and „Dekodierer“ (plan 2026-11-14 „Bildkette“ 4.10, BK6).
+    let (codec, decoder) = codecs::codec_args(args)?;
     let request = StreamRequest {
         mode,
         source: source_arg(args)?,
-        decoders: decoders_arg(args, mode)?,
+        decoders: codecs::decoders_arg(args, mode)?,
         display_size: size_args(args, "displayWidth", "displayHeight"),
         max_fps: fps_arg(args, "maxFps")?.unwrap_or(30),
+        max_rate_bps: match opt_i64(args, "maxRate") {
+            None => None,
+            Some(rate) => Some(
+                u64::try_from(rate)
+                    .ok()
+                    .filter(|rate| *rate > 0)
+                    .ok_or_else(|| invalid("„maxRate“ ist eine positive Zahl (bit/s)."))?,
+            ),
+        },
         frame_capabilities,
         expected_node: opt_str(args, "expectedNodeId").map(str::to_string),
+        codec,
+        decoder,
+        // B-36: the Android sink opens a decoder per picture group.
+        gop_continue: false,
+        gop_continue_decoders: Vec::new(),
     };
     let id = run::start(mode, target.peer(), request, own_device())?;
     Ok(json!({ "session": id }))
@@ -364,6 +347,17 @@ fn set_mode(args: &Value) -> Result<Value, ApiError> {
         "full" => StreamMode::Full,
         _ => return Err(invalid("„mode“ ist preview oder full.")),
     };
+    // „Höchste Datenrate“ changed live (BK7b): 0 is automatic. The frame leaves only for a
+    // host that announced `rate_ceiling_v1` (`viewer_client_tasks.rs`).
+    let ceiling = opt_i64(args, "maxRate")
+        .map(|rate| {
+            u64::try_from(rate)
+                .map(|rate| (rate > 0).then_some(rate))
+                .map_err(|_| {
+                    invalid("„maxRate“ ist 0 (automatisch) oder eine positive Zahl (bit/s).")
+                })
+        })
+        .transpose()?;
     session.send(&ViewerFrame::SetMode(SetMode {
         mode,
         source: source_arg(args)?,
@@ -372,6 +366,9 @@ fn set_mode(args: &Value) -> Result<Value, ApiError> {
         sharpness: opt_bool(args, "sharpness", false),
         lossless: opt_bool(args, "lossless", false),
     }))?;
+    if let Some(ceiling) = ceiling {
+        session.send(&ViewerFrame::RateCeiling(ceiling))?;
+    }
     Ok(json!({}))
 }
 

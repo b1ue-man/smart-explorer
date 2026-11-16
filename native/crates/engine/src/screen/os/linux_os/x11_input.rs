@@ -58,7 +58,8 @@ pub(super) struct Area {
 /// The root position of `x`, `y` (0–65535 over `area`).
 pub(super) fn root_point(area: Area, x: u16, y: u16) -> (i16, i16) {
     let along = |pos: u16, start: i32, length: i32| {
-        let pixel = i64::from(start) + i64::from(pos) * i64::from((length - 1).max(0)) / 65_535;
+        let span = (i64::from(length) - 1).max(0);
+        let pixel = i64::from(start) + i64::from(pos) * span / 65_535;
         pixel.clamp(i64::from(i16::MIN), i64::from(i16::MAX)) as i16
     };
     (along(x, area.x, area.width), along(y, area.y, area.height))
@@ -237,6 +238,38 @@ pub fn inject(events: &[InputEvent]) -> Result<(), ControlBlock> {
     }
 }
 
+/// The root area of `source` now, read on the input's own connection (merge
+/// W2: the input endpoint of an X11 source, `x11_input_lane.rs`, checks the
+/// geometry without the capture's connection).
+pub(super) fn area_now(source: &SourceId) -> Result<Area, ControlBlock> {
+    let mut state = state();
+    if state.conn.is_none() {
+        let (conn, screen) =
+            RustConnection::connect(None).map_err(|_| ControlBlock::ControlUnavailable)?;
+        if conn
+            .extension_information(x11rb::protocol::xtest::X11_EXTENSION_NAME)
+            .ok()
+            .flatten()
+            .is_none()
+        {
+            return Err(ControlBlock::UnsupportedOnHost);
+        }
+        let root = conn.setup().roots[screen].root;
+        state.conn = Some((conn, root));
+    }
+    let Some((conn, root)) = state.conn.as_ref() else {
+        return Err(ControlBlock::ControlUnavailable);
+    };
+    match area_of(conn, *root, source) {
+        Ok(area) => Ok(area),
+        Err(_) => {
+            // A broken connection is made anew with the next call.
+            state.conn = None;
+            Err(ControlBlock::ControlUnavailable)
+        }
+    }
+}
+
 /// Positions belong to a captured source, not a freshly relocated output.
 /// Callers retain their source/Frame/PRESENTED proof across the worker queue.
 pub fn inject_bound(
@@ -268,8 +301,10 @@ pub fn inject_bound(
     }
     for event in events {
         if let InputEvent::PointerAbs { x, y } | InputEvent::Touch { x, y, .. } = event {
-            let px = i64::from(area.x) + i64::from(*x) * i64::from(area.width - 1) / 65_535;
-            let py = i64::from(area.y) + i64::from(*y) * i64::from(area.height - 1) / 65_535;
+            let px =
+                i64::from(area.x) + i64::from(*x) * (i64::from(area.width) - 1).max(0) / 65_535;
+            let py =
+                i64::from(area.y) + i64::from(*y) * (i64::from(area.height) - 1).max(0) / 65_535;
             if i16::try_from(px).is_err() || i16::try_from(py).is_err() {
                 return Err(ControlBlock::ControlUnavailable);
             }
@@ -355,6 +390,31 @@ pub fn release(events: &[InputEvent]) -> Result<(), ControlBlock> {
         return Err(ControlBlock::ControlUnavailable);
     }
     Ok(())
+}
+
+/// Keep the host gate's admitted member geometry through the final XTest
+/// boundary. A movement/resize after that gate is denied by `inject_bound`.
+pub(in crate::screen::os) fn inject_x11_family(
+    member: &crate::remote_window::CaptureMember,
+    events: &[InputEvent],
+    inject: impl FnOnce(&SourceId, Area, &[InputEvent]) -> Result<(), ControlBlock>,
+) -> Result<(), ControlBlock> {
+    if !member.input || !member.geometry.valid() {
+        return Err(ControlBlock::ControlUnavailable);
+    }
+    let window = u32::try_from(member.binding.native.0)
+        .ok()
+        .filter(|id| *id > 1)
+        .ok_or(ControlBlock::ControlUnavailable)?;
+    let area = Area {
+        x: member.geometry.x,
+        y: member.geometry.y,
+        width: i32::try_from(member.geometry.width)
+            .map_err(|_| ControlBlock::ControlUnavailable)?,
+        height: i32::try_from(member.geometry.height)
+            .map_err(|_| ControlBlock::ControlUnavailable)?,
+    };
+    inject(&SourceId::Window(window.to_string()), area, events)
 }
 
 #[cfg(test)]

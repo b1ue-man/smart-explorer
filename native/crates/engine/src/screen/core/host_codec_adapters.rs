@@ -28,6 +28,26 @@ pub enum HostCodecPlan {
         output_buffer_bytes: u64,
     },
 }
+impl HostCodecPlan {
+    /// The plan of a session's codec on `platform`: the tiles; on Windows
+    /// the Media Foundation transforms (H.264, HEVC, AV1); elsewhere the
+    /// CPU-side I420 plan every other encoder shares (OpenH264, NVENC,
+    /// VA-API, SVT-AV1).
+    pub fn for_session(
+        codec: super::negotiate::CodecKind,
+        platform: super::wire_hello::HostPlatform,
+    ) -> Self {
+        if codec == super::negotiate::CodecKind::Tiles {
+            Self::Tiles
+        } else if platform == super::wire_hello::HostPlatform::Windows {
+            Self::MediaFoundation {
+                output_buffer_bytes: 64 * 1024 * 1024,
+            }
+        } else {
+            Self::OpenH264
+        }
+    }
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HostInputPixels {
     BorrowedSource,
@@ -74,11 +94,7 @@ impl HostOutputPlan {
             legacy_limits: None,
         })
     }
-    pub fn new(
-        contract: HostContract,
-        size: FrameSize,
-        codec: HostCodecPlan,
-    ) -> io::Result<Self> {
+    pub fn new(contract: HostContract, size: FrameSize, codec: HostCodecPlan) -> io::Result<Self> {
         if let HostContract::Versioned(contract) = contract {
             contract.validate()?;
         }
@@ -172,11 +188,7 @@ impl HostOutputPlan {
     /// Adds local host owners only. A local viewer keeps its independent W.
     /// Native metadata, pending old samples, and resize generations are added
     /// by the prepared source as actual separate owners, before approval.
-    pub fn append_to(
-        &self,
-        source: &mut CapturePlan,
-        input: HostInputPixels,
-    ) -> io::Result<()> {
+    pub fn append_to(&self, source: &mut CapturePlan, input: HostInputPixels) -> io::Result<()> {
         if !self.include_output {
             return Ok(());
         }

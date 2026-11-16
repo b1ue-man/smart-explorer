@@ -1,13 +1,19 @@
 //! Snapshot uses the same capture/encoder/header functions as the live pipeline.
 use super::*;
 use crate::screen::core::{
-    frame_budget::{contract_matches, FrameCapabilities, MAX_WORKING_BYTES},
+    frame_budget::{
+        contract_matches, FrameCapabilities, FrameContract, FrameLimits, MAX_WORKING_BYTES,
+    },
     frame_memory::MemoryPool,
+    frame_size_caps::PacketBudget,
     host_backend::{ScreenDecoder, TilesScreenDecoder},
-    pixel_convert::{downscale_bgra_with_limits, BgraImage},
-    wire_binary::{FrameRecord, FLAG_KEYFRAME, FLAG_MORE},
+    host_pipeline::Pipeline,
+    pixel_convert::{downscale_bgra_with_limits, BgraImage, FrameSize},
+    wire_binary::{FrameRecord, GopHeader, StreamKind, FLAG_KEYFRAME, FLAG_MORE},
 };
+use iroh::endpoint::Connection;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 struct Source {
     size: FrameSize,
@@ -56,7 +62,9 @@ fn batches_task_b6_snapshot_preserves_accepted_limits_family_and_legacy_pixels()
             }),
             encoder: None,
             encoder_book: None,
+            refused: Vec::new(),
             memory: None,
+            chain: Default::default(),
         };
         let shot = still_tiles(&mut stage, 4, FrameSize::MAX, accepted).unwrap();
         let header = shot.header(9);
@@ -142,7 +150,9 @@ fn batches_task_b6_abandoned_capture_output_retires_records_before_lease() {
         }),
         encoder: None,
         encoder_book: None,
+        refused: Vec::new(),
         memory: Some(memory),
+        chain: Default::default(),
     };
     let result = ResultOwner {
         records: vec![vec![0; 64]],

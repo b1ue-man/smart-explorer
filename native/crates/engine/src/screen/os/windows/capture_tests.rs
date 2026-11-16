@@ -420,7 +420,8 @@ fn screen_task_windows_dxgi_fallback_captures_monitor() {
         .find(|monitor| monitor.primary)
         .or(monitors.first())
         .expect("the session has a monitor");
-    assert!(backend.limits().contains(&"no_cursor_capture".to_string()));
+    // Desktop Duplication delivers the pointer since plan bildkette B-13.
+    assert!(!backend.limits().contains(&"no_cursor_capture".to_string()));
     let mut source = open_admitted(&backend, &SourceId::Monitor(primary.id.clone()), None)
         .expect("the monitor opens with the duplication");
     let image = next_picture(source.as_mut(), Duration::from_secs(5));

@@ -159,6 +159,9 @@ fn connect_session(session: &ActiveSession) -> io::Result<(RustConnection, usize
         ));
     }
     let stream = UnixStream::connect(&socket)?;
+    let timeout = Some(std::time::Duration::from_secs(2));
+    stream.set_read_timeout(timeout)?;
+    stream.set_write_timeout(timeout)?;
     if !server_allowed(peer_uid(&stream)?, uid) {
         return Err(refused("the X server belongs to another account"));
     }

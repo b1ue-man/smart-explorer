@@ -1,5 +1,44 @@
-//! Portable legacy tile adapters used by decoder and benchmark callers.
+//! Portable legacy tile adapters and shared codec data structures.
 use super::*;
+
+/// How the chroma planes of a decoded picture are stored.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Chroma {
+    /// One plane with interleaved U and V samples (`YuvPicture::uv`).
+    Nv12,
+    /// Separate planes of the same row pitch (`YuvPicture::uv_stride`);
+    /// `YuvPicture::uv` stays empty.
+    I420 { u: Vec<u8>, v: Vec<u8> },
+}
+
+/// The planes of a decoded picture in limited range, as the decoder made
+/// them (SCR-M7, decision C4: the viewer converts them to RGB on the GPU).
+/// Rows are `y_stride` and `uv_stride` bytes apart; the picture's size is
+/// the one of its picture stream.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct YuvPicture {
+    pub y: Vec<u8>,
+    pub y_stride: usize,
+    pub uv: Vec<u8>,
+    pub uv_stride: usize,
+    pub chroma: Chroma,
+    pub matrix: YuvMatrix,
+}
+
+/// Why a source cannot be opened; the key is the reason of `no_display`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SourceRefusal {
+    pub reason: String,
+}
+
+impl SourceRefusal {
+    pub fn new(reason: &str) -> Self {
+        Self {
+            reason: reason.into(),
+        }
+    }
+}
+
 /// The lossless tile codec as a `ScreenEncoder`.
 pub struct TilesScreenEncoder {
     encoder: TileEncoder,
@@ -66,6 +105,9 @@ impl ScreenEncoder for TilesScreenEncoder {
 pub struct TilesScreenDecoder {
     decoder: TileDecoder,
     decoded: Option<super::super::decoded_frame::DecodedFrame>,
+    /// A shown picture given back (`recycle_picture`); the next hand-over
+    /// copies into it instead of allocating.
+    spare: Option<BgraImage>,
 }
 
 impl TilesScreenDecoder {
@@ -73,6 +115,7 @@ impl TilesScreenDecoder {
         Ok(Self {
             decoder: TileDecoder::new(size)?,
             decoded: None,
+            spare: None,
         })
     }
 }
@@ -85,6 +128,7 @@ impl TilesScreenDecoder {
         Ok(Self {
             decoder: TileDecoder::new_with_limits(size, limits)?,
             decoded: None,
+            spare: None,
         })
     }
 }
@@ -111,5 +155,36 @@ impl ScreenDecoder for TilesScreenDecoder {
 
     fn picture(&self) -> &BgraImage {
         self.decoder.image()
+    }
+
+    /// The picture is the reference of the next tile frame, so it stays;
+    /// the hand-over is the one necessary copy, into a returned buffer of
+    /// the same size when there is one.
+    fn take_picture(&mut self) -> BgraImage {
+        let image = self.decoder.image();
+        match self.spare.take() {
+            // Regions cannot be cleared, so a spare with regions serves
+            // only a picture that has regions of its own (same as a clone).
+            Some(mut spare)
+                if spare.size() == image.size()
+                    && (spare.regions().is_none() || image.regions().is_some()) =>
+            {
+                spare.data_mut().copy_from_slice(image.data());
+                match image.regions() {
+                    Some(regions) => match spare.set_regions(regions.clone()) {
+                        Ok(()) => spare,
+                        Err(_) => image.clone(),
+                    },
+                    None => spare,
+                }
+            }
+            _ => image.clone(),
+        }
+    }
+
+    fn recycle_picture(&mut self, image: BgraImage) {
+        if image.size() == self.decoder.image().size() {
+            self.spare = Some(image);
+        }
     }
 }

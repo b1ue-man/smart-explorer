@@ -165,7 +165,7 @@ impl ScreenHostBackend for SyntheticBackend {
     ) -> io::Result<Box<dyn ScreenEncoder>> {
         match choice.codec {
             CodecKind::Tiles => Ok(Box::new(TilesScreenEncoder::new(size)?)),
-            CodecKind::H264 => Err(io::Error::new(
+            CodecKind::H264 | CodecKind::Hevc | CodecKind::Av1 => Err(io::Error::new(
                 io::ErrorKind::Unsupported,
                 "this host has no H.264 encoder yet",
             )),

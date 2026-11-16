@@ -508,13 +508,13 @@ eine getrennte Frage und unverändert.
 1. Wayland-Gastgeber zeigen beim Steuern weiter zwei Zeiger (`VERB-WAYLAND-ZEIGER`); ebenso Graphics Capture vor Windows 10 Version 2004
    und jeder Gastgeber bis v0.5.196.
 2. Hostprozess und Daemon müssen aus derselben Installation stammen (`VERB-HOSTPROZESS-VERSION`).
-3. `se screen bench` gegen ein Gerät liefert nur `decode` und `capture_to_arrival` (`VERB-BENCH-STATIONEN`).
+3. `se screen bench` gegen einen Gastgeber der Fassung v0.5.196 liefert nur `decode` und `capture_to_arrival`; ein Gastgeber mit der Fähigkeit `frame_timing_v1` meldet seine Stationen (BK0, Stand 2026-11-15: umgesetzt, nicht übersetzt, nicht auf Hardware gelaufen, wartet auf Suite und Release; `VERB-BENCH-STATIONEN`).
 4. Vier Zahlenwerte sind Schätzungen bis zum Suite-Lauf: T, `DRIVER_RATE`, Sendebündel 40/80 und die Puffergröße der Pumpe mit ihrem Budget (`VERB-MESSUNG`);
    die Messungen M2 und M3 nutzen Stellvertreter für den Bildstrom und die Listenanfrage.
 5. Eingehende Verbindungen bekommen die großen Sendebündel nur bei lesbarer ALPN im ersten Initial-Paket (`VERB-EINGANG-BUENDEL`).
 6. Das Verhalten von Graphics Capture beim Umschalten der Zeigeraufnahme auf stehendem Bildschirm ist eine Annahme (`VERB-WGC-UMSCHALTEN`).
 7. Die bedingten Pakete B1 bis B5 sind nicht gebaut; ihre Bedingungen entscheidet der Suite-Lauf (`VERB-BEDINGT`).
-8. Der Umbau der Bildkette nach `bildkette.md` ist der nächste Batch (`VERB-BILDKETTE`, Release 2); BK0 bis BK12 sind nicht begonnen.
+8. Der Umbau der Bildkette nach `bildkette.md` (`VERB-BILDKETTE`) ist Stand 2026-11-15 umgesetzt, nicht übersetzt, nicht auf Hardware gelaufen und wartet auf Suite und Release (BK0 bis BK9 und BK12; BK10 verworfen, BK11 entfällt). Nutzer 2026-11-14: „nicht nach irgend nem release, ein release wenn du fertig bist“; der eigene „Release 2“ nach diesem Batch ist damit überholt, es gibt ein Release für alles Fertige.
 9. Das Paket P8 ist umgesetzt (Stand 2026-11-14): Registerzeilen in `docs/tests/register.tsv`, die Teile `verbindungen` und `verbindungen-gesamt` in `native/test-crates-task.py` mit den Regeln in `native/crates_task_verbindungen.py`, Workflow `.github/workflows/crates-task.yml`, Abschnitt in `docs/RELEASING.md`. Danach sind die Lücken des zweiten Integrationsdurchgangs des Vorauftrags geschlossen (Paket E2, Testzeilen im Register und in den Listen der Suite). Nicht gebaut, nicht getestet, nicht committet.
 
 **Nächste Schritte.** Integration; Commits je Meilenstein mit ihren Registerzeilen; Push; ein Lauf `crates-task.yml` mit `part=suite`;

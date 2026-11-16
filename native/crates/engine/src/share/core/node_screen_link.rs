@@ -178,6 +178,16 @@ impl ScreenLink {
             display_size: request.display_size,
             max_fps: request.max_fps,
             frame_capabilities: request.frame_capabilities,
+            // `viewer_client::handshake_for` places HEVC and AV1 (B-31).
+            decoders_v2: None,
+            // B-36: only a viewer that keeps its decoder over a continuation.
+            gop_continue: request
+                .gop_continue
+                .then_some(crate::screen::core::gop_continue::GOP_CONTINUE_V1),
+            // B-36 per codec: the decoders that continue; a host before
+            // this field (or of v0.5.196) ignores it.
+            gop_continue_decoders: (!request.gop_continue_decoders.is_empty())
+                .then(|| request.gop_continue_decoders.clone()),
         };
         hello.proof = hmac_proof(
             &self.endpoint.relation_secret,

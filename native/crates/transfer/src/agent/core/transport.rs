@@ -283,6 +283,9 @@ fn establish((r, w): AgentStreams, handshake_deadline: Duration) -> io::Result<(
     let features = ServerFeatures::parse(&version);
     mux.link_aware_hash
         .store(features.link_aware_hash, Ordering::Release);
+    if features.origin {
+        mux.enable_origin();
+    }
     if features.credit {
         mux.enable_credit()?;
     }

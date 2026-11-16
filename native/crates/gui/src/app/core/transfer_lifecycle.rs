@@ -28,7 +28,8 @@ impl App {
         }
         self.transfer_center.trim_finished();
         if refresh && !self.root_path.is_empty() {
-            self.rescan();
+            // Nobody navigated: a finished transfer changed the folder (E4c).
+            self.rescan_background();
         }
     }
 

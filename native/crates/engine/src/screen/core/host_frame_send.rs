@@ -21,6 +21,9 @@ impl Pipeline {
             return Ok(Produced::Idle);
         }
         let stale = Duration::from_micros(STALE_STREAM_US);
+        // B-36: a new stream whose first frame is no key frame continues the
+        // encoder's chain from the confirmed picture.
+        let mut continued = false;
         if self.gop.is_none() {
             let header = GopHeader {
                 gop_id: self.next_gop_id,
@@ -40,7 +43,19 @@ impl Pipeline {
                 result=crate::screen::core::gop_stream::write_with_route(connection,stale,GopWriter::open(connection,header))=>result,
             };
             match opened {
-                Ok(gop) => self.gop = Some(gop),
+                Ok(mut gop) => {
+                    continued = !frame.keyframe && self.continue_from.is_some();
+                    if continued {
+                        gop.mark_continuation();
+                        super::super::chain_meter::lock(&self.chain).on_continued();
+                    }
+                    self.confirmed.opened(gop.header().gop_id, continued);
+                    if !continued {
+                        self.key_gop = gop.header().gop_id;
+                    }
+                    self.continue_from = None;
+                    self.gop = Some(gop);
+                }
                 _ if connection.close_reason().is_some() => return Ok(Produced::Closed),
                 // No free stream slot or credit yet: the frame is lost, the
                 // next one is a key frame on a new stream.
@@ -60,6 +75,7 @@ impl Pipeline {
             / u128::from(self.rate.target_bps().max(1)))
         .min(u128::from(u64::MAX)) as u64;
         let active_budget = stale.saturating_add(Duration::from_micros(serialization_us));
+        let send_started = std::time::Instant::now();
         let writing = crate::screen::core::gop_stream::write_with_route(
             connection,
             active_budget,
@@ -70,7 +86,13 @@ impl Pipeline {
             result=writing=>result,
         };
         let bytes = match written {
-            Ok(bytes) => bytes,
+            Ok(bytes) => {
+                // Station `send` (BK0): all records handed to the stream.
+                let micros = u64::try_from(send_started.elapsed().as_micros()).unwrap_or(u64::MAX);
+                super::super::chain_meter::lock(&self.chain)
+                    .record_us(super::super::chain_meter::Station::Send, micros);
+                bytes
+            }
             _ if connection.close_reason().is_some() => return Ok(Produced::Closed),
             _ => {
                 self.reset_stream();
@@ -81,7 +103,9 @@ impl Pipeline {
             self.reset_stream();
             return Ok(Produced::Reset);
         }
-        self.presentation.sent(gop_id, frame_id, frame.keyframe);
+        // A continuation starts the presentation of its stream like a key frame.
+        self.presentation
+            .sent(gop_id, frame_id, frame.keyframe || continued);
         permit.sent(gop_id, frame_id, bytes);
         let sent_us = now_us();
         self.pacer.on_frame_sent(SentFrame {

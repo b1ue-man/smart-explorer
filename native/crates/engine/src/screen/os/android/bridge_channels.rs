@@ -131,6 +131,10 @@ pub struct Prereqs {
     pub working_bytes: Option<u64>,
     /// Reported MediaCodec profiles, hardware and explicit dimensional capability evidence.
     pub encoders: Vec<crate::screen::core::negotiate::CodecOffer>,
+    /// HEVC and AV1 whose MediaCodec encoder the app refused to open in this run
+    /// (`encoder_failed` of a session of that codec): not offered again until the app
+    /// reports other encoders, so the next session negotiates H.264 (BK7b, B-26).
+    pub refused: Vec<crate::screen::core::negotiate::CodecKind>,
     /// Running apps: (package, label).
     pub apps: Vec<(String, String)>,
 }
@@ -187,6 +191,18 @@ pub fn registry() -> Option<Arc<ScreenRegistry>> {
 
 pub fn prereqs() -> Prereqs {
     with(|register| register.prereqs.clone())
+}
+
+/// Notes that the app's encoder of `codec` (HEVC or AV1) failed to open: it is left out of the host's offers.
+pub fn refuse_codec(codec: crate::screen::core::negotiate::CodecKind) {
+    if codec.is_legacy() {
+        return;
+    }
+    set_prereqs(|prereqs| {
+        if !prereqs.refused.contains(&codec) {
+            prereqs.refused.push(codec);
+        }
+    });
 }
 
 pub fn set_prereqs(change: impl FnOnce(&mut Prereqs)) -> Prereqs {

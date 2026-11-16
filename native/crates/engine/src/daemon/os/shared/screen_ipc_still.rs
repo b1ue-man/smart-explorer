@@ -80,6 +80,11 @@ impl Relayed {
             display_size: None,
             max_fps: 1,
             frame_capabilities: None,
+            max_rate_bps: None,
+            codec: None,
+            decoder: None,
+            gop_continue: false,
+            gop_continue_decoders: Vec::new(),
         };
         let mut stream = if metadata {
             match expected_node {

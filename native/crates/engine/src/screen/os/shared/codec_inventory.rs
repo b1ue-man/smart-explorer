@@ -2,9 +2,12 @@
 //! „Dekodierer“): on Windows the Media Foundation transforms found at run
 //! time (`MFStartup` and `MFTEnumEx`; without an H.264 encoder there is no
 //! Media Foundation entry, nothing is derived from the edition), hardware
-//! before software; on Windows and Linux OpenH264 when the user switched it
-//! on; the lossless tiles always last (`CodecRegistry`). Android has no
-//! H.264 before SCR-M8.
+//! before software; on Linux the GPU vendor coders found at run time (BK4:
+//! NVENC, VA-API per render node; plan 4.10a); on Windows and Linux
+//! OpenH264 when the user switched it on; on Linux SVT-AV1 and dav1d where
+//! the system has them (plan 2026-11-14 „Bildkette“ BK6, B-25); the
+//! lossless tiles always last (`CodecRegistry`). Android has no H.264
+//! before SCR-M8.
 //!
 //! OpenH264 encodes Constrained Baseline up to 3840 × 2160. Its decoder
 //! reports `cb` and `high`, because a host never sends B frames, so its
@@ -52,10 +55,17 @@ pub struct Inventory {
 /// it the check runs before every load.
 pub fn inventory(openh264_dir: Option<&Path>, verify: bool) -> Inventory {
     let (mut encoders, mut decoders) = super::media_foundation_codecs();
+    let (hardware_encoders, hardware_decoders) = super::hardware_codecs();
+    encoders.extend(hardware_encoders);
+    decoders.extend(hardware_decoders);
     let (openh264_encoders, openh264_decoders, openh264) =
         super::openh264_codecs(openh264_dir, verify);
     encoders.extend(openh264_encoders);
     decoders.extend(openh264_decoders);
+    // BK6 (B-25): software AV1 after the hardware coders of every codec.
+    let (av1_encoders, av1_decoders) = super::software_av1_codecs();
+    encoders.extend(av1_encoders);
+    decoders.extend(av1_decoders);
     Inventory {
         registry: CodecRegistry::new(encoders, decoders),
         openh264,
@@ -85,7 +95,14 @@ mod tests {
             profiles: Vec::new(),
             name: "tiles".into(),
             hardware: false,
+            profile_names: Vec::new(),
+            refused_settings: Vec::new(),
         }
+    }
+
+    /// The software AV1 rows of BK6 (present where the system has them).
+    fn av1_soft(entry: &CodecEntry) -> bool {
+        matches!(entry.name.as_str(), "svt-av1" | "dav1d")
     }
 
     #[test]
@@ -100,17 +117,43 @@ mod tests {
         assert_eq!(report.encoders.last(), Some(&tiles_entry()));
         assert_eq!(report.decoders.last(), Some(&tiles_entry()));
         let others = report.encoders.len() - 1;
+        // BK4: a Linux machine with a GPU coder lists it with `hardware`.
+        let (gpu_encoders, gpu_decoders) = super::super::hardware_codecs();
         if super::super::media_foundation_present() {
             assert!(
                 others > 0,
                 "Media Foundation without an encoder row: {report:?}"
             );
             assert!(report.encoders.iter().all(|entry| entry.name != "openh264"));
+        } else if !gpu_encoders.is_empty() || !gpu_decoders.is_empty() {
+            assert!(report.encoders.iter().all(|entry| entry.name != "openh264"));
+            let rows = report.encoders.iter().chain(&report.decoders);
+            assert!(rows
+                .filter(|entry| entry.codec != CodecKind::Tiles && !av1_soft(entry))
+                .all(|entry| entry.hardware));
         } else {
-            assert_eq!(report.encoders, vec![tiles_entry()]);
-            assert_eq!(report.decoders, vec![tiles_entry()]);
-            assert_eq!(found.registry.encoder_offers(), vec![CodecOffer::tiles()]);
-            assert_eq!(found.registry.decoder_offers(), vec![CodecOffer::tiles()]);
+            // BK6: SVT-AV1 and dav1d of the system may stand before the tiles.
+            let rows = |list: &[CodecEntry]| -> Vec<CodecEntry> {
+                list.iter()
+                    .filter(|entry| !av1_soft(entry))
+                    .cloned()
+                    .collect()
+            };
+            let offers = |list: Vec<CodecOffer>| -> Vec<CodecOffer> {
+                list.into_iter()
+                    .filter(|offer| offer.codec != CodecKind::Av1 || offer.hardware)
+                    .collect()
+            };
+            assert_eq!(rows(&report.encoders), vec![tiles_entry()]);
+            assert_eq!(rows(&report.decoders), vec![tiles_entry()]);
+            assert_eq!(
+                offers(found.registry.encoder_offers()),
+                vec![CodecOffer::tiles()]
+            );
+            assert_eq!(
+                offers(found.registry.decoder_offers()),
+                vec![CodecOffer::tiles()]
+            );
         }
         assert_eq!(report.openh264.state, OpenH264State::Absent);
         let json = serde_json::to_value(&report).unwrap();

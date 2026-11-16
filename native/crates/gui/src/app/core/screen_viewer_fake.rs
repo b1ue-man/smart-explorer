@@ -59,6 +59,7 @@ pub(super) fn hello(view: CapabilityDecision) -> ScreenHelloOk {
     ScreenHelloOk {
         family_version: None,
         icon_version: None,
+        encoders_v2: None,
         frame_contract: None,
         authorization: ScreenAuthorization {
             view,
@@ -150,6 +151,8 @@ impl Fake {
         let event = StreamEvent::Accepted {
             hello: hello(self.view),
             path: "direct".into(),
+            rate_ceiling: crate::daemon::RateCeilingState::Automatic,
+            set_decoders: false,
         };
         let senders = self.inner.events.lock().unwrap();
         senders[index].send(Ok(event)).unwrap();

@@ -160,6 +160,13 @@ impl ScreenSource for RegisteredSource {
     fn capture(&mut self, frame: u64, keyframe: bool) -> io::Result<SourceFrame> {
         self.source.capture(frame, keyframe)
     }
+    fn capture_picture(
+        &mut self,
+        frame: u64,
+        keyframe: bool,
+    ) -> io::Result<crate::screen::core::capture_picture::SourcePicture> {
+        self.source.capture_picture(frame, keyframe)
+    }
     fn capture_snapshot(
         &mut self,
         frame: u64,

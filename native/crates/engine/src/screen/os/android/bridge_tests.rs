@@ -322,3 +322,6 @@ fn batches_capture_task_android_wide_native_still_scales_once_without_false_resi
         frame => panic!("native geometry must not become a scaled resize event: {frame:?}"),
     }
 }
+
+#[path = "bridge_codec_task_tests.rs"]
+mod bridge_codec_task_tests;

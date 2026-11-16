@@ -23,6 +23,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.filterIsInstance
@@ -31,6 +32,7 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.decodeFromJsonElement
@@ -70,6 +72,11 @@ data class ScreenSessionState(
     /** An automatic codec fallback, separate from a terminal session error. */
     val codecFallback: String? = null,
     val stats: JsonObject? = null,
+    /** `rateCeiling` of the `accepted` event: `automatic`, `applied` or `unsupported_by_host` (B-09); `null` before it. */
+    val rateCeiling: String? = null,
+    /** Limits sent during the session ([ScreenSession.setMaxRate]) and answers to them (`rateCeiling` events, r1). */
+    val rateSends: Int = 0,
+    val rateAnswers: Int = 0,
     val ended: ScreenViewEvent.Ended? = null,
     val iconPeer: String = "",
     val iconFetch: (suspend (ScreenIconRequest) -> ScreenIconReply?)? = null,
@@ -80,12 +87,17 @@ data class ScreenSessionState(
     val canControl: Boolean
         get() = accepted && control != "off" && (input.pointer || input.touch || input.keyboard || input.text)
 
+    /** [rateCeiling] answers the limit chosen last: every limit sent during the session got its answer (r1). */
+    val rateAnswered: Boolean
+        get() = rateSends > 0 && rateAnswers >= rateSends
+
     /** The state after [event]. */
     fun apply(event: ScreenViewEvent): ScreenSessionState = when (event) {
         is ScreenViewEvent.Pending -> copy(pending = event.capability, state = "waiting_for_approval")
         is ScreenViewEvent.Accepted -> copy(
             iconVersion = event.body["iconVersion"]?.toString()?.toIntOrNull(),
             accepted = true,
+            rateCeiling = (event.body["rateCeiling"] as? JsonPrimitive)?.takeIf { it.isString }?.content,
             frameContract = ((event.body["frameContract"] ?: event.body["frame_contract"]) as? JsonObject)?.get("version")?.jsonPrimitive?.intOrNull == 2,
             bufferBudget = event.body["bufferBudget"]?.let {
                 runCatching {screenJson.decodeFromJsonElement<ScreenBufferBudget>(it)}.getOrNull()
@@ -114,6 +126,7 @@ data class ScreenSessionState(
             },
         )
         is ScreenViewEvent.Stats -> copy(stats = event.body)
+        is ScreenViewEvent.RateCeiling -> copy(rateCeiling = event.state, rateAnswers = rateAnswers + 1)
         is ScreenViewEvent.ControlState -> copy(holder = event.holder, blocked = event.blocked)
         is ScreenViewEvent.Windows -> copy(windows = runCatching { screenJson.decodeFromJsonElement<ScreenWindows>(event.body) }.getOrNull())
         is ScreenViewEvent.Family -> copy(family = screenJson.decodeFromJsonElement<FamilyState>(event.body))
@@ -137,6 +150,9 @@ interface ScreenBackend {
 
     fun offers(): List<DecoderOffer>
 
+    /** The offers for the viewer's own choice „Codec“ and „Dekodierer“ (BK7b); a backend that does not know them offers [offers]. */
+    fun offers(choice: ViewerCodecChoice): List<DecoderOffer> = offers()
+
     /** The pictures of session [session]. */
     fun pictures(session: Long): PictureSource
 
@@ -155,6 +171,13 @@ interface ScreenBackend {
     ): Long
 
     suspend fun setMode(session: Long, mode: String, source: String? = null, width: Int? = null, height: Int? = null, fps: Int? = null, sharpness: Boolean = false, lossless: Boolean = false)
+
+    /** [open] with the viewer's choice „Codec“, „Dekodierer“ and „Höchste Datenrate“; a backend that does not know them opens without. */
+    suspend fun openWith(target: ScreenTarget, mode: String, source: String?, displayWidth: Int, displayHeight: Int, maxFps: Int, decoders: List<DecoderOffer>, choice: ViewerCodecChoice): Long =
+        open(target, mode, source, displayWidth, displayHeight, maxFps, decoders)
+
+    /** „Höchste Datenrate“ changed during the session ([maxRate] in bit/s, 0 automatic); the mode and switches stay as given. */
+    suspend fun setRateCeiling(session: Long, mode: String, sharpness: Boolean, lossless: Boolean, maxRate: Long) = Unit
 
     suspend fun input(session: Long, events: List<JsonObject>): Int
 
@@ -179,6 +202,8 @@ object CoreScreenBackend : ScreenBackend {
 
     override fun offers() = ScreenDecoder.offers()
 
+    override fun offers(choice: ViewerCodecChoice) = ScreenDecoder.offers(choice)
+
     override fun pictures(session: Long): PictureSource = NativePictureSource(session)
 
     override suspend fun devices(roomId: String?) = ScreenApi.devices(roomId)
@@ -190,6 +215,13 @@ object CoreScreenBackend : ScreenBackend {
 
     override suspend fun setMode(session: Long, mode: String, source: String?, width: Int?, height: Int?, fps: Int?, sharpness: Boolean, lossless: Boolean) =
         ScreenApi.viewSetMode(session, mode, source, width, height, fps, sharpness, lossless)
+
+    override suspend fun openWith(target: ScreenTarget, mode: String, source: String?, displayWidth: Int, displayHeight: Int, maxFps: Int, decoders: List<DecoderOffer>, choice: ViewerCodecChoice) =
+        ScreenApi.viewOpen(target.relation, target.relationId, target.deviceId, mode, source, decoders, displayWidth, displayHeight, maxFps, ScreenScaling.awaitRendererLimit(), target.expectedNodeId,
+            maxRate = choice.maxRateBps, codec = choice.codec, decoder = choice.decoder)
+
+    override suspend fun setRateCeiling(session: Long, mode: String, sharpness: Boolean, lossless: Boolean, maxRate: Long) =
+        ScreenApi.viewSetMode(session, mode, sharpness = sharpness, lossless = lossless, maxRate = maxRate)
 
     override suspend fun input(session: Long, events: List<JsonObject>) = ScreenApi.viewInput(session, events)
 
@@ -229,6 +261,13 @@ private data class ScreenModeRequest(val mode:String="full",
 /** Identity of the complete image actually consumed by a Bitmap or Surface draw. */
 data class ScreenPresentedFrame(val session: Long, val gopId: Long, val frameId: Long, val epoch: Long)
 
+internal data class ChoiceSnapshot(
+    val choice: ViewerCodecChoice,
+    val forceLossless: Boolean,
+    val codecFallbackGop: Long?,
+    val codecFallback: String?,
+)
+
 class ScreenSession(private val target: ScreenTarget, private val backend: ScreenBackend = CoreScreenBackend) {
     val familyRequired: Boolean = target.source?.startsWith("window:@family.") == true
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -266,6 +305,45 @@ class ScreenSession(private val target: ScreenTarget, private val backend: Scree
     private var closed = false
     private var inputJob: Job? = null
 
+    /**
+     * The choice „Codec“, „Dekodierer“ and „Höchste Datenrate“ this session runs with (BK7b): the one it was opened with,
+     * or the one the host took within the session ([switchedTo], P1).
+     */
+    @Volatile var choice: ViewerCodecChoice = ViewerCodecChoice()
+        private set
+
+    /** The data-rate ceiling this session was opened with (`null` automatic); [switchedTo] never overwrites it. */
+    @Volatile var openedMaxRateBps: Long? = null
+        private set
+
+    /**
+     * Publishes [next] before `screen.viewSetDecoders` goes out so the decoder thread sees the new choice as soon as the
+     * host's next picture group arrives, and clears a prior automatic lossless fallback (`host_pairing.rs` lets another
+     * encoder try). Returns the previous state for [restoreChoice] when the host does not switch.
+     */
+    internal fun prepareDecoderSwitch(next: ViewerCodecChoice): ChoiceSnapshot = synchronized(lock) {
+        val snapshot = ChoiceSnapshot(choice, forceLossless, codecFallbackGop, mutable.value.codecFallback)
+        choice = next
+        if (!next.lossless) {
+            forceLossless = false
+            codecFallbackGop = null
+            mutable.value = mutable.value.copy(codecFallback = null)
+        }
+        snapshot
+    }
+
+    internal fun restoreChoice(snapshot: ChoiceSnapshot) = synchronized(lock) {
+        choice = snapshot.choice
+        forceLossless = snapshot.forceLossless
+        codecFallbackGop = snapshot.codecFallbackGop
+        mutable.value = mutable.value.copy(codecFallback = snapshot.codecFallback)
+    }
+
+    /** The host took [next] within this session (`screen.viewSetDecoders` answered `switched`): the decoder thread reads it for the next picture group. */
+    internal fun switchedTo(next: ViewerCodecChoice) {
+        prepareDecoderSwitch(next)
+    }
+
     /** The core's session number; 0 before [open] returned. */
     @Volatile var id: Long = 0
         private set
@@ -275,7 +353,9 @@ class ScreenSession(private val target: ScreenTarget, private val backend: Scree
     val deviceTarget: ScreenTarget get() = target
 
     /** Opens the session; a failure arrives as [CoreException] and leaves the session closed. */
-    suspend fun open(mode: String, source: String?, displayWidth: Int, displayHeight: Int, maxFps: Int, decoders: List<DecoderOffer>) {
+    suspend fun open(mode: String, source: String?, displayWidth: Int, displayHeight: Int, maxFps: Int, decoders: List<DecoderOffer>, choice: ViewerCodecChoice = ViewerCodecChoice()) {
+        this.choice = choice
+        this.openedMaxRateBps = choice.maxRateBps
         synchronized(lock) {wantedMode=ScreenModeRequest(if(mode=="preview") "preview" else "full")}
         val backlog = ArrayList<ScreenViewEvent>()
         collector = scope.launch(start = CoroutineStart.UNDISPATCHED) {
@@ -286,7 +366,7 @@ class ScreenSession(private val target: ScreenTarget, private val backend: Scree
             }
         }
         val opened = try {
-            backend.open(target, mode, source, displayWidth, displayHeight, maxFps, decoders)
+            backend.openWith(target, mode, source, displayWidth, displayHeight, maxFps, decoders, choice)
         } catch (e: CoreException) {
             collector?.cancel()
             throw e
@@ -342,7 +422,7 @@ class ScreenSession(private val target: ScreenTarget, private val backend: Scree
             lastPresented = null
             mutable.value = old.copy(inputReady = false)
         }
-        mutable.value = mutable.value.apply(event)
+        mutable.update { it.apply(event) }
         if (event is ScreenViewEvent.VisibilityAck && event.geometryGeneration == visibilityReport?.geometryGeneration) {
             minFrame = event.minFrameId
             mutable.value = mutable.value.copy(inputReady = visibilityReport?.state != "hidden" &&
@@ -398,7 +478,7 @@ class ScreenSession(private val target: ScreenTarget, private val backend: Scree
         !closed && frame.session == id && frame.epoch == displayEpoch && current.ended == null &&
             current.accepted && current.state in listOf("streaming", "starting") &&
             frame.gopId == current.stream?.gop && frame.gopId != rejectedGop && visibilityReport?.state != "hidden" &&
-            (!forceLossless || current.stream?.codec != "h264") &&
+            (!forceLossless || current.stream?.codec == "tiles") &&
             (!current.frameContract || minFrame?.let { frame.frameId >= it } == true)
             && (!familyRequired || current.family?.snapshot?.layout_revision?.let {
                 current.stream?.familyLayoutRevision == it
@@ -443,6 +523,27 @@ class ScreenSession(private val target: ScreenTarget, private val backend: Scree
         call {session->
             val wanted=synchronized(lock) {wantedMode}
             setMode(session,mode,source,width,height,fps,sharpness ?: wanted.sharpness,lossless ?: wanted.lossless)
+        }
+    }
+
+    /**
+     * „Höchste Datenrate“ ([bps] bit/s, `null` automatic) changes while the session runs. The core sends it as `RATE_CEILING`
+     * to a host that announced it; the wanted mode and switches go out unchanged beside it.
+     */
+    fun setMaxRate(bps: Long?) {
+        if (id == 0L) return
+        // Every other writer of the state holds the lock while it reads and writes; a count outside it could be overwritten.
+        synchronized(lock) { mutable.value = mutable.value.copy(rateSends = mutable.value.rateSends + 1) }
+        call { session ->
+            val wanted = synchronized(lock) {wantedMode}
+            val forced = synchronized(lock) {forceLossless}
+            try {
+                setRateCeiling(session, wanted.mode, wanted.sharpness, wanted.lossless || forced, bps ?: 0L)
+            } catch (e: CoreException) {
+                // No frame left the core, so no `rateCeiling` answer follows: this send does not count.
+                synchronized(lock) { mutable.value = mutable.value.copy(rateSends = (mutable.value.rateSends - 1).coerceAtLeast(0)) }
+                throw e
+            }
         }
     }
 

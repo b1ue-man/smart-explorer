@@ -126,7 +126,11 @@ fn bridge(peer: BackendHandle) -> io::Result<Bridge> {
     let (server, _) = ordinary.accept()?;
     let read = server.try_clone()?;
     let server = thread::spawn(move || backend_server::serve_backend(read, server, peer));
-    let identity = ipc_client::share_backend_identity("task share".into(), target);
+    let identity = ipc_client::share_backend_identity(
+        "task share".into(),
+        target,
+        crate::share::OperationOrigin::Job,
+    );
     let agent = crate::agent::AgentBackend::from_streams(
         Box::new(client.try_clone()?),
         Box::new(client),

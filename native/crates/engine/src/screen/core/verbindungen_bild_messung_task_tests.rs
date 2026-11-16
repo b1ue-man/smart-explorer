@@ -157,7 +157,7 @@ async fn pair_run(
         .ok_or_else(|| "this device has no codec for the preference".to_owned())?;
     let size = size.fit_within(choice.max_size);
     let size = match choice.codec {
-        CodecKind::H264 => size.even(),
+        CodecKind::H264 | CodecKind::Hevc | CodecKind::Av1 => size.even(),
         CodecKind::Tiles => size,
     };
     let fps = u32::from(FPS);

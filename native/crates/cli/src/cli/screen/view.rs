@@ -1,4 +1,5 @@
-//! `se screen view DEVICE [--source QUELLE] [--control] [--fullscreen] [--json]`
+//! `se screen view DEVICE [--source QUELLE] [--control] [--fullscreen]
+//! [--max-rate RATE] [--codec CODEC] [--decoder DECODER] [--json]`
 //! and `se screen grid [--room RAUM] [--json]` (SCR-M7): open the desktop
 //! viewer window of the GUI program (`--screen-view <ziel-json>`,
 //! `--screen-grid [--room <id>]`, V5) as a process of its own and return.
@@ -11,6 +12,7 @@ use serde_json::{json, Value};
 
 use super::DeviceChoice;
 use crate::app::start_request::StartRequest;
+use crate::screen::core::negotiate::{CodecSetting, DecoderPreference};
 use crate::screen::core::window_list::SourceId;
 
 #[derive(Args, Debug, PartialEq, Eq)]
@@ -29,8 +31,73 @@ pub(super) struct ViewArgs {
     /// Open in full screen
     #[arg(long)]
     fullscreen: bool,
+    /// „Höchste Datenrate“ of the desktop viewer, stored before it opens:
+    /// `auto`, or bit/s with an optional SI prefix (`k`, `M`, `G`), e.g. `20M`
+    #[arg(long, value_name = "RATE", value_parser = parse_max_rate)]
+    max_rate: Option<MaxRate>,
+    /// „Codec“ of the desktop viewer, stored before it opens: auto, h264,
+    /// hevc, av1 or lossless (plan 2026-11-14 „Bildkette“ 4.10)
+    #[arg(long, value_name = "CODEC", value_parser = parse_codec)]
+    codec: Option<CodecSetting>,
+    /// „Dekodierer“ of the desktop viewer, stored before it opens: auto,
+    /// hardware or software
+    #[arg(long, value_name = "DECODER", value_parser = parse_decoder)]
+    decoder: Option<DecoderPreference>,
     #[arg(long, help = "Print machine-readable JSON")]
     json: bool,
+}
+
+/// `--codec auto|h264|hevc|av1|lossless` (BK6).
+pub(super) fn parse_codec(text: &str) -> Result<CodecSetting, String> {
+    CodecSetting::parse(text.trim())
+        .ok_or_else(|| format!("invalid codec: {text} (auto, h264, hevc, av1 or lossless)"))
+}
+
+/// `--decoder auto|hardware|software` (BK6).
+pub(super) fn parse_decoder(text: &str) -> Result<DecoderPreference, String> {
+    DecoderPreference::parse(text.trim())
+        .ok_or_else(|| format!("invalid decoder: {text} (auto, hardware or software)"))
+}
+
+/// `--max-rate`: automatic or a ceiling in bit/s (plan 2026-11-14
+/// „Bildkette“ B-09).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum MaxRate {
+    Auto,
+    Bps(u64),
+}
+
+impl MaxRate {
+    fn bps(self) -> Option<u64> {
+        match self {
+            Self::Auto => None,
+            Self::Bps(bps) => Some(bps),
+        }
+    }
+}
+
+/// `auto`, or a positive number of bit/s with an optional decimal SI prefix
+/// (k = 10³, M = 10⁶, G = 10⁹, SI brochure 9th edition, table 7).
+pub(super) fn parse_max_rate(text: &str) -> Result<MaxRate, String> {
+    let text = text.trim();
+    if text.eq_ignore_ascii_case("auto") {
+        return Ok(MaxRate::Auto);
+    }
+    let (number, factor) = match text.chars().last() {
+        Some('k') | Some('K') => (&text[..text.len() - 1], 1e3),
+        Some('M') => (&text[..text.len() - 1], 1e6),
+        Some('G') => (&text[..text.len() - 1], 1e9),
+        _ => (text, 1.0),
+    };
+    let value: f64 = number
+        .trim()
+        .parse()
+        .map_err(|_| format!("invalid rate: {text} (auto, or bit/s such as 20M)"))?;
+    let bps = (value * factor).round();
+    if !bps.is_finite() || bps < 1.0 || bps > u64::MAX as f64 {
+        return Err(format!("invalid rate: {text} (a positive number of bit/s)"));
+    }
+    Ok(MaxRate::Bps(bps as u64))
 }
 
 #[derive(Args, Debug, PartialEq, Eq)]
@@ -120,6 +187,14 @@ pub(crate) fn open_family(device: &str, source: &str, control: bool) -> Result<u
 
 pub(super) fn run_view(args: ViewArgs) -> Result<i32, String> {
     let choice = super::select_device(&args.device)?;
+    if let Some(rate) = args.max_rate {
+        crate::app::screen_prefs::set_max_rate_bps(rate.bps())
+            .map_err(|error| format!("cannot store the maximum rate: {error}"))?;
+    }
+    if args.codec.is_some() || args.decoder.is_some() {
+        crate::app::screen_prefs::set_codec_choice(args.codec, args.decoder)
+            .map_err(|error| format!("cannot store the codec choice: {error}"))?;
+    }
     let target = target_json(
         &choice,
         args.source.as_deref(),

@@ -158,6 +158,9 @@ fn screen_task_android_view_bridge_shapes() {
         dropped_before_encode: 1,
         stream_resets: 0,
         unacked_bytes: 10,
+        frame_timing: None,
+        chain: None,
+        stations: None,
     });
     assert_eq!(stats["targetKbps"], 6000);
     assert_eq!(stats["streamResets"], 0);

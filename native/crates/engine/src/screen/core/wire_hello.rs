@@ -105,7 +105,22 @@ pub struct ScreenServerHello {
     /// when this host takes `CURSOR_REQUEST` after the hello.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cursor_overlay: Option<u16>,
+    /// Codec negotiation v2 (plan 2026-11-14 „Bildkette“ B-31): `Some(1)`
+    /// when this host reads `decoders_v2` and answers with `encoders_v2`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codecs_v2: Option<u16>,
+    /// `rate_ceiling_v1`: `Some(1)` when this host takes `RATE_CEILING`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rate_ceiling: Option<u16>,
+    /// `set_decoders_v1` (`set_decoders.rs`): `Some(1)` when this host takes
+    /// `SET_DECODERS` and negotiates the pairing again in the session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub set_decoders: Option<u16>,
 }
+
+#[path = "wire_hello_codecs.rs"]
+mod codecs;
+pub use codecs::{rate_ceiling_negotiated, CODECS_V2, RATE_CEILING_V1};
 
 impl ScreenServerHello {
     pub fn new(
@@ -127,6 +142,9 @@ impl ScreenServerHello {
             family_version: Some(super::family_protocol::FAMILY_PROTOCOL),
             family_feed_version: Some(super::wire::FAMILY_FEED_VERSION),
             cursor_overlay: Some(super::cursor_overlay::CURSOR_OVERLAY_V1),
+            codecs_v2: Some(CODECS_V2),
+            rate_ceiling: Some(RATE_CEILING_V1),
+            set_decoders: Some(super::set_decoders::SET_DECODERS_V1),
         }
     }
 
@@ -177,6 +195,19 @@ pub struct ScreenClientHello {
     /// List/icon operations only: no source, encoder, capture or indicator is opened.
     #[serde(default, skip_serializing_if = "is_false")]
     pub metadata_only: bool,
+    /// HEVC and AV1 decoders, only after the host's `codecs_v2` (B-31);
+    /// `decoders` keeps H.264 and the tiles.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decoders_v2: Option<Vec<CodecOffer>>,
+    /// `gop_continue_v1` (B-36, `gop_continue.rs`): `Some(1)` when the viewer
+    /// keeps its decoder over a continuation stream; an old host ignores it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gop_continue: Option<u16>,
+    /// The decoders of `decoders`/`decoders_v2` that keep their references
+    /// over a continuation (`gop_continue.rs`, `ContinueOffers`): the host
+    /// continues when the negotiated decoder is one of them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gop_continue_decoders: Option<Vec<CodecOffer>>,
 }
 
 impl ScreenClientHello {
@@ -205,6 +236,8 @@ impl ScreenClientHello {
         if self.decoders.len() > MAX_CODEC_OFFERS {
             return Err(invalid("screen hello lists more than 32 decoders"));
         }
+        codecs::validate_v2(self.decoders_v2.as_deref())?;
+        codecs::validate_continuing(self.gop_continue_decoders.as_deref())?;
         if let Some(size) = self.display_size {
             let side = 1..=MAX_DISPLAY_SIDE;
             if !side.contains(&size.width) || !side.contains(&size.height) {
@@ -282,6 +315,9 @@ pub struct ScreenHelloOk {
     pub frame_contract: Option<super::frame_budget::FrameContract>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon_version: Option<u8>,
+    /// HEVC and AV1 encoders, only for a viewer that sent `decoders_v2`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub encoders_v2: Option<Vec<CodecOffer>>,
 }
 
 impl ScreenHelloOk {
@@ -292,100 +328,13 @@ impl ScreenHelloOk {
         if self.encoders.len() > MAX_CODEC_OFFERS {
             return Err(invalid("screen hello lists more than 32 encoders"));
         }
-        Ok(())
+        codecs::validate_v2(self.encoders_v2.as_deref())
     }
 }
 
-/// Error codes of `HELLO_ERROR` and `ERROR` (C7). The wire carries the key,
-/// so a code of a newer host survives as text.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum ScreenErrorCode {
-    /// Before the proof or without the right; strangers learn nothing.
-    PermissionDenied,
-    /// Control asked for, only viewing allowed.
-    RightNotGranted,
-    ApprovalDenied,
-    ApprovalCancelled,
-    NoDisplay,
-    /// The host has no desktop app to show the indicator (C7).
-    IndicatorUnavailable,
-    ControlBusy,
-    ControlUnavailable,
-    HostShutdown,
-    /// The device does not know the screen ALPN (viewer side, `0x178`), or a
-    /// hello names a protocol version the other side does not speak.
-    ScreenUnsupported,
-    /// Nobody on the host can be asked (S1 C5).
-    ApprovalUnavailable,
-    /// The host's capture failed during the session (`ERROR`).
-    CaptureFailed,
-    /// The host's encoder failed or none fits (`ERROR`, `HELLO_ERROR`).
-    EncoderFailed,
-    /// Sent only by hosts before R15c, which refused past 8 sessions (4 of
-    /// one device); current hosts have no session count. Kept so viewers
-    /// still read that refusal.
-    SessionLimit,
-}
-
-impl ScreenErrorCode {
-    pub const ALL: [Self; 14] = [
-        Self::PermissionDenied,
-        Self::RightNotGranted,
-        Self::ApprovalDenied,
-        Self::ApprovalCancelled,
-        Self::NoDisplay,
-        Self::IndicatorUnavailable,
-        Self::ControlBusy,
-        Self::ControlUnavailable,
-        Self::HostShutdown,
-        Self::ScreenUnsupported,
-        Self::ApprovalUnavailable,
-        Self::CaptureFailed,
-        Self::EncoderFailed,
-        Self::SessionLimit,
-    ];
-
-    pub fn key(self) -> &'static str {
-        match self {
-            Self::PermissionDenied => "permission_denied",
-            Self::RightNotGranted => "right_not_granted",
-            Self::ApprovalDenied => "approval_denied",
-            Self::ApprovalCancelled => "approval_cancelled",
-            Self::NoDisplay => "no_display",
-            Self::IndicatorUnavailable => "indicator_unavailable",
-            Self::ControlBusy => "control_busy",
-            Self::ControlUnavailable => "control_unavailable",
-            Self::HostShutdown => "host_shutdown",
-            Self::ScreenUnsupported => "screen_unsupported",
-            Self::ApprovalUnavailable => "approval_unavailable",
-            Self::CaptureFailed => "capture_failed",
-            Self::EncoderFailed => "encoder_failed",
-            Self::SessionLimit => "session_limit",
-        }
-    }
-
-    pub fn from_key(key: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|code| code.key() == key)
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ScreenHelloError {
-    pub code: String,
-}
-
-impl ScreenHelloError {
-    pub fn new(code: ScreenErrorCode) -> Self {
-        Self {
-            code: code.key().into(),
-        }
-    }
-
-    #[allow(dead_code)] // Staged: the desktop viewer of SCR-M7 shows known codes.
-    pub fn known_code(&self) -> Option<ScreenErrorCode> {
-        ScreenErrorCode::from_key(&self.code)
-    }
-}
+#[path = "wire_hello_errors.rs"]
+mod errors;
+pub use errors::{ScreenErrorCode, ScreenHelloError};
 
 /// The host asks its user; the viewer waits or withdraws by closing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -448,9 +397,7 @@ pub async fn send_hello_reply<W: AsyncWrite + Unpin>(
     }
 }
 
-pub async fn recv_hello_reply<R: AsyncRead + Unpin>(
-    reader: &mut R,
-) -> io::Result<HelloReply> {
+pub async fn recv_hello_reply<R: AsyncRead + Unpin>(reader: &mut R) -> io::Result<HelloReply> {
     let (tag, payload) = read_frame(reader, MAX_CONTROL_BYTES).await?;
     match tag {
         HELLO_OK => {

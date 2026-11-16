@@ -151,7 +151,7 @@ pub use lane::{
 };
 pub use limiter::Limiter;
 pub use local_stage::download_to_id;
-pub use ports::{TransferVault, TransferWorker, FIELDS_WITHHELD};
+pub use ports::{JobSides, TransferVault, TransferWorker, FIELDS_WITHHELD};
 // The host adapter, memory budget, sensors and compression policy live in
 // `crate::host` (core layer, D13); these lines keep their transfer paths.
 use crate::host::platform;

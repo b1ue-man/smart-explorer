@@ -44,6 +44,16 @@ fn state() -> (DecodeState, Arc<MemoryPool>, Arc<AtomicBool>) {
     );
     state.gop = Some(Gop {
         id: 1,
+        first: 1,
+        header: GopHeader {
+            gop_id: 1,
+            frame_contract: None,
+            family_layout_revision: None,
+            kind: crate::screen::core::wire_binary::StreamKind::Video,
+            codec: crate::screen::core::negotiate::CodecKind::Tiles,
+            profile: None,
+            size: FrameSize::new(2, 2),
+        },
         yuv: false,
         pending: BTreeMap::new(),
         decoder: Box::new(Owner {

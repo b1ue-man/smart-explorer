@@ -69,7 +69,7 @@ pub fn open_share_backend_for(
                 status,
             } => {
                 let read = stream.try_clone().map_err(|error| error.to_string())?;
-                let inner = share_backend_identity(label.clone(), target.clone());
+                let inner = share_backend_identity(label.clone(), target.clone(), origin);
                 match crate::agent::AgentBackend::from_streams(
                     Box::new(read),
                     Box::new(stream),
@@ -79,6 +79,7 @@ pub fn open_share_backend_for(
                         let handle: crate::vfs::BackendHandle = Arc::new(agent);
                         // Jobs on this handle may run in the worker (Z-P2).
                         super::super::transfer_job_client::remember_share(&handle, &target);
+                        super::super::job_handles::remember_origin(&handle, &target, origin);
                         return Ok((label, handle, status));
                     }
                     Err(error) => {

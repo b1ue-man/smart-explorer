@@ -19,13 +19,14 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use super::pipewire_abi;
 use super::pipewire_stream::memory::CaptureMemory;
-use super::pipewire_stream::{LatestFrame, PwStream, Taken};
+use super::pipewire_stream::{LatestFrame, PwStream};
 use super::portal_tokens::{self, TokenKind};
 use crate::screen::core::capture_admission::{CaptureGrant, SessionAdmission, SourceKey};
 use crate::screen::core::host_backend::{ScreenSource, SourceFrame};
 use crate::screen::core::pixel_convert::FrameSize;
-use crate::screen::core::session_state::SessionState;
 
+#[path = "portal_capture.rs"]
+mod capture;
 #[path = "portal_connection.rs"]
 pub(super) mod connection;
 #[path = "portal_source_binding.rs"]
@@ -438,37 +439,24 @@ impl ScreenSource for PortalSource {
         self.size
     }
 
+    // Merge W2: the DMA-BUF route of BK8b in the picture types of BK3b
+    // (`portal_capture.rs`).
     fn capture(&mut self, _frame_id: u64, keyframe: bool) -> io::Result<SourceFrame> {
-        #[cfg(any(test, feature = "test-support"))]
-        self.memory().activate_for_test()?;
-        let latest = match &*self.handle.lock() {
-            PortalState::Waiting | PortalState::WaitingInactive => {
-                return Ok(SourceFrame::Paused(SessionState::WaitingForPortal))
-            }
-            PortalState::Streaming(latest) => latest.clone(),
-            PortalState::Denied(text) => {
-                return Err(io::Error::new(
-                    io::ErrorKind::PermissionDenied,
-                    format!("portal_denied: {text}"),
-                ))
-            }
-            PortalState::Failed(text) if text == PIPEWIRE_MISSING => {
-                return Ok(SourceFrame::Paused(SessionState::NoDisplay))
-            }
-            PortalState::Failed(text) => return Err(io::Error::other(text.clone())),
-        };
-        match latest.take(keyframe) {
-            Taken::Frame(image) => {
-                self.size = image.size();
-                self.had_frame = true;
-                Ok(SourceFrame::Frame(image))
-            }
-            Taken::Unchanged if !self.had_frame => {
-                Ok(SourceFrame::Paused(SessionState::WaitingForPortal))
-            }
-            Taken::Unchanged => Ok(SourceFrame::Unchanged),
-            Taken::Failed(text) => Err(io::Error::other(text)),
-        }
+        self.capture_cpu(keyframe)
+    }
+    fn capture_picture(
+        &mut self,
+        _frame_id: u64,
+        keyframe: bool,
+    ) -> io::Result<crate::screen::core::capture_picture::SourcePicture> {
+        self.capture_gpu(keyframe)
+    }
+    fn capture_snapshot(
+        &mut self,
+        _frame_id: u64,
+        contract: Option<crate::screen::core::frame_budget::FrameContract>,
+    ) -> io::Result<SourceFrame> {
+        self.snapshot(contract)
     }
 }
 

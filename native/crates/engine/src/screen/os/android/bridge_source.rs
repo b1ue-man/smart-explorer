@@ -1,5 +1,5 @@
 //! One session of the Android host (SCR-M8): the stage the pipeline asks
-//! for each frame. H.264 comes encoded from the app's MediaCodec encoder,
+//! for each frame. H.264, HEVC and AV1 come encoded from the app's MediaCodec encoder,
 //! which this stage configures per encoder epoch (`configure`), asks for
 //! key frames and new bit rates; tile previews and snapshots are stills of
 //! the accessibility service (at most one per 333 ms, C1 Android L2) that
@@ -234,15 +234,30 @@ impl HostStage for BridgeSource {
         match request.choice.codec {
             CodecKind::Tiles => self.tiles_frame(request),
             // A preview turned full stream: the app asks its user first.
-            CodecKind::H264 if !projection && !self.synthetic() => {
+            // HEVC and AV1 run in the app's MediaCodec encoder too: `configure`
+            // names the codec (`bridge_source_capture.rs`), and the host offers
+            // them only when the app reported a hardware encoder.
+            CodecKind::H264 | CodecKind::Hevc | CodecKind::Av1
+                if !projection && !self.synthetic() =>
+            {
                 if self.consent_epoch != Some(request.encoder_epoch) {
                     self.channel.send(json!({"op": "consent"}));
                     self.consent_epoch = Some(request.encoder_epoch);
                 }
                 Ok(StageFrame::Paused(SessionState::WaitingForPortal))
             }
-            CodecKind::H264 => self.h264_frame(request, encoder),
+            CodecKind::H264 | CodecKind::Hevc | CodecKind::Av1 => self.h264_frame(request, encoder),
         }
+    }
+
+    /// r1: the capture path of the statistics (`HostStats::chain`):
+    /// MediaProjection, the test picture for a synthetic source.
+    fn drain_chain(&mut self, meter: &mut crate::screen::core::chain_meter::ChainMeter) {
+        let mut facts = crate::screen::os::capture_facts();
+        if self.synthetic() {
+            facts.path = Some(crate::screen::core::frame_timing::CapturePath::TestPicture);
+        }
+        meter.set_facts(facts);
     }
 }
 

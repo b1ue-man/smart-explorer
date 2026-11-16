@@ -24,6 +24,8 @@ impl MountEngine {
     }
 
     pub fn prepare_host_remote(&self) -> io::Result<()> {
+        // Checks of the mount start, before the volume exists (E4c).
+        let _background = crate::vfs::BackgroundScope::enter();
         validate_backend_root(&*self.backend, self.projector.root().as_str())?;
         self.recover_pending_deletes()?;
         self.collect_orphan_stages();

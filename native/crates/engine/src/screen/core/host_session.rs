@@ -31,9 +31,10 @@ use crate::screen::core::wire_control::{
 use crate::screen::core::wire_hello::{ScreenErrorCode, SessionMode};
 use crate::share::relation_proof::ProvenPrincipal;
 
+#[path = "host_session_clock.rs"]
+mod clock;
 #[path = "host_session_control.rs"]
 mod control;
-
 #[path = "host_family.rs"]
 mod family;
 #[path = "host_input_release.rs"]
@@ -147,9 +148,7 @@ impl<'a> Session<'a> {
             return;
         }
         let mut stop = self.handle.stop_signal();
-        let tick = Duration::from_micros(1_000_000 / u64::from(max_fps.max(1)));
-        let mut capture = tokio::time::interval(tick);
-        capture.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut capture = clock::SessionClock::start(max_fps);
         let mut second = tokio::time::interval(Duration::from_secs(1));
         let mut heard = crate::share::route_protocol::active_now();
         // A capture tick that found the previous picture operation still
@@ -173,6 +172,12 @@ impl<'a> Session<'a> {
                         if self.on_frame(frame).await.is_err() {
                             break self.unwritable();
                         }
+                        // An acknowledgement freed the queue a refused credit waited for.
+                        if self.pipeline.credit_freed() {
+                            if let Some(ending) = self.produce_with(true).await {
+                                break ending;
+                            }
+                        }
                     }
                 },
                 (fallback, result) = self.metadata.next() => {
@@ -189,16 +194,19 @@ impl<'a> Session<'a> {
                         break ending;
                     }
                     let after = self.pipeline.work_started();
-                    missed_tick = tick_missed(started, after, self.pipeline.working());
+                    missed_tick = clock::tick_missed(started, after, self.pipeline.working());
                 }
                 _ = self.cursor.changed() => {
                     if self.poll_cursor().await.is_err() {
                         break self.unwritable();
                     }
                 }
-                _ = self.pipeline.finished(), if missed_tick => {
+                // A self-paced stage (the host process, BK3b) gets its next
+                // credit as soon as the last picture is written, not per tick.
+                _ = self.pipeline.finished(), if missed_tick || self.pipeline.chained() => {
                     missed_tick = false;
-                    if let Some(ending) = self.produce().await {
+                    let chained = self.pipeline.self_paced();
+                    if let Some(ending) = self.produce_with(chained).await {
                         break ending;
                     }
                 }
@@ -271,8 +279,7 @@ impl<'a> Session<'a> {
         self.handle.update(|view| {
             view.state = state;
             if let Some(stream) = &stream {
-                view.codec = Some(stream.codec.key().into());
-                view.encoder = Some(stream.encoder.clone());
+                view.set_stream(stream);
             }
         });
         let report = StateReport {
@@ -287,16 +294,25 @@ impl<'a> Session<'a> {
         if self.family.selected.is_some() {
             self.family_snapshot(false).await?;
         }
-        let stats = self.pipeline.second(self.connection);
+        let mut stats = self.pipeline.second(self.connection);
+        let requested =
+            crate::screen::core::chain_meter::lock(self.pipeline.chain_meter()).requested();
         self.handle.update(|view| {
             view.bitrate_kbps = stats.sent_kbps;
             view.fps = stats.fps;
             view.path = stats.path.key().into();
+            crate::screen::core::chain_meter::publish(view, &mut stats, requested);
         });
         self.frame(HostFrame::Stats(stats)).await
     }
 
     async fn produce(&mut self) -> Option<Ending> {
+        self.produce_with(false).await
+    }
+
+    /// One turn of the picture side; `chained` starts the next operation of
+    /// a self-paced stage only when its credit is free (`begin_chained`).
+    async fn produce_with(&mut self, chained: bool) -> Option<Ending> {
         self.poll_input_release();
         if let Some(applied) = self.pipeline.poll_capture_active() {
             if let Err(error) = applied {
@@ -371,7 +387,12 @@ impl<'a> Session<'a> {
                 ));
             }
         }
-        if let Err(failure) = self.pipeline.begin_tick() {
+        let begun = if chained {
+            self.pipeline.begin_chained()
+        } else {
+            self.pipeline.begin_tick()
+        };
+        if let Err(failure) = begun {
             return Some((
                 EndReason::Failed,
                 Some(ScreenWireError::new(
@@ -462,12 +483,6 @@ impl<'a> Session<'a> {
     }
 }
 
-/// Whether a capture tick was missed: it started no picture operation
-/// because the previous one still ran.
-fn tick_missed(started_before: u64, started_after: u64, working: bool) -> bool {
-    started_before == started_after && working
-}
-
 /// Why the viewer's stream failed: it closed the connection, or it was lost.
 fn closed_reason(connection: &Connection) -> EndReason {
     match connection.close_reason() {
@@ -479,21 +494,3 @@ fn closed_reason(connection: &Connection) -> EndReason {
 #[cfg(test)]
 #[path = "screen_metadata_runtime_task_tests.rs"]
 mod metadata_runtime_tests;
-
-#[cfg(test)]
-mod pacing_tests {
-    use super::tick_missed;
-
-    /// A tick that found the previous operation running is made up as soon
-    /// as it ends; a tick that started one, or found nothing to do (paused,
-    /// hidden, waiting for a visibility acknowledgement), is not.
-    #[test]
-    fn screen_metadata_runtime_task_missed_capture_tick_is_made_up_after_the_operation() {
-        assert!(tick_missed(4, 4, true), "still running: wait for its end");
-        assert!(
-            !tick_missed(4, 5, true),
-            "the tick started the next operation"
-        );
-        assert!(!tick_missed(4, 4, false), "nothing ran and nothing started");
-    }
-}

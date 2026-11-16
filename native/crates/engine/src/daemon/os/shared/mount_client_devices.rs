@@ -30,7 +30,8 @@ const WATCH_TIMEOUT: Duration = Duration::from_secs(35);
 /// A connection to the shared folder `root` of a device, once the daemon
 /// opened it: the stream, what the device's backend can, and whether the
 /// device lets this contact write. A device that rejected this device's
-/// session answers `PermissionDenied` with its reason (R3).
+/// session answers `PermissionDenied` with its reason (R3). The opening is
+/// background work when the calling thread runs the tree's own work (E4d).
 fn open_child(
     session: &MountHostSession,
     target: &PeerMountTarget,
@@ -46,6 +47,7 @@ fn open_child(
         req: MountHostRequest::ChildBackend {
             target: target.clone(),
             root: root.to_string(),
+            background: crate::vfs::in_background(),
         },
     };
     write_request(&mut stream, &request)

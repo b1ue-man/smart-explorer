@@ -269,15 +269,16 @@ den Rest der App im Hintergrund nicht wach). Ein Android-Host nimmt keine Tasten
 an; die Systemtasten Zurück, Home, Übersicht, Benachrichtigungen, Schnelleinstellungen, Sperren
 und Ausschaltmenü gehen. Ohne grafische Sitzung auf dem Gerät gibt es kein Bild
 (`no_display`). Im Quellstand vom 2026-11-14 (noch nicht veröffentlicht) zeichnet der Betrachter den
-Zeiger des Gastgebers selbst über das Bild, wenn der Gastgeber das kann (Linux unter X11, Windows mit
-Graphics Capture ab Windows 10 Version 2004); beim Steuern liegt er an der eigenen Mausposition, sodass
-nur ein Zeiger zu sehen ist. Unter Wayland und bei jedem Gastgeber älterer Fassung steht der Zeiger
+Zeiger des Gastgebers selbst über das Bild, wenn der Gastgeber das kann (Linux unter X11, Linux unter Wayland, wenn das
+Portal Zeiger-Metadaten anbietet, Windows mit Graphics Capture ab Windows 10 Version 2004 oder mit der
+DXGI-Duplikation); beim Steuern liegt er an der eigenen Mausposition, sodass nur ein Zeiger zu sehen ist.
+Bei einem Portal ohne Zeiger-Metadaten und bei jedem Gastgeber älterer Fassung steht der Zeiger
 weiter im Bild (Einzelheiten: [`docs/oberflaechen/bildschirm.md`](docs/oberflaechen/bildschirm.md)).
-`se screen bench` gibt in diesem Stand zusätzlich Stationszeiten (`stages_ms`) aus. Der Relay-Server verwirft Pakete, wenn die Warteschlange eines Ziels voll ist
+`se screen bench` gibt in diesem Stand zusätzlich Stationszeiten (`stages_ms`) aus; `--source monitor:<id>` oder `window:<id>` misst mit der echten Aufnahme des Gastgebers statt des Testbildes, `--codec auto|h264|hevc|av1|tiles` wählt den Codec der Messung. Im Quellstand vom 2026-11-15 (umgesetzt, nicht übersetzt, nicht auf Hardware gelaufen, wartet auf Suite und Release) kennt die Bildschirmverbindung zusätzlich HEVC und AV1 sowie Hardware-Kodierer und -Dekodierer (NVENC und AMF unter Windows, NVENC und VA-API unter Linux, Media Foundation, MediaCodec); die Bildrate folgt der Bildwiederholrate des Betrachter-Monitors statt fest 60, und bei Verlust setzt der Gastgeber, wo Kodierer und Dekodierer es können, ohne Schlüsselbild fort. Die Einstellungen „Codec“ (Automatisch, H.264, HEVC, AV1, Verlustfrei; sie ersetzt den Schalter „Verlustfrei“), „Dekodierer“ (Automatisch, Hardware, Software), „Höchste Datenrate“ und „Niedrigste Latenz“ stehen in der Betrachterleiste der Desktop-App; die ersten drei stehen auch im Menü „⋮“ der Android-Ansicht. `se screen view GERÄT` nimmt dafür `--codec auto|h264|hevc|av1|lossless`, `--decoder auto|hardware|software` und `--max-rate auto|<bit/s>[k|M|G]` und speichert sie vor dem Öffnen des Fensters (Bedienwege und Grenzen: [`docs/oberflaechen/bildschirm.md`](docs/oberflaechen/bildschirm.md), Abschnitt 5). Der Relay-Server verwirft Pakete, wenn die Warteschlange eines Ziels voll ist
 (512 Pakete oder 1 MiB); Smart Explorer begrenzt Bildpakete über den Relay-Pfad auf 768 KiB
 (Einzelheiten in [`docs/SHARE_SERVER.md`](docs/SHARE_SERVER.md)).
 
-**OpenH264 (ab 0.5.183):** H.264 über OpenH264 gehört nicht zum Programm.
+**OpenH264 (ab 0.5.183):** H.264 über OpenH264 gehört nicht zum Programm. Im Quellstand vom 2026-11-15 braucht ein Linux-Gerät mit NVENC- oder VA-API-Kodierer (aus den Systembibliotheken zur Laufzeit geladen) die Zustimmung zu OpenH264 für H.264 nicht mehr; AV1 kodiert und dekodiert Linux ohne Hardware mit SVT-AV1 und dav1d, wenn die Bibliotheken `libSvtAv1Enc.so.1` und `libdav1d.so.7` installiert sind (unter Ubuntu 24.04 die Pakete `libsvtav1enc1d1` und `libdav1d7`).
 `se screen codec openh264 enable` zeigt die Cisco-Lizenz (Binary License v1.0), fragt nach der
 Annahme und lädt OpenH264 2.6.0 von `ciscobinary.openh264.org`; Größe und SHA-256 sind festgelegt.
 `disable` schaltet es aus, `remove` löscht die Bibliothek dieses Nutzers. Den vollständigen

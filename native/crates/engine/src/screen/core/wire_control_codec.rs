@@ -56,6 +56,16 @@ pub fn encode_viewer_frame(frame: &ViewerFrame) -> io::Result<(u8, Vec<u8>)> {
         ViewerFrame::ControlRequest(request) => (CONTROL_REQUEST, to_json(request)?),
         ViewerFrame::PreviewAck(ack) => (PREVIEW_ACK, ack.encode()),
         ViewerFrame::CursorOverlay(on) => (CURSOR_REQUEST, vec![u8::from(*on)]),
+        ViewerFrame::RateCeiling(ceiling) => {
+            (super::RATE_CEILING, encode_u64s(&[ceiling.unwrap_or(0)]))
+        }
+        ViewerFrame::SetDecoders(set) => {
+            set.validate()?;
+            (super::super::set_decoders::SET_DECODERS, to_json(set)?)
+        }
+        ViewerFrame::FrameTiming(request) => {
+            (super::super::frame_timing::FRAME_TIMING, to_json(request)?)
+        }
     })
 }
 
@@ -121,6 +131,16 @@ pub fn decode_viewer_frame(tag: u8, payload: &[u8]) -> io::Result<ViewerFrame> {
         CURSOR_REQUEST if payload == [0] || payload == [1] => {
             ViewerFrame::CursorOverlay(payload[0] != 0)
         }
+        super::RATE_CEILING => {
+            let [ceiling] = decode_u64s::<1>(payload)?;
+            ViewerFrame::RateCeiling((ceiling != 0).then_some(ceiling))
+        }
+        super::super::set_decoders::SET_DECODERS => {
+            let set: super::super::set_decoders::SetDecoders = from_json(payload)?;
+            set.validate()?;
+            ViewerFrame::SetDecoders(set)
+        }
+        super::super::frame_timing::FRAME_TIMING => ViewerFrame::FrameTiming(from_json(payload)?),
         _ => return Err(invalid("unknown screen frame from the viewer")),
     })
 }

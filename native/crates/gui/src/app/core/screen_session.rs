@@ -5,7 +5,6 @@
 //! their own (`screen_decode_thread`); the GUI thread only takes the newest
 //! picture out of a slot and reads the state, so decoding and a slow
 //! connection never block it. Picture contents are never logged.
-use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex, MutexGuard, PoisonError};
 
@@ -27,9 +26,7 @@ use crate::screen::core::wire_control::{
 };
 use crate::screen::core::wire_hello::{ScreenErrorCode, ScreenHelloOk, SessionMode};
 
-/// Samples the latency figures of the statistics are taken from. It only
-/// smooths the display: the figures follow the latest frames.
-pub const LATENCY_WINDOW: usize = 200;
+pub use super::screen_chain_window::LatencyWindow;
 
 /// The planes or the pixels of a decoded picture.
 pub enum PictureData {
@@ -54,35 +51,6 @@ pub struct EndInfo {
     pub text: String,
     /// The code the host or the relay gave, if any.
     pub code: Option<String>,
-}
-
-/// The latest capture-to-display times in µs.
-#[derive(Clone, Debug, Default)]
-pub struct LatencyWindow {
-    samples: VecDeque<u64>,
-}
-
-impl LatencyWindow {
-    pub fn record(&mut self, latency_us: u64) {
-        if self.samples.len() == LATENCY_WINDOW {
-            self.samples.pop_front();
-        }
-        self.samples.push_back(latency_us);
-    }
-
-    /// Nearest-rank p50 and p95 in ms.
-    pub fn percentiles_ms(&self) -> Option<(f64, f64)> {
-        if self.samples.is_empty() {
-            return None;
-        }
-        let mut sorted: Vec<u64> = self.samples.iter().copied().collect();
-        sorted.sort_unstable();
-        let rank = |share: f64| {
-            let index = (share * sorted.len() as f64).ceil() as usize;
-            sorted[index.clamp(1, sorted.len()) - 1] as f64 / 1000.0
-        };
-        Some((rank(0.50), rank(0.95)))
-    }
 }
 
 /// What the viewer knows of a session (U25-3 `ViewerSession`).
@@ -116,6 +84,10 @@ pub struct SessionInfo {
     pub pictures: u64,
     /// The host's pointer for the overlay (plan 2026-11-14 P6).
     pub cursor: crate::screen::core::cursor_overlay::CursorView,
+    /// „Höchste Datenrate“ of this session (BK6, B-09).
+    pub rate_ceiling: crate::daemon::RateCeilingState,
+    /// The decoder of the running picture group with its stage (BK6).
+    pub decoder: Option<String>,
 }
 
 impl SessionInfo {
@@ -143,6 +115,8 @@ impl SessionInfo {
             accepted: 0,
             pictures: 0,
             cursor: Default::default(),
+            rate_ceiling: Default::default(),
+            decoder: None,
         }
     }
 
@@ -167,6 +141,8 @@ pub struct Shared {
     decoder_mode: Mutex<SetMode>,
     pub(super) lossless_fallback: AtomicBool,
     pub(super) memory: Mutex<Option<Arc<crate::screen::core::frame_memory::MemoryLease>>>,
+    /// Returned picture storage and local decoder switches (V1).
+    pub(super) local: super::screen_decode_local::DecodeLocal,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -194,6 +170,7 @@ impl Shared {
                 lossless: false,
             }),
             lossless_fallback: AtomicBool::new(false),
+            local: Default::default(),
         })
     }
 
@@ -209,7 +186,12 @@ impl Shared {
 
     /// The newest picture since the last call.
     pub fn take_picture(&self) -> Option<Picture> {
-        lock(&self.picture).take()
+        let picture = lock(&self.picture).take();
+        if picture.is_some() {
+            // The hand-over to the graphics (BK0, `screen_chain_window`).
+            lock(&self.info).latency.on_taken();
+        }
+        picture
     }
 
     pub fn update(&self, edit: impl FnOnce(&mut SessionInfo)) {
@@ -220,7 +202,10 @@ impl Shared {
     pub fn put_picture(&self, picture: Picture) {
         let presentation = lock(&self.presentation);
         if presentation.matches(&picture.presented) {
-            *lock(&self.picture) = Some(picture);
+            let unshown = lock(&self.picture).is_some();
+            self.local.replace(&self.picture, picture);
+            drop(presentation);
+            lock(&self.info).latency.on_put(unshown);
         }
     }
 
@@ -385,6 +370,11 @@ impl ViewerSession {
     /// The newest picture since the last call.
     pub fn take_picture(&self) -> Option<Picture> {
         self.shared.take_picture()
+    }
+
+    /// A paint drew the shown picture again because no new one came (r1).
+    pub fn note_repeated(&self) {
+        self.shared.update(|info| info.latency.on_repeated());
     }
 
     /// Queues the negotiated visibility report. Old peers retain their wire contract.

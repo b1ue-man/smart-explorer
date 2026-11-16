@@ -63,6 +63,10 @@ impl PreparedWorker {
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner) = info.limits;
             link.facts.regions.store(info.regions, Ordering::Release);
+            // The process paces its pictures itself when it says so (B-27).
+            link.facts
+                .stream_version
+                .store(info.stream, Ordering::Release);
             Ok(Self {
                 link: Arc::new(Mutex::new(link)),
                 key,

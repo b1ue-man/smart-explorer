@@ -1,4 +1,10 @@
 //! OpenH264 encoder; the productive entrypoint keeps every product copy admitted.
+//!
+//! Plan 2026-11-14 bildkette (BK3b): the bit rate is bounded by the ceiling
+//! of the codec pairing the encoder was opened for (`rate_cadence::
+//! codec_ceiling_bps`, the H.264 level both sides report, B-06), not by a
+//! fixed 240 Mbit/s; the BGRA → I420 conversion runs on all cores
+//! (`openh264_capture::admitted_i420`).
 use super::codec_inventory::openh264_encoder_offers;
 use super::openh264_capture::{admitted_i420, capture_limit, copy_access_unit};
 use super::openh264_codec::{coder_error, load, OPENH264_NAME};
@@ -6,11 +12,12 @@ use super::openh264_install::OpenH264Store;
 use crate::screen::core::capture_admission::CaptureGrant;
 use crate::screen::core::capture_image::CapturedImage;
 use crate::screen::core::codec_registry::EncoderFactory;
+use crate::screen::core::frame_budget::FrameLimits;
 use crate::screen::core::host_backend::{CapturedEncodedFrame, EncodedFrame, ScreenEncoder};
 use crate::screen::core::host_stage::StageRequest;
-use crate::screen::core::negotiate::{CodecChoice, CodecOffer, H264Profile};
-use crate::screen::core::pixel_convert::{bgra_to_i420, BgraImage, FrameSize, YuvMatrix};
-use crate::screen::core::rate_control::{MAX_BITRATE_BPS, MIN_BITRATE_BPS};
+use crate::screen::core::negotiate::{CodecChoice, CodecKind, CodecOffer, H264Profile};
+use crate::screen::core::pixel_convert::{bgra_to_i420_parallel, BgraImage, FrameSize, YuvMatrix};
+use crate::screen::core::rate_control::{codec_ceiling_bps, MIN_BITRATE_BPS};
 use openh264::encoder::{
     BitRate, Complexity, Encoder, EncoderConfig, FrameRate, FrameType, Profile, RateControlMode,
     UsageType, VuiConfig,
@@ -72,7 +79,11 @@ impl OpenH264EncoderFactory {
         fps: u32,
         grant: Option<CaptureGrant>,
     ) -> io::Result<OpenH264Encoder> {
-        if choice.profile != Some(H264Profile::ConstrainedBaseline) {
+        let compatible = choice.codec == CodecKind::H264
+            && choice
+                .profile
+                .is_some_and(|wanted| wanted.decodes(H264Profile::ConstrainedBaseline));
+        if !compatible {
             return Err(io::Error::new(
                 io::ErrorKind::Unsupported,
                 "OpenH264 encodes Constrained Baseline only",
@@ -87,12 +98,17 @@ impl OpenH264EncoderFactory {
                 format!("OpenH264 cannot encode {}x{}", size.width, size.height),
             ));
         }
+        let baseline = CodecChoice {
+            profile: Some(H264Profile::ConstrainedBaseline),
+            ..*choice
+        };
         Ok(OpenH264Encoder {
             api: Some(load(&self.store)?),
             encoder: None,
             size,
             fps: fps.max(1),
             bitrate: 0,
+            limit: codec_ceiling_bps(&baseline, size, fps.max(1)),
             grant,
         })
     }
@@ -106,11 +122,16 @@ struct OpenH264Encoder {
     fps: u32,
     /// The bit rate the encoder runs with.
     bitrate: c_int,
+    /// Ceiling of the codec pairing the encoder was opened for.
+    limit: u64,
     grant: Option<CaptureGrant>,
 }
 
-fn clamp_bitrate(target_bps: u64) -> c_int {
-    target_bps.clamp(MIN_BITRATE_BPS, MAX_BITRATE_BPS) as c_int
+/// `target_bps` within the floor of the rate control, the ceiling `limit`
+/// and the `int` of the OpenH264 API.
+fn clamp_bitrate(target_bps: u64, limit: u64) -> c_int {
+    let ceiling = limit.min(c_int::MAX as u64).max(MIN_BITRATE_BPS);
+    target_bps.clamp(MIN_BITRATE_BPS, ceiling) as c_int
 }
 
 impl OpenH264Encoder {
@@ -196,7 +217,7 @@ impl ScreenEncoder for OpenH264Encoder {
             .clone()
             .ok_or_else(|| io::Error::other("OpenH264 encoder has no capture grant"))?;
         let maximum = capture_limit(&grant, frame, request, self.size)?;
-        let target = clamp_bitrate(request.target_bps);
+        let target = clamp_bitrate(request.target_bps, self.limit);
         let first = self.encoder.is_none();
         if !first {
             self.retune(target);
@@ -256,12 +277,12 @@ impl ScreenEncoder for OpenH264Encoder {
                 "frame size differs from the OpenH264 encoder",
             ));
         }
-        let target = clamp_bitrate(target_bps);
+        let target = clamp_bitrate(target_bps, self.limit);
         let first = self.encoder.is_none();
         if !first {
             self.retune(target);
         }
-        let yuv = bgra_to_i420(&frame.view(), YuvMatrix::Bt709)?;
+        let yuv = bgra_to_i420_parallel(&frame.view(), YuvMatrix::Bt709, FrameLimits::LEGACY)?;
         let (width, height) = (self.size.width as usize, self.size.height as usize);
         let encoder = self.started(target)?;
         if keyframe && !first {

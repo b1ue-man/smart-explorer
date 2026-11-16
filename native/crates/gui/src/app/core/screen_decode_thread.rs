@@ -10,7 +10,11 @@
 //! opens a decoder for the new one; a record of an older group is stale and
 //! ignored. A decode error or a broken group is answered with one key frame
 //! request (`KeyframeRequester`: at most one open request); until a key frame
-//! of the group arrives its records are skipped.
+//! of the group arrives its records are skipped. A group that continues the
+//! chain (B-36) keeps the decoder, and a new „Dekodierer“ choice opens its
+//! decoder at the next key frame (V1): `screen_decode_continue.rs`. The
+//! decoder hands its picture over and gets the storage of shown pictures
+//! back (`screen_decode_local.rs`).
 use std::collections::BTreeMap;
 use std::io;
 use std::sync::Arc;
@@ -35,11 +39,25 @@ use super::screen_decode_run::SendFrame;
 /// One picture group with its decoder.
 struct Gop {
     id: u64,
+    /// The group whose key frame opened the decoder (B-36: later groups
+    /// may continue it).
+    first: u64,
+    header: GopHeader,
     decoder: Box<dyn ScreenDecoder>,
     /// The decoder keeps planes instead of converting.
     yuv: bool,
     /// Epoch captured when this actual input was submitted, retained over codec delay.
     pending: BTreeMap<u64, (DecodedFrame, super::screen_presented::PresentedFrame)>,
+}
+
+impl Gop {
+    fn matches_continuation(&self, next: &GopHeader) -> bool {
+        self.header.kind == next.kind
+            && self.header.codec == next.codec
+            && self.header.profile == next.profile
+            && self.header.size == next.size
+            && self.header.frame_contract == next.frame_contract
+    }
 }
 
 /// What the decode thread keeps between two events.
@@ -59,11 +77,14 @@ pub struct DecodeState {
     seq: u64,
     last_shown: Option<Instant>,
     started: Instant,
+    chain: continuation::Chain,
     // Declared last: decoder/pending pictures must die before the session lease.
     shared: Arc<Shared>,
     memory: crate::screen::core::frame_memory::MemoryHold,
 }
 
+#[path = "screen_decode_continue.rs"]
+mod continuation;
 #[path = "screen_decode_events.rs"]
 mod events;
 
@@ -94,6 +115,7 @@ impl DecodeState {
             seq: 0,
             last_shown: None,
             started: Instant::now(),
+            chain: Default::default(),
         }
     }
 
@@ -115,12 +137,17 @@ impl DecodeState {
     fn open_gop(&mut self, header: &GopHeader) -> Option<Gop> {
         match (self.open_decoder)(header) {
             Ok(mut decoder) => {
+                // The statistics name the decoder and its stage (BK6, 4.10a).
+                let name = decoder.name();
+                self.shared.update(|info| info.decoder = Some(name));
                 let yuv = self.shared.prefers_yuv();
                 if yuv {
                     decoder.prefer_yuv(true);
                 }
                 Some(Gop {
                     id: header.gop_id,
+                    first: header.gop_id,
+                    header: *header,
                     decoder,
                     yuv,
                     pending: BTreeMap::new(),
@@ -168,30 +195,57 @@ impl DecodeState {
             .load(std::sync::atomic::Ordering::Acquire)
             && header.codec != crate::screen::core::negotiate::CodecKind::Tiles
         {
+            // Every record not decoded breaks the chain (B-36).
+            self.chain.continuity.broken();
             return;
         }
         if let Some(family) = &self.shared.info().family {
             if family.snapshot.as_ref().is_none_or(|snapshot| {
                 header.family_layout_revision != Some(snapshot.layout_revision)
             }) {
+                self.chain.continuity.broken();
                 return;
             }
         }
         if header.gop_id < self.latest_gop {
+            if self
+                .gop
+                .as_ref()
+                .is_some_and(|gop| header.gop_id >= gop.first)
+            {
+                self.chain.continuity.broken();
+            }
             return;
         }
+        let fresh = header.gop_id > self.latest_gop || self.last_record.is_none();
+        let first_of_frame = self.last_record != Some((header.gop_id, record.frame_id));
         self.last_record = Some((header.gop_id, record.frame_id));
         let keyframe = record.flags & FLAG_KEYFRAME != 0;
+        if fresh && !self.stream_start(&header, &record) {
+            return;
+        }
+        if !fresh && keyframe && first_of_frame {
+            self.chain.continuity.start(&record);
+        }
         if self.broken == Some(header.gop_id) {
             if !keyframe
                 || self
                     .broken_frame
                     .is_some_and(|frame| record.frame_id <= frame)
             {
+                self.chain.continuity.broken();
+                // The group goes on without its key frame: a request the
+                // host took for answered (it named an older group, the host
+                // had opened this one as a continuation) is asked again, at
+                // most once per `KEYFRAME_RETRY_US` (`KeyframeRequester`).
+                self.request_keyframe(KeyframeReason::Reset, header.gop_id);
                 return;
             }
             self.broken = None;
             self.broken_frame = None;
+            self.gop = None;
+        }
+        if self.reopens_at(keyframe, first_of_frame) {
             self.gop = None;
         }
         self.latest_gop = header.gop_id;
@@ -203,6 +257,7 @@ impl DecodeState {
                 Some(gop) => gop,
                 None => {
                     self.broken_frame = Some(record.frame_id);
+                    self.chain.continuity.broken();
                     return;
                 }
             },
@@ -212,6 +267,9 @@ impl DecodeState {
             gop.decoder.prefer_yuv(want_yuv);
             gop.yuv = want_yuv;
         }
+        // Shown pictures' storage first: the decoder reads into it (V1).
+        self.shared.local.pool.feed(gop.decoder.as_mut());
+        let decode_started = Instant::now();
         let decoded = (|| -> io::Result<_> {
             let input = DecodedFrame::from_record(&record);
             if let Some((submitted, _)) = gop.pending.get(&input.frame_id) {
@@ -242,13 +300,19 @@ impl DecodeState {
                 .retain(|frame_id, _| *frame_id > output.frame_id);
             Ok(Some((output, receipt)))
         })();
+        self.chain.open_frame = record.has_more();
         match decoded {
             Ok(output) => {
                 if let Some((output, receipt)) = output {
+                    // Station `decode` of the viewer (BK0).
+                    let micros =
+                        u64::try_from(decode_started.elapsed().as_micros()).unwrap_or(u64::MAX);
+                    self.shared
+                        .update(|info| info.latency.decode.record(micros));
                     if output.keyframe {
                         self.keyframes.on_keyframe();
                     }
-                    self.show(&gop, header.size, output.capture_ts_us, receipt);
+                    self.show(&mut gop, header.size, output.capture_ts_us, receipt);
                 }
                 self.gop = Some(gop);
             }
@@ -256,6 +320,7 @@ impl DecodeState {
                 // The failed picture was never shown; the shown one stays
                 // without receipts until the requested key frame.
                 self.shared.suspend_presentation();
+                self.chain.continuity.broken();
                 self.broken = Some(header.gop_id);
                 self.broken_frame = Some(record.frame_id);
                 if header.frame_contract.is_some_and(|c| c.hybrid_regions)
@@ -277,7 +342,7 @@ impl DecodeState {
     /// Hands the finished picture to the GUI thread.
     fn show(
         &mut self,
-        gop: &Gop,
+        gop: &mut Gop,
         size: FrameSize,
         capture_ts_us: u64,
         presented: super::screen_presented::PresentedFrame,
@@ -294,16 +359,22 @@ impl DecodeState {
                 info.latency.record(latency);
             }
             info.pictures += 1;
+            // Left out by the preview's shortest gap (BK0: dropped pictures).
+            info.latency.dropped += u64::from(!due);
         });
         if !due {
             return;
         }
-        let planes = gop
-            .yuv
-            .then(|| gop.decoder.yuv_picture())
-            .flatten()
-            .map(PictureData::Yuv);
-        let data = planes.unwrap_or_else(|| PictureData::Bgra(gop.decoder.picture().clone()));
+        // Handed over, not copied (V1, BK9 U1); the storage comes back.
+        let planes = if gop.yuv {
+            gop.decoder.take_yuv_picture()
+        } else {
+            None
+        };
+        let data = match planes {
+            Some(planes) => PictureData::Yuv(planes),
+            None => PictureData::Bgra(gop.decoder.take_picture()),
+        };
         self.seq += 1;
         self.last_shown = Some(Instant::now());
         self.shared.put_picture(Picture {

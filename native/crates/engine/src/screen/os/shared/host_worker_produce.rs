@@ -1,5 +1,6 @@
 //! Captured frame production and admitted codec replacement.
 use super::*;
+use crate::screen::core::capture_picture::SourcePicture;
 impl Worker {
     pub(super) fn produce(&mut self, request: &StageRequest) -> WorkerReply {
         if let Err(error) = self.admit(request.frame_contract) {
@@ -47,14 +48,15 @@ impl Worker {
             return WorkerReply::Frame(StageFrame::Unchanged { source_size });
         }
         let capture_ts_us = now_us();
-        let captured = source.capture(request.frame_id, refresh);
+        // A picture may stay on the GPU for a GPU encoder (BK3b).
+        let captured = source.capture_picture(request.frame_id, refresh);
         let after = source.reference_generation();
         let source_size = source.size();
         if after != before {
             self.reference_generation = after;
             self.encoder = None;
             return match captured {
-                Ok(SourceFrame::Paused(state)) => WorkerReply::Frame(StageFrame::Paused(state)),
+                Ok(SourcePicture::Paused(state)) => WorkerReply::Frame(StageFrame::Paused(state)),
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                     WorkerReply::Frame(StageFrame::Unchanged { source_size })
                 }
@@ -63,12 +65,14 @@ impl Worker {
             };
         }
         let image = match captured {
-            Ok(SourceFrame::Frame(image)) => image,
-            Ok(SourceFrame::Unchanged) => {
+            Ok(SourcePicture::Frame(image)) => image,
+            Ok(SourcePicture::Unchanged) => {
                 let source_size = source.size();
                 return WorkerReply::Frame(StageFrame::Unchanged { source_size });
             }
-            Ok(SourceFrame::Paused(state)) => return WorkerReply::Frame(StageFrame::Paused(state)),
+            Ok(SourcePicture::Paused(state)) => {
+                return WorkerReply::Frame(StageFrame::Paused(state))
+            }
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                 return WorkerReply::Frame(StageFrame::Unchanged { source_size })
             }
@@ -81,10 +85,9 @@ impl Worker {
         let image = if image.size() == request.size {
             image
         } else {
-            match image.downscale(
+            match image.scaled(
                 request.size,
                 limits,
-                &image.grant(),
                 crate::screen::core::capture_admission::CaptureOwner::ScaledPixels,
             ) {
                 Ok(image) => image,
@@ -94,19 +97,23 @@ impl Worker {
                 Err(error) => return failed(ScreenErrorCode::CaptureFailed, error),
             }
         };
-        // An encoder that fails while encoding gives way to the next one of
-        // the same codec (a hardware MFT to the software MFT, C2) once.
+        // An encoder that fails while encoding gives way to every remaining
+        // stage of the rank once (`refused`, W4 B3).
+        let mut request = std::borrow::Cow::Borrowed(request);
+        let max_attempts = codec_inventory::registry()
+            .encoder_stage_count(&request)
+            .max(1);
         let mut attempt = 0;
         let (frame, running) = loop {
             attempt += 1;
-            let running = match self.encoder_for(request) {
+            let running = match self.encoder_for(&request) {
                 Ok(running) => running,
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                     return WorkerReply::Frame(StageFrame::Unchanged { source_size })
                 }
                 Err(error) => return failed(ScreenErrorCode::EncoderFailed, error),
             };
-            match running.encoder.encode_captured(&image, request) {
+            match running.encoder.encode_picture(&image, &request) {
                 Ok(frame) => break (frame, running),
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                     return WorkerReply::Frame(StageFrame::Unchanged { source_size })
@@ -114,10 +121,16 @@ impl Worker {
                 Err(error) => {
                     let factory = running.factory.clone();
                     self.encoder = None;
-                    if attempt > 1 || factory == crate::screen::core::codec_registry::TILES_NAME {
+                    if factory == crate::screen::core::codec_registry::TILES_NAME {
                         return failed(ScreenErrorCode::EncoderFailed, error);
                     }
-                    self.refused.push(factory);
+                    if !self.refused.contains(&factory) {
+                        self.refused.push(factory);
+                    }
+                    if attempt >= max_attempts {
+                        return failed(ScreenErrorCode::EncoderFailed, error);
+                    }
+                    request.to_mut().keyframe = true;
                 }
             }
         };

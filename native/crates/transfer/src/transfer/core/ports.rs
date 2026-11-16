@@ -12,7 +12,7 @@ use zeroize::Zeroizing;
 
 use super::types::TransferMsg;
 use super::{JobView, RecordKind};
-use crate::vfs::Backend;
+use crate::vfs::{Backend, BackendHandle};
 
 /// K20: what an issue line of a vault says when its fields cannot be sealed
 /// (`vault::FIELDS_WITHHELD` re-exports it).
@@ -100,6 +100,31 @@ pub trait TransferWorker: Sync {
         report: &(dyn Fn(TransferMsg) + Sync),
         cancel: &AtomicBool,
     ) -> bool;
+
+    /// The handles a job that runs in this process uses for its own
+    /// requests instead of the ones its sides carry. A side whose handle a
+    /// person browses with (metadata presence of the origin `User`) gets a
+    /// handle of the origin `Job` to the same device, so the job's listings
+    /// and status queries do not make its own transfers yield. Nothing by
+    /// default (`daemon::job_sides`).
+    fn job_sides(&self, _view: &JobView<'_>) -> JobSides {
+        JobSides::default()
+    }
+}
+
+/// The replacement handles of the two sides of a job; `None` keeps the
+/// side's own handle.
+#[derive(Clone, Default)]
+pub struct JobSides {
+    pub source: Option<BackendHandle>,
+    pub target: Option<BackendHandle>,
+}
+
+impl JobSides {
+    /// Whether no side is replaced.
+    pub fn is_empty(&self) -> bool {
+        self.source.is_none() && self.target.is_none()
+    }
 }
 
 crate::declare_port! {

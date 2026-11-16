@@ -28,6 +28,8 @@ impl MountEngine {
         if depth == 0 {
             return Ok(());
         }
+        // The host loads it before the volume exists: nobody waits (E4c).
+        let _background = crate::vfs::BackgroundScope::enter();
         let root = self.projector.root().as_str().to_string();
         self.load_directory_cached(&root, 0).map(|_| ())
     }
@@ -124,6 +126,13 @@ impl MountEngine {
         self.backend.parallelism().max(1).saturating_sub(1).max(1)
     }
 
+    /// A request a program waits for found its path in a fetch the engine
+    /// started by itself (a refresh or a preload): presence at a Share
+    /// device for as long as it waits (`waiting_presence.rs`).
+    fn waiting_presence(&self, path: &str) -> Option<super::waiting_presence::WaitingPresence> {
+        super::waiting_presence::start(&self.backend, path)
+    }
+
     pub fn drain_metadata_changes(&self, limit: usize) -> io::Result<Vec<MetadataChange>> {
         self.metadata_cache.drain_changes(limit)
     }
@@ -156,7 +165,7 @@ impl MountEngine {
             }
         }
         let slot = self.metadata_cache.load_slot(path)?;
-        let _load = slot.lock()?;
+        let _load = slot.lock_waiting(|| self.waiting_presence(path))?;
         match self.metadata_cache.stat(path)? {
             MetadataLookup::Found(metadata) => return Ok(metadata),
             MetadataLookup::KnownMissing => return Err(not_found(path)),
@@ -239,7 +248,7 @@ impl MountEngine {
 
     fn load_directory_cached(&self, path: &str, depth: u8) -> io::Result<Arc<[VfsMeta]>> {
         let slot = self.metadata_cache.load_slot(path)?;
-        let _load = slot.lock()?;
+        let _load = slot.lock_waiting(|| self.waiting_presence(path))?;
         if let Some(entries) = self.metadata_cache.directory(path)? {
             return Ok(entries);
         }
@@ -291,12 +300,14 @@ impl MountEngine {
         depth: u8,
         selected_revision: Option<u64>,
     ) -> io::Result<bool> {
+        // Runs on a `mount-metadata-load` thread, started by the engine (E4c).
+        let _background = crate::vfs::BackgroundScope::enter();
         let epoch = {
             let _namespace = read_lock(&self.namespace)?;
             self.metadata_epoch.load(Ordering::Acquire)
         };
         let slot = self.metadata_cache.load_slot(path)?;
-        let load = slot.lock()?;
+        let load = slot.lock_background()?;
         // Preserve explicit refresh semantics for unchanged selections; only a
         // newer still-fresh snapshot satisfies work selected before its fetch.
         if self
@@ -327,12 +338,14 @@ impl MountEngine {
 
     fn preload_directory(&self, ticket: &PreloadTicket) -> io::Result<bool> {
         let path = ticket.path.as_str();
+        // Runs on a `mount-metadata-load` thread, started by the engine (E4c).
+        let _background = crate::vfs::BackgroundScope::enter();
         let epoch = {
             let _namespace = read_lock(&self.namespace)?;
             self.metadata_epoch.load(Ordering::Acquire)
         };
         let slot = self.metadata_cache.load_slot(path)?;
-        let load = slot.lock()?;
+        let load = slot.lock_background()?;
         let revision = slot.revision();
         if !self.metadata_cache.preload_ticket_current(ticket)?
             || self.metadata_cache.revision(path)?.is_some()

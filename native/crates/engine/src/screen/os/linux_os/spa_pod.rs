@@ -10,6 +10,10 @@
 //! the body, padded with zero bytes to a multiple of 8.
 use crate::screen::core::pixel_convert::FrameSize;
 
+/// The DMA-BUF offer, the modifier reader and the damage metadata (BK8b).
+#[path = "spa_pod_dmabuf.rs"]
+pub mod dmabuf;
+
 const TYPE_ID: u32 = 3;
 const TYPE_RECTANGLE: u32 = 10;
 const TYPE_FRACTION: u32 = 11;
@@ -104,8 +108,8 @@ fn property(out: &mut Vec<u8>, key: u32) {
 /// The `EnumFormat` pod that offers raw video as shared memory: BGRx first,
 /// then RGBx, BGRA and RGBA; any size from 1 × 1 to 16384 × 16384 (default
 /// 1920 × 1080); any frame rate from 0 to 1000 (default 0/1, variable).
-/// There is no `VIDEO_modifier`, so producers choose shared memory over
-/// DMA-BUF.
+/// There is no `VIDEO_modifier`: this is the shared memory offer; the
+/// DMA-BUF offers precede it in `dmabuf::offer_pods` (BK8b).
 pub fn enum_format_pod() -> Vec<u8> {
     let mut body = Vec::new();
     word(&mut body, OBJECT_FORMAT);
@@ -152,64 +156,13 @@ fn read_u32(bytes: &[u8], at: usize) -> Option<u32> {
     Some(u32::from_le_bytes(slice.try_into().ok()?))
 }
 
-/// The value of a property: a plain value, or a choice of the kind `None`
-/// (`spa_pod_fixate` turns every choice of the negotiated format into that
-/// kind and leaves the values in place; the first one is the value). A
-/// choice with alternatives (`Range`, `Enum`, ...) is an offer, no value.
-fn plain_value(value_type: u32, value: &[u8]) -> Option<(u32, &[u8])> {
-    if value_type != TYPE_CHOICE {
-        return Some((value_type, value));
-    }
-    // choice kind, flags, size and type of the child, then the values.
-    let (kind, child_size, child_type) = (
-        read_u32(value, 0)?,
-        read_u32(value, 8)? as usize,
-        read_u32(value, 12)?,
-    );
-    if kind != CHOICE_NONE || child_type == TYPE_CHOICE {
-        return None;
-    }
-    let first = value.get(16..16usize.checked_add(child_size)?)?;
-    Some((child_type, first))
-}
-
 /// Reads `VIDEO_format` and `VIDEO_size` from a negotiated `Format` object
 /// pod (plain values or fixated choices); all other properties are skipped
 /// by their own sizes. `None` when the bytes are no such object or lack either value
-/// or hold a format this reader does not know.
+/// or hold a format this reader does not know. The modifier is read by
+/// `dmabuf::parse_negotiated`, which this is a view of.
 pub fn parse_video_format(bytes: &[u8]) -> Option<(VideoFormat, FrameSize)> {
-    let size = read_u32(bytes, 0)? as usize;
-    if read_u32(bytes, 4)? != TYPE_OBJECT || size < 8 {
-        return None;
-    }
-    let body = bytes.get(8..8usize.checked_add(size)?)?;
-    let (mut format, mut frame) = (None, None);
-    let mut at = 8;
-    while at + 16 <= body.len() {
-        let key = read_u32(body, at)?;
-        let value_size = read_u32(body, at + 8)? as usize;
-        let value_type = read_u32(body, at + 12)?;
-        let value = body.get(at + 16..at.checked_add(16)?.checked_add(value_size)?)?;
-        let plain = if matches!(key, KEY_VIDEO_FORMAT | KEY_VIDEO_SIZE) {
-            plain_value(value_type, value)
-        } else {
-            None
-        };
-        match (key, plain) {
-            (KEY_VIDEO_FORMAT, Some((TYPE_ID, id))) => {
-                format = VideoFormat::from_id(read_u32(id, 0)?);
-            }
-            (KEY_VIDEO_SIZE, Some((TYPE_RECTANGLE, rectangle))) => {
-                frame = Some(FrameSize::new(
-                    read_u32(rectangle, 0)?,
-                    read_u32(rectangle, 4)?,
-                ));
-            }
-            _ => {}
-        }
-        at = at.checked_add(16)?.checked_add(padded(value_size))?;
-    }
-    Some((format?, frame?))
+    dmabuf::parse_negotiated(bytes).map(|negotiated| (negotiated.format, negotiated.size))
 }
 
 fn int_property(body: &mut Vec<u8>, key: u32, value: u32) {
@@ -245,6 +198,45 @@ pub fn consumer_buffers_pod(size: FrameSize) -> std::io::Result<Vec<u8>> {
     let mut out = Vec::new();
     pod(&mut out, TYPE_OBJECT, &body);
     Ok(out)
+}
+
+/// `SPA_META_Cursor` of `enum spa_meta_type` (`spa/buffer/meta.h`: Invalid 0,
+/// Header 1, VideoCrop 2, VideoDamage 3, Bitmap 4, Cursor 5).
+pub const META_CURSOR: u32 = 5;
+/// `SPA_TYPE_OBJECT_ParamMeta`: the object type after `ParamBuffers`
+/// (0x40004, used above) in `spa/utils/type.h` (order read in PipeWire 1.2.7
+/// on 2026-11-14, BK8b; `SPA_PARAM_Meta` = 6 after `SPA_PARAM_Buffers` = 5 is
+/// read from `spa/param/param.h`).
+const OBJECT_PARAM_META: u32 = 0x40005;
+const PARAM_META: u32 = 6;
+/// `SPA_PARAM_META_type` and `SPA_PARAM_META_size` (`spa/param/buffers.h`:
+/// START, type, size, features).
+const KEY_META_TYPE: u32 = 1;
+const KEY_META_SIZE: u32 = 2;
+const TYPE_INT: u32 = 4;
+
+/// The `Meta` parameter that asks the producer for cursor metadata in every
+/// buffer (plan 2026-11-14 BK8a, B-16): the type `SPA_META_Cursor` and the
+/// expected size of the meta as an `Int` range (`default`, `minimum`,
+/// `maximum` bytes), the way screen capture clients request it. A producer
+/// that has no cursor metadata ignores the request.
+pub fn cursor_meta_pod(default: u32, minimum: u32, maximum: u32) -> Vec<u8> {
+    let mut body = Vec::new();
+    word(&mut body, OBJECT_PARAM_META);
+    word(&mut body, PARAM_META);
+    property(&mut body, KEY_META_TYPE);
+    id_pod(&mut body, META_CURSOR);
+    property(&mut body, KEY_META_SIZE);
+    choice(
+        &mut body,
+        CHOICE_RANGE,
+        TYPE_INT,
+        4,
+        &[default, minimum, maximum],
+    );
+    let mut out = Vec::with_capacity(body.len() + 8);
+    pod(&mut out, TYPE_OBJECT, &body);
+    out
 }
 
 #[cfg(test)]
@@ -315,10 +307,11 @@ mod tests {
         let size = u32::from_le_bytes(built[0..4].try_into().unwrap()) as usize;
         assert_eq!(size, built.len() - 8);
         assert_eq!(built.len() % 8, 0);
-        // No VIDEO_modifier (key 0x20005): producers keep to shared memory.
+        // No VIDEO_modifier (key 0x20002, `spa/param/format.h`; 0x20005 is
+        // `maxFramerate`): this offer is the shared memory one.
         assert!(!built
             .windows(4)
-            .any(|word| word == 0x20005u32.to_le_bytes()));
+            .any(|word| word == 0x20002u32.to_le_bytes()));
     }
 
     #[test]
@@ -387,5 +380,31 @@ mod tests {
         );
         assert_eq!(parse_video_format(&object(3, 0)), None);
         assert_eq!(parse_video_format(&object(0, 1)), None);
+    }
+
+    #[test]
+    fn bildkette_task_wayland_cursor_meta_pod_asks_for_the_cursor_meta_with_a_size_range() {
+        // Written out from `spa/param/buffers.h` (spa_param_meta) and
+        // `spa/pod/pod.h`: object ParamMeta, id Meta, type = Id Cursor,
+        // size = Range of Int (default, minimum, maximum).
+        let mut body = Vec::new();
+        word(&mut body, 0x40005);
+        word(&mut body, 6);
+        word(&mut body, 1);
+        word(&mut body, 0);
+        id_pod(&mut body, 5);
+        word(&mut body, 2);
+        word(&mut body, 0);
+        choice_pod(&mut body, 1, 4, 4, &[16_432, 52, 262_192]);
+        let mut expected = Vec::new();
+        word(&mut expected, body.len() as u32);
+        word(&mut expected, 15);
+        expected.extend_from_slice(&body);
+        pad(&mut expected);
+        let built = cursor_meta_pod(16_432, 52, 262_192);
+        assert_eq!(built, expected);
+        assert_eq!(built.len() % 8, 0);
+        let size = u32::from_le_bytes(built[0..4].try_into().unwrap()) as usize;
+        assert_eq!(size, built.len() - 8);
     }
 }

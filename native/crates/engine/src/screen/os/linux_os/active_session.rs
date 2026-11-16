@@ -256,7 +256,9 @@ fn system_active_session() -> io::Result<Option<LogindSession>> {
     {
         proxy.get_property(key).map_err(io::Error::other)
     }
-    let connection = Connection::system().map_err(io::Error::other)?;
+    let connection = zbus::blocking::connection::Builder::system()
+        .and_then(|builder| builder.method_timeout(Duration::from_secs(2)).build())
+        .map_err(io::Error::other)?;
     let seat = Proxy::new(
         &connection,
         SERVICE,

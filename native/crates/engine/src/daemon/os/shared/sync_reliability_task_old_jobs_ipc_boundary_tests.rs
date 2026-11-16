@@ -134,8 +134,11 @@ impl OfflineAgent {
             pending: Vec::new(),
             facts: fixture.facts.clone(),
         };
-        let inner =
-            super::super::ipc_client::share_backend_identity("C08 offline peer".into(), target);
+        let inner = super::super::ipc_client::share_backend_identity(
+            "C08 offline peer".into(),
+            target,
+            crate::share::OperationOrigin::Job,
+        );
         let agent =
             crate::agent::AgentBackend::from_streams(Box::new(reader), Box::new(writer), inner)
                 .expect("normal framed AgentBackend Hello handshake");

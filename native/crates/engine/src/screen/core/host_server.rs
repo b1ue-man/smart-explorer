@@ -79,6 +79,9 @@ struct Start<'a> {
     mode: SessionMode,
     icon_version: Option<u8>,
     family_version: Option<u16>,
+    /// The viewer's hello: `HELLO_OK` names HEVC and AV1 only after its
+    /// `decoders_v2` (plan 2026-11-14 „Bildkette“ B-31).
+    hello: &'a ScreenClientHello,
 }
 
 impl Start<'_> {
@@ -109,10 +112,11 @@ impl Start<'_> {
         approval: ApprovalKind,
         frame_contract: Option<FrameContract>,
     ) -> ScreenHelloOk {
-        ScreenHelloOk {
+        let mut ok = ScreenHelloOk {
             authorization,
             platform: metadata.platform,
-            encoders: metadata.encoders.clone(),
+            encoders: Vec::new(),
+            encoders_v2: None,
             input: metadata.input.clone(),
             monitors: metadata.monitors.clone(),
             limits: metadata.limits.clone(),
@@ -120,7 +124,9 @@ impl Start<'_> {
             frame_contract,
             icon_version: self.icon_version,
             family_version: self.family_version,
-        }
+        };
+        ok.offer_encoders(&metadata.encoders, self.hello);
+        ok
     }
 
     /// Registers under the current rights; `None` when they no longer allow
@@ -199,6 +205,7 @@ pub async fn serve(context: HostContext, viewer: ProvenViewer) -> io::Result<()>
         family_version: hello
             .family_version
             .filter(|version| *version == super::family_protocol::FAMILY_PROTOCOL),
+        hello: &hello,
     };
     let mode = hello.mode;
     let now = crate::share::core_now_secs();
@@ -343,6 +350,8 @@ pub async fn serve(context: HostContext, viewer: ProvenViewer) -> io::Result<()>
         source,
         contract,
         choice,
+        sharp,
+        fallbacks,
         admission,
     } = match startup::prepare(
         &context,
@@ -434,6 +443,15 @@ pub async fn serve(context: HostContext, viewer: ProvenViewer) -> io::Result<()>
     );
     pipeline.hold_admission(admission);
     pipeline.set_frame_contract(contract)?;
+    pipeline.set_sharp_choice(sharp);
+    // `SET_DECODERS` negotiates again with these encoders (P1); B-36 per
+    // decoder of the pairing (`ContinueOffers`).
+    pipeline.set_pairing(
+        metadata.encoders.clone(),
+        sharp,
+        super::gop_continue::ContinueOffers::from_hello(&hello),
+    );
+    pipeline.set_codec_fallbacks(fallbacks);
     if let Some(tiles) = negotiate_for_contract(
         &metadata.encoders,
         &hello.decoders,

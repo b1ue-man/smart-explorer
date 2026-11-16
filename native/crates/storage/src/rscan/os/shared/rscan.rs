@@ -58,6 +58,19 @@ pub fn start_scan_backend(
     retention: Option<RetentionHandle>,
     tx: Sender<ScanMessage>,
 ) -> ScanHandle {
+    start_scan_backend_with(Box::new(move || backend), root, max_depth, retention, tx)
+}
+
+/// [`start_scan_backend`] with the backend named by `open`, which runs on
+/// the scan's own thread: a caller on a frame loop can start a scan over a
+/// handle that takes time to open (a handle of another origin, E4c).
+pub fn start_scan_backend_with(
+    open: Box<dyn FnOnce() -> BackendHandle + Send>,
+    root: String,
+    max_depth: Option<u32>,
+    retention: Option<RetentionHandle>,
+    tx: Sender<ScanMessage>,
+) -> ScanHandle {
     let cancel = Arc::new(AtomicBool::new(false));
     let truncated = Arc::new(AtomicBool::new(false));
     let worker_cancel = cancel.clone();
@@ -66,6 +79,7 @@ pub fn start_scan_backend(
     if let Err(error) = std::thread::Builder::new()
         .name("rscan-driver".into())
         .spawn(move || {
+            let backend = open();
             run(
                 backend,
                 root,

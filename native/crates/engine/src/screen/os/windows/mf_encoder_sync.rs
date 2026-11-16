@@ -5,38 +5,45 @@
 //! comes on request (`CODECAPI_AVEncVideoForceKeyFrame`). A frame that does
 //! not come out of the same call, or a requested key frame that is none, is
 //! an encoder failure.
+//!
+//! Plan 2026-11-14 bildkette (BK3b): the bit rate is bounded by what the
+//! opened encoder and its level report (`mf_media::opened_limit`, the rule
+//! of B-06/B-21), no longer by a fixed 240 Mbit/s; a picture that lay on the
+//! GPU comes in as its NV12 copied from the ring slot.
 use std::io;
 
 use windows::core::VARIANT;
 use windows::Win32::Media::MediaFoundation::{
-    CODECAPI_AVEncCommonMeanBitRate, CODECAPI_AVEncVideoForceKeyFrame, ICodecAPI, IMFTransform,
+    eAVEncAV1VProfile_Main_420_8, eAVEncH265VProfile_Main_420_8, CODECAPI_AVEncCommonMeanBitRate,
+    CODECAPI_AVEncVideoForceKeyFrame, ICodecAPI, IMFMediaType, IMFTransform,
     MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, MFT_MESSAGE_NOTIFY_END_OF_STREAM,
-    MFT_MESSAGE_NOTIFY_END_STREAMING, MFT_MESSAGE_NOTIFY_START_OF_STREAM,
+    MFT_MESSAGE_NOTIFY_END_STREAMING, MFT_MESSAGE_NOTIFY_START_OF_STREAM, MF_MT_AVG_BITRATE,
+    MF_MT_MPEG2_PROFILE, MF_TRANSFORM_ASYNC_UNLOCK,
 };
 
-use super::mf_common::{ensure_com, EncoderSetup};
+use super::mf_common::{ensure_com, subtype, EncoderSetup};
 use super::mf_media::{
-    configure_encoder, h264_type, input_sample, is_keyframe, nv12_bytes, nv12_type, process_output,
-    sample_bytes_bounded, set_value, Output,
+    bounded_bitrate, configure_encoder, configure_hardware, h264_type, input_sample, is_keyframe,
+    nv12_bytes, nv12_type, opened_limit, process_output, sample_bytes_bounded, set_value,
+    video_type, Output,
 };
 use super::{mf_capture_media, mf_capture_output};
 use crate::screen::core::capture_admission::{CaptureGrant, CaptureOwner};
 use crate::screen::core::capture_image::{AdmittedBytes, CapturedImage};
+use crate::screen::core::capture_picture::Picture;
 use crate::screen::core::host_backend::{CapturedEncodedFrame, EncodedFrame, ScreenEncoder};
 use crate::screen::core::host_stage::StageRequest;
+use crate::screen::core::negotiate::CodecKind;
 use crate::screen::core::pixel_convert::{BgraImage, FrameSize};
-use crate::screen::core::rate_control::{MAX_BITRATE_BPS, MIN_BITRATE_BPS, START_DIRECT_BPS};
+use crate::screen::core::rate_control::START_DIRECT_BPS;
 
 /// Media Foundation time units (100 ns) per second.
 pub(super) const UNITS_PER_SECOND: i64 = 10_000_000;
 
-pub(super) fn clamp_bitrate(target_bps: u64) -> u32 {
-    target_bps.clamp(MIN_BITRATE_BPS, MAX_BITRATE_BPS) as u32
-}
-
-/// Sets a changed bit rate (at least 2 % off); a refusal keeps the old one.
-pub(super) fn retune(api: Option<&ICodecAPI>, current: &mut u32, target_bps: u64) {
-    let target = clamp_bitrate(target_bps);
+/// Sets a changed bit rate (at least 2 % off) within `limit`, the ceiling
+/// the opened encoder and its level report; a refusal keeps the old one.
+pub(super) fn retune(api: Option<&ICodecAPI>, current: &mut u32, target_bps: u64, limit: u32) {
+    let target = bounded_bitrate(target_bps, limit);
     if (i64::from(target) - i64::from(*current)).abs() * 50 < i64::from(*current) {
         return;
     }
@@ -53,6 +60,49 @@ pub(super) fn force_keyframe(api: Option<&ICodecAPI>) {
     }
 }
 
+/// The output type of `setup`: H.264 with its profile, HEVC Main or AV1
+/// Main, both 8-bit 4:2:0 (`EncoderSetup::codec`, B-23, merge W1; the
+/// profile constants as the crate `windows` 0.58.0 binds them:
+/// `eAVEncH265VProfile_Main_420_8` = 1, `eAVEncAV1VProfile_Main_420_8` = 1).
+pub(super) fn output_type(setup: &EncoderSetup, bitrate: u32) -> io::Result<IMFMediaType> {
+    let profile = match setup.codec {
+        CodecKind::H264 => return h264_type(setup, bitrate),
+        CodecKind::Hevc => eAVEncH265VProfile_Main_420_8.0 as u32,
+        CodecKind::Av1 => eAVEncAV1VProfile_Main_420_8.0 as u32,
+        CodecKind::Tiles => {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "Media Foundation encodes no tiles",
+            ))
+        }
+    };
+    let compressed = subtype(setup.codec)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::Unsupported, "no MF subtype"))?;
+    let media = video_type(&compressed, setup.size, setup.fps)?;
+    // SAFETY: attribute writes on an owned media type.
+    unsafe {
+        media.SetUINT32(&MF_MT_AVG_BITRATE, bitrate)?;
+        media.SetUINT32(&MF_MT_MPEG2_PROFILE, profile)?;
+    }
+    Ok(media)
+}
+
+/// The B-21 settings a hardware MFT leaves at its default (`se screen codec
+/// --json`, merge W1): unlocked and configured as `AsyncEncoder::create`
+/// does before its media types are set; nothing streams.
+pub(super) fn probe_refused(transform: &IMFTransform) -> Vec<String> {
+    // SAFETY: an attribute write on the activated transform; a transform
+    // that is not asynchronous ignores it.
+    let _ = unsafe {
+        transform
+            .GetAttributes()
+            .and_then(|attributes| attributes.SetUINT32(&MF_TRANSFORM_ASYNC_UNLOCK, 1))
+    };
+    let bitrate = bounded_bitrate(START_DIRECT_BPS, u32::MAX);
+    let (_, settings) = configure_hardware(transform, bitrate, 60);
+    settings.refused().into_iter().map(String::from).collect()
+}
+
 /// Opens `transform` for `setup`: output type first, then input type (the
 /// order encoders require), then streaming starts.
 pub(super) fn start(
@@ -60,7 +110,7 @@ pub(super) fn start(
     setup: &EncoderSetup,
     bitrate: u32,
 ) -> io::Result<()> {
-    let output = h264_type(setup, bitrate)?;
+    let output = output_type(setup, bitrate)?;
     let input = nv12_type(setup)?;
     // SAFETY: plain calls on an activated transform with owned types.
     unsafe {
@@ -109,13 +159,25 @@ pub(super) fn frame_of(parts: Vec<Vec<u8>>, key: bool, wanted: bool) -> io::Resu
     })
 }
 
+pub(in crate::screen::os) fn update_refresh<T>(refresh: &mut bool, result: &io::Result<T>) {
+    match result {
+        Ok(_) => *refresh = false,
+        Err(error) if error.kind() == io::ErrorKind::WouldBlock => *refresh = true,
+        Err(_) => {}
+    }
+}
+
 pub(super) struct SyncEncoder {
     transform: IMFTransform,
     api: Option<ICodecAPI>,
     setup: EncoderSetup,
     frames: i64,
     bitrate: u32,
+    /// Bit rate ceiling of the opened encoder and its level.
+    limit: u32,
     grant: Option<CaptureGrant>,
+    /// A frame was skipped (`WouldBlock`): the next request asks for a picture.
+    refresh: bool,
 }
 
 // SAFETY: the transform is used by one thread at a time (the encoder is
@@ -141,24 +203,25 @@ impl SyncEncoder {
         setup: EncoderSetup,
         grant: Option<CaptureGrant>,
     ) -> io::Result<Self> {
-        let bitrate = clamp_bitrate(START_DIRECT_BPS);
+        let bitrate = bounded_bitrate(START_DIRECT_BPS, u32::MAX);
         let api = configure_encoder(&transform, bitrate);
         start(&transform, &setup, bitrate)?;
+        let limit = opened_limit(&transform, api.as_ref(), &setup);
         Ok(Self {
             transform,
             api,
             setup,
             frames: 0,
             bitrate,
+            limit,
             grant,
+            refresh: false,
         })
     }
-}
 
-impl ScreenEncoder for SyncEncoder {
-    fn encode_captured(
+    fn encode_admitted(
         &mut self,
-        image: &CapturedImage,
+        image: &Picture,
         request: &StageRequest,
     ) -> io::Result<CapturedEncodedFrame> {
         let grant = self
@@ -167,7 +230,12 @@ impl ScreenEncoder for SyncEncoder {
             .ok_or_else(|| io::Error::other("MF encoder has no capture grant"))?;
         let maximum = mf_capture_output::capture_limit(&grant, image, request, self.setup.size)?;
         ensure_com();
-        retune(self.api.as_ref(), &mut self.bitrate, request.target_bps);
+        retune(
+            self.api.as_ref(),
+            &mut self.bitrate,
+            request.target_bps,
+            self.limit,
+        );
         if request.keyframe && self.frames > 0 {
             force_keyframe(self.api.as_ref());
         }
@@ -203,7 +271,34 @@ impl ScreenEncoder for SyncEncoder {
                 }
             }
         }
-        mf_capture_output::finish(bytes, self.setup.size, keyframe, request.keyframe)
+        mf_capture_output::finish(
+            bytes,
+            self.setup.codec,
+            self.setup.size,
+            keyframe,
+            request.keyframe,
+        )
+    }
+}
+
+impl ScreenEncoder for SyncEncoder {
+    fn encode_captured(
+        &mut self,
+        image: &CapturedImage,
+        request: &StageRequest,
+    ) -> io::Result<CapturedEncodedFrame> {
+        self.encode_picture(&Picture::Cpu(image.clone()), request)
+    }
+
+    /// A GPU picture comes in as its NV12 copied from the slot (BK3b).
+    fn encode_picture(
+        &mut self,
+        image: &Picture,
+        request: &StageRequest,
+    ) -> io::Result<CapturedEncodedFrame> {
+        let result = self.encode_admitted(image, request);
+        update_refresh(&mut self.refresh, &result);
+        result
     }
 
     fn name(&self) -> String {
@@ -212,6 +307,10 @@ impl ScreenEncoder for SyncEncoder {
 
     fn size(&self) -> FrameSize {
         self.setup.size
+    }
+
+    fn needs_refresh(&self) -> bool {
+        self.refresh
     }
 
     fn encode(
@@ -232,7 +331,7 @@ impl ScreenEncoder for SyncEncoder {
             ));
         }
         ensure_com();
-        retune(self.api.as_ref(), &mut self.bitrate, target_bps);
+        retune(self.api.as_ref(), &mut self.bitrate, target_bps, self.limit);
         if keyframe && self.frames > 0 {
             force_keyframe(self.api.as_ref());
         }
@@ -263,7 +362,8 @@ impl ScreenEncoder for SyncEncoder {
         }
         let frame = frame_of(parts, key, keyframe)?;
         for data in &frame.records {
-            crate::screen::core::frame_size_caps::check_avc_dimensions(
+            crate::screen::core::frame_size_caps::check_video_dimensions(
+                self.setup.codec,
                 data,
                 self.setup.size,
                 crate::screen::core::frame_budget::FrameLimits::RESOURCE,

@@ -123,3 +123,54 @@ async fn verbindungen_task_bild_control_stream_above_picture_groups() {
         "the control stream ({control}) goes before the picture groups ({pictures})"
     );
 }
+
+/// Plan bildkette BK3b (copy 16 of the BK3 table): the records of an
+/// admitted frame go into the QUIC send buffer as they are (`write_chunk`)
+/// and reach the viewer byte for byte, with the same headers and flags as
+/// the copying writer gave them. Not registered yet
+/// (`docs/tests/register.tsv`): the manager adds the row.
+#[tokio::test]
+async fn bildkette_task_chain_admitted_records_reach_the_viewer_unchanged() {
+    use crate::screen::core::capture_records::CapturedRecords;
+    use crate::screen::core::wire_binary::{
+        read_frame_record, read_gop_header, FLAG_KEYFRAME, FLAG_MORE,
+    };
+    let (viewer, host) = (endpoint().await, endpoint().await);
+    let (viewer_control, host_control) = connect(&viewer, &host).await;
+    let size = FrameSize::new(64, 64);
+    let header = GopHeader {
+        gop_id: 1,
+        frame_contract: None,
+        family_layout_revision: None,
+        kind: StreamKind::Video,
+        codec: CodecKind::Tiles,
+        profile: None,
+        size,
+    };
+    let grant = crate::screen::core::capture_test_support::grant(size, None);
+    let first: Vec<u8> = (0..200u32).map(|n| n as u8).collect();
+    let second = vec![0xA5u8; 3_000];
+    let payloads = vec![first.clone(), second.clone()];
+    let records = CapturedRecords::from_allocator(&grant, 3_200, 2, || Ok(payloads)).unwrap();
+    let mut group = GopWriter::open(&host_control, header)
+        .await
+        .expect("picture group stream");
+    let written = group
+        .write_frame_admitted(9, 77, true, records)
+        .await
+        .expect("written");
+    assert_eq!(written, (200 + 3_000 + 2 * 21) as u64);
+    group.finish();
+    let mut stream = viewer_control.accept_uni().await.expect("picture stream");
+    assert_eq!(read_gop_header(&mut stream).await.expect("header"), header);
+    for (payload, flags) in [(first, FLAG_KEYFRAME | FLAG_MORE), (second, FLAG_KEYFRAME)] {
+        let record = read_frame_record(&mut stream, &header)
+            .await
+            .expect("record")
+            .expect("one more record");
+        assert_eq!(record.frame_id, 9);
+        assert_eq!(record.capture_ts_us, 77);
+        assert_eq!(record.flags, flags);
+        assert_eq!(record.payload, payload);
+    }
+}

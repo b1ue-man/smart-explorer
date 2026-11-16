@@ -238,9 +238,15 @@ impl eframe::App for FamilyViewerApp {
                         .map(|end| end.text.as_str())
                         .or(info.reason.as_deref())
                         .unwrap_or("Fensterverbindung wird hergestellt …");
-                    let lines = self
-                        .diagnostics
-                        .then(|| super::screen_stats_overlay::stats_lines(&info, 0));
+                    // The display line as in the viewer (B-40, BK9).
+                    let lines = self.diagnostics.then(|| {
+                        super::screen_present::view_lines(
+                            ui.ctx(),
+                            &info,
+                            self.widget.planes_drawn(),
+                            0,
+                        )
+                    });
                     let params = ViewParams {
                         fit: self.prefs.fit,
                         control: self.control

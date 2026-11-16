@@ -55,6 +55,7 @@ fn hello(monitors: Vec<MonitorInfo>) -> ScreenHelloOk {
     ScreenHelloOk {
         family_version: None,
         icon_version: None,
+        encoders_v2: None,
         frame_contract: None,
         authorization: ScreenAuthorization {
             view: CapabilityDecision::Allow,
@@ -85,6 +86,8 @@ fn accepted(monitors: Vec<MonitorInfo>) -> Option<StreamEvent> {
     Some(StreamEvent::Accepted {
         hello: hello(monitors),
         path: "direct".into(),
+        rate_ceiling: crate::daemon::RateCeilingState::Automatic,
+        set_decoders: false,
     })
 }
 

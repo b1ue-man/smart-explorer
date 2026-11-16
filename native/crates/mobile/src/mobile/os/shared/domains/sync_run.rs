@@ -410,11 +410,11 @@ fn mirror_task(ctx: &TaskCtx, source: &str, target: &str) -> Result<Value, ApiEr
     }
     ctx.message("Verbinde…");
     let rt = Runtime::get()?;
-    let (src, src_root) = rt.resolve(source)?;
+    let (src, src_root) = rt.resolve_for_job(source)?;
     if ctx.cancelled() {
         return Err(canceled("Abgebrochen"));
     }
-    let (dst, dst_root) = rt.resolve(target)?;
+    let (dst, dst_root) = rt.resolve_for_job(target)?;
     if ctx.cancelled() {
         return Err(canceled("Abgebrochen"));
     }

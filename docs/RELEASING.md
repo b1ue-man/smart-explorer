@@ -399,6 +399,18 @@ slower than 10/20, which E5 leaves to M1). The measurements M2 and M3 use stand-
 stream (60 frames of 16 666 bytes a second) and the list request (9 bytes out, 4096 back), the
 Exec measurement M8 leaves out hello, session proof and rights (`docs/TODO.md` VERB-MESSUNG).
 
+Since 2026-11-15 (plan `docs/plaene/2026-11-14-verbindungen-je-zweck/bildkette.md`, source state: implemented, not compiled, not run on hardware, waits for suite and release) part `workspace` also
+expects the 229 new Rust tests of the batch (210 `bildkette_task_*`, 19 `verbindungen_task_*`) by
+name exactly once, on the operating system they run on (`BILDKETTE_TESTS` in
+`native/test-crates-task.py`: `both`, `linux`, `windows`). Two of the ignored tests of that batch run
+in the ignored groups of the Linux job: `bildkette_task_linux_hw_av1_roundtrip_psnr` (SVT-AV1 and
+dav1d; the step "Linux test packages" of `crates-task.yml` installs `libsvtav1enc1d1` and
+`libdav1d7`, the Ubuntu 24.04 packages of `libSvtAv1Enc.so.1` and `libdav1d.so.7`) and
+`bildkette_task_chain_host_process_crash_ends_only_its_session` (the development `se` that
+`compile_stage` builds into `native/target/debug`). Four tests need a graphics card that no hosted
+runner has (`#[ignore = "…; Suite keine (kein Runner mit Grafikkarte)"]`, register suite
+`keine (kein Runner mit Grafikkarte)`; `docs/TODO.md` VERB-TESTS-OHNE-SUITE).
+
 On 2026-11-07 the evaluation of the suites (TODO TESTS-BEWERTUNG) removed eight suites whose
 tests crates-task already ran: `fixes-2026-10-27`, `ideal`, `lan-cleanup`, `media-navigation`,
 `mount-recovery-cache`, `share-write-mount-save`, `sync-transparency` and `windows-direct`, with

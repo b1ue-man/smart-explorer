@@ -1,7 +1,8 @@
 //! Control frames after the handshake (decision C3). The viewer sends
 //! `SET_MODE`, `INPUT`, `FRAME_ACK`, `KEYFRAME_REQUEST`, `PING`,
-//! `LIST_WINDOWS`, `SNAPSHOT`, `CONTROL_REQUEST`, `PREVIEW_ACK` and
-//! `CURSOR_REQUEST`; the host sends `STATE`, `PONG`, `WINDOWS`, `STATS`,
+//! `LIST_WINDOWS`, `SNAPSHOT`, `CONTROL_REQUEST`, `PREVIEW_ACK`,
+//! `CURSOR_REQUEST`, `RATE_CEILING` (8 bytes) and `FRAME_TIMING` (JSON,
+//! `frame_timing.rs`); the host sends `STATE`, `PONG`, `WINDOWS`, `STATS`,
 //! `CONTROL_STATE`, `ERROR`, `CURSOR_SHAPE` and `CURSOR_POSITION` (the
 //! pointer overlay of `cursor_overlay.rs`).
 //! Frames that come with every picture or input event have a fixed
@@ -29,9 +30,7 @@ use super::wire_hello::ScreenErrorCode;
 
 #[path = "wire_control_codec.rs"]
 mod codec;
-pub use codec::{
-    decode_host_frame, decode_viewer_frame, encode_host_frame, encode_viewer_frame,
-};
+pub use codec::{decode_host_frame, decode_viewer_frame, encode_host_frame, encode_viewer_frame};
 
 /// The stream kind `SET_MODE` asks for: a click in the group view raises
 /// the same connection from `preview` to `full` (C6).
@@ -191,6 +190,10 @@ pub struct StreamInfo {
     pub encoder: String,
     #[serde(default)]
     pub hardware: bool,
+    /// The decoder stage the pairing chose (plan 2026-11-14 „Bildkette“
+    /// 4.10a): `true` hardware; absent from hosts before BK6.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decoder_hardware: Option<bool>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -204,7 +207,11 @@ pub struct StateReport {
     pub stream: Option<StreamInfo>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// `STATS`, once a second. The last three fields (plan 2026-11-14
+/// „Bildkette“ BK0) are optional both ways: a host of v0.5.196 leaves them
+/// out (the viewer shows „nicht gemeldet“), a viewer of v0.5.196 ignores
+/// them.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HostStats {
     pub target_kbps: u64,
     pub sent_kbps: u64,
@@ -214,6 +221,35 @@ pub struct HostStats {
     pub dropped_before_encode: u64,
     pub stream_resets: u64,
     pub unacked_bytes: u64,
+    /// `frame_timing_v1`: the host takes `FRAME_TIMING` (`Some(1)`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame_timing: Option<u8>,
+    /// Stages of the stations and what limits the rate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chain: Option<super::frame_timing::ChainReport>,
+    /// Station times; only after the viewer's `FRAME_TIMING` request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stations: Option<super::frame_timing::HostStations>,
+}
+
+/// The statistics before the first second: nothing sent, a direct path,
+/// none of the optional BK0 fields.
+impl Default for HostStats {
+    fn default() -> Self {
+        Self {
+            target_kbps: 0,
+            sent_kbps: 0,
+            fps: 0,
+            path: PathKind::Direct,
+            keyframes: 0,
+            dropped_before_encode: 0,
+            stream_resets: 0,
+            unacked_bytes: 0,
+            frame_timing: None,
+            chain: None,
+            stations: None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -286,7 +322,21 @@ pub enum ViewerFrame {
     /// The viewer draws the pointer itself (`true`) or wants it in the
     /// picture (`false`); only after the host announced `cursor_overlay`.
     CursorOverlay(bool),
+    /// „Höchste Datenrate“ in bit/s, `None` automatic (`RATE_CEILING`,
+    /// plan 2026-11-14 „Bildkette“ B-09); only after the host announced
+    /// `rate_ceiling_v1`.
+    RateCeiling(Option<u64>),
+    /// New decoder offers and continuation announcement after a change of
+    /// „Codec“ or „Dekodierer“ (`SET_DECODERS`, `set_decoders.rs`); only
+    /// after the host announced `set_decoders_v1`.
+    SetDecoders(super::set_decoders::SetDecoders),
+    /// `FRAME_TIMING` (BK0): station times on/off or one input probe; only
+    /// after the host announced `frame_timing_v1` in `STATS`.
+    FrameTiming(super::frame_timing::FrameTimingRequest),
 }
+
+/// Viewer to host: `u64` big-endian, the ceiling in bit/s, 0 automatic.
+pub const RATE_CEILING: u8 = 50;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum HostFrame {
@@ -316,9 +366,7 @@ pub async fn send_viewer_frame<W: AsyncWrite + Unpin>(
 }
 
 /// Host side: viewer frames are at most 64 KiB.
-pub async fn recv_viewer_frame<R: AsyncRead + Unpin>(
-    reader: &mut R,
-) -> io::Result<ViewerFrame> {
+pub async fn recv_viewer_frame<R: AsyncRead + Unpin>(reader: &mut R) -> io::Result<ViewerFrame> {
     let (tag, payload) = read_frame(reader, MAX_CONTROL_BYTES).await?;
     decode_viewer_frame(tag, &payload)
 }

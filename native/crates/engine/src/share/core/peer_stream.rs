@@ -101,6 +101,7 @@ pub(super) fn call<T>(
     let endpoint = backend.current_endpoint()?;
     // A person's listing, removal or digest is presence until it ends (E4).
     let _presence = backend.metadata_presence(&endpoint);
+    let origin = backend.effective_origin();
     let mut opened = backend.node.open_stream(&endpoint, &backend.identity)?;
     let lease = backend.mount_lease_token()?;
     let ctrl = Ctrl::Fs {
@@ -110,7 +111,7 @@ pub(super) fn call<T>(
     let result = backend.node.block_on_route(opened.generation, async {
         io_deadline::run(
             "Share streaming request",
-            framing::send_fs_ctrl(&mut opened.send, &ctrl, backend.origin),
+            framing::send_fs_ctrl(&mut opened.send, &ctrl, origin),
         )
         .await?;
         loop {

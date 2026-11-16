@@ -199,7 +199,7 @@ impl WorkerSource {
         self.link.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    fn unexpected(&mut self, what: &str) -> StageError {
+    pub(super) fn unexpected(&mut self, what: &str) -> StageError {
         self.link().kill();
         StageError::new(
             ScreenErrorCode::CaptureFailed,
@@ -292,6 +292,10 @@ impl ScreenSource for WorkerSource {
 
 impl HostStage for WorkerSource {
     fn produce(&mut self, request: &StageRequest) -> Result<StageFrame, StageError> {
+        // A process that paces itself streams (plan „Bildkette“ B-27).
+        if self.streams() {
+            return self.produce_streamed(request);
+        }
         let answer = self
             .link()
             .ask(&WorkerRequest::Produce(request.clone()), FRAME_TIMEOUT)?;
@@ -309,5 +313,33 @@ impl HostStage for WorkerSource {
             }
             _ => Err(self.unexpected("PRODUCE")),
         }
+    }
+
+    /// Paces its own pictures: the daemon grants credit when it frees,
+    /// not per tick of its session loop (BK3b).
+    fn self_paced(&self) -> bool {
+        self.streams()
+    }
+
+    fn set_stream_hint(&mut self, hint: crate::screen::core::host_stage::StreamHint) {
+        self.keep_stream_hint(hint);
+    }
+
+    fn take_stream_report(&mut self) -> Option<crate::screen::core::host_stage::StreamReport> {
+        self.last_stream_report()
+    }
+
+    fn drain_chain(&mut self, meter: &mut crate::screen::core::chain_meter::ChainMeter) {
+        self.drain_stream_chain(meter);
+    }
+
+    /// B-36: only the picture stream carries the wish (`STREAM`); `PRODUCE`
+    /// keeps the reset with a new encoder.
+    fn continues_references(&self) -> bool {
+        self.streams()
+    }
+
+    fn recover_references(&mut self, last_good: u64) {
+        self.keep_recovery(last_good);
     }
 }

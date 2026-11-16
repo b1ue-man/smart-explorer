@@ -5,9 +5,7 @@ use crate::screen::core::capture_image::{AdmittedBytes, CapturedImage};
 use crate::screen::core::capture_records::CapturedRecords;
 use crate::screen::core::frame_budget::FrameLimits;
 use crate::screen::core::host_stage::StageRequest;
-use crate::screen::core::pixel_convert::{
-    bgra_to_i420_with_limits, FrameSize, I420Image, YuvMatrix,
-};
+use crate::screen::core::pixel_convert::{bgra_to_i420_parallel, FrameSize, I420Image, YuvMatrix};
 use crate::screen::core::wire::invalid;
 use crate::screen::core::wire_binary::MAX_RECORD_BYTES;
 use openh264::encoder::EncodedBitStream;
@@ -52,9 +50,11 @@ pub(super) fn admitted_i420(
         .ok_or_else(|| invalid("OpenH264 I420 size overflow"))?;
     // pixel_convert allocates exactly three zeroed planes at these lengths;
     // no unbounded library allocator or geometric Vec growth is involved.
-    grant.claim(CaptureOwner::CodecInput, bytes)?.allocate(|| {
-        bgra_to_i420_with_limits(&frame.view(), YuvMatrix::Bt709, FrameLimits::RESOURCE)
-    })
+    // The conversion runs on all cores, bit-identical to the reference
+    // `bgra_to_i420_with_limits` (plan bildkette B-19, BK3b).
+    grant
+        .claim(CaptureOwner::CodecInput, bytes)?
+        .allocate(|| bgra_to_i420_parallel(&frame.view(), YuvMatrix::Bt709, FrameLimits::RESOURCE))
 }
 
 /// Validate the native lengths before Layer::nal_unit's unchecked pointer

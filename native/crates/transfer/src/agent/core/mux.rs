@@ -19,6 +19,9 @@ pub(super) struct Mux {
     pub(super) link_aware_hash: AtomicBool,
     /// The server announced `credit-v1` and the connection switched to it.
     credit: AtomicBool,
+    /// The server announced `origin-v1`: a request made on a thread that
+    /// runs background work carries the mark (`agent_proto::request_id`).
+    origin: AtomicBool,
     streams: Arc<StreamCount>,
     retired: AtomicBool,
     activity: Arc<Activity>,
@@ -69,6 +72,7 @@ impl Mux {
             next_id: AtomicU64::new(1),
             link_aware_hash: AtomicBool::new(false),
             credit: AtomicBool::new(false),
+            origin: AtomicBool::new(false),
             streams: Arc::new(StreamCount::default()),
             retired: AtomicBool::new(false),
             activity: Arc::new(Activity::new()),
@@ -92,7 +96,15 @@ impl Mux {
         self.credit.load(Ordering::Acquire)
     }
 
-    /// Allocate a fresh req_id and a channel to receive its frames.
+    /// The server reads the background mark of a request (E4d); set once
+    /// after the handshake, before any request that could carry it.
+    pub(super) fn enable_origin(&self) {
+        self.origin.store(true, Ordering::Release);
+    }
+
+    /// Allocate a fresh req_id and a channel to receive its frames. The id
+    /// carries the background mark when the calling thread runs work its
+    /// program started by itself (E4d): every frame of the request keeps it.
     pub(super) fn register(&self) -> (u64, RequestRx) {
         self.register_with_tree_budget(None)
     }
@@ -101,7 +113,10 @@ impl Mux {
         &self,
         budget: Option<crate::agent_proto::TreeDecodeBudget>,
     ) -> (u64, RequestRx) {
-        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        let id = crate::agent_proto::request_id(
+            self.next_id.fetch_add(1, Ordering::Relaxed),
+            self.origin.load(Ordering::Acquire),
+        );
         let (mut route, rx) = if self.credit_mode() {
             RequestRx::credited(
                 id,

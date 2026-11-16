@@ -240,7 +240,17 @@ object FilesApi {
 
     // ---- fs.* ----
 
-    suspend fun list(location: String, showHidden: Boolean, filter: FilterSpec?, sort: SortSpec): Listing =
+    /**
+     * [background]: the view reads itself again after an operation ended and nobody navigated;
+     * the core then lists as work of its own (no metadata presence at a Share device).
+     */
+    suspend fun list(
+        location: String,
+        showHidden: Boolean,
+        filter: FilterSpec?,
+        sort: SortSpec,
+        background: Boolean = false,
+    ): Listing =
         Core.request<Listing>(
             "fs.list",
             buildJsonObject {
@@ -248,6 +258,7 @@ object FilesApi {
                 put("showHidden", showHidden)
                 put("filter", filterJson(filter))
                 put("sort", sortJson(sort))
+                if (background) put("background", true)
             },
         )
 

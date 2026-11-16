@@ -4,8 +4,9 @@
 //! while too many bytes are unacknowledged, on the relay path at most
 //! 768 KiB because the relay drops above 1 MiB per destination (NR N19); the
 //! reset of a picture stream whose oldest unacknowledged frame is older than
-//! one second; and coalesced key-frame requests. Frames are only ever
-//! dropped before encoding, so the decoder never misses a reference.
+//! the stale time (`stale_after_us`, plan 2026-11-14 „Bildkette“ B-35); and
+//! coalesced key-frame requests. Frames are only ever dropped before
+//! encoding, so the decoder never misses a reference.
 use std::collections::VecDeque;
 
 use super::rate_control::PathKind;
@@ -17,11 +18,26 @@ pub const RELAY_QUEUE_BYTES: u64 = 1024 * 1024;
 pub const RELAY_GUARD_BYTES: u64 = 768 * 1024;
 /// Queueing the guard allows beyond one round trip: 100 ms of the target.
 pub const QUEUE_ALLOWANCE_US: u64 = 100_000;
-/// Age of the oldest unacknowledged frame that resets the picture stream.
+/// Age of the oldest unacknowledged frame that resets the picture stream
+/// while the pacer knows no round trip (`Pacer::set_timing`), and the
+/// longest a single write may stall (decision C3, 2026-10-17).
 pub const STALE_STREAM_US: u64 = 1_000_000;
-/// Frames in flight that reset the stream regardless of age: one second at
-/// 240 frames/s, four times over.
+/// Upper bound of the frames in flight, a memory bound: 1024 `SentFrame`s
+/// of 40 bytes are 40 KiB per session. Below it the bound follows the stale
+/// time (`in_flight_limit`); without timing it is the old rule (one second
+/// at 240 frames/s, four times over).
 pub const MAX_IN_FLIGHT_FRAMES: usize = 1024;
+/// B-35: round trips the oldest frame may wait for its acknowledgement. As
+/// the probe timeout of RFC 9002 (6.2.1: `smoothed_rtt + max(4 × rttvar,
+/// granularity) + max_ack_delay`) the bound is a multiple of the smoothed
+/// round trip, so it scales from the LAN to the WAN instead of the fixed
+/// second; 4 covers the PTO with a variance up to ¾ of the round trip. The
+/// viewer acknowledges without delay (`gop_stream.rs`).
+pub const STALE_RTT_FACTOR: u64 = 4;
+/// B-35: frame intervals the oldest frame may wait at least, so a LAN with
+/// a round trip below one frame interval does not reset on the jitter of
+/// one late frame (the frame clock already takes frames ¼ interval early).
+pub const STALE_FRAME_INTERVALS: u64 = 3;
 /// Highest frame rate of the frame clock: the highest common display
 /// refresh rate; capture never delivers more.
 pub const MAX_FPS: u32 = 240;
@@ -36,6 +52,33 @@ pub fn guard_bytes(target_bps: u64, path: PathKind, rtt_us: u64) -> u64 {
         PathKind::Direct => bytes,
         PathKind::Relay => bytes.min(RELAY_GUARD_BYTES),
     }
+}
+
+/// The stale time of a picture stream (B-35): max(4 × smoothed round trip,
+/// 3 frame intervals), plus the time the line needs at `target_bps` to
+/// carry the bytes still unacknowledged. A frame's age counts from the
+/// moment its last record was handed to the stream (`SentFrame::sent_us`),
+/// not from the moment it left, so a key frame larger than four round trips
+/// of the line (300 KB at 6 Mbit/s need 400 ms) would otherwise reset its
+/// own stream before its acknowledgement could arrive, every time.
+pub fn stale_after_us(srtt_us: u64, interval_us: u64, unacked_bytes: u64, target_bps: u64) -> u64 {
+    let base = srtt_us
+        .saturating_mul(STALE_RTT_FACTOR)
+        .max(interval_us.saturating_mul(STALE_FRAME_INTERVALS));
+    let drain = u128::from(unacked_bytes) * 8 * 1_000_000 / u128::from(target_bps.max(1));
+    base.saturating_add(u64::try_from(drain).unwrap_or(u64::MAX))
+}
+
+/// Frames in flight that reset the stream regardless of their age: twice
+/// the frames the cadence sends within the stale time. Frames come at most
+/// every ¾ interval (`FrameClock::take`) plus one encoded ahead (B-27), so
+/// a stream whose oldest frame is still in time never reaches it; the count
+/// only catches a broken cadence. At most `MAX_IN_FLIGHT_FRAMES`.
+pub fn in_flight_limit(stale_us: u64, interval_us: u64) -> usize {
+    let frames = stale_us / interval_us.max(1) + 1;
+    usize::try_from(frames.saturating_mul(2))
+        .unwrap_or(usize::MAX)
+        .min(MAX_IN_FLIGHT_FRAMES)
 }
 
 /// What to do with the frame just captured.
@@ -71,6 +114,9 @@ pub struct Pacer {
     keyframe_due: bool,
     dropped: u64,
     resets: u64,
+    /// Smoothed round trip and frame interval (µs) for B-35; without them
+    /// the fixed second and `MAX_IN_FLIGHT_FRAMES` apply.
+    timing: Option<(u64, u64)>,
 }
 
 impl Default for Pacer {
@@ -84,6 +130,7 @@ impl Default for Pacer {
             keyframe_due: true,
             dropped: 0,
             resets: 0,
+            timing: None,
         }
     }
 }
@@ -110,9 +157,8 @@ impl Pacer {
         rtt_us: u64,
     ) -> PaceDecision {
         if let Some(oldest) = self.in_flight.front() {
-            if now_us.saturating_sub(oldest.sent_us) > STALE_STREAM_US
-                || self.in_flight.len() >= MAX_IN_FLIGHT_FRAMES
-            {
+            let (stale_us, limit) = self.stale_limits(target_bps);
+            if now_us.saturating_sub(oldest.sent_us) > stale_us || self.in_flight.len() >= limit {
                 return PaceDecision::ResetStream;
             }
             let expected = if self.keyframe_due {
@@ -127,6 +173,23 @@ impl Pacer {
         }
         PaceDecision::Encode {
             keyframe: self.keyframe_due,
+        }
+    }
+
+    /// B-35: the smoothed round trip of the path and the frame interval of
+    /// the cadence; the stale time follows them from now on.
+    pub fn set_timing(&mut self, srtt_us: u64, interval_us: u64) {
+        self.timing = Some((srtt_us, interval_us));
+    }
+
+    /// The stale time and the frame limit for the next decision.
+    pub fn stale_limits(&self, target_bps: u64) -> (u64, usize) {
+        match self.timing {
+            Some((srtt_us, interval_us)) => {
+                let stale = stale_after_us(srtt_us, interval_us, self.unacked_bytes, target_bps);
+                (stale, in_flight_limit(stale, interval_us))
+            }
+            None => (STALE_STREAM_US, MAX_IN_FLIGHT_FRAMES),
         }
     }
 
@@ -176,6 +239,16 @@ impl Pacer {
         self.resets += 1;
     }
 
+    /// The picture stream was reset and the next one continues the encoder's
+    /// chain (B-36): the frames in flight are forgotten as by
+    /// `on_stream_reset`, but no key frame is due for it; one already due
+    /// stays due.
+    pub fn on_stream_reset_continued(&mut self) {
+        self.in_flight.clear();
+        self.unacked_bytes = 0;
+        self.resets += 1;
+    }
+
     /// `KEYFRAME_REQUEST`, a joining viewer or a size change; requests before
     /// the next encoded frame make one key frame.
     pub fn request_keyframe(&mut self) {
@@ -203,6 +276,28 @@ impl Pacer {
     }
 }
 
+/// The highest frame rate the codec pairing allows for `size`: `requested`
+/// within `MAX_FPS` and the macroblock rate both report; `None` when not even
+/// one frame per second fits. The encoder opens with this rate (plan
+/// 2026-11-14 „Bildkette“ B-03).
+pub fn codec_cap(
+    requested: u32,
+    size: super::pixel_convert::FrameSize,
+    max_blocks_per_second: Option<u64>,
+) -> Option<u32> {
+    let blocks = super::frame_size_caps::macroblocks(size);
+    if blocks == 0 {
+        return None;
+    }
+    let max = max_blocks_per_second
+        .map_or(u64::from(MAX_FPS), |n| n / blocks)
+        .min(u64::from(MAX_FPS));
+    if max == 0 {
+        return None;
+    }
+    Some(requested.clamp(1, MAX_FPS).min(max as u32))
+}
+
 /// Takes captured frames at the wanted rate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FrameClock {
@@ -226,24 +321,14 @@ impl FrameClock {
         self.interval_us = interval_us(fps);
     }
 
-    /// The same effective cadence is returned to the encoder's StageRequest.
+    /// Sets the cadence to `codec_cap` and returns it.
     pub fn set_codec_fps(
         &mut self,
         requested: u32,
         size: super::pixel_convert::FrameSize,
         max_blocks_per_second: Option<u64>,
     ) -> Option<u32> {
-        let blocks = super::frame_size_caps::macroblocks(size);
-        if blocks == 0 {
-            return None;
-        }
-        let max = max_blocks_per_second
-            .map_or(u64::from(MAX_FPS), |n| n / blocks)
-            .min(u64::from(MAX_FPS));
-        if max == 0 {
-            return None;
-        }
-        let fps = requested.clamp(1, MAX_FPS).min(max as u32);
+        let fps = codec_cap(requested, size, max_blocks_per_second)?;
         self.set_fps(fps);
         Some(fps)
     }

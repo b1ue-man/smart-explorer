@@ -3,6 +3,7 @@ package app.smartexplorer.android.ui.screen
 import android.graphics.Bitmap
 import app.smartexplorer.android.screen.ScreenFrameLimits
 import app.smartexplorer.android.screen.ScreenCodecLatency
+import app.smartexplorer.android.screen.ScreenEncoderCodecs
 import android.media.MediaCodec
 import android.media.MediaCodecInfo.CodecProfileLevel
 import android.media.MediaCodecList
@@ -49,6 +50,8 @@ class ScreenDecoder(
     private val presentationEpoch: () -> Long = { 0L },
     bufferBudget:()->ScreenBufferBudget? = {ScreenBufferBudget.LEGACY},
     pullBuffers:ScreenPullBuffers? = null,
+    /** The viewer's choice „Dekodierer“ and „Codec“: which decoder stage may run a group (BK7b, [ScreenDecoderPolicy]). */
+    private val choice: () -> ViewerCodecChoice = { ViewerCodecChoice() },
 ) {
     interface Listener {
         fun onSize(width: Int, height: Int)
@@ -62,6 +65,8 @@ class ScreenDecoder(
         }
         /** MediaCodec confirmed this exact output on the still-active Surface. */
         fun onSurfaceFrame(frame: ScreenPresentedFrame) {}
+        /** The MediaCodec decoder that runs the picture group: its [codec] key, its name and whether it is a hardware decoder. */
+        fun onDecoderStage(codec: String, name: String, hardware: Boolean) {}
         fun onFrameSource(gopId: Long) {}
         /** The decoder failed [consecutive] times in a row without a picture in between. */
         fun onDecodeFailure(consecutive: Int)
@@ -77,6 +82,9 @@ class ScreenDecoder(
     private var latestGop = 0L
     private var codecWidth=0
     private var codecHeight=0
+    /** The codec key of the running decoder (`h264`, `hevc`, `av1`); only H.264 is checked with `ScreenFrameLimits.checkAvc`. */
+    private var activeCodec=ScreenEncoderCodecs.H264
+    private val avcChecked get()=activeCodec==ScreenEncoderCodecs.H264
     private var heldIndex = -1
     private val pulls=pullBuffers ?: ScreenPullBuffers(bufferBudget)
     private val staging get()=pulls.buffer
@@ -254,7 +262,8 @@ class ScreenDecoder(
         val c = codec ?: return
         val key = if (keyframe) MediaCodec.BUFFER_FLAG_KEY_FRAME else 0
         try {
-            ScreenFrameLimits.checkAvc(src,payloadOffset,len,codecWidth,codecHeight,pulls.budget)
+            if(avcChecked) ScreenFrameLimits.checkAvc(src,payloadOffset,len,codecWidth,codecHeight,pulls.budget)
+            else pulls.budget.checkedBytes(codecWidth,codecHeight)
             if (src === staging) {
                 val payload = ByteArray(len)
                 src.position(payloadOffset)
@@ -279,7 +288,8 @@ class ScreenDecoder(
     private fun queueBytes(payload: ByteArray, pts: Long, keyframe: Boolean) {
         val c = codec ?: return
         try {
-            ScreenFrameLimits.checkAvc(payload,codecWidth,codecHeight,pulls.budget)
+            if(avcChecked) ScreenFrameLimits.checkAvc(payload,codecWidth,codecHeight,pulls.budget)
+            else pulls.budget.checkedBytes(codecWidth,codecHeight)
             var index = heldIndex
             var tries = 0
             while (index < 0 && running && tries++ < INPUT_TRIES) index = c.dequeueInputBuffer(INPUT_WAIT_US)
@@ -325,26 +335,43 @@ class ScreenDecoder(
     private fun configure(info: ScreenViewEvent.Stream, gop: Long, payload: ByteArray): Boolean {
         val target=surface() ?: run { fail(); return false }
         val checked=try { pulls.budget.checkedBytes(info.width,info.height) } catch (_: IllegalArgumentException) { fail(); return false }
-        try {ScreenFrameLimits.checkAvc(payload,info.width,info.height,pulls.budget)} catch (_: RuntimeException) {fail(); return false}
+        // H.264, HEVC or AV1 (B-39): the group's codec names the MIME type. Only 4:2:0 is offered, so another profile cannot arrive.
+        val codecKey=info.codec
+        val mime=ScreenEncoderCodecs.mime(codecKey) ?: run { fail(); return false }
+        if(codecKey!=ScreenEncoderCodecs.H264 && info.profile!=null) { fail(); return false }
+        // The in-band parameter sets of HEVC and AV1 were checked by the core before the picture reached this thread (`viewer_sink.rs`).
+        if(codecKey==ScreenEncoderCodecs.H264) try {ScreenFrameLimits.checkAvc(payload,info.width,info.height,pulls.budget)} catch (_: RuntimeException) {fail(); return false}
         codecWidth=info.width;codecHeight=info.height
         var avcProfile: Int?=null
-        for(at in 0 until (payload.size-4).coerceAtLeast(0)) {
+        for(at in 0 until (if(codecKey==ScreenEncoderCodecs.H264) (payload.size-4).coerceAtLeast(0) else 0)) {
             if(payload[at]==0.toByte() && payload[at+1]==0.toByte() && payload[at+2]==1.toByte() && payload[at+3].toInt() and 31==7) {
                 avcProfile=payload[at+4].toInt() and 255; break
             }
         }
-        val choices=MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos.filter {
-            !it.isEncoder && !it.isAlias && it.supportedTypes.any { type -> type.equals(MIME,true) }
-        }.sortedByDescending { it.isHardwareAccelerated }
+        val everyDecoder=MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos.filter {
+            !it.isEncoder && !it.isAlias && it.supportedTypes.any { type -> type.equals(mime,true) }
+        }
+        // „Dekodierer“ and the hardware rule of HEVC and AV1 (`ScreenDecoderPolicy`); the hardware decoder runs first.
+        val hardwareExists=everyDecoder.any { it.isHardwareAccelerated }
+        val wanted=choice()
+        val choices=everyDecoder.filter { ScreenDecoderPolicy.allows(wanted,codecKey,it.isHardwareAccelerated,hardwareExists) }
+            .sortedByDescending { it.isHardwareAccelerated }
+        val mainProfile=when(codecKey) {
+            ScreenEncoderCodecs.HEVC -> CodecProfileLevel.HEVCProfileMain
+            ScreenEncoderCodecs.AV1 -> CodecProfileLevel.AV1ProfileMain8
+            else -> null
+        }
         for(candidate in choices) {
-            val caps=candidate.getCapabilitiesForType(MIME)
+            val caps=candidate.getCapabilitiesForType(mime)
             if(caps.videoCapabilities?.isSizeSupported(info.width,info.height)!=true) continue
             val profiles=caps.profileLevels.map { it.profile }
             if(avcProfile==100 && CodecProfileLevel.AVCProfileHigh !in profiles) continue
+            if(mainProfile!=null && mainProfile !in profiles) continue
             for(hints in listOf(true,false)) {
-                val format=MediaFormat.createVideoFormat(MIME,info.width,info.height).apply {
+                val format=MediaFormat.createVideoFormat(mime,info.width,info.height).apply {
                     setInteger(MediaFormat.KEY_MAX_INPUT_SIZE,minOf((checked.toLong()*3/4).coerceAtLeast(64*1024L),pulls.budget.recordBytes.toLong()).toInt())
-                    if(hints && caps.isFeatureSupported(android.media.MediaCodecInfo.CodecCapabilities.FEATURE_LowLatency)) setInteger(MediaFormat.KEY_LOW_LATENCY,1)
+                    // KEY_LOW_LATENCY (API 30) where the decoder reports FEATURE_LowLatency; a refusal falls back to the attempt without hints.
+                    if(hints) ScreenCodecLatency.requestDecoder(caps, this)
                 }
                 var created: MediaCodec?=null
                 try {
@@ -357,7 +384,9 @@ class ScreenDecoder(
                         }
                     }, Handler(Looper.getMainLooper()))
                     created.start()
-                    codec=created; codecGop=gop; awaitingKeyframe=true; return true
+                    codec=created; codecGop=gop; awaitingKeyframe=true; activeCodec=codecKey
+                    listener.onDecoderStage(codecKey,candidate.name,candidate.isHardwareAccelerated)
+                    return true
                 } catch(e: RuntimeException) {
                     created?.release(); Log.w(TAG,"Decoder ${candidate.name} abgelehnt: ${e.javaClass.simpleName}")
                 }
@@ -490,6 +519,35 @@ class ScreenDecoder(
                 emptyList()
             }
             return offersFor(caps)
+        }
+
+        /**
+         * The decoders for the viewer's own choice (BK7b, B-39, 4.10): H.264 in the stage „Dekodierer“ allows, then HEVC
+         * and AV1 (4:2:0, `main`) as [ScreenDecoderPolicy] lets them run, `tiles` last. The offers of
+         * a family window or a preview stay [offers].
+         */
+        fun offers(choice: ViewerCodecChoice): List<DecoderOffer> =
+            ScreenDecoderPolicy.combine(offers(), ScreenDecoderPolicy.videoOffers(videoDecoderCaps(), choice), choice)
+
+        /** The HEVC and AV1 decoders of MediaCodec that name the `main` profile and report their size limits. */
+        fun videoDecoderCaps(): List<VideoDecoderCaps> = try {
+            MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos.filter { !it.isEncoder && !it.isAlias }.flatMap { info ->
+                ScreenEncoderCodecs.VIDEO.mapNotNull { codec ->
+                    val mime = ScreenEncoderCodecs.mime(codec) ?: return@mapNotNull null
+                    if (info.supportedTypes.none { it.equals(mime, true) }) return@mapNotNull null
+                    val caps = info.getCapabilitiesForType(mime)
+                    val video = caps.videoCapabilities ?: return@mapNotNull null
+                    val main = ScreenEncoderCodecs.profile(codec, "main") ?: return@mapNotNull null
+                    if (caps.profileLevels.none { it.profile == main }) return@mapNotNull null
+                    VideoDecoderCaps(
+                        codec, info.isHardwareAccelerated,
+                        minOf(video.supportedWidths.upper, ScreenFrameLimits.MAX_SIDE),
+                        minOf(video.supportedHeights.upper, ScreenFrameLimits.MAX_SIDE),
+                    )
+                }
+            }
+        } catch (e: RuntimeException) {
+            emptyList()
         }
 
         /** [offers] for the given decoders. */

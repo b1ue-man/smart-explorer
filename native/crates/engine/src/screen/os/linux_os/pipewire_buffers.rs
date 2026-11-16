@@ -70,13 +70,16 @@ pub(super) unsafe extern "C" fn on_add_buffer(pointer: *mut c_void, buffer: *mut
                 .unwrap_or_else(PoisonError::into_inner)
                 .add(buffer, data.memory.generation(), &data.imports)
         };
-        if let Err(error) = result {
-            data.fail(error.to_string());
+        match result {
+            Ok(()) => data.latest.gpu_added(buffer),
+            Err(error) => data.fail(error.to_string()),
         }
     });
 }
 pub(super) unsafe extern "C" fn on_remove_buffer(pointer: *mut c_void, buffer: *mut PwBuffer) {
     guarded(pointer, |data| {
+        // A held DMA-BUF picture of this buffer is not queued back (BK8b).
+        data.latest.gpu_removed(buffer);
         data.owners
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -153,15 +156,19 @@ pub mod fixture {
         unsafe { OwnedFd::from_raw_fd(fd) }
     }
     pub unsafe fn add(id: u32, fd: &OwnedFd, flags: u32) {
-        add_raw(id, fd.as_raw_fd(), flags);
+        add_raw(id, fd.as_raw_fd(), flags, 2);
     }
-    unsafe fn add_raw(id: u32, fd: c_int, flags: u32) {
+    /// A Core memory of another `spa_data_type` (3 = DMA-BUF, BK8b).
+    pub unsafe fn add_kind(id: u32, fd: &OwnedFd, flags: u32, kind: u32) {
+        add_raw(id, fd.as_raw_fd(), flags, kind);
+    }
+    unsafe fn add_raw(id: u32, fd: c_int, flags: u32, kind: u32) {
         let block = Box::into_raw(Box::new(MemBlock {
             pool: 1usize as *mut c_void,
             id,
             refs: 1,
             flags,
-            type_: 2,
+            type_: kind,
             fd,
             size: 0,
             map: std::ptr::null_mut(),
@@ -180,7 +187,7 @@ pub mod fixture {
             (s.data, s.events)
         };
         let events = &*(events as *const CoreEvents);
-        events.add_mem.unwrap()(data as *mut c_void, id, 2, fd, flags);
+        events.add_mem.unwrap()(data as *mut c_void, id, kind, fd, flags);
     }
     pub unsafe fn remove(id: u32) {
         let (data, events) = {
@@ -281,7 +288,7 @@ pub mod fixture {
             }
         };
         if let Some((id, fd, flags)) = next {
-            add_raw(id, fd, flags);
+            add_raw(id, fd, flags, 2);
         }
         0
     }

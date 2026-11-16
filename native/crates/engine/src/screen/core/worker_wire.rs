@@ -11,6 +11,15 @@
 //! viewer's input (`INPUT` → `INPUT_DONE` with the reason of a block); the
 //! process injects it, because on Wayland only the portal session of the
 //! capture carries the input (C5). Input events are never logged.
+//!
+//! Since plan 2026-11-14 „Bildkette“ B-27 a host process that announces
+//! `STREAM_VERSION` in its preparation (`PreparedInfoWire::stream`) paces
+//! capture and encoding itself: the daemon sends `STREAM` orders (the
+//! settings of the picture stream and its credit) instead of one `PRODUCE`
+//! per frame, and the process answers every credit with exactly one answer
+//! of its own accord, each preceded by a `STREAMED` mark. A process without
+//! the announcement keeps the `PRODUCE` exchange; a daemon that never sends
+//! `STREAM` gets no mark.
 use std::io::{self, Read, Write};
 
 use serde::{Deserialize, Serialize};
@@ -38,6 +47,8 @@ pub const CAPTURE: u8 = 3;
 pub const CLOSE: u8 = 4;
 pub const INPUT: u8 = 5;
 pub const BOUND_INPUT: u8 = 10;
+/// The settings and the credit of the picture stream (`StreamOrder`).
+pub const STREAM: u8 = 11;
 pub const SET_CAPTURE_ACTIVE: u8 = 6;
 pub const OPEN_FAMILY: u8 = 7;
 pub const FAMILY_COMMAND: u8 = 8;
@@ -56,6 +67,10 @@ pub const RAW: u8 = 22;
 pub const INPUT_DONE: u8 = 23;
 /// Unsolicited: the pointer's shape or position (`cursor_overlay.rs`, P6).
 pub const CURSOR: u8 = 27;
+/// Precedes every answer of the picture stream (`StreamMark`).
+pub const STREAMED: u8 = 28;
+/// Version of the picture stream this program serves; 0 is `PRODUCE` only.
+pub const STREAM_VERSION: u32 = 1;
 
 /// Absolute private-worker allocation ceiling. Each PRODUCE retains its
 /// narrower negotiated contract; a packet length never increases that contract.
@@ -80,9 +95,10 @@ pub fn tag_limit(tag: u8) -> Option<usize> {
             .max(packet_budget().ok()?.raw_bytes)
             .checked_add(58),
         OPEN | OPEN_FAMILY | FAMILY_COMMAND | RELEASE_INPUT | PRODUCE | CAPTURE | INPUT
-        | BOUND_INPUT | OPENED | REFUSED | PAUSED | FAILED | INPUT_DONE | CURSOR => {
+        | BOUND_INPUT | STREAM | OPENED | REFUSED | PAUSED | FAILED | INPUT_DONE | CURSOR => {
             Some(MAX_CONTROL_BYTES)
         }
+        STREAMED => Some(StreamMark::BYTES),
         CLOSE => Some(0),
         SET_CAPTURE_ACTIVE | CAPTURE_ACTIVE => Some(1),
         UNCHANGED => Some(8),
@@ -271,6 +287,79 @@ fn read_size(reader: &mut BeReader<'_>) -> io::Result<FrameSize> {
     Ok(size)
 }
 
+/// What precedes one answer of the picture stream: the credit it answers
+/// (the `granted` count of the order it fulfils), the frame id the host
+/// process drew the picture with, the time of the capture call and of
+/// scaling plus encoding of that picture, and the pictures the process
+/// dropped before encoding so far (a newer capture replaced them); since
+/// BK0 (plan 2026-11-14 „Bildkette“) also the process's clock when it wrote
+/// the answer, its capture facts (`CaptureFacts::pack`) and its GPU
+/// read-backs so far; since r1 the colour conversion within `encode_us`
+/// (`convert_clock`, 0: not measured apart). Daemon and host process come from one installation,
+/// so the mark has no older layout to read.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct StreamMark {
+    pub answer: u64,
+    /// 0 for an answer without a picture.
+    pub frame_id: u64,
+    pub capture_us: u64,
+    pub encode_us: u64,
+    pub dropped: u64,
+    /// Wall clock (µs, `now_us`) when the answer was written; 0 unknown.
+    pub handed_us: u64,
+    pub facts: u64,
+    pub readbacks: u64,
+    pub convert_us: u64,
+}
+
+impl StreamMark {
+    pub const BYTES: usize = 72;
+
+    pub fn encode(&self) -> [u8; Self::BYTES] {
+        let mut out = [0u8; Self::BYTES];
+        for (index, value) in [
+            self.answer,
+            self.frame_id,
+            self.capture_us,
+            self.encode_us,
+            self.dropped,
+            self.handed_us,
+            self.facts,
+            self.readbacks,
+            self.convert_us,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            out[index * 8..index * 8 + 8].copy_from_slice(&value.to_be_bytes());
+        }
+        out
+    }
+
+    pub fn decode(payload: &[u8]) -> io::Result<Self> {
+        let mut reader = BeReader::new(payload);
+        let mark = Self {
+            answer: reader.u64()?,
+            frame_id: reader.u64()?,
+            capture_us: reader.u64()?,
+            encode_us: reader.u64()?,
+            dropped: reader.u64()?,
+            handed_us: reader.u64()?,
+            facts: reader.u64()?,
+            readbacks: reader.u64()?,
+            convert_us: reader.u64()?,
+        };
+        reader.finish()?;
+        Ok(mark)
+    }
+}
+
+/// Writes the mark of the next stream answer (host process side); the
+/// caller writes the answer under the same output lock.
+pub fn send_mark(writer: &mut impl Write, mark: &StreamMark) -> io::Result<()> {
+    write_message(writer, STREAMED, &mark.encode())
+}
+
 /// Writes one request (daemon side).
 pub fn send_request(writer: &mut impl Write, request: &WorkerRequest) -> io::Result<()> {
     let (tag, payload) = request.encode()?;
@@ -288,4 +377,4 @@ mod replies;
 #[path = "worker_request_wire.rs"]
 mod requests;
 pub use replies::WorkerReply;
-pub use requests::WorkerRequest;
+pub use requests::{StreamOrder, WorkerRequest, MAX_AHEAD};

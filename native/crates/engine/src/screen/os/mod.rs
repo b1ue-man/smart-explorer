@@ -1,17 +1,6 @@
-//! Platform side of the screen strand (S4). SCR-M2 brought the parts every
-//! platform shares: the test-picture backend and the indicator window of the
-//! desktop worker. SCR-M3 adds the codec inventory of a process, the host
-//! process that captures and encodes per session (its client in the daemon,
-//! its main loop, its lifetime per OS: a job object on Windows, the
-//! parent-death signal on Linux), Media Foundation on Windows (loaded at run
-//! time) and OpenH264 on Windows and Linux (`native_ffi`, not on Android).
-//! SCR-M4 adds the Windows host (`windows/`): monitors, the window list, the
-//! secure desktop, and capture with Graphics Capture or the DXGI duplication.
-//! SCR-M5 adds the Linux host (`linux_os/`): X11, the Wayland portal with
-//! PipeWire, window and app lists per desktop. SCR-M8 adds the Android host
-//! (`android/`): the bridge to the app, which captures, encodes and injects.
-//! The functions below select the platform's parts with `#[cfg(...)]` so the
-//! shared modules stay free of it.
+//! Platform side of the screen strand (S4): shared synthetic/indicator/worker
+//! plumbing (`shared/`), runtime-loaded codecs (`native_ffi/`), and OS backends
+//! (`windows/`, `linux_os/`, `android/`) selected with `#[cfg(...)]`.
 use std::path::Path;
 use std::sync::Arc;
 
@@ -150,6 +139,21 @@ pub mod openh264_pins;
 #[cfg(target_os = "linux")]
 #[path = "linux_os/app_units.rs"]
 mod app_units;
+// BK4: NVENC and VA-API coders of Linux hosts and viewers.
+#[cfg(target_os = "linux")]
+#[path = "linux_os/hw_codecs.rs"]
+mod linux_hw_codecs;
+// Merge W2: the NVENC parts both platforms share (layouts, interface,
+// HEVC/AV1 views, settings); loading and the device stay platform code.
+#[cfg(any(windows, target_os = "linux"))]
+#[path = "native_ffi/nvenc_shared.rs"]
+mod nvenc_shared;
+// BK4 (B-25, B-38): SVT-AV1 and dav1d hulls; BK6 registers them
+// (`linux_os/av1_soft_codec.rs`). Not every hull item is called yet.
+#[cfg(target_os = "linux")]
+#[allow(dead_code)]
+#[path = "native_ffi/av1_soft.rs"]
+mod av1_soft;
 #[cfg(all(test, windows))]
 #[path = "windows/batches_capture_codec_task_tests.rs"]
 mod batches_capture_mf_task_tests;
@@ -240,6 +244,16 @@ pub mod portal_tokens;
 #[cfg(windows)]
 #[path = "windows/secure_desktop.rs"]
 mod secure_desktop;
+// BK12 (B-22): NVENC and AMF directly, hooked into `codec_facade.rs`
+// before the Media Foundation transforms (merge W1).
+#[cfg(windows)]
+#[path = "windows/vendor_codecs.rs"]
+mod vendor_codecs;
+// Merge W1: the hardware adapters (output first) and the driver libraries
+// of their vendors (System32, else the adapter's driver store folder).
+#[cfg(windows)]
+#[path = "windows/dxgi_adapters.rs"]
+mod dxgi_adapters;
 /// Ordinary window operations never cross a locked or disconnected desktop.
 #[cfg(windows)]
 pub fn window_control_block() -> Option<crate::screen::core::wire_control::ControlBlock> {
@@ -258,12 +272,30 @@ pub mod session_detect;
 #[cfg(target_os = "linux")]
 #[path = "linux_os/spa_pod.rs"]
 mod spa_pod;
+/// The capture tick of a session (B-08): a high-resolution timer on Windows.
+#[cfg(windows)]
+#[path = "windows/timer_resolution.rs"]
+pub mod timer_resolution;
+/// Elsewhere the runtime's interval drives the capture tick.
+#[cfg(not(windows))]
+#[path = "shared/timer_resolution_other.rs"]
+pub mod timer_resolution;
 #[cfg(target_os = "linux")]
 #[path = "linux_os/wayland_toplevels.rs"]
 mod wayland_toplevels;
 #[cfg(windows)]
 #[path = "windows/window_list.rs"]
 mod window_list;
+/// Threads of the screen host process (B-29): raised priority and a
+/// precise tick wait on Windows.
+#[cfg(windows)]
+#[path = "windows/worker_thread.rs"]
+pub mod worker_thread;
+/// Elsewhere the threads keep their priority (raising it needs
+/// `CAP_SYS_NICE` on Linux) and the tick sleeps.
+#[cfg(not(windows))]
+#[path = "shared/worker_thread_other.rs"]
+pub mod worker_thread;
 #[cfg(target_os = "linux")]
 #[path = "linux_os/x11_capture.rs"]
 mod x11_capture;
@@ -400,14 +432,32 @@ fn note_input_target(source: &crate::screen::core::window_list::SourceId) {
 #[cfg(not(any(windows, target_os = "linux")))]
 fn note_input_target(_source: &crate::screen::core::window_list::SourceId) {}
 
+/// Enables PipeWire DMA-BUF offers in the host worker process (BK8b, W2).
+#[cfg(target_os = "linux")]
+fn enable_gpu_pictures() {
+    pipewire_stream::dmabuf::enable_gpu_pipeline(true);
+}
+
+#[cfg(not(target_os = "linux"))]
+fn enable_gpu_pictures() {}
+
 #[cfg(target_os = "android")]
 pub fn host_indicator(registry: &Arc<ScreenRegistry>) -> Arc<dyn SessionIndicator> {
     Arc::new(bridge_backend::BridgeIndicator::new(registry))
 }
 
+#[cfg_attr(windows, path = "windows/chain_facts.rs")]
+#[cfg_attr(target_os = "linux", path = "linux_os/chain_facts.rs")]
+#[cfg_attr(not(any(windows, target_os = "linux")), path = "android/chain_info.rs")]
+mod chain_facts;
+pub use chain_facts::capture_facts;
+
 #[path = "codec_facade.rs"]
 mod codec_facade;
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(test)]
 use codec_facade::media_foundation_present;
-use codec_facade::{media_foundation_codecs, openh264_codecs, openh264_switched_on};
+use codec_facade::{
+    hardware_codecs, media_foundation_codecs, openh264_codecs, openh264_switched_on,
+    software_av1_codecs,
+};
 pub use codec_facade::{openh264_action, openh264_license, OpenH264Action};

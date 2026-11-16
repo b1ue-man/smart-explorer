@@ -99,6 +99,20 @@ pub fn read_owned(
     if grant.generation().value() != generation {
         return Err(invalid("owned worker grant generation mismatch"));
     }
+    let bytes = read_rest(reader, &head, length, &grant, contract, limits, tag)?;
+    Ok((id, grant, bytes))
+}
+/// The rest of an owned worker picture after its prefix `head`, in one
+/// transport buffer admitted from `grant`.
+fn read_rest(
+    reader: &mut impl Read,
+    head: &[u8; 58],
+    length: usize,
+    grant: &CaptureGrant,
+    contract: Option<FrameContract>,
+    limits: FrameLimits,
+    tag: u8,
+) -> io::Result<AdmittedBytes> {
     let budget = if tag == RAW && contract.is_none() {
         super::frame_size_caps::PacketBudget::for_limits(limits)?
     } else {
@@ -112,10 +126,10 @@ pub fn read_owned(
     if length - 58 > bound {
         return Err(invalid("owned worker body exceeds its bound"));
     }
-    let mut bytes = AdmittedBytes::new(&grant, CaptureOwner::Transport, length as u64)?;
-    bytes.as_mut_slice()[..58].copy_from_slice(&head);
+    let mut bytes = AdmittedBytes::new(grant, CaptureOwner::Transport, length as u64)?;
+    bytes.as_mut_slice()[..58].copy_from_slice(head);
     reader.read_exact(&mut bytes.as_mut_slice()[58..])?;
-    Ok((id, grant, bytes))
+    Ok(bytes)
 }
 pub fn decode_owned(
     bytes: &AdmittedBytes,
@@ -229,6 +243,9 @@ fn decode_records(
     })
 }
 
+#[path = "capture_transport_read.rs"]
+mod reading;
+pub use reading::read_owned_reply;
 #[path = "capture_transport_wire.rs"]
 mod sending;
 #[cfg(any(test, feature = "test-support"))]

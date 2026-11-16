@@ -8,6 +8,14 @@
 //! `capture_to_arrival`, the host's capture until the last record arrived,
 //! for a session with another device); `--json` prints them with the report
 //! and the text shows one `stage_ms` line per station.
+//!
+//! `--source QUELLE` (plan 2026-11-14 „Bildkette“ BK0): the host captures
+//! `monitor:<id>` or `window:<id>` (`se screen probe` and `se screen windows`
+//! list them) instead of the test picture. A host that announces
+//! `frame_timing_v1` adds its stations to `stages_ms` (`capture`, `encode`,
+//! `worker_handoff`, `send`, `network`, `tick_jitter`, `input`,
+//! `input_inject`); `host_timing` says `reported` or `unsupported_by_host`.
+//! A monitor the host does not have ends with the code `source_not_found`.
 use clap::Args;
 use clap_complete::ArgValueCandidates;
 
@@ -31,7 +39,7 @@ pub(super) struct BenchArgs {
     #[arg(long)]
     local: bool,
     /// Codec of the measurement
-    #[arg(long, value_parser = ["auto", "h264", "tiles"], default_value = "auto")]
+    #[arg(long, value_parser = ["auto", "h264", "hevc", "av1", "tiles"], default_value = "auto")]
     codec: String,
     /// Size of the test picture
     #[arg(long, value_name = "WxH", value_parser = parse_size, default_value_t = DEFAULT_SIZE.into())]
@@ -42,6 +50,9 @@ pub(super) struct BenchArgs {
     /// Length of the measurement
     #[arg(long, default_value_t = DEFAULT_SECONDS)]
     seconds: u32,
+    /// The host's real capture instead of the test picture: monitor:<id> or window:<id>
+    #[arg(long, value_name = "QUELLE", conflicts_with = "local")]
+    source: Option<String>,
     #[arg(long, help = "Print machine-readable JSON")]
     json: bool,
 }
@@ -89,10 +100,25 @@ impl BenchArgs {
         options.decoders(&crate::screen::os::codec_inventory::registry())?;
         Ok(options)
     }
+
+    /// `--source` as the host reads it; the test picture is no source.
+    pub(super) fn source(&self) -> Result<Option<String>, String> {
+        let Some(text) = self.source.as_deref() else {
+            return Ok(None);
+        };
+        match crate::screen::core::window_list::SourceId::parse(text) {
+            Ok(crate::screen::core::window_list::SourceId::Synthetic) => {
+                Err("--source names the host's screen; omit it for the test picture".into())
+            }
+            Ok(source) => Ok(Some(source.to_string())),
+            Err(error) => Err(format!("invalid source: {error}")),
+        }
+    }
 }
 
 pub(super) fn run(args: BenchArgs) -> Result<i32, String> {
     let options = args.options()?;
+    let source = args.source()?;
     let report = match args.device.as_deref() {
         None => run_local(options, &crate::screen::os::codec_inventory::registry())
             .map_err(|error| error.to_string())?,
@@ -106,9 +132,13 @@ pub(super) fn run(args: BenchArgs) -> Result<i32, String> {
                 };
                 eprintln!("Warte auf Bestätigung an {name}: Bildschirm {what} …");
             };
-            crate::daemon::screen_bench(choice.target, &options, pending)?
+            crate::daemon::screen_bench(choice.target, &options, source, pending)?
         }
     };
     super::output::print(args.json, &report, || super::output::bench_text(&report));
     Ok(0)
 }
+
+#[cfg(test)]
+#[path = "bildkette_bench_tests.rs"]
+mod bildkette_tests;

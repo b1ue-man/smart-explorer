@@ -37,7 +37,10 @@ pub(super) fn discover_peer_mount(
     label: String,
 ) -> Result<PeerMountDiscovery, String> {
     let mount_target = peer_mount_target(&open_target);
-    let (_, backend, _) = crate::daemon::open_share_backend(open_target.clone())?;
+    // The roots are listed for a person who waits in the mount dialog:
+    // metadata presence of a person (E4).
+    let origin = crate::share::OperationOrigin::User;
+    let (_, backend, _) = crate::daemon::open_share_backend_for(open_target.clone(), origin)?;
     let roots = peer_roots(&backend)?;
     let selected = roots
         .iter()
@@ -183,3 +186,7 @@ pub(super) fn peer_root_paths_for_test(entries: &[(&str, &[&str])]) -> Vec<Strin
 #[cfg(test)]
 #[path = "mount_peer_roots_task_tests.rs"]
 mod task_tests;
+
+#[cfg(test)]
+#[path = "mount_peer_roots_origin_tests.rs"]
+mod origin_tests;

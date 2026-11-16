@@ -83,18 +83,16 @@ fn service_version(backend: &BackendHandle) -> String {
     } else {
         ""
     };
-    // `range-v1` only for a backend that reads ranges: the frames behind it
-    // are forwarded to it (`backend_ranges`); `ListMeta`, `WalkKeyed`,
-    // `ListDirMeta`, `StatMeta`: `backend_hash.rs`.
+    // `range-v1` only for a backend that reads ranges (`backend_ranges`);
+    // `ListMeta` … `StatMeta`: `backend_hash.rs`; `origin-v1`: below (E4d).
     format!(
-        "{}{}.capacity-v1.folder-reservation-v1.file-identity-v1.list-meta-v1.walk-keys-v1.meta-list-v1{single}{times} worker",
+        "{}{}.capacity-v1.folder-reservation-v1.file-identity-v1.list-meta-v1.walk-keys-v1.meta-list-v1.origin-v1{single}{times} worker",
         agent_proto::server_version_with(batch, slots),
         backend_ranges::labels(backend)
     )
 }
 
-/// The frames of an upload with `DataLz4` unpacked, for a backend that was
-/// announced with `lz4-v1`; for any other backend they are passed unchanged.
+/// Upload frames with `DataLz4` unpacked for a backend announced with `lz4-v1`.
 fn lz4_inbound<'a>(
     backend: &BackendHandle,
     inbound: &'a (dyn agent_proto::Inbound + Send),
@@ -117,8 +115,7 @@ impl agent_proto::Inbound for Passthrough<'_> {
     }
 }
 
-/// The legacy text of the busy reply when no thread can be started; "too
-/// many concurrent" is what older clients classify as overload.
+/// Busy reply without a thread; older clients read "too many concurrent" as overload.
 const THREAD_LIMIT_TEXT: &str = "too many concurrent backend requests (thread limit)";
 
 /// How a request whose worker thread could not start is answered.
@@ -205,6 +202,8 @@ pub fn serve_backend(
         let version2 = version.clone();
         let stages2 = stages.clone();
         match workers.submit(Box::new(move || {
+            // Background work of the client (`origin-v1`), this request only (E4d).
+            let _background = crate::agent_proto::request_scope(id);
             let result =
                 dispatch_backend(&context, id, (backend2, &stages2), req, &version2, credit);
             let result = match result {

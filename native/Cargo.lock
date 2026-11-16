@@ -7202,6 +7202,7 @@ dependencies = [
  "argon2 0.5.3",
  "ashpd 0.13.13",
  "base64 0.22.1",
+ "bytes",
  "bzip2",
  "chacha20 0.10.0",
  "chacha20poly1305",
