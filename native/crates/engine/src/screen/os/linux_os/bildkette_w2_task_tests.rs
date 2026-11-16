@@ -214,7 +214,7 @@ fn bildkette_task_linux_w2_gpu_picture_reaches_the_encoder_without_a_cpu_consume
     let grant = crate::screen::core::capture_test_support::grant(NATIVE, None);
     let stream = Arc::new(Stream::default());
     let returned = Arc::new(AtomicUsize::new(0));
-    let (picture, surface) = picture(&grant, true, &stream, &returned);
+    let (picture, surface) = self::picture(&grant, true, &stream, &returned);
     // The host process relabels the size; no pixel work, no read-back.
     let scaled = picture
         .scaled(
@@ -224,8 +224,8 @@ fn bildkette_task_linux_w2_gpu_picture_reaches_the_encoder_without_a_cpu_consume
         )
         .unwrap();
     assert!(scaled.on_gpu());
-    let (session, log) = session(true, Import::Works);
-    let mut encoder = encoder(session, &grant);
+    let (session, log) = self::session(true, Import::Works);
+    let mut encoder = self::encoder(session, &grant);
     assert!(encoder.takes_dmabuf());
     let error = encoder
         .encode_picture(&scaled, &request(SMALL, 77))
@@ -255,9 +255,9 @@ fn bildkette_task_linux_w2_dmabuf_failure_falls_back_to_shared_memory() {
     ] {
         let stream = Arc::new(Stream::default());
         let returned = Arc::new(AtomicUsize::new(0));
-        let (picture, _) = picture(&grant, true, &stream, &returned);
-        let (session, log) = session(true, import);
-        let mut encoder = encoder(session, &grant);
+        let (picture, _) = self::picture(&grant, true, &stream, &returned);
+        let (session, log) = self::session(true, import);
+        let mut encoder = self::encoder(session, &grant);
         let error = encoder
             .encode_picture(&picture, &request(SMALL, 1))
             .unwrap_err();
@@ -272,9 +272,9 @@ fn bildkette_task_linux_w2_dmabuf_failure_falls_back_to_shared_memory() {
     // picture only read back, and the stream returns to shared memory.
     let stream = Arc::new(Stream::default());
     let returned = Arc::new(AtomicUsize::new(0));
-    let (picture, _) = picture(&grant, true, &stream, &returned);
-    let (session, log) = session(false, Import::Works);
-    let mut encoder = encoder(session, &grant);
+    let (picture, _) = self::picture(&grant, true, &stream, &returned);
+    let (session, log) = self::session(false, Import::Works);
+    let mut encoder = self::encoder(session, &grant);
     assert!(!encoder.takes_dmabuf());
     assert!(encoder
         .encode_picture(&picture, &request(SMALL, 1))
@@ -288,9 +288,9 @@ fn bildkette_task_linux_w2_dmabuf_failure_falls_back_to_shared_memory() {
     // A key frame of a still screen for a new encoder reads back once
     // without leaving DMA-BUF (here the read-back fails: no device).
     let stream = Arc::new(Stream::default());
-    let (repeat, _) = picture(&grant, false, &stream, &returned);
-    let (session, log) = session(true, Import::Works);
-    let mut encoder = encoder(session, &grant);
+    let (repeat, _) = self::picture(&grant, false, &stream, &returned);
+    let (session, log) = self::session(true, Import::Works);
+    let mut encoder = self::encoder(session, &grant);
     assert!(encoder.encode_picture(&repeat, &request(SMALL, 2)).is_err());
     assert!(stream.causes().is_empty());
     assert!(log.lock().unwrap().is_empty());
@@ -333,11 +333,11 @@ fn bildkette_task_linux_w2_va_rate_ceiling_comes_from_the_level() {
     );
     // The encoder takes the lower of the pairing's and the level's ceiling.
     let grant = crate::screen::core::capture_test_support::grant(NATIVE, None);
-    let (mut test_session, _) = session(true, Import::Works);
+    let (mut test_session, _) = self::session(true, Import::Works);
     test_session.level = Some(25_000_000);
     let encoder = encoder(test_session, &grant).with_ceiling(800_000_000);
     assert_eq!(encoder.ceiling(), 25_000_000);
-    let (test_session, _) = session(true, Import::Works);
+    let (test_session, _) = self::session(true, Import::Works);
     let encoder = HwH264Encoder::new(test_session, "t".into(), SMALL, 60, None);
     assert_eq!(encoder.with_ceiling(10_000_000).ceiling(), 10_000_000);
     // The fastest quality level (va.h: 1 best quality, the range fastest).

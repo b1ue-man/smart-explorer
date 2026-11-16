@@ -206,6 +206,7 @@ pub struct EncodedFrame {
 }
 /// Productive host output. Unlike the codec benchmark result, every record
 /// carries the promise acquired before its own byte allocation.
+#[derive(Debug)]
 pub struct CapturedEncodedFrame {
     pub records: CapturedRecords,
     pub keyframe: bool,

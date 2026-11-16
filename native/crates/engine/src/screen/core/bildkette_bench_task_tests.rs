@@ -114,7 +114,7 @@ fn bildkette_task_bench_stations_complete_with_synthetic_source() {
         later,
         Some(ViewerFrame::FrameTiming(FrameTimingRequest::probe(77)))
     );
-    let mut report = report();
+    let mut report = self::report();
     host.finish(&clock(), &mut report);
     assert_eq!(report.host_timing.as_deref(), Some(HOST_TIMING_REPORTED));
     assert_eq!(
@@ -151,7 +151,7 @@ fn bildkette_task_bench_old_host_keeps_the_old_fields() {
     assert_eq!(host.on_stats(stats(None, None), 5), None);
     assert_eq!(host.on_stats(stats(None, None), 6), None);
     let before = serde_json::to_value(report()).unwrap();
-    let mut report = report();
+    let mut report = self::report();
     host.finish(&clock(), &mut report);
     assert_eq!(report.host_timing.as_deref(), Some(HOST_TIMING_UNSUPPORTED));
     assert_eq!(report.stages_ms.len(), 1, "only the viewer's station");
@@ -170,7 +170,7 @@ fn bildkette_task_bench_old_host_keeps_the_old_fields() {
         ..HostStations::default()
     };
     host.on_stats(stats(Some(1), Some(stations)), 2);
-    let mut report = report();
+    let mut report = self::report();
     host.finish(&ClockSync::default(), &mut report);
     assert!(!report.stages_ms.contains_key("network"));
 }

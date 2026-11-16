@@ -29,8 +29,8 @@ mod capture;
 #[path = "host_worker_encode.rs"]
 mod encode;
 #[cfg(all(test, windows))]
-pub(super) use encode::Encoding;
-pub(super) use encode::{EncoderOpener, Registry};
+pub(in crate::screen::os) use encode::Encoding;
+pub(in crate::screen::os) use encode::{EncoderOpener, Registry};
 
 /// Without an order and without open credit the capture stage rests
 /// (hidden viewer, long back pressure); the next order wakes it.

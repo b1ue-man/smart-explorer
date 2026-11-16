@@ -103,7 +103,7 @@ impl PortalSource {
         let limits = ScreenSource::frame_limits_for_contract(self, contract);
         let (still, gpu_active) = match (self.stream()?, self.capture_grant()) {
             (Stream::Running(latest), Some(grant)) => {
-                let active = latest.dmabuf.dmabuf().is_some();
+                let active = latest.dmabuf_negotiated();
                 (latest.still_from_gpu(&grant)?, active)
             }
             _ => (None, false),

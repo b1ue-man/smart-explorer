@@ -19,8 +19,8 @@ use crate::screen::core::{
     gop_continue::ContinueOffers,
     gop_stream::{accept_picture_streams_with_contract, PictureEvent},
     host_backend::{
-        CapturedEncodedFrame, EncodedFrame, MonitorInfo, ScreenEncoder, ScreenHostBackend,
-        ScreenSource, SourceFrame, SourceRefusal,
+        CapturedEncodedFrame, EncodedFrame, ScreenEncoder, ScreenHostBackend, ScreenSource,
+        SourceFrame, SourceRefusal,
     },
     host_pipeline::{codec_fallbacks, encode_stage_frame, Pipeline, Produced, TestStage},
     host_stage::StageRequest,
@@ -28,7 +28,7 @@ use crate::screen::core::{
     negotiate::{negotiate, CodecChoice, CodecKind, CodecOffer, CodecPreference, H264Profile},
     pixel_convert::{BgraImage, FrameSize},
     set_decoders::SetDecoders,
-    window_list::{SourceId, WindowList},
+    window_list::{MonitorInfo, SourceId, WindowList},
     wire_control::ControlBlock,
     wire_hello::HostPlatform,
 };

@@ -443,9 +443,12 @@ impl VendorSession for AmfSession {
     }
 
     fn recover_references(&mut self, last_good: u64) -> Recovery {
-        match self.ltr.as_mut() {
-            Some(ltr) if ltr.recover(last_good) => Recovery::Continued,
-            _ => Recovery::KeyframeNeeded,
+        // `recover` changes the slots, so it runs outside a match guard
+        // (a guard borrows immutably).
+        if self.ltr.as_mut().is_some_and(|ltr| ltr.recover(last_good)) {
+            Recovery::Continued
+        } else {
+            Recovery::KeyframeNeeded
         }
     }
 

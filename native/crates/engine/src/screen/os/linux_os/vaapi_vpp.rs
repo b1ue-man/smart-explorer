@@ -44,7 +44,7 @@ impl<'a> Buffers<'a> {
     }
 
     /// A buffer holding `value`, a `repr(C)` parameter struct.
-    pub(super) fn add<T: Copy>(&mut self, kind: c_int, value: &T) -> io::Result<VaId> {
+    pub(super) fn add<T>(&mut self, kind: c_int, value: &T) -> io::Result<VaId> {
         self.add_elements(kind, std::slice::from_ref(value))
     }
 
@@ -72,7 +72,7 @@ impl<'a> Buffers<'a> {
 
     /// One buffer of `values.len()` elements of `T` (BK4b: the per-tile
     /// `VASliceParameterBufferAV1` of a tile group, `num_elements` > 1).
-    pub(super) fn add_elements<T: Copy>(&mut self, kind: c_int, values: &[T]) -> io::Result<VaId> {
+    pub(super) fn add_elements<T>(&mut self, kind: c_int, values: &[T]) -> io::Result<VaId> {
         if values.is_empty() {
             return Err(invalid("VA parameter buffer without elements"));
         }

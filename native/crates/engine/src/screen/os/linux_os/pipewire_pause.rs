@@ -36,6 +36,11 @@ pub struct LatestFrame {
 }
 
 impl LatestFrame {
+    /// Whether the stream negotiated DMA-BUF pictures (BK8b).
+    pub(in crate::screen::os) fn dmabuf_negotiated(&self) -> bool {
+        self.dmabuf.dmabuf().is_some()
+    }
+
     fn lock(&self) -> MutexGuard<'_, LatestInner> {
         self.inner.lock().unwrap_or_else(PoisonError::into_inner)
     }
