@@ -11,7 +11,8 @@ use std::time::Instant;
 
 use windows_sys::Win32::System::Threading::SetEvent;
 
-use super::nvenc_encode::{async_timeout_ms, Core, MIN_ASYNC_TIMEOUT_MS};
+use super::nvenc_device::MIN_ASYNC_TIMEOUT_MS;
+use super::nvenc_encode::{async_timeout_ms, Core};
 use super::nvenc_ffi::{self as nv, NvTable, Zeroed};
 use super::vendor_encode::RateParams;
 use super::*;

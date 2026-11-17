@@ -13,6 +13,8 @@ use std::io;
 
 use windows::core::Interface;
 use windows::Win32::Graphics::Direct3D11::{ID3D11Device, ID3D11Texture2D};
+use windows_sys::Win32::Foundation::HANDLE;
+use windows_sys::Win32::System::Threading::CreateEventW;
 
 use super::nvenc_codecs::encode_guid;
 use super::nvenc_ffi::{
@@ -27,6 +29,28 @@ use crate::screen::core::pixel_convert::FrameSize;
 pub(super) use crate::screen::os::nvenc_shared::api::{
     async_encode, destroy_session, invalidation, largest_picture, missing, status,
 };
+
+/// Shortest completion wait for one asynchronous NVENC picture (W4, B1).
+pub(super) const MIN_ASYNC_TIMEOUT_MS: u32 = 100;
+
+/// Completion deadline in milliseconds: four frame intervals, at least 100 ms.
+pub(super) fn async_timeout_ms(fps: u32) -> u32 {
+    4_000u64
+        .div_ceil(u64::from(fps.max(1)))
+        .max(u64::from(MIN_ASYNC_TIMEOUT_MS)) as u32
+}
+
+/// The completion event of an asynchronous session (moved here from
+/// `nvenc_encode.rs` on 2026-11-17).
+pub(super) fn create_completion_event() -> io::Result<HANDLE> {
+    // SAFETY: unnamed auto-reset unsignaled kernel event (`nvenc_d3d11.cpp:16`).
+    let event = unsafe { CreateEventW(std::ptr::null(), 0, 0, std::ptr::null()) };
+    if event.is_null() {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(event)
+    }
+}
 
 /// At most this many registered input textures per session (2 ring slots,
 /// the encoder-size texture, one ring of the next capture generation).

@@ -46,6 +46,20 @@ pub trait EncoderFactory: Send + Sync {
             "encoder_factory_has_no_capture_admission",
         ))
     }
+    /// `open_admitted` with the encoder's rate control starting at `bps`,
+    /// the rate the session gives it (plan 2026-11-17), instead of its own
+    /// start; a factory without such a start opens as `open_admitted` and
+    /// takes `bps` with its first picture.
+    fn open_admitted_at(
+        &self,
+        choice: &CodecChoice,
+        size: FrameSize,
+        fps: u32,
+        grant: super::capture_admission::CaptureGrant,
+        _bps: u64,
+    ) -> io::Result<Box<dyn ScreenEncoder>> {
+        self.open_admitted(choice, size, fps, grant)
+    }
     /// Name for statistics and `se screen codec`.
     fn name(&self) -> String;
     /// What it encodes: codec, profile, hardware and largest frame.

@@ -242,6 +242,11 @@ pub trait ScreenEncoder: Send {
     fn recover_references(&mut self, _last_good: u64) -> super::ref_recovery::Recovery {
         super::ref_recovery::Recovery::KeyframeNeeded
     }
+    /// What the encoder made of the last rate it was given (plan
+    /// 2026-11-17, `rate_control::honour`); `None`: it does not tell.
+    fn rate_state(&self) -> Option<super::rate_control::honour::EncoderRateState> {
+        None
+    }
     fn encode_frame(
         &mut self,
         frame: &BgraImage,

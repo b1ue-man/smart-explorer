@@ -92,6 +92,12 @@ pub struct RateFacts {
     pub user_ceiling_bps: Option<u64>,
     pub back_pressure: bool,
     pub resets: u64,
+    /// What holds the target (`RateController::limit`, plan 2026-11-17).
+    pub limit: Option<super::rate_control::RateLimit>,
+    /// The rate the encoder is given (`RateController::encoder_bps`).
+    pub encoder_bps: Option<u64>,
+    /// Whether the encoder keeps it (`RateController::honour`).
+    pub honour: Option<super::rate_control::honour::HonourVerdict>,
 }
 
 impl RateFacts {
@@ -111,8 +117,13 @@ impl RateFacts {
         "viewer"
     }
 
-    /// What holds the target bit rate.
+    /// What holds the target bit rate: the rate control's own reason; a
+    /// pipeline without one (before plan 2026-11-17) names the ceilings, and
+    /// `link` for any target below them.
     pub fn rate_limit(&self) -> &'static str {
+        if let Some(limit) = self.limit {
+            return limit.key();
+        }
         if self.target_bps < self.ceiling_bps {
             return "link";
         }
@@ -291,6 +302,8 @@ impl ChainMeter {
             fps_limit: Some(rates.fps_limit().to_string()),
             rate_limit: Some(rates.rate_limit().to_string()),
             rate_ceiling_kbps: rates.user_ceiling_bps.map(|bps| bps / 1000),
+            encoder_rate_kbps: rates.encoder_bps.map(|bps| bps / 1000),
+            rate_honour: rates.honour.map(|verdict| verdict.key().to_string()),
         }
     }
 

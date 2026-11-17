@@ -149,16 +149,26 @@ impl CodecRegistry {
             );
             let mut selected = None;
             let mut refusals = Vec::new();
-            for (hardware, factory) in candidates {
-                match factory.open_admitted(
+            let count = candidates.len();
+            for (index, (hardware, factory)) in candidates.into_iter().enumerate() {
+                // Plan 2026-11-17: the encoder opens at the session's rate and
+                // runs inside the watch of its rate (`rate_control::honour`),
+                // which may give it up while another candidate is left.
+                match factory.open_admitted_at(
                     &request.choice,
                     request.size,
                     request.fps,
                     grant.clone(),
+                    request.target_bps,
                 ) {
                     Ok(encoder) => {
+                        let can_demote = index + 1 < count;
                         selected = Some(OpenedEncoder {
-                            encoder,
+                            encoder: super::super::rate_control::honour::guard(
+                                encoder,
+                                request.choice.codec,
+                                can_demote,
+                            ),
                             factory: factory.name(),
                             hardware,
                         });

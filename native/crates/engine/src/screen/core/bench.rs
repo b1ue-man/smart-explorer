@@ -24,7 +24,8 @@ use super::gop_stream::{now_us, path_of, PictureEvent};
 use super::host_backend::ScreenDecoder;
 use super::negotiate::{negotiate, CodecKind, CodecOffer, CodecPreference};
 use super::pixel_convert::{BgraImage, FrameSize};
-use super::rate_control::PathKind;
+use super::rate_control::honour::HonourMeter;
+use super::rate_control::model::start_table_bps;
 use super::session_state::{KeyframeRequester, SessionState};
 use super::synthetic::{render, MIN_SYNTHETIC_SIZE};
 use super::viewer_client::{ViewerError, ViewerSession};
@@ -344,8 +345,11 @@ pub fn run_local(options: BenchOptions, codecs: &CodecRegistry) -> io::Result<Be
     };
     let mut decoder = codecs.open_decoder(&header)?;
     measure.decoder = decoder.name();
-    // The start rate of a direct path (C3); `tiles` ignores it.
-    let target_bps = PathKind::Direct.start_bps();
+    // The start rate of the stream as a session gives it (plan 2026-11-17,
+    // `rate_control::model`); `tiles` ignores it.
+    let chroma_444 = choice.codec.chroma_444(choice.profile);
+    let target_bps = start_table_bps(size, fps, choice.codec, chroma_444);
+    let mut honour = HonourMeter::watching();
     let mut image = BgraImage::new(size)?;
     let interval = Duration::from_micros(1_000_000 / u64::from(fps));
     let end = Instant::now() + Duration::from_secs(u64::from(options.seconds));
@@ -365,6 +369,8 @@ pub fn run_local(options: BenchOptions, codecs: &CodecRegistry) -> io::Result<Be
         let encoded = encoder.encode(&image, frame_id == 1, target_bps);
         let convert_us = super::convert_clock::take();
         let encoded = encoded?;
+        let bytes: u64 = encoded.records.iter().map(|r| r.len() as u64).sum();
+        honour.on_frame(bytes, encoded.keyframe, target_bps, target_bps, fps);
         let total_us = u64::try_from(encode_started.elapsed().as_micros()).unwrap_or(u64::MAX);
         let encode_us = super::convert_clock::encode_without(total_us, convert_us);
         measure.stages.record_us(stages::ENCODE, encode_us);
@@ -398,7 +404,16 @@ pub fn run_local(options: BenchOptions, codecs: &CodecRegistry) -> io::Result<Be
             std::thread::sleep(wait);
         }
     }
-    measure.report(&encoder.name(), "local")
+    let mut report = measure.report(&encoder.name(), "local")?;
+    // Plan 2026-11-17: the rate the encoder was given and whether it kept it.
+    if choice.codec.is_video() {
+        report.host_chain = Some(super::frame_timing::ChainReport {
+            encoder_rate_kbps: Some(target_bps / 1000),
+            rate_honour: Some(honour.verdict().key().to_string()),
+            ..Default::default()
+        });
+    }
+    Ok(report)
 }
 
 #[cfg(test)]

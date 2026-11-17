@@ -39,6 +39,7 @@ use crate::screen::core::host_backend::{CapturedEncodedFrame, EncodedFrame, Scre
 use crate::screen::core::host_stage::StageRequest;
 use crate::screen::core::negotiate::CodecKind;
 use crate::screen::core::pixel_convert::{BgraImage, FrameSize};
+use crate::screen::core::rate_control::honour::EncoderRateState;
 use crate::screen::core::rate_control::MIN_BITRATE_BPS;
 use crate::screen::core::wire::invalid;
 use crate::screen::os::mf_capture_output::capture_limit;
@@ -122,6 +123,10 @@ pub(super) trait VendorSession {
     /// selects its level itself and reports no bit-rate limit).
     fn rate_ceiling(&self, _fps: u32) -> Option<u64> {
         None
+    }
+    /// The driver refused the last rate it was given (plan 2026-11-17).
+    fn rate_refused(&self) -> bool {
+        false
     }
 }
 
@@ -360,6 +365,15 @@ impl<S: VendorSession> ScreenEncoder for VendorEncoder<S> {
 
     fn needs_refresh(&self) -> bool {
         self.refresh
+    }
+
+    /// The rate the session runs at and whether it refused the last one.
+    fn rate_state(&self) -> Option<EncoderRateState> {
+        let rate = self.rate?;
+        Some(EncoderRateState {
+            applied_bps: u64::from(rate.bits_per_second),
+            refused: self.session.rate_refused(),
+        })
     }
 
     fn encode(

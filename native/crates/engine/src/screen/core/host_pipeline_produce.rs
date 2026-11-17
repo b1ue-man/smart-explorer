@@ -9,6 +9,7 @@
 use super::*;
 use crate::screen::core::host_stage::{StreamHint, StreamReport};
 use crate::screen::core::pacing::{codec_cap, guard_bytes};
+use crate::screen::core::rate_control::model::start_table_bps;
 use crate::screen::core::rate_control::{codec_ceiling_bps, PathKind};
 
 /// Dropped pictures one report adds to the statistics at most.
@@ -90,6 +91,14 @@ impl Pipeline {
         self.clock.set_fps(self.quality.fps.min(open_fps));
         self.rate
             .set_codec_ceiling(codec_ceiling_bps(&self.choice, size, open_fps));
+        // Plan 2026-11-17: the stream's start rate (`rate_control::model`).
+        let chroma_444 = self.choice.codec.chroma_444(self.choice.profile);
+        self.rate.set_stream_start(start_table_bps(
+            size,
+            open_fps,
+            self.choice.codec,
+            chroma_444,
+        ));
         let now = now_us();
         self.self_paced = self
             .stage
@@ -117,6 +126,8 @@ impl Pipeline {
         // B-35: the stale time follows the smoothed round trip of the path
         // (`path_of` reads noq's smoothed estimate) and the cadence.
         self.pacer.set_timing(rtt_us, self.clock.interval_us());
+        // The unacknowledged bytes drain at the measured rate (plan 2026-11-17).
+        self.pacer.set_drain_rate(self.rate.sustained_bps());
         // A frame the line cannot take is dropped before encoding: for the
         // tile codec, whose size no target steers, this is how its frame rate
         // sinks to what the line carries; for every codec it is back pressure.
@@ -157,7 +168,8 @@ impl Pipeline {
             frame_contract: self.frame_contract,
             visible_rects: self.visible_for_size(size),
             keyframe,
-            target_bps: target,
+            // The encoder gets the target times its correction (plan 2026-11-17).
+            target_bps: self.rate.encoder_bps(),
             size,
             choice: self.choice,
             encoder_epoch: self.encoder_epoch,
@@ -228,6 +240,20 @@ impl Pipeline {
                     .min(u128::from(u64::MAX)) as u64;
                 self.rate
                     .on_encode_at(encoded_bytes, production_us(report, waited), now_us());
+                // Whether the video encoder keeps the rate it was given (plan
+                // 2026-11-17); lossless regions of a hybrid stream are no part
+                // of its rate.
+                let hybrid = request.frame_contract.is_some_and(|c| c.hybrid_regions);
+                if request.choice.codec.is_video() && !hybrid {
+                    self.rate.on_encoded(
+                        encoded_bytes,
+                        frame.keyframe,
+                        target,
+                        request.target_bps,
+                        request.fps,
+                        &encoder.name,
+                    );
+                }
                 // Mid-GOP encoder fallback (W4, B3): start a fresh picture group
                 // so the new encoder's parameter sets never mix with the old ones.
                 if self

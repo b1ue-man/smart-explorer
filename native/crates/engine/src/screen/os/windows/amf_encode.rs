@@ -255,10 +255,21 @@ impl AmfSession {
         size: FrameSize,
         fps: u32,
     ) -> io::Result<Self> {
+        Self::open_at(device, codec, size, fps, START_DIRECT_BPS)
+    }
+
+    /// `open` with the rate control starting at `bps` (plan 2026-11-17).
+    pub(super) fn open_at(
+        device: &ID3D11Device,
+        codec: CodecKind,
+        size: FrameSize,
+        fps: u32,
+        bps: u64,
+    ) -> io::Result<Self> {
         let names = names(codec)
             .ok_or_else(|| io::Error::new(io::ErrorKind::Unsupported, "AMF has no tiles"))?;
         let (context, component) = context_and_encoder(device, names)?;
-        let rate = RateParams::for_target(START_DIRECT_BPS, fps);
+        let rate = RateParams::for_target(bps, fps);
         let mut session = Self {
             component,
             context,
@@ -454,6 +465,12 @@ impl VendorSession for AmfSession {
 
     fn rate_ceiling(&self, _fps: u32) -> Option<u64> {
         self.ceiling
+    }
+
+    /// The component refused its target bit rate, at the start or since
+    /// (`apply`, plan 2026-11-17): it runs at its own default.
+    fn rate_refused(&self) -> bool {
+        self.refused.contains(&self.names.target)
     }
 }
 

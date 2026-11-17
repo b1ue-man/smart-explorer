@@ -186,10 +186,11 @@ impl RateController {
     }
 
     /// „Höchste Datenrate“ of the viewer (B-09): `None` is automatic. Takes
-    /// effect at once; a lower ceiling lowers the target with it.
+    /// effect at once; a lower ceiling lowers the target with it, while the
+    /// link estimate stays (plan 2026-11-17), so a raised ceiling returns to
+    /// what the line was measured to carry.
     pub fn set_ceiling(&mut self, ceiling_bps: Option<u64>) {
         self.user_ceiling_bps = ceiling_bps.map(|bps| bps.max(MIN_BITRATE_BPS));
-        self.delay_target = self.clamp(self.delay_target);
     }
 
     pub fn user_ceiling_bps(&self) -> Option<u64> {
@@ -199,7 +200,7 @@ impl RateController {
     /// What the codec pairing carries (B-06, `codec_ceiling_bps`).
     pub fn set_codec_ceiling(&mut self, ceiling_bps: u64) {
         self.codec_ceiling_bps = Some(ceiling_bps.max(MIN_BITRATE_BPS));
-        self.delay_target = self.clamp(self.delay_target);
+        self.delay_target = self.link_clamp(self.delay_target);
     }
 }
 

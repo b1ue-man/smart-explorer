@@ -2,6 +2,7 @@
 //! 4.10a): the stage of every station the host reports (capture path with
 //! its fallback, conversion on GPU or CPU, read-backs, pointer in the
 //! picture, a capped capture rate), what limits frame rate and bit rate,
+//! the rate the encoder is given and whether it keeps it (plan 2026-11-17),
 //! the kinds of recovery, the host's station times (after `FRAME_TIMING`,
 //! the network with the clock offset) and the viewer's own stations
 //! (decode, hand-over to the graphics, dropped pictures, pictures drawn
@@ -21,6 +22,22 @@ fn limit_text(key: &str) -> &str {
         "link" => "Leitung",
         "ceiling" => "Höchste Datenrate",
         "codec_ceiling" => "Obergrenze der Codec-Paarung",
+        "ramp" => "Anlauf",
+        "content" => "Bildinhalt",
+        "encoder_ceiling" => "Obergrenze des Kodierers",
+        "encoder_ignores" => "Kodierer hält die Rate nicht",
+        other => other,
+    }
+}
+
+/// The verdict of the host's honour meter (plan 2026-11-17).
+fn honour_text(key: &str) -> &str {
+    match key {
+        "pending" => "noch nicht beurteilt",
+        "honoured" => "eingehalten",
+        "tolerated" => "knapp eingehalten",
+        "corrected" => "korrigiert",
+        "ignores" => "nicht eingehalten",
         other => other,
     }
 }
@@ -97,6 +114,13 @@ fn stage_lines(chain: &ChainReport) -> Vec<String> {
             limit(&chain.fps_limit)
         ),
         format!("Datenrate begrenzt durch {}", limit(&chain.rate_limit)),
+        match (chain.encoder_rate_kbps, chain.rate_honour.as_deref()) {
+            (Some(kbps), Some(honour)) => {
+                format!("Kodierer-Rate {kbps} kbit/s ({})", honour_text(honour))
+            }
+            (Some(kbps), None) => format!("Kodierer-Rate {kbps} kbit/s"),
+            (None, _) => format!("Kodierer-Rate {NOT_REPORTED}"),
+        },
         format!(
             "Erholungen: Fortsetzung {}, Schlüsselbild {}",
             count(chain.recoveries_continued),

@@ -166,6 +166,10 @@ impl Pipeline {
             user_ceiling_bps: self.rate.user_ceiling_bps(),
             back_pressure: self.rate.back_pressure(now_us()),
             resets: self.pacer.resets(),
+            // Plan 2026-11-17: the reason, the encoder's rate and its honour.
+            limit: Some(self.rate.limit()),
+            encoder_bps: Some(self.rate.encoder_bps()),
+            honour: Some(self.rate.honour()),
         };
         let (chain, stations) = {
             let meter = super::super::chain_meter::lock(&self.chain);

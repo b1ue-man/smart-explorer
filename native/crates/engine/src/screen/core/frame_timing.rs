@@ -164,12 +164,23 @@ pub struct ChainReport {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fps_limit: Option<String>,
     /// `ceiling` (the viewer's „Höchste Datenrate“), `codec_ceiling` (the
-    /// codec pairing) or `link` (rate control on the line).
+    /// codec pairing), `link` (rate control on the line); since plan
+    /// 2026-11-17 also `ramp` (the start ramp), `content` (the picture does
+    /// not fill the target), `encoder_ceiling` (the encoder's own ceiling)
+    /// and `encoder_ignores` (the encoder exceeds its rate, se gives it less).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rate_limit: Option<String>,
     /// The viewer's „Höchste Datenrate“ in kbit/s.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rate_ceiling_kbps: Option<u64>,
+    /// The rate the encoder is given in kbit/s: the target times the
+    /// correction of its honour meter (plan 2026-11-17).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub encoder_rate_kbps: Option<u64>,
+    /// `pending`, `honoured`, `tolerated`, `corrected` or `ignores`
+    /// (`rate_control::honour::HonourVerdict`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rate_honour: Option<String>,
 }
 
 /// The capture API a session uses.

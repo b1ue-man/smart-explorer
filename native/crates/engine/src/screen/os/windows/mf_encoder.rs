@@ -38,6 +38,7 @@ use crate::screen::core::capture_picture::Picture;
 use crate::screen::core::host_backend::{CapturedEncodedFrame, EncodedFrame, ScreenEncoder};
 use crate::screen::core::host_stage::StageRequest;
 use crate::screen::core::pixel_convert::{BgraImage, FrameSize};
+use crate::screen::core::rate_control::honour::EncoderRateState;
 use crate::screen::core::rate_control::START_DIRECT_BPS;
 
 #[cfg(test)]
@@ -79,6 +80,9 @@ pub(super) struct AsyncEncoder {
     refresh: bool,
     /// Streaming restarted: the next frame must be a key frame.
     restarted: bool,
+    /// The MFT refused its mean bit rate or reads back another one (plan
+    /// 2026-11-17, `ScreenEncoder::rate_state`).
+    rate_refused: bool,
 }
 
 // SAFETY: as `SyncEncoder`: one thread at a time, free-threaded objects of
@@ -88,21 +92,24 @@ unsafe impl Send for AsyncEncoder {}
 
 impl AsyncEncoder {
     pub(super) fn new(transform: IMFTransform, setup: EncoderSetup) -> io::Result<Self> {
-        Self::create(transform, setup, None)
+        Self::create(transform, setup, None, START_DIRECT_BPS)
     }
 
+    /// Opens at `bps`, the rate the session gives it (plan 2026-11-17).
     pub(super) fn new_admitted(
         transform: IMFTransform,
         setup: EncoderSetup,
         grant: CaptureGrant,
+        bps: u64,
     ) -> io::Result<Self> {
-        Self::create(transform, setup, Some(grant))
+        Self::create(transform, setup, Some(grant), bps)
     }
 
     fn create(
         transform: IMFTransform,
         setup: EncoderSetup,
         grant: Option<CaptureGrant>,
+        bps: u64,
     ) -> io::Result<Self> {
         // SAFETY: attribute write on the activated transform; without it an
         // asynchronous MFT refuses every call.
@@ -125,7 +132,7 @@ impl AsyncEncoder {
                 .ok(),
             None => None,
         };
-        let bitrate = bounded_bitrate(START_DIRECT_BPS, u32::MAX);
+        let bitrate = bounded_bitrate(bps, u32::MAX);
         let (api, settings) = configure_hardware(&transform, bitrate, setup.fps);
         if let Err(error) = start(&transform, &setup, bitrate) {
             if gpu.is_none() {
@@ -142,6 +149,7 @@ impl AsyncEncoder {
         }
         let limit = opened_limit(&transform, api.as_ref(), &setup);
         let refused = settings.refused();
+        let rate_refused = refused.contains(&super::mf_media::SETTINGS[3]);
         if !refused.is_empty() {
             eprintln!(
                 "screen encoder {}: settings at the encoder's default: {}",
@@ -163,6 +171,7 @@ impl AsyncEncoder {
             ltr: settings.ltr_frames > 0,
             refresh: false,
             restarted: false,
+            rate_refused,
         })
     }
 
@@ -343,13 +352,10 @@ impl ScreenEncoder for AsyncEncoder {
         let maximum = mf_capture_output::capture_limit(&grant, image, request, self.setup.size)?;
         ensure_com();
         let (limit, fps) = (self.limit, self.setup.fps);
-        retune_bounded(
-            self.api.as_ref(),
-            &mut self.bitrate,
-            request.target_bps,
-            limit,
-            fps,
-        );
+        let (api, target) = (self.api.as_ref(), request.target_bps);
+        if let Some(refused) = retune_bounded(api, &mut self.bitrate, target, limit, fps) {
+            self.rate_refused = refused;
+        }
         let key = request.keyframe || self.restarted;
         if key && (self.frames > 0 || self.restarted) {
             force_keyframe(self.api.as_ref());
@@ -387,6 +393,13 @@ impl ScreenEncoder for AsyncEncoder {
         self.refresh
     }
 
+    fn rate_state(&self) -> Option<EncoderRateState> {
+        Some(EncoderRateState {
+            applied_bps: u64::from(self.bitrate),
+            refused: self.rate_refused,
+        })
+    }
+
     fn encode(
         &mut self,
         frame: &BgraImage,
@@ -406,7 +419,10 @@ impl ScreenEncoder for AsyncEncoder {
         }
         ensure_com();
         let (limit, fps) = (self.limit, self.setup.fps);
-        retune_bounded(self.api.as_ref(), &mut self.bitrate, target_bps, limit, fps);
+        let api = self.api.as_ref();
+        if let Some(refused) = retune_bounded(api, &mut self.bitrate, target_bps, limit, fps) {
+            self.rate_refused = refused;
+        }
         if keyframe && self.frames > 0 {
             force_keyframe(self.api.as_ref());
         }

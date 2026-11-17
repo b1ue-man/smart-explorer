@@ -112,10 +112,11 @@ impl Probe {
 /// The start of the target per peer and path.
 impl RateController {
     /// Binds the peer once: a rate remembered for it and this path replaces
-    /// the start value and ends the ramp before it starts (B-05).
+    /// the start value and ends the ramp before it starts (B-05); the relay
+    /// guard does not cut it (`model::session_start_bps`).
     pub fn bind_peer(&mut self, peer: &str) {
         if let Some(known) = self.probe.bind(peer, self.path) {
-            self.delay_target = self.clamp(known as f64);
+            self.delay_target = self.link_clamp(self.start_value(Some(known)) as f64);
             self.sustained = Some(self.delay_target);
         }
     }
@@ -150,34 +151,44 @@ impl RateController {
 
     /// The picture stream went stale (`pacing::stale_after_us`, B-35): the
     /// frames handed to it were not acknowledged within the time the line
-    /// needs for them at the target, so the path does not carry the target.
-    /// No acknowledgement of these frames follows (the stream is reset and
-    /// its frames are forgotten), so the delay-based controller never sees
-    /// this overuse and the next frames would be sized for the same target
-    /// and go stale as well. The target halves, as the sender of RFC 5681
-    /// (section 3.1, equation 4) halves after a loss it detects by timeout,
-    /// the counterpart of the slow start that doubled it; the ramp ends, and
-    /// the event is back pressure, so an application-limited sender does not
-    /// grow again within one rate window.
-    pub fn on_stale_stream(&mut self, now_us: u64) {
+    /// needs for them, so the path does not carry the target. No
+    /// acknowledgement of these frames follows (the stream is reset and its
+    /// frames are forgotten), so the delay-based controller never sees this
+    /// overuse and the next frames would be sized for the same target and go
+    /// stale as well. The target halves, as the sender of RFC 5681 (section
+    /// 3.1, equation 4) halves after a loss it detects by timeout, the
+    /// counterpart of the slow start that doubled it; the ramp ends, and the
+    /// event is back pressure, so an application-limited sender does not
+    /// grow again within one rate window. Plan 2026-11-17: at most once per
+    /// `stale_us` (the stale time of the stream that went stale), so the
+    /// resets of one congested period halve once, not once each.
+    pub fn on_stale_stream(&mut self, now_us: u64, stale_us: u64) {
         self.pressure_us = Some(now_us);
         self.probe.on_limit();
-        self.delay_target = self.clamp(self.current() * STALE_DECREASE);
-        self.sustained = Some(self.delay_target);
         self.gradient.reset();
         self.overuse_streak = 0;
         self.last_update_us = now_us;
+        let recent = self
+            .stale_halved
+            .is_some_and(|(at, window)| now_us.saturating_sub(at) < window);
+        if recent {
+            return;
+        }
+        self.stale_halved = Some((now_us, stale_us));
+        self.delay_target = self.link_clamp(self.target_bps() as f64 * STALE_DECREASE);
+        self.sustained = Some(self.delay_target);
     }
 
-    /// A new path starts over from its remembered rate or its start value
-    /// and discards the previous path's loss ceiling.
+    /// A new path starts over from its remembered rate or the start of the
+    /// stream on it (`model::session_start_bps`) and discards the previous
+    /// path's loss ceiling.
     pub fn set_path(&mut self, path: PathKind) {
         if path != self.path {
             self.path = path;
             let known = self.probe.start(path);
-            let start = known.unwrap_or_else(|| path.start_bps());
-            self.delay_target = self.clamp(start as f64);
+            self.delay_target = self.link_clamp(self.start_value(known) as f64);
             self.sustained = known.map(|_| self.delay_target);
+            self.stale_halved = None;
             self.loss_target = f64::INFINITY;
             self.gradient.reset();
             self.received = RateWindow::default();

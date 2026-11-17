@@ -69,6 +69,9 @@ fn rates() -> RateFacts {
         user_ceiling_bps: Some(20_000_000),
         back_pressure: false,
         resets: 3,
+        limit: None,
+        encoder_bps: None,
+        honour: None,
     }
 }
 
