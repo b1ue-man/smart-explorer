@@ -95,10 +95,11 @@ pub(super) fn max_rate_row(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Ve
         .on_hover_text("Ohne Haken: automatisch. Wirkt sofort, wenn das Gerät es unterstützt.")
         .changed();
     if limited {
+        // One percent of the value per dragged pixel.
+        let speed = mbit / 100.0;
         let field = egui::DragValue::new(&mut mbit)
             .range(MIN_BITRATE_BPS as f64 / 1e6..=f64::MAX)
-            // One percent of the value per dragged pixel.
-            .speed(mbit / 100.0)
+            .speed(speed)
             .suffix(" Mbit/s");
         changed |= ui.add(field).changed();
     }

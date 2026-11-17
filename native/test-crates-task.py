@@ -1707,9 +1707,10 @@ def part_s4():
     summary(f"S4-MESSUNG plattform={platform_name} verfahren={method} aead_mib_s={aead} share_mib_s={share} "
             f"anteil_prozent={percent} gezaehlt_mib={counted} schwelle_prozent={S4_THRESHOLD_PERCENT:.1f}")
     if float(percent) >= S4_THRESHOLD_PERCENT:
+        # The plaintext channel this threshold decided on is withdrawn (user 2026-11-14: "dann kannst
+        # von mir aus auch das unverschlüsselt ganz weg lassen"); the share stays a recorded finding.
         summary(f"S4-BEFUND: on {platform_name} encryption takes {percent} % of a transfer, at or above the "
-                f"{S4_THRESHOLD_PERCENT:.0f} % threshold (E30): the plan owner decides on the plaintext channel.")
-        ok = False
+                f"{S4_THRESHOLD_PERCENT:.0f} % threshold (E30); no plaintext channel (withdrawn 2026-11-14).")
     return ok
 
 

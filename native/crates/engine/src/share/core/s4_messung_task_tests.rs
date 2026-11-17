@@ -37,8 +37,9 @@ fn s4_messung_task_aead_chacha20_poly1305() -> Result<(), String> {
 }
 
 /// Ausgehandeltes Verfahren, dessen AEAD-Durchsatz, Share-Durchsatz ueber Loopback und der
-/// Anteil. Der Test besteht, wenn der Anteil unter 10 % liegt; ein Anteil von 10 % oder mehr
-/// ist nach E30 ein Befund fuer den Klartextkanal und laesst den Test fehlschlagen.
+/// Anteil. Ein Anteil von 10 % oder mehr war nach E30 ein Befund fuer den Klartextkanal; den
+/// hat der Nutzer am 2026-11-14 zurueckgenommen („dann kannst von mir aus auch das
+/// unverschlüsselt ganz weg lassen“). Der Test misst und druckt, er bewertet nicht mehr.
 #[test]
 #[ignore = "Messung; Suite crates-task"]
 fn s4_messung_task_share_loopback_anteil() -> Result<(), String> {
@@ -47,11 +48,8 @@ fn s4_messung_task_share_loopback_anteil() -> Result<(), String> {
     let share = share_loopback_mib_s()?;
     let anteil = anteil_prozent(share.mib_s, aead_mib);
     println!("{}", messung_zeile(&platform(), aead, aead_mib, &share));
-    assert!(
-        anteil < THRESHOLD_PERCENT,
-        "anteil_prozent={:.1} liegt nicht unter {:.1} (E30: Befund fuer den Klartextkanal)",
-        anteil,
-        THRESHOLD_PERCENT
-    );
+    if anteil >= THRESHOLD_PERCENT {
+        println!("S4-HINWEIS anteil_prozent={anteil:.1} schwelle_prozent={THRESHOLD_PERCENT:.1}");
+    }
     Ok(())
 }
