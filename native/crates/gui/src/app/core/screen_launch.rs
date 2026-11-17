@@ -38,6 +38,8 @@ fn viewport(title: &str) -> egui::ViewportBuilder {
 /// Opens the viewer window with wgpu, and with the CPU path (glow) when the
 /// window cannot get a wgpu surface.
 fn run_viewer(start: Start, title: &str) -> i32 {
+    // P8: FFmpeg loads (or this user's copy downloads) while the window opens.
+    crate::screen::os::prepare_ffmpeg();
     let prefs = ViewerPrefs::load();
     let wgpu = eframe::NativeOptions {
         renderer: eframe::Renderer::Wgpu,

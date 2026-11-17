@@ -48,7 +48,48 @@ pub(super) fn codec_rows(ui: &mut egui::Ui, out: &mut Vec<ToolbarAction>) {
     if picked != decoder {
         out.push(ToolbarAction::Decoder(picked));
     }
+    output_rows(ui, out);
 }
+
+/// „Dekodierer-Bibliothek: Automatisch / FFmpeg / Media Foundation“ and
+/// „Anzeige: Automatisch / Direct3D 11 / wgpu“ (plan 2026-11-17 P8), on
+/// Windows, where both libraries and both displays exist.
+#[cfg(windows)]
+fn output_rows(ui: &mut egui::Ui, out: &mut Vec<ToolbarAction>) {
+    use super::super::screen_prefs::{DecoderLibrary, DisplayChoice};
+    let library = super::super::screen_prefs::decoder_library_choice();
+    let mut chosen = library;
+    let _ = egui::ComboBox::from_id_salt("screen_decoder_library")
+        .selected_text(format!("Bibliothek: {}", library.label()))
+        .show_ui(ui, |ui| {
+            for choice in DecoderLibrary::ALL {
+                ui.selectable_value(&mut chosen, choice, choice.label());
+            }
+        })
+        .response
+        .on_hover_text("Automatisch: FFmpeg (D3D11VA, DXVA2, Software), sonst Media Foundation.");
+    if chosen != library {
+        out.push(ToolbarAction::DecoderLibrary(chosen));
+    }
+    let display = super::super::screen_prefs::display_choice();
+    let mut picked = display;
+    let _ = egui::ComboBox::from_id_salt("screen_display")
+        .selected_text(format!("Anzeige: {}", display.label()))
+        .show_ui(ui, |ui| {
+            for choice in DisplayChoice::ALL {
+                ui.selectable_value(&mut picked, choice, choice.label());
+            }
+        })
+        .response
+        .on_hover_text("Automatisch: Direct3D 11 ohne CPU-Umweg, sonst wgpu.");
+    if picked != display {
+        out.push(ToolbarAction::Display(picked));
+    }
+}
+
+/// One library and one display elsewhere: nothing to choose.
+#[cfg(not(windows))]
+fn output_rows(_ui: &mut egui::Ui, _out: &mut Vec<ToolbarAction>) {}
 
 /// Stores a „Codec“ or „Dekodierer“ choice in `prefs` and the process
 /// (`set_codec_choice`); `true` when the session must change its decoders:
@@ -73,6 +114,18 @@ pub fn apply_codec(
             let _ = set(None, Some(*decoder));
             prefs.decoder = Some(*decoder);
             true
+        }
+        // P8: another library opens the session again; another display
+        // takes effect at the next picture (`screen_direct.rs`).
+        ToolbarAction::DecoderLibrary(library) => {
+            let _ = super::super::screen_prefs::set_output_choice(Some(*library), None);
+            prefs.decoder_library = Some(*library);
+            true
+        }
+        ToolbarAction::Display(display) => {
+            let _ = super::super::screen_prefs::set_output_choice(None, Some(*display));
+            prefs.display = Some(*display);
+            false
         }
         _ => return false,
     };

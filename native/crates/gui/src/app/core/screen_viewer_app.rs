@@ -316,13 +316,18 @@ impl ScreenViewerApp {
                 ToolbarAction::Fullscreen => out.push(Transition::Fullscreen),
                 ToolbarAction::Fit(fit) => self.change_prefs(|prefs| prefs.fit = *fit),
                 ToolbarAction::Sharpness(on) => self.change_prefs(|prefs| prefs.sharpness = *on),
-                ToolbarAction::Codec(_) | ToolbarAction::Decoder(_) => {
+                ToolbarAction::Codec(_)
+                | ToolbarAction::Decoder(_)
+                | ToolbarAction::DecoderLibrary(_)
+                | ToolbarAction::Display(_) => {
                     let again = screen_toolbar_ui::apply_codec(&action, &mut self.common.prefs);
                     if let (true, Mode::View(view)) = (again, &self.mode) {
                         // V1: a decoder that decodes the running stream takes
                         // over at the next key frame, without a new session.
-                        let local = matches!(action, ToolbarAction::Decoder(_))
-                            && view.session.as_ref().is_some_and(|s| s.switch_decoder());
+                        let local = matches!(
+                            action,
+                            ToolbarAction::Decoder(_) | ToolbarAction::DecoderLibrary(_)
+                        ) && view.session.as_ref().is_some_and(|s| s.switch_decoder());
                         // P1: the host negotiates again (`SET_DECODERS`).
                         let frame = super::screen_pool::decoders_frame(&self.common.backend.offers);
                         let sent = view.session.as_ref().is_some_and(|s| s.set_decoders(frame));

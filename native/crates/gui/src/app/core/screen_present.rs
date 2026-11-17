@@ -78,6 +78,9 @@ pub enum WindowBackend {
     WgpuGl,
     /// eframe's glow renderer (no wgpu surface).
     Glow,
+    /// The Direct3D 11 presenter of the picture area (plan 2026-11-17 P8,
+    /// `screen_direct.rs`): imports FFmpeg's D3D11VA textures as they are.
+    Direct3d11,
     Other,
 }
 
@@ -97,6 +100,7 @@ impl WindowBackend {
             Self::Dx12 => "DX12",
             Self::WgpuGl => "OpenGL (wgpu)",
             Self::Glow => "OpenGL (glow)",
+            Self::Direct3d11 => "Direct3D 11",
             Self::Other => "andere",
         }
     }
@@ -111,13 +115,18 @@ pub enum DecodedSurface {
     D3d11Texture,
     /// An NV12 surface of the VA-API decoder (BK4).
     VaSurface,
+    /// A Direct3D 9 surface of FFmpeg's DXVA2 stage (P8), always read back.
+    Dxva2Surface,
 }
 
 impl DecodedSurface {
-    /// From the decoder's name, which names its stage (BK5w, BK4).
+    /// From the decoder's name, which names its stage (BK5w, BK4, P8:
+    /// `FFmpeg h264 [D3D11VA]`, `FFmpeg hevc [DXVA2]`).
     pub fn of_decoder(name: &str) -> Self {
         if name.contains("D3D11VA") {
             Self::D3d11Texture
+        } else if name.contains("[DXVA2]") {
+            Self::Dxva2Surface
         } else if name.starts_with("vaapi-") {
             Self::VaSurface
         } else {
@@ -147,11 +156,14 @@ impl PresentPath {
     }
 }
 
-/// Whether `backend` imports `surface` without a copy through the processor;
-/// none does with the locked versions (module head).
+/// Whether `backend` imports `surface` without a copy through the processor:
+/// no wgpu or glow backend with the locked versions (module head); the
+/// Direct3D 11 presenter takes D3D11VA textures (P8).
 pub fn imports(backend: WindowBackend, surface: DecodedSurface) -> bool {
     match (backend, surface) {
         (_, DecodedSurface::Memory) => false,
+        (WindowBackend::Direct3d11, DecodedSurface::D3d11Texture) => true,
+        (WindowBackend::Direct3d11, _) => false,
         // Vulkan: no external-memory extension on the device (wgpu-hal 22).
         (WindowBackend::Vulkan, _) => false,
         // DX12 is not compiled (wgpu without its `dx12` feature).
@@ -188,11 +200,16 @@ pub fn stats_line(path: PresentPath, backend: WindowBackend, surface: DecodedSur
     format!("Anzeige {} ({}{readback})", path.label(), backend.label())
 }
 
-/// The statistics line for the window of `ctx` and the session's decoder.
+/// The statistics line for the window of `ctx` and the session's decoder;
+/// „Anzeige direkt (Direct3D 11)“ while the presenter shows the picture.
 pub fn window_line(ctx: &eframe::egui::Context, decoder: Option<&str>, planes: bool) -> String {
+    let surface = DecodedSurface::of_decoder(decoder.unwrap_or_default());
+    if super::screen_direct::showing(ctx) {
+        let backend = WindowBackend::Direct3d11;
+        return stats_line(select(backend, surface, planes, false), backend, surface);
+    }
     let backend = super::screen_render_owner::get(ctx)
         .map_or(WindowBackend::Other, |owner| owner.window_backend());
-    let surface = DecodedSurface::of_decoder(decoder.unwrap_or_default());
     stats_line(select(backend, surface, planes, false), backend, surface)
 }
 

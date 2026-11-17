@@ -6,7 +6,7 @@
 //! socket: the picture comes out of a slot, frames go into a queue.
 use std::sync::Arc;
 
-use eframe::egui::{self, Align2, Color32, EventFilter, FontId, Pos2, Rect, Sense, Vec2};
+use eframe::egui::{self, Align2, Color32, EventFilter, FontId, Rect, Sense, Vec2};
 
 use super::screen_input_keys::{local_keys, LocalKey};
 use super::screen_input_map::{Geometry, InputMapper};
@@ -17,11 +17,6 @@ use super::screen_texture_cpu::CpuTexture;
 use super::screen_wgpu_yuv::YuvFrame;
 use crate::screen::core::pixel_convert::FrameSize;
 use crate::screen::core::wire_control::ViewerFrame;
-
-/// Distance from the edge of the area at which a 1:1 picture larger than the
-/// area starts to scroll, and how fast, in points.
-const EDGE_ZONE: f32 = 24.0;
-const EDGE_SPEED: f32 = 900.0;
 
 /// What the viewer app tells the widget for one frame.
 pub struct ViewParams<'a> {
@@ -62,40 +57,8 @@ impl Current {
     }
 }
 
+use super::screen_viewport::edge_pan;
 pub use super::screen_viewport::image_rect;
-
-/// The pan after `dt` seconds with the pointer at `hover`: toward the edge it
-/// is near, while the picture is larger than the area there.
-fn edge_pan(pan: Vec2, area: Rect, dest: Vec2, hover: Option<Pos2>, dt: f32) -> Vec2 {
-    let Some(hover) = hover.filter(|pos| area.contains(*pos)) else {
-        return pan;
-    };
-    let axis = |pan: f32, pos: f32, start: f32, end: f32, picture: f32, room: f32| {
-        if picture <= room {
-            return 0.0;
-        }
-        let step = EDGE_SPEED * dt;
-        let moved = if pos - start < EDGE_ZONE {
-            pan - step
-        } else if end - pos < EDGE_ZONE {
-            pan + step
-        } else {
-            pan
-        };
-        moved.clamp(0.0, picture - room)
-    };
-    Vec2::new(
-        axis(pan.x, hover.x, area.min.x, area.max.x, dest.x, area.width()),
-        axis(
-            pan.y,
-            hover.y,
-            area.min.y,
-            area.max.y,
-            dest.y,
-            area.height(),
-        ),
-    )
-}
 
 /// The picture area of one session.
 pub struct ViewWidget {
@@ -109,6 +72,8 @@ pub struct ViewWidget {
     gpu: bool,
     was_focused: bool,
     visibility: super::screen_visibility::VisibilityTracker,
+    /// P8: Direct3D 11 display of GPU pictures (`screen_direct.rs`).
+    direct: super::screen_direct::DirectView,
 }
 
 impl ViewWidget {
@@ -123,10 +88,12 @@ impl ViewWidget {
             gpu,
             was_focused: true,
             visibility: super::screen_visibility::VisibilityTracker::default(),
+            direct: Default::default(),
         }
     }
 
     fn accept(&mut self, ctx: &egui::Context, session: &ViewerSession, picture: Picture) {
+        self.direct.deactivate();
         if self
             .source_stamp
             .as_ref()
@@ -221,6 +188,7 @@ impl ViewWidget {
     }
 
     pub fn retire(&mut self) {
+        self.direct.deactivate();
         self.current = None;
         self.source_stamp = None;
         self.source_geometry = None;
@@ -322,11 +290,12 @@ impl ViewWidget {
         }
         let painter = ui.painter_at(area);
         painter.rect_filled(area, 0.0, Color32::BLACK);
-        let size = self
-            .current
-            .as_ref()
-            .map(Current::size)
-            .or(self.source_geometry);
+        // P8: the presenter's picture while it shows, else the slot's.
+        let direct_size = self.direct.size().filter(|_| self.direct.showing());
+        let size = direct_size
+            .or_else(|| self.current.as_ref().map(Current::size))
+            .or(self.source_geometry)
+            .or_else(|| self.direct.size());
         let mut shown = None;
         let mut reported_geometry = None;
         if let Some(size) = size.filter(|size| size.width > 0 && size.height > 0) {
@@ -343,16 +312,18 @@ impl ViewWidget {
             let dest = image_rect(area, size, params.fit, ppp, self.pan);
             reported_geometry = Some(Geometry { rect: dest, size });
             let nearest = params.fit == Fit::Actual;
-            let rendered = super::screen_view_widget_render::paint(
-                self.current.as_ref(),
-                &mut self.cpu,
-                session,
-                &painter,
-                area,
-                &Geometry { rect: dest, size },
-                nearest,
-            );
-            if rendered {
+            let direct = self.direct.showing();
+            let rendered = direct
+                || super::screen_view_widget_render::paint(
+                    self.current.as_ref(),
+                    &mut self.cpu,
+                    session,
+                    &painter,
+                    area,
+                    &Geometry { rect: dest, size },
+                    nearest,
+                );
+            if rendered && !direct {
                 // The host's pointer, when it travels beside the picture (P6);
                 // while this view steers it is the one pointer over the picture.
                 let over = response.contains_pointer() || response.dragged();
@@ -372,17 +343,18 @@ impl ViewWidget {
                 Color32::from_gray(210),
             );
         }
+        let mut overlays: Vec<Rect> = Vec::new();
         if let Some(lines) = params.stats {
-            screen_stats_overlay::show(ui, area, lines);
+            overlays.push(screen_stats_overlay::show(ui, area, lines));
         }
         if let Some(hint) = params.hint.filter(|_| shown.is_some()) {
-            painter.text(
+            overlays.push(painter.text(
                 area.left_top() + Vec2::new(8.0, 8.0),
                 Align2::LEFT_TOP,
                 hint,
                 FontId::proportional(14.0),
                 Color32::from_gray(230),
-            );
+            ));
         }
         if let Some(report) = self.visibility.report(
             &window,
@@ -399,6 +371,16 @@ impl ViewWidget {
             session.set_visibility(report);
         }
         let (locals, escape) = self.input(ui, session, &response, params, shown.as_ref());
+        let place = super::screen_direct::DirectPlace {
+            area,
+            dest: reported_geometry.map(|geometry| geometry.rect),
+            visible: !window.hidden()
+                && !session.is_ended()
+                && !params.dimmed
+                && ui.is_rect_visible(area),
+            steering: params.control && session.input_ready(),
+        };
+        self.direct.frame(ui, session, place, &overlays);
         ViewResult {
             display: FrameSize::new(
                 (area.width() * ppp).round().max(1.0) as u32,

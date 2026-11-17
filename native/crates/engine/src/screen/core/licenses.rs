@@ -33,16 +33,29 @@ pub struct LicenseText {
     pub text: &'static str,
 }
 
+/// The notice of the FFmpeg build the Windows viewer decodes with (plan
+/// 2026-11-17 P8): build, source, LGPL v3 and how to use an own build.
+pub const FFMPEG_NOTICE: &str = include_str!("../../../../../../third-party/ffmpeg/NOTICE.txt");
+
 /// Every license text of the screen strand this build carries. The notices
 /// of `openh264-rs`, `ashpd`, `wide` and `bzip2-rs` follow with their files
 /// under `third-party/` (SCR-M10).
 pub fn screen_licenses() -> Vec<LicenseText> {
-    vec![LicenseText {
-        key: "openh264",
-        component: "OpenH264 Video Codec provided by Cisco Systems, Inc. (downloaded by the user)",
-        license: "Cisco binary license v1.0",
-        text: CISCO_BINARY_LICENSE,
-    }]
+    vec![
+        LicenseText {
+            key: "openh264",
+            component:
+                "OpenH264 Video Codec provided by Cisco Systems, Inc. (downloaded by the user)",
+            license: "Cisco binary license v1.0",
+            text: CISCO_BINARY_LICENSE,
+        },
+        LicenseText {
+            key: "ffmpeg",
+            component: "FFmpeg 8.1 libavcodec, libavutil, libswresample (Windows viewer)",
+            license: "GNU LGPL v3",
+            text: FFMPEG_NOTICE,
+        },
+    ]
 }
 
 /// The license of `key`.

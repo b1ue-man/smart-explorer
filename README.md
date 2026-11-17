@@ -285,6 +285,8 @@ Annahme und lädt OpenH264 2.6.0 von `ciscobinary.openh264.org`; Größe und SHA
 Lizenztext zeigt `se screen codec licenses`; die Quelle ist `third-party/openh264/BINARY_LICENSE.txt`,
 der Installer legt sie unter `licenses\OpenH264\` ab.
 
+**FFmpeg im Windows-Betrachter (Quellstand 2026-11-17, nicht übersetzt, nicht auf Hardware gelaufen):** Der Windows-Bildschirmbetrachter dekodiert H.264, HEVC und AV1 mit FFmpeg (D3D11VA, sonst DXVA2, sonst Software) und zeigt D3D11VA-Bilder mit Direct3D 11 ohne CPU-Umweg; Media Foundation und die wgpu-Anzeige bleiben wählbar („Dekodierer-Bibliothek“, „Anzeige“). Der Installer legt die unveränderten LGPL-DLLs eines festgelegten FFmpeg-8.1-Builds (`avutil-60.dll`, `swresample-6.dll`, `avcodec-62.dll`, Größe und SHA-256 in `native/ffmpeg-runtime.nsh`) unter `ffmpeg\` und die Lizenztexte unter `licenses\FFmpeg\` ab; eine über den Auto-Updater aktualisierte oder portable Installation lädt dasselbe Archiv beim ersten Start des Betrachters einmal im Hintergrund (80 MB, geprüft) nach und dekodiert bis dahin mit Media Foundation. Einzelheiten: [`docs/RELEASING.md`](docs/RELEASING.md), [`docs/oberflaechen/bildschirm.md`](docs/oberflaechen/bildschirm.md).
+
 **Cryptomator-Tresore (ab 0.5.183):** Smart Explorer öffnet Cryptomator-Tresore im Format 8
 und legt neue an. `se vault add` trägt einen vorhandenen Tresor ein, `se vault create` legt
 einen an (Passwort mit mindestens 8 Zeichen), `se vault unlock` und `se vault lock` entsperren

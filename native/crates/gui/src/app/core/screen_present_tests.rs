@@ -128,3 +128,60 @@ fn bildkette_task_present_configuration_per_mode() {
     assert_eq!(present_mode(false), standard.present_mode);
     assert_eq!(present_mode(true), lowest.present_mode);
 }
+
+/// P8: the Direct3D 11 presenter takes D3D11VA textures as they are; FFmpeg's
+/// stage names choose the surface, DXVA2 and software pictures are read
+/// back or uploaded as before.
+#[test]
+fn bildkette_task_present_direct3d11_takes_d3d11va_textures() {
+    let d3d11 = WindowBackend::Direct3d11;
+    assert!(imports(d3d11, DecodedSurface::D3d11Texture));
+    for surface in [
+        DecodedSurface::Memory,
+        DecodedSurface::VaSurface,
+        DecodedSurface::Dxva2Surface,
+    ] {
+        assert!(!imports(d3d11, surface), "{surface:?}");
+        assert_eq!(
+            select(d3d11, surface, true, false),
+            PresentPath::PlaneUpload
+        );
+    }
+    assert_eq!(
+        select(d3d11, DecodedSurface::D3d11Texture, true, false),
+        PresentPath::Direct
+    );
+    // A failed presenter goes back to the planes.
+    assert_eq!(
+        select(d3d11, DecodedSurface::D3d11Texture, true, true),
+        PresentPath::PlaneUpload
+    );
+    assert_eq!(
+        DecodedSurface::of_decoder("FFmpeg h264 [D3D11VA]"),
+        DecodedSurface::D3d11Texture
+    );
+    assert_eq!(
+        DecodedSurface::of_decoder("FFmpeg hevc [DXVA2]"),
+        DecodedSurface::Dxva2Surface
+    );
+    assert_eq!(
+        DecodedSurface::of_decoder("FFmpeg av1 [Software]"),
+        DecodedSurface::Memory
+    );
+    assert_eq!(
+        stats_line(PresentPath::Direct, d3d11, DecodedSurface::D3d11Texture),
+        "Anzeige direkt (Direct3D 11)"
+    );
+    assert_eq!(
+        stats_line(
+            PresentPath::PlaneUpload,
+            WindowBackend::Vulkan,
+            DecodedSurface::Dxva2Surface
+        ),
+        "Anzeige Upload YUV-Ebenen (Vulkan, Hardwarebild zurückgelesen)"
+    );
+    // No wgpu or glow backend imports any of them (locked versions).
+    for backend in BACKENDS {
+        assert!(!imports(backend, DecodedSurface::Dxva2Surface));
+    }
+}

@@ -18,6 +18,7 @@ use std::sync::{Mutex, PoisonError};
 
 use serde::{Deserialize, Serialize};
 
+pub use crate::screen::core::decoder_library::DecoderLibrary;
 pub use crate::screen::core::negotiate::{CodecSetting, DecoderPreference};
 
 const SCHEMA: u32 = 1;
@@ -31,6 +32,49 @@ pub enum Fit {
     Fit,
     /// One picture pixel per screen pixel.
     Actual,
+}
+
+/// „Anzeige“ of the viewer (plan 2026-11-17 P8): Direct3D 11 for pictures
+/// of FFmpeg's D3D11VA stage on Windows, wgpu/glow for every other picture
+/// and wherever Direct3D 11 does not open; „wgpu“ keeps every picture on
+/// the wgpu/glow path. Automatic is Direct3D 11 with that fallback.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DisplayChoice {
+    #[default]
+    #[serde(rename = "auto")]
+    Automatic,
+    Direct3d11,
+    Wgpu,
+}
+
+impl DisplayChoice {
+    pub const ALL: [Self; 3] = [Self::Automatic, Self::Direct3d11, Self::Wgpu];
+
+    pub fn parse(text: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|choice| choice.key() == text)
+    }
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Automatic => "auto",
+            Self::Direct3d11 => "direct3d11",
+            Self::Wgpu => "wgpu",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Automatic => "Automatisch",
+            Self::Direct3d11 => "Direct3D 11",
+            Self::Wgpu => "wgpu",
+        }
+    }
+
+    /// Whether GPU pictures may go through the Direct3D 11 presenter.
+    pub fn direct(self) -> bool {
+        self != Self::Wgpu
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -58,6 +102,12 @@ pub struct ViewerPrefs {
     /// „Dekodierer“ (4.10, BK6); absent is „Automatisch“.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub decoder: Option<DecoderPreference>,
+    /// „Dekodierer-Bibliothek“ (P8); absent is „Automatisch“.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decoder_library: Option<DecoderLibrary>,
+    /// „Anzeige“ (P8); absent is „Automatisch“.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display: Option<DisplayChoice>,
 }
 
 fn schema() -> u32 {
@@ -75,6 +125,8 @@ impl Default for ViewerPrefs {
             max_rate_bps: None,
             codec: None,
             decoder: None,
+            decoder_library: None,
+            display: None,
         }
     }
 }
@@ -140,6 +192,44 @@ pub fn set_codec_choice(
     prefs.save_to(&prefs_path())
 }
 
+/// „Dekodierer-Bibliothek“ and „Anzeige“ of this process (P8): unread
+/// (`None`) or the values.
+type OutputChoice = (Option<DecoderLibrary>, Option<DisplayChoice>);
+static OUTPUT: Mutex<Option<OutputChoice>> = Mutex::new(None);
+
+fn output_choice() -> OutputChoice {
+    let mut known = OUTPUT.lock().unwrap_or_else(PoisonError::into_inner);
+    *known.get_or_insert_with(|| {
+        let prefs = ViewerPrefs::load_from(&prefs_path());
+        (prefs.decoder_library, prefs.display)
+    })
+}
+
+/// The stored „Dekodierer-Bibliothek“.
+pub fn decoder_library_choice() -> DecoderLibrary {
+    output_choice().0.unwrap_or_default()
+}
+
+/// The stored „Anzeige“.
+pub fn display_choice() -> DisplayChoice {
+    output_choice().1.unwrap_or_default()
+}
+
+/// Stores „Dekodierer-Bibliothek“ and „Anzeige“ at once (`None` keeps that
+/// value) and makes the library the one of this process's decoders.
+pub fn set_output_choice(
+    library: Option<DecoderLibrary>,
+    display: Option<DisplayChoice>,
+) -> io::Result<()> {
+    let (old_library, old_display) = output_choice();
+    let chosen = (library.or(old_library), display.or(old_display));
+    *OUTPUT.lock().unwrap_or_else(PoisonError::into_inner) = Some(chosen);
+    crate::screen::core::decoder_library::set_decoder_library(chosen.0.unwrap_or_default());
+    let mut prefs = ViewerPrefs::load_from(&prefs_path());
+    (prefs.decoder_library, prefs.display) = chosen;
+    prefs.save_to(&prefs_path())
+}
+
 impl ViewerPrefs {
     /// „Codec“; a file of a viewer before BK6 has only `lossless`.
     pub fn codec_setting(&self) -> CodecSetting {
@@ -176,6 +266,9 @@ impl ViewerPrefs {
         // Like the rate: the codec choice this process knows wins (BK6).
         if let Some(known) = *CODEC.lock().unwrap_or_else(PoisonError::into_inner) {
             stored.apply_codec(known);
+        }
+        if let Some((library, display)) = *OUTPUT.lock().unwrap_or_else(PoisonError::into_inner) {
+            (stored.decoder_library, stored.display) = (library, display);
         }
         stored.save_to(&prefs_path())
     }
@@ -228,5 +321,34 @@ mod bildkette_codec_tests {
         ));
         assert!(chosen.lossless, "an older viewer reads its switch again");
         assert_eq!(chosen.codec_setting(), CodecSetting::Lossless);
+    }
+
+    /// P8: „Dekodierer-Bibliothek“ and „Anzeige“ are stored beside the
+    /// other choices; a file without them means automatic (FFmpeg first,
+    /// Direct3D 11 for D3D11VA pictures), and „wgpu“ turns the presenter off.
+    #[test]
+    fn bildkette_task_ffmpeg_output_choices_are_stored() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("viewer.json");
+        std::fs::write(&path, br#"{"schema":1,"decoder":"hardware"}"#).unwrap();
+        let older = ViewerPrefs::load_from(&path);
+        assert_eq!(older.decoder_library, None);
+        assert_eq!(older.display, None);
+        assert!(DisplayChoice::default().direct());
+        assert!(DisplayChoice::Direct3d11.direct());
+        assert!(!DisplayChoice::Wgpu.direct());
+        let mut chosen = older.clone();
+        chosen.decoder_library = Some(DecoderLibrary::MediaFoundation);
+        chosen.display = Some(DisplayChoice::Wgpu);
+        chosen.save_to(&path).unwrap();
+        let stored: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(stored["decoder_library"], "media_foundation");
+        assert_eq!(stored["display"], "wgpu");
+        assert_eq!(stored["decoder"], "hardware");
+        assert_eq!(ViewerPrefs::load_from(&path), chosen);
+        for choice in DisplayChoice::ALL {
+            assert_eq!(DisplayChoice::parse(choice.key()), Some(choice));
+        }
     }
 }

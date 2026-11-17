@@ -86,6 +86,8 @@ fn screen_task_viewer_launch_args() {
             max_rate: None,
             codec: None,
             decoder: None,
+            decoder_library: None,
+            display: None,
             json: true,
         }
     );
@@ -216,4 +218,38 @@ fn bildkette_task_codec_cli_codec_and_decoder_options() {
     );
     assert!(Wrapper::try_parse_from(["screen", "view", "Laptop", "--codec", "vp9"]).is_err());
     assert!(Wrapper::try_parse_from(["screen", "view", "Laptop", "--decoder", "gpu"]).is_err());
+}
+
+/// P8 (plan 2026-11-17): `--decoder-library auto|ffmpeg|media_foundation`
+/// and `--display auto|direct3d11|wgpu`; anything else is refused before
+/// the window.
+#[test]
+fn bildkette_task_ffmpeg_cli_library_and_display_options() {
+    use crate::app::screen_prefs::DisplayChoice;
+    use crate::screen::core::decoder_library::DecoderLibrary;
+    let view = Wrapper::try_parse_from([
+        "screen",
+        "view",
+        "Laptop",
+        "--decoder-library",
+        "media_foundation",
+        "--display",
+        "wgpu",
+    ])
+    .unwrap();
+    let ScreenCommand::View(args) = view.command else {
+        panic!("not the view command");
+    };
+    assert_eq!(args.decoder_library, Some(DecoderLibrary::MediaFoundation));
+    assert_eq!(args.display, Some(DisplayChoice::Wgpu));
+    assert_eq!(super::parse_library("ffmpeg"), Ok(DecoderLibrary::Ffmpeg));
+    assert_eq!(super::parse_library("auto"), Ok(DecoderLibrary::Automatic));
+    assert_eq!(
+        super::parse_display("direct3d11"),
+        Ok(DisplayChoice::Direct3d11)
+    );
+    assert!(
+        Wrapper::try_parse_from(["screen", "view", "Laptop", "--decoder-library", "mf"]).is_err()
+    );
+    assert!(Wrapper::try_parse_from(["screen", "view", "Laptop", "--display", "dx12"]).is_err());
 }

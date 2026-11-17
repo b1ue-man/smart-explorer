@@ -185,6 +185,8 @@ pub fn sample(frame: &eframe::Frame, ctx: &egui::Context) -> WindowVisibility {
         return fallback();
     };
     let hwnd = HWND(raw.hwnd.get() as *mut _);
+    // P8: the parent of the Direct3D 11 picture (`core/screen_direct.rs`).
+    ctx.data_mut(|data| data.insert_temp(egui::Id::new("screen_parent_hwnd"), hwnd.0 as usize));
     install_keyboard(hwnd);
     // SAFETY: read-only window/key-state queries; no input injection.
     let minimized = unsafe { IsIconic(hwnd).as_bool() };

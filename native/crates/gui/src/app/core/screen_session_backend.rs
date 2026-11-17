@@ -61,6 +61,10 @@ impl Backend {
         crate::screen::core::negotiate::set_decoder_preference(
             super::screen_prefs::decoder_choice(),
         );
+        // „Dekodierer-Bibliothek“ (P8): FFmpeg, Media Foundation or both.
+        crate::screen::core::decoder_library::set_decoder_library(
+            super::screen_prefs::decoder_library_choice(),
+        );
         let offers = registry.decoder_offers();
         // B-36 announcement and the decoder switch without a new session.
         super::screen_decode_local::install_registry(registry.clone());
