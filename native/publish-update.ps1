@@ -200,6 +200,20 @@ if ($packages) {
         throw "Dokany dependency fetcher returned no MSI path."
     }
     Assert-NonEmptyFile $dokanyMsi
+    # Plan 2026-11-17 P8: the pinned FFmpeg runtime of the screen viewer
+    # (three DLLs and the LGPL text, each checked against ffmpeg-runtime.nsh).
+    $ffmpegFetch = Join-Path $PSScriptRoot "fetch-ffmpeg-runtime.ps1"
+    if (-not (Test-Path -LiteralPath $ffmpegFetch -PathType Leaf)) {
+        throw "FFmpeg dependency fetcher missing: $ffmpegFetch"
+    }
+    $ffmpegDir = (& $ffmpegFetch | Select-Object -Last 1)
+    if ([string]::IsNullOrWhiteSpace($ffmpegDir)) {
+        throw "FFmpeg dependency fetcher returned no directory."
+    }
+    $ffmpegDlls = @("avutil-60.dll", "swresample-6.dll", "avcodec-62.dll")
+    foreach ($dll in $ffmpegDlls) {
+        Assert-NonEmptyFile (Join-Path $ffmpegDir $dll)
+    }
     $archiveExtractor = @("7z.exe", "7za.exe", "7z", "7za") |
         ForEach-Object { Get-Command $_ -CommandType Application -ErrorAction SilentlyContinue } |
         Select-Object -First 1 |
@@ -332,7 +346,7 @@ if ($makensis) {
     $updaterHash = (Get-FileHash -LiteralPath $nativeUpdater -Algorithm SHA256).Hash.ToLowerInvariant()
     $cliHash = (Get-FileHash -LiteralPath $nativeCli -Algorithm SHA256).Hash.ToLowerInvariant()
     $launcherHash = (Get-FileHash -LiteralPath $nativeLauncher -Algorithm SHA256).Hash.ToLowerInvariant()
-    & $makensis "/DVERSION=$version" "/DEXE_SRC=$nativeApp" "/DEXE_SHA256=$appHash" "/DUPDATER_SRC=$nativeUpdater" "/DUPDATER_SHA256=$updaterHash" "/DCLI_SRC=$nativeCli" "/DCLI_SHA256=$cliHash" "/DLAUNCHER_SRC=$nativeLauncher" "/DLAUNCHER_SHA256=$launcherHash" "/DDOKANY_MSI_SRC=$dokanyMsi" "/DINSTALLER_OUT=$installer" "installer.nsi" | Out-Null
+    & $makensis "/DVERSION=$version" "/DEXE_SRC=$nativeApp" "/DEXE_SHA256=$appHash" "/DUPDATER_SRC=$nativeUpdater" "/DUPDATER_SHA256=$updaterHash" "/DCLI_SRC=$nativeCli" "/DCLI_SHA256=$cliHash" "/DLAUNCHER_SRC=$nativeLauncher" "/DLAUNCHER_SHA256=$launcherHash" "/DDOKANY_MSI_SRC=$dokanyMsi" "/DFFMPEG_DIR=$ffmpegDir" "/DINSTALLER_OUT=$installer" "installer.nsi" | Out-Null
     if ($LASTEXITCODE -ne 0) {
         throw "Installer-Build fehlgeschlagen: $installer"
     }
@@ -351,6 +365,19 @@ if ($makensis) {
             (Get-FileHash -LiteralPath $embeddedMsi -Algorithm SHA256).Hash -ne
                 (Get-FileHash -LiteralPath $dokanyMsi -Algorithm SHA256).Hash) {
             throw "Der Installer enthält nicht die verifizierte Dokany-MSI-Datei."
+        }
+        # P8: the installer carries exactly the fetched FFmpeg DLLs.
+        & $archiveExtractor e -y -r "-o$verifyDirectory" $installer @ffmpegDlls | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            throw "Eingebettete FFmpeg-Dateien konnten nicht aus dem Installer gelesen werden."
+        }
+        foreach ($dll in $ffmpegDlls) {
+            $embedded = Join-Path $verifyDirectory $dll
+            Assert-NonEmptyFile $embedded
+            if ((Get-FileHash -LiteralPath $embedded -Algorithm SHA256).Hash -ne
+                (Get-FileHash -LiteralPath (Join-Path $ffmpegDir $dll) -Algorithm SHA256).Hash) {
+                throw "Der Installer enthält nicht die verifizierte FFmpeg-Datei $dll."
+            }
         }
     } finally {
         Remove-Item -LiteralPath $verifyDirectory -Recurse -Force -ErrorAction SilentlyContinue

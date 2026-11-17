@@ -8,11 +8,15 @@ use super::{Arc, DecoderFactory, EncoderFactory, Factories, OpenH264Report, Path
 /// The encoders and decoders of this Windows host in the rank of plan
 /// 2026-11-14 „Bildkette“ 4.10a: NVENC, AMF (BK12, found at run time),
 /// then the Media Foundation transforms (hardware MFTs, software MFT);
-/// none elsewhere.
+/// the decoders of FFmpeg (plan 2026-11-17 P8) before those of Media
+/// Foundation, both behind „Dekodierer-Bibliothek“; none elsewhere.
 #[cfg(windows)]
 pub(super) fn media_foundation_codecs() -> Factories {
     let (encoders, decoders) = mf_common::codecs();
-    (super::vendor_codecs::vendor_encoders(encoders), decoders)
+    (
+        super::vendor_codecs::vendor_encoders(encoders),
+        super::ffmpeg_codecs::decoders(decoders),
+    )
 }
 
 #[cfg(not(windows))]

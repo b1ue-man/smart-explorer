@@ -302,6 +302,13 @@ pub trait ScreenDecoder: Send {
     /// new allocation while size and format stay; the default drops it.
     fn recycle_yuv(&mut self, _planes: YuvPicture) {}
     fn recycle_picture(&mut self, _image: BgraImage) {}
+    /// P8 (2026-11-17): a presenter on the decoder's device takes pictures as
+    /// GPU surfaces; only FFmpeg's D3D11VA stage honours it.
+    fn prefer_gpu(&mut self, _on: bool) {}
+    /// The last picture as a GPU surface after `prefer_gpu(true)`, once.
+    fn take_gpu_picture(&mut self) -> Option<super::gpu_picture::GpuPicture> {
+        None
+    }
     /// B-36: whether this decoder may go on over a continuation
     /// (`FLAG_CONTINUE`) and decode it correctly from its kept references;
     /// `false` makes the viewer ask for a key frame instead (`gop_continue`).

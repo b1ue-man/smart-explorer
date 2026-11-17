@@ -85,6 +85,9 @@ pub enum ToolbarAction {
     Codec(super::screen_prefs::CodecSetting),
     /// „Dekodierer“ (BK6, 4.10).
     Decoder(super::screen_prefs::DecoderPreference),
+    /// „Dekodierer-Bibliothek“ and „Anzeige“ (plan 2026-11-17 P8).
+    DecoderLibrary(super::screen_prefs::DecoderLibrary),
+    Display(super::screen_prefs::DisplayChoice),
     /// „Höchste Datenrate“ in bit/s, `None` automatic (B-09).
     MaxRate(Option<u64>),
     LowLatency(bool),

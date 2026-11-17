@@ -90,7 +90,9 @@ impl DecodeState {
                 // The overlay pointer (P6): a new connection starts without it.
                 self.shared.update(|info| info.cursor = Default::default());
                 if self.shared.wants_cursor() {
-                    let _ = (self.send)(&ViewerFrame::CursorOverlay(true));
+                    // P8: off while the host draws it into a Direct3D 11 picture.
+                    let wish = self.shared.direct.cursor_overlay();
+                    let _ = (self.send)(&ViewerFrame::CursorOverlay(wish));
                 }
             }
             StreamEvent::Host(frame) => {

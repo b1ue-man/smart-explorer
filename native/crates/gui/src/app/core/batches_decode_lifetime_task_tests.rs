@@ -55,6 +55,7 @@ fn state() -> (DecodeState, Arc<MemoryPool>, Arc<AtomicBool>) {
             size: FrameSize::new(2, 2),
         },
         yuv: false,
+        gpu: false,
         pending: BTreeMap::new(),
         decoder: Box::new(Owner {
             image: BgraImage::new(FrameSize::new(2, 2)).unwrap(),

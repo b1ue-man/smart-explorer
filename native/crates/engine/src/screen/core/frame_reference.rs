@@ -138,6 +138,16 @@ impl ScreenDecoder for ReferenceDecoder {
     fn recycle_picture(&mut self, image: BgraImage) {
         self.inner.recycle_picture(image);
     }
+    fn prefer_gpu(&mut self, on: bool) {
+        self.inner.prefer_gpu(on);
+    }
+    fn take_gpu_picture(&mut self) -> Option<super::gpu_picture::GpuPicture> {
+        if self.valid {
+            self.inner.take_gpu_picture()
+        } else {
+            None
+        }
+    }
     fn keeps_references(&self) -> bool {
         self.inner.keeps_references()
     }

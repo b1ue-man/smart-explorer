@@ -4,6 +4,11 @@ use crate::screen::core::input_model::pixel_to_pointer;
 use crate::screen::core::pixel_convert::FrameSize;
 use eframe::egui::{Pos2, Rect, Vec2};
 
+/// Distance from the edge of the area at which a 1:1 picture larger than the
+/// area starts to scroll, and how fast, in points.
+const EDGE_ZONE: f32 = 24.0;
+const EDGE_SPEED: f32 = 900.0;
+
 /// Where the picture lies on the screen and how large its source is.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Geometry {
@@ -81,4 +86,37 @@ pub fn viewport_uv(rect: Rect, ppp: f32, screen: [u32; 2]) -> Option<[f32; 4]> {
         (right - left) / size.x,
         (bottom - top) / size.y,
     ])
+}
+
+/// The pan after `dt` seconds with the pointer at `hover`: toward the edge it
+/// is near, while the picture is larger than the area there.
+pub fn edge_pan(pan: Vec2, area: Rect, dest: Vec2, hover: Option<Pos2>, dt: f32) -> Vec2 {
+    let Some(hover) = hover.filter(|pos| area.contains(*pos)) else {
+        return pan;
+    };
+    let axis = |pan: f32, pos: f32, start: f32, end: f32, picture: f32, room: f32| {
+        if picture <= room {
+            return 0.0;
+        }
+        let step = EDGE_SPEED * dt;
+        let moved = if pos - start < EDGE_ZONE {
+            pan - step
+        } else if end - pos < EDGE_ZONE {
+            pan + step
+        } else {
+            pan
+        };
+        moved.clamp(0.0, picture - room)
+    };
+    Vec2::new(
+        axis(pan.x, hover.x, area.min.x, area.max.x, dest.x, area.width()),
+        axis(
+            pan.y,
+            hover.y,
+            area.min.y,
+            area.max.y,
+            dest.y,
+            area.height(),
+        ),
+    )
 }

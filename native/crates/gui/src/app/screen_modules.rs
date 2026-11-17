@@ -22,6 +22,11 @@ mod screen_decode_local;
 mod screen_decode_thread;
 #[path = "core/screen_devices.rs"]
 mod screen_devices;
+// Plan 2026-11-17 P8: Direct3D 11 display of FFmpeg's D3D11VA pictures.
+#[path = "core/screen_direct.rs"]
+mod screen_direct;
+#[path = "core/screen_direct_layout.rs"]
+mod screen_direct_layout;
 #[path = "core/screen_input_keys.rs"]
 mod screen_input_keys;
 #[path = "core/screen_input_map.rs"]

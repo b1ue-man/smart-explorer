@@ -1,0 +1,32 @@
+FFmpeg runtime of the screen viewer (Windows)
+=============================================
+
+The Windows screen viewer of Smart Explorer decodes H.264, HEVC and AV1 with
+FFmpeg (libavcodec, libavutil, libswresample). Smart Explorer distributes the
+unmodified shared libraries of one pinned build and loads them at run time;
+it is not linked against them at build time.
+
+Build: BtbN FFmpeg-Builds, release autobuild-2026-10-31-12-59,
+  ffmpeg-n8.1.3-27-g8dca1586f4-win64-lgpl-shared-8.1.zip
+  https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-10-31-12-59/ffmpeg-n8.1.3-27-g8dca1586f4-win64-lgpl-shared-8.1.zip
+  SHA-256 of the archive: 5cef7bc48e513f3cee7c881e8b2999d835541edb1846c3e89443a67f8f8556ab
+Libraries: avcodec-62.dll (libavcodec 62.28.103), avutil-60.dll
+  (libavutil 60.26.103), swresample-6.dll (libswresample 6)
+FFmpeg source: https://git.ffmpeg.org/ffmpeg.git, branch release/8.1,
+  commit 8dca1586f4 (tag n8.1.3 plus 27 commits); https://ffmpeg.org/download.html
+Build scripts: https://github.com/BtbN/FFmpeg-Builds (variant "lgpl", shared)
+
+The build is configured with --enable-version3 and without --enable-gpl and
+--enable-nonfree: the libraries are licensed under the GNU Lesser General
+Public License version 3 (LGPL v3). The LGPL v3 text (LICENSE.txt of the
+archive) and the GNU GPL v3 text it refers to accompany this notice. The
+libraries include further libraries under permissive licenses (for example
+dav1d, BSD-2-Clause), as listed by the build scripts above.
+
+Replacing the libraries (LGPL v3, section 4 d 1): Smart Explorer checks the
+bundled libraries against their SHA-256 values. To use a modified,
+interface-compatible build instead (FFmpeg 8.1 ABI: avcodec-62, avutil-60,
+swresample-6), set the environment variable SE_FFMPEG_DIR to the directory
+that holds avutil-60.dll, swresample-6.dll and avcodec-62.dll; the viewer
+then loads that directory without the SHA-256 check (it still checks the
+major versions and the structure layouts it uses).

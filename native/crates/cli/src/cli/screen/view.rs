@@ -1,5 +1,6 @@
 //! `se screen view DEVICE [--source QUELLE] [--control] [--fullscreen]
-//! [--max-rate RATE] [--codec CODEC] [--decoder DECODER] [--json]`
+//! [--max-rate RATE] [--codec CODEC] [--decoder DECODER]
+//! [--decoder-library LIBRARY] [--display DISPLAY] [--json]`
 //! and `se screen grid [--room RAUM] [--json]` (SCR-M7): open the desktop
 //! viewer window of the GUI program (`--screen-view <ziel-json>`,
 //! `--screen-grid [--room <id>]`, V5) as a process of its own and return.
@@ -11,7 +12,9 @@ use clap_complete::ArgValueCandidates;
 use serde_json::{json, Value};
 
 use super::DeviceChoice;
+use crate::app::screen_prefs::DisplayChoice;
 use crate::app::start_request::StartRequest;
+use crate::screen::core::decoder_library::DecoderLibrary;
 use crate::screen::core::negotiate::{CodecSetting, DecoderPreference};
 use crate::screen::core::window_list::SourceId;
 
@@ -43,8 +46,29 @@ pub(super) struct ViewArgs {
     /// hardware or software
     #[arg(long, value_name = "DECODER", value_parser = parse_decoder)]
     decoder: Option<DecoderPreference>,
+    /// „Dekodierer-Bibliothek“ (Windows), stored before the viewer opens:
+    /// auto (FFmpeg, then Media Foundation), ffmpeg or media_foundation
+    #[arg(long, value_name = "LIBRARY", value_parser = parse_library)]
+    decoder_library: Option<DecoderLibrary>,
+    /// „Anzeige“ (Windows), stored before the viewer opens: auto,
+    /// direct3d11 or wgpu
+    #[arg(long, value_name = "DISPLAY", value_parser = parse_display)]
+    display: Option<DisplayChoice>,
     #[arg(long, help = "Print machine-readable JSON")]
     json: bool,
+}
+
+/// `--decoder-library auto|ffmpeg|media_foundation` (plan 2026-11-17 P8).
+pub(super) fn parse_library(text: &str) -> Result<DecoderLibrary, String> {
+    DecoderLibrary::parse(text.trim()).ok_or_else(|| {
+        format!("invalid decoder library: {text} (auto, ffmpeg or media_foundation)")
+    })
+}
+
+/// `--display auto|direct3d11|wgpu` (P8).
+pub(super) fn parse_display(text: &str) -> Result<DisplayChoice, String> {
+    DisplayChoice::parse(text.trim())
+        .ok_or_else(|| format!("invalid display: {text} (auto, direct3d11 or wgpu)"))
 }
 
 /// `--codec auto|h264|hevc|av1|lossless` (BK6).
@@ -194,6 +218,10 @@ pub(super) fn run_view(args: ViewArgs) -> Result<i32, String> {
     if args.codec.is_some() || args.decoder.is_some() {
         crate::app::screen_prefs::set_codec_choice(args.codec, args.decoder)
             .map_err(|error| format!("cannot store the codec choice: {error}"))?;
+    }
+    if args.decoder_library.is_some() || args.display.is_some() {
+        crate::app::screen_prefs::set_output_choice(args.decoder_library, args.display)
+            .map_err(|error| format!("cannot store the decoder library or display: {error}"))?;
     }
     let target = target_json(
         &choice,

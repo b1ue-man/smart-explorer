@@ -1036,6 +1036,20 @@ BILDKETTE_TESTS = {
         "bildkette_task_r1_convert_station_apart_from_encode",
         "bildkette_task_r1_new_paths_and_causes_pack",
         "verbindungen_task_metadata_presence_background_scope_marks_only_its_thread",
+        # Plan 2026-11-17 P8: FFmpeg decoder and Direct3D 11 display of the Windows viewer
+        # (pure rules, run on both systems).
+        "bildkette_task_ffmpeg_symbol_table_and_versions",
+        "bildkette_task_ffmpeg_layouts_follow_the_pinned_headers",
+        "bildkette_task_ffmpeg_fresh_frame_and_packet_fingerprints",
+        "bildkette_task_ffmpeg_stage_order_names_and_options",
+        "bildkette_task_ffmpeg_library_choice_and_fallback",
+        "bildkette_task_ffmpeg_output_choices_are_stored",
+        "bildkette_task_ffmpeg_cli_library_and_display_options",
+        "bildkette_task_d3d11_child_and_picture_follow_the_area",
+        "bildkette_task_d3d11_blit_rects_letterbox_and_one_to_one",
+        "bildkette_task_d3d11_menus_hide_overlays_cut_out",
+        "bildkette_task_d3d11_colour_space_of_stream_and_output",
+        "bildkette_task_present_direct3d11_takes_d3d11va_textures",
     ],
     "linux": [
         "bildkette_task_r1_linux_capture_path_reaches_the_chain",
@@ -1170,6 +1184,8 @@ BILDKETTE_TESTS = {
         "bildkette_task_win_decode_open_refusal_per_size",
         "bildkette_task_win_decode_stage_name",
         "bildkette_task_rate_windows_session_timer_is_high_resolution",
+        # P8: FFmpeg's factories before Media Foundation's; without the DLLs Media Foundation.
+        "bildkette_task_ffmpeg_absent_dlls_leave_media_foundation",
     ],
 }
 

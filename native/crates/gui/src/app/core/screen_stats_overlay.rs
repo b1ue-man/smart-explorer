@@ -99,8 +99,9 @@ pub fn stats_lines(info: &SessionInfo, unmapped_keys: u64) -> Vec<String> {
     lines
 }
 
-/// Draws the field in the top right corner of `rect`.
-pub fn show(ui: &egui::Ui, rect: egui::Rect, lines: &[String]) {
+/// Draws the field in the top right corner of `rect`; its rectangle (cut out
+/// of a Direct3D 11 picture, `screen_direct.rs`).
+pub fn show(ui: &egui::Ui, rect: egui::Rect, lines: &[String]) -> egui::Rect {
     let painter = ui.painter_at(rect);
     let galley = painter.layout(
         lines.join("\n"),
@@ -110,10 +111,8 @@ pub fn show(ui: &egui::Ui, rect: egui::Rect, lines: &[String]) {
     );
     let size = galley.size() + egui::vec2(12.0, 8.0);
     let top_left = rect.right_top() + egui::vec2(-size.x - 8.0, 8.0);
-    painter.rect_filled(
-        egui::Rect::from_min_size(top_left, size),
-        4.0,
-        Color32::from_black_alpha(170),
-    );
+    let field = egui::Rect::from_min_size(top_left, size);
+    painter.rect_filled(field, 4.0, Color32::from_black_alpha(170));
     painter.galley(top_left + egui::vec2(6.0, 4.0), galley, Color32::WHITE);
+    field
 }

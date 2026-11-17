@@ -46,6 +46,8 @@ struct Gop {
     decoder: Box<dyn ScreenDecoder>,
     /// The decoder keeps planes instead of converting.
     yuv: bool,
+    /// The decoder keeps D3D11VA pictures on the GPU for the presenter (P8).
+    gpu: bool,
     /// Epoch captured when this actual input was submitted, retained over codec delay.
     pending: BTreeMap<u64, (DecodedFrame, super::screen_presented::PresentedFrame)>,
 }
@@ -149,12 +151,15 @@ impl DecodeState {
                 if yuv {
                     decoder.prefer_yuv(true);
                 }
+                let gpu = self.shared.direct.wanted();
+                decoder.prefer_gpu(gpu);
                 Some(Gop {
                     id: header.gop_id,
                     first: header.gop_id,
                     header: *header,
                     decoder,
                     yuv,
+                    gpu,
                     pending: BTreeMap::new(),
                 })
             }
@@ -274,6 +279,11 @@ impl DecodeState {
             gop.decoder.prefer_yuv(want_yuv);
             gop.yuv = want_yuv;
         }
+        let want_gpu = self.shared.direct.wanted();
+        if want_gpu != gop.gpu {
+            gop.decoder.prefer_gpu(want_gpu);
+            gop.gpu = want_gpu;
+        }
         // Shown pictures' storage first: the decoder reads into it (V1).
         self.shared.local.pool.feed(gop.decoder.as_mut());
         let decode_started = Instant::now();
@@ -372,6 +382,15 @@ impl DecodeState {
         });
         self.guard_picture(gop.header.codec);
         if !due {
+            return;
+        }
+        // P8: a D3D11VA picture goes to the presenter on this thread.
+        if let Some(picture) = gop.gpu.then(|| gop.decoder.take_gpu_picture()).flatten() {
+            self.seq += 1;
+            self.last_shown = Some(Instant::now());
+            if !super::screen_direct::deliver(&self.shared, &*self.send, picture, presented) {
+                self.request_keyframe(KeyframeReason::DecodeError, gop.header.gop_id);
+            }
             return;
         }
         // Handed over, not copied (V1, BK9 U1); the storage comes back.

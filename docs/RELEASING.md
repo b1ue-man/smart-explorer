@@ -122,6 +122,39 @@ on 2026-07-22. If the supported ABI, driver protocol, or MSI changes, review and
 manifest, Rust validation, fetchers, installer, license notices and user/native
 documentation together.
 
+## Pinned FFmpeg runtime of the Windows viewer (plan 2026-11-17 P8)
+
+The Windows screen viewer decodes with FFmpeg (D3D11VA, DXVA2, software) and loads it at run time;
+nothing links against it. `native/ffmpeg-runtime.nsh` is the single manifest read by Rust
+(`crates/engine/src/screen/os/windows/ffmpeg_runtime.rs`), NSIS (`native/installer.nsi`) and both
+fetchers. Pin (checked 2026-11-17 by downloading and hashing):
+
+- archive `ffmpeg-n8.1.3-27-g8dca1586f4-win64-lgpl-shared-8.1.zip` of BtbN FFmpeg-Builds, release
+  `autobuild-2026-10-31-12-59` (a month-end build, kept two years by BtbN's retention policy),
+  `https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-10-31-12-59/ffmpeg-n8.1.3-27-g8dca1586f4-win64-lgpl-shared-8.1.zip`,
+  exactly `80,356,594` bytes, SHA-256 `5cef7bc48e513f3cee7c881e8b2999d835541edb1846c3e89443a67f8f8556ab`
+  (the same digest the GitHub release API reports for the asset);
+- shipped from it: `avutil-60.dll` (3,021,824 bytes, `46ad0647…1950`), `swresample-6.dll`
+  (747,008 bytes, `790d6feb…ef62`), `avcodec-62.dll` (91,620,864 bytes, `71ad4d3a…70d9`) and
+  `LICENSE.txt` (GNU LGPL v3, 7,651 bytes); full hashes in the manifest. The configure line inside
+  `avutil-60.dll` has `--enable-version3` and neither `--enable-gpl` nor `--enable-nonfree`.
+
+`native/fetch-ffmpeg-runtime.ps1` and `.sh` fetch the archive into the ignored
+`native/target/installer-dependencies/ffmpeg-<release>/`, check size and SHA-256, extract the three
+DLLs and the licence and check each against its pin. `native/publish-update.ps1 -Stage Package` runs
+the PowerShell fetcher, passes `/DFFMPEG_DIR` to `makensis`, and after the build extracts the three
+DLLs from the installer with 7-Zip and compares their SHA-256 with the fetched files. The installer puts
+them into `$INSTDIR\ffmpeg\` (`SetOverwrite ifdiff`, so an unchanged pin is not rewritten under a
+running viewer) and `NOTICE.txt`, `LICENSE-LGPL-3.0.txt`, `LICENSE-GPL-3.0.txt` into
+`$INSTDIR\licenses\FFmpeg\`; the uninstaller removes both folders. The DLLs are no release asset and
+no update-feed payload (the 28 assets stay): an installation updated by the auto-updater, or a
+portable copy, downloads the same pinned archive once in the background when the viewer starts and
+keeps the checked files in `<app data>\screen\ffmpeg\<release>\`; until then, or offline, Media
+Foundation decodes. `SE_FFMPEG_DIR` loads a user's own interface-compatible build without the pins
+(LGPL v3 section 4 d 1, `third-party/ffmpeg/NOTICE.txt`). Moving the pin to another FFmpeg major
+version means new layout facts in `crates/engine/src/screen/core/ffmpeg_layout.rs` from that
+version's headers (`docs/GOTCHAS.md`, picture chain).
+
 ## Windows installer and Linux script (0.5.183)
 
 - **Installer sections** (`native/installer.nsi`): `Smart Explorer (erforderlich)` (`SEC_MAIN`);

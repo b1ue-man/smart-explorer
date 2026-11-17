@@ -54,6 +54,12 @@
 !ifndef DOKANY_MSI_SRC
   !define DOKANY_MSI_SRC "${__FILEDIR__}\target\installer-dependencies\${DOKANY_VERSION}\${DOKANY_MSI_FILENAME}"
 !endif
+; Plan 2026-11-17 P8: the pinned FFmpeg runtime of the screen viewer
+; (fetch-ffmpeg-runtime.ps1 checks every file against ffmpeg-runtime.nsh).
+!include "${__FILEDIR__}\ffmpeg-runtime.nsh"
+!ifndef FFMPEG_DIR
+  !define FFMPEG_DIR "${__FILEDIR__}\target\installer-dependencies\ffmpeg-${FFMPEG_RELEASE}\files"
+!endif
 
 !include "FileFunc.nsh"
 !include "Sections.nsh"
@@ -135,6 +141,19 @@ Section "Smart Explorer (erforderlich)" SEC_MAIN
   File "${__FILEDIR__}\..\third-party\rust-crates\THIRD-PARTY-LICENSES.txt"
   SetOutPath "$INSTDIR\licenses\OpenH264"
   File "${__FILEDIR__}\..\third-party\openh264\BINARY_LICENSE.txt"
+  ; FFmpeg (LGPL v3), loaded at run time by the screen viewer from $INSTDIR\ffmpeg.
+  ; Unchanged pinned DLLs are not rewritten, so a running viewer that holds
+  ; them loaded does not stop an update of the same FFmpeg pin.
+  SetOutPath "$INSTDIR\ffmpeg"
+  SetOverwrite ifdiff
+  File "${FFMPEG_DIR}\${FFMPEG_AVUTIL_DLL}"
+  File "${FFMPEG_DIR}\${FFMPEG_SWRESAMPLE_DLL}"
+  File "${FFMPEG_DIR}\${FFMPEG_AVCODEC_DLL}"
+  SetOverwrite on
+  SetOutPath "$INSTDIR\licenses\FFmpeg"
+  File "/oname=NOTICE.txt" "${__FILEDIR__}\..\third-party\ffmpeg\NOTICE.txt"
+  File "/oname=LICENSE-LGPL-3.0.txt" "${FFMPEG_DIR}\LICENSE.txt"
+  File "/oname=LICENSE-GPL-3.0.txt" "${__FILEDIR__}\..\third-party\dokany\LICENSE-GPL-3.0.txt"
   SetOutPath "$INSTDIR"
 
   ; Best-effort Windows Defender Firewall rule for direct Share peer listeners.
@@ -401,6 +420,14 @@ Section "Uninstall"
   RMDir "$INSTDIR\licenses\Rust-Crates"
   Delete "$INSTDIR\licenses\OpenH264\BINARY_LICENSE.txt"
   RMDir "$INSTDIR\licenses\OpenH264"
+  Delete "$INSTDIR\ffmpeg\${FFMPEG_AVUTIL_DLL}"
+  Delete "$INSTDIR\ffmpeg\${FFMPEG_SWRESAMPLE_DLL}"
+  Delete "$INSTDIR\ffmpeg\${FFMPEG_AVCODEC_DLL}"
+  RMDir "$INSTDIR\ffmpeg"
+  Delete "$INSTDIR\licenses\FFmpeg\NOTICE.txt"
+  Delete "$INSTDIR\licenses\FFmpeg\LICENSE-LGPL-3.0.txt"
+  Delete "$INSTDIR\licenses\FFmpeg\LICENSE-GPL-3.0.txt"
+  RMDir "$INSTDIR\licenses\FFmpeg"
   RMDir "$INSTDIR\licenses"
   Delete "$INSTDIR\Smart Explorer_old.exe"
   Delete "$INSTDIR\Smart Explorer_update_pending.exe"

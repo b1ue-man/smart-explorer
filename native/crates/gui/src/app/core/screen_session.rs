@@ -143,6 +143,8 @@ pub struct Shared {
     pub(super) memory: Mutex<Option<Arc<crate::screen::core::frame_memory::MemoryLease>>>,
     /// Returned picture storage and local decoder switches (V1).
     pub(super) local: super::screen_decode_local::DecodeLocal,
+    /// The window's Direct3D 11 presenter while it takes GPU pictures (P8).
+    pub(super) direct: super::screen_direct::DirectSlot,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -171,6 +173,7 @@ impl Shared {
             }),
             lossless_fallback: AtomicBool::new(false),
             local: Default::default(),
+            direct: Default::default(),
         })
     }
 

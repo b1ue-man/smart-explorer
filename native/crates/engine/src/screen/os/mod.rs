@@ -184,6 +184,39 @@ mod cursor_overlay;
 #[cfg(windows)]
 #[path = "windows/d3d_device.rs"]
 mod d3d_device;
+// Plan 2026-11-17 P8: FFmpeg decoders (D3D11VA, DXVA2, software) of the
+// Windows viewer before the Media Foundation decoders, the DLLs found or
+// fetched at run time, and the Direct3D 11 device decoder and presenter share.
+#[cfg(windows)]
+#[path = "windows/ffmpeg_codecs.rs"]
+mod ffmpeg_codecs;
+#[cfg(windows)]
+#[path = "windows/ffmpeg_decoder.rs"]
+mod ffmpeg_decoder;
+#[cfg(windows)]
+#[path = "windows/ffmpeg_fetch.rs"]
+mod ffmpeg_fetch;
+#[cfg(windows)]
+#[path = "windows/ffmpeg_ffi.rs"]
+mod ffmpeg_ffi;
+#[cfg(windows)]
+#[path = "windows/ffmpeg_frame.rs"]
+pub mod ffmpeg_frame;
+#[cfg(windows)]
+#[path = "windows/ffmpeg_runtime.rs"]
+mod ffmpeg_runtime;
+#[cfg(windows)]
+#[path = "windows/viewer_d3d11.rs"]
+pub mod viewer_d3d11;
+/// Starts loading FFmpeg in the background at the viewer's start, and the
+/// one-time download of this user's copy where no installed copy exists.
+#[cfg(windows)]
+pub fn prepare_ffmpeg() {
+    ffmpeg_runtime::ensure_in_background();
+}
+/// FFmpeg decodes on Windows only; elsewhere there is nothing to prepare.
+#[cfg(not(windows))]
+pub fn prepare_ffmpeg() {}
 #[cfg(target_os = "linux")]
 #[path = "linux_os/host_backend.rs"]
 mod host_backend;

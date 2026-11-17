@@ -707,6 +707,52 @@ confirmed it. Paths are below `native/crates/engine/src/screen/os/` unless noted
 - **The H.264 licence question of hardware encoders without the Cisco binary is not examined legally**
   (plan section 6, point 9); only OpenH264 needs the user's consent.
 
+**FFmpeg decoder and Direct3D 11 display of the Windows viewer (plan 2026-11-17 P8; source state 2026-11-17: written, not compiled, not run on hardware)**
+
+- **One pinned FFmpeg ABI.** The loader (`windows/ffmpeg_ffi.rs`) takes 30 functions by name from
+  `avutil-60.dll`, `swresample-6.dll` and `avcodec-62.dll` of the BtbN LGPL shared build
+  n8.1.3-27-g8dca1586f4 (`native/ffmpeg-runtime.nsh`, `core/ffmpeg_plan.rs`); another major version
+  is refused (`avutil_version`, `avcodec_version`). Field offsets come from the archive's headers
+  (`core/ffmpeg_layout.rs`) and are checked before the first call: a fresh `AVFrame`/`AVPacket` must
+  show the defaults of `get_frame_defaults`/`get_packet_defaults` at the expected offsets, and the
+  offset of `AVCodecContext.hw_device_ctx` is read from the options table at run time
+  (`hwaccel_flags` minus 8, `extra_hw_frames` must follow at plus 4). Pixel formats and device types
+  are looked up by name (`av_get_pix_fmt`, `av_hwdevice_find_type_by_name`), never as enum numbers. A
+  pin change to another FFmpeg major version must redo all of this from that version's headers.
+- **The DLLs are 95 MB, hashed before loading.** Every directory (installed `<install dir>\ffmpeg`,
+  then this user's `<app data>\screen\ffmpeg\<release>`) is checked against the SHA-256 pins before
+  `LoadLibraryExW` (`LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32`). The viewer starts
+  this in a background thread when its window opens (`screen::os::prepare_ffmpeg`); the first codec
+  list waits for it (time not measured). Host processes never load FFmpeg (only decoder factories do).
+  `SE_FFMPEG_DIR` loads a user's own build without pins (LGPL v3 section 4 d 1).
+- **Auto-updated and portable installations have no `<install dir>\ffmpeg`.** The update payloads are the
+  program files only, so the viewer downloads the pinned archive (80 MB) once in the background
+  (`windows/ffmpeg_fetch.rs`, HTTPS, GitHub release hosts only, size and SHA-256), takes the three DLLs
+  and `LICENSE.txt` out with an own ZIP central-directory reader (`flate2`, no ZIP64) and renames the
+  checked folder into place. Until then, or when it fails (offline), Media Foundation decodes. The
+  BtbN month-end build is kept two years by that project's retention policy; the pin must move before
+  `autobuild-2026-10-31-12-59` disappears.
+- **One device, one lock.** Decoder and presenter use the same `ID3D11Device` (`windows/viewer_d3d11.rs`)
+  with multithread protection; FFmpeg gets `ID3D11Multithread::Enter`/`Leave` as its recursive
+  `lock`/`unlock` and the presenter takes the same lock around the video processor and `Present`
+  (Moonlight-qt does the same). A held `D3d11Frame` keeps one slice of the decoder's texture array; the
+  decoder adds 4 pool surfaces (`extra_hw_frames`), the presenter holds at most two (shown, held).
+- **FFmpeg falls back to software silently.** With `hw_device_ctx` set, the default `get_format` picks
+  the hardware format, but when the accelerator does not open it returns a software format
+  (`libavcodec/decode.c:993-1054`). The decoder therefore checks each frame's format against its stage
+  (`frame_fits_stage`); a mismatch is a hardware failure of that stage (next key frame: next stage).
+- **The child window and egui.** The Direct3D 11 picture is a `WS_CHILD` window over egui's picture
+  area; it answers `WM_NCHITTEST` with `HTTRANSPARENT`, so mouse input reaches the viewer window
+  (same thread). egui cannot draw over it: open menus/combo boxes hide it while open; the statistics
+  field, the full-screen button, hints and tooltips are cut out with `SetWindowRgn`. Whether DWM clips a
+  flip-model swap chain of a child window to its window region is not verified on hardware; if not,
+  those overlays are hidden behind the picture (menus stay usable because they hide it).
+- **Swap chain without frame-latency waits.** `FLIP_DISCARD`, 5 buffers, `ALLOW_TEARING` where
+  supported, `Present(0, …)`; no waitable object and no `SetMaximumFrameLatency(1)` (Moonlight-qt
+  `d3d11va.cpp:563-577`: with sync interval 0 that makes `Present` block on DWM). Swap chain creation
+  and `ResizeBuffers` run on the window's thread, `Present` on the decode thread
+  (`DXGI_MWA_NO_WINDOW_CHANGES`).
+
 **Timer resolution on Windows (`windows/timer_resolution.rs`)**
 
 - The session clock uses a high-resolution waitable timer (`CREATE_WAITABLE_TIMER_HIGH_RESOLUTION`,
