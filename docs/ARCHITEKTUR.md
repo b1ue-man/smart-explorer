@@ -97,9 +97,9 @@ und deren Reihenfolge, Hallo- und Rahmenformate (neue Felder und Rahmen nur erg�
 ignorieren sie oder bekommen sie nie), Halbschluss, Routenpause, Leerlauf von 120 aktiven Sekunden und Zählerfelder der TCP-Tunnel, alle Bedienwege der Bildschirmverbindung (`docs/oberflaechen/bildschirm.md`), Ranged Uploads auf der ersten Dateiverbindung und das Speicherbudget der TCP-Puffer von höchstens 16 MiB je Prozess.
 Offene Punkte stehen in `docs/TODO.md` (Zeilen `VERB-*`).
 
-## Bildkette (Quellstand 2026-11-15: umgesetzt, nicht übersetzt, nicht auf Hardware gelaufen, wartet auf Suite und Release)
+## Bildkette (Stand 2026-11-17: ausgeliefert in v0.5.197 (übersetzt und getestet in Suite-Lauf 44042089709), nicht auf Hardware gelaufen)
 
-Plan: `docs/plaene/2026-11-14-verbindungen-je-zweck/bildkette.md` (Entscheidungen B-01 bis B-40, Abschnitt 4.10a „Auswahl zur Laufzeit statt Messbedingung“); Bedienwege, Aufnahmewege, Kodierer und Grenzen: `docs/oberflaechen/bildschirm.md` (Abschnitte 4, 5, 6, 8, 10 und 11). Jede Aussage dieses Abschnitts stammt aus dem Quelltext des Zweigs `bildkette`; kein Lauf hat sie bestätigt. Die Messungen MB1 bis MB6 (Plan 5.3) sind nicht gelaufen und erst nach dem Release am Gerät möglich.
+Plan: `docs/plaene/2026-11-14-verbindungen-je-zweck/bildkette.md` (Entscheidungen B-01 bis B-40, Abschnitt 4.10a „Auswahl zur Laufzeit statt Messbedingung“); Bedienwege, Aufnahmewege, Kodierer und Grenzen: `docs/oberflaechen/bildschirm.md` (Abschnitte 4, 5, 6, 8, 10 und 11). Jede Aussage dieses Abschnitts stammt aus dem Quelltext; Suite-Lauf 44042089709 hat sie ohne Grafikkarte getestet, kein Lauf am Gerät hat sie bestätigt. Die Messungen MB1 bis MB6 (Plan 5.3) sind nicht gelaufen und erst nach dem Release am Gerät möglich.
 
 | Baustein | Einstieg und Vertrag |
 |---|---|
