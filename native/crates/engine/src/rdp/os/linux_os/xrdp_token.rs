@@ -28,6 +28,11 @@ fn euid() -> u32 {
     unsafe { libc::geteuid() }
 }
 
+/// Whether this worker runs as root (it may change PAM without polkit).
+pub(super) fn running_as_root() -> bool {
+    euid() == 0
+}
+
 /// The name of `uid` in the user database.
 pub fn user_name(uid: u32) -> Option<String> {
     // SAFETY: `passwd` is plain data; zero is a valid empty value.

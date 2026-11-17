@@ -114,12 +114,16 @@ pub fn withdraw(viewer: &Viewer, _issued: &LoginInfo) {
 }
 
 /// „Bildschirm steuern“ ended for a viewer: its tokens go; after the last
-/// one every token and the PAM line go too (decision 6, 7).
+/// one every token goes, and a root worker also takes the PAM line out
+/// (decision 6, 7). A worker without root keeps the line: removing it would
+/// ask for polkit approval now and again at the next setup, and without a
+/// listed token the line accepts nobody (manager decision 2026-11-17: no
+/// prompts during use).
 pub fn coverage_ended(steers: &dyn Fn(&Viewer) -> bool, steering_remains: bool) {
     xrdp_token::revoke(|record| {
         !steering_remains || !steers(&Viewer::new(&record.device_id, &record.public_key))
     });
-    if steering_remains || !xrdp_token::pam_installed() {
+    if steering_remains || !xrdp_token::pam_installed() || !xrdp_token::running_as_root() {
         return;
     }
     let mut step = STEP.lock().unwrap_or_else(PoisonError::into_inner);
