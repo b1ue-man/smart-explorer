@@ -14,7 +14,7 @@ Abkürzungen: `N/` = `native/crates/`, `A/` = `android/app/src/main/java/app/sma
 | Bridge | JSON-Methoden `share.*` der Android-Bibliothek | `N/mobile/src/mobile/os/shared/domains/mod.rs:247-311` (Dispatch `share_method`), Domänen `share_*.rs`; Kotlin `A/api/Share*.kt`; Vertrag `docs/superpowers/plans/2026-09-25-android-apk/api.md` §5 |
 | IPC | Loopback-IPC GUI/CLI ↔ Hintergrund-Worker | `N/engine/src/daemon/os/shared/ipc_protocol.rs` (`ShareCommand` `:128-131`, `MutateExecGrant`, `ExecShare`, `ExecStream`, `ExecJobs`, `CancelExec`, `Access` `:215-218` mit den Anfragen in `N/engine/src/daemon/os/shared/ipc_protocol_access.rs`), Antwort `ShareCommandReply` `:89-101` |
 | MCP | `se mcp` (Werkzeuge `status`, `connections`, `exec`, `sessions`, `se`) | `N/cli/src/cli/mcp/catalog.rs`; `se` führt jeden CLI-Befehl aus (`N/cli/src/cli/mcp/cli_tool.rs:1-6`), daher gilt für MCP die CLI-Spalte |
-| Netz | Exec-Protokoll zwischen Geräten | `N/engine/src/share/core/exec_protocol.rs:82-94` (`ExecHelloOk`, `ExecWireError`), Ablehnungstexte `N/engine/src/share/core/exec_policy.rs:171-199`, `N/engine/src/share/core/exec_program_path.rs:73-78` |
+| Netz | Exec-Protokoll zwischen Geräten (`share-exec/3` mit Verbindungspool, Rückfall `/2`) | `N/engine/src/share/core/exec_protocol.rs` (`EXEC_ALPN_V3`, `EXEC_ALPN`, `ExecHelloOk`, `ExecWireError`), Pool `N/engine/src/share/core/exec_client_pool.rs`, Gastgeber je Strom `N/engine/src/share/core/exec_admission_v3.rs` und `exec_host_connections.rs`, Ablehnungstexte `N/engine/src/share/core/exec_policy.rs:171-199`, `N/engine/src/share/core/exec_program_path.rs:73-78` |
 
 ## Bestand vor dem Stapel (Lesestand `7e7203c9`)
 
@@ -184,6 +184,10 @@ Stand 2026-10-21 (Lauf U42, PRM-M11). Belege am Code nachgelesen; die Stapel-Sui
 ### Gleichzeitigkeit der Befehle (R15)
 
 Befehle haben keine Gleichzeitigkeitsgrenze mehr, weder je Gerät noch je Host. `ExecRegistryLimits` nennt nur noch `history` und `terminal_cache`, beide ohne Nutzungsgrenze (`N/engine/src/share/core/exec_registry.rs:84-90`). Die Fehlervarianten `PrincipalLimit` und `GlobalLimit` gibt es im Quelltext unter `native/` und `android/` nicht mehr. Ältere Hosts können diese Fehler noch senden; wie ein Client einen solchen Fehler anzeigt, ist nicht belegt.
+
+### Wiederverwendung einer Exec-Verbindung (`share-exec/3`, Plan 2026-11-14 B3)
+
+Ein Client bietet beim Verbinden `smart-explorer/share-exec/3` und `/2` im selben Handshake an (`N/engine/src/share/core/transport_purpose.rs`, `connect_exec`). Gegenüber aktuellen Gastgebern bleibt eine authentifizierte `/3`-Verbindung je lokaler Identität, Beziehung und Gegenstelle nach dem letzten Auftrag 60 s offen (`N/engine/src/share/core/exec_client_pool.rs`). Aufeinanderfolgende und gleichzeitige Befehle öffnen darauf je einen eigenen bidirektionalen QUIC-Strom bis zur Stromgrenze der Gegenstelle (64). Darüber läuft ein Befehl auf einer eigenen Verbindung, so bleibt R15 erhalten. Strom 0 authentifiziert die Verbindung mit dem Präfix `smart-explorer/share-exec/v3|` (`N/engine/src/share/core/relation_proof.rs`). Je Befehl laufen frisch: Rechte-, Konto-, Programm- und Rückfrageprüfung, Präsenz und Audit (`N/engine/src/share/core/exec_admission_v3.rs`). Entzieht der Gastgeber das Exec-Recht oder läuft es ab, erhalten laufende Befehle ihren `Revoked`-Abschluss, und die `/3`-Verbindung schließt (`N/engine/src/share/core/exec_host_connections.rs`). Gegenüber Gastgebern bis v0.5.196 wird im ersten Handshake `/2` ausgehandelt und die Gegenstelle für die Laufzeit des Prozesses gemerkt. CLI, Desktop, Android, MCP und alle Ausgabeformate bleiben unverändert. Messung M8 (Suite-Lauf 44016047636, Profil `wan`, vor B3): Befehl p50 über neue Verbindung 206,3 ms, über bestehende 50,6 ms.
 
 ### Ausnahmen mit Grund
 

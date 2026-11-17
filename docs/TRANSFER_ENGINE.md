@@ -496,7 +496,7 @@ und nicht ausgeführt; die Messfälle (`speed_task_*`) laufen erst in der Task-S
   über die Statusabfrage geklärt und nie erneut gesendet.
 - **Weitere QUIC-Verbindungen (KP5a, Z-P6).** Bei `bulk_connections_v1` öffnet der Client bis zu 3
   weitere Verbindungen für Lesen, Einzelschreiben und Pakete, sobald die erste Verbindung ≥ 1 %
-  Verlust zeigt oder etwa 250 MiB/s erreicht (`share/core/node_bulk.rs`). Jede durchläuft Hallo,
+  Verlust zeigt oder 165,7 MiB/s erreicht (`DRIVER_RATE` in `share/core/node_bulk.rs`, gemessen 2026-11-17). Jede durchläuft Hallo,
   Sitzungsnachweis und die Direkt-zuerst-Zulassung. Bereichs-Uploads bleiben auf der ersten.
 - **Worker (KP5a, Z-P3/Z-P8).** Der Worker nimmt Anfragen auf wiederverwendeten Fäden an (leer nach
   30 s beendet, `daemon/os/shared/backend_pool.rs`) und kündigt auf dem Loopback-Sprung kein
@@ -973,9 +973,9 @@ die Zahlenwerte unten Schätzungen und als solche gekennzeichnet. Architekturüb
   Feld `bulk_mib_s`).
 - **Weitere Verbindungen (KP5a) unter Präsenz.** Solange eine interaktive Sitzung läuft, öffnet
   `share/core/node_bulk.rs` keine weitere Zusatzverbindung und tastet die erste nicht mehr ab. Der
-  Schwellwert `DRIVER_RATE` (250 MiB/s) für das Öffnen einer weiteren Verbindung bleibt bestehen; ob er
-  gemessen stimmt, entscheidet M1 (Varianten mit einer und vier Verbindungen, mit und ohne große Bündel),
-  danach setzt der Manager den Wert (Nachsteuerung N1 im Plan).
+  Schwellwert `DRIVER_RATE` für das Öffnen einer weiteren Verbindung ist 165,7 MiB/s. Das sind 80 % der
+  Einzelverbindungsrate der langsamsten Plattform in M1, Windows x86_64 mit 207,1 MiB/s (Suite-Lauf 44016047636).
+  Vorher galt die Schätzung 250 MiB/s. Werte aller Plattformen: Plan `2026-11-14-verbindungen-je-zweck`, Abschnitt F.
 - **Priorität der Datenströme (E4).** Alle Ströme, die Dateidaten tragen, haben Priorität −1, alle Ströme ohne
   Dateidaten der Verbindung 0: beim Client jeder Strom aus `open_transfer_stream_until` (Lesen, Schreiben,
   Pakete), beim Gastgeber die Antworten auf `Read`, `ReadAt` und `GetBatch` (`share/core/server_priority.rs`).

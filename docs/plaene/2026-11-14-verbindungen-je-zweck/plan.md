@@ -521,6 +521,52 @@ eine getrennte Frage und unverändert.
 Auswertung der Zeilen `VERBINDUNGEN-*`; Nachsteuerung N1; derselbe Lauf noch einmal zur Bestätigung; ein Release über `release.yml`. Ein Eintrag
 der Messwerte in ARCHITEKTUR, TRANSFER_ENGINE und `VERB-MESSUNG` folgt nach dem Suite-Lauf.
 
+## F Messwerte und Nachsteuerung N1 (Suite-Lauf 44016047636, 2026-11-17)
+
+Alle Werte stammen aus den Zeilen `VERBINDUNGEN-BEFUND` des Suite-Laufs 44016047636 (Commit `d60b52c7`). Profil `lan` und `wan` sind
+netem-Strecken auf dem Runner, gemessen auf Linux x86_64, wenn keine Plattform genannt ist.
+
+| Messung | Ergebnis | Entscheidung |
+|---|---|---|
+| M2, Rückzugsziel T | Bildlatenz p95 mit Übertragung daneben: `lan` 9,3 ms (Cubic 154,2 ms), `wan` 28,1 ms (Cubic 3971,8 ms); Übertragung neben dem Bild 100,1 % (`lan`) und 66,1 % (`wan`) der Cubic-Rate, Übertragung allein 100,4 % und 100,0 %. Die Kandidaten 15, 25 und 50 ms bestehen alle; die Auswertung empfiehlt das größte, 50 ms. | T bleibt 25 ms (`share/core/yield_controller.rs` `DEFAULT_TARGET`): Bildlatenz auf `lan` 9,3 ms gegen 10,3 ms bei 50 ms, Übertragung auf `wan` 66,1 % gegen 67,9 %, also kürzere Bildlatenz bei fast gleicher Rate. Die Empfehlungsregel „größtes bestehendes T“ wiegt die Bildlatenz nicht; das Ziel des Auftrags ist ein konstanter Bildschirm. |
+| M3, E4 Listenanfrage neben einer Übertragung | p95 `lan` 271,7 → 27,3 ms, `wan` 2503,7 → 78,3 ms; Übertragung daneben unverändert (113,1 und 10,9 MiB/s). | Stromprioritäten bleiben; keine eigene Steuerverbindung (Bedingung „Steuerverbindung“ auf beiden Profilen nicht erfüllt: 27,3 < 54 ms, 78,3 < 150 ms). |
+| M4, E7 TCP-Pumpe | 305,0 → 497,8 MiB/s (+63,2 %, Grenze +20 %). | Pufferwachstum 8 KiB bis 64 KiB im Budget von 16 MiB bleibt (`share/core/tcp_forward.rs`). |
+| M1, Sendebündel | Einzelverbindung 40/80 gegen 10/20: Linux x86_64 481,0 gegen 423,4 MiB/s, Windows x86_64 207,1 gegen 155,5, Linux aarch64 302,3 gegen 320,8 (−5,8 %); vier Verbindungen auf Linux aarch64 807,8 gegen 605,4. Gesamtregel „auf jeder Plattform nicht langsamer“: nein (2 von 3). | 40/80 bleibt für `Files` und `Tcp` (`share/core/transport_purpose.rs`): Übertragungen großer Mengen laufen mit Zusatzverbindungen, und dort gewinnt 40/80 auch auf aarch64 33 %; der Verlust von 5,8 % betrifft nur die Einzelverbindung auf aarch64. |
+| M1, `DRIVER_RATE` | Einzelverbindung: Windows x86_64 207,1, Linux aarch64 302,3, Linux x86_64 481,0 MiB/s. | `DRIVER_RATE` = 80 % der langsamsten Plattform = 165,7 MiB/s (`share/core/node_bulk.rs`, Commit `691b6889`). |
+| M1, `MAX_EXTRA` und X-TCP | Vier Verbindungen auf 2 von 3 Plattformen mehr als 15 % schneller als eine (Linux x86_64 934,9 gegen 481,0 MiB/s); X-TCP-Bedingung nicht erfüllt (934,9 MiB/s über der Grenze 298 MiB/s). | `MAX_EXTRA` bleibt 3; X-TCP wird nicht neu bewertet. |
+| M9, B5 ACK-Frequenz | Gewinn auf 0 von 3 Plattformen über 10 % (Linux x86_64 +2,0 %). | B5 nicht gebaut. |
+| M6, B2 | Kodierung H.264 p95 10,1 ms (Grenze 16,7 ms, nicht erfüllt), Dekodierung p95 11,7 ms (Grenze 8 ms, erfüllt). | Nichts zu bauen: VA-API-Kodierung und -Dekodierung bestehen bereits aus der Bildkette (TODO `SCREEN-VAAPI`); der Runner hat keine Grafikkarte, gemessen ist der Software-Rückfall. |
+| M7, B1 und B4 | Profil `loss` (RTT 100 ms): p50 66,2, p95 67,2, Maximum 194,2 ms, keine Lücke; Profil `loss1` (RTT 40 ms): p50 39,9, p95 43,1, Maximum 121,3 ms, größte Lücke 109,0 ms; B4-Erholzeit 0,0 und 109,0 ms unter den Grenzen 266,6 und 146,6 ms. | B1 auf `loss` nicht erfüllt, auf `loss1` „unbekannt“, weil der p99-Aufschlag zwischen p95 und Maximum lag. M7 meldet seit Commit `691b6889` `bild_p99_ms`, und die Regel entscheidet B1 mit p99 − p50 > 2 × RTT oder Lücke > 200 ms; der nächste Suite-Lauf entscheidet B1 damit endgültig. B4 nicht gebaut. |
+| M8, B3 | Exec-Auftrag p50 `wan`: neue Verbindung 206,3 ms, bestehende Verbindung 50,6 ms, Aufbauanteil 75,5 % (Grenze 50 %); `lan` 32,5 gegen 2,2 ms. | B3 gebaut (unten). |
+
+**B3 Exec-Wiederverwendung (`share-exec/3`).** Gebaut nach dem Vorbild OpenSSH `ControlMaster`/`ControlPersist`:
+
+- Der Client bietet `smart-explorer/share-exec/3` und `/2` im selben TLS-Handshake an (`transport_purpose::connect_exec`, iroh `ConnectOptions::with_additional_alpns`). Ein Gastgeber bis v0.5.196 wählt `/2`. Der Auftrag läuft dann wie bisher, und der Knoten merkt sich die Gegenstelle für seine Laufzeit (`exec_client_pool.rs`).
+- Unter `/3` authentifiziert Strom 0 die Verbindung einmal mit eigenem Transkript-Präfix `smart-explorer/share-exec/v3|`. Ein `/2`-Beweis gilt dort nicht, und ein `/3`-Beweis gilt nicht unter `/2`.
+- Jeder Auftrag nutzt einen eigenen bidirektionalen QUIC-Strom. Je Auftrag frisch geprüft werden:
+  - Beziehung und Grant (`exec_auth::authorize_stream`);
+  - das Teilrecht;
+  - die Rückfrage;
+  - das Ausführungskonto;
+  - die Programmliste.
+
+  Ebenfalls je Auftrag laufen Audit, Präsenz und Heartbeats.
+- Der Client hält je lokaler Identität, Beziehung und Gegenstelle eine Verbindung. Sie bleibt nach dem letzten Auftrag 60 s offen.
+- Ein Auftrag wird höchstens einmal auf einer neuen Verbindung wiederholt, und nur, solange noch kein Byte seines `Start` geschrieben war.
+- Ist die Stromgrenze der Gegenstelle (64) ausgeschöpft, weicht ein Auftrag auf eine eigene Verbindung aus. Damit bleibt R15 (keine Gleichzeitigkeitsgrenze) erhalten.
+- Widerruf oder Ablauf des Exec-Rechts schließt offene `/3`-Verbindungen des Geräts (`exec_host_connections.rs`):
+  - im Leerlauf sofort;
+  - bei laufenden Aufträgen nach Zustellung von `Revoked`.
+
+  Bisher endete jede Exec-Verbindung nach ihrem einen Auftrag, deshalb brauchte es diese Schließung nicht.
+- Für Exec gilt jetzt unter `/2` und `/3` auch eine Verbindung mit der auslaufenden Kopplungs-ID während der Übergangszeit einer Codeerneuerung (E17). Für Sitzungen galt das schon. Für Exec bestand bisher der Beweis und dann scheiterte die Grantsuche. Endet die Übergangszeit, lehnt unter `/3` der nächste Auftragsstrom ab.
+- M8 misst jetzt den Produktionsweg (`ShareIrohNode::start_exec`) statt eines Stellvertreter-Stroms. Tests: `verbindungen_task_exec_*` in `share/core/exec_pool_task_tests.rs`.
+- Nicht übersetzt und nicht gelaufen, bis der nächste Suite-Lauf sie bestätigt.
+
+**Übrige Befunde.** S4-Kryptoanteil (Lauf 6): Linux aarch64 16,1 %, Linux x86_64 7,2 %, Windows 2,8 %. Das ist nur ein Befund, gebaut wird
+dafür nichts. Die beiden ignorierten Linux-Gruppen der Bildkette (AV1-Rundlauf, Absturz des Hostprozesses) sind in Lauf 9 gelaufen und
+bestanden.
+
 ## Schleifenstand
 
 - Ziel: Transportaufbau je Komponente, der „möglichst schnelle konstante verbindungen“ liefert (Nutzer 2026-11-14), und die Optimierung der Bildübertragung je Station (Nutzer 2026-11-14, Nachricht 6). Die unverschlüsselte Bildschirmübertragung (Nachricht 5) hat der Nutzer am 2026-11-14 zurückgenommen („ah dann nehme ich es zurück, dann kannst von mir aus auch das unverschlüsselt ganz weg lassen“); sie entfällt (C4).
@@ -532,6 +578,7 @@ der Messwerte in ARCHITEKTUR, TRANSFER_ENGINE und `VERB-MESSUNG` folgt nach dem 
   - Windows, Linux, Android: im Plan erfüllt; Zeigerüberlagerung ohne Wayland- und Android-Gastgeber (Grund in C5, offen als `VERB-WAYLAND-ZEIGER`).
   - Direktweg- und Relay-Regeln bleiben: erfüllt (C8, C9).
 - Möglichkeiten (bewertet in C): VPN im Programm (verworfen, C1); VPN mit Systemadapter (verworfen); getrennte Verbindungen je Zweck mit eigener Regelung (gewählt, E1 bis E5); QUIC-Datagramme mit FEC für das Bild (bedingt, E11); parallele Verbindungen für große Übertragungen (Bestand, Schwelle gemessen); Paketgröße und Bündel (Bündel gewählt, MTU verworfen); Klartextbild (vom Nutzer zurückgenommen, C4); Stationsverbesserungen (Zeigerüberlagerung gewählt, Hardwarekodierung und Schlüsselbild-Ersatz bedingt).
-- Aktiver Stand (2026-11-14, nach P8): P1, P2, P2b, P3, P4, P5a (reduziert), P6, PX, P7, beide Reviews (Bild, Transport), P9 und P8 sind im Arbeitsbaum umgesetzt beziehungsweise geschrieben, ebenso die Schließung der Lücken des zweiten Integrationsdurchgangs des Vorauftrags; nichts gebaut, getestet, committet oder veröffentlicht; P5b und P5c entfallen. Einzelheiten und offene Punkte: Abschnitt E.
-- Nächster Schritt: Integration, Commits, Push, ein Suite-Lauf, Nachsteuerung N1, ein Release (D1 Welle 8, D5). Der Umbau der Bildkette (`bildkette.md`) folgt als eigener Batch nach dem Release.
-- Schleifenstatus: aktiv (Umsetzung läuft; Wirkungsnachweise warten auf den Suite-Lauf).
+- Aktiver Stand (2026-11-17): Suite-Läufe 1 bis 9; Lauf 44016047636 vollständig grün. Die Nachsteuerung N1 und die Entscheidungen zu B1 bis B5 stehen in Abschnitt F. B3 ist gebaut; B1 entscheidet der nächste Lauf über p99. Danach folgt derselbe Suite-Lauf noch einmal und dann das eine Release.
+- Früherer Stand (2026-11-14, nach P8): P1, P2, P2b, P3, P4, P5a (reduziert), P6, PX, P7, beide Reviews (Bild, Transport), P9 und P8 sind im Arbeitsbaum umgesetzt beziehungsweise geschrieben, ebenso die Schließung der Lücken des zweiten Integrationsdurchgangs des Vorauftrags; nichts gebaut, getestet, committet oder veröffentlicht; P5b und P5c entfallen. Einzelheiten und offene Punkte: Abschnitt E.
+- Nächster Schritt: Suite-Lauf 10 mit B3 und dem p99 von M7, dann ein Release über `release.yml` (D5) für diesen Auftrag und die Bildkette gemeinsam.
+- Schleifenstatus: aktiv (Bestätigungslauf für B3 und B1 steht aus).
