@@ -325,6 +325,8 @@ pub fn on_service_start(steering: bool) {
     let spawned = std::thread::Builder::new()
         .name("rdp-self-setup-start".into())
         .spawn(move || {
+            #[cfg(windows)]
+            crate::share::exec_accounts_refresh_after_update();
             refresh_probe();
             if steering {
                 ensure_rdp_host(SetupTrigger::VersionStart, None);

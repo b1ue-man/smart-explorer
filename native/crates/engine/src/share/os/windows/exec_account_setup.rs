@@ -116,6 +116,35 @@ pub fn exec_accounts_apply(
     }
 }
 
+/// After an update (plan 2026-11-17 P4): when the account service is
+/// installed and its program copy differs from this installation's
+/// `se.exe`, renews it with one UAC prompt at the first start of the new
+/// version, so neither RDP sign-in as `se-remote` nor Exec waits for an
+/// administrator command during use. Nothing happens when it is current.
+pub fn exec_accounts_refresh_after_update() {
+    let installed = matches!(super::exec_account_scm::service_state(), Ok(Some(_)));
+    let (Ok(copy), Ok(program)) = (
+        super::exec_account_config::program_copy(),
+        elevation_program(),
+    ) else {
+        return;
+    };
+    let outdated = matches!(
+        (sha256_file(&copy), sha256_file(&program)),
+        (Ok(old), Ok(new)) if old != new
+    );
+    if !installed || !outdated {
+        return;
+    }
+    match exec_accounts_apply(&ExecAccountsAction::Update, Elevation::PkexecGraphical) {
+        Ok(ExecAccountsOutcome::Done(_)) => eprintln!("Kontodienst nach dem Update erneuert"),
+        Ok(ExecAccountsOutcome::NeedsAdministrator { reason, .. }) => {
+            eprintln!("Kontodienst nach dem Update nicht erneuert: {reason}")
+        }
+        Err(error) => eprintln!("Kontodienst nach dem Update nicht erneuert: {error}"),
+    }
+}
+
 /// `se.exe` beside the running program where it exists (the desktop app
 /// has it next to itself), else the running program.
 fn elevation_program() -> io::Result<PathBuf> {

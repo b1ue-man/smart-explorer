@@ -61,7 +61,7 @@ pub fn automatic(
     match crate::share::exec_remote_rdp_password(true) {
         Ok(secret) => Automatic::Secret(secret),
         Err(error) => Automatic::Unsupported(format!(
-            "der Kontodienst setzt kein Kennwort für se-remote ({error}); ein Kontodienst vor 0.5.198 braucht `se share exec accounts update`"
+            "der Kontodienst setzt kein Kennwort für se-remote ({error}); ein Kontodienst vor 0.5.198 wird beim ersten Start nach dem Update erneuert"
         )),
     }
 }

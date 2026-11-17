@@ -195,6 +195,8 @@ pub fn exec_account_session_limits() -> bool {
 // setup|allow|disallow|update|remove`, PRM-M6 on Linux, PRM-M7 on Windows):
 // both platforms offer the same types. On Windows the elevations
 // `PkexecGraphical` and `PkexecTerminal` ask through UAC.
+#[cfg(windows)]
+pub use self::platform_exec::exec_accounts_refresh_after_update;
 #[cfg(target_os = "linux")]
 #[allow(unused_imports)] // keeps the Linux re-export of the invoking user in use
 pub use self::platform_exec::invoking_uid as exec_accounts_invoking_uid;

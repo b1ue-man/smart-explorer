@@ -51,7 +51,8 @@ mod exec_supervisor;
 pub use self::exec_account_choices::account_choices;
 pub use self::exec_account_client::{remote_rdp_password, resolve_account, run_as_supported};
 pub use self::exec_account_setup::{
-    exec_accounts_apply, Elevation, ExecAccountsAction, ExecAccountsOutcome,
+    exec_accounts_apply, exec_accounts_refresh_after_update, Elevation, ExecAccountsAction,
+    ExecAccountsOutcome,
 };
 
 use std::ffi::OsString;
