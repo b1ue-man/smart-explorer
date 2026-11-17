@@ -8,19 +8,16 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::{mpsc, watch};
 
 use super::exec_access_view::{ExecClientNotice, ReceivedHelloOk};
-use super::exec_auth::build_client_hello;
 use super::exec_client_active::TransportClosed;
-use super::exec_client_messages::{
-    authentication, classify_io, client_failure_message, disconnected, failure, peer_name, protocol,
-};
+use super::exec_client_messages::{classify_io, disconnected, failure, protocol};
 use super::exec_heartbeat::{ExecHeartbeatPolicy, EXEC_HEARTBEAT_POLICY};
 #[cfg(any(test, feature = "test-support"))]
 use super::exec_protocol::ExecHelloOk;
-use super::exec_protocol::{
-    recv_hello_result, recv_server_hello, send_client_frame, send_client_hello, ClientFrame,
-};
+use super::exec_protocol::{send_client_frame, ClientFrame};
 use super::exec_terminal::{require_host_terminal, ExecTerminalSize};
-use super::exec_types::{ExecAuthorization, ExecId, ExecProviderStatus, ExecStart, ExecTerminal};
+use super::exec_types::{
+    ExecAuthorization, ExecId, ExecProviderStatus, ExecStart, ExecTerminal, EXEC_PROTOCOL_VERSION,
+};
 use super::identity::ShareIdentity;
 use super::types::PeerEndpoint;
 
@@ -95,6 +92,8 @@ pub struct ExecClientSession {
 mod input;
 #[path = "exec_client_spawn.rs"]
 mod spawn;
+#[path = "exec_client_v3.rs"]
+pub(in crate::share) mod v3;
 pub use input::ExecInputSender;
 #[cfg(any(test, feature = "test-support"))]
 pub fn batches_fixture_sender(
@@ -361,29 +360,7 @@ async fn handshake<W: AsyncWrite + Unpin, R: AsyncRead + Unpin>(
     endpoint: &PeerEndpoint,
     identity: &ShareIdentity,
 ) -> Result<ReceivedHelloOk, ExecClientFailure> {
-    let deadline = super::route_protocol::active_now() + HANDSHAKE_TIMEOUT;
-    let server = until(deadline, recv_server_hello(recv))
-        .await
-        .map_err(|error| classify_io(error, false, "server_hello"))?;
-    let mut client = build_client_hello(&server, endpoint, identity)
-        .map_err(|error| authentication(error, "server_identity", false))?;
-    client.client_features.push("route_policy_v1".into());
-    until(deadline, send_client_hello(send, &client))
-        .await
-        .map_err(|error| classify_io(error, false, "client_hello"))?;
-    match until(deadline, recv_hello_result::<_, ReceivedHelloOk>(recv))
-        .await
-        .map_err(|error| classify_io(error, false, "hello_result"))?
-    {
-        Ok(hello) if !hello.hello.authorization.session_id.trim().is_empty() => Ok(hello),
-        Ok(_) => Err(protocol("empty Exec session id", false, "invalid_hello_ok")),
-        Err(error) => Err(failure(
-            ExecClientFailureKind::Authentication,
-            &error.code,
-            &client_failure_message(&error.code, &error.message, &peer_name(endpoint)),
-            false,
-        )),
-    }
+    v3::handshake_version(EXEC_PROTOCOL_VERSION, send, recv, endpoint, identity).await
 }
 
 pub(super) async fn write_frame_with_timeout<W: AsyncWrite + Unpin>(

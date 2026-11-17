@@ -94,7 +94,9 @@ impl RuntimeConfiguration<'_> {
             // a new scope generation while still holding an old export table.
             self.iroh
                 .invalidate_restrictions_at(&restrictions, candidate.authorization_epoch)?;
-            self.iroh.access_registry().recheck(&candidate, now_secs());
+            let now = now_secs();
+            self.iroh.access_registry().recheck(&candidate, now);
+            self.iroh.exec_host.recheck(&candidate, now);
             *state = candidate;
             (restrictions, state.clone())
         };

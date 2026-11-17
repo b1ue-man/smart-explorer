@@ -10,7 +10,7 @@
 //! |---|---|---|---|
 //! | `Files` | `share-fs/3` (sessions, bulk extras, rooms, repair) | Cubic with yielding (E2) | 40/80 |
 //! | `Screen` | `share-screen/1` (pictures and the device feed) | Cubic | 10/20 |
-//! | `Exec` | `share-exec/2` | Cubic | 10/20 |
+//! | `Exec` | `share-exec/3`, `/2` | Cubic | 10/20 |
 //! | `Apps` | `share-apps/1` | Cubic | 10/20 |
 //! | `Tcp` | `share-tcp/2`, `/1` | Cubic | 40/80 |
 //! | `LanLink` | `paired-link/1` | Cubic | 10/20 |
@@ -69,7 +69,9 @@ impl TransportPurpose {
         Some(match alpn {
             crate::share::node::ALPN => TransportPurpose::Files,
             crate::screen::core::wire::SCREEN_ALPN => TransportPurpose::Screen,
-            crate::share::exec_protocol::EXEC_ALPN => TransportPurpose::Exec,
+            crate::share::exec_protocol::EXEC_ALPN_V3 | crate::share::exec_protocol::EXEC_ALPN => {
+                TransportPurpose::Exec
+            }
             crate::share::apps_wire::APPS_ALPN => TransportPurpose::Apps,
             crate::share::tcp_forward::TCP_ALPN | crate::share::tcp_forward::TCP_ALPN_V1 => {
                 TransportPurpose::Tcp
@@ -129,6 +131,7 @@ const BULK_DATAGRAMS: NonZeroUsize = count(80);
 pub(crate) fn accepted_alpns() -> Vec<Vec<u8>> {
     vec![
         crate::share::node::ALPN.to_vec(),
+        crate::share::exec_protocol::EXEC_ALPN_V3.to_vec(),
         crate::share::exec_protocol::EXEC_ALPN.to_vec(),
         crate::share::tcp_forward::TCP_ALPN.to_vec(),
         crate::share::tcp_forward::TCP_ALPN_V1.to_vec(),
@@ -302,6 +305,27 @@ pub(crate) async fn connect_files(
     .await
 }
 
+/// An Exec connection (`Exec` profile): offers `share-exec/3` and `/2` in one
+/// handshake when `offer_v3` is true, or `/2` alone for a known legacy host.
+pub(crate) async fn connect_exec(
+    endpoint: &Endpoint,
+    addr: impl Into<EndpointAddr>,
+    offer_v3: bool,
+) -> Result<Connection, ConnectError> {
+    let addr = addr.into();
+    let mut options = ConnectOptions::new()
+        .with_transport_config(transport_config_to(TransportPurpose::Exec, Some(addr.id)));
+    let alpn = if offer_v3 {
+        options =
+            options.with_additional_alpns(vec![crate::share::exec_protocol::EXEC_ALPN.to_vec()]);
+        crate::share::exec_protocol::EXEC_ALPN_V3
+    } else {
+        crate::share::exec_protocol::EXEC_ALPN
+    };
+    let connecting = endpoint.connect_with_opts(addr, alpn, options).await?;
+    Ok(connecting.await?)
+}
+
 /// The purpose all ALPNs of `offer` share, if every one is known.
 pub(crate) fn offered_purpose<A, E>(
     offer: impl IntoIterator<Item = Result<A, E>>,
@@ -328,8 +352,16 @@ pub(crate) struct AcceptProfiles {
 
 impl AcceptProfiles {
     pub(crate) fn new(endpoint: &Endpoint) -> Self {
+        #[cfg(not(test))]
+        let alpns = accepted_alpns();
+        #[cfg(test)]
+        let mut alpns = accepted_alpns();
+        #[cfg(test)]
+        if overrides::current().legacy_exec_host {
+            alpns.retain(|alpn| alpn.as_slice() != crate::share::exec_protocol::EXEC_ALPN_V3);
+        }
         Self {
-            template: endpoint.create_server_config_builder(accepted_alpns()),
+            template: endpoint.create_server_config_builder(alpns),
         }
     }
 

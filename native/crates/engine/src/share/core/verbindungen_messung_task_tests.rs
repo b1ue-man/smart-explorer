@@ -285,9 +285,13 @@ fn verbindungen_messung_task_m4_nachher() -> Result<(), String> {
     tunnel_case("nachher", false)
 }
 
-/// M8: `EXEC_JOBS` short jobs, a connection each or one for all.
+/// M8: `EXEC_JOBS` short jobs, a connection each (`exec_reuse = false`, `/2`)
+/// or one pooled `/3` connection for all (`exec_reuse = None`).
 fn exec_case(variant: &str, fresh: bool) -> Result<(), String> {
-    let _plan = hold(ProfileOverrides::default());
+    let _plan = hold(ProfileOverrides {
+        exec_reuse: if fresh { Some(false) } else { None },
+        ..ProfileOverrides::default()
+    });
     let result = run_case(exec_setup(fresh, EXEC_JOBS))?;
     println!(
         "{}",

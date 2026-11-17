@@ -1,8 +1,57 @@
 //! Common admission for FS, Exec/terminal, Screen and the existing LAN-link actor.
+use std::io;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use iroh::endpoint::{Connection, VarInt};
+
 use super::node::ShareIrohNode;
+use super::route_cancellation::RouteCancellation;
 use super::types::PeerEndpoint;
-use iroh::endpoint::Connection;
-use std::{io, sync::Arc, time::Instant};
+
+#[path = "node_routes_exec.rs"]
+mod exec;
+#[path = "exec_client_pool.rs"]
+pub(in crate::share) mod pool;
+#[cfg(test)]
+#[path = "exec_pool_task_tests.rs"]
+mod pool_tests;
+#[cfg(test)]
+#[path = "exec_loopback_fixture.rs"]
+pub(in crate::share) mod test_fixture;
+
+pub(super) fn exec_reuse_disabled() -> bool {
+    #[cfg(any(test, feature = "test-support"))]
+    {
+        super::keepalive::transport_purpose::overrides::current().exec_reuse == Some(false)
+    }
+    #[cfg(not(any(test, feature = "test-support")))]
+    {
+        false
+    }
+}
+
+pub(super) fn remaining_timeout(deadline: Option<Instant>) -> io::Result<Duration> {
+    Ok(deadline
+        .map(|limit| super::io_deadline::remaining(limit, "Exec-Verbindungsaufbau"))
+        .transpose()?
+        .unwrap_or(super::io_deadline::PEER_OP_TIMEOUT)
+        .min(super::io_deadline::PEER_OP_TIMEOUT))
+}
+
+pub(super) async fn wait_cancelled(cancellation: Option<&Arc<RouteCancellation>>) {
+    match cancellation {
+        Some(rc) => rc.cancelled().await,
+        None => std::future::pending::<()>().await,
+    }
+}
+
+pub(super) fn interrupted_connect() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::Interrupted,
+        "Exec-Verbindungsaufbau abgebrochen",
+    )
+}
 
 impl ShareIrohNode {
     pub(super) fn block_on_route<F: std::future::Future>(
@@ -20,8 +69,21 @@ impl ShareIrohNode {
     pub(super) fn connect_exec_cancellable(
         &self,
         endpoint: &PeerEndpoint,
-        cancellation: Option<&Arc<super::route_cancellation::RouteCancellation>>,
+        cancellation: Option<&Arc<RouteCancellation>>,
         deadline: Option<Instant>,
+    ) -> io::Result<Connection> {
+        let offer_v3 =
+            !exec_reuse_disabled() && !self.exec_pool.is_legacy_v2(&endpoint.presence.node_id);
+        self.block_on(self.connect_exec_async(endpoint, cancellation, deadline, offer_v3, true))
+    }
+
+    pub(super) async fn connect_exec_async(
+        &self,
+        endpoint: &PeerEndpoint,
+        cancellation: Option<&Arc<RouteCancellation>>,
+        deadline: Option<Instant>,
+        offer_v3: bool,
+        bind_cancellation: bool,
     ) -> io::Result<Connection> {
         self.require_sharing_active()?;
         if let Some(cancellation) = cancellation {
@@ -44,109 +106,44 @@ impl ShareIrohNode {
         let generation = self
             .policy
             .snapshot(super::session::PeerPrincipal::from_endpoint(endpoint))?;
-        let timeout = deadline
-            .map(|deadline| super::io_deadline::remaining(deadline, "Exec-Verbindungsaufbau"))
-            .transpose()?
-            .unwrap_or(super::io_deadline::PEER_OP_TIMEOUT)
-            .min(super::io_deadline::PEER_OP_TIMEOUT);
-        let connection = self.block_on(async {
-            let cancelled = async {
-                if let Some(cancellation) = cancellation { cancellation.cancelled().await; }
-                else { std::future::pending::<()>().await; }
-            };
-            tokio::select! {
-                biased;
-                _ = cancelled => Err(io::Error::new(io::ErrorKind::Interrupted, "Exec-Verbindungsaufbau abgebrochen")),
-                result = super::io_deadline::run_for("peer exec connection", timeout, async {
-                    super::keepalive::transport_purpose::connect(
-                        &self.endpoint,
-                        addr,
-                        super::exec_protocol::EXEC_ALPN,
-                        super::keepalive::transport_purpose::TransportPurpose::Exec,
-                    )
+        let timeout = remaining_timeout(deadline)?;
+        let connection = tokio::select! {
+            biased;
+            () = wait_cancelled(cancellation) => Err(interrupted_connect()),
+            result = super::io_deadline::run_for("peer exec connection", timeout, async {
+                super::keepalive::transport_purpose::connect_exec(&self.endpoint, addr, offer_v3)
                     .await
                     .map_err(super::io_deadline::disconnected)
-                }) => result,
+            }) => result,
+        }?;
+        if bind_cancellation {
+            if let Some(cancellation) = cancellation {
+                cancellation.bind(&connection)?;
             }
-        })?;
-        if let Some(cancellation) = cancellation {
-            cancellation.bind(&connection)?;
         }
         if let Err(error) = self.policy.bind(&connection, generation) {
             connection.close(
-                iroh::endpoint::VarInt::from_u32(0x5345),
+                VarInt::from_u32(0x5345),
                 b"authorization changed during handshake",
             );
             return Err(error);
         }
-        let routed = self.block_on(async {
-            let cancelled = async {
-                if let Some(cancellation) = cancellation { cancellation.cancelled().await; }
-                else { std::future::pending::<()>().await; }
-            };
-            tokio::select! {
-                biased;
-                _ = cancelled => Err(io::Error::new(io::ErrorKind::Interrupted, "Exec-Verbindungsaufbau abgebrochen")),
-                result = self.await_route(&connection, Some(endpoint), deadline) => result,
-            }
-        });
+        let routed = tokio::select! {
+            biased;
+            () = wait_cancelled(cancellation) => Err(interrupted_connect()),
+            result = self.await_route(&connection, Some(endpoint), deadline) => result,
+        };
         if let Err(error) = routed {
-            connection.close(
-                iroh::endpoint::VarInt::from_u32(0x4558),
-                b"Exec route admission failed",
-            );
+            connection.close(VarInt::from_u32(0x4558), b"Exec route admission failed");
             return Err(error);
         }
         if let Some(cancellation) = cancellation {
-            cancellation.check()?;
-        }
-        Ok(connection)
-    }
-
-    pub(super) fn start_exec_cancellable(
-        self: &Arc<Self>,
-        endpoint: PeerEndpoint,
-        identity: super::identity::ShareIdentity,
-        start: super::exec_types::ExecStart,
-        retainer: Option<Arc<dyn Send + Sync>>,
-        cancellation: Option<Arc<super::route_cancellation::RouteCancellation>>,
-        deadline: Option<Instant>,
-    ) -> io::Result<super::exec_session::ShareExecSession> {
-        let connection =
-            self.connect_exec_cancellable(&endpoint, cancellation.as_ref(), deadline)?;
-        if let Some(deadline) = deadline {
-            if let Err(error) = super::io_deadline::remaining(deadline, "Exec-Verbindungsaufbau") {
-                connection.close(
-                    iroh::endpoint::VarInt::from_u32(0x4558),
-                    b"Exec setup deadline expired",
-                );
+            if let Err(error) = cancellation.check() {
+                connection.close(VarInt::from_u32(0x4558), b"Exec setup cancelled");
                 return Err(error);
             }
         }
-        if let Some(cancellation) = &cancellation {
-            cancellation.check()?;
-        }
-        // E3: a job with a terminal keeps the process interactive while it
-        // runs; the entry ends with the client task that holds the retainer.
-        let retainer = if start.terminal.is_some() {
-            use super::keepalive::interactive_presence::{retain_with, InteractiveKind};
-            Some(retain_with(InteractiveKind::ExecTerminal, retainer))
-        } else {
-            retainer
-        };
-        let _runtime = self.rt.enter();
-        let client = super::exec_client::spawn_connected_cancellable(
-            connection,
-            endpoint,
-            identity,
-            start,
-            retainer,
-            cancellation,
-        );
-        Ok(super::exec_session::ShareExecSession::new(
-            self.clone(),
-            client,
-        ))
+        Ok(connection)
     }
 
     pub(super) fn monitor_route(

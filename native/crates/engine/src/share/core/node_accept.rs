@@ -6,7 +6,7 @@ use iroh::endpoint::{Connection, IncomingAddr, VarInt};
 
 use super::connection_events::ConnectionErrorKind;
 use super::core::eio;
-use super::exec_protocol::EXEC_ALPN;
+use super::exec_protocol::{EXEC_ALPN, EXEC_ALPN_V3};
 use super::handshake_limits::{ApplicationHandshakePermit, TlsAdmission, TlsSource};
 use super::identity::code_renewal_registry::is_withdrawn;
 use super::keepalive::transport_purpose::AcceptProfiles;
@@ -16,10 +16,10 @@ use crate::screen::core::wire::SCREEN_ALPN;
 impl ShareIrohNode {
     pub(super) fn spawn_accept_loop(self: &Arc<Self>) {
         let node = self.clone();
+        // E1: every incoming connection gets the profile of its purpose
+        // (`transport_purpose.rs`); the checks below keep their order.
+        let profiles = Arc::new(AcceptProfiles::new(&node.endpoint));
         self.rt.spawn(async move {
-            // E1: every incoming connection gets the profile of its purpose
-            // (`transport_purpose.rs`); the checks below keep their order.
-            let profiles = Arc::new(AcceptProfiles::new(&node.endpoint));
             while let Some(incoming) = node.endpoint.accept().await {
                 if node.require_sharing_active().is_err() {
                     incoming.refuse();
@@ -97,7 +97,7 @@ impl ShareIrohNode {
                     // Penalized after failed authentication: Exec and screen
                     // always, file sessions only for unknown endpoints, so
                     // automatic reconnects of paired devices are never throttled.
-                    let exec = connection.alpn() == EXEC_ALPN;
+                    let exec = matches!(connection.alpn(), EXEC_ALPN_V3 | EXEC_ALPN);
                     let screen = connection.alpn() == SCREEN_ALPN;
                     let tcp = super::tcp_forward::tcp_version_for_alpn(connection.alpn()).is_some();
                     let apps = connection.alpn() == super::apps_wire::APPS_ALPN;
@@ -150,7 +150,7 @@ impl ShareIrohNode {
                     // a fixed set of kinds (connection_events.rs).
                     let error_kind = match connection.alpn() {
                         ALPN => ConnectionErrorKind::FsConnection,
-                        EXEC_ALPN => ConnectionErrorKind::ExecConnection,
+                        EXEC_ALPN_V3 | EXEC_ALPN => ConnectionErrorKind::ExecConnection,
                         _ => ConnectionErrorKind::Accept,
                     };
                     let dispatch = super::route_protocol::scope(connection.clone(),
@@ -269,7 +269,9 @@ async fn dispatch_connection(
                 .track(&connection, super::quic_stats_hub::Side::Host);
             super::server::handle_connection(node, connection, permit).await
         }
-        EXEC_ALPN => super::exec_server::handle_connection(node, connection, permit).await,
+        EXEC_ALPN_V3 | EXEC_ALPN => {
+            super::exec_server::handle_connection(node, connection, permit).await
+        }
         SCREEN_ALPN => node.handle_screen_connection(connection, permit).await,
         super::tcp_forward::TCP_ALPN | super::tcp_forward::TCP_ALPN_V1 => {
             node.handle_tcp_connection(connection, permit).await

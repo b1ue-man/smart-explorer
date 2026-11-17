@@ -24,6 +24,13 @@ pub(crate) struct ProfileOverrides {
     pub(crate) ack_frequency: Option<bool>,
     /// `Some(false)`: transfer streams keep priority 0 ("vorher" of M3).
     pub(crate) transfer_priority: Option<bool>,
+    /// `Some(false)`: Exec opens a fresh `/2` connection per job without
+    /// pooling ("neue_verbindung" of M8).
+    pub(crate) exec_reuse: Option<bool>,
+    /// `true`: accepted ALPNs of a started host omit `share-exec/3` (simulates
+    /// a v0.5.196 host in negotiation tests).
+    #[cfg(test)]
+    pub(crate) legacy_exec_host: bool,
 }
 
 static ACTIVE: Mutex<ProfileOverrides> = Mutex::new(ProfileOverrides {
@@ -32,6 +39,9 @@ static ACTIVE: Mutex<ProfileOverrides> = Mutex::new(ProfileOverrides {
     transmit: None,
     ack_frequency: None,
     transfer_priority: None,
+    exec_reuse: None,
+    #[cfg(test)]
+    legacy_exec_host: false,
 });
 static SERIAL: Mutex<()> = Mutex::new(());
 

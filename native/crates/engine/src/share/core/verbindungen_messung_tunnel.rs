@@ -185,30 +185,6 @@ pub(crate) async fn tunnel_throughput(legacy: bool) -> Result<f64, String> {
     Ok(mib_s(received, elapsed))
 }
 
-/// One request and its answer on a new stream of the `Exec` connection.
-async fn exec_round(client: &Connection, server: &Connection) -> Result<(), String> {
-    let asking = async {
-        let (mut send, mut recv) = client.open_bi().await.map_err(io::Error::other)?;
-        send.write_all(b"true").await.map_err(io::Error::other)?;
-        send.finish().map_err(io::Error::other)?;
-        let reply = recv.read_to_end(64).await.map_err(io::Error::other)?;
-        if reply.as_slice() != b"done" {
-            return Err(io::Error::other("unerwartete Antwort"));
-        }
-        Ok::<(), io::Error>(())
-    };
-    let answering = async {
-        let (mut send, mut recv) = server.accept_bi().await.map_err(io::Error::other)?;
-        recv.read_to_end(64).await.map_err(io::Error::other)?;
-        send.write_all(b"done").await.map_err(io::Error::other)?;
-        send.finish().map_err(io::Error::other)?;
-        Ok::<(), io::Error>(())
-    };
-    let (asked, answered) = tokio::join!(asking, answering);
-    asked.map_err(|error| format!("Anfrage: {error}"))?;
-    answered.map_err(|error| format!("Antwort: {error}"))
-}
-
 pub(crate) struct ExecSetupResult {
     pub jobs: usize,
     pub p50_ms: f64,
@@ -216,49 +192,50 @@ pub(crate) struct ExecSetupResult {
     pub total_ms: f64,
 }
 
-/// M8: `jobs` short jobs on the `Exec` profile. `fresh`: each job makes its
-/// own connection (as `node_routes.rs` does: handshake, admission, request,
-/// answer, close); otherwise all jobs share one connection and pay only the
-/// request on a new stream. The connection setup of the shared variant is
-/// not counted. Lower bound of the real Exec cost: no hello, no session
-/// proof, no rights check.
+/// M8: `jobs` short jobs on the real production Exec path (`ShareIrohNode` +
+/// `ExecClientPool`). `fresh`: `ProfileOverrides.exec_reuse == Some(false)`
+/// opens a fresh `/2` connection per job; `!fresh`: warms the `/3` pool once
+/// and measures `jobs` subsequent jobs multiplexed as streams on that pooled
+/// `/3` connection (including per-job `Start`, rights check, `HELLO_OK`,
+/// registry/audit and `ResultAck` / `ResultAcknowledged`).
 pub(crate) async fn exec_setup(fresh: bool, jobs: usize) -> Result<ExecSetupResult, String> {
-    let link = Link::new().await?;
-    let shared = if fresh {
-        None
-    } else {
-        Some(
-            link.connect(
-                crate::share::exec_protocol::EXEC_ALPN,
-                TransportPurpose::Exec,
-            )
-            .await?,
-        )
+    tokio::task::spawn_blocking(move || exec_setup_blocking(fresh, jobs))
+        .await
+        .map_err(|error| format!("Exec-Messung Task: {error}"))?
+}
+
+fn exec_setup_blocking(fresh: bool, jobs: usize) -> Result<ExecSetupResult, String> {
+    use crate::share::exec_types::ExecTerminalKind;
+    use crate::share::node_routes::test_fixture::{
+        argv_start, enabled_grant, make_identity, run_to_terminal, start_client_node,
+        ExecLoopbackHost,
     };
+
+    let client_id = make_identity("m8-client").map_err(text)?;
+    let host = ExecLoopbackHost::start_for_client(&client_id, enabled_grant()).map_err(text)?;
+    let client = start_client_node(&client_id).map_err(text)?;
+    let run_one = || -> Result<(), String> {
+        let start = argv_start("true").map_err(text)?;
+        let (_, terminal) = run_to_terminal(&client.0, &host.endpoint, &client_id, start)
+            .map_err(|err| err.to_string())?;
+        if terminal.kind != ExecTerminalKind::Exited || terminal.exit_code != Some(0) {
+            return Err(format!("unerwartetes Auftragsende: {terminal:?}"));
+        }
+        Ok(())
+    };
+    if !fresh {
+        run_one()?;
+    }
     let mut samples = LatencySamples::default();
     let all = Instant::now();
     for _ in 0..jobs {
         let started = Instant::now();
-        match &shared {
-            Some(pair) => exec_round(&pair.0, &pair.1).await?,
-            None => {
-                let pair = link
-                    .connect(
-                        crate::share::exec_protocol::EXEC_ALPN,
-                        TransportPurpose::Exec,
-                    )
-                    .await?;
-                exec_round(&pair.0, &pair.1).await?;
-                close_pair(&pair);
-            }
-        }
+        run_one()?;
         samples.record(u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX));
     }
     let total = all.elapsed();
-    if let Some(pair) = &shared {
-        close_pair(pair);
-    }
-    link.close().await;
+    drop(client);
+    drop(host);
     let summary = samples
         .summary()
         .ok_or_else(|| "keine Messwerte".to_owned())?;

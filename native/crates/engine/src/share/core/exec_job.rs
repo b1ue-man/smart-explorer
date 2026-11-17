@@ -7,12 +7,20 @@ use tokio::sync::mpsc;
 
 use super::core::{eio, now_secs};
 use super::exec_audit::{self, AuditEvent};
-use super::exec_platform::{ContainedExec, StopReason};
+#[cfg(not(test))]
+use super::exec_platform::ContainedExec as JobProcess;
+use super::exec_platform::StopReason;
 use super::exec_protocol::ServerFrame;
 use super::exec_registry::{ExecCancelReason, ExecCancellation, ExecRegistry, ExecReservation};
 use super::exec_supervisor_protocol::{RunAsAccount, SupervisorEvent, SupervisorExit};
 use super::exec_terminal::ExecTerminalSize;
 use super::exec_types::{ExecJobView, ExecStart, ExecTerminal, ExecTerminalKind};
+
+#[cfg(test)]
+#[path = "exec_job_test_runner.rs"]
+pub(in crate::share) mod test_runner;
+#[cfg(test)]
+use test_runner::JobProcess;
 
 const EVENT_POLL: Duration = Duration::from_millis(25);
 /// How soon input that the supervisor's full queue did not take is offered again.
@@ -56,6 +64,8 @@ pub(super) struct JobLaunch {
     pub(super) account_label: String,
     /// The path a grant with a program list authorized for this start.
     pub(super) program: Option<PathBuf>,
+    #[cfg(test)]
+    pub(super) test_runner: Option<Arc<test_runner::TestExecRunner>>,
 }
 
 pub(super) fn run_contained_job(
@@ -70,8 +80,14 @@ pub(super) fn run_contained_job(
         account,
         account_label,
         program,
+        #[cfg(test)]
+        test_runner,
     } = launch;
-    let mut process = match ContainedExec::prepare_as(&start, account.as_ref()) {
+    #[cfg(not(test))]
+    let prepared = JobProcess::prepare_as(&start, account.as_ref());
+    #[cfg(test)]
+    let prepared = JobProcess::prepare(&start, account.as_ref(), test_runner.as_deref());
+    let mut process = match prepared {
         Ok(process) => process,
         Err(error) => return fail_preparation(&registry, &reservation, error, &output),
     };
@@ -244,7 +260,7 @@ pub(super) fn run_contained_job(
 /// queue did not take; none of it was sent, so offering it again later sends
 /// every byte once and keeps the order. A full queue drops a window size
 /// instead: the next resize replaces it, and it must not end the session.
-fn deliver(process: &mut ContainedExec, command: JobInput) -> io::Result<Option<JobInput>> {
+fn deliver(process: &mut JobProcess, command: JobInput) -> io::Result<Option<JobInput>> {
     match command {
         JobInput::Stdin(bytes) => {
             let written = process.write_stdin(&bytes)?;
@@ -268,7 +284,7 @@ fn queue_full(error: &io::Error) -> bool {
 }
 
 fn stop_and_finish(
-    mut process: ContainedExec,
+    mut process: JobProcess,
     registry: &ExecRegistry,
     reservation: &ExecReservation,
     start: &ExecStart,

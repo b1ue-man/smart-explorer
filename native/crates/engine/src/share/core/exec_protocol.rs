@@ -6,10 +6,21 @@ use super::exec_access_view::ExecApprovalPending;
 use super::exec_terminal::ExecTerminalSize;
 use super::exec_types::{
     ExecAuthorization, ExecId, ExecProviderStatus, ExecStart, ExecTerminal, EXEC_CAPABILITY,
-    EXEC_PROTOCOL_VERSION, MAX_EXEC_DATA_BYTES, MAX_EXEC_START_BYTES,
+    EXEC_CAPABILITY_V3, EXEC_PROTOCOL_VERSION, EXEC_PROTOCOL_VERSION_V3, MAX_EXEC_DATA_BYTES,
+    MAX_EXEC_START_BYTES,
 };
 
 pub const EXEC_ALPN: &[u8] = b"smart-explorer/share-exec/2";
+pub const EXEC_ALPN_V3: &[u8] = b"smart-explorer/share-exec/3";
+
+/// Protocol version selected by an Exec ALPN (`3` or `2`).
+pub fn exec_version_for_alpn(alpn: &[u8]) -> Option<u16> {
+    match alpn {
+        EXEC_ALPN_V3 => Some(EXEC_PROTOCOL_VERSION_V3),
+        EXEC_ALPN => Some(EXEC_PROTOCOL_VERSION),
+        _ => None,
+    }
+}
 const MAX_HANDSHAKE_BYTES: usize = 64 * 1024;
 const MAX_RESIZE_BYTES: usize = 256;
 const HEADER_BYTES: usize = 5;
@@ -63,6 +74,13 @@ impl ExecServerHello {
             server_fingerprint,
             server_node_id,
         }
+    }
+
+    /// Marks this server hello as protocol version 3 (`share-exec/3`).
+    pub fn into_v3(mut self) -> Self {
+        self.protocol_version = EXEC_PROTOCOL_VERSION_V3;
+        self.capability = EXEC_CAPABILITY_V3.into();
+        self
     }
 }
 
@@ -286,9 +304,7 @@ pub async fn send_client_frame<W: AsyncWrite + Unpin>(
     }
 }
 
-pub async fn recv_client_frame<R: AsyncRead + Unpin>(
-    reader: &mut R,
-) -> io::Result<ClientFrame> {
+pub async fn recv_client_frame<R: AsyncRead + Unpin>(reader: &mut R) -> io::Result<ClientFrame> {
     let (tag, payload) =
         read_payload(reader, MAX_EXEC_START_BYTES.max(MAX_EXEC_DATA_BYTES + 32)).await?;
     match tag {
@@ -348,9 +364,7 @@ pub async fn send_server_frame<W: AsyncWrite + Unpin>(
     }
 }
 
-pub async fn recv_server_frame<R: AsyncRead + Unpin>(
-    reader: &mut R,
-) -> io::Result<ServerFrame> {
+pub async fn recv_server_frame<R: AsyncRead + Unpin>(reader: &mut R) -> io::Result<ServerFrame> {
     let (tag, payload) =
         read_payload(reader, MAX_HANDSHAKE_BYTES.max(MAX_EXEC_DATA_BYTES + 32)).await?;
     match tag {

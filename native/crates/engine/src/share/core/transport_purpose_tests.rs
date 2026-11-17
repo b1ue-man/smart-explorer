@@ -92,8 +92,9 @@ fn verbindungen_task_profile_switches_change_only_their_values() {
 #[test]
 fn verbindungen_task_profile_per_alpn() {
     use crate::share::{apps_wire, exec_protocol, lan_link_wire, tcp_forward};
-    let cases: [(&[u8], TransportPurpose); 7] = [
+    let cases: [(&[u8], TransportPurpose); 8] = [
         (crate::share::node::ALPN, TransportPurpose::Files),
+        (exec_protocol::EXEC_ALPN_V3, TransportPurpose::Exec),
         (exec_protocol::EXEC_ALPN, TransportPurpose::Exec),
         (tcp_forward::TCP_ALPN, TransportPurpose::Tcp),
         (tcp_forward::TCP_ALPN_V1, TransportPurpose::Tcp),
@@ -134,6 +135,7 @@ fn verbindungen_task_profile_per_alpn() {
     let value = |name: &str| -> Vec<u8> {
         match name {
             "ALPN" => crate::share::node::ALPN.to_vec(),
+            "EXEC_ALPN_V3" => exec_protocol::EXEC_ALPN_V3.to_vec(),
             "EXEC_ALPN" => exec_protocol::EXEC_ALPN.to_vec(),
             "TCP_ALPN" => tcp_forward::TCP_ALPN.to_vec(),
             "TCP_ALPN_V1" => tcp_forward::TCP_ALPN_V1.to_vec(),
@@ -144,7 +146,7 @@ fn verbindungen_task_profile_per_alpn() {
         }
     };
     let endpoint: Vec<Vec<u8>> = names.iter().map(|name| value(name)).collect();
-    assert_eq!(endpoint.len(), 7, "{names:?}");
+    assert_eq!(endpoint.len(), 8, "{names:?}");
     assert_eq!(&accepted_alpns()[..endpoint.len()], &endpoint[..]);
 }
 
@@ -164,8 +166,10 @@ fn verbindungen_task_profile_late_bound_purpose() {
     assert_eq!(hinted.purpose(), Some(TransportPurpose::Exec));
     assert!(!hinted.yields());
     // Offered ALPNs pick a profile only when they agree.
+    use crate::share::exec_protocol::{EXEC_ALPN, EXEC_ALPN_V3};
     use crate::share::tcp_forward::{TCP_ALPN, TCP_ALPN_V1};
     let ok = |list: &[&[u8]]| offered_purpose(list.iter().map(|alpn| Ok::<_, ()>(*alpn)));
+    assert_eq!(ok(&[EXEC_ALPN_V3, EXEC_ALPN]), Some(TransportPurpose::Exec));
     assert_eq!(ok(&[TCP_ALPN, TCP_ALPN_V1]), Some(TransportPurpose::Tcp));
     assert_eq!(
         ok(&[crate::share::node::ALPN]),

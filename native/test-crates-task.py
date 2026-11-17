@@ -814,6 +814,11 @@ VERBINDUNGEN_TESTS = {
         "verbindungen_task_host_download_streams_get_priority_minus_one_replies_keep_zero",
         "verbindungen_task_exec_host_entry_ends_on_error_abort_and_panic",
         "verbindungen_task_exec_host_terminal_job_counts_until_its_guard_drops",
+        # B3 (share-exec/3 connection reuse, plan section F).
+        "verbindungen_task_exec_negotiates_v3_and_remembers_v2_peers",
+        "verbindungen_task_exec_reuses_one_connection_and_retries_only_before_first_byte",
+        "verbindungen_task_exec_checks_rights_per_job_and_closes_on_revocation",
+        "verbindungen_task_exec_pool_closes_connection_after_idle_timeout",
         # P3 (TCP pump) and the two route-pause tests of the transport review.
         "verbindungen_task_tcp_budget_grants_growth_only_within_capacity",
         "verbindungen_task_tcp_budget_returns_after_end",

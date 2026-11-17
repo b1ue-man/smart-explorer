@@ -12,7 +12,7 @@ use super::core::eio;
 use super::direct_reciprocal_coordinator::DirectReciprocalCoordinator;
 use super::direct_reciprocal_transport::SharedDirectRepairStore;
 use super::endpoint_routes::{EndpointRoutes, NodeTransportOptions, PublishedEndpointRoutes};
-use super::exec_protocol::EXEC_ALPN;
+use super::exec_protocol::{EXEC_ALPN, EXEC_ALPN_V3};
 use super::exec_registry::{ExecCancelReason, ExecRegistry, ExecRegistryLimits};
 use super::handshake_limits::HandshakeAdmission;
 use super::identity::ShareIdentity;
@@ -62,6 +62,8 @@ pub struct ShareIrohNode {
     next_incoming_session: AtomicU64,
     connection_events: ConnectionEventReporter,
     exec_registry: Arc<ExecRegistry>,
+    pub(in crate::share) exec_host: Arc<super::exec_server::host_connections::ExecHostConnections>,
+    pub(in crate::share) exec_pool: Arc<super::node_routes::pool::ExecClientPool>,
     /// Screen sessions of this host (S4, `node_screen.rs`).
     pub(super) screen: super::node_screen::NodeScreen,
     pub(super) tcp: super::node_tcp::NodeTcp,
@@ -159,6 +161,7 @@ impl ShareIrohNode {
             .secret_key(identity.iroh_secret.clone())
             .alpns(vec![
                 ALPN.to_vec(),
+                EXEC_ALPN_V3.to_vec(),
                 EXEC_ALPN.to_vec(),
                 super::tcp_forward::TCP_ALPN.to_vec(),
                 super::tcp_forward::TCP_ALPN_V1.to_vec(),
@@ -187,6 +190,8 @@ impl ShareIrohNode {
         wake.watch(&rt, &endpoint);
         let quic_stats = super::quic_stats_hub::QuicStatsHub::start(&rt);
         let exec_registry = Arc::new(ExecRegistry::new(ExecRegistryLimits::default()));
+        let exec_host = super::exec_server::host_connections::ExecHostConnections::new();
+        let exec_pool = super::node_routes::pool::ExecClientPool::new(&rt);
         let screen = super::node_screen::NodeScreen::new();
         let node = Arc::new(Self {
             rt,
@@ -206,6 +211,8 @@ impl ShareIrohNode {
             next_incoming_session: AtomicU64::new(0),
             connection_events: ConnectionEventReporter::default(),
             exec_registry,
+            exec_host,
+            exec_pool,
             screen,
             tcp: super::node_tcp::NodeTcp::new(),
             apps: Arc::new(super::node_apps::NodeApps::new()),
@@ -371,6 +378,8 @@ impl ShareIrohNode {
         self.exec_registry
             .as_ref()
             .cancel_all(ExecCancelReason::WorkerStopping);
+        self.exec_host.close_all();
+        self.exec_pool.close_all();
         super::node_screen::stop_all(&self.screen);
         super::node_tcp::stop_all(&self.tcp);
         super::node_apps::stop_all(&self.apps);

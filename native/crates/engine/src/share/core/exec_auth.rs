@@ -6,12 +6,16 @@ use super::core::{eio, hmac_proof, now_secs, random_token};
 use super::exec_access_view::client_features;
 use super::exec_policy::ExecGrant;
 use super::exec_protocol::{ExecClientHello, ExecServerHello};
-use super::exec_types::{ExecAuthorization, ExecPrincipal, EXEC_CAPABILITY, EXEC_PROTOCOL_VERSION};
+use super::exec_types::{
+    ExecAuthorization, ExecPrincipal, EXEC_CAPABILITY, EXEC_CAPABILITY_V3, EXEC_PROTOCOL_VERSION,
+    EXEC_PROTOCOL_VERSION_V3,
+};
+use super::identity::code_renewal_registry::retiring_secret;
 use super::identity::ShareIdentity;
 use super::profiles::fingerprint_matches;
 use super::relation_proof::{
     prove_relation, relation_transcript, ProvenPrincipal, RelationClientHello, RelationRejection,
-    RelationServerHello, EXEC_TRANSCRIPT_PREFIX,
+    RelationServerHello, EXEC_TRANSCRIPT_PREFIX, EXEC_V3_TRANSCRIPT_PREFIX,
 };
 use super::session::relation_kind_id;
 use super::types::{PeerEndpoint, ShareAuthState};
@@ -66,17 +70,27 @@ impl From<RelationRejection> for ExecRejection {
     }
 }
 
-pub fn build_client_hello(
+fn protocol_spec(version: u16) -> Option<(&'static str, &'static str)> {
+    match version {
+        EXEC_PROTOCOL_VERSION => Some((EXEC_CAPABILITY, EXEC_TRANSCRIPT_PREFIX)),
+        EXEC_PROTOCOL_VERSION_V3 => Some((EXEC_CAPABILITY_V3, EXEC_V3_TRANSCRIPT_PREFIX)),
+        _ => None,
+    }
+}
+
+pub fn build_client_hello_for(
+    version: u16,
     server: &ExecServerHello,
     endpoint: &PeerEndpoint,
     identity: &ShareIdentity,
 ) -> io::Result<ExecClientHello> {
-    validate_server(server, endpoint)?;
+    let (capability, _) = protocol_spec(version).ok_or_else(denied)?;
+    validate_server_for(version, capability, server, endpoint)?;
     let (relation_kind, relation_id) = relation_kind_id(endpoint);
     let client_nonce = random_token(18).map_err(eio)?;
     let mut hello = ExecClientHello {
-        protocol_version: EXEC_PROTOCOL_VERSION,
-        capability: EXEC_CAPABILITY.into(),
+        protocol_version: version,
+        capability: capability.into(),
         relation_kind: relation_kind.into(),
         relation_id,
         device_id: identity.device_id.clone(),
@@ -92,19 +106,21 @@ pub fn build_client_hello(
     Ok(hello)
 }
 
-pub fn authorize_client_hello(
+pub fn authorize_client_hello_for(
+    version: u16,
     server: &ExecServerHello,
     hello: &ExecClientHello,
     remote_node: &str,
     auth: &Arc<Mutex<ShareAuthState>>,
 ) -> Result<AuthorizedExecPeer, ExecRejection> {
     let state = auth.lock().map_err(|_| ExecRejection::NotAuthorized)?;
-    authorize_client_hello_in(server, hello, remote_node, &state, now_secs())
+    authorize_client_hello_for_in(version, server, hello, remote_node, &state, now_secs())
 }
 
 /// Order: protocol and pinned identity, then the relation proof (HMAC over
 /// the transcript), then the Exec permission of the proven device at `now`:
 /// commands or terminal not off and the grant not ended.
+#[cfg(test)]
 pub(super) fn authorize_client_hello_in(
     server: &ExecServerHello,
     hello: &ExecClientHello,
@@ -112,7 +128,28 @@ pub(super) fn authorize_client_hello_in(
     state: &ShareAuthState,
     now: i64,
 ) -> Result<AuthorizedExecPeer, ExecRejection> {
-    if server.protocol_version != EXEC_PROTOCOL_VERSION || server.capability != EXEC_CAPABILITY {
+    authorize_client_hello_for_in(
+        EXEC_PROTOCOL_VERSION,
+        server,
+        hello,
+        remote_node,
+        state,
+        now,
+    )
+}
+
+pub(super) fn authorize_client_hello_for_in(
+    version: u16,
+    server: &ExecServerHello,
+    hello: &ExecClientHello,
+    remote_node: &str,
+    state: &ShareAuthState,
+    now: i64,
+) -> Result<AuthorizedExecPeer, ExecRejection> {
+    let Some((capability, _)) = protocol_spec(version) else {
+        return Err(ExecRejection::Authentication);
+    };
+    if server.protocol_version != version || server.capability != capability {
         return Err(ExecRejection::Authentication);
     }
     let proven = prove_relation(
@@ -121,11 +158,36 @@ pub(super) fn authorize_client_hello_in(
         remote_node,
         state,
     )?;
-    let grant = principal_grant(state, &proven).ok_or(ExecRejection::NotAuthorized)?;
+    authorize_stream_in(&proven, state, now)
+}
+
+/// Re-checks the relation and Exec permission of a proven `/3` connection for
+/// one job stream at `now`: nothing from an earlier job is reused.
+pub(in crate::share) fn authorize_stream(
+    proven: &ProvenPrincipal,
+    auth: &Arc<Mutex<ShareAuthState>>,
+) -> Result<AuthorizedExecPeer, ExecRejection> {
+    let state = auth.lock().map_err(|_| ExecRejection::NotAuthorized)?;
+    authorize_stream_in(proven, &state, now_secs())
+}
+
+pub(in crate::share) fn authorize_stream_in(
+    proven: &ProvenPrincipal,
+    state: &ShareAuthState,
+    now: i64,
+) -> Result<AuthorizedExecPeer, ExecRejection> {
+    let mut current = proven.clone();
+    if current.relation_kind == "direct"
+        && current.relation_id != state.identity.direct_lookup_id
+        && retiring_secret(&state.identity.node_id, &current.relation_id).is_some()
+    {
+        current.relation_id = state.identity.direct_lookup_id.clone();
+    }
+    let grant = principal_grant(state, &current).ok_or(ExecRejection::NotAuthorized)?;
     if !exec_connection_allowed(grant, now) {
         return Err(ExecRejection::NotAuthorized);
     }
-    authorized(state, &proven, grant)
+    authorized(state, &current, grant)
 }
 
 fn authorized(
@@ -146,8 +208,11 @@ fn authorized(
 
 /// The Exec server hello as a relation handshake.
 pub(super) fn relation_server(server: &ExecServerHello) -> RelationServerHello {
+    let prefix = protocol_spec(server.protocol_version)
+        .map(|(_, prefix)| prefix)
+        .unwrap_or(EXEC_TRANSCRIPT_PREFIX);
     RelationServerHello {
-        transcript_prefix: EXEC_TRANSCRIPT_PREFIX.into(),
+        transcript_prefix: prefix.into(),
         protocol_version: server.protocol_version,
         capability: server.capability.clone(),
         challenge: server.challenge.clone(),
@@ -176,9 +241,14 @@ pub(super) fn relation_client(hello: &ExecClientHello) -> RelationClientHello {
     }
 }
 
-fn validate_server(server: &ExecServerHello, endpoint: &PeerEndpoint) -> io::Result<()> {
-    if server.protocol_version != EXEC_PROTOCOL_VERSION
-        || server.capability != EXEC_CAPABILITY
+fn validate_server_for(
+    version: u16,
+    capability: &str,
+    server: &ExecServerHello,
+    endpoint: &PeerEndpoint,
+) -> io::Result<()> {
+    if server.protocol_version != version
+        || server.capability != capability
         || server.server_device_id != endpoint.presence.device_id
         || server.server_public_key != endpoint.presence.public_key
         || server.server_fingerprint != endpoint.presence.fingerprint
@@ -239,6 +309,13 @@ mod tests {
             ),
             &client.proof
         ));
+        let server_v3 = server.clone().into_v3();
+        assert!(transcript(&server_v3, &client).starts_with(EXEC_V3_TRANSCRIPT_PREFIX));
+        assert!(!verify_hmac(
+            b"secret",
+            &transcript(&server_v3, &client),
+            &client.proof
+        ));
     }
 
     #[test]
@@ -280,6 +357,20 @@ mod tests {
             authorize_client_hello_in(&server, &client, &client.node_id, &state, NOW).unwrap();
         assert_eq!(authorized.authorization.policy_revision, 3);
         assert_eq!(authorized.grant, state.direct_grants[0].exec);
+        let v3 = server.clone().into_v3();
+        let mut c3 = client.clone();
+        c3.protocol_version = EXEC_PROTOCOL_VERSION_V3;
+        c3.capability = EXEC_CAPABILITY_V3.into();
+        let auth_v3 = |hello: &ExecClientHello| {
+            authorize_client_hello_for_in(3, &v3, hello, &hello.node_id, &state, NOW)
+        };
+        assert_eq!(auth_v3(&c3).err(), Some(ExecRejection::Authentication));
+        c3.proof = hmac_proof(b"secret", &transcript(&v3, &c3));
+        assert!(auth_v3(&c3).is_ok());
+        assert_eq!(
+            authorize_client_hello_in(&server, &c3, &c3.node_id, &state, NOW).err(),
+            Some(ExecRejection::Authentication)
+        );
         let mut forged = client.clone();
         forged.proof = hmac_proof(b"wrong", &transcript(&server, &forged));
         assert_eq!(

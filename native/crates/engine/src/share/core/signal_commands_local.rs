@@ -21,12 +21,11 @@ pub(super) fn mutate_exec_grant(
 ) -> io::Result<ExecGrantMutation> {
     let mutation =
         exec_grant_runtime::mutate(auth, iroh.exec_registry(), target, enabled, now_secs())?;
+    iroh.recheck_exec_connections();
     schedule_current(auth, iroh)?;
-    // Exec authorization is checked on every fresh Exec connection, and the
-    // registry has already installed the deny barrier/cancellation above.
-    // Keep existing connections alive long enough to deliver their signed-off
-    // Revoked terminal status; closing QUIC here would erase that lifecycle
-    // distinction and surface only an ambiguous disconnect to the requester.
+    // Idle `/3` connections whose grant is now off close at once; connections
+    // with running streams stay alive just long enough to deliver their
+    // signed-off Revoked terminal status (`exec_host_connections.rs`).
     Ok(mutation)
 }
 
@@ -45,6 +44,7 @@ pub(super) fn apply_persisted_exec_grant(
         principal,
         policy,
     )?;
+    iroh.recheck_exec_connections();
     schedule_current(auth, iroh)?;
     Ok(mutation)
 }
@@ -91,7 +91,9 @@ pub(super) fn set_direct_online(
                 next_epoch,
                 iroh.exec_registry(),
             )?;
-            iroh.access_registry().recheck(&candidate, now_secs());
+            let now = now_secs();
+            iroh.access_registry().recheck(&candidate, now);
+            iroh.exec_host.recheck(&candidate, now);
             *state = candidate;
         }
         (

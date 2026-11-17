@@ -7,7 +7,9 @@ use std::io;
 use super::exec_terminal::ExecTerminalRequest;
 
 pub const EXEC_PROTOCOL_VERSION: u16 = 2;
+pub const EXEC_PROTOCOL_VERSION_V3: u16 = 3;
 pub const EXEC_CAPABILITY: &str = "exec_stream_v2";
+pub const EXEC_CAPABILITY_V3: &str = "exec_stream_v3";
 pub const MAX_EXEC_START_BYTES: usize = 128 * 1024;
 pub const MAX_EXEC_DATA_BYTES: usize = 64 * 1024;
 

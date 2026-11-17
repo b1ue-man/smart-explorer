@@ -10,14 +10,16 @@ use crate::share::identity::code_renewal_registry::retiring_secret;
 use crate::share::profiles::{fingerprint_matches, ShareProfiles};
 use crate::share::types::{DirectGrantState, ShareAuthState};
 
-/// Transcript prefix of the Exec handshake (ALPN `smart-explorer/share-exec/2`).
+/// Transcript prefix of the Exec v2 handshake (ALPN `smart-explorer/share-exec/2`).
 pub const EXEC_TRANSCRIPT_PREFIX: &str = "smart-explorer/share-exec/v2|";
+/// Transcript prefix of the Exec v3 handshake (ALPN `smart-explorer/share-exec/3`).
+pub const EXEC_V3_TRANSCRIPT_PREFIX: &str = "smart-explorer/share-exec/v3|";
 
 /// The server half of a relation handshake.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RelationServerHello {
     /// Fixed per protocol and ending in `|`: Exec
-    /// `smart-explorer/share-exec/v2|`, screen `smart-explorer/share-screen/v1|`.
+    /// `smart-explorer/share-exec/v3|` (`/2`: `v2|`), screen `smart-explorer/share-screen/v1|`.
     pub transcript_prefix: String,
     pub protocol_version: u16,
     /// Protocol capability; the client must name the same one.

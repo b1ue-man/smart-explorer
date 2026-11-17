@@ -6,30 +6,32 @@
 //! count against the Exec limits with the running jobs (C5). A run-as
 //! account the host refuses is answered with the code the platform gave the
 //! refusal (D.2.2) and logged as `helper_refused`.
-use super::super::access_audit::{self, AccessEntry, AccessEvent, AccessKind};
+use super::super::access_audit::{self, AccessEntry};
 use super::super::auth_penalty::PenaltyKind;
 use super::super::consent_launch;
-use super::super::exec_access_view::{host_access_features, ExecAccessView, HelloOkWithAccess};
+use super::super::exec_access_view::HelloOkWithAccess;
 use super::super::exec_audit::{self, AuditEvent, StartAccess};
 use super::super::exec_auth::AuthorizedExecPeer;
-use super::super::exec_client_messages::{
-    account_helper_unavailable, account_not_allowed, permission_denied, ACCOUNT_HELPER_UNAVAILABLE,
-    ACCOUNT_NOT_ALLOWED, PERMISSION_DENIED,
-};
+use super::super::exec_client_messages::{permission_denied, PERMISSION_DENIED};
 use super::super::exec_helper_protocol::ACCOUNT_UNAVAILABLE;
 use super::super::exec_policy::ExecGrant;
 use super::super::exec_supervisor_protocol::RunAsAccount;
-use super::super::exec_terminal::{host_denial, host_features};
+use super::super::exec_terminal::host_denial;
 use super::super::exec_types::{ExecProviderStatus, ExecStart};
 use super::super::relation_proof::ProvenPrincipal;
 use super::*;
 
 // The decision about one start, with the host user's answer on `ask`.
 #[path = "access_approval_exec.rs"]
-mod approval;
+pub(super) mod approval;
+#[path = "exec_admission_v3.rs"]
+mod v3;
 #[cfg(any(test, feature = "test-support"))]
 pub(in crate::share) use approval::start_grant;
-use approval::{decide_start, ApprovedStart, Refusal, StartApproval};
+use approval::{decide_start, Refusal, StartApproval};
+use v3::{
+    account_refusal, build_hello_ok, probe_host_provider, record_helper_refusal, AdmittedConnection,
+};
 
 /// How often the grant is read again while the host user decides.
 const GRANT_POLL: Duration = Duration::from_secs(1);
@@ -39,6 +41,8 @@ pub(in crate::share) async fn handle_connection(
     connection: Connection,
     handshake_permit: ApplicationHandshakePermit,
 ) -> io::Result<()> {
+    let version = exec_version_for_alpn(connection.alpn())
+        .ok_or_else(|| eio("Unbekanntes Exec-Protokoll"))?;
     let _incoming = node.track_incoming(&connection)?;
     node.require_sharing_active()?;
     node.await_route(&connection, None, None).await?;
@@ -64,13 +68,18 @@ pub(in crate::share) async fn handle_connection(
     } else {
         identity.device_name.clone()
     };
-    let server_hello = ExecServerHello::new(
+    let base_hello = ExecServerHello::new(
         random_token(32).map_err(eio)?,
         identity.device_id,
         identity.public_key,
         identity.fingerprint,
         identity.node_id,
     );
+    let server_hello = if version == EXEC_PROTOCOL_VERSION_V3 {
+        base_hello.into_v3()
+    } else {
+        base_hello
+    };
     crate::share::route_protocol::run_until_active(
         handshake_deadline,
         "Exec-ServerHello Timeout",
@@ -94,41 +103,46 @@ pub(in crate::share) async fn handle_connection(
             return Err(error);
         }
     };
-    let authorized =
-        match authorize_client_hello(&server_hello, &client_hello, &remote_node, &node.auth) {
-            Ok(authorized) => authorized,
-            Err(rejection) => {
-                if rejection.counts_as_failed_authentication() {
-                    node.auth_penalties().record(
-                        &remote_node,
-                        PenaltyKind::AuthFailure,
-                        std::time::Instant::now(),
-                    );
-                }
-                exec_audit::record(AuditEvent::AuthRejected {
-                    remote_node: &remote_node,
-                    claimed_device: &client_hello.device_id,
-                    reason: rejection.audit_reason(),
-                });
-                let error = io::Error::from(rejection);
-                let denied = ExecWireError {
-                    code: PERMISSION_DENIED.into(),
-                    message: permission_denied(&host),
-                };
-                if crate::share::route_protocol::run_until_active(
-                    handshake_deadline,
-                    "Exec-Ablehnung Timeout",
-                    send_hello_error(&mut send, &denied),
-                )
-                .await
-                .is_ok()
-                {
-                    let _ = finish_send_and_wait_until(&mut send, &connection, handshake_deadline)
-                        .await;
-                }
-                return Err(error);
+    let authorized = match authorize_client_hello_for(
+        version,
+        &server_hello,
+        &client_hello,
+        &remote_node,
+        &node.auth,
+    ) {
+        Ok(authorized) => authorized,
+        Err(rejection) => {
+            if rejection.counts_as_failed_authentication() {
+                node.auth_penalties().record(
+                    &remote_node,
+                    PenaltyKind::AuthFailure,
+                    std::time::Instant::now(),
+                );
             }
-        };
+            exec_audit::record(AuditEvent::AuthRejected {
+                remote_node: &remote_node,
+                claimed_device: &client_hello.device_id,
+                reason: rejection.audit_reason(),
+            });
+            let error = io::Error::from(rejection);
+            let denied = ExecWireError {
+                code: PERMISSION_DENIED.into(),
+                message: permission_denied(&host),
+            };
+            if crate::share::route_protocol::run_until_active(
+                handshake_deadline,
+                "Exec-Ablehnung Timeout",
+                send_hello_error(&mut send, &denied),
+            )
+            .await
+            .is_ok()
+            {
+                let _ =
+                    finish_send_and_wait_until(&mut send, &connection, handshake_deadline).await;
+            }
+            return Err(error);
+        }
+    };
     node.bind_incoming_principal(
         &connection,
         super::super::session::PeerPrincipal::from_exec(&authorized.principal),
@@ -142,18 +156,7 @@ pub(in crate::share) async fn handle_connection(
             true,
         )
         .map_err(eio)?;
-    let (provider, terminal_supported) = crate::share::route_protocol::timeout_until(
-        handshake_deadline,
-        tokio::task::spawn_blocking(|| {
-            (
-                super::super::exec_platform::provider_status(),
-                super::super::exec_platform::terminal_supported(),
-            )
-        }),
-    )
-    .await
-    .map_err(|_| timed_out("Exec-Providerpruefung Timeout"))?
-    .map_err(eio)?;
+    let (provider, terminal_supported) = probe_host_provider(&node, handshake_deadline).await?;
     crate::share::route_monitor::authenticated_remote_capability(
         &connection,
         client_hello
@@ -161,15 +164,7 @@ pub(in crate::share) async fn handle_connection(
             .iter()
             .any(|feature| feature == "route_policy_v1"),
     );
-    let mut features = host_features(terminal_supported);
-    features.push("route_policy_v1".into());
-    features.extend(host_access_features().map(String::from));
-    let hello_ok = ExecHelloOk {
-        authorization: authorized.authorization.clone(),
-        provider: provider.clone(),
-        features,
-    };
-    let access = ExecAccessView::of(&authorized.grant, &provider.user_label);
+    let (hello_ok, access) = build_hello_ok(&authorized, &provider, terminal_supported);
     crate::share::route_protocol::run_until_active(
         handshake_deadline,
         "Exec-HelloOk Timeout",
@@ -182,6 +177,19 @@ pub(in crate::share) async fn handle_connection(
         ),
     )
     .await?;
+    if version == EXEC_PROTOCOL_VERSION_V3 {
+        return v3::serve_v3_connection(
+            node,
+            connection,
+            handshake_permit,
+            send,
+            authorized,
+            provider,
+            client_hello.client_features,
+            host,
+        )
+        .await;
+    }
     drop(handshake_permit);
     if !provider.available {
         finish_send_and_wait_until(
@@ -206,9 +214,36 @@ pub(in crate::share) async fn handle_connection(
     let ClientFrame::Start { start, .. } = first else {
         return Err(eio("Exec-Start fehlt"));
     };
-    // A terminal start is answered like a denied admission: no job is
-    // prepared and no process exists.
-    if let Some(denial) = host_denial(&start, terminal_supported) {
+    let end_mode = StreamEnd::CloseConnection(connection.clone());
+    admit_and_serve_start(
+        AdmittedConnection {
+            node: &node,
+            connection: &connection,
+            host: &host,
+            client_features: &client_hello.client_features,
+            provider: &provider,
+            terminal_supported,
+        },
+        authorized,
+        start,
+        protocol,
+        send,
+        recv,
+        end_mode,
+    )
+    .await
+}
+
+pub(super) async fn admit_and_serve_start(
+    ctx: AdmittedConnection<'_>,
+    authorized: AuthorizedExecPeer,
+    start: ExecStart,
+    mut protocol: ServerProtocolState,
+    mut send: iroh::endpoint::SendStream,
+    mut recv: iroh::endpoint::RecvStream,
+    end_mode: StreamEnd,
+) -> io::Result<()> {
+    if let Some(denial) = host_denial(&start, ctx.terminal_supported) {
         exec_audit::record(AuditEvent::StartRefused {
             principal: &authorized.principal,
             start: &start,
@@ -217,29 +252,23 @@ pub(in crate::share) async fn handle_connection(
         protocol.terminal();
         send_terminal_frame(&mut send, &ServerFrame::Error(denial)).await?;
         wait_result_ack(&mut recv, &mut protocol, &start.exec_id).await?;
-        return acknowledge_result(&mut send, &start.exec_id, &connection).await;
+        return acknowledge_result(&mut send, &start.exec_id, end_mode).await;
     }
-    // From here the client stream has its reader: a start on `ask` waits for
-    // the host user while heartbeats, early input and a cancel arrive.
     let mut stream = ClientStream::new(exec_frame_reader::client_frames(recv));
     let approvals = consent_launch::approvals();
-    let registry = node.exec_registry().clone();
+    let registry = ctx.node.exec_registry().clone();
     let record = |entry: AccessEntry<'_>| access_audit::record_access(entry);
     let approval = StartApproval {
         service: approvals,
-        auth: &node.auth,
+        auth: &ctx.node.auth,
         authorized: &authorized,
         start: &start,
-        host: &host,
-        client_features: &client_hello.client_features,
-        own_label: &provider.user_label,
+        host: ctx.host,
+        client_features: ctx.client_features,
+        own_label: &ctx.provider.user_label,
         audit: &record,
         grant_poll: GRANT_POLL,
     };
-    // The capability the start needs (on `ask` with the host user's answer),
-    // the grant's program list and its run-as account are host decisions
-    // made before any process exists; a refusal is answered like a denied
-    // admission.
     let decided = decide_start(
         &approval,
         &mut send,
@@ -249,22 +278,27 @@ pub(in crate::share) async fn handle_connection(
     )
     .await?;
     let checked = match decided {
-        Ok(approved) => match grant_launch(&approved.decided.grant, &start, &provider, &host).await
-        {
-            Ok(launch) => Ok((approved, launch)),
-            Err(refusal) => {
-                if refusal.account {
-                    record_helper_refusal(&authorized, &approved, &start, &refusal.error.message);
+        Ok(approved) => {
+            match grant_launch(&approved.decided.grant, &start, ctx.provider, ctx.host).await {
+                Ok(launch) => Ok((approved, launch)),
+                Err(refusal) => {
+                    if refusal.account {
+                        record_helper_refusal(
+                            &authorized,
+                            &approved,
+                            &start,
+                            &refusal.error.message,
+                        );
+                    }
+                    Err(Refusal::start(refusal.error))
                 }
-                Err(Refusal::start(refusal.error))
             }
-        },
+        }
         Err(refusal) => Err(refusal),
     };
     let (approved, launch) = match checked {
         Ok(checked) => checked,
         Err(refusal) => {
-            // The host user's answers have entries of their own.
             if refusal.start_refused {
                 exec_audit::record(AuditEvent::StartRefused {
                     principal: &authorized.principal,
@@ -278,7 +312,7 @@ pub(in crate::share) async fn handle_connection(
                 &mut stream,
                 &mut protocol,
                 &start,
-                &connection,
+                end_mode,
                 frame,
             )
             .await;
@@ -294,7 +328,7 @@ pub(in crate::share) async fn handle_connection(
         },
     );
     let grant_end = GrantEndWatch::new(
-        node.auth.clone(),
+        ctx.node.auth.clone(),
         ProvenPrincipal::from(&authorized.principal),
         decided.capability,
         decided.end,
@@ -318,11 +352,14 @@ pub(in crate::share) async fn handle_connection(
                     account: launch.account,
                     account_label: launch.account_label,
                     program: launch.program,
+                    #[cfg(test)]
+                    test_runner: ctx.node.exec_host.test_runner(),
                 },
                 send,
                 stream,
                 protocol,
-                connection.clone(),
+                ctx.connection.clone(),
+                end_mode,
                 grant_end,
             )
             .await;
@@ -345,49 +382,37 @@ pub(in crate::share) async fn handle_connection(
         &mut stream,
         &mut protocol,
         &start,
-        &connection,
+        end_mode,
         frame,
     )
     .await
 }
 
-/// Answers a start that gets no job (a refusal or a cached result) and
-/// completes the result handshake on the client stream's reader.
 async fn answer_without_job(
     send: &mut iroh::endpoint::SendStream,
     stream: &mut ClientStream,
     protocol: &mut ServerProtocolState,
     start: &ExecStart,
-    connection: &Connection,
+    end_mode: StreamEnd,
     frame: ServerFrame,
 ) -> io::Result<()> {
     protocol.terminal();
     send_terminal_frame(send, &frame).await?;
     wait_result_ack_from_reader(&mut stream.frames, protocol, &start.exec_id).await?;
-    acknowledge_result(send, &start.exec_id, connection).await
+    acknowledge_result(send, &start.exec_id, end_mode).await
 }
 
-/// What the grant decided about one start.
 struct GrantLaunch {
     account: Option<RunAsAccount>,
-    /// The account as the audit log names it.
     account_label: String,
-    /// The program file of a grant with a program list.
     program: Option<std::path::PathBuf>,
 }
 
-/// Why the grant refused a start before any job process exists.
 struct LaunchRefusal {
     error: ExecWireError,
-    /// This host refused the grant's run-as account (`helper_refused`).
     account: bool,
 }
 
-/// Applies the grant to `start`: its program list and environment rule may
-/// refuse it (file system lookups, so on the blocking pool), and its run-as
-/// account is resolved (user database lookups and the account service block
-/// as well). Both are host decisions made before any job process exists.
-/// `host` names this device in the refusal texts (C6).
 async fn grant_launch(
     grant: &ExecGrant,
     start: &ExecStart,
@@ -430,45 +455,6 @@ async fn grant_launch(
             account: true,
         }),
     }
-}
-
-/// The refusal of a run-as account: the code the platform gave it
-/// (`account_not_allowed`, `account_helper_unavailable`, otherwise
-/// `account_unavailable`) with the text and next step of C6.
-fn account_refusal(error: &io::Error, name: &str, host: &str) -> ExecWireError {
-    let code =
-        super::super::exec_platform::account_error_code(error).unwrap_or(ACCOUNT_UNAVAILABLE);
-    let message = match code {
-        ACCOUNT_NOT_ALLOWED => account_not_allowed(host, name),
-        ACCOUNT_HELPER_UNAVAILABLE => account_helper_unavailable(host, name, &error.to_string()),
-        _ => format!("run-as account {name:?} of this device: {error}"),
-    };
-    ExecWireError {
-        code: code.into(),
-        message,
-    }
-}
-
-/// `helper_refused` (C5): this host refused the run-as account of a start.
-fn record_helper_refusal(
-    authorized: &AuthorizedExecPeer,
-    approved: &ApprovedStart,
-    start: &ExecStart,
-    reason: &str,
-) {
-    let access = approved.decided.grant.access_grant();
-    let principal = ProvenPrincipal::from(&authorized.principal);
-    access_audit::record_access(AccessEntry {
-        kind: AccessKind::Exec { start: Some(start) },
-        principal: &principal,
-        outcome: Some(AccessEvent::HelperRefused),
-        capability: approved.decided.capability,
-        approval: Some(approved.approval),
-        approval_id: None,
-        account_profile: Some(access.account.key()),
-        account: access.account.account_name(),
-        reason: Some(reason),
-    });
 }
 
 fn refused(message: impl Into<String>) -> LaunchRefusal {

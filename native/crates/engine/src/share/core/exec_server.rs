@@ -11,17 +11,17 @@ use tokio::sync::mpsc;
 use super::access_grant_runtime::GrantEndWatch;
 use super::core::{eio, now_secs, random_token};
 use super::exec_access_view::ExecApprovalPending;
-use super::exec_auth::authorize_client_hello;
+use super::exec_auth::authorize_client_hello_for;
 use super::exec_frame_reader::{self, FrameReader};
 use super::exec_heartbeat::{ExecHeartbeatPolicy, EXEC_HEARTBEAT_POLICY};
 use super::exec_job::{run_contained_job, JobInput, JobLaunch};
 use super::exec_protocol::{
-    recv_client_frame, recv_client_hello, send_hello_error, send_hello_ok, send_server_frame,
-    send_server_hello, ClientFrame, ExecHelloOk, ExecServerHello, ExecWireError, ServerFrame,
-    ServerProtocolState,
+    exec_version_for_alpn, recv_client_frame, recv_client_hello, send_hello_error, send_hello_ok,
+    send_server_frame, send_server_hello, ClientFrame, ExecHelloOk, ExecServerHello, ExecWireError,
+    ServerFrame, ServerProtocolState,
 };
 use super::exec_registry::{ExecAdmission, ExecCancelReason, ExecRegistry};
-use super::exec_types::ExecId;
+use super::exec_types::{ExecId, EXEC_PROTOCOL_VERSION_V3};
 use super::handshake_limits::ApplicationHandshakePermit;
 use super::node::ShareIrohNode;
 
@@ -31,12 +31,22 @@ const MAX_QUEUED_INPUT: usize = 16;
 
 #[path = "exec_admission.rs"]
 mod admission;
+#[path = "exec_host_connections.rs"]
+pub(in crate::share) mod host_connections;
 // Plan 2026-11-14 E3 (P2b): the host side of an Exec job with a terminal.
 #[path = "exec_server_presence.rs"]
 mod presence;
 pub(super) use admission::handle_connection;
 #[cfg(any(test, feature = "test-support"))]
 pub(super) use admission::start_grant;
+
+/// How the host closes out a completed job stream after `ResultAcknowledged`.
+pub(super) enum StreamEnd {
+    /// `/2`: one job per connection; wait for the client to close the connection.
+    CloseConnection(Connection),
+    /// `/3`: finish only this stream and keep the connection open unless revoked.
+    FinishStream(host_connections::HostStreamGuard),
+}
 
 /// The client half after the start frame: its frame reader, the inputs it
 /// sent ahead of the job, and its heartbeat so far.
@@ -139,6 +149,7 @@ async fn serve_job(
     stream: ClientStream,
     mut protocol: ServerProtocolState,
     connection: Connection,
+    end_mode: StreamEnd,
     mut grant_end: Option<GrantEndWatch>,
 ) -> io::Result<()> {
     // A job with a terminal keeps the process interactive until this future
@@ -290,7 +301,7 @@ async fn serve_job(
                     drop(input_tx);
                     let result = worker.await.map_err(eio)?;
                     wait_result_ack_from_reader(&mut frames, &mut protocol, &exec_id).await?;
-                    acknowledge_result(&mut send, &exec_id, &connection).await?;
+                    acknowledge_result(&mut send, &exec_id, end_mode).await?;
                     return result;
                 }
             }
@@ -426,7 +437,7 @@ async fn send_terminal_frame(
 async fn acknowledge_result(
     send: &mut iroh::endpoint::SendStream,
     exec_id: &ExecId,
-    connection: &Connection,
+    end_mode: StreamEnd,
 ) -> io::Result<()> {
     send_frame_bounded(
         send,
@@ -436,12 +447,27 @@ async fn acknowledge_result(
         super::route_protocol::active_now() + EXEC_HEARTBEAT_POLICY.write_timeout,
     )
     .await?;
-    finish_send_and_wait_until(
-        send,
-        connection,
-        super::route_protocol::active_now() + EXEC_HEARTBEAT_POLICY.server_result_ack_timeout(),
-    )
-    .await
+    let deadline =
+        super::route_protocol::active_now() + EXEC_HEARTBEAT_POLICY.server_result_ack_timeout();
+    match end_mode {
+        StreamEnd::CloseConnection(connection) => {
+            finish_send_and_wait_until(send, &connection, deadline).await
+        }
+        StreamEnd::FinishStream(guard) => finish_stream_ack(send, guard, deadline).await,
+    }
+}
+
+async fn finish_stream_ack(
+    send: &mut iroh::endpoint::SendStream,
+    guard: host_connections::HostStreamGuard,
+    deadline: tokio::time::Instant,
+) -> io::Result<()> {
+    send.finish().map_err(eio)?;
+    if guard.is_revoked() {
+        let _ = super::route_protocol::timeout_until(deadline, send.stopped()).await;
+    }
+    drop(guard);
+    Ok(())
 }
 
 async fn finish_send_and_wait_until(

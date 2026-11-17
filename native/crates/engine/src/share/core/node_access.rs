@@ -164,6 +164,7 @@ impl ShareIrohNode {
         self.rt.spawn(access_expiry(
             Arc::downgrade(&self.auth),
             self.access_registry().clone(),
+            self.exec_host.clone(),
         ));
     }
 }
@@ -171,7 +172,11 @@ impl ShareIrohNode {
 /// Started with the node, without any dependency on a screen session.
 /// Subscribe before reading deadlines so an admission or moved deadline in
 /// between the read and wait remains an unseen watch update.
-async fn access_expiry(auth: Weak<Mutex<ShareAuthState>>, registry: Arc<AccessLeaseRegistry>) {
+async fn access_expiry(
+    auth: Weak<Mutex<ShareAuthState>>,
+    registry: Arc<AccessLeaseRegistry>,
+    exec_host: Arc<super::exec_server::host_connections::ExecHostConnections>,
+) {
     let mut changed = registry.changes();
     // The end the last round waited for; reaching it ended a grant (A6).
     let mut awaited: Option<i64> = None;
@@ -190,6 +195,7 @@ async fn access_expiry(auth: Weak<Mutex<ShareAuthState>>, registry: Arc<AccessLe
             };
             let now = now_secs();
             registry.recheck(&state, now);
+            exec_host.recheck(&state, now);
             if awaited.is_some_and(|end| end <= now) {
                 crate::screen::core::feed_host::rights_changed();
             }
@@ -197,10 +203,14 @@ async fn access_expiry(auth: Weak<Mutex<ShareAuthState>>, registry: Arc<AccessLe
             // loop wakes at that instant and rotates se-managed RDP credentials
             // (threat T-R2), even when no lease runs.
             let steering_end = super::configuration_runtime::recheck_steering(&state, now);
-            let next = [registry.next_deadline(), steering_end]
-                .into_iter()
-                .flatten()
-                .min();
+            let next = [
+                registry.next_deadline(),
+                exec_host.next_deadline(&state),
+                steering_end,
+            ]
+            .into_iter()
+            .flatten()
+            .min();
             awaited = next;
             let seconds = next.map_or(30, |end| {
                 u64::try_from(end.saturating_sub(now)).unwrap_or(0).min(30)

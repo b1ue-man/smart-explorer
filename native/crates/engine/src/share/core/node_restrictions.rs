@@ -58,16 +58,22 @@ impl ShareIrohNode {
         self.invalidate_restrictions(&RestrictionSet::everything(RestrictionReason::Unattributed))
     }
 
-    pub fn invalidate_restrictions(
-        &self,
-        restrictions: &RestrictionSet,
-    ) -> io::Result<usize> {
+    pub(in crate::share) fn recheck_exec_connections(&self) {
+        if let Ok(state) = self.auth.lock() {
+            self.exec_host
+                .recheck(&state, crate::share::core::now_secs());
+        }
+    }
+
+    pub fn invalidate_restrictions(&self, restrictions: &RestrictionSet) -> io::Result<usize> {
         let epoch = self
             .auth
             .lock()
             .map_err(|_| eio("Share-State gesperrt"))?
             .authorization_epoch;
-        self.invalidate_restrictions_at(restrictions, epoch)
+        let count = self.invalidate_restrictions_at(restrictions, epoch)?;
+        self.recheck_exec_connections();
+        Ok(count)
     }
 
     pub(in crate::share) fn invalidate_restrictions_at(
@@ -77,6 +83,9 @@ impl ShareIrohNode {
     ) -> io::Result<usize> {
         if restrictions.is_empty() {
             return Ok(0);
+        }
+        if restrictions.everything_reason().is_some() {
+            self.exec_host.close_all();
         }
         let previous = self
             .session_epoch
