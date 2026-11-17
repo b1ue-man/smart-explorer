@@ -102,7 +102,7 @@ pub use self::removed_direct_peers::{
     ForgottenDirectPeer, PairingOrigin, RemovedDirectPeer, MAX_REMOVED_DIRECT_PEERS,
 };
 pub use self::service::ShareService;
-pub use self::transport_options::migrate_server_file;
+pub use self::transport_options::{migrate_server_file, refresh_server_file, upgrade_server_file};
 pub use self::types::{
     DirectAccessState, DirectContact, DirectGrant, DirectGrantState, DirectRelationFlags,
     DirectRequestPolicy, ExecGrantTarget, ExecRequest, ExecResult, MemberUpsert, PeerOpenTarget,

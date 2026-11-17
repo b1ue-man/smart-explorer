@@ -1,5 +1,6 @@
 use std::io::{self, Read, Write};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use iroh::RelayUrl;
 
@@ -23,6 +24,65 @@ const MAX_SERVER_FILE_BYTES: u64 = 16 * 1024;
 /// without scheme becomes `tcp://host:port`, which keeps its plaintext
 /// meaning and shows it. Returns the new value when the file changed.
 pub fn migrate_server_file(path: &Path) -> io::Result<Option<String>> {
+    let Some(raw) = read_server_file(path)? else {
+        return Ok(None);
+    };
+    let Some(canonical) = migrate_stored(&raw) else {
+        return Ok(None);
+    };
+    write_server_file(path, &canonical)?;
+    Ok(Some(canonical))
+}
+
+/// Switches a plaintext server address to the same server over TLS once the
+/// server proves it there (TODO `DIREKT-INTERNET`, 2026-11-17): a device
+/// with `tcp://host:port` gets an `http://` relay, and QUIC address
+/// discovery runs only over TLS (`endpoint_routes.rs` `relay_mode`), so such
+/// a device never learned its public address and every peer connection
+/// across the internet fell back to the relay. The encrypted alternative
+/// (`SignalServerConfig::encrypted_alternative`) is connected with the
+/// normal certificate check; only a completed TLS and WebSocket handshake
+/// rewrites the file. A server without a valid certificate for its name
+/// keeps the plaintext address. One try per process (worker start).
+pub fn upgrade_server_file(path: &Path) -> io::Result<Option<String>> {
+    if UPGRADE_TRIED.swap(true, Ordering::AcqRel) {
+        return Ok(None);
+    }
+    let Some(raw) = read_server_file(path)? else {
+        return Ok(None);
+    };
+    let Ok(config) = SignalServerConfig::parse_stored(&raw) else {
+        return Ok(None);
+    };
+    let Some(encrypted) = config.encrypted_alternative() else {
+        return Ok(None);
+    };
+    if SignalServerConfig::parse_stored(&encrypted).is_err()
+        || super::signal_connection::SignalConnection::connect(&encrypted).is_err()
+    {
+        return Ok(None);
+    }
+    write_server_file(path, &encrypted)?;
+    Ok(Some(encrypted))
+}
+
+static UPGRADE_TRIED: AtomicBool = AtomicBool::new(false);
+
+/// The worker's read of the server file: the canonical form (B21), then
+/// the switch to TLS (`upgrade_server_file`); the new value when it changed.
+pub fn refresh_server_file(path: &Path) -> io::Result<Option<String>> {
+    let migrated = migrate_server_file(path)?;
+    match upgrade_server_file(path) {
+        Ok(Some(encrypted)) => {
+            eprintln!("share: Share-Server-Adresse auf {encrypted} umgestellt (verschlüsselt, Adresserkennung für Direktwege)");
+            Ok(Some(encrypted))
+        }
+        _ => Ok(migrated),
+    }
+}
+
+/// The stored server address, `None` without a file or above the limit.
+fn read_server_file(path: &Path) -> io::Result<Option<String>> {
     let file = match std::fs::File::open(path) {
         Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
@@ -34,16 +94,17 @@ pub fn migrate_server_file(path: &Path) -> io::Result<Option<String>> {
     if raw.len() as u64 > MAX_SERVER_FILE_BYTES {
         return Ok(None);
     }
-    let Some(canonical) = migrate_stored(&raw) else {
-        return Ok(None);
-    };
+    Ok(Some(raw))
+}
+
+fn write_server_file(path: &Path, value: &str) -> io::Result<()> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
-    temporary.write_all(canonical.as_bytes())?;
+    temporary.write_all(value.as_bytes())?;
     temporary.flush()?;
     temporary.as_file().sync_all()?;
     temporary.persist(path).map_err(|error| error.error)?;
-    Ok(Some(canonical))
+    Ok(())
 }
 
 /// Relay settings of the Iroh endpoint for a stored server address: the

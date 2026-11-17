@@ -454,7 +454,7 @@ pub(crate) fn load_share_server() -> Result<String, String> {
         return Err("Share server configuration exceeds its 16 KiB limit".into());
     }
     if let Some(canonical) =
-        crate::share::migrate_server_file(&path).map_err(|error| error.to_string())?
+        crate::share::refresh_server_file(&path).map_err(|error| error.to_string())?
     {
         return Ok(canonical);
     }
