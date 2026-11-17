@@ -18,6 +18,8 @@ pub use legacy_launcher::{
 pub use release::{download_update, download_version, list_remote_versions, RollbackDownload};
 
 const HTTP_TIMEOUT: Duration = Duration::from_secs(25);
+/// Per read of a payload download: no limit on the whole transfer.
+const DOWNLOAD_READ_TIMEOUT: Duration = Duration::from_secs(60);
 const UPDATE_USER_AGENT: &str = "smart-explorer-updater";
 
 pub(super) struct PayloadSpec {
@@ -316,9 +318,17 @@ fn http_download(url: &str, dest: &Path, signed_size: Option<u64>) -> Result<(),
             .unwrap_or_default()
     ));
     let _ = std::fs::remove_file(&tmp);
-    let resp = ureq::get(url)
-        .set("User-Agent", UPDATE_USER_AGENT)
-        .timeout(HTTP_TIMEOUT)
+    // Connect and per-read limits only: `Request::timeout` bounds the whole
+    // request including the body (ureq 2.12.1 "overall timeout"), so a
+    // 100 MB payload needed more than 32 Mbit/s and a device on a slower
+    // line could never update (seen 2026-11-17 at about 3 Mbit/s). The
+    // Android path reads the same way (`feed_files.rs`).
+    let resp = ureq::AgentBuilder::new()
+        .timeout_connect(HTTP_TIMEOUT)
+        .timeout_read(DOWNLOAD_READ_TIMEOUT)
+        .user_agent(UPDATE_USER_AGENT)
+        .build()
+        .get(url)
         .call()
         .map_err(|e| format_http_error(url, e))?;
     // r-lokal-4: exactly the signed size; without manifest never more than
