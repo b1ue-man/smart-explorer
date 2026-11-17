@@ -138,7 +138,12 @@ fn screen_task_negotiate_matrix() {
         assert_eq!(preference.key(), text);
     }
     assert_eq!(CodecPreference::parse("vp9"), None);
-    for codec in [CodecKind::H264, CodecKind::Tiles] {
+    for codec in [
+        CodecKind::H264,
+        CodecKind::Tiles,
+        CodecKind::Av1,
+        CodecKind::Hevc,
+    ] {
         assert_eq!(CodecKind::from_wire_code(codec.wire_code()), Some(codec));
     }
     for profile in [Cb, High] {
@@ -147,7 +152,8 @@ fn screen_task_negotiate_matrix() {
             Some(profile)
         );
     }
-    assert_eq!(CodecKind::from_wire_code(3), None);
+    assert_eq!(CodecKind::from_wire_code(0), None);
+    assert_eq!(CodecKind::from_wire_code(5), None);
     assert_eq!(
         serde_json::to_string(&hardware(Cb)).unwrap(),
         r#"{"codec":"h264","profile":"cb","hardware":true}"#

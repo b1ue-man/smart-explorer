@@ -27,7 +27,10 @@ use crate::screen::os::mf_encoder_sync::update_refresh;
 fn bildkette_task_win_w4_scaled_gpu_input_stays_within_two_codec_input_claims() {
     let (size, ring_size) = (FrameSize::new(1920, 1080), FrameSize::new(3840, 2160));
     // 24 working images of 1080p need about 190 MiB (`VERSIONED_WORKING_IMAGES`).
-    let caps = FrameCapabilities::admitted(size, MAX_WORKING_BYTES).unwrap();
+    let mut caps = FrameCapabilities::admitted(size, MAX_WORKING_BYTES).unwrap();
+    // Without hybrid regions: their two previous images (`CodecInput`) would
+    // cover a third NV12 claim and hide the MF path's own allowance.
+    caps.hybrid_regions = false;
     let contract = FrameContract::negotiate(Some(caps), Some(caps))
         .unwrap()
         .unwrap();
