@@ -563,6 +563,20 @@ netem-Strecken auf dem Runner, gemessen auf Linux x86_64, wenn keine Plattform g
 - M8 misst jetzt den Produktionsweg (`ShareIrohNode::start_exec`) statt eines Stellvertreter-Stroms. Tests: `verbindungen_task_exec_*` in `share/core/exec_pool_task_tests.rs`.
 - Nicht übersetzt und nicht gelaufen, bis der nächste Suite-Lauf sie bestätigt.
 
+**Bestätigungslauf 44042089709 (2026-11-17, Commit `15b44603`).** Alle 15 Jobs bestanden.
+
+- **B1:** endgültig nicht erfüllt.
+  - `loss`: p99 − p50 = 214,6 − 70,9 = 143,7 ms (Grenze 200 ms); größte Lücke 168,0 ms (Grenze 200 ms).
+  - `loss1`: 94,6 − 42,4 = 52,2 ms (Grenze 80 ms); größte Lücke 102,5 ms.
+  - B1 wird nicht gebaut. Kein bedingtes Paket bleibt offen.
+- **B3:** Die vier Tests `verbindungen_task_exec_*` bestehen auf Linux und Windows.
+- **M8 auf dem Produktionsweg:** Auftrag p50 über die bestehende `/3`-Verbindung gegen eine neue Verbindung je Auftrag:
+  - `wan`: 101,4 gegen 360,4 ms;
+  - `lan`: 4,5 gegen 42,2 ms.
+
+  Die Gesamtzeit der Variante `bestehende_verbindung` auf `lan` (3119,3 ms für 20 Aufträge gegen 850,2 ms) enthält mehr als die Summe der Auftragszeiten. Der Grund ist nicht geprüft; die Messung zählt Aufbau und Aufwärmen des Pools vermutlich mit (Annahme).
+- **`DRIVER_RATE`:** Die Windows-Einzelrate lag in diesem Lauf bei 256,5 MiB/s (Lauf 9: 207,1 MiB/s). `DRIVER_RATE` bleibt 165,7 MiB/s. Das ist der kleinere der beiden gemessenen Werte; er öffnet Zusatzverbindungen früher und nie später als nötig.
+
 **Übrige Befunde.** S4-Kryptoanteil (Lauf 6): Linux aarch64 16,1 %, Linux x86_64 7,2 %, Windows 2,8 %. Das ist nur ein Befund, gebaut wird
 dafür nichts. Die beiden ignorierten Linux-Gruppen der Bildkette (AV1-Rundlauf, Absturz des Hostprozesses) sind in Lauf 9 gelaufen und
 bestanden.
@@ -580,5 +594,5 @@ bestanden.
 - Möglichkeiten (bewertet in C): VPN im Programm (verworfen, C1); VPN mit Systemadapter (verworfen); getrennte Verbindungen je Zweck mit eigener Regelung (gewählt, E1 bis E5); QUIC-Datagramme mit FEC für das Bild (bedingt, E11); parallele Verbindungen für große Übertragungen (Bestand, Schwelle gemessen); Paketgröße und Bündel (Bündel gewählt, MTU verworfen); Klartextbild (vom Nutzer zurückgenommen, C4); Stationsverbesserungen (Zeigerüberlagerung gewählt, Hardwarekodierung und Schlüsselbild-Ersatz bedingt).
 - Aktiver Stand (2026-11-17): Suite-Läufe 1 bis 9; Lauf 44016047636 vollständig grün. Die Nachsteuerung N1 und die Entscheidungen zu B1 bis B5 stehen in Abschnitt F. B3 ist gebaut; B1 entscheidet der nächste Lauf über p99. Danach folgt derselbe Suite-Lauf noch einmal und dann das eine Release.
 - Früherer Stand (2026-11-14, nach P8): P1, P2, P2b, P3, P4, P5a (reduziert), P6, PX, P7, beide Reviews (Bild, Transport), P9 und P8 sind im Arbeitsbaum umgesetzt beziehungsweise geschrieben, ebenso die Schließung der Lücken des zweiten Integrationsdurchgangs des Vorauftrags; nichts gebaut, getestet, committet oder veröffentlicht; P5b und P5c entfallen. Einzelheiten und offene Punkte: Abschnitt E.
-- Nächster Schritt: Suite-Lauf 10 mit B3 und dem p99 von M7, dann ein Release über `release.yml` (D5) für diesen Auftrag und die Bildkette gemeinsam.
-- Schleifenstatus: aktiv (Bestätigungslauf für B3 und B1 steht aus).
+- Nächster Schritt: ein Release über `release.yml` (D5) für diesen Auftrag und die Bildkette gemeinsam; Suite-Lauf 44042089709 ist grün.
+- Schleifenstatus: aktiv bis zum Release.
