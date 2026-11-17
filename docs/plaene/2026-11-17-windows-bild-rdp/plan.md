@@ -52,3 +52,8 @@ Der direkte NVENC-Weg stand im Register an erster Stelle, gewählt wurde der Med
 - Nutzer: „av1 braucht n haufen daten, 84mbit/s ist durchaus drin … shadowpc braucht mit ner latens von 20-30ms und gestochen scharfen bildern … in der selben auflösung weniger“, „h.264 capped bei 800kbit/s aus irgend nem grund und ruckelt … nicht ok“, „av1 ist zu viel. punkt.“
 - Anforderung: jeder Kodierer hält nachweislich die von se gesetzte Datenrate ein (AV1 unter H.264 bei gleicher Qualität); hält er sie nicht, wird er umkonfiguriert oder übersprungen. Keine künstliche Obergrenze unter der Leitung (H.264 800 kbit/s ist ein Fehler). Ziel wie Shadow: unter 20 ms Latenz (Nutzer nach erneutem Nachsehen: „<20 bei shadow“), scharfes Bild.
 - Paket P7: Analyse läuft (Ratenmodell, Anwendung je Kodierer, Verlustfrei in der echten Sitzung).
+
+## Betrachter wie Shadow (Nutzer 2026-11-17)
+
+- Nutzer: „shadow nutzt ffmpeg, ein anderer währe Dxva2, als render ist directx 11“; „ich habe dir doch gerade die namen aus den einstellungen genannt. WARUM NUTZEN WIR DIE NICHT?“
+- Paket P8: Windows-Betrachter dekodiert mit FFmpeg (libavcodec, LGPL, dynamisch) über D3D11VA, Rückfall DXVA2, dann Software; Media Foundation nur noch, wenn FFmpeg nicht lädt. Das Videobild wird mit Direct3D 11 ohne CPU-Umweg angezeigt (dekodierte Textur direkt in die Swapchain); Werkzeugleiste und Menüs bleiben. FFmpeg kommt in Installer und Release-Build.
