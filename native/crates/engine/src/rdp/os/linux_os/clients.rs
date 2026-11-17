@@ -2,9 +2,12 @@
 //! graphical credential and certificate dialogs, no terminal needed), then
 //! `xfreerdp3` in an X11 session or `wlfreerdp3` in a Wayland session. The
 //! certificate pin stays `/cert:deny,fingerprint:sha256:<pin>`; credentials
-//! se supplies travel only through `/args-from:stdin`, never in argv.
+//! se supplies travel only through `/args-from:stdin`, never in argv. Since
+//! P4 (plan 2026-11-17) a host account without a password stands as `/u:`
+//! and `/d:` in argv, so the client's own dialog asks only for the password.
 use crate::rdp::core::{
-    CertificatePolicy, ClientCapability, ClientKind, HostService, StartRequest,
+    freerdp_account_args, freerdp_stdin_invocation, CertificatePolicy, ClientCapability,
+    ClientKind, HostAccount, HostService, StartRequest,
 };
 use crate::rdp::os::shared::clients::{ClientProcess, Credentials, NEEDS_SDL};
 use crate::rdp::os::shared::process::{capture, find_tool};
@@ -89,6 +92,7 @@ pub fn launch(
     service: &HostService,
     listener: SocketAddr,
     credentials: Option<&Credentials>,
+    account: Option<&HostAccount>,
 ) -> Result<ClientProcess, String> {
     let certificate = service
         .certificate_sha256
@@ -110,6 +114,8 @@ pub fn launch(
         if needs_credential_input(&request.client_id) {
             return Err(NEEDS_SDL.into());
         }
+        // User and domain are no secret; the client asks for the password.
+        args.extend(account.map(freerdp_account_args).unwrap_or_default());
         let child = Command::new(executable)
             .args(&args)
             .stdin(Stdio::inherit())
@@ -131,45 +137,32 @@ pub fn launch(
     launch_with_credentials(executable, args, credentials)
 }
 /// FreeRDP 3 `client/common/cmdline.h`: with `/args-from:stdin` every
-/// argument comes from stdin, one per line, and none from argv.
+/// argument comes from stdin, one per line, and none from argv
+/// (`core::freerdp_stdin_invocation`, decision 9 of P4).
 fn launch_with_credentials(
     executable: PathBuf,
-    mut args: Vec<String>,
+    args: Vec<String>,
     credentials: &Credentials,
 ) -> Result<ClientProcess, String> {
-    let password = credentials.password.expose();
-    let line_safe = |value: &str| !value.contains(['\n', '\r', '\0']);
-    if !line_safe(&credentials.username)
-        || !credentials.domain.as_deref().is_none_or(line_safe)
-        || !line_safe(password)
-    {
-        return Err("RDP credentials contain a line break and cannot be handed over".into());
-    }
-    args.push(format!("/u:{}", credentials.username));
-    if let Some(domain) = &credentials.domain {
-        args.push(format!("/d:{domain}"));
-    }
+    let (argv, input) = freerdp_stdin_invocation(
+        &args,
+        &credentials.username,
+        credentials.domain.as_deref(),
+        credentials.password.expose(),
+    )?;
     let mut child = Command::new(executable)
-        .arg("/args-from:stdin")
+        .args(&argv)
         .stdin(Stdio::piped())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         .spawn()
         .map_err(|e| format!("Cannot start installed FreeRDP client: {e}"))?;
-    let mut input = Vec::new();
-    for arg in &args {
-        input.extend_from_slice(arg.as_bytes());
-        input.push(b'\n');
-    }
-    input.extend_from_slice(b"/p:");
-    input.extend_from_slice(password.as_bytes());
-    input.push(b'\n');
     let written = match child.stdin.take() {
         Some(mut stdin) => stdin.write_all(&input).and_then(|()| stdin.flush()),
         None => Err(std::io::Error::other("FreeRDP stdin is unavailable")),
     };
-    // The only copy of the password outside `Credentials` is overwritten.
-    input.fill(0);
+    // The only copy of the password outside `Credentials` is wiped on drop.
+    drop(input);
     if let Err(error) = written {
         let _ = child.kill();
         let _ = child.wait();

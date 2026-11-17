@@ -1165,11 +1165,39 @@ BILDKETTE_TESTS = {
 }
 
 
+# The tests of the RDP sign-in with the account of the sharing device (plan 2026-11-17 P4, TODO
+# RDP-ZIELKONTO: account names, mstsc without a .rdp file for the desktop, the RemoteApp profile with the
+# account, the old host's refusal, redaction, steering, forgetting, FreeRDP over standard input, the xrdp
+# PAM line and token), by the operating system whose "Tests of every crate" run must report each of them as
+# passed exactly once (`run(expect=...)`, as PLUGIN_TESTS). docs/tests/register.tsv names the requirement
+# each protects.
+RDP_KONTO_TESTS = {
+    "both": [
+        "rdp_konto_task_account_rejects_line_and_separator_characters",
+        "rdp_konto_task_mstsc_desktop_uses_v_without_profile",
+        "rdp_konto_task_remoteapp_profile_carries_host_account",
+        "rdp_konto_task_account_name_forms",
+        "rdp_konto_task_old_host_refuses_rdp_login_viewer_falls_back",
+        "rdp_konto_task_login_info_debug_redacts_secret",
+        "rdp_konto_task_login_refused_without_steering",
+        "rdp_konto_task_stored_password_forgotten_when_steering_ends",
+        "rdp_konto_task_freerdp_password_only_on_stdin",
+        "rdp_konto_task_xrdp_pam_line_inserted_once_before_common_auth",
+        "rdp_konto_task_xrdp_token_bound_to_user_and_tunnel",
+    ],
+    "linux": [],
+    "windows": [
+        "rdp_konto_task_username_hint_written_for_both_names",
+    ],
+}
+
+
 def batch_expected():
     system = "windows" if WINDOWS else "linux"
     return (BATCH_TESTS["both"] + BATCH_TESTS[system] + VERBINDUNGEN_TESTS["both"]
             + VERBINDUNGEN_TESTS[system] + PLUGIN_TESTS["both"] + PLUGIN_TESTS[system]
-            + BILDKETTE_TESTS["both"] + BILDKETTE_TESTS[system])
+            + BILDKETTE_TESTS["both"] + BILDKETTE_TESTS[system]
+            + RDP_KONTO_TESTS["both"] + RDP_KONTO_TESTS[system])
 
 
 # Loads the netem qdisc module. The Azure kernels of the hosted runners ship sch_netem in the package

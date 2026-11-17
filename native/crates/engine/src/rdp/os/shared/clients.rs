@@ -1,7 +1,7 @@
 //! The installed native RDP client of this OS (design 2.4): inventory, the
 //! derived choice, trust and launch. Windows and Linux have adapters; the
 //! remaining platforms (Android) have none, which every call reports.
-use crate::rdp::core::{ClientCapability, HostService, StartRequest};
+use crate::rdp::core::{ClientCapability, HostAccount, HostService, StartRequest};
 use crate::rdp::os::platform::clients as platform;
 use crate::share::apps_wire::ManagedSecret;
 use std::{
@@ -11,8 +11,7 @@ use std::{
 
 /// Shown where FreeRDP would need a terminal for its credential prompt
 /// and no credentials were handed over (MCP, Android bridge; design 2.8).
-pub const NEEDS_SDL: &str =
-    "Für Remote Desktop ohne Terminal das Paket freerdp3-sdl installieren";
+pub const NEEDS_SDL: &str = "Für Remote Desktop ohne Terminal das Paket freerdp3-sdl installieren";
 
 const NO_CLIENT: &str =
     "Auf diesem Gerät gibt es keinen RDP-Client; Bildschirm ansehen/steuern bleibt verfügbar";
@@ -24,9 +23,11 @@ pub struct ClientProcess {
 }
 
 /// Credentials se hands to the client: the host's se-managed service
-/// credentials (`RdpCredential`) or what the person typed into the desktop
-/// GUI's own dialog (Linux without `sdl-freerdp3`, design 2.8). Never
-/// account passwords from a store, never in argv, files or logs.
+/// credentials (`RdpCredential`), the sign-in the host issued for its
+/// account (`RdpLogin`, P4: a se-remote password, an xrdp token or the
+/// password stored on the host) or what the person typed into the desktop
+/// GUI's own dialog (Linux without `sdl-freerdp3`, design 2.8). Never from a
+/// store of this device, never in argv, files or logs.
 pub struct Credentials {
     pub username: String,
     pub domain: Option<String>,
@@ -93,17 +94,20 @@ pub fn check_client(request: &StartRequest) -> Result<ClientCapability, String> 
     Ok(client)
 }
 
+/// `account`: the host's account the client proposes when se hands over no
+/// password (P4; mstsc `UsernameHint`, FreeRDP `/u:` `/d:`).
 pub fn launch(
     request: &StartRequest,
     service: &HostService,
     listener: SocketAddr,
     credentials: Option<&Credentials>,
+    account: Option<&HostAccount>,
 ) -> Result<ClientProcess, String> {
     check_client(request)?;
     if !listener.ip().is_loopback() || listener.port() == 0 {
         return Err("RDP client requires a loopback tunnel".into());
     }
-    platform_launch(request, service, listener, credentials)
+    platform_launch(request, service, listener, credentials, account)
 }
 
 pub fn hide_probe_console(command: &mut Command) {
@@ -116,8 +120,9 @@ fn platform_launch(
     service: &HostService,
     listener: SocketAddr,
     credentials: Option<&Credentials>,
+    account: Option<&HostAccount>,
 ) -> Result<ClientProcess, String> {
-    platform::launch(request, service, listener, credentials)
+    platform::launch(request, service, listener, credentials, account)
 }
 #[cfg(not(any(windows, target_os = "linux")))]
 fn platform_launch(
@@ -125,6 +130,7 @@ fn platform_launch(
     service: &HostService,
     listener: SocketAddr,
     _: Option<&Credentials>,
+    _: Option<&HostAccount>,
 ) -> Result<ClientProcess, String> {
     platform::launch(request, service, listener)
 }
@@ -170,10 +176,6 @@ pub fn watch_process_exit(
     platform::watch_process_exit(pid, started, on_exit)
 }
 #[cfg(not(any(windows, target_os = "linux")))]
-pub fn watch_process_exit(
-    _: u32,
-    _: u64,
-    _: Box<dyn FnOnce() + Send>,
-) -> Result<(), String> {
+pub fn watch_process_exit(_: u32, _: u64, _: Box<dyn FnOnce() + Send>) -> Result<(), String> {
     Err("Prozessgebundene Weiterleitungen gibt es auf dieser Plattform nicht".into())
 }

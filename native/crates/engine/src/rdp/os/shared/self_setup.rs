@@ -428,6 +428,8 @@ pub fn coverage_ended(steering_remains: bool) {
             // Not behind `RUN`: an open administrator prompt of a setup must
             // not delay the rotation.
             forget_issued();
+            // P4: stored passwords, xrdp tokens, a new se-remote password.
+            super::host_login::coverage_ended(steering_remains);
             if let Some(device) = host_device() {
                 if let Err(error) = platform::rotate_credentials(&device) {
                     note_error(format!("Zugangsdaten nach Entzug nicht erneuert: {error}"));

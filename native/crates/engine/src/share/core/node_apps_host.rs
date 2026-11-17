@@ -19,6 +19,8 @@ impl ShareIrohNode {
             | AppsCommand::RdpProbeV2
             | AppsCommand::RdpPrepare
             | AppsCommand::RdpCredential { .. }
+            | AppsCommand::RdpLogin { .. }
+            | AppsCommand::RdpStorePassword { .. }
             | AppsCommand::LocalServices => self.apps_einrichtung(principal, command, send).await,
             AppsCommand::Catalog => {
                 let host = self.apps.host(principal)?;

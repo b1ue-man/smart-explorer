@@ -139,6 +139,22 @@ pub fn exec_run_as_supported() -> bool {
     exec_platform::run_as_supported()
 }
 
+/// Windows: a new password of `se-remote` from the account service (RDP
+/// sign-in, plan 2026-11-17 P4); `for_rdp` also admits it to Remote Desktop.
+#[cfg(windows)]
+pub fn exec_remote_rdp_password(
+    for_rdp: bool,
+) -> Result<crate::share::apps_wire::ManagedSecret, String> {
+    platform_exec::remote_rdp_password(for_rdp).map_err(|error| error.to_string())
+}
+
+/// Linux: whether the account service configuration lets the worker of
+/// `uid` use `account` (the xrdp sign-in follows Exec, plan 2026-11-17 P4).
+#[cfg(target_os = "linux")]
+pub fn exec_account_helper_allows(uid: u32, account: &str) -> bool {
+    platform_exec::helper_allows(uid, account)
+}
+
 /// "Ausführen als" of this host: the state of its account service and every
 /// account choice with availability, reason and next step (PRM-M6, PRM-M7,
 /// D.2.4). Unlike `exec_run_as_supported` it may ask the account service

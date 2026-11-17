@@ -1,9 +1,15 @@
 //! Windows Remote Desktop Connection (`mstsc`) as the one client (design
 //! 2.4). se stores the host's authenticated SHA-1 thumbprint as `CertHash`
-//! for the device address (`trust.rs`), so the profile runs without
-//! `/prompt` and `/public` and saved Windows credentials apply.
+//! for the device address (`trust.rs`), so mstsc runs without `/prompt` and
+//! `/public` and saved Windows credentials apply. Since P4 (plan 2026-11-17)
+//! the whole desktop starts as `mstsc /v:<address>` without a `.rdp` file:
+//! mstsc shows its security warning with redirection checkboxes for every
+//! opened unsigned file since April 2026 (CVE-2026-26151), not for a start
+//! by name. A RemoteApp keeps its profile, which names the host's account.
+//! `UsernameHint` makes mstsc propose the host's account, not this one's.
 use crate::rdp::core::{
-    CertificatePolicy, ClientCapability, ClientKind, HostService, StartRequest,
+    mstsc_start, CertificatePolicy, ClientCapability, ClientKind, HostAccount, HostService,
+    MstscStart, StartRequest,
 };
 use crate::rdp::os::shared::clients::{ClientProcess, Credentials};
 use std::{
@@ -24,7 +30,7 @@ fn executable() -> Option<PathBuf> {
 pub fn inventory() -> Vec<ClientCapability> {
     vec![ClientCapability { id: "mstsc".into(), kind: ClientKind::Mstsc, version: None,
         certificate_policy: CertificatePolicy::NativeDialog, remote_app: true,
-        available: executable().is_some(), detail: "Windows Remote Desktop Connection: se stores the authenticated host certificate thumbprint for the device address, so no certificate question appears; a changed host certificate shows the native warning. Account credentials are entered once in the Windows dialog and can be saved there. Desktop and published Server/RDS RemoteApp aliases are supported.".into() }]
+        available: executable().is_some(), detail: "Windows Remote Desktop Connection: se stores the authenticated host certificate thumbprint for the device address, so no certificate question appears; a changed host certificate shows the native warning. The desktop starts by address without a .rdp file, so no redirection warning appears. mstsc proposes the device's account; se hands over the device's sign-in when the device issues one, otherwise the password is entered once in the Windows dialog. Desktop and published Server/RDS RemoteApp aliases are supported.".into() }]
 }
 /// mstsc asks for account credentials in its own dialog.
 pub fn needs_credential_input(_: &str) -> bool {
@@ -34,23 +40,49 @@ pub fn launch(
     request: &StartRequest,
     _: &HostService,
     listener: SocketAddr,
-    _: Option<&Credentials>,
+    credentials: Option<&Credentials>,
+    account: Option<&HostAccount>,
 ) -> Result<ClientProcess, String> {
-    let profile = super::profile::Profile::create(listener, request.remote_app.as_deref())?;
+    let executable = executable().ok_or_else(|| "System mstsc.exe is unavailable".to_string())?;
+    // P4: mstsc proposes the device's account instead of this computer's. A
+    // failed write only loses the proposal; the session credential and
+    // `CertHash` still apply.
+    let hint = account
+        .map(HostAccount::qualified)
+        .or_else(|| credentials.map(qualified));
+    if let Some(hint) = &hint {
+        let _ = trust::write_username_hint(listener, hint);
+    }
+    let (argument, resources): (std::ffi::OsString, Box<dyn Send>) =
+        match mstsc_start(listener, request.remote_app.as_deref()) {
+            MstscStart::Address(argument) => (argument.into(), Box::new(()) as Box<dyn Send>),
+            MstscStart::Profile => {
+                let alias = request.remote_app.as_deref();
+                let profile = super::profile::Profile::create(listener, alias, account)?;
+                (
+                    profile.path.clone().into_os_string(),
+                    Box::new(profile) as Box<dyn Send>,
+                )
+            }
+        };
     // Without /prompt and /public: the stored `CertHash` and saved
     // credentials of this device address apply (design 2.7.2).
-    let child =
-        Command::new(executable().ok_or_else(|| "System mstsc.exe is unavailable".to_string())?)
-            .arg(&profile.path)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(|e| format!("Cannot start Windows Remote Desktop Connection: {e}"))?;
-    Ok(ClientProcess {
-        child,
-        resources: Box::new(profile),
-    })
+    let child = Command::new(executable)
+        .arg(argument)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("Cannot start Windows Remote Desktop Connection: {e}"))?;
+    Ok(ClientProcess { child, resources })
+}
+
+/// `DOMAIN\user` of handed-over credentials.
+fn qualified(credentials: &Credentials) -> String {
+    match &credentials.domain {
+        Some(domain) => format!("{domain}\\{}", credentials.username),
+        None => credentials.username.clone(),
+    }
 }
 pub fn system_windows_directory() -> Option<PathBuf> {
     use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW;

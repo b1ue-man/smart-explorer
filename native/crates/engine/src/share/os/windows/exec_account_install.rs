@@ -418,8 +418,9 @@ fn delete_remote_account_and_profile() -> io::Result<bool> {
 }
 
 /// 32 characters with upper and lower case letters, digits and symbols, so
-/// every password policy of Windows accepts them.
-fn random_password() -> io::Result<String> {
+/// every password policy of Windows accepts them (also the RDP password of
+/// `se-remote`, `exec_account_rdp.rs`).
+pub(super) fn random_password() -> io::Result<String> {
     const CLASSES: [&[u8]; 4] = [
         b"ABCDEFGHJKLMNPQRSTUVWXYZ",
         b"abcdefghijkmnopqrstuvwxyz",

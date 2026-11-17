@@ -244,6 +244,49 @@ pub fn apps_rdp_credential(
     }
 }
 
+/// P4 `RdpLogin`: the grant's account and how the host signs this viewer
+/// in; `status_only` asks without a password and without side effects.
+/// A host up to 0.5.197 refuses the command (the caller falls back).
+pub fn apps_rdp_login(
+    target: PeerOpenTarget,
+    service_id: &str,
+    status_only: bool,
+    wait: Option<Duration>,
+) -> Result<crate::rdp::core::LoginInfo, String> {
+    let command = AppsCommand::RdpLogin {
+        service_id: service_id.into(),
+        status_only,
+    };
+    login_reply(apps_command(target, command, wait, || {})?.2)
+}
+
+/// P4 `RdpStorePassword`: the host checks and stores the password of the
+/// grant's account for this viewer; `None` forgets it.
+pub fn apps_rdp_store_password(
+    target: PeerOpenTarget,
+    service_id: &str,
+    password: Option<crate::share::apps_wire::ManagedSecret>,
+    wait: Option<Duration>,
+) -> Result<crate::rdp::core::LoginInfo, String> {
+    let command = AppsCommand::RdpStorePassword {
+        service_id: service_id.into(),
+        password,
+    };
+    login_reply(apps_command(target, command, wait, || {})?.2)
+}
+
+fn login_reply(result: AppsResult) -> Result<crate::rdp::core::LoginInfo, String> {
+    match result {
+        AppsResult::RdpLoginInfo {
+            username,
+            domain,
+            secret,
+            state,
+        } => crate::rdp::core::LoginInfo::from_wire(username, domain, secret, state),
+        _ => Err("Unexpected RDP login reply".into()),
+    }
+}
+
 /// Design 9.2 `LocalServices`: the host's services shared with this device
 /// (CLI/MCP without a running feed); `unavailable` names why none are known.
 pub fn apps_local_services(

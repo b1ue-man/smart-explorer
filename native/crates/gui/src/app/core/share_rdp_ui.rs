@@ -14,6 +14,8 @@ use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex, PoisonError};
 #[path = "device_feed_cache.rs"]
 pub(super) mod feed;
+#[path = "share_rdp_login_ui.rs"]
+mod login;
 #[path = "share_rdp_sessions.rs"]
 mod sessions;
 pub use sessions::lifetime_text;
@@ -40,6 +42,8 @@ struct State {
     user: String,
     domain: String,
     password: String,
+    /// P4: the sign-in with the device's account (state line, dialog).
+    login: login::Panel,
 }
 type Shared = Arc<Mutex<State>>;
 type OwnedNodes = Arc<Mutex<BTreeSet<String>>>;
@@ -89,7 +93,7 @@ pub fn entry_buttons(
 }
 
 pub(super) fn device(ui: &mut egui::Ui, profiles: &ShareProfiles, device: &str, key: &str) {
-    ui.label("Öffnet den Desktop dieses Geräts im RDP-Programm dieses Rechners. se richtet beide Seiten selbst ein; Benutzername und Kennwort fragt das RDP-Programm, und es kann sie speichern.");
+    ui.label("Öffnet den Desktop dieses Geräts im RDP-Programm dieses Rechners. se richtet beide Seiten selbst ein und meldet mit dem Konto an, das die Freigabe des Geräts nennt; braucht das ein Kennwort, fragt diese Seite einmal danach, und das Gerät speichert es.");
     let identity = egui::Id::new(("rdp-device", device, key));
     let shared: Shared = ui.ctx().data_mut(|d| {
         d.get_temp_mut_or_insert_with(identity, || Arc::new(Mutex::new(State::default())))
@@ -112,8 +116,10 @@ pub(super) fn device(ui: &mut egui::Ui, profiles: &ShareProfiles, device: &str, 
     };
     let present = present_relation(profiles, device, key).is_some();
     let (entries, note) = page_entries(feed.as_ref());
+    let name = login::device_name(profiles, device, key);
     let chosen;
     let typed;
+    let entered;
     {
         let mut state = shared.lock().unwrap_or_else(PoisonError::into_inner);
         let gap = state.clients.as_deref().and_then(client_gap);
@@ -126,10 +132,12 @@ pub(super) fn device(ui: &mut egui::Ui, profiles: &ShareProfiles, device: &str, 
         if let Some(gap) = &gap {
             ui.colored_label(egui::Color32::RED, gap);
         }
-        let ready = state.clients.is_some() && state.ask.is_none();
+        let ready = state.clients.is_some() && state.ask.is_none() && state.login.entry.is_none();
         let enabled = present && !state.busy && gap.is_none() && ready;
         chosen = entry_buttons(ui, &entries, enabled);
+        login::status(ui, &shared, &mut state, (device, key), present);
         typed = credentials_form(ui, &mut state);
+        entered = login::entry_dialog(ui, &mut state.login, &name);
         if state.busy {
             ui.horizontal(|ui| {
                 ui.spinner();
@@ -144,18 +152,28 @@ pub(super) fn device(ui: &mut egui::Ui, profiles: &ShareProfiles, device: &str, 
             ui.colored_label(egui::Color32::RED, text);
         }
     }
-    let start = match (chosen, typed) {
-        (Some(remote_app), _) => Some((remote_app, None)),
-        (None, Some((remote_app, credentials))) => Some((remote_app, Some(credentials))),
-        (None, None) => None,
+    let start = |remote_app| Start {
+        device: device.to_string(),
+        key: key.to_string(),
+        remote_app,
+        credentials: None,
+        password: None,
+        ask_password: true,
     };
-    if let Some((remote_app, credentials)) = start {
-        let session = Start {
-            device: device.to_string(),
-            key: key.to_string(),
-            remote_app,
-            credentials,
-        };
+    let session = match (chosen, typed, entered) {
+        (Some(remote_app), _, _) => Some(start(remote_app)),
+        (None, Some((remote_app, credentials)), _) => Some(Start {
+            credentials: Some(credentials),
+            ..start(remote_app)
+        }),
+        (None, None, Some((remote_app, account, password))) => Some(Start {
+            ask_password: password.is_some(),
+            password: password.map(|password| (account, password)),
+            ..start(remote_app)
+        }),
+        (None, None, None) => None,
+    };
+    if let Some(session) = session {
         open(ui.ctx(), &shared, session, owned_nodes.clone());
     }
     let active_nodes: BTreeSet<_> = crate::rdp::owned_sessions()
@@ -177,11 +195,7 @@ pub(super) fn device(ui: &mut egui::Ui, profiles: &ShareProfiles, device: &str, 
 
 /// Every node this device may use under its stored relations; the session
 /// list shows the sessions of these nodes.
-pub fn relation_nodes<'a>(
-    profiles: &'a ShareProfiles,
-    device: &str,
-    key: &str,
-) -> Vec<&'a str> {
+pub fn relation_nodes<'a>(profiles: &'a ShareProfiles, device: &str, key: &str) -> Vec<&'a str> {
     let direct = profiles
         .direct_contacts
         .iter()
@@ -295,6 +309,12 @@ struct Start {
     key: String,
     remote_app: Option<String>,
     credentials: Option<crate::rdp::Credentials>,
+    /// P4: the account and password typed into the dialog; the device
+    /// checks and stores them before the start.
+    password: Option<(String, crate::share::apps_wire::ManagedSecret)>,
+    /// P4: a device that needs the password once ends the start with the
+    /// dialog; `false` after „Ohne Speichern verbinden“ (the RDP program asks).
+    ask_password: bool,
 }
 
 /// One click: relation, probe, host setup, service, client, trust and start
@@ -313,10 +333,31 @@ fn open(ctx: &egui::Context, shared: &Shared, start: Start, owned_nodes: OwnedNo
     if let Err(error) = std::thread::Builder::new()
         .name("device-rdp-open".into())
         .spawn(move || {
+            if let Some((account, password)) = start.password {
+                let stored = crate::rdp::viewer_login::store_password(
+                    &start.device,
+                    &start.key,
+                    Some(password),
+                    None,
+                );
+                let mut state = state.lock().unwrap_or_else(PoisonError::into_inner);
+                match stored {
+                    Ok(info) => state.login.note(&info),
+                    Err(error) => {
+                        // Wrong password or refused: the dialog again.
+                        state.busy = false;
+                        state.error = Some(error);
+                        state.login.entry = Some((start.remote_app, account));
+                        context.request_repaint();
+                        return;
+                    }
+                }
+            }
             let typed = start.credentials.is_some();
             let options = crate::rdp::OpenOptions {
                 remote_app: start.remote_app.clone(),
                 credentials: start.credentials,
+                ask_password: start.ask_password,
                 ..Default::default()
             };
             let result = crate::rdp::open_device_with(&start.device, &start.key, options, || {
@@ -333,11 +374,22 @@ fn open(ctx: &egui::Context, shared: &Shared, start: Start, owned_nodes: OwnedNo
             state.busy = false;
             match result {
                 Ok(session) => {
+                    if let Some(login) = &session.login {
+                        state.login.note_view(login);
+                    }
+                    let login = session.login.as_ref().map(|login| login.text.as_str());
                     state.info = Some(format!(
-                        "{} läuft. {}",
+                        "{} läuft. {} {}",
                         session.remote_app.as_deref().unwrap_or(tiles::RDP_LABEL),
-                        session.session_notice
+                        session.session_notice,
+                        login.unwrap_or_default()
                     ))
+                }
+                Err(error) if crate::rdp::core::entry_needed_account(&error).is_some() => {
+                    let account = crate::rdp::core::entry_needed_account(&error)
+                        .unwrap_or_default()
+                        .to_string();
+                    state.login.entry = Some((start.remote_app, account));
                 }
                 Err(error) if !typed && error.contains(crate::rdp::NEEDS_SDL) => {
                     state.ask = Some(start.remote_app);

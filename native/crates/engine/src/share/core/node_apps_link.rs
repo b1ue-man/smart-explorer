@@ -139,6 +139,10 @@ fn matches_result(command: &AppsCommand, result: &AppsResult) -> bool {
                 AppsCommand::RdpCredential { .. },
                 AppsResult::RdpCredential { .. }
             )
+            | (
+                AppsCommand::RdpLogin { .. } | AppsCommand::RdpStorePassword { .. },
+                AppsResult::RdpLoginInfo { .. }
+            )
             | (AppsCommand::LocalServices, AppsResult::LocalServices { .. })
     )
 }

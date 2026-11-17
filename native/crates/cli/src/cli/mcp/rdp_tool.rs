@@ -12,12 +12,12 @@ use crate::{
 use rmcp::model::CallToolResult;
 use serde_json::{json, Value};
 
-pub(super) const DESCRIPTION: &str = "Remote Desktop to a paired device that granted „Bildschirm steuern“. `open` with only `device` opens the whole desktop in this computer's installed RDP program (optionally `remote_app`: an alias the device publishes); se chooses relation, service and client, sets the device's Remote Desktop up when needed (the device may ask its user once for administrator approval), trusts the certificate from the authenticated probe and keeps the session as long as the RDP program runs. The person types account credentials in the RDP program; this tool takes no password. `local_probe`, `probe` and `clients` read capabilities; `list`, `status` and `close` manage running sessions. Without an RDP program (Android) `open` fails with the reason.";
+pub(super) const DESCRIPTION: &str = "Remote Desktop to a paired device that granted „Bildschirm steuern“. `open` with only `device` opens the whole desktop in this computer's installed RDP program (optionally `remote_app`: an alias the device publishes); se chooses relation, service and client, sets the device's Remote Desktop up when needed (the device may ask its user once for administrator approval), trusts the certificate from the authenticated probe and keeps the session as long as the RDP program runs. se signs in with the account the device's grant names: automatically (se-remote, xrdp) or with the password stored once on the device (desktop GUI or `se rdp password`); otherwise the RDP program asks. This tool takes no password: `login_status` shows the account and how the device signs this computer in, `forget_password` deletes the password the device stored for this computer. `local_probe`, `probe` and `clients` read capabilities; `list`, `status` and `close` manage running sessions. Without an RDP program (Android) `open` fails with the reason.";
 const IGNORED: &str = "Accepted for callers of 0.5.188 and earlier; ignored.";
 pub(super) fn properties() -> Value {
     json!({
-        "action":{"type":"string","enum":["local_probe","probe","clients","open","list","status","close"]},
-        "device":{"type":"string","description":"probe/open: share endpoint, saved device name, device ID or fingerprint prefix"},
+        "action":{"type":"string","enum":["local_probe","probe","clients","open","list","status","close","login_status","forget_password"]},
+        "device":{"type":"string","description":"probe/open/login_status/forget_password: share endpoint, saved device name, device ID or fingerprint prefix"},
         "remote_app":{"type":"string","description":"open: exact alias of a RemoteApp the device publishes (Windows Server/RDS)"},
         "wait":{"type":"integer","minimum":1,"description":"open: an explicit limit in seconds for the device's answers; without it the call waits until the device answers"},
         "id":{"type":"string","description":"status/close: tunnel ID from open/list"},
@@ -76,6 +76,17 @@ pub(super) fn rdp_with(
             json!({"tunnel":crate::daemon::tcp_status(TunnelId::parse(&args.string("id")?)?)?})
         }
         "close" => json!({"closed":crate::rdp::close(TunnelId::parse(&args.string("id")?)?)?}),
+        // P4: state and forgetting only; a password is never an argument.
+        "login_status" => {
+            let (device, key) = resolve(&args.string("device")?)?;
+            let info = crate::rdp::viewer_login::login_status(&device, &key, None)?;
+            json!({"login": info.view()})
+        }
+        "forget_password" => {
+            let (device, key) = resolve(&args.string("device")?)?;
+            let info = crate::rdp::viewer_login::store_password(&device, &key, None, None)?;
+            json!({"login": info.view()})
+        }
         action => return Err(format!("Unknown RDP action {action}")),
     };
     Ok(response::ok(result))
