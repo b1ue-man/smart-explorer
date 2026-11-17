@@ -308,7 +308,7 @@ impl ShareProfiles {
     }
 }
 
-fn tombstone_for(
+pub(super) fn tombstone_for(
     entry: &DirectRequestEntry,
     now: i64,
 ) -> Result<DirectRequestTombstone, DirectLedgerError> {

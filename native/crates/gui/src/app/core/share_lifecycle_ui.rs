@@ -306,9 +306,9 @@ fn authorized_card(
                 });
             }
         } else if device.authorization.starts_with("active") {
-            ui.label("Legacy-Freigabe ohne gespeicherten Request-Verlauf.");
+            ui.label("Freigabe ohne gespeicherten Request-Verlauf (aufgeräumt, erneuerter Code oder Legacy).");
             if ui
-                .button("Unverknuepfte Legacy-Freigabe lokal sperren")
+                .button("Freigabe lokal sperren")
                 .clicked()
             {
                 *action = Some(LifecycleAction::RevokeUnlinkedLegacyGrant {

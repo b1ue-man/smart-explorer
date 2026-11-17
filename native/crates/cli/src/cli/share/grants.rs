@@ -266,7 +266,13 @@ fn revoke(args: RevokeArgs, json: bool) -> Result<(), String> {
         &grant.fingerprint,
         &grant.device_id,
     )?;
-    let Some(entry) = latest_accepted_request(&profiles, grant) else {
+    let identity = latest_accepted_request(&profiles, grant)
+        .map(|_| super::identity_command::load_with_repair_hint())
+        .transpose()?;
+    let Some((entry, identity)) = latest_accepted_request(&profiles, grant)
+        .zip(identity)
+        .filter(|(e, id)| e.local_lookup_id.as_deref() == Some(id.direct_lookup_id.as_str()))
+    else {
         if args.message.is_some() {
             return Err(
                 "legacy grant revocation does not support an authenticated --message; omit it"
@@ -276,7 +282,6 @@ fn revoke(args: RevokeArgs, json: bool) -> Result<(), String> {
         return revoke_legacy(&profiles, grant, json);
     };
     let request_id = entry.record.request.request_id.clone();
-    let identity = super::identity_command::load_with_repair_hint()?;
     let persisted = crate::share::decide_direct_request(
         Some(super::default_home()),
         &identity,
