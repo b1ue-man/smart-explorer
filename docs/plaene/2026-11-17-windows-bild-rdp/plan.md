@@ -46,3 +46,9 @@ Der direkte NVENC-Weg stand im Register an erster Stelle, gewählt wurde der Med
 - Nutzung: ohne physischen Monitor legt se den virtuellen Monitor in der Auflösung des Betrachters ohne Abfrage an.
 - Ungeprüft bis zum Gerätelauf: Annahme eines lokal signierten Benutzermodus-Treibers bei Secure Boot; DXGI-Aufnahme eines IddCx-Monitors.
 - Wahl im Betrachter (Nutzer 2026-11-17: „ich will per wahl auch auf den eigenen monitor wechseln können, damit ich die auflösung einstellen kann“): „Monitor: physisch / eigener (virtuell)“ auch an Geräten mit echtem Monitor, Auflösung fest = Fenstergröße oder aus Liste bzw. eingegeben. Windows: virtueller Monitor kommt hinzu, der physische bleibt. Linux Wayland: virtueller Monitor über das Portal. Linux X11 mit echtem Monitor: die gewählte Auflösung wird auf dem vorhandenen Monitor gesetzt (lokal sichtbar, nur auf ausdrückliche Wahl).
+
+## Bitrate (Nutzer 2026-11-17)
+
+- Nutzer: „av1 braucht n haufen daten, 84mbit/s ist durchaus drin … shadowpc braucht mit ner latens von 20-30ms und gestochen scharfen bildern … in der selben auflösung weniger“, „h.264 capped bei 800kbit/s aus irgend nem grund und ruckelt … nicht ok“, „av1 ist zu viel. punkt.“
+- Anforderung: jeder Kodierer hält nachweislich die von se gesetzte Datenrate ein (AV1 unter H.264 bei gleicher Qualität); hält er sie nicht, wird er umkonfiguriert oder übersprungen. Keine künstliche Obergrenze unter der Leitung (H.264 800 kbit/s ist ein Fehler). Ziel wie Shadow: 20–30 ms Latenz, scharfes Bild.
+- Paket P7: Analyse läuft (Ratenmodell, Anwendung je Kodierer, Verlustfrei in der echten Sitzung).
