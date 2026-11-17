@@ -49,7 +49,7 @@ impl<S: VendorSession> VendorEncoder<S> {
     /// P3: a session without admission on a device of its own (`gpu`),
     /// for the run-time check and `bench --local`; pictures go through
     /// `encode`.
-    pub(super) fn plain(
+    pub(crate) fn plain(
         session: S,
         name: &str,
         codec: CodecKind,

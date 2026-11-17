@@ -67,13 +67,14 @@ pub enum VirtualDisplayWish {
     /// Follow the viewer when the host has no physical monitor.
     #[default]
     Auto,
-    /// The physical monitor as it is: never change the host's display; an
-    /// unknown future value means this.
-    #[serde(other)]
-    Off,
     /// se's own display also at a physical monitor (display modes only; the
     /// driver setup never replaces a physical monitor).
     Request,
+    /// The physical monitor as it is: never change the host's display; an
+    /// unknown future value means this (`serde(other)` must be the last
+    /// variant).
+    #[serde(other)]
+    Off,
 }
 
 impl VirtualDisplayWish {

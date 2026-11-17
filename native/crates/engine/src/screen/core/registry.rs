@@ -371,7 +371,6 @@ pub struct SessionHandle {
 }
 
 impl SessionHandle {
-    #[cfg(any(test, feature = "test-support"))]
     pub fn id(&self) -> String {
         self.id.to_string()
     }
