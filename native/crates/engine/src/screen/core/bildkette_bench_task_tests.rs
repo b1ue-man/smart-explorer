@@ -9,6 +9,7 @@ use crate::screen::core::frame_timing::{
     ChainReport, FrameTimingRequest, HostStations, SkewedUs, StationUs, FRAME_TIMING_VERSION,
 };
 use crate::screen::core::metrics::ClockSync;
+use crate::screen::core::rate_control::PathKind;
 use crate::screen::core::wire_control::{HostStats, Pong};
 
 fn station(p50_us: u64, p95_us: u64) -> Option<StationUs> {

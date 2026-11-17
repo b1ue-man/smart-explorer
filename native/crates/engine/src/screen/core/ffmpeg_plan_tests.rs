@@ -6,7 +6,7 @@ use super::*;
 /// Offsets of a C struct of `(size, align)` fields on x86_64 (each field at
 /// the next multiple of its alignment).
 fn offsets(fields: &[(usize, usize)]) -> Vec<usize> {
-    let mut at = 0;
+    let mut at: usize = 0;
     fields
         .iter()
         .map(|(size, align)| {
