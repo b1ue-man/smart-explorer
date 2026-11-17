@@ -1,3 +1,5 @@
+use super::model::DECREASE_FACTOR;
+use super::rate_windows::MIN_DELAY_POINTS;
 use super::*;
 use crate::screen::core::pixel_convert::FrameSize;
 

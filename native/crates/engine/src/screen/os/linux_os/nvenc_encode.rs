@@ -137,6 +137,9 @@ pub(super) struct NvencSession {
     init: Box<NvEncInitializeParams>,
     config: Box<NvEncConfig>,
     rate: RateParams,
+    /// A rate the driver refused (plan 2026-11-17): the session keeps the
+    /// running one and does not ask for this one again.
+    refused: Option<RateParams>,
     frames: u64,
     codec: CodecKind,
     /// B-36: the GPU can invalidate references (merge W2).
@@ -178,6 +181,7 @@ impl NvencSession {
             init: Box::new(NvEncInitializeParams::zeroed()),
             config: Box::new(NvEncConfig::zeroed()),
             rate: RateParams::for_target(START_DIRECT_BPS, fps),
+            refused: None,
             frames: 0,
             codec,
             invalidation,
@@ -255,8 +259,12 @@ impl NvencSession {
         init.buffer_format = NV_ENC_BUFFER_FORMAT_NV12;
     }
 
-    /// A new rate without a new IDR (`nvEncReconfigureEncoder`).
+    /// A new rate without a new IDR (`nvEncReconfigureEncoder`). A refused
+    /// rate keeps the running one (plan 2026-11-17): the configuration goes
+    /// back to it and the error only reports the refusal.
     fn retune(&mut self, rate: &RateParams) -> io::Result<()> {
+        let reconfigure = self.api.functions.reconfigure_encoder.ok_or_else(missing)?;
+        let previous = self.rate;
         self.rate = *rate;
         apply_codec_settings(&mut self.config, rate, self.codec);
         apply_codec_references(&mut self.config, self.codec, self.invalidation);
@@ -264,10 +272,19 @@ impl NvencSession {
         let mut params = Box::new(NvEncReconfigureParams::zeroed());
         params.version = NV_ENC_RECONFIGURE_PARAMS_VER;
         params.re_init_encode_params = *self.init;
-        let reconfigure = self.api.functions.reconfigure_encoder.ok_or_else(missing)?;
         // SAFETY: valid session; the config pointer inside stays valid.
         let result = unsafe { reconfigure(self.encoder, &mut *params) };
-        status(&self.api, self.encoder, result, "nvEncReconfigureEncoder")
+        let checked = status(&self.api, self.encoder, result, "nvEncReconfigureEncoder");
+        if checked.is_err() {
+            self.rate = previous;
+            apply_codec_settings(&mut self.config, &previous, self.codec);
+            apply_codec_references(&mut self.config, self.codec, self.invalidation);
+            self.fill_init();
+            self.refused = Some(*rate);
+        } else {
+            self.refused = None;
+        }
+        checked
     }
 
     /// Writes I420 planes as NV12 into the input buffer.
@@ -340,8 +357,13 @@ impl HwH264Session for NvencSession {
         };
         let api = self.api.clone();
         let _current = self.context.push();
-        if self.rate.differs(rate) {
-            self.retune(rate)?;
+        if self.rate.differs(rate) && self.refused != Some(*rate) {
+            if let Err(error) = self.retune(rate) {
+                eprintln!(
+                    "screen encoder nvenc: rate {} bit/s refused, keeps {} bit/s: {error}",
+                    rate.bits_per_second, self.rate.bits_per_second
+                );
+            }
         }
         let pitch = self.upload(yuv)?;
         let f = &api.functions;

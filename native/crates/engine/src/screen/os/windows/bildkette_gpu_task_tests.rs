@@ -280,8 +280,10 @@ fn bildkette_task_win_gpu_encoder_settings_mapping() {
     assert_eq!(SETTINGS.len(), 8);
     // B-29: the full-power state is asked for and listed when refused.
     assert_eq!(SETTINGS[7], "low_power_off");
-    assert_eq!(one_frame_buffer(6_000_000, 60), 100_000);
-    assert_eq!(one_frame_buffer(6_000_000, 0), 6_000_000);
+    // In bytes (plan 2026-11-17; `CODECAPI_AVEncCommonBufferSize` of H.264
+    // and HEVC): one frame of 6 Mbit/s at 60 frames/s is 12 500 bytes.
+    assert_eq!(one_frame_buffer(6_000_000, 60), 12_500);
+    assert_eq!(one_frame_buffer(6_000_000, 0), 750_000);
     assert_eq!(ltr_control(2), 0x0001_0002);
     assert_eq!(gop_candidates(None), vec![u32::MAX, 65_535, 32_767]);
     assert_eq!(gop_candidates(Some(1_000))[0], 1_000);

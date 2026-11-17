@@ -117,6 +117,9 @@ pub struct Pacer {
     /// Smoothed round trip and frame interval (µs) for B-35; without them
     /// the fixed second and `MAX_IN_FLIGHT_FRAMES` apply.
     timing: Option<(u64, u64)>,
+    /// The rate the line was measured to carry (`set_drain_rate`); the
+    /// unacknowledged bytes drain at most this fast.
+    drain_bps: Option<u64>,
 }
 
 impl Default for Pacer {
@@ -131,6 +134,7 @@ impl Default for Pacer {
             dropped: 0,
             resets: 0,
             timing: None,
+            drain_bps: None,
         }
     }
 }
@@ -182,11 +186,24 @@ impl Pacer {
         self.timing = Some((srtt_us, interval_us));
     }
 
+    /// Plan 2026-11-17: the rate the line was measured to carry
+    /// (`RateController::sustained_bps`). The stale time lets the
+    /// unacknowledged bytes drain at the smaller of it and the target, so a
+    /// large lossless key frame on a line slower than the target is not
+    /// declared stale before it can arrive (the reset loop of lossless
+    /// sessions).
+    pub fn set_drain_rate(&mut self, bps: u64) {
+        self.drain_bps = Some(bps.max(1));
+    }
+
     /// The stale time and the frame limit for the next decision.
     pub fn stale_limits(&self, target_bps: u64) -> (u64, usize) {
+        let drain_bps = self
+            .drain_bps
+            .map_or(target_bps, |drain| drain.min(target_bps));
         match self.timing {
             Some((srtt_us, interval_us)) => {
-                let stale = stale_after_us(srtt_us, interval_us, self.unacked_bytes, target_bps);
+                let stale = stale_after_us(srtt_us, interval_us, self.unacked_bytes, drain_bps);
                 (stale, in_flight_limit(stale, interval_us))
             }
             None => (STALE_STREAM_US, MAX_IN_FLIGHT_FRAMES),

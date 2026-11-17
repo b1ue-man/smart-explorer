@@ -43,6 +43,7 @@ use crate::screen::core::codec_registry::{DecoderFactory, EncoderFactory};
 use crate::screen::core::host_backend::{ScreenDecoder, ScreenEncoder};
 use crate::screen::core::negotiate::{CodecChoice, CodecKind, CodecOffer, H264Profile};
 use crate::screen::core::pixel_convert::FrameSize;
+use crate::screen::core::rate_control::START_DIRECT_BPS;
 use crate::screen::core::wire_binary::GopHeader;
 
 #[path = "mf_enum.rs"]
@@ -278,7 +279,7 @@ impl EncoderFactory for MfEncoderFactory {
         size: FrameSize,
         fps: u32,
     ) -> io::Result<Box<dyn ScreenEncoder>> {
-        self.create(choice, size, fps, None)
+        self.create(choice, size, fps, None, START_DIRECT_BPS)
     }
 
     fn open_admitted(
@@ -288,7 +289,19 @@ impl EncoderFactory for MfEncoderFactory {
         fps: u32,
         grant: CaptureGrant,
     ) -> io::Result<Box<dyn ScreenEncoder>> {
-        self.create(choice, size, fps, Some(grant))
+        self.create(choice, size, fps, Some(grant), START_DIRECT_BPS)
+    }
+
+    /// The MFT opens at the rate the session gives it (plan 2026-11-17).
+    fn open_admitted_at(
+        &self,
+        choice: &CodecChoice,
+        size: FrameSize,
+        fps: u32,
+        grant: CaptureGrant,
+        bps: u64,
+    ) -> io::Result<Box<dyn ScreenEncoder>> {
+        self.create(choice, size, fps, Some(grant), bps)
     }
 }
 
@@ -318,6 +331,7 @@ impl MfEncoderFactory {
         size: FrameSize,
         fps: u32,
         grant: Option<CaptureGrant>,
+        bps: u64,
     ) -> io::Result<Box<dyn ScreenEncoder>> {
         if choice.codec != self.codec
             || (self.codec != CodecKind::H264 && !MF_VIDEO_ENCODERS_CONNECTED)
@@ -372,10 +386,10 @@ impl MfEncoderFactory {
         };
         match (self.kind == Kind::HardwareEncoder, grant) {
             (true, Some(grant)) => Ok(Box::new(AsyncEncoder::new_admitted(
-                transform, setup, grant,
+                transform, setup, grant, bps,
             )?)),
             (false, Some(grant)) => Ok(Box::new(SyncEncoder::new_admitted(
-                transform, setup, grant,
+                transform, setup, grant, bps,
             )?)),
             (true, None) => Ok(Box::new(AsyncEncoder::new(transform, setup)?)),
             (false, None) => Ok(Box::new(SyncEncoder::new(transform, setup)?)),

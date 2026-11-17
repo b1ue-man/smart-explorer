@@ -54,6 +54,8 @@ fn bildkette_task_stats_viewer_lines_name_every_station() {
         fps_limit: Some("encode_time".into()),
         rate_limit: Some("link".into()),
         rate_ceiling_kbps: None,
+        encoder_rate_kbps: Some(12_000),
+        rate_honour: Some("corrected".into()),
     };
     let station = Some(StationUs {
         p50_us: 1_500,
@@ -86,6 +88,7 @@ fn bildkette_task_stats_viewer_lines_name_every_station() {
         "Zeiger im Bild nein, Aufnahmerate begrenzt ja",
         "Bildrate 60 von 120 B/s, begrenzt durch Kodierzeit",
         "Datenrate begrenzt durch Leitung",
+        "Kodierer-Rate 12000 kbit/s (korrigiert)",
         "Erholungen: Fortsetzung 2, Schlüsselbild 1",
         "Gastgeber Aufnahme p50 1.5 ms, p95 2.5 ms",
         "Gastgeber Umwandlung nicht gemeldet",

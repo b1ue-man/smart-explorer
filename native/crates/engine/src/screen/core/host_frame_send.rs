@@ -71,8 +71,11 @@ impl Pipeline {
         let gop_id = gop.header().gop_id;
         self.next_frame_id += 1;
         let encoded_bytes: u64 = frame.records.iter().map(|r| r.len() as u64).sum();
+        // At the rate the line was measured to carry (plan 2026-11-17): a
+        // large lossless key frame on a line slower than the target gets the
+        // time it needs.
         let serialization_us = (u128::from(encoded_bytes) * 8 * 1_000_000
-            / u128::from(self.rate.target_bps().max(1)))
+            / u128::from(self.rate.sustained_bps().max(1)))
         .min(u128::from(u64::MAX)) as u64;
         let active_budget = stale.saturating_add(Duration::from_micros(serialization_us));
         let send_started = std::time::Instant::now();

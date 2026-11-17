@@ -5,7 +5,9 @@
 //! frames, CBR) and one `ProcessOutput` with its three outcomes.
 //!
 //! Plan 2026-11-14 bildkette B-21 (package BK2a), hardware encoders: CBR
-//! with a buffer of one frame (bit rate / frame rate), no B frames, low
+//! with a buffer of one frame (bit rate / frame rate; since 2026-11-17 in
+//! bytes, as `CODECAPI_AVEncCommonBufferSize` takes it for H.264 and HEVC,
+//! before in bits: a buffer of eight frames), no B frames, low
 //! latency, the longest GOP the encoder takes (key frames only on request),
 //! LTR buffer control where `CODECAPI_AVEncVideoLTRBufferControl` is taken,
 //! key frames marked as LTR 0. A value the MFT refuses stays at its default
@@ -28,8 +30,8 @@ use windows::Win32::Media::MediaFoundation::{
     MFVideoInterlace_Progressive, MFT_OUTPUT_DATA_BUFFER, MFT_OUTPUT_STREAM_CAN_PROVIDE_SAMPLES,
     MFT_OUTPUT_STREAM_PROVIDES_SAMPLES, MF_E_TRANSFORM_NEED_MORE_INPUT,
     MF_E_TRANSFORM_STREAM_CHANGE, MF_MT_AVG_BITRATE, MF_MT_DEFAULT_STRIDE, MF_MT_FRAME_RATE,
-    MF_MT_FRAME_SIZE, MF_MT_INTERLACE_MODE, MF_MT_MAJOR_TYPE, MF_MT_MPEG2_LEVEL,
-    MF_MT_MPEG2_PROFILE, MF_MT_PIXEL_ASPECT_RATIO, MF_MT_SUBTYPE,
+    MF_MT_FRAME_SIZE, MF_MT_INTERLACE_MODE, MF_MT_MAJOR_TYPE, MF_MT_MPEG2_PROFILE,
+    MF_MT_PIXEL_ASPECT_RATIO, MF_MT_SUBTYPE,
 };
 
 use super::mf_common::{platform, EncoderSetup};
@@ -37,7 +39,16 @@ use crate::screen::core::negotiate::H264Profile;
 use crate::screen::core::pixel_convert::{
     bgra_to_i420_with_limits, BgraImage, FrameSize, YuvMatrix,
 };
-use crate::screen::core::rate_control::MIN_BITRATE_BPS;
+
+// The bit rate of the encoders (plan 2026-11-17: buffer in bytes, mean bit
+// rate read back) lives in `mf_rate.rs`; every `mf_media::` path stays.
+#[path = "mf_rate.rs"]
+mod rate;
+#[cfg(test)]
+pub(in crate::screen::os) use rate::{bitrate_limit, level_max_bitrate};
+pub(in crate::screen::os) use rate::{
+    bounded_bitrate, one_frame_buffer, opened_limit, retune_bounded, set_mean_bitrate,
+};
 
 fn pack(high: u32, low: u32) -> u64 {
     (u64::from(high) << 32) | u64::from(low)
@@ -320,12 +331,6 @@ pub(in crate::screen::os) const SETTINGS: [&str; 8] = [
     "low_power_off",
 ];
 
-/// The CBR buffer in bits: one frame at `bitrate` and `fps` (R01
-/// `nvenc_base.cpp:260-283`, VBV = bit rate / frame rate).
-pub(in crate::screen::os) fn one_frame_buffer(bitrate: u32, fps: u32) -> u32 {
-    (bitrate / fps.max(1)).max(1)
-}
-
 /// `CODECAPI_AVEncVideoLTRBufferControl`: trust mode 1 in the upper 16
 /// bits, the number of LTR frames in the lower 16.
 pub(in crate::screen::os) fn ltr_control(frames: u16) -> u32 {
@@ -345,50 +350,8 @@ pub(in crate::screen::os) fn gop_candidates(encoder_max: Option<u32>) -> Vec<u32
     list
 }
 
-/// MaxBR of H.264 Annex A Table A-1 in bit/s: 1000 bit/s units for
-/// Baseline/Main, × 1.25 for High (`cpbBrVclFactor` 1250). `level` as in
-/// `MF_MT_MPEG2_LEVEL` (`eAVEncH264VLevel`: 10 = 1, 9 = 1b, 51 = 5.1).
-pub(in crate::screen::os) fn level_max_bitrate(level: u32, high: bool) -> Option<u64> {
-    let kbits: u64 = match level {
-        10 => 64,
-        9 => 128,
-        11 => 192,
-        12 => 384,
-        13 => 768,
-        20 => 2_000,
-        21 | 22 => 4_000,
-        30 => 10_000,
-        31 => 14_000,
-        32 | 40 => 20_000,
-        41 | 42 => 50_000,
-        50 => 135_000,
-        51 | 52 | 60 => 240_000,
-        61 => 480_000,
-        62 => 800_000,
-        _ => return None,
-    };
-    Some(if high { kbits * 1250 } else { kbits * 1000 })
-}
-
-/// The bit rate ceiling of an opened encoder: the smaller of what its level
-/// and the encoder report; without either only the `u32` of the API.
-pub(in crate::screen::os) fn bitrate_limit(level: Option<u64>, encoder: Option<u64>) -> u32 {
-    [level, encoder]
-        .into_iter()
-        .flatten()
-        .filter(|limit| *limit >= MIN_BITRATE_BPS)
-        .min()
-        .unwrap_or(u64::from(u32::MAX))
-        .min(u64::from(u32::MAX)) as u32
-}
-
-/// `target` within the floor of the rate control and `limit`.
-pub(in crate::screen::os) fn bounded_bitrate(target: u64, limit: u32) -> u32 {
-    target.clamp(MIN_BITRATE_BPS, u64::from(limit).max(MIN_BITRATE_BPS)) as u32
-}
-
 /// The largest value the encoder reports for `key`.
-fn range_max(api: &ICodecAPI, key: &GUID) -> Option<u32> {
+pub(super) fn range_max(api: &ICodecAPI, key: &GUID) -> Option<u32> {
     let mut low = VARIANT::default();
     let mut high = VARIANT::default();
     let mut step = VARIANT::default();
@@ -418,8 +381,8 @@ pub(in crate::screen::os) fn configure_hardware(
     taken.note(SETTINGS[1], b_frames);
     let constant = set(&CODECAPI_AVEncCommonRateControlMode, VARIANT::from(cbr));
     taken.note(SETTINGS[2], constant);
-    let mean = set(&CODECAPI_AVEncCommonMeanBitRate, VARIANT::from(bitrate));
-    taken.note(SETTINGS[3], mean);
+    // Read back (plan 2026-11-17): a rate the MFT does not keep is refused.
+    taken.note(SETTINGS[3], !set_mean_bitrate(&api, bitrate));
     let buffer = VARIANT::from(one_frame_buffer(bitrate, fps));
     taken.note(SETTINGS[4], set(&CODECAPI_AVEncCommonBufferSize, buffer));
     let gop = gop_candidates(range_max(&api, &CODECAPI_AVEncMPVGOPSize))
@@ -436,49 +399,6 @@ pub(in crate::screen::os) fn configure_hardware(
     let full_power = set(&CODECAPI_AVEncLowPowerEncoder, VARIANT::from(0u32));
     taken.note(SETTINGS[7], full_power);
     (Some(api), taken)
-}
-
-/// The bit rate ceiling of the opened `transform` (after its types are set);
-/// the H.264 level table only for H.264 (HEVC and AV1: the encoder's range,
-/// the pairing's ceiling is the rate control's, merge W1).
-pub(in crate::screen::os) fn opened_limit(
-    transform: &IMFTransform,
-    api: Option<&ICodecAPI>,
-    setup: &EncoderSetup,
-) -> u32 {
-    let h264 = setup.codec == crate::screen::core::negotiate::CodecKind::H264;
-    // SAFETY: plain reads of the transform's current output type.
-    let level = unsafe { transform.GetOutputCurrentType(0) }
-        .and_then(|media| unsafe { media.GetUINT32(&MF_MT_MPEG2_LEVEL) })
-        .ok()
-        .filter(|_| h264);
-    let high = setup.profile == H264Profile::High;
-    let by_level = level.and_then(|level| level_max_bitrate(level, high));
-    let by_encoder = api
-        .and_then(|api| range_max(api, &CODECAPI_AVEncCommonMeanBitRate))
-        .map(u64::from);
-    bitrate_limit(by_level, by_encoder)
-}
-
-/// Sets a changed bit rate (at least 2 % off) within `limit` and its one
-/// frame buffer; a refusal keeps the old one.
-pub(in crate::screen::os) fn retune_bounded(
-    api: Option<&ICodecAPI>,
-    current: &mut u32,
-    target_bps: u64,
-    limit: u32,
-    fps: u32,
-) {
-    let target = bounded_bitrate(target_bps, limit);
-    if (i64::from(target) - i64::from(*current)).abs() * 50 < i64::from(*current) {
-        return;
-    }
-    let Some(api) = api else { return };
-    if set_value(api, &CODECAPI_AVEncCommonMeanBitRate, VARIANT::from(target)) {
-        *current = target;
-        let buffer = VARIANT::from(one_frame_buffer(target, fps));
-        set_value(api, &CODECAPI_AVEncCommonBufferSize, buffer);
-    }
 }
 
 /// Marks the next frame (a key frame) as long-term reference 0.

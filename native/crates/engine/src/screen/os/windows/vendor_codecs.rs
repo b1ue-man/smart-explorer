@@ -235,6 +235,7 @@ impl VendorFactory {
         size: FrameSize,
         fps: u32,
         grant: CaptureGrant,
+        bps: u64,
     ) -> io::Result<Box<dyn ScreenEncoder>> {
         check_request(self.codec, self.max, choice, size)?;
         let (name, pci) = (self.vendor.name(self.codec), self.vendor.pci_vendor());
@@ -252,14 +253,14 @@ impl VendorFactory {
         let ceiling = crate::screen::core::rate_control::codec_ceiling_bps(choice, size, fps);
         let encoder: Box<dyn ScreenEncoder> = match self.vendor {
             Vendor::Nvenc => {
-                let session = nvenc_encode::NvencSession::open(&device, codec, size, fps)?;
+                let session = nvenc_encode::NvencSession::open_at(&device, codec, size, fps, bps)?;
                 let hull =
                     vendor_encode::VendorEncoder::new(session, &name, codec, size, grant, gpu)
                         .with_ceiling(ceiling);
                 Box::new(hull) as Box<dyn ScreenEncoder>
             }
             Vendor::Amf => {
-                let session = amf_encode::AmfSession::open(&device, codec, size, fps)?;
+                let session = amf_encode::AmfSession::open_at(&device, codec, size, fps, bps)?;
                 let hull =
                     vendor_encode::VendorEncoder::new(session, &name, codec, size, grant, gpu)
                         .with_ceiling(ceiling);
@@ -317,6 +318,19 @@ impl EncoderFactory for VendorFactory {
         fps: u32,
         grant: CaptureGrant,
     ) -> io::Result<Box<dyn ScreenEncoder>> {
-        self.create(choice, size, fps, grant)
+        let start = crate::screen::core::rate_control::START_DIRECT_BPS;
+        self.create(choice, size, fps, grant, start)
+    }
+
+    /// The session opens at the rate the session gives it (plan 2026-11-17).
+    fn open_admitted_at(
+        &self,
+        choice: &CodecChoice,
+        size: FrameSize,
+        fps: u32,
+        grant: CaptureGrant,
+        bps: u64,
+    ) -> io::Result<Box<dyn ScreenEncoder>> {
+        self.create(choice, size, fps, grant, bps)
     }
 }

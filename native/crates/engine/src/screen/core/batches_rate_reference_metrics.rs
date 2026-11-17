@@ -7,6 +7,24 @@ pub(super) const FRAME_US: u64 = 1_000_000 / FPS as u64;
 pub(super) const WARMUP_US: u64 = 5_000_000;
 pub(super) const STATIONARY_US: u64 = 12_000_000;
 
+/// The start of every window on the relay (plan 2026-11-17): the table of
+/// its stream, at most the relay guard (`rate_control::model`).
+fn start_bps() -> u64 {
+    let model = super::super::model::start_table_bps(
+        super::SIZE,
+        FPS,
+        crate::screen::core::negotiate::CodecKind::H264,
+        false,
+    );
+    super::super::model::session_start_bps(
+        Some(model),
+        None,
+        true,
+        super::super::START_RELAY_BPS,
+        u64::MAX,
+    )
+}
+
 #[derive(Clone, Copy, Serialize)]
 pub(super) struct Profile {
     pub label: &'static str,
@@ -226,10 +244,10 @@ pub(super) fn evaluate(profile: Profile, reference: &Measurement, screen: &Measu
             "stationary useful throughput {r_screen:.0} < 90% of measured reference {r_ref:.0}"
         ));
     }
-    let r_start = super::super::START_RELAY_BPS * profile.windows as u64;
+    let r_start = start_bps() * profile.windows as u64;
     let intervals = ((r_ref / r_start as f64).max(1.0).ln() / 1.25f64.ln()).ceil() as u64 + 2;
     let mut interval = screen.idle_rtt_us.max(FRAME_US);
-    let mut targets = vec![super::super::START_RELAY_BPS; profile.windows];
+    let mut targets = vec![start_bps(); profile.windows];
     let mut rtts = vec![screen.idle_rtt_us; profile.windows];
     let mut frame_intervals = vec![FRAME_US; profile.windows];
     let mut first = vec![None; profile.windows];
@@ -279,10 +297,7 @@ pub(super) fn evaluate(profile: Profile, reference: &Measurement, screen: &Measu
             "actual synthetic frame preparation cannot saturate the profiled link".to_owned(),
         );
     }
-    if first
-        .iter()
-        .any(|value| *value != Some(super::super::START_RELAY_BPS))
-    {
+    if first.iter().any(|value| *value != Some(start_bps())) {
         failures
             .push("not every window exposed the actual conservative relay start target".to_owned());
     }

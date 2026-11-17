@@ -194,6 +194,9 @@ pub(super) fn chain_text(chain: &ChainReport) -> String {
         format!("fps_limit={}", text(&chain.fps_limit)),
         format!("rate_limit={}", text(&chain.rate_limit)),
         format!("rate_ceiling_kbps={}", count(chain.rate_ceiling_kbps)),
+        // Plan 2026-11-17: the rate the encoder is given and its honour.
+        format!("encoder_rate_kbps={}", count(chain.encoder_rate_kbps)),
+        format!("rate_honour={}", text(&chain.rate_honour)),
     ]
     .join("\t")
 }

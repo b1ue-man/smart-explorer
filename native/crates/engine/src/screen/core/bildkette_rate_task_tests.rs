@@ -1,11 +1,18 @@
 //! Acceptance of plan 2026-11-14 „Bildkette“ package BK1 (B-02, B-03, B-05,
-//! B-06, B-08, B-09) at the rate control and its sources.
+//! B-06, B-08, B-09) at the rate control and its sources; the growth tests
+//! follow the bounded growth of plan 2026-11-17 (a sender that fills the
+//! target drives it, `bildkette_rate_model_task_tests.rs`).
 use super::*;
 use crate::screen::core::negotiate::{CodecChoice, CodecKind, H264Profile};
 use crate::screen::core::pixel_convert::FrameSize;
 
 const FRAME_US: u64 = 16_667;
 const DELAY_US: u64 = 5_000;
+/// 8 MB per frame: 3.84 Gbit/s at 60 frames/s, a sender that fills every
+/// target of these tests (plan 2026-11-17 bounds the growth by delivery).
+const BIG_FRAME: u64 = 8_000_000;
+/// The stream's table start of the app-limited test (1080p60 H.264).
+const TABLE: u64 = 20_000_000;
 
 /// Sends frame `index` of a 60 frames/s stream with `bytes` and acknowledges
 /// it `delay_us` later; the target before the frame and the signal.
@@ -93,21 +100,24 @@ fn bildkette_task_rate_ramp_doubles_per_round_trip_until_overuse() {
     let mut rate = RateController::new(PathKind::Direct, 0);
     rate.set_timing(20_000, FRAME_US);
     assert!(rate.ramping());
-    // An application-limited sender (1 kB per frame) with constant delay:
-    // the target doubles once per max(RTT, frame interval).
+    // A sender that fills the target (8 MB per frame, 3.84 Gbit/s offered)
+    // with constant delay: the target doubles once per max(RTT, frame
+    // interval), within twice what was delivered (slow start).
     let mut changes = Vec::new();
     let mut index = 0;
-    while index < 40 {
-        let (before, _) = frame(&mut rate, index, 1_000, DELAY_US);
+    while changes.len() < 10 && index < 200 {
+        let (before, _) = frame(&mut rate, index, BIG_FRAME, DELAY_US);
         let after = rate.target_bps();
         if after != before {
             changes.push((index, before, after));
         }
         index += 1;
     }
-    assert!(changes.len() >= 10, "{changes:?}");
+    assert_eq!(changes.len(), 10, "{changes:?}");
+    let delivered = rate.receive_rate_bps().unwrap();
     for (_, before, after) in &changes {
         assert_eq!(*after, before * 2, "{changes:?}");
+        assert!(*after <= 2 * delivered, "{changes:?}");
     }
     for pair in changes.windows(2) {
         let gap_us = (pair[1].0 - pair[0].0) * FRAME_US;
@@ -115,29 +125,36 @@ fn bildkette_task_rate_ramp_doubles_per_round_trip_until_overuse() {
     }
     assert!(rate.target_bps() > START_DIRECT_BPS * 1000);
     // A queue builds up: 6 ms more delay per frame. The first persistent
-    // overuse ends the ramp; the sender stayed application-limited without
-    // back pressure, so the target sinks from itself, not to 0.85 × the
-    // receive rate of 480 kbit/s (plan 5.3a).
-    let mut decreased = None;
+    // overuse ends the ramp; the sender filled the target, so it sinks to
+    // 0.85 × the receive rate (an application-limited one: 0.85 × its own
+    // target, `bildkette_task_rate_app_limited_overuse_never_drops_to_
+    // content_rate`).
+    let mut decreased = false;
     for step in 1..40 {
-        let (before, signal) = frame(&mut rate, index, 1_000, DELAY_US + step * 6_000);
+        let (_, signal) = frame(&mut rate, index, BIG_FRAME, DELAY_US + step * 6_000);
         index += 1;
         if signal == DelaySignal::Decrease {
-            decreased = Some(before);
+            decreased = true;
             break;
         }
     }
-    let before = decreased.expect("persistent overuse lowers the target");
+    assert!(decreased, "persistent overuse lowers the target");
     assert!(!rate.ramping());
-    assert_eq!(rate.target_bps(), (0.85 * before as f64).round() as u64);
-    assert!(rate.target_bps() > rate.receive_rate_bps().unwrap());
+    let receive = rate.receive_rate_bps().unwrap();
+    assert_eq!(rate.target_bps(), (0.85 * receive as f64).round() as u64);
 }
 
 #[test]
 fn bildkette_task_rate_receive_rate_does_not_hold_an_application_limited_target() {
+    // Plan 2026-11-17 replaces 5.3a's unbounded growth: an
+    // application-limited sender is not held at its receive rate (v0.5.196
+    // held it at 1.25 × that), it grows back to the stream's table start,
+    // but never above the larger of the table and 1.5 × what was delivered
+    // + 10 kbit/s.
     let name = peer("app-limited");
     probe::remember(&name, PathKind::Direct, START_DIRECT_BPS);
     let mut rate = RateController::new(PathKind::Direct, 0);
+    rate.set_stream_start(TABLE);
     rate.bind_peer(&name);
     assert!(!rate.ramping(), "a remembered rate ends the ramp");
     assert_eq!(rate.target_bps(), START_DIRECT_BPS);
@@ -146,20 +163,21 @@ fn bildkette_task_rate_receive_rate_does_not_hold_an_application_limited_target(
         frame(&mut rate, index, 1_000, DELAY_US);
     }
     let receive = rate.receive_rate_bps().unwrap();
-    let grown = rate.target_bps();
-    assert!(grown > START_DIRECT_BPS);
-    assert!(
-        grown as f64 > 1.25 * receive as f64,
-        "v0.5.196 held the target at 1.25 × receive rate: {grown} vs {receive}"
-    );
+    assert_eq!(rate.target_bps(), TABLE);
+    assert!(rate.target_bps() as f64 > 1.5 * receive as f64 + 10_000.0);
     // Back pressure (a frame dropped before encoding) holds it.
-    rate.on_back_pressure(60 * FRAME_US);
-    for index in 60..70 {
-        frame(&mut rate, index, 1_000, DELAY_US);
+    let mut held = RateController::new(PathKind::Direct, 0);
+    held.set_stream_start(TABLE);
+    held.bind_peer(&name);
+    held.set_timing(20_000, FRAME_US);
+    held.on_back_pressure(0);
+    for index in 0..10 {
+        frame(&mut held, index, 1_000, DELAY_US);
     }
-    assert_eq!(rate.target_bps(), grown);
+    assert_eq!(held.target_bps(), START_DIRECT_BPS);
     // A sender that fills the target is bounded by what was delivered.
     let mut full = RateController::new(PathKind::Direct, 0);
+    full.set_stream_start(1_000_000);
     full.bind_peer(&name);
     full.set_timing(20_000, FRAME_US);
     let filling = START_DIRECT_BPS / 60 / 8;
@@ -167,7 +185,8 @@ fn bildkette_task_rate_receive_rate_does_not_hold_an_application_limited_target(
         frame(&mut full, index, filling, DELAY_US);
     }
     let delivered = full.receive_rate_bps().unwrap();
-    assert!(full.target_bps() as f64 <= 1.25 * delivered as f64 + 1.0);
+    assert!(full.target_bps() > START_DIRECT_BPS);
+    assert!(full.target_bps() as f64 <= 1.5 * delivered as f64 + 10_000.0 + 1.0);
 }
 
 #[test]
@@ -200,12 +219,13 @@ fn bildkette_task_rate_ceiling_comes_from_encoder_and_decoder() {
         ..choice
     };
     assert_eq!(codec_ceiling_bps(&tiles, size, 60), 1920 * 1080 * 32 * 60);
-    // No fixed 240 Mbit/s: the target ramps to the pairing's ceiling.
+    // No fixed 240 Mbit/s: a sender that fills it ramps to the pairing's
+    // ceiling.
     let mut rate = RateController::new(PathKind::Direct, 0);
     rate.set_codec_ceiling(avc_max_bitrate_bps(None, H264Profile::High));
     rate.set_timing(1_000, FRAME_US);
     for index in 0..80 {
-        frame(&mut rate, index, 1_000, DELAY_US);
+        frame(&mut rate, index, BIG_FRAME, DELAY_US);
     }
     assert_eq!(rate.target_bps(), 1_000_000_000);
     assert!(rate.target_bps() > MAX_BITRATE_BPS);
@@ -218,7 +238,7 @@ fn bildkette_task_rate_user_ceiling_bounds_the_target() {
     rate.set_ceiling(Some(10_000_000));
     assert_eq!(rate.user_ceiling_bps(), Some(10_000_000));
     for index in 0..40 {
-        frame(&mut rate, index, 1_000, DELAY_US);
+        frame(&mut rate, index, BIG_FRAME, DELAY_US);
     }
     assert_eq!(rate.target_bps(), 10_000_000);
     // A lower ceiling lowers the target at once; automatic lets it grow.
@@ -227,8 +247,8 @@ fn bildkette_task_rate_user_ceiling_bounds_the_target() {
     rate.set_ceiling(Some(1));
     assert_eq!(rate.target_bps(), MIN_BITRATE_BPS);
     rate.set_ceiling(None);
-    // A sender that fills the target grows to at most twice what arrived:
-    // 20 kB per frame (9.6 Mbit/s) leaves room above 3 Mbit/s.
+    // Automatic returns to the link estimate, which the viewer's ceiling
+    // never cut (plan 2026-11-17).
     for index in 40..80 {
         frame(&mut rate, index, 20_000, DELAY_US);
     }

@@ -756,6 +756,34 @@ confirmed it. Paths are below `native/crates/engine/src/screen/os/` unless noted
 - *Media Foundation hardware stage* (`windows/mf_decoder.rs`): any error before the stage's first picture
   ends the hardware stage for the process, so the next key frame opens in software.
 
+**Bit rate and the honour of the encoders (plan 2026-11-17; implemented, not compiled, not run on hardware)**
+
+- *Media Foundation buffer unit.* `CODECAPI_AVEncCommonBufferSize` takes bytes for H.264 and HEVC
+  (Microsoft's property page: "For H.264 video and Windows Media Video … the size of the buffer is in
+  bytes"; the H.264 and H.265 encoder pages say the same); for MPEG-2 it is bits. Until 2026-11-17 the
+  MFT got bit rate / frame rate as bits, i.e. eight frames of buffer, and burst up to eight frame budgets
+  in one picture (queue guard drops, back pressure, a delay overuse, the target sank to the content
+  rate: the 800 kbit/s H.264 session). Now `rate_control::model::mf_buffer_bytes` (`windows/mf_rate.rs`).
+  AV1 MFTs: bytes as well (assumption, no Microsoft page names the unit). NVENC (`vbvBufferSize`) and AMF
+  (`VBVBufferSize`) take bits; their buffer stays in bits.
+- *Mean bit rate read back.* An MFT may take `CODECAPI_AVEncCommonMeanBitRate` and keep another value;
+  `set_mean_bitrate` reads it back with `ICodecAPI::GetValue` and calls a value more than 2 % off a
+  refusal. An MFT that does not answer `GetValue` counts as taking the rate (the byte meter still judges
+  it).
+- *An encoder that is opened with fewer pictures than its frame rate.* The encoder opens at the highest
+  allowed frame rate and gets only the changed pictures; its budget per picture is rate / opening rate, so
+  a desktop with few changes sends less than the target. That is intended (the honour meter counts only
+  pictures that fill half their budget); the start table (`model::start_table_bps`) keeps the budget of
+  one picture sharp (1080p60 H.264: 20 Mbit/s, 41 666 bytes a picture).
+- *Honour meter limits.* 60 filling non-key pictures make one judgement, about one second at 60 frames
+  per second, longer on a quiet screen; the thresholds 1.3, 1.5 and 4, the floor 0.25 and the step 1.25
+  are plan values without a measurement. The daemon's meter does not count lossless regions of a
+  hybrid stream and the tiles. A host process demotes an encoder only while another encoder of the codec
+  is left in its rank; the last one keeps running at the session's correction.
+- *Growth after a stale stream.* An application-limited target grows back to its table start one second
+  after a stale stream, while the drain rate of the stale time stays at the halved, measured rate, so a
+  large lossless key frame on a slower line is not declared stale again (`Pacer::set_drain_rate`).
+
 **Assumptions to check first when a device misbehaves (each has a visible effect; none was run)**
 
 - *VA-API.* The driver takes packed sequence and picture headers but writes the slice headers itself
@@ -770,7 +798,8 @@ confirmed it. Paths are below `native/crates/engine/src/screen/os/` unless noted
   the nv-codec-headers tag `n12.1.14.0`), checked only by the tests `bildkette_task_*_struct_sizes`;
   `NV_ENC_CAPS_WIDTH_MAX` = 16 and `HEIGHT_MAX` = 17 are counted from the enumeration; the NV12 input
   starts its chroma plane at `pitch × height`; `nvEncReconfigureEncoder` without reset takes a new
-  CBR rate. Reference invalidation works only where the driver reports
+  CBR rate, and a refused one keeps the running rate (since 2026-11-17; before, the encoder ended and
+  the next stage opened). Reference invalidation works only where the driver reports
   `NV_ENC_CAPS_SUPPORT_REF_PIC_INVALIDATION`.
 - *AMF.* Property names and enumeration values follow SDK 1.4.35; the capability `MaxBitrate` is read from
   the opened component (`windows/amf_caps.rs`) and, if missing, the level or the pairing limits; the
@@ -799,8 +828,9 @@ confirmed it. Paths are below `native/crates/engine/src/screen/os/` unless noted
   Android draws its own mouse pointer over the view is assumed, not tried. The Kotlin code was never
   compiled.
 - *Rate and recovery.* The reset threshold factors 4 and 3, the hold of 3 s after a metadata operation,
-  the target of 25 ms of the yielding controller and the start rates 6 and 2 Mbit/s are plan values
-  without a measurement. A continuation without a key frame assumes that the host references only
+  the target of 25 ms of the yielding controller, the start rates 6 and 2 Mbit/s (before the pipeline
+  names its stream) and the codec shares 1.0, 0.7 and 0.6 of the start table (plan 2026-11-17) are plan
+  values without a measurement. A continuation without a key frame assumes that the host references only
   pictures the viewer holds; a reference to a lost picture ends in a decode error and a key frame,
   not in a wrong picture.
 - *Windows display.* The viewer's window draws with Vulkan (eframe 0.29.1 enables only `metal` and

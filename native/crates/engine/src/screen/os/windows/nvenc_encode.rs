@@ -30,7 +30,7 @@ use std::sync::Arc;
 use windows::core::Interface;
 use windows::Win32::Graphics::Direct3D11::{ID3D11Device, ID3D11Texture2D};
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0};
-use windows_sys::Win32::System::Threading::{CreateEventW, WaitForSingleObject};
+use windows_sys::Win32::System::Threading::WaitForSingleObject;
 
 use super::nvenc_codecs::{encode_guid, rfi_dpb};
 use super::nvenc_device::{
@@ -51,6 +51,7 @@ use super::nvenc_ffi::{
 use super::vendor_encode::{RateParams, Recovery, RefHistory, VendorPicture, VendorSession};
 use crate::screen::core::negotiate::CodecKind;
 use crate::screen::core::pixel_convert::FrameSize;
+#[cfg(test)]
 use crate::screen::core::rate_control::START_DIRECT_BPS;
 use crate::screen::core::wire::invalid;
 
@@ -64,25 +65,8 @@ pub(super) use crate::screen::os::nvenc_shared::settings::{
     apply_reference_settings, apply_settings, RFI_DPB,
 };
 
-/// Shortest completion wait for one asynchronous NVENC picture (W4, B1).
-pub(super) const MIN_ASYNC_TIMEOUT_MS: u32 = 100;
-
-/// Completion deadline in milliseconds: four frame intervals, at least 100 ms.
-pub(super) fn async_timeout_ms(fps: u32) -> u32 {
-    4_000u64
-        .div_ceil(u64::from(fps.max(1)))
-        .max(u64::from(MIN_ASYNC_TIMEOUT_MS)) as u32
-}
-
-fn create_completion_event() -> io::Result<HANDLE> {
-    // SAFETY: unnamed auto-reset unsignaled kernel event (`nvenc_d3d11.cpp:16`).
-    let event = unsafe { CreateEventW(std::ptr::null(), 0, 0, std::ptr::null()) };
-    if event.is_null() {
-        Err(io::Error::last_os_error())
-    } else {
-        Ok(event)
-    }
-}
+pub(super) use super::nvenc_device::async_timeout_ms;
+use super::nvenc_device::create_completion_event;
 
 impl NvRate for RateParams {
     fn cbr(&self) -> (u32, u32, u32) {
@@ -106,18 +90,33 @@ pub(super) struct Core<A: NvTable> {
     init: Box<NvEncInitializeParams>,
     config: Box<NvEncConfig>,
     pub(super) rate: RateParams,
+    /// A rate the driver refused; not asked again (plan 2026-11-17).
+    pub(super) refused: Option<RateParams>,
     invalidation: bool,
     pub(super) history: RefHistory,
     frames: u64,
 }
 
 impl<A: NvTable> Core<A> {
+    #[cfg(test)]
     pub(super) fn open(
         api: A,
         encoder: Ptr,
         codec: CodecKind,
         size: FrameSize,
         fps: u32,
+    ) -> io::Result<Self> {
+        Self::open_at(api, encoder, codec, size, fps, START_DIRECT_BPS)
+    }
+
+    /// `open` with the rate control starting at `bps` (plan 2026-11-17).
+    pub(super) fn open_at(
+        api: A,
+        encoder: Ptr,
+        codec: CodecKind,
+        size: FrameSize,
+        fps: u32,
+        bps: u64,
     ) -> io::Result<Self> {
         let guid = encode_guid(codec)
             .ok_or_else(|| io::Error::new(io::ErrorKind::Unsupported, "NVENC has no tiles"))?;
@@ -139,7 +138,8 @@ impl<A: NvTable> Core<A> {
             codec,
             init: Box::new(NvEncInitializeParams::zeroed()),
             config: Box::new(NvEncConfig::zeroed()),
-            rate: RateParams::for_target(START_DIRECT_BPS, fps),
+            rate: RateParams::for_target(bps, fps),
+            refused: None,
             invalidation,
             history: RefHistory::new(if invalidation { rfi_dpb(codec) } else { 1 }),
             frames: 0,
@@ -219,20 +219,30 @@ impl<A: NvTable> Core<A> {
         init.buffer_format = NV_ENC_BUFFER_FORMAT_NV12;
     }
 
-    /// A new bit rate or frame rate without a new IDR
-    /// (`nvEncReconfigureEncoder` without `resetEncoder`/`forceIDR`).
-    pub(super) fn retune(&mut self, rate: &RateParams) -> io::Result<()> {
+    fn configure(&mut self, rate: &RateParams) {
         self.rate = *rate;
         apply_codec_settings(&mut self.config, rate, self.codec);
         apply_codec_references(&mut self.config, self.codec, self.invalidation);
         self.fill_init();
+    }
+
+    /// A new rate without a new IDR (`nvEncReconfigureEncoder` without
+    /// `resetEncoder`/`forceIDR`); a refused one keeps the running rate.
+    pub(super) fn retune(&mut self, rate: &RateParams) -> io::Result<()> {
+        let reconfigure = self.api.table().reconfigure_encoder.ok_or_else(missing)?;
+        let previous = self.rate;
+        self.configure(rate);
         let mut params = Box::new(NvEncReconfigureParams::zeroed());
         params.version = NV_ENC_RECONFIGURE_PARAMS_VER;
         params.re_init_encode_params = *self.init;
-        let reconfigure = self.api.table().reconfigure_encoder.ok_or_else(missing)?;
         // SAFETY: valid session; the config pointer inside stays valid.
         let result = unsafe { reconfigure(self.encoder, &mut *params) };
-        status(&self.api, self.encoder, result, "nvEncReconfigureEncoder")
+        let checked = status(&self.api, self.encoder, result, "nvEncReconfigureEncoder");
+        self.refused = checked.is_err().then_some(*rate);
+        if self.refused.is_some() {
+            self.configure(&previous);
+        }
+        checked
     }
 
     /// Encodes the mapped input, waits on the completion event up to the
@@ -369,15 +379,27 @@ pub(super) struct NvencSession {
 }
 
 impl NvencSession {
+    #[cfg(test)]
     pub(super) fn open(
         device: &ID3D11Device,
         codec: CodecKind,
         size: FrameSize,
         fps: u32,
     ) -> io::Result<Self> {
+        Self::open_at(device, codec, size, fps, START_DIRECT_BPS)
+    }
+
+    /// `open` with the rate control starting at `bps` (plan 2026-11-17).
+    pub(super) fn open_at(
+        device: &ID3D11Device,
+        codec: CodecKind,
+        size: FrameSize,
+        fps: u32,
+        bps: u64,
+    ) -> io::Result<Self> {
         let api = super::nvenc_ffi::load().map_err(io::Error::other)?;
         let encoder = open_session(&api, device)?;
-        let core = Core::open(api, encoder, codec, size, fps)?;
+        let core = Core::open_at(api, encoder, codec, size, fps, bps)?;
         Ok(Self {
             core,
             registered: Vec::new(),
@@ -424,8 +446,9 @@ impl VendorSession for NvencSession {
         rate: &RateParams,
         deliver: &mut dyn FnMut(&[u8]) -> io::Result<()>,
     ) -> io::Result<bool> {
-        if self.core.rate.differs(rate) {
-            self.core.retune(rate)?;
+        let retune = self.core.rate.differs(rate) && self.core.refused != Some(*rate);
+        if let Some(Err(error)) = retune.then(|| self.core.retune(rate)) {
+            eprintln!("screen encoder nvenc: keeps its rate: {error}");
         }
         let handle = self.registration(picture.texture)?;
         let mut mapped = NvEncMapInputResource::zeroed();
@@ -459,6 +482,10 @@ impl VendorSession for NvencSession {
 
     fn recover_references(&mut self, last_good: u64) -> Recovery {
         self.core.recover_references(last_good)
+    }
+
+    fn rate_refused(&self) -> bool {
+        self.core.refused.is_some()
     }
 }
 

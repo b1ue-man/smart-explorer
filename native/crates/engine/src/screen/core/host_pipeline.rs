@@ -357,9 +357,11 @@ impl Pipeline {
     /// passes the wish on to its encoder, the stream goes but the encoder stays: the next
     /// stream continues from the confirmed picture (B-36). Otherwise as
     /// before: a new encoder and a key frame. Either way the path did not
-    /// carry the target (`RateController::on_stale_stream`).
+    /// carry the target (`RateController::on_stale_stream`, which halves it
+    /// at most once per stale time, plan 2026-11-17).
     fn reset_stale_stream(&mut self) {
-        self.rate.on_stale_stream(now_us());
+        let (stale_us, _) = self.pacer.stale_limits(self.rate.target_bps());
+        self.rate.on_stale_stream(now_us(), stale_us);
         let facts = super::gop_continue::ResetFacts {
             negotiated: self.continuation_offered(),
             video: self.kind == StreamKind::Video

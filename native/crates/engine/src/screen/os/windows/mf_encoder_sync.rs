@@ -14,18 +14,18 @@ use std::io;
 
 use windows::core::VARIANT;
 use windows::Win32::Media::MediaFoundation::{
-    eAVEncAV1VProfile_Main_420_8, eAVEncH265VProfile_Main_420_8, CODECAPI_AVEncCommonMeanBitRate,
-    CODECAPI_AVEncVideoForceKeyFrame, ICodecAPI, IMFMediaType, IMFTransform,
-    MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, MFT_MESSAGE_NOTIFY_END_OF_STREAM,
-    MFT_MESSAGE_NOTIFY_END_STREAMING, MFT_MESSAGE_NOTIFY_START_OF_STREAM, MF_MT_AVG_BITRATE,
-    MF_MT_MPEG2_PROFILE, MF_TRANSFORM_ASYNC_UNLOCK,
+    eAVEncAV1VProfile_Main_420_8, eAVEncH265VProfile_Main_420_8, CODECAPI_AVEncVideoForceKeyFrame,
+    ICodecAPI, IMFMediaType, IMFTransform, MFT_MESSAGE_NOTIFY_BEGIN_STREAMING,
+    MFT_MESSAGE_NOTIFY_END_OF_STREAM, MFT_MESSAGE_NOTIFY_END_STREAMING,
+    MFT_MESSAGE_NOTIFY_START_OF_STREAM, MF_MT_AVG_BITRATE, MF_MT_MPEG2_PROFILE,
+    MF_TRANSFORM_ASYNC_UNLOCK,
 };
 
 use super::mf_common::{ensure_com, subtype, EncoderSetup};
 use super::mf_media::{
     bounded_bitrate, configure_encoder, configure_hardware, h264_type, input_sample, is_keyframe,
-    nv12_bytes, nv12_type, opened_limit, process_output, sample_bytes_bounded, set_value,
-    video_type, Output,
+    nv12_bytes, nv12_type, opened_limit, process_output, sample_bytes_bounded, set_mean_bitrate,
+    set_value, video_type, Output,
 };
 use super::{mf_capture_media, mf_capture_output};
 use crate::screen::core::capture_admission::{CaptureGrant, CaptureOwner};
@@ -35,6 +35,7 @@ use crate::screen::core::host_backend::{CapturedEncodedFrame, EncodedFrame, Scre
 use crate::screen::core::host_stage::StageRequest;
 use crate::screen::core::negotiate::CodecKind;
 use crate::screen::core::pixel_convert::{BgraImage, FrameSize};
+use crate::screen::core::rate_control::honour::EncoderRateState;
 use crate::screen::core::rate_control::START_DIRECT_BPS;
 
 /// Media Foundation time units (100 ns) per second.
@@ -42,15 +43,23 @@ pub(super) const UNITS_PER_SECOND: i64 = 10_000_000;
 
 /// Sets a changed bit rate (at least 2 % off) within `limit`, the ceiling
 /// the opened encoder and its level report; a refusal keeps the old one.
-pub(super) fn retune(api: Option<&ICodecAPI>, current: &mut u32, target_bps: u64, limit: u32) {
+/// `None` when nothing was set, else whether the encoder refused the rate
+/// or reads back another one (`set_mean_bitrate`, plan 2026-11-17).
+pub(super) fn retune(
+    api: Option<&ICodecAPI>,
+    current: &mut u32,
+    target_bps: u64,
+    limit: u32,
+) -> Option<bool> {
     let target = bounded_bitrate(target_bps, limit);
     if (i64::from(target) - i64::from(*current)).abs() * 50 < i64::from(*current) {
-        return;
+        return None;
     }
-    let mean = &CODECAPI_AVEncCommonMeanBitRate;
-    if api.is_some_and(|api| set_value(api, mean, VARIANT::from(target))) {
+    let refused = set_mean_bitrate(api?, target);
+    if !refused {
         *current = target;
     }
+    Some(refused)
 }
 
 /// Asks for an IDR as the next frame.
@@ -178,6 +187,9 @@ pub(super) struct SyncEncoder {
     grant: Option<CaptureGrant>,
     /// A frame was skipped (`WouldBlock`): the next request asks for a picture.
     refresh: bool,
+    /// The MFT refused its mean bit rate or reads back another one (plan
+    /// 2026-11-17, `ScreenEncoder::rate_state`).
+    rate_refused: bool,
 }
 
 // SAFETY: the transform is used by one thread at a time (the encoder is
@@ -187,23 +199,26 @@ unsafe impl Send for SyncEncoder {}
 
 impl SyncEncoder {
     pub(super) fn new(transform: IMFTransform, setup: EncoderSetup) -> io::Result<Self> {
-        Self::create(transform, setup, None)
+        Self::create(transform, setup, None, START_DIRECT_BPS)
     }
 
+    /// Opens at `bps`, the rate the session gives it (plan 2026-11-17).
     pub(super) fn new_admitted(
         transform: IMFTransform,
         setup: EncoderSetup,
         grant: CaptureGrant,
+        bps: u64,
     ) -> io::Result<Self> {
-        Self::create(transform, setup, Some(grant))
+        Self::create(transform, setup, Some(grant), bps)
     }
 
     fn create(
         transform: IMFTransform,
         setup: EncoderSetup,
         grant: Option<CaptureGrant>,
+        bps: u64,
     ) -> io::Result<Self> {
-        let bitrate = bounded_bitrate(START_DIRECT_BPS, u32::MAX);
+        let bitrate = bounded_bitrate(bps, u32::MAX);
         let api = configure_encoder(&transform, bitrate);
         start(&transform, &setup, bitrate)?;
         let limit = opened_limit(&transform, api.as_ref(), &setup);
@@ -216,6 +231,7 @@ impl SyncEncoder {
             limit,
             grant,
             refresh: false,
+            rate_refused: false,
         })
     }
 
@@ -230,12 +246,10 @@ impl SyncEncoder {
             .ok_or_else(|| io::Error::other("MF encoder has no capture grant"))?;
         let maximum = mf_capture_output::capture_limit(&grant, image, request, self.setup.size)?;
         ensure_com();
-        retune(
-            self.api.as_ref(),
-            &mut self.bitrate,
-            request.target_bps,
-            self.limit,
-        );
+        let api = self.api.as_ref();
+        if let Some(refused) = retune(api, &mut self.bitrate, request.target_bps, self.limit) {
+            self.rate_refused = refused;
+        }
         if request.keyframe && self.frames > 0 {
             force_keyframe(self.api.as_ref());
         }
@@ -313,6 +327,13 @@ impl ScreenEncoder for SyncEncoder {
         self.refresh
     }
 
+    fn rate_state(&self) -> Option<EncoderRateState> {
+        Some(EncoderRateState {
+            applied_bps: u64::from(self.bitrate),
+            refused: self.rate_refused,
+        })
+    }
+
     fn encode(
         &mut self,
         frame: &BgraImage,
@@ -331,7 +352,10 @@ impl ScreenEncoder for SyncEncoder {
             ));
         }
         ensure_com();
-        retune(self.api.as_ref(), &mut self.bitrate, target_bps, self.limit);
+        let api = self.api.as_ref();
+        if let Some(refused) = retune(api, &mut self.bitrate, target_bps, self.limit) {
+            self.rate_refused = refused;
+        }
         if keyframe && self.frames > 0 {
             force_keyframe(self.api.as_ref());
         }
