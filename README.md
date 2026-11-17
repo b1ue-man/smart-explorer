@@ -278,7 +278,7 @@ weiter im Bild (Einzelheiten: [`docs/oberflaechen/bildschirm.md`](docs/oberflaec
 (512 Pakete oder 1 MiB); Smart Explorer begrenzt Bildpakete über den Relay-Pfad auf 768 KiB
 (Einzelheiten in [`docs/SHARE_SERVER.md`](docs/SHARE_SERVER.md)).
 
-**OpenH264 (ab 0.5.183):** H.264 über OpenH264 gehört nicht zum Programm. Im Quellstand vom 2026-11-15 braucht ein Linux-Gerät mit NVENC- oder VA-API-Kodierer (aus den Systembibliotheken zur Laufzeit geladen) die Zustimmung zu OpenH264 für H.264 nicht mehr; AV1 kodiert und dekodiert Linux ohne Hardware mit SVT-AV1 und dav1d, wenn die Bibliotheken `libSvtAv1Enc.so.1` und `libdav1d.so.7` installiert sind (unter Ubuntu 24.04 die Pakete `libsvtav1enc1d1` und `libdav1d7`).
+**OpenH264 (ab 0.5.183):** H.264 über OpenH264 gehört nicht zum Programm. Im Quellstand vom 2026-11-15 braucht ein Linux-Gerät mit NVENC- oder VA-API-Kodierer (aus den Systembibliotheken zur Laufzeit geladen) die Zustimmung zu OpenH264 für H.264 nicht mehr; AV1 kodiert und dekodiert Linux ohne Hardware mit SVT-AV1 und dav1d, wenn SVT-AV1 ab 2.3.0 (`libSvtAv1Enc.so.2`, `.so.3` oder `.so.4`) und dav1d (`libdav1d.so.7`, unter Ubuntu 24.04 das Paket `libdav1d7`) installiert sind. Ältere SVT-AV1-Versionen (Ubuntu 24.04 liefert 1.7.0) gibt ein Bild erst mit dem nächsten heraus; das Programm nutzt sie nicht und kodiert dann H.264.
 `se screen codec openh264 enable` zeigt die Cisco-Lizenz (Binary License v1.0), fragt nach der
 Annahme und lädt OpenH264 2.6.0 von `ciscobinary.openh264.org`; Größe und SHA-256 sind festgelegt.
 `disable` schaltet es aus, `remove` löscht die Bibliothek dieses Nutzers. Den vollständigen

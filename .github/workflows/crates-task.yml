@@ -130,16 +130,26 @@ jobs:
 
       # libxcb1-dev provides libxcb.so, the file `-lxcb` of the engine's test binary needs (see `s4`).
       # This job linked without it (run 2026-11-14, ubuntu-24.04); the package is a safety margin.
-      # libsvtav1enc1d1 and libdav1d7 (Ubuntu 24.04 universe: 1.7.0 and 1.4.1) provide the SONAMEs
-      # libSvtAv1Enc.so.1 and libdav1d.so.7 that the ignored test bildkette_task_linux_hw_av1_roundtrip_psnr
-      # opens at run time (native/crates/engine/src/screen/os/native_ffi/av1_soft.rs); no -dev package is
-      # needed because the engine loads them with dlopen and does not link them. Not yet run on the runner.
+      # libdav1d7 (Ubuntu 24.04 universe: 1.4.1) provides the SONAME libdav1d.so.7 that the ignored test
+      # bildkette_task_linux_hw_av1_roundtrip_psnr opens at run time (native/crates/engine/src/screen/os/
+      # native_ffi/av1_soft.rs); no -dev package is needed because the engine loads it with dlopen.
+      # SVT-AV1 comes from source: Ubuntu 24.04 ships 1.7.0, which hands out a picture only after the
+      # next one arrives (resource coordination keeps the previous picture; picture in, picture out
+      # for low delay since 2.3.0, CHANGELOG.md), so the engine refuses SVT-AV1 before 2.3.0. v3.1.0
+      # installs libSvtAv1Enc.so.3 (SOVERSION = major) into /usr/local/lib; encoder only, no apps.
       - name: Linux test packages
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential pkg-config libxcb1-dev xvfb libegl1 libgl1 libx11-6 libx11-xcb1 \
-            libxcursor1 libxi6 libxkbcommon0 libxkbcommon-x11-0 libxrandr2 libsvtav1enc1d1 libdav1d7
+          sudo apt-get install -y build-essential pkg-config cmake nasm libxcb1-dev xvfb libegl1 libgl1 libx11-6 \
+            libx11-xcb1 libxcursor1 libxi6 libxkbcommon0 libxkbcommon-x11-0 libxrandr2 libdav1d7
+          git clone --quiet --depth 1 --branch v3.1.0 https://gitlab.com/AOMediaCodec/SVT-AV1.git "$RUNNER_TEMP/svt-av1"
+          cmake -S "$RUNNER_TEMP/svt-av1" -B "$RUNNER_TEMP/svt-av1/build" -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_APPS=OFF -DBUILD_DEC=OFF -DBUILD_TESTING=OFF -DBUILD_SHARED_LIBS=ON
+          cmake --build "$RUNNER_TEMP/svt-av1/build" -j"$(nproc)"
+          sudo cmake --install "$RUNNER_TEMP/svt-av1/build"
+          sudo ldconfig
+          ldconfig -p | grep -F libSvtAv1Enc.so.3
 
       - name: Runner resources and Defender state
         if: runner.os == 'Windows'

@@ -20,7 +20,7 @@ use std::io;
 use std::sync::{Arc, OnceLock};
 
 use super::super::av1_soft::{
-    dav1d_available, svt_available, Dav1dDecoder, SvtAv1Encoder, DAV1D_LIBRARIES, SVT_LIBRARY,
+    dav1d_available, svt_library, Dav1dDecoder, SvtAv1Encoder, DAV1D_LIBRARIES,
 };
 use super::hw_encode_common::{HwH264Encoder, HwH264Session, HwInput, RateParams};
 use crate::screen::core::capture_admission::CaptureGrant;
@@ -48,12 +48,12 @@ type Factories = (Vec<Arc<dyn EncoderFactory>>, Vec<Arc<dyn DecoderFactory>>);
 
 /// SVT-AV1 and dav1d where the system has a compatible version.
 pub(super) fn codecs() -> Factories {
-    static SVT: OnceLock<bool> = OnceLock::new();
+    static SVT: OnceLock<Option<&'static str>> = OnceLock::new();
     static DAV1D: OnceLock<bool> = OnceLock::new();
     let mut encoders: Vec<Arc<dyn EncoderFactory>> = Vec::new();
     let mut decoders: Vec<Arc<dyn DecoderFactory>> = Vec::new();
-    if *SVT.get_or_init(|| svt_available(SVT_LIBRARY)) {
-        encoders.push(Arc::new(SvtAv1Factory));
+    if let Some(library) = *SVT.get_or_init(svt_library) {
+        encoders.push(Arc::new(SvtAv1Factory { library }));
     }
     if *DAV1D.get_or_init(|| dav1d_available(&DAV1D_LIBRARIES)) {
         decoders.push(Arc::new(Dav1dFactory));
@@ -62,7 +62,10 @@ pub(super) fn codecs() -> Factories {
 }
 
 /// The SVT-AV1 encoder factory: AV1 Main in software.
-pub(super) struct SvtAv1Factory;
+pub(super) struct SvtAv1Factory {
+    /// The SONAME `svt_library` found (`SVT_LIBRARIES`).
+    library: &'static str,
+}
 
 impl SvtAv1Factory {
     fn create(
@@ -86,6 +89,7 @@ impl SvtAv1Factory {
         }
         let session = SvtSession {
             encoder: None,
+            library: self.library,
             size,
             fps: fps.max(1),
             running: 0,
@@ -131,6 +135,7 @@ impl EncoderFactory for SvtAv1Factory {
 /// One SVT-AV1 encoder, reopened when the rate drifts too far.
 struct SvtSession {
     encoder: Option<SvtAv1Encoder>,
+    library: &'static str,
     size: FrameSize,
     fps: u32,
     /// The bit rate the open encoder runs with.
@@ -163,7 +168,7 @@ impl HwH264Session for SvtSession {
         if reopened {
             self.encoder = None;
             let opened = SvtAv1Encoder::open(
-                SVT_LIBRARY,
+                self.library,
                 self.size,
                 self.fps,
                 u64::from(rate.bits_per_second),
@@ -335,7 +340,10 @@ mod tests {
         assert!(!needs_reopen(6_000_000, 8_300_000));
         assert!(needs_reopen(6_000_000, 4_000_000));
         assert!(needs_reopen(6_000_000, 9_000_000));
-        let offers = SvtAv1Factory.offers();
+        let offers = SvtAv1Factory {
+            library: "libSvtAv1Enc.so.3",
+        }
+        .offers();
         assert_eq!(offers.len(), 1);
         assert_eq!(
             (offers[0].codec, offers[0].profile, offers[0].hardware),

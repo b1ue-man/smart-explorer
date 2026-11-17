@@ -686,9 +686,17 @@ confirmed it. Paths are below `native/crates/engine/src/screen/os/` unless noted
 - **Linux libraries and their sonames** (`linux_os/nvenc_ffi.rs`, `vaapi_ffi.rs`, `native_ffi/av1_soft.rs`):
   `libnvidia-encode.so.1` with `libcuda.so.1` (CUDA context must be current before each NVENC call),
   `libva.so.2` with `libva-drm.so.2` (`vaCreateSurfaces` is versioned; libva 2.20.0 headers were
-  read), `libSvtAv1Enc.so.1` (SVT-AV1 1.5 up to, not including, 2.0), `libdav1d.so.7` and, if that is
-  missing, `libdav1d.so.6`. On Ubuntu 24.04 the packages are `libsvtav1enc1d1` (1.7.0, not
-  `libsvtav1enc1`) and `libdav1d7`; no `-dev` package is needed because nothing is linked. A
+  read), `libSvtAv1Enc.so.4`, `.so.3` or `.so.2` (SVT-AV1 2.3.0 or later; SOVERSION = major version),
+  `libdav1d.so.7` and, if that is missing, `libdav1d.so.6`. SVT-AV1 before 2.3.0 is refused: its
+  resource coordination keeps each picture until the next one arrives, so a picture comes one picture
+  late and a still screen never gets its last one (seen on the runner with 1.7.0, 2026-11-17: "SVT-AV1
+  gave no packet for the picture"); 2.3.0 made `svt_av1_enc_get_packet` block in low delay
+  (`pred-struct=1`), one picture in, one packet out (CHANGELOG.md). 3.0 dropped the application data
+  argument of `svt_av1_enc_init_handle` and inserted `temporal_layer_index` and `avg_qp` into the buffer
+  header (`SvtAbi` in `av1_soft.rs`; headers of v2.3.0, v3.1.0 and v4.3.0 read). Ubuntu 24.04 ships only
+  1.7.0 (`libsvtav1enc1d1`), so software AV1 needs a newer SVT-AV1 there; `crates-task.yml` builds
+  v3.1.0 from source for its test. Packages of dav1d: `libdav1d7`; no `-dev` package is needed because
+  nothing is linked. A
   render node needs the session user's access to `/dev/dri/renderD*` (assumption: the host process
   runs in the session account, so it has it). libva messages are muted.
 - **Probes run once per process (`OnceLock`).** A GPU or a driver that appears after the first codec

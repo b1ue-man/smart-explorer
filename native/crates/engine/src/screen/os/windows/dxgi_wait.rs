@@ -114,8 +114,13 @@ impl Schedule {
         let Some(mut due) = last.checked_add(interval) else {
             return unknown;
         };
-        // The first request after `now` and after the one already served.
-        for floor in [Some(now), self.served].into_iter().flatten() {
+        // The first request after the one already served that is still
+        // open: a request stays open for one interval, so a thread that
+        // overslept the start of its read (a timer tick of the system, or a
+        // read too short for the lead to cover the jitter) takes the picture
+        // late instead of chasing the next request for ever.
+        let open_after = now.checked_sub(interval);
+        for floor in [self.served, open_after].into_iter().flatten() {
             if due <= floor {
                 let behind = floor.saturating_duration_since(due).as_nanos();
                 let cycles = behind / interval.as_nanos().max(1) + 1;
@@ -128,6 +133,14 @@ impl Schedule {
                 };
                 due = advanced;
             }
+        }
+        if due <= now {
+            // Late: the request waits already; the next compositor picture
+            // serves it, at most until the request after it.
+            return Step::Acquire {
+                wait: interval.min(MAX_BLOCK),
+                due: Some(due),
+            };
         }
         let start = due.checked_sub(self.lead()).unwrap_or(now);
         if now < start {

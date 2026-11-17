@@ -439,6 +439,9 @@ fn bildkette_task_win_w4_nvenc_async_completes_and_times_out_without_blocking_lo
         .unwrap();
     plan.add_bytes(CaptureOwner::CodecOutput, 4096, 2, CapturePhases::ALL)
         .unwrap();
+    // The record headers of the encoded frames (`CapturedRecords`).
+    plan.add_bytes(CaptureOwner::Metadata, 4096, 2, CapturePhases::ALL)
+        .unwrap();
     let grant = admission.authority().approve(plan).unwrap();
     let img = Picture::Cpu(
         CaptureImageBuilder::new(

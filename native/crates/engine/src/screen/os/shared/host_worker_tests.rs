@@ -10,17 +10,18 @@ pub fn worker_program() -> PathBuf {
         return PathBuf::from(path);
     }
     let name = if cfg!(windows) { "se.exe" } else { "se" };
+    // `target/debug/deps/<test>`, or with Cargo's separate build directory
+    // `target/debug/build/<crate>/<hash>/out/<test>`: the nearest folder
+    // above the test binary that holds the program.
     let current = std::env::current_exe().unwrap();
     let candidate = current
-        .parent()
-        .and_then(Path::parent)
+        .ancestors()
+        .skip(1)
         .map(|dir| dir.join(name))
-        .unwrap();
-    assert!(
-        candidate.is_file(),
-        "SE_SCREEN_TASK_WORKER names no program and {candidate:?} is missing"
-    );
-    candidate
+        .find(|candidate| candidate.is_file());
+    candidate.unwrap_or_else(|| {
+        panic!("SE_SCREEN_TASK_WORKER names no program and no {name} lies above {current:?}")
+    })
 }
 
 fn tiles() -> CodecChoice {

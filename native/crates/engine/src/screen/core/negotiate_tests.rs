@@ -124,8 +124,8 @@ fn screen_task_negotiate_matrix() {
         FrameSize::new(320, 180)
     );
 
-    // Offers beyond 32 per side are ignored.
-    let mut many = vec![software(Cb); MAX_CODEC_OFFERS];
+    // Offers beyond the legacy and the v2 list (2 × 32 per side) are ignored.
+    let mut many = vec![software(Cb); MAX_COMBINED_OFFERS];
     many.push(hardware(High));
     assert_eq!(
         rows(&negotiate(&many, &[hardware(High)], Auto)),

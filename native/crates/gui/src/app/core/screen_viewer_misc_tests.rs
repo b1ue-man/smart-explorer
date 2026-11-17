@@ -298,9 +298,12 @@ fn screen_task_viewer_toolbar_labels() {
         "1:1",
         "Vollbild",
         "Schärfe vor Flüssigkeit",
-        "Verlustfrei",
         "Niedrigste Latenz (Bildrisse möglich)",
         "Statistik",
+        // „Codec“ replaces the switch „Verlustfrei“ (BK6, one of its entries).
+        "Codec: Automatisch",
+        "Dekodierer: Automatisch",
+        "Höchste Datenrate",
     ] {
         assert!(shown.iter().any(|text| text == label), "{label}: {shown:?}");
     }

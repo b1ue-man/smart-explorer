@@ -348,11 +348,17 @@ fn verbindungen_task_zeiger_windows_capture_stops_drawing_the_pointer_with_the_o
     let starts = overlay
         .find("SetIsCursorCaptureEnabled(!overlay.separated())")
         .expect("a new session starts with the pointer the overlay leaves to the capture");
-    let offers = overlay
+    // `attach_duplication` (B-13) offers it too; the Graphics Capture
+    // session's offer is the one in `attach`, after its switch.
+    let attach = overlay
+        .find("pub(super) fn attach(session")
+        .expect("the Graphics Capture session is attached");
+    let offers = overlay[attach..]
         .find("overlay.set_supported();")
+        .map(|at| attach + at)
         .expect("the capture offers the overlay");
     assert!(
-        starts < offers,
+        attach < starts && starts < offers,
         "the overlay is offered only after the session took the pointer switch"
     );
     assert!(

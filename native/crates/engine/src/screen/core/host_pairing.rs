@@ -148,7 +148,11 @@ impl Pipeline {
         self.choice = chosen;
         self.set_sharp_choice(sharp);
         self.choice = effective;
-        self.set_quality_mode(mode);
+        // Under „Verlustfrei“ the tiles stay the effective choice: nothing
+        // restarts (not even an idle stage), the pairing waits in the policy.
+        if self.quality_choice() != effective {
+            self.set_quality_mode(mode);
+        }
         if self.continue_from.is_some() && !self.continuation_offered() {
             self.reset_stream();
         }

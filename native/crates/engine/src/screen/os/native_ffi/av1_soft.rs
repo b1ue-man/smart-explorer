@@ -1,5 +1,9 @@
-//! Software AV1 for Linux (BK4/BK6, B-25, B-38): SVT-AV1 (`libSvtAv1Enc.so.1`,
-//! v1.5–1.x, checked against v1.7.0 `EbSvtAv1*.h` and `EbEncSettings.c`) and
+//! Software AV1 for Linux (BK4/BK6, B-25, B-38): SVT-AV1 from 2.3.0
+//! (`libSvtAv1Enc.so.2`/`.3`/`.4`, checked against the v2.3.0, v3.1.0 and
+//! v4.3.0 `Source/API/EbSvtAv1*.h`; before 2.3.0 the resource coordination
+//! keeps each picture until the next one arrives, so a still screen never got
+//! its last picture, and only 2.3.0 made `svt_av1_enc_get_packet` block for
+//! low delay: one picture in, one packet out, CHANGELOG.md) and
 //! dav1d (`libdav1d.so.7`/`.6`, checked against 1.2.1 and 1.4.1 `dav1d/*.h`),
 //! loaded at run time by SONAME. Only leading ABI-stable fields are read inside
 //! oversized zeroed blocks; SVT-AV1 configuration is set by parameter name.
@@ -12,7 +16,12 @@ use libloading::Library;
 use crate::screen::core::pixel_convert::{FrameSize, I420Image};
 use crate::screen::core::wire::invalid;
 
-pub(super) const SVT_LIBRARY: &str = "libSvtAv1Enc.so.1";
+/// The SONAMEs (SOVERSION = major version), newest first.
+pub(super) const SVT_LIBRARIES: [&str; 3] = [
+    "libSvtAv1Enc.so.4",
+    "libSvtAv1Enc.so.3",
+    "libSvtAv1Enc.so.2",
+];
 pub(super) const DAV1D_LIBRARIES: [&str; 2] = ["libdav1d.so.7", "libdav1d.so.6"];
 /// `EB_ErrorNone`, `EB_NoErrorEmptyQueue` (EbSvtAv1.h).
 const EB_ERROR_NONE: c_int = 0;
@@ -30,7 +39,10 @@ const SVT_DEADLINE: Duration = Duration::from_secs(2);
 mod dav1d;
 pub(super) use dav1d::{dav1d_available, Dav1dDecoder};
 
-/// `EbBufferHeaderType` of SVT-AV1 1.7 (136 bytes) in a larger block.
+/// The leading fields of `EbBufferHeaderType`, equal from 2.3.0 to 4.3.0,
+/// in a larger block; `tail` starts at byte 64. 2.x continues with `qp`,
+/// `pic_type` (word 1 of `tail`); 3.0 inserted `temporal_layer_index` before
+/// `qp` and `avg_qp` after it, so `pic_type` is word 3 (`SvtAbi`).
 #[repr(C)]
 struct SvtBufferHeader {
     size: u32,
@@ -42,12 +54,30 @@ struct SvtBufferHeader {
     n_tick_count: u32,
     dts: i64,
     pts: i64,
-    qp: u32,
-    pic_type: u32,
-    rest: [u64; 24],
+    tail: [u32; 50],
 }
 
-/// `EbSvtIOFormat` of SVT-AV1 ≥ 1.5 (64 bytes).
+/// The two interfaces of the supported versions.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum SvtAbi {
+    /// 2.3.0 to 2.x: `svt_av1_enc_init_handle(handle, app_data, config)`.
+    V2,
+    /// 3.x and 4.x: `svt_av1_enc_init_handle(handle, config)`.
+    V3,
+}
+
+impl SvtAbi {
+    /// The word of `SvtBufferHeader::tail` that holds `pic_type`.
+    fn pic_type_word(self) -> usize {
+        match self {
+            Self::V2 => 1,
+            Self::V3 => 3,
+        }
+    }
+}
+
+/// `EbSvtIOFormat` of SVT-AV1 2.x (64 bytes); 3.0 keeps the first six
+/// fields (planes and strides) and dropped the rest, which it never reads.
 #[repr(C)]
 struct SvtIoFormat {
     luma: *mut u8,
@@ -92,19 +122,39 @@ pub(super) fn svt_settings(
         ("transfer-characteristics", "1".into()),
         ("matrix-coefficients", "1".into()),
         ("color-range", "0".into()),
+        // Low delay (LOW_DELAY_B in 2.x/3.x, LOW_DELAY in 4.x): the condition
+        // under which `svt_av1_enc_get_packet` blocks for its picture.
+        ("pred-struct", "1".into()),
     ]
 }
 
-/// Whether `version` (`svt_av1_get_version`, "v1.7.0") has the 1.5+ layout.
-pub(super) fn svt_version_supported(version: &str) -> bool {
+/// The interface of `version` (`svt_av1_get_version`, "v3.1.0"): 2.3.0 to
+/// 4.x; `None` before 2.3.0 (one picture late) and for an unknown major.
+pub(super) fn svt_abi(version: &str) -> Option<SvtAbi> {
     let mut parts = version
+        .trim()
         .trim_start_matches('v')
-        .split('.')
+        .split(|c: char| !c.is_ascii_digit())
         .map(|part| part.parse::<u32>());
-    matches!((parts.next(), parts.next()), (Some(Ok(1)), Some(Ok(minor))) if minor >= 5)
+    match (parts.next(), parts.next()) {
+        (Some(Ok(2)), Some(Ok(minor))) if minor >= 3 => Some(SvtAbi::V2),
+        (Some(Ok(3 | 4)), Some(Ok(_))) => Some(SvtAbi::V3),
+        _ => None,
+    }
 }
 
-/// Whether `library` loads with a supported 1.5+ SVT-AV1 ABI.
+pub(super) fn svt_version_supported(version: &str) -> bool {
+    svt_abi(version).is_some()
+}
+
+/// The first of `SVT_LIBRARIES` that loads with a supported version.
+pub(super) fn svt_library() -> Option<&'static str> {
+    SVT_LIBRARIES
+        .into_iter()
+        .find(|library| svt_available(library))
+}
+
+/// Whether `library` loads with a supported SVT-AV1 interface.
 pub(super) fn svt_available(library: &str) -> bool {
     let Ok(lib) = open(library) else {
         return false;
@@ -149,6 +199,7 @@ pub(super) struct SvtAv1Encoder {
     release: unsafe extern "C" fn(*mut *mut SvtBufferHeader),
     deinit: unsafe extern "C" fn(Handle) -> c_int,
     deinit_handle: unsafe extern "C" fn(Handle) -> c_int,
+    abi: SvtAbi,
     library_name: String,
     size: FrameSize,
     fps: u32,
@@ -181,14 +232,12 @@ impl SvtAv1Encoder {
                 .to_string_lossy()
                 .into_owned()
         };
-        if !svt_version_supported(&text) {
+        let Some(abi) = svt_abi(&text) else {
             return Err(io::Error::new(
                 io::ErrorKind::Unsupported,
-                format!("SVT-AV1 {text} is older than 1.5"),
+                format!("SVT-AV1 {text}: before 2.3.0 a picture comes only with the next one"),
             ));
-        }
-        let init_handle: unsafe extern "C" fn(*mut Handle, *mut c_void, *mut c_void) -> c_int =
-            symbol(&lib, library, "svt_av1_enc_init_handle")?;
+        };
         let parse: unsafe extern "C" fn(*mut c_void, *const c_char, *const c_char) -> c_int =
             symbol(&lib, library, "svt_av1_enc_parse_parameter")?;
         let set: unsafe extern "C" fn(Handle, *mut c_void) -> c_int =
@@ -203,6 +252,7 @@ impl SvtAv1Encoder {
             release: symbol(&lib, library, "svt_av1_enc_release_out_buffer")?,
             deinit: symbol(&lib, library, "svt_av1_enc_deinit")?,
             deinit_handle: symbol(&lib, library, "svt_av1_enc_deinit_handle")?,
+            abi,
             library_name: library.to_owned(),
             size,
             fps,
@@ -212,10 +262,25 @@ impl SvtAv1Encoder {
             _library: lib,
         };
         let config = encoder.config_block.as_mut_ptr().cast::<c_void>();
-        // SAFETY: the library fills the zeroed configuration block.
-        if unsafe { init_handle(&mut encoder.handle, std::ptr::null_mut(), config) }
-            != EB_ERROR_NONE
-        {
+        let handle = &mut encoder.handle as *mut Handle;
+        let created = match abi {
+            SvtAbi::V2 => {
+                let init_handle: unsafe extern "C" fn(
+                    *mut Handle,
+                    *mut c_void,
+                    *mut c_void,
+                ) -> c_int = symbol(&encoder._library, library, "svt_av1_enc_init_handle")?;
+                // SAFETY: the library fills the zeroed configuration block.
+                unsafe { init_handle(handle, std::ptr::null_mut(), config) }
+            }
+            SvtAbi::V3 => {
+                let init_handle: unsafe extern "C" fn(*mut Handle, *mut c_void) -> c_int =
+                    symbol(&encoder._library, library, "svt_av1_enc_init_handle")?;
+                // SAFETY: as above; 3.0 dropped the application data argument.
+                unsafe { init_handle(handle, config) }
+            }
+        };
+        if created != EB_ERROR_NONE {
             encoder.handle = std::ptr::null_mut();
             return Err(io::Error::other("svt_av1_enc_init_handle failed"));
         }
@@ -276,7 +341,7 @@ impl SvtAv1Encoder {
         input.p_buffer = (&mut io_format as *mut SvtIoFormat).cast();
         input.n_filled_len = (yuv.y.len() + yuv.u.len() + yuv.v.len()) as u32;
         input.pts = self.frames;
-        input.pic_type = if keyframe {
+        input.tail[self.abi.pic_type_word()] = if keyframe {
             EB_AV1_KEY_PICTURE
         } else {
             EB_AV1_INVALID_PICTURE

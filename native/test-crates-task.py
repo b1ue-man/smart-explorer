@@ -1347,10 +1347,11 @@ IGNORED_GROUPS = [
         ],
     },
     {   # SVT-AV1 encoding and dav1d decoding through the runtime-loaded libraries (plan 2026-11-14
-        # "Bildkette", BK4, B-25/B-38): the test opens `libSvtAv1Enc.so.1` and `libdav1d.so.7` by their
-        # SONAME and checks the PSNR of five pictures. The `workspace` job installs the Ubuntu 24.04
-        # packages libsvtav1enc1d1 (1.7.0, SONAME libSvtAv1Enc.so.1) and libdav1d7 (1.4.1, SONAME
-        # libdav1d.so.7) in its step "Linux test packages". Linux only: the loaders are Linux code.
+        # "Bildkette", BK4, B-25/B-38): the test opens the first SVT-AV1 of 2.3.0 or later by SONAME
+        # (`libSvtAv1Enc.so.4`/`.3`/`.2`) and `libdav1d.so.7` and checks the PSNR of five pictures. The
+        # `workspace` job builds SVT-AV1 v3.1.0 from source (libSvtAv1Enc.so.3; Ubuntu 24.04 ships only
+        # 1.7.0, which the engine refuses because it hands out a picture only with the next one) and
+        # installs libdav1d7 (1.4.1) in its step "Linux test packages". Linux only: the loaders are Linux code.
         "title": "SVT-AV1 and dav1d round trip (ignored test, runtime libraries)",
         "os": ("Linux",),
         "tests": [

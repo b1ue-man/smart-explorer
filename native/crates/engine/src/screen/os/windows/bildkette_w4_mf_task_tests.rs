@@ -26,7 +26,8 @@ use crate::screen::os::mf_encoder_sync::update_refresh;
 #[test]
 fn bildkette_task_win_w4_scaled_gpu_input_stays_within_two_codec_input_claims() {
     let (size, ring_size) = (FrameSize::new(1920, 1080), FrameSize::new(3840, 2160));
-    let caps = FrameCapabilities::admitted(size, 32 * 1024 * 1024).unwrap();
+    // 24 working images of 1080p need about 190 MiB (`VERSIONED_WORKING_IMAGES`).
+    let caps = FrameCapabilities::admitted(size, MAX_WORKING_BYTES).unwrap();
     let contract = FrameContract::negotiate(Some(caps), Some(caps))
         .unwrap()
         .unwrap();

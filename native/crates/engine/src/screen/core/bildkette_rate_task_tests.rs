@@ -76,10 +76,11 @@ fn bildkette_task_rate_cadence_change_keeps_the_encoder() {
     assert_eq!(codec_cap(144, size, Some(245_760)), Some(30));
     // The pipeline restarts an encoder only for a higher allowed rate, and
     // the once-a-second cadence step never ends the encoder.
-    let produce = include_str!("host_pipeline_produce.rs");
+    // A Windows checkout has CRLF line ends.
+    let produce = include_str!("host_pipeline_produce.rs").replace("\r\n", "\n");
     assert!(produce.contains("open_fps > self.codec_fps"));
     assert!(!produce.contains("let changed = self.codec_fps != fps;"));
-    let mode = include_str!("host_mode.rs");
+    let mode = include_str!("host_mode.rs").replace("\r\n", "\n");
     let second = &mode[mode.find("pub fn second").unwrap()..];
     let second = &second[..second.find("\n    }\n").unwrap()];
     assert!(!second.contains("drop_encoder"));
@@ -226,8 +227,10 @@ fn bildkette_task_rate_user_ceiling_bounds_the_target() {
     rate.set_ceiling(Some(1));
     assert_eq!(rate.target_bps(), MIN_BITRATE_BPS);
     rate.set_ceiling(None);
+    // A sender that fills the target grows to at most twice what arrived:
+    // 20 kB per frame (9.6 Mbit/s) leaves room above 3 Mbit/s.
     for index in 40..80 {
-        frame(&mut rate, index, 1_000, DELAY_US);
+        frame(&mut rate, index, 20_000, DELAY_US);
     }
     assert!(rate.target_bps() > 3_000_000);
 }

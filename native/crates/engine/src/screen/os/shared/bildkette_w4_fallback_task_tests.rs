@@ -183,7 +183,12 @@ fn test_grant() -> (Arc<SessionAdmission>, CaptureGrant) {
     ] {
         plan.add_bgra(owner, SIZE, 2, CapturePhases::ALL).unwrap();
     }
-    for owner in [CaptureOwner::CodecOutput, CaptureOwner::FilterScratch] {
+    // `Metadata`: the record headers of every encoded frame (`CapturedRecords`).
+    for owner in [
+        CaptureOwner::CodecOutput,
+        CaptureOwner::FilterScratch,
+        CaptureOwner::Metadata,
+    ] {
         plan.add_bytes(owner, 65_536, 2, CapturePhases::ALL)
             .unwrap();
     }

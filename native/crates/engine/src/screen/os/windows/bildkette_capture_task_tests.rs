@@ -155,11 +155,23 @@ fn bildkette_task_win_capture_schedule_reads_before_due() {
         schedule.step(ms(19), &cadence),
         Step::Sleep(Duration::from_millis(9))
     );
-    // Long after the last request the next due request still lies ahead.
-    match schedule.step(ms(1_005), &cadence) {
-        Step::Sleep(pause) => assert!(pause <= Duration::from_millis(10)),
-        Step::Acquire { due, .. } => assert!(due.is_some_and(|due| due > ms(1_005))),
-    }
+    // Overslept the start (read at 28 for 30, woke at 33): the request at
+    // 30 is still open and is served late, not skipped for the one at 40.
+    assert_eq!(
+        schedule.step(ms(33), &cadence),
+        Step::Acquire {
+            wait: Duration::from_millis(10),
+            due: Some(ms(30))
+        }
+    );
+    // Long after the last request: the request of the current interval.
+    assert_eq!(
+        schedule.step(ms(1_005), &cadence),
+        Step::Acquire {
+            wait: Duration::from_millis(10),
+            due: Some(ms(1_000))
+        }
+    );
 }
 
 #[test]

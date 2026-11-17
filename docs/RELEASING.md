@@ -404,8 +404,9 @@ expects the 229 new Rust tests of the batch (210 `bildkette_task_*`, 19 `verbind
 name exactly once, on the operating system they run on (`BILDKETTE_TESTS` in
 `native/test-crates-task.py`: `both`, `linux`, `windows`). Two of the ignored tests of that batch run
 in the ignored groups of the Linux job: `bildkette_task_linux_hw_av1_roundtrip_psnr` (SVT-AV1 and
-dav1d; the step "Linux test packages" of `crates-task.yml` installs `libsvtav1enc1d1` and
-`libdav1d7`, the Ubuntu 24.04 packages of `libSvtAv1Enc.so.1` and `libdav1d.so.7`) and
+dav1d; the step "Linux test packages" of `crates-task.yml` builds SVT-AV1 v3.1.0 from source,
+`libSvtAv1Enc.so.3`, because Ubuntu 24.04 ships only 1.7.0, which the engine refuses, and installs
+`libdav1d7`, the package of `libdav1d.so.7`) and
 `bildkette_task_chain_host_process_crash_ends_only_its_session` (the development `se` that
 `compile_stage` builds into `native/target/debug`). Four tests need a graphics card that no hosted
 runner has (`#[ignore = "…; Suite keine (kein Runner mit Grafikkarte)"]`, register suite
