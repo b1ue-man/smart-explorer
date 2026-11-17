@@ -412,6 +412,8 @@ mod remote_drive_task_mount_lease_tests;
 pub mod removal;
 #[path = "core/removed_direct_peers.rs"]
 mod removed_direct_peers;
+#[path = "core/reply_drain.rs"]
+mod reply_drain;
 #[path = "core/room_relation.rs"]
 mod room_relation;
 #[path = "core/server.rs"]

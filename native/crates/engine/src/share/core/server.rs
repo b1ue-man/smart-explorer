@@ -237,10 +237,7 @@ pub(super) async fn handle_connection(
                 }
                 // Drain replies/FIN before a pressure close: a completed mutation
                 // cannot be mistaken for an unexecuted retry.
-                if super::route_protocol::timeout_for(io_deadline::PEER_OP_TIMEOUT, acknowledged)
-                    .await
-                    .is_err()
-                {
+                if !super::reply_drain::acknowledged(&connection, acknowledged).await {
                     // Delivery is ambiguous. This is never an IDLE retry signal,
                     // which could replay an already completed mutation.
                     connection.close(VarInt::from_u32(0x5348), b"reply acknowledgment timeout");
