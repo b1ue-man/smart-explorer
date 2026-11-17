@@ -315,12 +315,13 @@ impl DecodeState {
             }
             gop.pending
                 .retain(|frame_id, _| *frame_id > output.frame_id);
-            Ok(Some((output, receipt)))
+            // Pictures submitted after this one and still in the decoder (P3).
+            Ok(Some((output, receipt, gop.pending.len())))
         })();
         self.chain.open_frame = record.has_more();
         match decoded {
             Ok(output) => {
-                if let Some((output, receipt)) = output {
+                if let Some((output, receipt, lag)) = output {
                     // Station `decode` of the viewer (BK0).
                     let micros =
                         u64::try_from(decode_started.elapsed().as_micros()).unwrap_or(u64::MAX);
@@ -329,6 +330,7 @@ impl DecodeState {
                     if output.keyframe {
                         self.keyframes.on_keyframe();
                     }
+                    self.guard_picture(header.codec, lag);
                     self.show(&mut gop, header.size, output.capture_ts_us, receipt);
                 }
                 self.gop = Some(gop);
@@ -380,7 +382,6 @@ impl DecodeState {
             // Left out by the preview's shortest gap (BK0: dropped pictures).
             info.latency.dropped += u64::from(!due);
         });
-        self.guard_picture(gop.header.codec);
         if !due {
             return;
         }

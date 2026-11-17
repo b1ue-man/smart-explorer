@@ -341,6 +341,15 @@ pub(crate) fn available() -> bool {
     !found.hardware.is_empty() || !found.software.is_empty()
 }
 
+/// Whether a hardware MFT of `codec` runs on the adapter `luid` (plan
+/// 2026-11-17 P3 (b): a vendor encoder of another adapter then gives way).
+pub(crate) fn hardware_mft_on(codec: CodecKind, luid: u64) -> bool {
+    found()
+        .encoders(codec)
+        .iter()
+        .any(|entry| entry.adapter == Some(luid))
+}
+
 /// Whether a hardware MFT on `own` gives way to one on the capture's
 /// adapter `capture` among `entries` (pure, for the task tests): only when
 /// its adapter is known, differs, and `entries` hold an MFT of `capture`.

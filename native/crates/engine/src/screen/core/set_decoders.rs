@@ -31,8 +31,8 @@ use super::frame_budget::FrameContract;
 use super::gop_continue::ContinueOffers;
 use super::host_pipeline::codec_fallbacks;
 use super::negotiate::{
-    negotiate_for_contract, sharp_alternative, CodecChoice, CodecKind, CodecOffer, CodecPreference,
-    MAX_COMBINED_OFFERS,
+    negotiate_for_contract, negotiate_trusted, sharp_alternative, CodecChoice, CodecKind,
+    CodecOffer, CodecPreference, CodecTrust, MAX_COMBINED_OFFERS,
 };
 use super::pixel_convert::FrameSize;
 use super::wire::invalid;
@@ -109,7 +109,19 @@ pub fn renegotiate(
     contract: Option<FrameContract>,
     video_session: bool,
 ) -> Option<Pairing> {
-    let choices = negotiate_for_contract(encoders, decoders, CodecPreference::Auto, contract);
+    renegotiate_trusted(encoders, decoders, contract, video_session, CodecTrust::ALL)
+}
+
+/// `renegotiate` with the host's trust of the newer codecs (D6, plan
+/// 2026-11-17 P3).
+pub fn renegotiate_trusted(
+    encoders: &[CodecOffer],
+    decoders: &[CodecOffer],
+    contract: Option<FrameContract>,
+    video_session: bool,
+    trust: CodecTrust,
+) -> Option<Pairing> {
+    let choices = negotiate_trusted(encoders, decoders, CodecPreference::Auto, contract, trust);
     let choice = choices
         .iter()
         .copied()

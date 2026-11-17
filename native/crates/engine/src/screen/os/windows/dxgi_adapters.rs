@@ -31,6 +31,11 @@
 //!   resolve on the current drive, where an unprivileged user may create
 //!   the folder `\SystemRoot`).
 //!
+//! - `identity` (plan 2026-11-17 „Windows-Bild“ P3): PCI vendor, device
+//!   and revision of an adapter and the version of its user-mode driver
+//!   (`IDXGIAdapter::CheckInterfaceSupport` with `IDXGIDevice`), the key of
+//!   the codec verdicts, read once per process.
+//!
 //! The D3DKMT entries are loaded from `gdi32.dll` in System32 at run time;
 //! their structures are mirrored from the crate `windows` 0.58.0
 //! (`Wdk::Graphics::Direct3D`: `D3DKMT_OPENADAPTERFROMLUID`,
@@ -42,13 +47,15 @@ use std::ffi::{c_void, OsString};
 use std::io;
 use std::os::windows::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use libloading::os::windows::{
     Library, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR, LOAD_LIBRARY_SEARCH_SYSTEM32,
 };
+use windows::core::Interface;
 use windows::Win32::Foundation::LUID;
 use windows::Win32::Graphics::Dxgi::{
-    CreateDXGIFactory1, IDXGIAdapter1, IDXGIFactory1, DXGI_ADAPTER_FLAG_SOFTWARE,
+    CreateDXGIFactory1, IDXGIAdapter1, IDXGIDevice, IDXGIFactory1, DXGI_ADAPTER_FLAG_SOFTWARE,
 };
 use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW;
 
@@ -98,6 +105,79 @@ pub(in crate::screen::os) fn adapters() -> Vec<Adapter> {
     }
     order_by_output(&mut found, |adapter| adapter.output);
     found
+}
+
+/// `vendor:device:revision@a.b.c.d` of `adapter` (hexadecimal PCI ids; the
+/// four 16-bit parts of the user-mode driver version where the driver
+/// reports it).
+fn identity(adapter: &IDXGIAdapter1) -> String {
+    // SAFETY: plain queries of the live adapter.
+    let Ok(desc) = (unsafe { adapter.GetDesc1() }) else {
+        return String::new();
+    };
+    let base = format!(
+        "{:04x}:{:04x}:{:02x}",
+        desc.VendorId, desc.DeviceId, desc.Revision
+    );
+    // SAFETY: as above; the call only writes the version.
+    match unsafe { adapter.CheckInterfaceSupport(&IDXGIDevice::IID) } {
+        Ok(version) => {
+            let part = |shift: u32| ((version as u64) >> shift) & 0xffff;
+            format!("{base}@{}.{}.{}.{}", part(48), part(32), part(16), part(0))
+        }
+        Err(_) => base,
+    }
+}
+
+/// Packed LUID, PCI vendor and identity of every hardware adapter, read
+/// once per process (`adapters` order).
+fn identities() -> &'static [(u64, u32, String)] {
+    static FOUND: OnceLock<Vec<(u64, u32, String)>> = OnceLock::new();
+    FOUND.get_or_init(|| {
+        adapters()
+            .iter()
+            .map(|adapter| {
+                let identity = identity(&adapter.adapter);
+                (packed(adapter.luid), adapter.vendor, identity)
+            })
+            .collect()
+    })
+}
+
+/// The identity of the adapter of the packed LUID `luid`; empty when no
+/// hardware adapter has it.
+pub(in crate::screen::os) fn identity_of(luid: u64) -> String {
+    identities()
+        .iter()
+        .find(|(own, _, _)| *own == luid)
+        .map(|(_, _, identity)| identity.clone())
+        .unwrap_or_default()
+}
+
+/// The PCI vendor of the adapter of the packed LUID `luid`.
+pub(in crate::screen::os) fn vendor_of_luid(luid: u64) -> Option<u32> {
+    identities()
+        .iter()
+        .find(|(own, _, _)| *own == luid)
+        .map(|(_, vendor, _)| *vendor)
+}
+
+/// The identity of the first hardware adapter of the PCI `vendor`.
+pub(in crate::screen::os) fn identity_of_vendor(vendor: u32) -> String {
+    identities()
+        .iter()
+        .find(|(_, own, _)| *own == vendor)
+        .map(|(_, _, identity)| identity.clone())
+        .unwrap_or_default()
+}
+
+/// The identity of the first hardware adapter (where a decoder's hardware
+/// stage runs).
+pub(in crate::screen::os) fn identity_of_first() -> String {
+    identities()
+        .first()
+        .map(|(_, _, identity)| identity.clone())
+        .unwrap_or_default()
 }
 
 /// Stable: the entries `output` names first (pure, for the task tests).

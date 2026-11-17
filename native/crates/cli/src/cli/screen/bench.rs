@@ -136,7 +136,11 @@ pub(super) fn run(args: BenchArgs) -> Result<i32, String> {
         }
     };
     super::output::print(args.json, &report, || super::output::bench_text(&report));
-    Ok(0)
+    // P3: the counters are printed; no intact picture stays an error.
+    match report.failure {
+        Some(failure) => Err(failure),
+        None => Ok(0),
+    }
 }
 
 #[cfg(test)]

@@ -257,7 +257,8 @@ pub(in crate::screen) fn encode_stage_frame(
     {
         stage.encoder = None;
     }
-    let max_attempts = backend.encoder_stages(&request).max(1);
+    // Counted only after a failure (plan 2026-11-17 P3).
+    let mut max_attempts: Option<usize> = None;
     let mut attempt = 0;
     loop {
         attempt += 1;
@@ -291,7 +292,9 @@ pub(in crate::screen) fn encode_stage_frame(
                 if !stage.refused.contains(&factory) {
                     stage.refused.push(factory);
                 }
-                if attempt >= max_attempts {
+                let stages =
+                    *max_attempts.get_or_insert_with(|| backend.encoder_stages(&request).max(1));
+                if attempt >= stages {
                     return Err(error);
                 }
                 request.to_mut().keyframe = true;

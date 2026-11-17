@@ -10,13 +10,24 @@
 //! register as `CodecReport`. A decoder opens under the viewer's choice
 //! „Dekodierer“ (`negotiate::decoder_preference`, plan 2026-11-14
 //! „Bildkette“ 4.10): only implementations with a stage of that kind.
+//!
+//! Plan 2026-11-17 „Windows-Bild“ P3: a register with `Checks`
+//! (`codec_verify.rs`) offers no encoder or decoder that failed its
+//! run-time check, an HEVC or AV1 encoder only once it passed (H.264
+//! unchecked as well: the gate at its opening checks it first), names the
+//! verdict of every row (`CodecEntry::verdict`) and gives the host's trust
+//! of the newer codecs to the negotiation (`codec_trust`, D6).
 use std::io;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
+use super::codec_verdicts::{Role, VerdictView};
+use super::codec_verify::Checks;
 use super::host_backend::{ScreenDecoder, ScreenEncoder};
-use super::negotiate::{CodecChoice, CodecKind, CodecOffer, H264Profile, MAX_CODEC_OFFERS};
+use super::negotiate::{
+    CodecChoice, CodecKind, CodecOffer, CodecTrust, H264Profile, MAX_CODEC_OFFERS,
+};
 use super::pixel_convert::FrameSize;
 use super::wire_binary::GopHeader;
 
@@ -24,6 +35,9 @@ use super::wire_binary::GopHeader;
 mod continuation;
 #[path = "codec_registry_open.rs"]
 mod open;
+#[path = "codec_registry_verify.rs"]
+mod verify;
+pub use verify::VerifyLine;
 
 /// Text at every place that controls OpenH264 (Cisco condition 3).
 pub const OPENH264_NOTICE: &str = "OpenH264 Video Codec provided by Cisco Systems, Inc.";
@@ -70,6 +84,12 @@ pub trait EncoderFactory: Send + Sync {
     fn refused_settings(&self) -> Vec<String> {
         Vec::new()
     }
+    /// The adapter it runs on as the verdicts name it
+    /// (`vendor:device:revision@driver`, P3); empty for software and where
+    /// the platform does not say.
+    fn device(&self) -> String {
+        String::new()
+    }
     /// Opens an encoder for `choice` at `size` with `fps` frames per second.
     fn open(
         &self,
@@ -90,6 +110,10 @@ pub trait DecoderFactory: Send + Sync {
     /// announces `gop_continue` only then (`codec_registry_continue.rs`).
     fn keeps_references(&self, _codec: CodecKind) -> bool {
         false
+    }
+    /// The adapter of its hardware stage as the verdicts name it (P3).
+    fn device(&self) -> String {
+        String::new()
     }
 }
 
@@ -117,6 +141,9 @@ pub struct CodecEntry {
     /// Settings the encoder refused (B-21), BK6.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub refused_settings: Vec<String>,
+    /// The run-time check (P3); absent for the tiles and without checks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verdict: Option<VerdictView>,
 }
 
 /// State of the OpenH264 library of this user.
@@ -167,6 +194,8 @@ pub struct CodecReport {
 pub struct CodecRegistry {
     encoders: Vec<Arc<dyn EncoderFactory>>,
     decoders: Vec<Arc<dyn DecoderFactory>>,
+    /// The run-time checks (P3); `None` offers everything, as before.
+    checks: Option<Arc<Checks>>,
 }
 
 /// Whether `offer` encodes `codec` and `profile`: `Some(true)` for the
@@ -229,6 +258,7 @@ fn entries(name: String, offers: &[CodecOffer], refused: Vec<String>) -> Vec<Cod
                     hardware: false,
                     profile_names: Vec::new(),
                     refused_settings: refused.clone(),
+                    verdict: None,
                 });
                 rows.len() - 1
             }
@@ -257,6 +287,7 @@ fn tiles_entry() -> CodecEntry {
         hardware: false,
         profile_names: Vec::new(),
         refused_settings: Vec::new(),
+        verdict: None,
     }
 }
 
@@ -272,39 +303,146 @@ impl CodecRegistry {
         encoders: Vec<Arc<dyn EncoderFactory>>,
         decoders: Vec<Arc<dyn DecoderFactory>>,
     ) -> Self {
-        Self { encoders, decoders }
+        Self {
+            encoders,
+            decoders,
+            checks: None,
+        }
+    }
+
+    /// The same register with the run-time checks of P3.
+    pub fn with_checks(mut self, checks: Arc<Checks>) -> Self {
+        self.checks = Some(checks);
+        self
+    }
+
+    pub fn checks(&self) -> Option<&Arc<Checks>> {
+        self.checks.as_ref()
+    }
+
+    /// Whether `other` holds the same factories (the kept register of a
+    /// process, P3 task tests).
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn same_factories(&self, other: &Self) -> bool {
+        self.encoders.len() == other.encoders.len()
+            && self.decoders.len() == other.decoders.len()
+            && self
+                .encoders
+                .iter()
+                .zip(&other.encoders)
+                .all(|(a, b)| Arc::ptr_eq(a, b))
+            && self
+                .decoders
+                .iter()
+                .zip(&other.decoders)
+                .all(|(a, b)| Arc::ptr_eq(a, b))
     }
 
     /// The host's encoders for `HELLO_OK` and the negotiation.
     pub fn encoder_offers(&self) -> Vec<CodecOffer> {
-        ordered_offers(self.encoders.iter().map(|factory| factory.offers()))
+        ordered_offers(
+            self.encoders
+                .iter()
+                .map(|factory| self.offered(factory.as_ref())),
+        )
+    }
+
+    /// P3: the offers of `factory` without those that failed their check;
+    /// HEVC and AV1 only once checked.
+    fn offered(&self, factory: &dyn EncoderFactory) -> Vec<CodecOffer> {
+        let offers = factory.offers();
+        let Some(checks) = &self.checks else {
+            return offers;
+        };
+        let (name, device) = (factory.name(), factory.device());
+        offers
+            .into_iter()
+            .filter(|offer| {
+                if !offer.codec.is_video() {
+                    return true;
+                }
+                let profile = Some(offer.codec.profile_name(offer.profile));
+                let summary =
+                    checks
+                        .store()
+                        .summary(&name, &device, offer.codec, profile, Role::Encoder);
+                if summary.failed.is_some() && !summary.passes() {
+                    return false;
+                }
+                summary.passes() || offer.codec == CodecKind::H264
+            })
+            .collect()
+    }
+
+    /// Whether `factory` failed its check as a decoder of `codec` (P3).
+    fn decoder_failed(&self, factory: &dyn DecoderFactory, codec: CodecKind) -> bool {
+        self.checks
+            .as_ref()
+            .is_some_and(|checks| checks.decoder_failed(factory, codec))
     }
 
     /// The viewer's decoders for its hello, without the codecs that gave no
-    /// picture in this process (`decoder_health`).
+    /// picture in this process (`decoder_health`) and without the decoders
+    /// that failed their check (P3).
     pub fn decoder_offers(&self) -> Vec<CodecOffer> {
         super::decoder_health::usable_offers(&ordered_offers(self.decoders.iter().map(|factory| {
             factory
                 .offers()
                 .into_iter()
+                .filter(|offer| !self.decoder_failed(factory.as_ref(), offer.codec))
                 .map(|offer| offer.with_pixel_access(true))
                 .collect()
         })))
     }
 
+    /// D6: the newer codecs of which an encoder of this register passed
+    /// its round trip with a local decoder; every codec without checks.
+    pub fn codec_trust(&self) -> CodecTrust {
+        let Some(checks) = &self.checks else {
+            return CodecTrust::ALL;
+        };
+        let mut trust = CodecTrust::NONE;
+        for factory in &self.encoders {
+            let (name, device) = (factory.name(), factory.device());
+            for codec in [CodecKind::Hevc, CodecKind::Av1] {
+                let summary = checks
+                    .store()
+                    .summary(&name, &device, codec, None, Role::Encoder);
+                if summary.verified {
+                    trust = trust.with(codec);
+                }
+            }
+        }
+        trust
+    }
+
+    /// The verdict of every row of `factory` (`name`, `device`) as `role`.
+    fn judged(&self, mut rows: Vec<CodecEntry>, device: &str, role: Role) -> Vec<CodecEntry> {
+        if let Some(checks) = &self.checks {
+            for row in rows.iter_mut().filter(|row| row.codec.is_video()) {
+                let summary = checks
+                    .store()
+                    .summary(&row.name, device, row.codec, None, role);
+                row.verdict = Some(VerdictView::of(summary));
+            }
+        }
+        rows
+    }
+
     /// The register as `se screen codec` shows it.
     pub fn report(&self, openh264: OpenH264Report) -> CodecReport {
         let encoders = self.encoders.iter().flat_map(|factory| {
-            entries(
+            let rows = entries(
                 factory.name(),
                 &factory.offers(),
                 factory.refused_settings(),
-            )
+            );
+            self.judged(rows, &factory.device(), Role::Encoder)
         });
-        let decoders = self
-            .decoders
-            .iter()
-            .flat_map(|factory| entries(factory.name(), &factory.offers(), Vec::new()));
+        let decoders = self.decoders.iter().flat_map(|factory| {
+            let rows = entries(factory.name(), &factory.offers(), Vec::new());
+            self.judged(rows, &factory.device(), Role::Decoder)
+        });
         CodecReport {
             encoders: encoders.chain(std::iter::once(tiles_entry())).collect(),
             decoders: decoders.chain(std::iter::once(tiles_entry())).collect(),

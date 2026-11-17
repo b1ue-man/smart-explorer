@@ -19,6 +19,9 @@
 //! - Package BK12 (B-22): the vendor encoders NVENC and AMF open on the
 //!   capture's device itself (`attach_device`, no device manager) and take
 //!   the same textures (`GpuInput::texture`).
+//! - Plan 2026-11-17 P3 (b): without the capture's device (none yet,
+//!   another adapter or vendor) they get a device of their own with the
+//!   CPU upload (`mf_d3d_own.rs`).
 use std::io;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
@@ -33,8 +36,11 @@ use windows::Win32::Media::MediaFoundation::{
     IMFDXGIDeviceManager, IMFSample, IMFTransform, MF_SA_D3D11_AWARE,
 };
 
+#[path = "mf_d3d_own.rs"]
+mod own;
 #[path = "mf_d3d_surface.rs"]
 mod surface;
+pub(in crate::screen::os) use own::{attach_own, input_route, own_for_vendor, InputRoute};
 pub(in crate::screen::os) use surface::detach;
 
 use super::video_convert::{nv12_len, nv12_texture, Ring, VideoConverter};
@@ -260,10 +266,13 @@ pub(in crate::screen::os) struct GpuInput {
     raw: usize,
     _manager: Option<IMFDXGIDeviceManager>,
     size: FrameSize,
-    token: u64,
+    /// The arming of the capture; `None` for a device of its own (P3).
+    token: Option<u64>,
     /// Input texture of the encoder's size (scaled or uploaded pictures).
     target: Option<Owned>,
     upload: Option<Owned>,
+    /// Target and staging texture of pictures without admission (P3).
+    plain: Option<(ID3D11Texture2D, ID3D11Texture2D)>,
     scale: Option<(VideoConverter, ID3D11VideoProcessorOutputView)>,
     /// Ring slot the MFT reads until its output arrived.
     in_flight: Option<(Arc<Ring>, usize)>,
@@ -348,9 +357,10 @@ fn arm(
         raw,
         _manager: manager,
         size,
-        token,
+        token: Some(token),
         target: None,
         upload: None,
+        plain: None,
         scale: None,
         in_flight: None,
     })
@@ -464,8 +474,11 @@ impl GpuInput {
 impl Drop for GpuInput {
     fn drop(&mut self) {
         self.finish();
+        let Some(own) = self.token else {
+            return;
+        };
         let mut state = bridge();
-        if state.armed.map(|(_, token)| token) == Some(self.token) {
+        if state.armed.map(|(_, token)| token) == Some(own) {
             state.armed = None;
         }
     }

@@ -16,7 +16,10 @@ impl Encoding {
 
     /// Encodes `image` with the running or next stage of the rank (W4, B3):
     /// each failing stage goes onto `refused` once, asks the replacement for
-    /// a key frame, and retries up to the stage count of `request`.
+    /// a key frame, and retries up to the stage count of `request`. The
+    /// stage count is asked only after a failure (plan 2026-11-17
+    /// „Windows-Bild“ P3: asking built the whole codec register, with every
+    /// Media Foundation enumeration, for every picture).
     pub(in crate::screen::os) fn encode_with_fallback(
         &mut self,
         image: &Picture,
@@ -27,7 +30,7 @@ impl Encoding {
         String,
         bool,
     )> {
-        let max_attempts = self.opener.stage_count(&request).max(1);
+        let mut max_attempts: Option<usize> = None;
         let mut attempt = 0;
         loop {
             attempt += 1;
@@ -50,7 +53,10 @@ impl Encoding {
                     if !self.refused.contains(&factory) {
                         self.refused.push(factory);
                     }
-                    if attempt >= max_attempts {
+                    let opener = &self.opener;
+                    let stages =
+                        *max_attempts.get_or_insert_with(|| opener.stage_count(&request).max(1));
+                    if attempt >= stages {
                         return Err(error);
                     }
                     request.to_mut().keyframe = true;

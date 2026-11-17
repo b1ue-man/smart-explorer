@@ -126,6 +126,10 @@ mod bits;
 mod hevc_av1;
 #[path = "frame_size_packet.rs"]
 mod packet;
+// Plan 2026-11-17 „Windows-Bild“ P3: stream structure of the codec check
+// and the key-frame rule D8, with the readers of `bits`.
+#[path = "codec_verify_bits.rs"]
+mod verify_bits;
 
 pub use avc::{avc_limits, check_avc_dimensions, fit_macroblocks, macroblocks, AvcLimits};
 pub use hevc_av1::{
@@ -133,3 +137,7 @@ pub use hevc_av1::{
     video_parameter_sets, Av1Level, HevcLevel, AV1_LEVELS, HEVC_LEVELS,
 };
 pub use packet::{validate_encoded_budget, PacketBudget, RECORD_BUFFER_OVERHEAD};
+pub use verify_bits::{
+    coded_pictures, complete_unit, completed, insertion_point, marked_keyframe,
+    stream_parameter_sets, Completion,
+};

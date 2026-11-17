@@ -1050,6 +1050,20 @@ BILDKETTE_TESTS = {
         "bildkette_task_d3d11_menus_hide_overlays_cut_out",
         "bildkette_task_d3d11_colour_space_of_stream_and_output",
         "bildkette_task_present_direct3d11_takes_d3d11va_textures",
+        # Plan 2026-11-17 „Windows-Bild“ P3: run-time check of the codecs.
+        "bildkette_task_verify_tiles_round_trip_verified",
+        "bildkette_task_verify_garbage_encoder_failed_garbled",
+        "bildkette_task_verify_slow_encoder_failed_slow",
+        "bildkette_task_verify_late_encoder_and_late_decoder_attributed",
+        "bildkette_task_verify_missing_keyframe_failed",
+        "bildkette_task_verify_no_reference_decoder_structural_or_missing_parameter_sets",
+        "bildkette_task_verify_open_skips_failed_factory_and_offers_drop_it",
+        "bildkette_task_verify_verdict_store_key_change_and_crash_marker",
+        "bildkette_task_verify_negotiate_unverified_hevc_after_verified_h264",
+        "bildkette_task_verify_negotiate_verified_newer_codec_keeps_b30",
+        "bildkette_task_verify_encode_does_not_rebuild_registry_per_picture",
+        "bildkette_task_verify_bench_counts_late_not_corrupt",
+        "bildkette_task_verify_guard_gives_up_lagging_decoder",
     ],
     "linux": [
         "bildkette_task_r1_linux_capture_path_reaches_the_chain",
@@ -1186,6 +1200,9 @@ BILDKETTE_TESTS = {
         "bildkette_task_rate_windows_session_timer_is_high_resolution",
         # P8: FFmpeg's factories before Media Foundation's; without the DLLs Media Foundation.
         "bildkette_task_ffmpeg_absent_dlls_leave_media_foundation",
+        # Plan 2026-11-17 P3: input route (b) and key-frame rule D8.
+        "bildkette_task_verify_vendor_route_without_capture_uses_own_device",
+        "bildkette_task_verify_mf_keyframe_needs_idr_unit",
     ],
 }
 

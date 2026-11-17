@@ -1,7 +1,12 @@
 //! Opening admitted and raw codecs with the registry's established fallback order.
+//! Plan 2026-11-17 „Windows-Bild“ P3: with checks an encoder without a
+//! verdict runs its round trip first, and one that failed it is skipped like
+//! a refusal; a decoder that failed its check is not opened.
 use std::io;
 use std::sync::Arc;
 
+use super::super::codec_verdicts::Verdict;
+use super::super::codec_verify::Checks;
 use super::super::host_backend::{ScreenDecoder, TilesScreenDecoder, TilesScreenEncoder};
 use super::super::negotiate::{CodecChoice, CodecKind};
 use super::super::pixel_convert::FrameSize;
@@ -9,6 +14,34 @@ use super::super::wire_binary::GopHeader;
 use super::{encodes_stream, CodecRegistry, EncoderFactory, OpenedEncoder, TILES_NAME};
 
 impl CodecRegistry {
+    /// The gate of P3 (`Checks::admit`): `Err` with the reason skips
+    /// `factory`; without checks every encoder opens, as before.
+    fn admit(
+        &self,
+        factory: &Arc<dyn EncoderFactory>,
+        choice: &CodecChoice,
+        size: FrameSize,
+    ) -> Result<(), String> {
+        self.checks.as_ref().map_or(Ok(()), |checks| {
+            checks.admit(factory, &self.decoders, choice, size)
+        })
+    }
+
+    /// Whether `factory` has a stored failed verdict for `choice` at `size`
+    /// (no check runs): the gate skips it, so the rate watch must not give
+    /// an encoder up for it (merge of P3 and the bit rate, 2026-11-17).
+    fn known_failed(
+        &self,
+        factory: &Arc<dyn EncoderFactory>,
+        choice: &CodecChoice,
+        size: FrameSize,
+    ) -> bool {
+        self.checks.as_ref().is_some_and(|checks| {
+            let key = Checks::encoder_key(factory.as_ref(), choice, size);
+            matches!(checks.store().get(&key), Some(Verdict::Failed(_)))
+        })
+    }
+
     fn matching_encoders(
         &self,
         choice: &CodecChoice,
@@ -149,8 +182,12 @@ impl CodecRegistry {
             );
             let mut selected = None;
             let mut refusals = Vec::new();
-            let count = candidates.len();
-            for (index, (hardware, factory)) in candidates.into_iter().enumerate() {
+            for (index, (hardware, factory)) in candidates.iter().copied().enumerate() {
+                // P3: an encoder that failed its check is skipped like a refusal.
+                if let Err(reason) = self.admit(factory, &request.choice, request.size) {
+                    refusals.push(format!("{}: {reason}", factory.name()));
+                    continue;
+                }
                 // Plan 2026-11-17: the encoder opens at the session's rate and
                 // runs inside the watch of its rate (`rate_control::honour`),
                 // which may give it up while another candidate is left.
@@ -162,7 +199,12 @@ impl CodecRegistry {
                     request.target_bps,
                 ) {
                     Ok(encoder) => {
-                        let can_demote = index + 1 < count;
+                        // Another candidate is left unless every later one
+                        // failed its check (P3), which the gate would skip.
+                        let (choice, size) = (&request.choice, request.size);
+                        let can_demote = candidates[index + 1..]
+                            .iter()
+                            .any(|(_, later)| !self.known_failed(later, choice, size));
                         selected = Some(OpenedEncoder {
                             encoder: super::super::rate_control::honour::guard(
                                 encoder,
@@ -246,6 +288,10 @@ impl CodecRegistry {
         let candidates = self.matching_encoders(choice, size, fps, refused, contract);
         let mut refusals: Vec<String> = Vec::new();
         for (hardware, factory) in candidates {
+            if let Err(reason) = self.admit(factory, choice, size) {
+                refusals.push(format!("{}: {reason}", factory.name()));
+                continue;
+            }
             match factory.open(choice, size, fps) {
                 Ok(encoder) => {
                     let factory = factory.name();
@@ -329,6 +375,10 @@ impl CodecRegistry {
                     && offer.supports_size_rate(header.size, 0, header.frame_contract)
             });
             if !decodes {
+                continue;
+            }
+            if self.decoder_failed(factory.as_ref(), header.codec) {
+                refusals.push(format!("{}: failed its run-time check", factory.name()));
                 continue;
             }
             match factory.open(header) {

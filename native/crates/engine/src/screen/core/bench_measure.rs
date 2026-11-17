@@ -3,15 +3,21 @@
 //! barcode, latency, rates, recoveries, the static block's PSNR and the
 //! station samples. With the host's real capture (`--source`) there is no
 //! barcode: every decoded picture counts as shown and no PSNR is taken.
-use std::io;
+//!
+//! Plan 2026-11-17 „Windows-Bild“ P3: the barcode is read against the
+//! picture the decoder says it gave (`decoded_frame`), not against the
+//! record just passed in, so a decoder that answers one call late counts
+//! late (`late_frames`), not corrupt; decode errors and decoders that did
+//! not open are counted, and the report keeps every counter when no
+//! picture arrived intact (`failure`).
 use std::time::{Duration, Instant};
 
+use super::super::decoded_frame::DecodedFrame;
 use super::super::gop_stream::now_us;
 use super::super::metrics::{psnr_db, ClockSync, LatencySamples, RateMeter, RecoveryTracker};
 use super::super::negotiate::CodecKind;
 use super::super::pixel_convert::{downscale_bgra, BgraImage, FrameSize, Rect};
 use super::super::synthetic::{read_barcode, render, static_block, BarcodeRead};
-use super::super::wire_binary::FrameRecord;
 use super::{BenchReport, BitrateKbps, LatencyMs, StageSamples};
 
 /// Interval of the PSNR samples (a reference picture costs a render).
@@ -30,6 +36,10 @@ pub(super) struct Measure {
     /// A key frame was shown since the last look (answers the open request).
     pub(super) fresh_keyframe: bool,
     pub(super) corrupt: u64,
+    /// Pictures that came out of a later decoder call than their own.
+    pub(super) late: u64,
+    pub(super) decode_errors: u64,
+    pub(super) open_failures: u64,
     pub(super) psnr: Option<f64>,
     pub(super) psnr_at: Option<Instant>,
     pub(super) codec: Option<CodecKind>,
@@ -52,6 +62,9 @@ impl Measure {
             keyframes: 0,
             fresh_keyframe: false,
             corrupt: 0,
+            late: 0,
+            decode_errors: 0,
+            open_failures: 0,
             psnr: None,
             psnr_at: None,
             codec: None,
@@ -61,18 +74,23 @@ impl Measure {
         }
     }
 
-    /// One decoded picture of `record`, shown at `shown_us` (viewer clock);
-    /// `local` pictures share the host clock.
+    /// One decoded picture `frame` (the decoder's own identity of it),
+    /// completed by the record of `submitted`, shown at `shown_us` (viewer
+    /// clock); `local` pictures share the host clock.
     pub(super) fn shown(
         &mut self,
         picture: &BgraImage,
-        record: &FrameRecord,
+        frame: DecodedFrame,
+        submitted: u64,
         shown_us: u64,
         local: bool,
     ) {
+        if frame.frame_id < submitted {
+            self.late += 1;
+        }
         if !self.real {
             match read_barcode(&picture.view(), self.size) {
-                Ok(BarcodeRead::Valid(id)) if id == record.frame_id => {}
+                Ok(BarcodeRead::Valid(id)) if id == frame.frame_id => {}
                 _ => {
                     self.corrupt += 1;
                     self.recovery.on_disruption(shown_us);
@@ -80,16 +98,16 @@ impl Measure {
                 }
             }
         }
-        if record.is_keyframe() {
+        if frame.keyframe {
             self.keyframes += 1;
             self.fresh_keyframe = true;
         }
         self.recovery.on_good_frame(shown_us);
         self.shown.record(shown_us, 0);
         let latency = if local {
-            Some(shown_us.saturating_sub(record.capture_ts_us))
+            Some(shown_us.saturating_sub(frame.capture_ts_us))
         } else {
-            self.clock.latency_us(record.capture_ts_us, shown_us)
+            self.clock.latency_us(frame.capture_ts_us, shown_us)
         };
         if let Some(latency) = latency {
             self.latency.record(latency);
@@ -99,28 +117,31 @@ impl Measure {
         }
         if self.psnr_at.is_none_or(|at| at.elapsed() >= PSNR_EVERY) {
             self.psnr_at = Some(Instant::now());
-            if let Some(value) = static_psnr(picture, record.frame_id, self.size) {
+            if let Some(value) = static_psnr(picture, frame.frame_id, self.size) {
                 self.psnr = Some(self.psnr.map_or(value, |lowest| lowest.min(value)));
             }
         }
     }
 
-    pub(super) fn report(&self, encoder: &str, path: &str) -> io::Result<BenchReport> {
+    /// The report; without any shown picture with `failure` set and every
+    /// counter kept (P3).
+    pub(super) fn report(&self, encoder: &str, path: &str) -> BenchReport {
         let now = now_us();
         let shown = self.shown.summary(now);
-        if shown.frames == 0 {
-            return Err(io::Error::other(if self.real {
+        let failure = (shown.frames == 0).then(|| {
+            if self.real {
                 "no picture of the host's screen arrived"
             } else {
                 "no frame of the test picture arrived intact"
-            }));
-        }
+            }
+            .to_string()
+        });
         let bytes = self.received.summary(now);
         let latency = self.latency.summary();
         let milliseconds = |pick: fn(&super::super::metrics::LatencySummary) -> f64| {
             latency.as_ref().map_or(0.0, pick)
         };
-        Ok(BenchReport {
+        BenchReport {
             codec: self.codec.map_or("tiles", CodecKind::key).into(),
             encoder: encoder.into(),
             decoder: self.decoder.clone(),
@@ -141,12 +162,16 @@ impl Measure {
             keyframes: self.keyframes,
             recoveries: self.recovery.recoveries_ms(),
             corrupt_frames: self.corrupt,
+            late_frames: self.late,
+            decode_errors: self.decode_errors,
+            decoder_open_failures: self.open_failures,
             static_psnr_db: self.psnr.filter(|value| value.is_finite()),
             stages_ms: self.stages.summary(),
             source: None,
             host_timing: None,
             host_chain: None,
-        })
+            failure,
+        }
     }
 }
 

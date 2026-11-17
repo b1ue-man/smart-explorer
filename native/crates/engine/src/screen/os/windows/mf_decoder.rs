@@ -52,6 +52,11 @@ use stage::{known, remember, DecodeStage, HardwareFailure};
 const FRAME_UNITS: i64 = UNITS_PER_SECOND / 30;
 /// Output types the decoder may list before NV12.
 const MAX_TYPES: u32 = 64;
+/// Most rows or columns a decoder's NV12 buffer may add to the picture:
+/// one HEVC coding tree block (64) or AV1 superblock (128) less one (plan
+/// 2026-11-17 P3: 15 refused every HEVC and AV1 stream whose decoder aligns
+/// to its block size).
+const MAX_PADDING: u32 = 127;
 
 /// Whether this host decodes `codec` in hardware (`se screen codec`).
 pub(super) fn hardware_offered(codec: CodecKind) -> bool {
@@ -224,8 +229,8 @@ impl MfDecoder {
             };
             if allocated.width < self.size.width
                 || allocated.height < self.size.height
-                || allocated.width > self.size.width.saturating_add(15)
-                || allocated.height > self.size.height.saturating_add(15)
+                || allocated.width > self.size.width.saturating_add(MAX_PADDING)
+                || allocated.height > self.size.height.saturating_add(MAX_PADDING)
             {
                 return Err(io::Error::other(
                     "MF decoder geometry contradicts the stream",

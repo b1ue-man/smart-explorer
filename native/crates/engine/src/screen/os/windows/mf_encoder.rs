@@ -15,6 +15,12 @@
 //! taken back, streaming restarted, key frame) and the capture of the
 //! session to the CPU path; the frame in between is skipped and the next one
 //! asked for (`needs_refresh`).
+//!
+//! Plan 2026-11-17 „Windows-Bild“ P3: a D3D11-aware MFT whose capture runs
+//! on no or another adapter gets a device of its own on its adapter with
+//! the CPU upload (`d3d_input::attach_own`, (b)); its failure does not
+//! switch the capture's route. Key frames follow rule D8
+//! (`mf_capture_output.rs`).
 use std::io;
 use std::time::{Duration, Instant};
 
@@ -26,10 +32,10 @@ use windows::Win32::Media::MediaFoundation::{
 };
 
 use super::mf_common::{ensure_com, EncoderSetup};
-use super::mf_encoder_sync::{force_keyframe, frame_of, start, stop, UNITS_PER_SECOND};
+use super::mf_encoder_sync::{force_keyframe, start, stop, UNITS_PER_SECOND};
 use super::mf_media::{
-    bounded_bitrate, configure_hardware, input_sample, is_keyframe, mark_ltr, nv12_bytes,
-    opened_limit, process_output, retune_bounded, sample_bytes, Output,
+    bounded_bitrate, configure_hardware, is_keyframe, mark_ltr, opened_limit, retune_bounded,
+    Output,
 };
 use super::{mf_capture_media, mf_capture_output};
 use crate::screen::core::capture_admission::{CaptureGrant, CaptureOwner};
@@ -40,12 +46,15 @@ use crate::screen::core::host_stage::StageRequest;
 use crate::screen::core::pixel_convert::{BgraImage, FrameSize};
 use crate::screen::core::rate_control::honour::EncoderRateState;
 use crate::screen::core::rate_control::START_DIRECT_BPS;
+use d3d_input::InputRoute;
 
 #[cfg(test)]
 #[path = "bildkette_gpu_task_tests.rs"]
 mod bildkette_gpu_task_tests;
 #[path = "mf_d3d_input.rs"]
 pub(super) mod d3d_input;
+#[path = "mf_encoder_plain.rs"]
+mod plain;
 #[path = "d3d_video_convert.rs"]
 pub(super) mod video_convert;
 
@@ -83,6 +92,9 @@ pub(super) struct AsyncEncoder {
     /// The MFT refused its mean bit rate or reads back another one (plan
     /// 2026-11-17, `ScreenEncoder::rate_state`).
     rate_refused: bool,
+    /// D8: the last parameter sets and those of the output type.
+    parameter_sets: Option<Vec<u8>>,
+    sequence_header: Option<Vec<u8>>,
 }
 
 // SAFETY: as `SyncEncoder`: one thread at a time, free-threaded objects of
@@ -120,18 +132,26 @@ impl AsyncEncoder {
         };
         let events: IMFMediaEventGenerator = transform.cast()?;
         // The manager goes to the MFT before its media types (B-20); only an
-        // admitted capture has a device to share.
-        let mut gpu = match grant {
-            Some(_) => d3d_input::attach(&transform, setup.size, setup.adapter)
-                .map_err(|reason| {
-                    eprintln!(
-                        "screen encoder {}: system memory input ({reason:?})",
-                        setup.name
-                    );
-                })
-                .ok(),
-            None => None,
+        // admitted capture has a device to share. Without one on its adapter
+        // (none yet, another adapter, no admission) a device of its own (P3).
+        let attached = match grant {
+            Some(_) => d3d_input::attach(&transform, setup.size, setup.adapter),
+            None => Err(d3d_input::SystemReason::NoCapture),
         };
+        let mut gpu = attached
+            .or_else(|reason| match d3d_input::input_route(Err(reason), true) {
+                InputRoute::OwnDevice => {
+                    d3d_input::attach_own(&transform, setup.size, setup.adapter)
+                }
+                _ => Err(reason),
+            })
+            .map_err(|reason| {
+                eprintln!(
+                    "screen encoder {}: system memory input ({reason:?})",
+                    setup.name
+                );
+            })
+            .ok();
         let bitrate = bounded_bitrate(bps, u32::MAX);
         let (api, settings) = configure_hardware(&transform, bitrate, setup.fps);
         if let Err(error) = start(&transform, &setup, bitrate) {
@@ -148,6 +168,7 @@ impl AsyncEncoder {
             start(&transform, &setup, bitrate)?;
         }
         let limit = opened_limit(&transform, api.as_ref(), &setup);
+        let sequence_header = mf_capture_output::sequence_header(&transform);
         let refused = settings.refused();
         let rate_refused = refused.contains(&super::mf_media::SETTINGS[3]);
         if !refused.is_empty() {
@@ -172,6 +193,8 @@ impl AsyncEncoder {
             refresh: false,
             restarted: false,
             rate_refused,
+            parameter_sets: None,
+            sequence_header,
         })
     }
 
@@ -275,7 +298,13 @@ impl AsyncEncoder {
                             gpu.finish();
                         }
                         let keyframe = is_keyframe(&sample);
-                        mf_capture_output::append_sample(&mut bytes, &sample)?;
+                        mf_capture_output::append_unit_sample(
+                            &mut bytes,
+                            &sample,
+                            self.setup.codec,
+                            &mut self.parameter_sets,
+                            self.sequence_header.as_deref(),
+                        )?;
                         let wanted = request.keyframe || self.restarted;
                         let (codec, size) = (self.setup.codec, self.setup.size);
                         return mf_capture_output::finish(bytes, codec, size, keyframe, wanted);
@@ -293,7 +322,10 @@ impl AsyncEncoder {
     /// The GPU path failed: CPU path for the session, this encoder on NV12
     /// in system memory; else the original error (the next encoder follows).
     fn gpu_failed(&mut self, error: io::Error) -> io::Result<CapturedEncodedFrame> {
-        d3d_input::disable(&format!("{}: {error}", self.setup.name));
+        // A device of its own is not the capture's (P3).
+        if self.gpu.as_ref().is_some_and(|gpu| !gpu.is_own()) {
+            d3d_input::disable(&format!("{}: {error}", self.setup.name));
+        }
         self.gpu = None;
         if self.restart_system().is_err() {
             return Err(error);
@@ -325,7 +357,9 @@ impl AsyncEncoder {
             }
         }
         self.credits = 0;
-        start(&self.transform, &self.setup, self.bitrate)
+        start(&self.transform, &self.setup, self.bitrate)?;
+        self.sequence_header = mf_capture_output::sequence_header(&self.transform);
+        Ok(())
     }
 }
 
@@ -379,7 +413,10 @@ impl ScreenEncoder for AsyncEncoder {
     }
 
     fn name(&self) -> String {
-        match self.gpu {
+        match &self.gpu {
+            Some(gpu) if gpu.is_own() => {
+                format!("{} [GPU input (D3D11, own device)]", self.setup.name)
+            }
             Some(_) => format!("{} [GPU input (D3D11)]", self.setup.name),
             None => self.setup.name.clone(),
         }
@@ -400,66 +437,15 @@ impl ScreenEncoder for AsyncEncoder {
         })
     }
 
+    /// Without admission (the run-time check, `bench --local`):
+    /// `mf_encoder_plain.rs`.
     fn encode(
         &mut self,
         frame: &BgraImage,
         keyframe: bool,
         target_bps: u64,
     ) -> io::Result<EncodedFrame> {
-        if self.grant.is_some() {
-            return Err(io::Error::other(
-                "admitted MF encoder requires encode_captured",
-            ));
-        }
-        if frame.size() != self.setup.size {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "frame size differs from the Media Foundation encoder",
-            ));
-        }
-        ensure_com();
-        let (limit, fps) = (self.limit, self.setup.fps);
-        let api = self.api.as_ref();
-        if let Some(refused) = retune_bounded(api, &mut self.bitrate, target_bps, limit, fps) {
-            self.rate_refused = refused;
-        }
-        if keyframe && self.frames > 0 {
-            force_keyframe(self.api.as_ref());
-        }
-        let deadline = Instant::now() + EVENT_DEADLINE;
-        self.await_input(deadline)?;
-        let duration = UNITS_PER_SECOND / i64::from(self.setup.fps.max(1));
-        let sample = input_sample(&nv12_bytes(frame)?, self.frames * duration, duration)?;
-        self.frames += 1;
-        // SAFETY: one owned input sample for stream 0 after `NeedInput`.
-        unsafe { self.transform.ProcessInput(0, &sample, 0)? };
-        self.credits -= 1;
-        let fallback = self.setup.size.bgra_len();
-        loop {
-            match self.next_event(deadline)? {
-                Event::NeedInput => self.credits += 1,
-                Event::HaveOutput => match process_output(&self.transform, fallback)? {
-                    Output::Sample(out) => {
-                        let key = is_keyframe(&out);
-                        let frame = frame_of(vec![sample_bytes(&out)?], key, keyframe)?;
-                        for data in &frame.records {
-                            crate::screen::core::frame_size_caps::check_video_dimensions(
-                                self.setup.codec,
-                                data,
-                                self.setup.size,
-                                crate::screen::core::frame_budget::FrameLimits::RESOURCE,
-                            )?;
-                        }
-                        return Ok(frame);
-                    }
-                    Output::NeedInput => {}
-                    Output::StreamChange => {
-                        return Err(io::Error::other("the encoder changed its output type"));
-                    }
-                },
-                Event::Other => {}
-            }
-        }
+        self.encode_plain(frame, keyframe, target_bps)
     }
 }
 

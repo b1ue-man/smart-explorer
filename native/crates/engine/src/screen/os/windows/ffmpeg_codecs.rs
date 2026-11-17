@@ -183,6 +183,11 @@ impl DecoderFactory for MediaFoundationGate {
     fn keeps_references(&self, codec: CodecKind) -> bool {
         self.inner.keeps_references(codec)
     }
+
+    /// The adapter of the wrapped decoder (P3: the key of its verdicts).
+    fn device(&self) -> String {
+        self.inner.device()
+    }
 }
 
 /// The decoders of the Windows viewer: FFmpeg's three factories first, then

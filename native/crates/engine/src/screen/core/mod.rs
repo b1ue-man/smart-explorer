@@ -59,6 +59,9 @@ pub mod capture_transport;
 pub mod catalog_entries;
 pub mod chain_meter;
 pub mod codec_registry;
+// Plan 2026-11-17 „Windows-Bild“ P3: run-time check of the codecs.
+pub mod codec_verdicts;
+pub mod codec_verify;
 pub mod control_sender;
 pub mod convert_clock;
 pub mod cursor_overlay;

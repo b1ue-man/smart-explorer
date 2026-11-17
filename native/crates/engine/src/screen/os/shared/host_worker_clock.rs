@@ -432,6 +432,9 @@ impl Stream {
 }
 
 #[cfg(test)]
+#[path = "bildkette_verify_stage_task_tests.rs"]
+mod bildkette_verify_stage_task_tests;
+#[cfg(test)]
 #[path = "bildkette_w4_fallback_task_tests.rs"]
 mod bildkette_w4_fallback_task_tests;
 #[cfg(test)]

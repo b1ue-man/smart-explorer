@@ -4,6 +4,8 @@
 //! license text; only „Annehmen und herunterladen“ downloads from Cisco.
 //! Off, on again and „Entfernen“ follow the switch. Inventory and actions
 //! run on a background thread; the area shows their progress and errors.
+//! Plan 2026-11-17 „Windows-Bild“ P3: every row names its run-time check
+//! (`CodecEntry::verdict`); `se screen codec verify` checks again.
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
 use eframe::egui::{self, RichText};
@@ -80,7 +82,45 @@ fn run(shared: &Arc<Mutex<CodecState>>, ctx: &egui::Context, action: OpenH264Act
     }
 }
 
-/// One line per codec: what, by whom, on what.
+/// Checks every encoder again on a background thread (P3, as `se screen
+/// codec verify`), then reads the register.
+fn verify(shared: &Arc<Mutex<CodecState>>, ctx: &egui::Context) {
+    {
+        let mut current = lock(shared);
+        current.busy = Some("Prüfe die Kodierer mit dem Testbild …");
+        current.error = None;
+    }
+    let (slot, ctx) = (shared.clone(), ctx.clone());
+    let started = std::thread::Builder::new()
+        .name("screen-codec-verify".into())
+        .spawn(move || {
+            let (_, report) = codec_inventory::verify();
+            let mut current = lock(&slot);
+            current.report = Some(report);
+            current.busy = None;
+            ctx.request_repaint();
+        });
+    if started.is_err() {
+        lock(shared).busy = None;
+    }
+}
+
+/// The words of a run-time check (P3).
+fn verdict_text(entry: &CodecEntry) -> String {
+    let Some(verdict) = &entry.verdict else {
+        return String::new();
+    };
+    let text = match (verdict.state.as_str(), verdict.reason.as_deref()) {
+        ("verified", _) => "geprüft".to_string(),
+        ("structural", _) => "Bitstrom geprüft".to_string(),
+        ("failed", Some(reason)) => format!("Prüfung fehlgeschlagen ({reason}), nicht angeboten"),
+        ("failed", None) => "Prüfung fehlgeschlagen, nicht angeboten".to_string(),
+        _ => "ungeprüft".to_string(),
+    };
+    format!(" · {text}")
+}
+
+/// One line per codec: what, by whom, on what, and its check.
 pub fn entry_line(entry: &CodecEntry) -> String {
     let profiles: Vec<&str> = entry.profiles.iter().map(|profile| profile.key()).collect();
     let kind = if entry.hardware {
@@ -88,11 +128,12 @@ pub fn entry_line(entry: &CodecEntry) -> String {
     } else {
         "Software"
     };
+    let verdict = verdict_text(entry);
     if profiles.is_empty() {
-        format!("{} · {} · {kind}", entry.codec.key(), entry.name)
+        format!("{} · {} · {kind}{verdict}", entry.codec.key(), entry.name)
     } else {
         format!(
-            "{} ({}) · {} · {kind}",
+            "{} ({}) · {} · {kind}{verdict}",
             entry.codec.key(),
             profiles.join(", "),
             entry.name
@@ -151,6 +192,10 @@ pub fn ui(ui: &mut egui::Ui) {
                 }
             }
             ui.small(format!("OpenH264-Version: {}", report.openh264.version));
+            let button = egui::Button::new("Kodierer erneut prüfen");
+            if ui.add_enabled(busy.is_none(), button).clicked() {
+                verify(&shared, ui.ctx());
+            }
         });
     let openh264 = &report.openh264;
     ui.horizontal_wrapped(|ui| {

@@ -9,7 +9,8 @@
 //! Plan 2026-11-14 bildkette (BK3b): the bit rate is bounded by what the
 //! opened encoder and its level report (`mf_media::opened_limit`, the rule
 //! of B-06/B-21), no longer by a fixed 240 Mbit/s; a picture that lay on the
-//! GPU comes in as its NV12 copied from the ring slot.
+//! GPU comes in as its NV12 copied from the ring slot. Plan 2026-11-17 P3:
+//! key frames follow rule D8 (`mf_capture_output.rs`).
 use std::io;
 
 use windows::core::VARIANT;
@@ -140,34 +141,6 @@ pub(super) fn stop(transform: &IMFTransform) {
     }
 }
 
-/// The records of one encoded frame: one access unit, or an error when the
-/// frame is missing or a requested key frame is none.
-pub(super) fn frame_of(parts: Vec<Vec<u8>>, key: bool, wanted: bool) -> io::Result<EncodedFrame> {
-    let total = parts
-        .iter()
-        .try_fold(0usize, |sum, part| sum.checked_add(part.len()))
-        .filter(|n| *n <= crate::screen::core::wire_binary::MAX_RECORD_BYTES)
-        .ok_or_else(|| io::Error::other("MF access unit exceeds 16 MiB"))?;
-    let mut bytes = Vec::with_capacity(total);
-    for part in parts {
-        bytes.extend_from_slice(&part);
-    }
-    if bytes.is_empty() {
-        return Err(io::Error::other(
-            "Media Foundation gave no picture for the frame",
-        ));
-    }
-    if wanted && !key {
-        return Err(io::Error::other(
-            "Media Foundation gave no key frame on request",
-        ));
-    }
-    Ok(EncodedFrame {
-        records: vec![bytes],
-        keyframe: key,
-    })
-}
-
 pub(in crate::screen::os) fn update_refresh<T>(refresh: &mut bool, result: &io::Result<T>) {
     match result {
         Ok(_) => *refresh = false,
@@ -190,6 +163,9 @@ pub(super) struct SyncEncoder {
     /// The MFT refused its mean bit rate or reads back another one (plan
     /// 2026-11-17, `ScreenEncoder::rate_state`).
     rate_refused: bool,
+    /// D8: the last parameter sets and those of the output type.
+    parameter_sets: Option<Vec<u8>>,
+    sequence_header: Option<Vec<u8>>,
 }
 
 // SAFETY: the transform is used by one thread at a time (the encoder is
@@ -222,6 +198,7 @@ impl SyncEncoder {
         let api = configure_encoder(&transform, bitrate);
         start(&transform, &setup, bitrate)?;
         let limit = opened_limit(&transform, api.as_ref(), &setup);
+        let sequence_header = mf_capture_output::sequence_header(&transform);
         Ok(Self {
             transform,
             api,
@@ -232,6 +209,8 @@ impl SyncEncoder {
             grant,
             refresh: false,
             rate_refused: false,
+            parameter_sets: None,
+            sequence_header,
         })
     }
 
@@ -277,7 +256,13 @@ impl SyncEncoder {
             )? {
                 Output::Sample(sample) => {
                     keyframe |= is_keyframe(&sample);
-                    mf_capture_output::append_sample(&mut bytes, &sample)?;
+                    mf_capture_output::append_unit_sample(
+                        &mut bytes,
+                        &sample,
+                        self.setup.codec,
+                        &mut self.parameter_sets,
+                        self.sequence_header.as_deref(),
+                    )?;
                 }
                 Output::NeedInput => break,
                 Output::StreamChange => {
@@ -384,7 +369,15 @@ impl ScreenEncoder for SyncEncoder {
                 }
             }
         }
-        let frame = frame_of(parts, key, keyframe)?;
+        // D8: the mark against the stream, parameter sets completed.
+        let frame = mf_capture_output::checked_unit(
+            self.setup.codec,
+            parts.concat(),
+            key,
+            keyframe,
+            &mut self.parameter_sets,
+            self.sequence_header.as_deref(),
+        )?;
         for data in &frame.records {
             crate::screen::core::frame_size_caps::check_video_dimensions(
                 self.setup.codec,

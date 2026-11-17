@@ -146,6 +146,11 @@ pub(super) fn bench_text(report: &BenchReport) -> String {
             "frames\tsent={}\tshown={}\tcorrupt={}\tkeyframes={}",
             report.frames_sent, report.frames_shown, report.corrupt_frames, report.keyframes
         ),
+        // Plan 2026-11-17 P3: the decoder's counters.
+        format!(
+            "decoder\tlate={}\tdecode_errors={}\topen_failures={}",
+            report.late_frames, report.decode_errors, report.decoder_open_failures
+        ),
         format!(
             "fps\tmean={}\tmin={}",
             number(report.fps_mean),
@@ -164,6 +169,9 @@ pub(super) fn bench_text(report: &BenchReport) -> String {
         ),
     ];
     rows.extend(stages);
+    if let Some(failure) = &report.failure {
+        rows.push(format!("failure\t{failure}"));
+    }
     if let Some(source) = &report.source {
         rows.push(format!("source\t{source}"));
     }

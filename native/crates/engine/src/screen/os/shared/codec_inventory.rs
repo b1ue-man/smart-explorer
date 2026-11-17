@@ -15,9 +15,20 @@
 //! `screen_task_openh264_decodes_constrained_high`). Should that check fail,
 //! `OPENH264_DECODES_HIGH` becomes `false` and OpenH264 viewers report `cb`
 //! only.
-use std::path::Path;
+//!
+//! Plan 2026-11-17 „Windows-Bild“ P3: a process keeps its register
+//! (`registry`) and builds it again only when the OpenH264 switch changes
+//! (the host process asked for it with every picture, and every build
+//! enumerated and activated the Media Foundation transforms). This user's
+//! register runs the run-time checks (`codec_verify.rs`) with the verdicts
+//! in `<app data>/screen/codec_verdicts.json`; a register of another store
+//! (task tests) checks nothing, as before.
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
-use crate::screen::core::codec_registry::{CodecRegistry, CodecReport, OpenH264Report};
+use crate::screen::core::codec_registry::{CodecRegistry, CodecReport, OpenH264Report, VerifyLine};
+use crate::screen::core::codec_verdicts::VerdictStore;
+use crate::screen::core::codec_verify::Checks;
 use crate::screen::core::negotiate::{CodecOffer, H264Profile};
 use crate::screen::core::pixel_convert::FrameSize;
 
@@ -50,10 +61,37 @@ pub struct Inventory {
     pub openh264: OpenH264Report,
 }
 
-/// The codecs with the OpenH264 store `openh264_dir` (`None`: this user's).
-/// `verify` checks the OpenH264 file against its pin for the report; without
-/// it the check runs before every load.
+/// Size of the checks of the whole register (`se screen codec verify`, the
+/// warm-up): the 720p size class.
+pub const CHECK_SIZE: FrameSize = FrameSize::new(1280, 720);
+
+/// The verdict file of this user.
+pub fn verdicts_path() -> PathBuf {
+    crate::support_dirs::app_data_dir()
+        .join("screen")
+        .join("codec_verdicts.json")
+}
+
+/// The checks of this user's codecs, one per process.
+fn user_checks() -> Arc<Checks> {
+    static CHECKS: OnceLock<Arc<Checks>> = OnceLock::new();
+    CHECKS
+        .get_or_init(|| Arc::new(Checks::new(VerdictStore::at(verdicts_path()))))
+        .clone()
+}
+
+/// The codecs with the OpenH264 store `openh264_dir` (`None`: this user's,
+/// with the run-time checks). `verify` checks the OpenH264 file against its
+/// pin for the report; without it the check runs before every load.
 pub fn inventory(openh264_dir: Option<&Path>, verify: bool) -> Inventory {
+    let mut found = build(openh264_dir, verify);
+    if openh264_dir.is_none() {
+        found.registry = found.registry.with_checks(user_checks());
+    }
+    found
+}
+
+fn build(openh264_dir: Option<&Path>, verify: bool) -> Inventory {
     let (mut encoders, mut decoders) = super::media_foundation_codecs();
     let (hardware_encoders, hardware_decoders) = super::hardware_codecs();
     encoders.extend(hardware_encoders);
@@ -72,15 +110,59 @@ pub fn inventory(openh264_dir: Option<&Path>, verify: bool) -> Inventory {
     }
 }
 
+/// The store and OpenH264 switch a kept register was built for.
+type Key = (Option<PathBuf>, bool);
+/// Most stores a process keeps a register of (the daemon and the host
+/// process one; task tests one per store).
+const KEPT_STORES: usize = 8;
+
+static KEPT: Mutex<Vec<(Key, CodecRegistry)>> = Mutex::new(Vec::new());
+
+/// The register of the store `openh264_dir` (`None`: this user's), built
+/// once per process and again only when the OpenH264 switch changes.
+pub fn kept(openh264_dir: Option<&Path>) -> CodecRegistry {
+    let switched = super::codec_facade::openh264_store_switched_on(openh264_dir);
+    let key: Key = (openh264_dir.map(Path::to_path_buf), switched);
+    let mut kept = KEPT.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some((_, registry)) = kept.iter().find(|(known, _)| *known == key) {
+        return registry.clone();
+    }
+    let registry = inventory(openh264_dir, false).registry;
+    // The register of the other switch state of this store goes.
+    kept.retain(|(known, _)| known.0 != key.0);
+    if kept.len() >= KEPT_STORES {
+        kept.remove(0);
+    }
+    kept.push((key, registry.clone()));
+    registry
+}
+
 /// The codecs of this process and this user.
 pub fn registry() -> CodecRegistry {
-    inventory(None, false).registry
+    kept(None)
 }
 
 /// `se screen codec --json` of this process and this user.
 pub fn report() -> CodecReport {
     let inventory = inventory(None, true);
     inventory.registry.report(inventory.openh264)
+}
+
+/// `se screen codec verify`: forgets the verdicts of this version and
+/// checks every encoder of this user at `CHECK_SIZE` (each with the local
+/// decoders); the lines of the check and the report afterwards.
+pub fn verify() -> (Vec<VerifyLine>, CodecReport) {
+    user_checks().store().forget();
+    let lines = registry().verify_encoders(CHECK_SIZE, false);
+    (lines, report())
+}
+
+/// The warm-up of a host (`SessionQuery::VerifyCodecs`): checks the HEVC
+/// and AV1 encoders without a verdict, then names the encoder offer.
+pub fn warm_up() -> Vec<CodecOffer> {
+    let registry = registry();
+    registry.verify_encoders(CHECK_SIZE, true);
+    registry.encoder_offers()
 }
 
 #[cfg(test)]
@@ -97,6 +179,7 @@ mod tests {
             hardware: false,
             profile_names: Vec::new(),
             refused_settings: Vec::new(),
+            verdict: None,
         }
     }
 
