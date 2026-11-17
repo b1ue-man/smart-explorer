@@ -2,11 +2,6 @@
 //! Desktop, Tresore“). `app/mod.rs` declares this module once; later S4
 //! packages declare their app files here instead of in `app/mod.rs`.
 
-// SCR-M2: the indicator window of `--screen-indicator` (V9 start kind
-// `ScreenIndicator`, wired in `run_gui`).
-#[path = "core/screen_indicator_ui.rs"]
-mod screen_indicator_ui;
-pub use screen_indicator_ui::run_screen_indicator;
 // SCR-M2: tab 9 „Bildschirm“ of „Geräte & Freigaben“.
 #[path = "core/share_screen_tab_ui.rs"]
 pub mod share_screen_tab_ui;

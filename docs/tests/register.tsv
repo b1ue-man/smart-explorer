@@ -3667,7 +3667,6 @@ native/crates/gui/src/app/core/read_access.rs	search_recursive_access_task_decli
 native/crates/gui/src/app/core/reclaim_core_vault_tests.rs	reclaim_journal_seals_paths_in_vault_drives	behalten	K5	GUI Explorer (reclaim_core_vault_tests): reclaim journal seals paths in vault drives	crates-task
 native/crates/gui/src/app/core/reclaim_remote_trash.rs	review_task_remote_trash_never_takes_the_last_copy	behalten	K3	GUI Explorer (reclaim_remote_trash): remote trash never takes the last copy	crates-task
 native/crates/gui/src/app/core/reclaim_results_ui.rs	count_label_discloses_truncation	behalten	K1	GUI Explorer (reclaim_results_ui): count label discloses truncation	crates-task
-native/crates/gui/src/app/core/screen_indicator_ui.rs	screen_task_gui_indicator_lines	behalten	K1	GUI Explorer (screen_indicator_ui): gui indicator lines	crates-task
 native/crates/gui/src/app/core/screen_input_batch_tests.rs	screen_task_viewer_input_batches_are_bounded	behalten	K5	GUI Explorer (screen_input_batch_tests): viewer input batches are bounded	crates-task
 native/crates/gui/src/app/core/screen_input_batch_tests.rs	screen_task_viewer_input_touch_replaces_the_pointer	behalten	K1	GUI Explorer (screen_input_batch_tests): viewer input touch replaces the pointer	crates-task
 native/crates/gui/src/app/core/screen_input_map_tests.rs	screen_task_ime_commit_sends_text	behalten	K5	GUI Explorer (screen_input_map_tests): ime commit sends text	crates-task

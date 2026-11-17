@@ -60,12 +60,13 @@ pub fn run_gui() -> eframe::Result<()> {
     if let Some(code) = desktop::run_if_requested(&raw_args) {
         std::process::exit(code);
     }
-    // V9 background kind of S4, also before the update confirmation: the
-    // indicator window of running screen sessions, started by the worker.
+    // V9 background kind of S4: the former indicator window of running
+    // screen sessions. User 2026-11-17: no popup on the viewed device; the
+    // worker starts it no more, and a start by an older worker ends at once.
     if let Ok(app::start_request::StartRequest::ScreenIndicator) =
         app::start_request::parse(&raw_args)
     {
-        return app::run_screen_indicator();
+        return Ok(());
     }
     // SCR-M3: the screen host process of one session (`--screen-host-worker`).
     if let Some(code) = run_screen_host_worker_if_requested(&raw_args) {
