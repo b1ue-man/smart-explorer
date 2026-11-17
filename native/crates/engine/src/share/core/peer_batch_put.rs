@@ -9,11 +9,12 @@
 use std::io::{self, Read};
 use std::time::{Duration, Instant};
 
+use crate::share::commit_wait::{run_until_answer, OutcomeWait};
 use crate::share::core::{eio, random_hex_token};
 use crate::share::framing::{recv_resp_wire, send_ctrl, send_tagged, TAG_DATA};
 use crate::share::fs::CHUNK;
 use crate::share::fs_error::into_io;
-use crate::share::io_deadline::{self, PEER_OP_TIMEOUT};
+use crate::share::io_deadline;
 use crate::share::node_sessions::OpenedPeerStream;
 use crate::share::wire::{
     BatchPart, Ctrl, FsBatchPut, FsBatchStatus, FsRequest, FsResponse, NONCE_HEX_LEN,
@@ -30,11 +31,6 @@ use parts::{
     before_commit, committed, fill, fill_range, fill_rest, plain, put_header, read_outcome,
     read_reply, retry_status, skip_oversized, unknown, PartOutcome, Reply, SHORT_SOURCE,
 };
-
-/// Publishing costs a few metadata operations per entry on the host (a
-/// round trip each when the export is a remote connection); one second per
-/// entry on top of the operation deadline covers slow backends.
-const COMMIT_PER_ENTRY: Duration = Duration::from_secs(1);
 
 /// A refusing host sends its reason before it stops the stream, so the
 /// reason is normally buffered already; five seconds cover a retransmission.
@@ -214,22 +210,27 @@ impl PeerBackend {
             opened.generation,
             io_deadline::run("peer batch commit", send_ctrl(&mut opened.send, &commit)),
         );
-        let entry_count = u32::try_from(entries.len()).unwrap_or(u32::MAX);
-        let budget = match &sent {
-            Ok(()) => PEER_OP_TIMEOUT.saturating_add(COMMIT_PER_ENTRY.saturating_mul(entry_count)),
-            // A host that stopped the stream has sent its reason already.
-            Err(_) => REFUSAL_WAIT,
-        };
-        let reply = if evidence {
-            self.node.block_on_route(
-                opened.generation,
-                io_deadline::run_for("peer batch reply", budget, read_outcome(&mut opened.recv)),
-            )
-        } else {
-            self.node.block_on_route(
-                opened.generation,
-                io_deadline::run_for("peer batch reply", budget, read_reply(&mut opened.recv)),
-            )
+        // Publishing costs a few metadata operations per entry on the host
+        // (a round trip each when the export is a remote connection): no
+        // time limit while the connection lives (`commit_wait.rs`). A host
+        // that stopped the stream has sent its reason already.
+        let (generation, operation) = (opened.generation, "peer batch reply");
+        let recv = &mut opened.recv;
+        let reply = match (&sent, evidence) {
+            (Ok(()), true) => self
+                .node
+                .block_on_route(generation, run_until_answer(operation, read_outcome(recv))),
+            (Ok(()), false) => self
+                .node
+                .block_on_route(generation, run_until_answer(operation, read_reply(recv))),
+            (Err(_), true) => self.node.block_on_route(
+                generation,
+                io_deadline::run_for(operation, REFUSAL_WAIT, read_outcome(recv)),
+            ),
+            (Err(_), false) => self.node.block_on_route(
+                generation,
+                io_deadline::run_for(operation, REFUSAL_WAIT, read_reply(recv)),
+            ),
         };
         match reply {
             Ok(Reply::Committed(outcomes)) => {
@@ -373,7 +374,9 @@ impl PeerBackend {
     }
 
     /// The commit may have happened: ask the host by the nonce until it
-    /// answers or one operation deadline has passed.
+    /// answers, as long as it reports the batch pending; one operation
+    /// deadline without that sign of life, or a cancelled transfer, leaves
+    /// the outcome unknown (`OutcomeWait`).
     fn resolve_unknown(
         &self,
         mut opened: OpenedPeerStream,
@@ -386,7 +389,7 @@ impl PeerBackend {
         let _ = self
             .node
             .invalidate_outgoing_session(&opened.session_key, opened.generation);
-        let deadline = Instant::now() + PEER_OP_TIMEOUT;
+        let mut wait = OutcomeWait::new(Instant::now());
         loop {
             let status = self.request(FsRequest::PutBatchStatus {
                 nonce: nonce.to_string(),
@@ -407,7 +410,7 @@ impl PeerBackend {
                 }
                 Ok(FsResponse::Batch {
                     status: FsBatchStatus::Pending,
-                }) => {}
+                }) => wait.pending(Instant::now()),
                 Ok(other) => {
                     let cause = format!("{error}; unerwartete Statusantwort {other:?}");
                     return PartOutcome::Unknown(unknown(nonce, &cause));
@@ -421,7 +424,7 @@ impl PeerBackend {
                     return PartOutcome::Unknown(unknown(nonce, &cause));
                 }
             }
-            if Instant::now() >= deadline {
+            if !wait.ask_again(Instant::now()) || crate::source_media::context_canceled() {
                 return PartOutcome::Unknown(unknown(nonce, &error.to_string()));
             }
             std::thread::sleep(STATUS_POLL);

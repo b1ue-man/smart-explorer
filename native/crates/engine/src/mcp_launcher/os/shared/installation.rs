@@ -8,6 +8,9 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
+/// How long `Installation::lock_waiting` tries a busy lock again.
+pub const LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+
 #[derive(Clone, Debug)]
 pub struct Installation {
     pub root: PathBuf,
@@ -152,6 +155,26 @@ impl Installation {
         let path = self.root.join("mcp").join(name);
         os::validate_tree(&self.root, &path)?;
         os::lock(&path, exclusive)
+    }
+    /// `lock` for the update owner's own steps, tried again while the lock is
+    /// busy for up to `LOCK_WAIT`. Admission, launchers, relays (every 500 ms
+    /// while an update blocks) and MCP sessions (every second) hold
+    /// control.lock shared, and test update-owner.lock exclusively, for a few
+    /// milliseconds per check; a single fail-fast request of the owner lost
+    /// against such a reader and left its transaction unfinished. A holder
+    /// that keeps the lock longer is reported as `lock_busy:` as before.
+    pub fn lock_waiting(&self, name: &str, exclusive: bool) -> Result<File, String> {
+        let deadline = std::time::Instant::now() + LOCK_WAIT;
+        loop {
+            match self.lock(name, exclusive) {
+                Err(error)
+                    if error.starts_with("lock_busy:") && std::time::Instant::now() < deadline =>
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(25));
+                }
+                result => return result,
+            }
+        }
     }
     pub fn state(&self) -> Result<Option<UpdateState>, String> {
         let path = self.root.join("mcp/update.v1.json");

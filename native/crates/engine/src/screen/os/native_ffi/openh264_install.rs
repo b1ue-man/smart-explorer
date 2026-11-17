@@ -8,7 +8,7 @@
 //! right before (`verified_library`), so a changed file is never loaded.
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -20,8 +20,6 @@ use crate::screen::core::codec_registry::{OpenH264Report, OpenH264State, OPENH26
 
 const STATE_FILE: &str = "state.json";
 const MAX_STATE_BYTES: u64 = 4096;
-/// Time for the download of about 0.6 MB.
-const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// `state.json` of the store.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -164,11 +162,7 @@ impl OpenH264Store {
 
     /// The same with the compressed file fetched elsewhere (the task suite,
     /// an offline copy): it must match the pinned size and SHA-256 as well.
-    pub fn enable_from_compressed(
-        &self,
-        accepted: &str,
-        compressed: &[u8],
-    ) -> io::Result<()> {
+    pub fn enable_from_compressed(&self, accepted: &str, compressed: &[u8]) -> io::Result<()> {
         check_license(accepted)?;
         let pin = pin()?;
         self.install(&pin, compressed)?;
@@ -255,45 +249,34 @@ fn verify(path: &Path) -> io::Result<()> {
 }
 
 /// Fetches the compressed library from Cisco: HTTPS only, the pinned
-/// address without redirects, at most the pinned size plus one byte.
+/// address without redirects, never a byte beyond the pinned size. No limit
+/// on the whole transfer (user rule 2026-11-17): `http_resume` limits the
+/// connect and each read and continues a broken transfer with a range
+/// request.
 fn download(pin: &OpenH264Pin) -> io::Result<Vec<u8>> {
     if !pin.url.starts_with(DOWNLOAD_HOST) {
         return Err(io::Error::other("OpenH264 address is not Cisco's server"));
     }
-    let response = ureq::AgentBuilder::new()
-        .https_only(true)
-        .redirects(0)
-        .timeout(DOWNLOAD_TIMEOUT)
-        .build()
-        .get(pin.url)
-        .set("User-Agent", "SmartExplorer-OpenH264/1")
-        .call()
-        .map_err(|error| {
-            io::Error::other(format!("OpenH264 {OPENH264_VERSION} download: {error}"))
-        })?;
-    if response.status() != 200 || response.get_url() != pin.url {
-        return Err(io::Error::other(format!(
-            "OpenH264 download ended at {} with status {}",
-            response.get_url(),
-            response.status()
-        )));
-    }
-    if let Some(length) = response.header("Content-Length") {
-        if length.trim().parse::<u64>().ok() != Some(pin.compressed_size) {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!(
-                    "OpenH264 download announces {length} bytes, the pin {}",
-                    pin.compressed_size
-                ),
-            ));
-        }
-    }
+    let source = crate::http_resume::Source {
+        url: pin.url,
+        user_agent: "SmartExplorer-OpenH264/1",
+        https_only: true,
+        redirects: 0,
+        final_url: &|actual| actual == pin.url,
+    };
+    let bound = crate::http_resume::Bound {
+        exact: Some(pin.compressed_size),
+        ceiling: None,
+    };
     let mut bytes = Vec::new();
-    response
-        .into_reader()
-        .take(pin.compressed_size + 1)
-        .read_to_end(&mut bytes)?;
+    crate::http_resume::fetch(&source, bound, &mut bytes, &mut |_, _| {}, &|| false).map_err(
+        |error| {
+            io::Error::new(
+                error.kind(),
+                format!("OpenH264 {OPENH264_VERSION} download: {error}"),
+            )
+        },
+    )?;
     Ok(bytes)
 }
 

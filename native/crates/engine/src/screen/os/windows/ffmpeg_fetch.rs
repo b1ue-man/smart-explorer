@@ -1,9 +1,11 @@
 //! The download of this user's FFmpeg copy (plan 2026-11-17 P8, see
 //! `ffmpeg_runtime.rs`): HTTPS only, at most two redirects, and only the
 //! pinned URL or GitHub's release asset hosts as the final address (as the
-//! Dokany download, `mount/os/windows/runtime_install_download.rs`); the
-//! response is capped at the pinned size plus one byte, then size and
-//! SHA-256 must match. The three DLLs and the licence come out of the
+//! Dokany download, `mount/os/windows/runtime_install_download.rs`); no
+//! byte beyond the pinned size is taken, then size and SHA-256 must match.
+//! No limit on the whole transfer (user rule 2026-11-17): `http_resume`
+//! limits the connect and each read and continues a broken transfer with a
+//! range request. The three DLLs and the licence come out of the
 //! archive with a reader of the ZIP central directory and raw deflate
 //! (`flate2`, already a dependency), each checked against its pin, into a
 //! fresh directory beside the target that is renamed into place at the end,
@@ -11,7 +13,6 @@
 use std::fs;
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::Path;
-use std::time::Duration;
 
 use sha2::{Digest, Sha256};
 
@@ -21,8 +22,6 @@ const TRUSTED_HOSTS: [&str; 2] = [
     "https://release-assets.githubusercontent.com/",
     "https://objects.githubusercontent.com/",
 ];
-/// The archive is 80 MB; a slow line (1 Mbit/s) needs about 11 minutes.
-const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const EOCD: u32 = 0x0605_4b50;
 const CENTRAL: u32 = 0x0201_4b50;
 const LOCAL: u32 = 0x0403_4b50;
@@ -37,23 +36,19 @@ fn trusted_final_url(actual: &str, original: &str) -> bool {
 
 /// Downloads the archive into `file` and checks it against the pins.
 fn download(pins: &Pins, file: &mut fs::File) -> io::Result<()> {
-    let response = ureq::AgentBuilder::new()
-        .https_only(true)
-        .redirects(2)
-        .timeout(DOWNLOAD_TIMEOUT)
-        .build()
-        .get(pins.url)
-        .set("User-Agent", "SmartExplorer-FFmpeg-Runtime/1")
-        .call()
-        .map_err(|error| io::Error::other(error.to_string()))?;
-    if response.status() != 200 || !trusted_final_url(response.get_url(), pins.url) {
-        return Err(invalid(format!(
-            "FFmpeg download ended at an address that is not allowed ({})",
-            response.get_url()
-        )));
-    }
-    let mut body = response.into_reader().take(pins.zip_size.saturating_add(1));
-    let written = io::copy(&mut body, file)?;
+    let source = crate::http_resume::Source {
+        url: pins.url,
+        user_agent: "SmartExplorer-FFmpeg-Runtime/1",
+        https_only: true,
+        redirects: 2,
+        final_url: &|actual| trusted_final_url(actual, pins.url),
+    };
+    let bound = crate::http_resume::Bound {
+        exact: Some(pins.zip_size),
+        ceiling: None,
+    };
+    let written = crate::http_resume::fetch(&source, bound, file, &mut |_, _| {}, &|| false)
+        .map_err(|error| io::Error::new(error.kind(), format!("FFmpeg download: {error}")))?;
     if written != pins.zip_size {
         return Err(invalid(format!(
             "FFmpeg archive has {written} bytes instead of {}",

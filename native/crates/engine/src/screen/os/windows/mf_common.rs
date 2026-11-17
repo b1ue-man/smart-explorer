@@ -57,7 +57,7 @@ mod mf_enum;
 pub(super) use mf_enum::available;
 use mf_enum::confirmed_offers;
 pub(super) use mf_enum::{
-    activate_codec, adapter_of, hardware_mft_on, prefer_capture_adapter, subtype, Entry, Kind,
+    activate_codec, adapter_of, prefer_capture_adapter, subtype, Entry, Kind,
 };
 
 /// Whether the encoders write HEVC and AV1 output types (B-23): since merge

@@ -120,8 +120,11 @@ impl App {
                 temp_root().display()
             )
         });
-        let mut startup_update_error =
-            crate::updater::take_updater_error().map(|e| format!("Update-Helfer: {e}"));
+        // Kept until a successful update or "Hinweis ausblenden" (update page).
+        let update_failure = crate::updater::last_update_failure();
+        let mut startup_update_error = update_failure
+            .as_ref()
+            .map(super::settings_updates::failure_notice);
         let (staged_update, staging_load_failed) = if just_updated {
             (None, false)
         } else {
@@ -358,6 +361,7 @@ impl App {
             rollback_rx: None,
             unsigned_update_prompt: None,
             update_feed_draft: crate::updater::update_source_str().unwrap_or_default(),
+            update_failure,
             pending_initial_path: initial_path,
             integration_ctx_menu: Self::initial_context_menu_enabled(),
 

@@ -1,15 +1,12 @@
 use std::{
     fs,
-    io::Read,
     path::{Path, PathBuf},
-    time::Duration,
 };
 
 use super::{DOKANY_API_VERSION, DOKANY_DRIVER_PROTOCOL_VERSION};
 
 const PINNED_MANIFEST: &str = include_str!("../../../../../../dokany-runtime.nsh");
 const RELEASE_ASSET_HOST: &str = "https://release-assets.githubusercontent.com/";
-const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(180);
 
 pub(super) struct PinnedMsi {
     pub(super) version: &'static str,
@@ -91,36 +88,29 @@ pub(super) fn acquire_msi(local: Option<&Path>, pinned: &PinnedMsi) -> Result<Ms
         .tempfile_in(&directory)
         .map_err(|error| format!("sichere Dokany-Temp-Datei anlegen: {error}"))?;
 
-    let response = ureq::AgentBuilder::new()
-        .https_only(true)
-        .redirects(2)
-        .timeout(DOWNLOAD_TIMEOUT)
-        .build()
-        .get(pinned.url)
-        .set("User-Agent", "SmartExplorer-Dokany-Installer/1")
-        .call()
-        .map_err(|error| format!("Dokany {} herunterladen: {error}", pinned.version))?;
-    if response.status() != 200 || !trusted_final_url(response.get_url(), pinned.url) {
-        return Err(format!(
-            "Dokany-Download endete an einer nicht freigegebenen HTTPS-Adresse ({})",
-            response.get_url()
-        ));
-    }
-    if let Some(length) = response.header("Content-Length") {
-        let length = length
-            .parse::<u64>()
-            .map_err(|_| "Dokany-Download meldet eine ungueltige Groesse".to_string())?;
-        if length != pinned.size {
-            return Err(format!(
-                "Dokany-Downloadgroesse stimmt nicht (erwartet {}, gemeldet {length})",
-                pinned.size
-            ));
-        }
-    }
-
-    let mut bounded = response.into_reader().take(pinned.size.saturating_add(1));
-    let written = std::io::copy(&mut bounded, temporary.as_file_mut())
-        .map_err(|error| format!("Dokany-MSI speichern: {error}"))?;
+    // No limit on the whole transfer (user rule 2026-11-17): `http_resume`
+    // limits the connect and each read, continues a broken transfer with a
+    // range request, refuses another final address than the pinned one or
+    // GitHub's release asset host, and takes no byte beyond the pinned size.
+    let source = crate::http_resume::Source {
+        url: pinned.url,
+        user_agent: "SmartExplorer-Dokany-Installer/1",
+        https_only: true,
+        redirects: 2,
+        final_url: &|actual| trusted_final_url(actual, pinned.url),
+    };
+    let bound = crate::http_resume::Bound {
+        exact: Some(pinned.size),
+        ceiling: None,
+    };
+    let written = crate::http_resume::fetch(
+        &source,
+        bound,
+        temporary.as_file_mut(),
+        &mut |_, _| {},
+        &|| false,
+    )
+    .map_err(|error| format!("Dokany {} herunterladen: {error}", pinned.version))?;
     if written != pinned.size {
         return Err(format!(
             "Dokany-Downloadgroesse stimmt nicht (erwartet {}, empfangen {written})",

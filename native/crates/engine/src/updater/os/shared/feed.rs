@@ -17,9 +17,10 @@ pub use legacy_launcher::{
 };
 pub use release::{download_update, download_version, list_remote_versions, RollbackDownload};
 
+/// Whole-request limit of the small control reads (version, sidecars, the
+/// signed manifest, the GitHub release list); payloads have none
+/// (`http_download`).
 const HTTP_TIMEOUT: Duration = Duration::from_secs(25);
-/// Per read of a payload download: no limit on the whole transfer.
-const DOWNLOAD_READ_TIMEOUT: Duration = Duration::from_secs(60);
 const UPDATE_USER_AGENT: &str = "smart-explorer-updater";
 
 pub(super) struct PayloadSpec {
@@ -309,6 +310,13 @@ fn http_get_string_optional_404(url: &str) -> Result<Option<String>, String> {
 /// Downloads `url` to `dest`; `signed_size` (from the release manifest) is
 /// the exact length, otherwise the announced length or the free space bounds
 /// the download (r-lokal-4).
+///
+/// No limit on the whole transfer (user rule 2026-11-17): ureq's
+/// `Request::timeout` bounded the whole request including the body, so a
+/// 100 MB payload needed more than 32 Mbit/s and a device on a slower line
+/// could never update (seen 2026-11-17 at about 3 Mbit/s). `http_resume`
+/// limits the connect and each read, and continues a broken or stalled
+/// transfer with a range request from the bytes already written.
 fn http_download(url: &str, dest: &Path, signed_size: Option<u64>) -> Result<(), String> {
     let tmp = dest.with_extension(format!(
         "{}download",
@@ -318,38 +326,28 @@ fn http_download(url: &str, dest: &Path, signed_size: Option<u64>) -> Result<(),
             .unwrap_or_default()
     ));
     let _ = std::fs::remove_file(&tmp);
-    // Connect and per-read limits only: `Request::timeout` bounds the whole
-    // request including the body (ureq 2.12.1 "overall timeout"), so a
-    // 100 MB payload needed more than 32 Mbit/s and a device on a slower
-    // line could never update (seen 2026-11-17 at about 3 Mbit/s). The
-    // Android path reads the same way (`feed_files.rs`).
-    let resp = ureq::AgentBuilder::new()
-        .timeout_connect(HTTP_TIMEOUT)
-        .timeout_read(DOWNLOAD_READ_TIMEOUT)
-        .user_agent(UPDATE_USER_AGENT)
-        .build()
-        .get(url)
-        .call()
-        .map_err(|e| format_http_error(url, e))?;
     // r-lokal-4: exactly the signed size; without manifest never more than
     // announced, nor than the free space minus the app-data reserve when no
     // length is announced.
-    let announced = resp
-        .header("Content-Length")
-        .and_then(|value| value.trim().parse::<u64>().ok());
     let folder = tmp.parent().unwrap_or_else(|| Path::new("."));
-    let bound = match signed_size {
-        Some(size) => super::download_bound::DownloadBound::exact(size),
-        None => super::download_bound::DownloadBound::new(announced, folder),
+    let bound = crate::http_resume::Bound {
+        exact: signed_size,
+        ceiling: super::download_bound::free_space_ceiling(folder),
     };
-    let mut reader = resp.into_reader();
+    let source = crate::http_resume::Source {
+        url,
+        user_agent: UPDATE_USER_AGENT,
+        https_only: false,
+        redirects: 5,
+        final_url: &|_| true,
+    };
     let mut file =
         std::fs::File::create(&tmp).map_err(|e| format!("Temp-Datei {}: {}", tmp.display(), e))?;
-    let copied =
-        super::download_bound::copy_bounded(&mut reader, &mut file, bound, &mut |_| {}, &|| false);
+    let copied = crate::http_resume::fetch(&source, bound, &mut file, &mut |_, _| {}, &|| false);
     if let Err(e) = copied {
+        drop(file);
         let _ = std::fs::remove_file(&tmp);
-        return Err(format!("Download {}: {}", url, e));
+        return Err(with_socket_hint(format!("Download {}: {}", url, e)));
     }
     if let Err(e) = file.sync_all() {
         let _ = std::fs::remove_file(&tmp);
@@ -364,16 +362,20 @@ fn http_download(url: &str, dest: &Path, signed_size: Option<u64>) -> Result<(),
 }
 
 fn format_http_error(url: &str, err: ureq::Error) -> String {
-    let msg = err.to_string();
-    let hint = if msg.contains("os error 10013")
-        || msg.contains("Zugriff auf einen Socket")
-        || msg.contains("access permissions")
+    with_socket_hint(format!("HTTP {}: {}", url, err))
+}
+
+/// `message` with a hint when Windows refused the outgoing socket.
+fn with_socket_hint(message: String) -> String {
+    let hint = if message.contains("os error 10013")
+        || message.contains("Zugriff auf einen Socket")
+        || message.contains("access permissions")
     {
         " Hinweis: Windows hat den ausgehenden Socket blockiert. Pruefe Firewall/Antivirus oder eine App-Regel fuer Smart Explorer."
     } else {
         ""
     };
-    format!("HTTP {}: {}{}", url, msg, hint)
+    format!("{message}{hint}")
 }
 
 /// Owner/repo from the configured feed, if it's a GitHub feed.

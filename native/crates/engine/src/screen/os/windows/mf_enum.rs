@@ -343,6 +343,7 @@ pub(crate) fn available() -> bool {
 
 /// Whether a hardware MFT of `codec` runs on the adapter `luid` (plan
 /// 2026-11-17 P3 (b): a vendor encoder of another adapter then gives way).
+#[allow(dead_code)] // no longer decides the vendor order (2026-11-17)
 pub(crate) fn hardware_mft_on(codec: CodecKind, luid: u64) -> bool {
     found()
         .encoders(codec)

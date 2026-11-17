@@ -3,6 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::daemon::WorkerHandoff;
+use crate::mcp_launcher::Resumed;
 use serde::Serialize;
 
 use super::cli_swap::{
@@ -149,28 +150,35 @@ impl McpTerminalUpdate {
             cli: cli.into(),
             finished: false,
         };
-        if root.join("mcp/current.v1.json").exists()
-            && crate::mcp_launcher::Installation::load(&root)?.status()["state"]
-                == "update_recovery_required"
-        {
-            if crate::mcp_launcher::recover_update(&root, false).is_err() {
-                crate::mcp_launcher::verify_recovery_targets(&root, true)?;
-                if launcher.is_some() {
-                    crate::mcp_launcher::verify_installed_product(
-                        &root,
-                        cli,
-                        payload.sha256(),
-                        version,
-                    )?;
-                } else {
-                    crate::mcp_launcher::verify_legacy_product(
-                        &root,
-                        cli,
-                        payload.sha256(),
-                        version,
-                    )?;
+        // As the desktop helper (field failure 2026-11-17): the installed `se`
+        // decides whether an unfinished transaction rolls back or completes,
+        // and a failed rollback is reported as such.
+        if root.join("mcp/current.v1.json").exists() {
+            let wait = crate::mcp_launcher::OWNER_EXIT_WAIT;
+            match crate::mcp_launcher::resume_interrupted_update(&root, wait)
+                .map_err(|error| format!("unfinished earlier update: {error}"))?
+            {
+                Resumed::Nothing | Resumed::RolledBack => {}
+                Resumed::Running => {
+                    return Err("update_in_progress: another update holds this installation".into())
                 }
-                crate::mcp_launcher::recover_update(&root, true)?;
+                Resumed::CompletionPending => {
+                    let sha256 = payload.sha256();
+                    // Another release completes by its own runtime's proof.
+                    if !crate::mcp_launcher::complete_other_release(&root, sha256)? {
+                        crate::mcp_launcher::verify_recovery_targets(&root, true)?;
+                        if launcher.is_some() {
+                            crate::mcp_launcher::verify_installed_product(
+                                &root, cli, sha256, version,
+                            )?;
+                        } else {
+                            crate::mcp_launcher::verify_legacy_product(
+                                &root, cli, sha256, version,
+                            )?;
+                        }
+                        crate::mcp_launcher::recover_update(&root, true)?;
+                    }
+                }
             }
         }
         let Some(launcher) = launcher else {
@@ -196,9 +204,8 @@ impl McpTerminalUpdate {
                     version,
                     vec![proof],
                 )?;
-                transaction.drain(std::time::Duration::from_secs(30))?;
-                transaction
-                    .publish_stop(&crate::support_dirs::sync_data_dir().join("daemon.stop"))?;
+                let marker = crate::support_dirs::sync_data_dir().join("daemon.stop");
+                transaction.drain_and_stop(std::time::Duration::from_secs(30), &marker)?;
                 value.transaction = Some(transaction);
             }
             return Ok(value);
@@ -242,8 +249,8 @@ impl McpTerminalUpdate {
                 manifest.clone(),
                 vec![proof],
             )?;
-            transaction.drain(std::time::Duration::from_secs(30))?;
-            transaction.publish_stop(&crate::support_dirs::sync_data_dir().join("daemon.stop"))?;
+            let marker = crate::support_dirs::sync_data_dir().join("daemon.stop");
+            transaction.drain_and_stop(std::time::Duration::from_secs(30), &marker)?;
             value.transaction = Some(transaction);
         }
         if old.is_none() {

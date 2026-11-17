@@ -74,7 +74,8 @@ fn main() {
     };
     match result {
         Ok(()) => {}
-        Err(failure) => {
+        Err(mut failure) => {
+            failure.message.extend(mcp::take_rollback_note());
             handle_failure_with(&fallback_error_file, &failure, |recovery| {
                 spawn_verified_detached(
                     &recovery.executable,
@@ -193,7 +194,7 @@ fn apply_update(mut args: ApplyArgs) -> Result<(), ApplyFailure> {
     if let Some(completed) = &legacy_launcher {
         completed.revalidate()?;
     }
-    let mut mcp_update = mcp::McpUpdate::prepare(&args)?;
+    let mut mcp_update = mcp::prepare_or_restart(&args)?;
     if mcp_update.already_completed() {
         installer::refresh_after_commit(&args);
         let mut bookkeeping = PreparedBookkeeping::prepare(

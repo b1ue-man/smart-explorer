@@ -1,7 +1,41 @@
 use super::prelude::*;
 use super::*;
 
+/// The start notice of a failed or unfinished update (field failure
+/// 2026-11-17: the helper's code alone, then nothing at all).
+pub(super) fn failure_notice(failure: &crate::updater::UpdateFailure) -> String {
+    let title = match failure.error {
+        Some(_) => "Letztes Update fehlgeschlagen",
+        None => "Update unterbrochen",
+    };
+    format!("{title}: {} {}", failure.reason, failure.next_action)
+}
+
 impl App {
+    /// Reason, next step and the helper's own report, until a successful
+    /// update removes the report or the person hides it.
+    fn ui_update_failure(&mut self, ui: &mut egui::Ui) {
+        let Some(failure) = self.update_failure.clone() else {
+            return;
+        };
+        let title = match failure.error {
+            Some(_) => "⚠ Letztes Update fehlgeschlagen",
+            None => "⚠ Update unterbrochen",
+        };
+        ui.colored_label(theme::danger(ui), title);
+        ui.label(RichText::new(&failure.reason).small());
+        ui.label(RichText::new(format!("Nächster Schritt: {}", failure.next_action)).small());
+        if let Some(error) = &failure.error {
+            let report = format!("Meldung des Updaters: {error}");
+            ui.label(RichText::new(report).small().color(theme::muted(ui)));
+            if ui.small_button("Hinweis ausblenden").clicked() {
+                let _ = crate::updater::take_updater_error();
+                self.update_failure = crate::updater::last_update_failure();
+            }
+        }
+        ui.add_space(4.0);
+    }
+
     pub(super) fn ui_settings_updates(&mut self, ui: &mut egui::Ui) {
         // ─── Update ───────────────────────────────────────────────────
         ui.add_space(12.0);
@@ -11,6 +45,7 @@ impl App {
             format!("Version {}", env!("CARGO_PKG_VERSION")),
         );
         super::licenses_ui::licenses_button(ui);
+        self.ui_update_failure(ui);
         if !self.show_update_dialog {
             if let Some(ReadyUpdate::Staged(bundle)) = self.update_ready.as_ref() {
                 let version = bundle.version().to_string();

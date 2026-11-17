@@ -79,3 +79,37 @@ fn luecken_task_update_report_names_the_rollback_pause() {
         Some("auto_update\tpaused after a rollback to 0.5.170")
     );
 }
+
+/// Field failure 2026-11-17: `se update --check` showed the bare code only.
+#[test]
+fn update_sha_task_cli_names_reason_next_action_and_pending_update() {
+    use crate::updater::{PendingUpdate, UpdateFailure};
+    let failure = UpdateFailure {
+        error: Some("runtime_sha256_mismatch".into()),
+        reason: "Grund\tmit Tab".into(),
+        next_action: "Weiter".into(),
+        pending: Some(PendingUpdate::RollBack {
+            previous_version: "0.5.197".into(),
+            target_version: "0.5.198".into(),
+        }),
+    };
+    assert_eq!(
+        super::failure::lines(Some(&failure)),
+        vec![
+            "previous_update_error\truntime_sha256_mismatch",
+            "previous_update_reason\tGrund mit Tab",
+            "previous_update_next\tWeiter",
+            "pending_update\troll_back\tv0.5.198 -> v0.5.197",
+        ]
+    );
+    assert!(super::failure::lines(None).is_empty());
+    let rollback = "Frühere Aktualisierung abschließen: update_rollback_failed: lock_busy: x";
+    let explained = super::failure::explained(rollback.to_string());
+    assert!(explained.starts_with(rollback), "{explained}");
+    assert!(
+        explained.contains("\nEine unterbrochene frühere Aktualisierung"),
+        "{explained}"
+    );
+    let plain = "the feed offers 1.0, older than this se 2.0";
+    assert_eq!(super::failure::explained(plain.to_string()), plain);
+}

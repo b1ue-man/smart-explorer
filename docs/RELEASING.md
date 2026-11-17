@@ -1330,7 +1330,8 @@ decides by what lies beside it:
   worker handoff. The generation pointer commits only after those checks.
   Failure restores both CLI and the previous generation when their hashes
   prove that restoration; an unconfirmed crash stays `update_recovery_required`
-  until explicit checked recovery. A genuinely legacy feed without either
+  until the next update run resumes it (see **Unfinished update transaction**
+  below). A genuinely legacy feed without either
   launcher bytes or hash retires a managed generation through the same drain
   transaction. A missing launcher from a feed that requires it is an error.
   `--reinstall` reinstalls the same version; `se update` never downgrades.
@@ -1345,6 +1346,36 @@ decides by what lies beside it:
   restart would fail and roll the update back. The rollback archive of the app
   is labelled with the running `se`'s version, which equals the app's version
   in every installation the installer or updater produced.
+
+**Unfinished update transaction.** An updater that ends before Commit or
+Rollback (ended, crashed, or its own rollback failed) leaves
+`mcp/update.v1.json` in `prepared` or `stopping`; MCP admission then answers
+`update_recovery_required`. The next update run (desktop helper, installer
+bundle, terminal-only `se update`) gives the ended owner's process up to 30 s to
+exit, hashes the recorded regular files and resumes by what they hold
+(`native/crates/engine/src/mcp_launcher/os/shared/recovery.rs`): all previous
+content rolls back through the checked recovery and the new update starts;
+all target content completes after the start proof as before; any other mix
+is refused with each file and the version it holds (`update_recovery_refused`).
+The update owner retries its own lock requests for up to 5 s while admission,
+launchers, relays or MCP sessions hold a lock for a check. Up to v0.5.198 a
+failed rollback at this point was reported as the `runtime_sha256_mismatch` of
+the completion check against the unchanged files (field failure 2026-11-17).
+
+The helper's last report stays in `last_updater_error.txt` until a successful
+update or **Hinweis ausblenden** on the app's update page. The app's start
+notice and update page, `se update` and `se update --check` show its German
+reason and the next automatic step (text lines `previous_update_reason`,
+`previous_update_next`, `pending_update`; JSON `update_failure`;
+`previous_update_error` is unchanged). `se update` exits non-zero before
+staging while the unfinished update has no automatic way on, its state is
+unreadable, or its updater still runs. A helper that fails at this step
+changed no installed file; in the app-acknowledged mode it starts the
+unchanged app again (hash-checked) so the app shows the reason. An unfinished
+update whose files are already the target of another release than the running
+update completes by that release's own runtime contract probe, and the running
+update then proceeds from it. A failed stop publication rolls the prepared
+transaction back at once (`UpdateTransaction::drain_and_stop`).
 
 The helper's launch protocol is a release compatibility boundary because an
 older app downloads the **new** helper before asking it to apply the update.

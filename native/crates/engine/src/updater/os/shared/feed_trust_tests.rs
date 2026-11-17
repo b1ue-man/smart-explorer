@@ -424,9 +424,9 @@ fn lokal_task_feed_without_manifest_is_unsigned_by_its_kind() {
     server.serve(
         "release-manifest",
         Route {
-            body: Vec::new(),
             announce: Some(10),
             cut_at: Some(0),
+            ..Route::plain(Vec::new())
         },
     );
     assert!(read_trust(&server.feed(), VERSION).is_err());

@@ -1281,6 +1281,17 @@ antwortet. Lief vor dem Update ein Hintergrund-Worker, startet `se update` einer
   lehnt `se update` das ab, bevor es etwas lädt, denn der Neustart der App würde
   dort scheitern.
 
+**Fehlgeschlagenes oder unterbrochenes Update (seit 2026-11-17).** Der Grund auf Deutsch und der
+nächste automatische Schritt stehen beim Start der App, auf ihrer Update-Seite (bis zu einem
+erfolgreichen Update oder **Hinweis ausblenden**) und in `se update` / `se update --check`
+(`previous_update_reason`, `previous_update_next`, `pending_update`; JSON `update_failure`).
+Ein unterbrochenes Update (Updater beendet vor Abschluss oder Rücknahme) setzt der nächste Update-Lauf
+fort: Sind alle Programmdateien noch die vorherige Version, nimmt er es zurück und installiert neu;
+sind alle schon die neue, schließt er es ab; ein gemischter Stand wird mit jeder Datei abgelehnt.
+`se update` bricht mit Fehlercode ab, bevor es etwas lädt, wenn das unterbrochene Update keinen
+automatischen Weg hat oder sein Updater noch läuft. Scheitert der Update-Helfer an diesem Schritt,
+startet er die unveränderte App wieder, damit sie den Grund zeigt.
+
 **Signierte Updates (seit 2026-11-07).** Jedes Release des GitHub-Feeds enthält `release-manifest`
 (Version und SHA-256 sowie Größe jedes Programms) und `release-manifest.sig` (Ed25519-Signatur). Die
 App und `se update` prüfen die Signatur gegen den im Programm eingebauten öffentlichen Schlüssel,

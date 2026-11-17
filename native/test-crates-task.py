@@ -647,6 +647,24 @@ BATCH_TESTS = {
         "fs_fehler_task_error_under_a_share_names_the_virtual_root",
         "pin_neu_task_stop_in_the_pause_cancels_the_renewal",
         "pin_neu_task_cli_lists_and_stops_the_waiting_renewal",
+        # Field failure 2026-11-17 (Windows update "runtime_sha256_mismatch"): an update its owner left
+        # in phase "stopping" is rolled back or completed by the installed files, never masked; the
+        # update owner waits briefly for readers of its locks; the reason reaches app and `se update`.
+        # The recovery_task tests run on both systems (Windows: LockFileEx, Linux: flock).
+        "update_sha_task_previous_files_roll_back",
+        "update_sha_task_target_files_complete",
+        "update_sha_task_mixed_or_unknown_files_are_refused_and_named",
+        "update_sha_task_absent_files_and_unchanged_payloads_follow_the_record",
+        "update_sha_task_stopping_leftover_with_previous_files_rolls_back_and_admits_a_new_update",
+        "update_sha_task_stopping_leftover_with_target_files_waits_for_the_start_proof",
+        "update_sha_task_stopping_leftover_with_unknown_files_is_refused_by_name",
+        "update_sha_task_rollback_waits_for_a_reader_holding_control_briefly",
+        "update_sha_task_running_or_exiting_owner_is_not_recovered",
+        "update_sha_task_field_failure_names_reason_and_the_rollback_of_the_next_run",
+        "update_sha_task_reason_follows_the_most_specific_code",
+        "update_sha_task_nothing_to_show_without_report_or_while_an_update_runs",
+        "update_sha_task_next_action_names_each_resolution_and_the_startup_check",
+        "update_sha_task_cli_names_reason_next_action_and_pending_update",
     ],
     "linux": [
         "batches_p13_legacy_profile_generation_serializes_with_terminal_updates",
@@ -702,6 +720,17 @@ BATCH_TESTS = {
         "rdp_netz_krdp_task_unit_without_loopback_address_gives_evidence_and_note",
         "pin_neu_task_android_status_names_the_waiting_renewal",
         "dienste_oeffnen_task_android_close_of_an_unknown_service_names_the_port",
+        # User rule 2026-11-17: no total time limit on a download that still moves; a broken one
+        # continues with a range request (native/crates/engine/src/http_resume).
+        "zeitlimit_task_content_range_is_read_strictly",
+        "zeitlimit_task_an_answer_continues_restarts_or_is_refused",
+        "zeitlimit_task_only_attempts_without_a_new_byte_for_the_stall_window_end_a_download",
+        "zeitlimit_task_a_broken_update_download_continues_with_a_range_request",
+        "zeitlimit_task_a_commit_wait_ends_with_the_answer_or_the_cancellation_only",
+        "zeitlimit_task_commit_requests_and_pending_batches_have_no_time_limit",
+        "zeitlimit_task_a_vault_wait_ends_only_when_the_worker_is_gone",
+        "zeitlimit_task_a_vault_wait_takes_the_answer_or_notices_the_closed_connection",
+        "zeitlimit_task_drive_upload_chunks_have_idle_limits_on_their_own_connection",
     ],
     "windows": [
         "batches_p13_legacy_windows_profile_pins_cli_without_sidecar",

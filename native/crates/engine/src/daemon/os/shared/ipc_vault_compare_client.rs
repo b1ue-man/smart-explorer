@@ -2,14 +2,13 @@
 //! (VLT-M8, U26-8) for processes without the vault keys (`se`, the desktop
 //! GUI, `se mcp`). Every request carries the daemon token. A comparison and
 //! a check start the worker when it does not run (the answer is then
-//! `vault_locked`: nothing is unlocked). The worker does not time out; only
-//! the client gives up after `COMPARE_TIMEOUT` / `RESOLVE_TIMEOUT` (a large
-//! vault over a network takes long and reports no progress), says so, and the
-//! work goes on in the worker. Failures keep the structured code
-//! (`vault_locked`, `compare_stale`).
+//! `vault_locked`: nothing is unlocked). Neither side has a time limit: the
+//! client waits as long as the worker that took the request lives
+//! (`ipc_vault_compare_wait.rs`; a large vault over a network takes long
+//! and reports no progress, and closing the connection would end the work).
+//! Failures keep the structured code (`vault_locked`, `compare_stale`).
 #![allow(dead_code)] // CLI (VLT-M9), GUI (VLT-M10), Android (VLT-M11)
 
-use std::io;
 use std::time::Duration;
 
 use super::ipc_protocol::{
@@ -18,15 +17,9 @@ use super::ipc_protocol::{
 };
 use super::ipc_storage::{read_ipc_addr, read_token};
 use super::ipc_vault_client::VaultIpcError;
+use super::ipc_vault_compare_wait::{first_byte, Stopped, READ_IDLE};
 
-/// Longest wait for a comparison or a check (large vaults over a network;
-/// the engine reports no progress).
-const COMPARE_TIMEOUT: Duration = Duration::from_secs(600);
-/// Longest wait for an action on an entry.
-const RESOLVE_TIMEOUT: Duration = Duration::from_secs(600);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
-/// What the client says when it stops waiting.
-const STILL_WORKING: &str = "Der Dienst antwortet noch nicht; der Vorgang läuft weiter.";
 
 /// A comparison with all its entries: the head and what `Items` delivered
 /// page by page. The surfaces never see pages.
@@ -64,11 +57,7 @@ fn unexpected<T>() -> Result<T, VaultIpcError> {
     Err(plain("Unerwartete Antwort des Background-Workers"))
 }
 
-fn exchange(
-    req: VaultIpcRequest,
-    timeout: Duration,
-    start_worker: bool,
-) -> Result<VaultIpcReply, VaultIpcError> {
+fn exchange(req: VaultIpcRequest, start_worker: bool) -> Result<VaultIpcReply, VaultIpcError> {
     if start_worker {
         super::ipc_client::ensure_worker_ready().map_err(plain)?;
     }
@@ -85,21 +74,19 @@ fn exchange(
     let mut stream = crate::daemon::ipc_proof::connect(&addr, CONNECT_TIMEOUT)
         .map_err(|error| gone(plain(format!("Background-Worker IPC: {error}"))))?;
     let token = read_token().map_err(|error| plain(format!("Background-Worker Token: {error}")))?;
-    set_stream_timeout(&stream, Some(timeout));
+    set_stream_timeout(&stream, Some(READ_IDLE));
     write_request(&mut stream, &IpcRequest::Vault { token, req })
         .map_err(|error| plain(format!("Tresor-IPC senden: {error}")))?;
+    first_byte(&stream).map_err(|stopped| match stopped {
+        Stopped::Closed => plain("Der Background-Worker hat die Verbindung ohne Antwort beendet"),
+        Stopped::Replaced => gone(plain("Der Background-Worker wurde ersetzt")),
+        Stopped::Silent => plain("Der Background-Worker antwortet nicht mehr"),
+        Stopped::Failed(error) => plain(format!("Tresor-IPC lesen: {error}")),
+    })?;
     match read_response(&mut stream) {
         Ok(IpcResponse::Vault(reply)) => Ok(reply),
         Ok(IpcResponse::Err { msg, code }) => Err(VaultIpcError { message: msg, code }),
         Ok(_) => unexpected(),
-        Err(error)
-            if matches!(
-                error.kind(),
-                io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
-            ) =>
-        {
-            Err(plain(STILL_WORKING))
-        }
         Err(error) => Err(plain(format!("Tresor-IPC lesen: {error}"))),
     }
 }
@@ -122,7 +109,7 @@ fn fetch_items(
         let VaultIpcReply::ItemPage {
             items: page,
             next_offset,
-        } = exchange(req, COMPARE_TIMEOUT, false)?
+        } = exchange(req, false)?
         else {
             return unexpected();
         };
@@ -147,7 +134,7 @@ pub fn vault_compare(job: &str, groups: &[&str]) -> Result<CompareViewFull, Vaul
         job: job.to_string(),
         groups: groups.iter().map(|group| (*group).to_string()).collect(),
     };
-    let VaultIpcReply::Compared(head) = exchange(req, COMPARE_TIMEOUT, true)? else {
+    let VaultIpcReply::Compared(head) = exchange(req, true)? else {
         return unexpected();
     };
     let items = fetch_items(&head.job, head.revision, head.total)?;
@@ -160,7 +147,7 @@ pub fn vault_compare_text(job: &str, item: &str) -> Result<(String, String), Vau
         job: job.to_string(),
         item: item.to_string(),
     };
-    match exchange(req, RESOLVE_TIMEOUT, false)? {
+    match exchange(req, false)? {
         VaultIpcReply::Texts { a, b } => Ok((a.expose().to_string(), b.expose().to_string())),
         _ => unexpected(),
     }
@@ -199,7 +186,7 @@ pub fn vault_resolve(
         all,
         confirmed,
     };
-    resolved(exchange(req, RESOLVE_TIMEOUT, false)?)
+    resolved(exchange(req, false)?)
 }
 
 /// Resolves a text conflict with the merged text `content`.
@@ -209,7 +196,7 @@ pub fn vault_merge_apply(job: &str, item: &str, content: &str) -> Result<(), Vau
         item: item.to_string(),
         content: SecretText::new(content),
     };
-    resolved(exchange(req, RESOLVE_TIMEOUT, false)?).map(|_| ())
+    resolved(exchange(req, false)?).map(|_| ())
 }
 
 /// „Tresor prüfen“ for the site `site` (ID, ID prefix or label); the
@@ -222,7 +209,7 @@ pub fn vault_check(site: &str) -> Result<Vec<CompareItemWire>, VaultIpcError> {
         site,
         revision,
         total,
-    } = exchange(req, COMPARE_TIMEOUT, true)?
+    } = exchange(req, true)?
     else {
         return unexpected();
     };

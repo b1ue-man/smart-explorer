@@ -10,6 +10,9 @@ use serde::{Deserialize, Serialize};
 use crate::daemon::WorkerHandoff;
 use crate::updater::{FeedCheck, Installation, ReplacedCli, UnsignedConsent, UnsignedFeed};
 
+#[path = "update_failure.rs"]
+mod failure;
+
 /// The replaced `se` must answer within this time, including a worker handoff.
 const COMPLETION_TIMEOUT: Duration = Duration::from_secs(90);
 const MAX_SOURCE_BYTES: usize = 4096;
@@ -119,10 +122,15 @@ struct Installed {
 struct Report<'a> {
     check: &'a FeedCheck,
     installation: &'a Installation,
-    previous_error: Option<String>,
+    failure: Option<crate::updater::UpdateFailure>,
 }
 
+/// Errors carry the German reason of a known code (field failure 2026-11-17).
 pub(super) fn run(args: UpdateArgs) -> Result<i32, String> {
+    run_update(args).map_err(failure::explained)
+}
+
+fn run_update(args: UpdateArgs) -> Result<i32, String> {
     if let Some(expected) = &args.complete_install {
         return complete_install(expected, args.restart_worker);
     }
@@ -143,7 +151,7 @@ pub(super) fn run(args: UpdateArgs) -> Result<i32, String> {
     let report = Report {
         check: &check,
         installation: &installation,
-        previous_error: crate::updater::peek_updater_error(),
+        failure: failure::current(&installation),
     };
     if args.check {
         let status = if check.update_available {
@@ -171,6 +179,7 @@ pub(super) fn run(args: UpdateArgs) -> Result<i32, String> {
     };
     match &installation {
         Installation::TerminalOnly { cli } => {
+            failure::preflight(&installation)?;
             let installed = install_terminal_only(cli, &check.feed_version, &consent)?;
             let status = if check.update_available {
                 "updated"
@@ -184,6 +193,7 @@ pub(super) fn run(args: UpdateArgs) -> Result<i32, String> {
                 return Err(REINSTALL_DESKTOP.to_string());
             }
             crate::updater::desktop_update_possible()?;
+            failure::preflight(&installation)?;
             let bundle = crate::updater::stage_update(&check.feed_version, &consent)?;
             crate::updater::apply_staged_update_for(&bundle, &installation)?;
             let signed = Some(bundle.unsigned().map_or("verified", UnsignedFeed::code));
@@ -401,7 +411,8 @@ fn print(
             "installed": installed,
             "note": note,
             "signature": signature,
-            "previous_update_error": report.previous_error,
+            "previous_update_error": report.failure.as_ref().and_then(|f| f.error.as_ref()),
+            "update_failure": report.failure,
             // The app's "Auto-Update pausiert (zurückgerollt auf v…)".
             "auto_update_paused_at": crate::updater::pinned_version(),
             "startup_check": crate::updater::startup_check_enabled(),
@@ -443,8 +454,8 @@ fn print(
     if let Some(note) = note {
         println!("note\t{note}");
     }
-    if let Some(error) = &report.previous_error {
-        println!("previous_update_error\t{}", clean(error));
+    for line in failure::lines(report.failure.as_ref()) {
+        println!("{line}");
     }
     if let Some(line) = paused_line(crate::updater::pinned_version().as_deref()) {
         println!("{line}");

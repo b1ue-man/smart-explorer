@@ -63,11 +63,11 @@ impl UpdateTransaction {
     ) -> Result<Self, String> {
         let installation = Installation::load(root)?;
         target.validate(os::CLI_NAME)?;
-        let owner = installation.lock("update-owner.lock", true)?;
+        let owner = installation.lock_waiting("update-owner.lock", true)?;
         if !retire_managed {
             crate::mcp_launcher::contract_probe::verify_manifest_policy(root, &target)?;
         }
-        let _control = installation.lock("control.lock", true)?;
+        let _control = installation.lock_waiting("control.lock", true)?;
         let installation = Installation::load(root)?;
         if root.join("mcp/uninstall.v1.json").exists() {
             return Err("installation_uninstall_in_progress".into());
@@ -147,11 +147,21 @@ impl UpdateTransaction {
             }
         }
     }
+    /// `drain`, then `publish_stop`. A failed stop rolls the prepared
+    /// transaction back at once instead of leaving it for the next update run.
+    pub fn drain_and_stop(&mut self, timeout: Duration, marker: &Path) -> Result<(), String> {
+        self.drain(timeout)?;
+        self.publish_stop(marker)
+            .map_err(|error| match self.rollback() {
+                Ok(()) => error,
+                Err(rollback) => format!("{error}; rollback: {rollback}"),
+            })
+    }
     pub fn publish_stop(&mut self, marker: &Path) -> Result<(), String> {
         if self.operations.is_none() {
             return Err("update_stop_requires_drain".into());
         }
-        let _control = self.installation.lock("control.lock", true)?;
+        let _control = self.installation.lock_waiting("control.lock", true)?;
         // Exact legacy payload, published with the identity-bound control record.
         let parent = marker.parent().ok_or("stop_parent_missing")?;
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
@@ -168,7 +178,7 @@ impl UpdateTransaction {
     }
     /// Called only after regular replacement and acknowledged new app startup.
     pub fn commit(&mut self) -> Result<(), String> {
-        let _control = self.installation.lock("control.lock", true)?;
+        let _control = self.installation.lock_waiting("control.lock", true)?;
         if self.state.retire_managed {
             verify_target_proofs(&self.installation.root, &self.state, true)?;
             atomic_json(
@@ -229,7 +239,7 @@ impl UpdateTransaction {
         Ok(())
     }
     pub fn rollback(&mut self) -> Result<(), String> {
-        let _control = self.installation.lock("control.lock", true)?;
+        let _control = self.installation.lock_waiting("control.lock", true)?;
         let active = Installation::load(&self.installation.root)?;
         if active.manifest != self.state.previous {
             return Err("update_rollback_manifest_changed_recovery_required".into());
@@ -262,8 +272,8 @@ impl Drop for UpdateTransaction {
 /// pointer and installed hash together. No deletion based on a missing PID.
 pub fn recover_update(root: &Path, complete: bool) -> Result<(), String> {
     let installation = Installation::load(root)?;
-    let _owner = installation.lock("update-owner.lock", true)?;
-    let _control = installation.lock("control.lock", true)?;
+    let _owner = installation.lock_waiting("update-owner.lock", true)?;
+    let _control = installation.lock_waiting("control.lock", true)?;
     let Some(mut state) = installation.state()? else {
         return Ok(());
     };
@@ -377,8 +387,8 @@ pub fn installation_stop_marker() -> Option<std::path::PathBuf> {
 
 pub fn verify_recovery_targets(root: &Path, complete: bool) -> Result<(), String> {
     let installation = Installation::load(root)?;
-    let _owner = installation.lock("update-owner.lock", true)?;
-    let _control = installation.lock("control.lock", true)?;
+    let _owner = installation.lock_waiting("update-owner.lock", true)?;
+    let _control = installation.lock_waiting("control.lock", true)?;
     let state = installation.state()?.ok_or("no pending MCP update")?;
     if !state.blocks_work()
         && !(state.retire_managed

@@ -6,7 +6,8 @@
 //! without it, the free space of the target folder minus [`SPACE_RESERVE`]
 //! when the platform reports it. No fixed size: large releases stay
 //! possible. A signed release manifest (E12) sets the exact payload size
-//! instead ([`DownloadBound::exact`]).
+//! instead. HTTP downloads apply the same bound in `crate::http_resume`,
+//! which also continues a broken transfer; this copy serves folder feeds.
 use std::io::{self, Read, Write};
 use std::path::Path;
 
@@ -28,9 +29,7 @@ impl DownloadBound {
     pub(super) fn new(announced: Option<u64>, folder: &Path) -> Self {
         let ceiling = match announced {
             Some(_) => None,
-            None => {
-                super::os::available_space(folder).map(|free| free.saturating_sub(SPACE_RESERVE))
-            }
+            None => free_space_ceiling(folder),
         };
         Self {
             exact: announced,
@@ -38,13 +37,22 @@ impl DownloadBound {
         }
     }
 
-    /// Exactly `size` bytes: the size the signed release manifest names.
+    /// Exactly `size` bytes: the size the signed release manifest names
+    /// (HTTP payloads take it through `crate::http_resume::Bound::exact`).
+    #[cfg(test)]
     pub(super) fn exact(size: u64) -> Self {
         Self {
             exact: Some(size),
             ceiling: None,
         }
     }
+}
+
+/// The most a download into `folder` may write while no answer names its
+/// length: the free space minus [`SPACE_RESERVE`], when the platform
+/// reports it.
+pub(super) fn free_space_ceiling(folder: &Path) -> Option<u64> {
+    super::os::available_space(folder).map(|free| free.saturating_sub(SPACE_RESERVE))
 }
 
 /// Copies `reader` to `writer` within `bound`; returns the bytes written.

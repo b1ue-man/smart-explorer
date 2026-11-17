@@ -1,7 +1,40 @@
 //! Couples immutable generation publication to the existing apply transaction.
 use super::args::ApplyArgs;
-use smart_explorer::mcp_launcher::{GenerationInput, Installation, UpdateTransaction};
+use smart_explorer::mcp_launcher::{
+    complete_other_release, resume_interrupted_update, GenerationInput, Installation, Resumed,
+    UpdateTransaction, OWNER_EXIT_WAIT,
+};
 use std::path::PathBuf;
+use std::sync::Mutex;
+
+const UPDATE_RUNNING: &str =
+    "update_in_progress: ein anderer Update-Lauf hält diese Installation; Update nicht gestartet";
+
+/// A rollback that failed while the apply unwound (`Drop`), for the failure
+/// report: the transaction stays open and the next update run resumes it.
+static ROLLBACK_NOTE: Mutex<Option<String>> = Mutex::new(None);
+
+/// The note for the failure report, once.
+pub(super) fn take_rollback_note() -> Option<String> {
+    ROLLBACK_NOTE.lock().ok()?.take()
+}
+
+/// `McpUpdate::prepare`. A refusal there changed no installed file, so the
+/// app this update closed starts again and shows the reason; before, it
+/// stayed closed without a word (field failure 2026-11-17). Not while
+/// another update runs: that one stops the app itself.
+pub(super) fn prepare_or_restart(args: &ApplyArgs) -> Result<McpUpdate, super::ApplyFailure> {
+    McpUpdate::prepare(args).map_err(|message| {
+        let restart = args.install_mode == super::args::InstallMode::GuiAck
+            && !message.starts_with("update_in_progress")
+            && super::hash::verify_sha256(&args.target, &args.target_sha256).is_ok();
+        if restart {
+            super::ApplyFailure::with_recovery(message, &args.target, &args.target_sha256)
+        } else {
+            message.into()
+        }
+    })
+}
 
 pub(super) struct McpUpdate {
     root: PathBuf,
@@ -51,14 +84,37 @@ impl McpUpdate {
             )?;
         }
         if root.join("mcp/current.v1.json").exists() {
-            let installation = Installation::load(&root)?;
-            if installation.status()["state"] == "update_recovery_required" {
-                if smart_explorer::mcp_launcher::recover_update(&root, false).is_err() {
+            // The installed files decide (field failure 2026-11-17): previous
+            // files roll an unfinished transaction back, target files complete
+            // it here. A failed rollback is reported as such, never as the
+            // completion check against the still previous files.
+            let earlier = |error: String| format!("Frühere Aktualisierung abschließen: {error}");
+            let mut resumed = resume_interrupted_update(&root, OWNER_EXIT_WAIT).map_err(earlier)?;
+            // Files of another release than this update: that release completes
+            // by its own runtime's proof and this update starts from it.
+            if resumed == Resumed::CompletionPending
+                && complete_other_release(&root, &args.cli_sha256).map_err(earlier)?
+            {
+                super::logging::append_log("MCP: unfinished update of another release completed");
+                resumed = Resumed::Nothing;
+            }
+            match resumed {
+                Resumed::Nothing => {}
+                Resumed::RolledBack => {
+                    super::logging::append_log("MCP: unfinished update transaction rolled back")
+                }
+                Resumed::Running => return Err(UPDATE_RUNNING.into()),
+                Resumed::CompletionPending => {
                     smart_explorer::mcp_launcher::verify_recovery_targets(&root, true)?;
-                    if args.launcher_sha256.as_ref().is_some_and(|expected| {
-                        installation.status()["update"]["target"]["launcher_sha256"].as_str()
-                            != Some(expected.as_str())
-                    }) {
+                    // Read from the record itself: a status read loses against
+                    // a reader of control.lock and would name no launcher.
+                    let state = Installation::load(&root)?.state()?;
+                    let recorded = state.map(|state| state.target.launcher_sha256);
+                    if args
+                        .launcher_sha256
+                        .as_ref()
+                        .is_some_and(|expected| recorded.as_ref() != Some(expected))
+                    {
                         return Err("recovery_candidate_launcher_mismatch".into());
                     }
                     super::hash::verify_sha256(&args.cli_target, &args.cli_sha256)?;
@@ -91,9 +147,8 @@ impl McpUpdate {
                 }
                 let mut transaction =
                     UpdateTransaction::prepare_retirement(&root, &args.version, targets)?;
-                transaction.drain(std::time::Duration::from_secs(30))?;
-                transaction
-                    .publish_stop(&super::logging::appdata_dir().join("sync/daemon.stop"))?;
+                let marker = super::logging::appdata_dir().join("sync/daemon.stop");
+                transaction.drain_and_stop(std::time::Duration::from_secs(30), &marker)?;
                 value.transaction = Some(transaction);
             }
             return Ok(value);
@@ -137,9 +192,8 @@ impl McpUpdate {
             }
             let mut transaction =
                 UpdateTransaction::prepare_with_targets(&root, manifest.clone(), targets)?;
-            transaction.drain(std::time::Duration::from_secs(30))?;
             let marker = super::logging::appdata_dir().join("sync/daemon.stop");
-            transaction.publish_stop(&marker)?;
+            transaction.drain_and_stop(std::time::Duration::from_secs(30), &marker)?;
             value.transaction = Some(transaction);
         }
         if old.is_none() {
@@ -166,15 +220,27 @@ impl McpUpdate {
 }
 impl Drop for McpUpdate {
     fn drop(&mut self) {
-        if !self.finished
-            && previous_matches(&self.cli, self.previous_cli.as_deref())
-            && previous_matches(&self.app, self.previous_app.as_deref())
-        {
-            if let Some(transaction) = self.transaction.as_mut() {
-                if let Err(error) = transaction.rollback() {
-                    super::logging::append_log(&format!("MCP rollback: {error}"));
-                }
-            }
+        if self.finished {
+            return;
+        }
+        let restored = previous_matches(&self.cli, self.previous_cli.as_deref())
+            && previous_matches(&self.app, self.previous_app.as_deref());
+        let Some(transaction) = self.transaction.as_mut() else {
+            return;
+        };
+        let note = if !restored {
+            "die Programmdateien sind nicht auf dem vorherigen Stand".to_string()
+        } else if let Err(error) = transaction.rollback() {
+            super::logging::append_log(&format!("MCP rollback: {error}"));
+            format!("MCP-Rollback fehlgeschlagen ({error})")
+        } else {
+            return;
+        };
+        if let Ok(mut slot) = ROLLBACK_NOTE.lock() {
+            *slot = Some(format!(
+                "; MCP-Aktualisierung bleibt offen: {note}; der nächste Update-Lauf prüft \
+                 die Programmdateien und setzt sie zurück oder schließt sie ab"
+            ));
         }
     }
 }

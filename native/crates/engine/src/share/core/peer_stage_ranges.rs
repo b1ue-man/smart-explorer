@@ -332,9 +332,11 @@ impl RangeWriter {
         let Some(mut opened) = self.opened.take() else {
             return Err(eio("Bereichsstrom geschlossen"));
         };
+        // The host writes the range's last bytes before it answers: no time
+        // limit, bound to the connection (`commit_wait.rs`).
         let result = self.node.block_on_route(
             opened.generation,
-            io_deadline::run("peer stage range end", async {
+            crate::share::commit_wait::run_until_answer("peer stage range end", async {
                 opened.send.finish().map_err(eio)?;
                 recv_resp_wire(&mut opened.recv).await
             }),

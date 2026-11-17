@@ -10,6 +10,10 @@ mod config;
 mod core;
 #[path = "os/shared/download_bound.rs"]
 mod download_bound;
+#[path = "core/failure.rs"]
+mod failure;
+#[path = "os/shared/failure_report.rs"]
+mod failure_report;
 #[path = "os/shared/feed.rs"]
 mod feed;
 #[path = "os/shared/feed_files.rs"]
@@ -47,6 +51,11 @@ pub use config::{
     take_updater_error, update_source_str,
 };
 pub use core::is_newer;
+pub use failure::{
+    known_reason as known_update_failure_reason, next_action as update_next_action, PendingUpdate,
+    UpdateFailure,
+};
+pub use failure_report::{last_update_failure, pending_update_at, update_failure_at};
 pub use feed::{
     complete_legacy_launcher, download_update, download_version, list_remote_versions,
     CompletedLegacyLauncher, LegacyLauncherRequest, RollbackDownload,
@@ -75,3 +84,7 @@ pub use types::{StagedUpdate, UpdateMsg, VerifiedPayload};
 #[cfg(test)]
 #[path = "core/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "core/failure_tests.rs"]
+mod failure_tests;

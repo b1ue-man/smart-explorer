@@ -25,6 +25,12 @@ mod launcher;
 mod os;
 #[path = "os/shared/provision.rs"]
 mod provision;
+#[path = "os/shared/recovery.rs"]
+mod recovery;
+pub use recovery::{
+    complete_other_release, inspect_interrupted_update, resume_interrupted_update,
+    InterruptedUpdate, Resumed, OWNER_EXIT_WAIT,
+};
 #[path = "os/shared/relay.rs"]
 mod relay;
 #[path = "os/shared/transaction.rs"]

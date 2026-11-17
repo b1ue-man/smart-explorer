@@ -177,10 +177,14 @@ fn adapter_device(vendor: u32) -> Option<ID3D11Device> {
         .map(|set| set.device)
 }
 
-/// Plan 4.10a with P3 (b): whether the capture's adapter has an encoder of
-/// `codec` that takes its textures (its vendor interface or a hardware
-/// MFT); a vendor encoder of another adapter then gives way to it instead
-/// of opening on a device of its own (the iGPU of a hybrid laptop).
+/// Plan 4.10a with P3 (b): whether the capture's adapter has a vendor
+/// interface (NVENC, AMF) for `codec` that takes its textures; a vendor
+/// encoder of another adapter then gives way to it instead of opening on a
+/// device of its own (the AMD iGPU of a hybrid laptop). A hardware MFT on
+/// the capture's adapter does not count: measured 2026-11-17 on a cloud VM
+/// whose desktop belongs to a virtual adapter, the NVIDIA MFT needed 16 ms
+/// per picture (p95 up to 600 ms) where NVENC on its own device is the
+/// fastest path; the best path, not the zero-copy one, decides.
 fn capture_adapter_encodes(codec: CodecKind) -> bool {
     let Some(capture) = d3d_input::capture_adapter() else {
         return false;
@@ -192,7 +196,7 @@ fn capture_adapter_encodes(codec: CodecKind) -> bool {
         (Some(VENDOR_AMD), Some(index)) => found.amf[index].is_some(),
         _ => false,
     };
-    vendor || super::mf_common::hardware_mft_on(codec, capture)
+    vendor
 }
 
 /// The PCI vendor id of the adapter `device` runs on.

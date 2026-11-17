@@ -287,6 +287,8 @@ pub struct App {
     /// followed by eframe's normal `on_exit` callback.
     pub(in crate::app) shutdown_prepared: bool,
     pub(in crate::app) update_feed_draft: String,
+    /// The last failed or unfinished update, shown on the update page (start).
+    pub(in crate::app) update_failure: Option<crate::updater::UpdateFailure>,
     /// Previously-released versions from the GitHub feed (#rollback). None = not
     /// fetched yet; `Some(vec)` = fetched (possibly empty).
     pub(in crate::app) remote_versions: Option<Vec<String>>,
@@ -294,10 +296,8 @@ pub struct App {
     /// Rollback download in flight; `unsigned_update_prompt` asks per update (E12).
     pub(in crate::app) rollback_rx: Option<Receiver<RollbackResult>>,
     pub(in crate::app) unsigned_update_prompt: Option<UnsignedPrompt>,
-    /// Newest released version that is strictly newer than the running one, once
-    /// the release list has been fetched. Drives the "Update verfügbar" banner
-    /// and a one-shot notice, so a newer release is offered automatically
-    /// without pressing "Jetzt prüfen", independent of the main-branch feed.
+    /// Newest release strictly newer than the running one (release list, not the main-branch
+    /// feed): the "Update verfügbar" banner and a one-shot notice, without "Jetzt prüfen".
     pub(in crate::app) update_release_available: Option<String>,
     /// Set once we've shown the discovery notice, so it fires only once.
     pub(in crate::app) update_release_notified: bool,

@@ -175,9 +175,12 @@ impl PeerWriter {
         let Some(mut recv) = self.recv.take() else {
             return Err(eio("Peer-Schreibantwort geschlossen"));
         };
+        // No time limit: the host flushes and promotes before it answers
+        // (`commit_wait.rs`); the connection, the route and the transfer's
+        // cancellation still end the wait.
         let result = self.node.block_on_route(
             self.generation,
-            super::io_deadline::run("peer write finish", async {
+            super::commit_wait::run_until_answer("peer write finish", async {
                 send_ctrl(
                     &mut send,
                     &Ctrl::Fs {

@@ -118,6 +118,8 @@ mod ipc_vault_client;
 mod ipc_vault_compare;
 #[path = "os/shared/ipc_vault_compare_client.rs"]
 mod ipc_vault_compare_client;
+#[path = "os/shared/ipc_vault_compare_wait.rs"]
+mod ipc_vault_compare_wait;
 #[path = "os/shared/job.rs"]
 mod job;
 #[path = "os/shared/job_supervisor.rs"]

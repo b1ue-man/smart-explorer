@@ -379,7 +379,11 @@ handeln danach die bestätigte Daemongeneration neu aus. Eine unterbrochene
 Mutation wird nicht automatisch wiederholt. Unversionierte oder inkompatible
 Prozesse benutzen den bisherigen geordneten Stopweg. Ein verwaister
 vorbereiteter Austausch bleibt als `update_recovery_required` gesperrt, bis
-der reguläre Updateweg ihn bestätigt zurücknimmt oder abschließt.
+der reguläre Updateweg ihn bestätigt zurücknimmt oder abschließt. Die Richtung
+bestimmen die installierten Programmdateien: alle auf dem vorherigen Stand →
+Rücknahme, alle auf dem Zielstand → Abschluss nach Startbeweis, gemischt →
+Ablehnung mit jeder Datei (`update_recovery_refused`, siehe
+[RELEASING.md](RELEASING.md), „Unfinished update transaction“).
 
 `se plugin status --json`, das MCP-Tool `status` und die Desktopseite zeigen
 die installierte Generation, `next_runtime_sha256`, die aktiven Server des

@@ -94,3 +94,25 @@ fn build(kind: Kind) -> ureq::Agent {
             .build(),
     }
 }
+
+/// The chunks of a resumable upload: a new agent per request, with limits on
+/// connecting and on each read or write and none on the whole request (user
+/// rule 2026-11-17; the former 10-minute request limit cut a chunk off on a
+/// slow line while its bytes still moved). Not pooled: ureq 2.12.1 clears a
+/// socket's timeouts when it returns to the pool and sets none when it is
+/// used again (`Stream::reset`, `unit::connect_socket`); only a new
+/// connection gets them (`stream::connect_host`). A chunk is 8 to 64 MiB, so
+/// the handshake of its own connection costs little against its bytes.
+pub(super) fn upload_agent() -> ureq::Agent {
+    ureq::AgentBuilder::new()
+        .timeout_connect(super::api::DRIVE_CONNECT_TIMEOUT)
+        .timeout_read(UPLOAD_IDLE)
+        .timeout_write(UPLOAD_IDLE)
+        .redirects(0)
+        .max_idle_connections(0)
+        .max_idle_connections_per_host(0)
+        .build()
+}
+
+/// Time one read or write of an upload chunk may wait without a byte moving.
+const UPLOAD_IDLE: Duration = super::api::DRIVE_REQUEST_TIMEOUT;

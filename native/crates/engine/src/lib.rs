@@ -26,6 +26,7 @@ pub mod connect;
 pub mod daemon;
 pub mod folder_index;
 pub mod gdrive;
+mod http_resume;
 pub mod keep_awake;
 pub mod login;
 #[cfg(not(target_os = "android"))]

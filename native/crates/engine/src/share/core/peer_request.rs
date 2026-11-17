@@ -209,19 +209,23 @@ impl PeerBackend {
                 return Err(error);
             }
         };
-        let result = self.node.block_on_route(
-            opened.generation,
-            io_deadline::run_for_until(
-                "peer filesystem request",
-                timeout,
-                absolute.then_some(deadline),
-                async {
-                    let ctrl = Ctrl::Fs { req, lease };
-                    send_fs_ctrl(&mut opened.send, &ctrl, origin).await?;
-                    recv_resp_wire(&mut opened.recv).await
-                },
-            ),
-        );
+        let commit = super::commit_wait::waits_for_host_commit(&req);
+        let generation = opened.generation;
+        let exchange = async {
+            let ctrl = Ctrl::Fs { req, lease };
+            send_fs_ctrl(&mut opened.send, &ctrl, origin).await?;
+            recv_resp_wire(&mut opened.recv).await
+        };
+        let operation = "peer filesystem request";
+        // A host-side flush or sync has no time limit (`commit_wait.rs`).
+        let result = if commit {
+            let wait = super::commit_wait::run_until_answer(operation, exchange);
+            self.node.block_on_route(generation, wait)
+        } else {
+            let total = absolute.then_some(deadline);
+            let wait = io_deadline::run_for_until(operation, timeout, total, exchange);
+            self.node.block_on_route(generation, wait)
+        };
         let result = result.and_then(|response| {
             response_matches(&expected, &response)
                 .then_some(response)

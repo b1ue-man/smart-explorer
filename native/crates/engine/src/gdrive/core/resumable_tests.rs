@@ -193,3 +193,22 @@ fn range_completion_and_rate_limit_parsing_are_strict() {
         assert!(confirmed_offset(&response(range), 100, 0, None).is_err());
     }
 }
+
+/// User rule 2026-11-17: an upload chunk has limits on connecting and on
+/// each read or write, on a connection of its own (a pooled socket would
+/// carry none in ureq 2.12.1), and none on the whole request.
+#[test]
+fn zeitlimit_task_drive_upload_chunks_have_idle_limits_on_their_own_connection() {
+    let agent = format!("{:?}", crate::gdrive::http::upload_agent());
+    for expected in [
+        "timeout_connect: Some(10s)",
+        "timeout_read: Some(60s)",
+        "timeout_write: Some(60s)",
+        "timeout: None",
+        "redirects: 0",
+        "max_idle: 0",
+        "max_idle_per_host: 0",
+    ] {
+        assert!(agent.contains(expected), "{expected} missing in {agent}");
+    }
+}

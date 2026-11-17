@@ -30,6 +30,12 @@ pub(in crate::updater) mod http_fixture {
         pub(in crate::updater) announce: Option<usize>,
         /// Send only this many bytes of the body, then close.
         pub(in crate::updater) cut_at: Option<usize>,
+        /// `cut_at` applies to the first this many requests of the path
+        /// only (`None`: to every request).
+        pub(in crate::updater) cut_requests: Option<usize>,
+        /// Answer `Range: bytes=<first>-` with 206 and `Content-Range`, as
+        /// GitHub's release assets do; otherwise the range is ignored.
+        pub(in crate::updater) ranges: bool,
     }
 
     impl Route {
@@ -38,6 +44,8 @@ pub(in crate::updater) mod http_fixture {
                 body: body.into(),
                 announce: None,
                 cut_at: None,
+                cut_requests: None,
+                ranges: false,
             }
         }
     }
@@ -174,7 +182,11 @@ pub(in crate::updater) mod http_fixture {
             .unwrap_or("/")
             .trim_start_matches('/')
             .to_string();
-        requests.lock().expect("the request log").push(path.clone());
+        let nth = {
+            let mut log = requests.lock().expect("the request log");
+            log.push(path.clone());
+            log.iter().filter(|logged| **logged == path).count()
+        };
         let route = routes.lock().expect("the routes").get(&path).cloned();
         let Some(route) = route else {
             let _ = stream.write_all(
@@ -182,17 +194,49 @@ pub(in crate::updater) mod http_fixture {
             );
             return;
         };
-        let announced = route.announce.unwrap_or(route.body.len());
-        let header = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {announced}\r\nConnection: close\r\n\r\n"
-        );
-        let body = match route.cut_at {
-            Some(limit) => &route.body[..limit.min(route.body.len())],
-            None => &route.body[..],
+        let first = range_start(&text)
+            .filter(|first| route.ranges && *first < route.body.len())
+            .unwrap_or(0);
+        let whole = route.body.len();
+        let header = if first > 0 {
+            format!(
+                "HTTP/1.1 206 Partial Content\r\nContent-Type: application/octet-stream\r\nContent-Range: bytes {first}-{}/{whole}\r\nContent-Length: {}\r\nETag: \"fixture\"\r\nConnection: close\r\n\r\n",
+                whole - 1,
+                whole - first
+            )
+        } else {
+            let announced = route.announce.unwrap_or(whole);
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {announced}\r\nETag: \"fixture\"\r\nConnection: close\r\n\r\n"
+            )
+        };
+        let rest = &route.body[first..];
+        let cut = route
+            .cut_at
+            .filter(|_| route.cut_requests.is_none_or(|requests| nth <= requests));
+        let body = match cut {
+            Some(limit) => &rest[..limit.min(rest.len())],
+            None => rest,
         };
         let _ = stream.write_all(header.as_bytes());
         let _ = stream.write_all(body);
         let _ = stream.flush();
+    }
+
+    /// The first byte of a `Range: bytes=<first>-` header in `head`.
+    fn range_start(head: &str) -> Option<usize> {
+        head.lines().find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            if !name.trim().eq_ignore_ascii_case("range") {
+                return None;
+            }
+            value
+                .trim()
+                .strip_prefix("bytes=")?
+                .strip_suffix('-')?
+                .parse()
+                .ok()
+        })
     }
 }
 
@@ -317,9 +361,10 @@ fn lokal_task_copy_bounded_enforces_the_announced_signed_and_free_space_bound() 
 }
 
 /// lok-4b: a feed that ends its body short of the announced length fails the
-/// payload download and the file download; neither leaves a partial file
-/// (`.download` in the app data, `.part` beside the destination). The
-/// control cases still succeed.
+/// payload download and the file download once its resume attempts bring no
+/// new byte (`http_resume`); neither leaves a partial file (`.download` in
+/// the app data, `.part` beside the destination). The control cases still
+/// succeed.
 #[test]
 fn lokal_task_http_downloads_that_end_short_leave_no_partial_file() {
     let app = AppData::new();
@@ -344,8 +389,8 @@ fn lokal_task_http_downloads_that_end_short_leave_no_partial_file() {
             name,
             Route {
                 body: announced.bytes.clone(),
-                announce: None,
                 cut_at: Some(announced.bytes.len() / 2),
+                ..Route::plain(Vec::new())
             },
         );
     }
@@ -363,9 +408,8 @@ fn lokal_task_http_downloads_that_end_short_leave_no_partial_file() {
     server.serve(
         "update.apk",
         Route {
-            body: vec![7; 100],
-            announce: None,
             cut_at: Some(50),
+            ..Route::plain(vec![7; 100])
         },
     );
     let cancel = AtomicBool::new(false);

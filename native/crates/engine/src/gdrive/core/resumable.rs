@@ -9,6 +9,10 @@ use std::time::Duration;
 pub(super) const CHUNK_SIZE: usize = 8 * 1024 * 1024;
 const MAX_RETRIES: usize = 6;
 const MAX_NO_PROGRESS: usize = 6;
+/// Whole-request limit of the small requests around an upload: the session
+/// start, the status query, a server-side copy and the multipart create of
+/// a file up to 5 MB. Chunks have none (`resumable_session.rs`,
+/// `http::upload_agent`).
 pub(super) const REQUEST_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 /// First wait after a failed chunk request, then doubling: the former
 /// schedule (250 ms << failures, from 500 ms up to 8 s), now with jitter.

@@ -37,21 +37,23 @@ impl Session {
         Ok(())
     }
 
+    /// A chunk on a connection of its own with limits on connecting and on
+    /// each read or write, none on the whole request (`http::upload_agent`);
+    /// a broken chunk continues from the confirmed offset (`resumable.rs`).
     pub(super) fn content_request(&self, bearer: &str) -> ureq::Request {
-        self.request(bearer)
+        super::http::upload_agent()
+            .put(&self.url)
+            .set("Authorization", bearer)
     }
 
+    /// The status query: an empty request with a small answer.
     pub(super) fn status_request(&self, bearer: &str, total: u64) -> ureq::Request {
-        self.request(bearer)
-            .set("Content-Length", "0")
-            .set("Content-Range", &format!("bytes */{total}"))
-    }
-
-    fn request(&self, bearer: &str) -> ureq::Request {
         self.agent
             .put(&self.url)
             .timeout(REQUEST_TIMEOUT)
             .set("Authorization", bearer)
+            .set("Content-Length", "0")
+            .set("Content-Range", &format!("bytes */{total}"))
     }
 }
 

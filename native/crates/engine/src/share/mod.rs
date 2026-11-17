@@ -21,6 +21,8 @@ mod backend_capabilities;
 mod blocking;
 #[path = "core/capacity.rs"]
 mod capacity;
+#[path = "core/commit_wait.rs"]
+mod commit_wait;
 #[path = "core/configuration_runtime.rs"]
 mod configuration_runtime;
 #[path = "core/connection_events.rs"]

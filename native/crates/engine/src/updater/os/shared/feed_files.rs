@@ -67,6 +67,10 @@ pub fn read_feed_sha256(feed: &str, name: &str) -> Result<String, String> {
 
 /// Streams `name` to `dest` (through `dest` + `.part`), reporting
 /// `(done, total)` bytes. A cancel or error removes the partial file.
+///
+/// Over HTTP without a limit on the whole transfer (user rule 2026-11-17):
+/// `http_resume` limits the connect and each read and continues a broken
+/// or stalled transfer with a range request from the bytes written.
 pub fn download_feed_file(
     feed: &str,
     name: &str,
@@ -74,7 +78,10 @@ pub fn download_feed_file(
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(u64, Option<u64>),
 ) -> Result<(), String> {
-    let (mut reader, total) = open_feed_file(feed, name)?;
+    let source = match classify_feed(feed) {
+        Feed::Local(dir) => FileSource::Local(open_local(&dir.join(name))?),
+        Feed::Http(base) => FileSource::Http(format!("{base}/{name}")),
+    };
     let partial = dest.with_file_name(format!(
         "{}.part",
         dest.file_name()
@@ -84,18 +91,10 @@ pub fn download_feed_file(
     let result = (|| {
         let mut file = std::fs::File::create(&partial)
             .map_err(|error| format!("Download-Datei {}: {error}", partial.display()))?;
-        progress(0, total);
-        // r-lokal-4: the announced length, else the free space minus the
-        // app-data reserve, bounds the download.
         let folder = partial.parent().unwrap_or_else(|| Path::new("."));
-        let bound = super::download_bound::DownloadBound::new(total, folder);
-        super::download_bound::copy_bounded(
-            &mut reader,
-            &mut file,
-            bound,
-            &mut |done| progress(done, total),
-            &|| cancel.load(Ordering::Relaxed),
-        )
+        copy_source(source, folder, &mut file, progress, &|| {
+            cancel.load(Ordering::Relaxed)
+        })
         .map_err(|error| match error.kind() {
             std::io::ErrorKind::Interrupted => "Download abgebrochen".to_string(),
             std::io::ErrorKind::UnexpectedEof => format!("Download {name} unvollständig: {error}"),
@@ -113,6 +112,52 @@ pub fn download_feed_file(
     result
 }
 
+/// Where a feed file comes from.
+enum FileSource {
+    /// The open file of a folder feed and its length.
+    Local((std::fs::File, Option<u64>)),
+    /// The address of the file in an HTTP feed.
+    Http(String),
+}
+
+/// Copies `source` into `file`. r-lokal-4: the announced length, else the
+/// free space of `folder` minus the app-data reserve, bounds the download.
+fn copy_source(
+    source: FileSource,
+    folder: &Path,
+    file: &mut std::fs::File,
+    progress: &mut dyn FnMut(u64, Option<u64>),
+    cancelled: &dyn Fn() -> bool,
+) -> std::io::Result<u64> {
+    match source {
+        FileSource::Local((mut reader, total)) => {
+            progress(0, total);
+            let bound = super::download_bound::DownloadBound::new(total, folder);
+            super::download_bound::copy_bounded(
+                &mut reader,
+                file,
+                bound,
+                &mut |done| progress(done, total),
+                cancelled,
+            )
+        }
+        FileSource::Http(url) => {
+            let source = crate::http_resume::Source {
+                url: &url,
+                user_agent: USER_AGENT,
+                https_only: false,
+                redirects: 5,
+                final_url: &|_| true,
+            };
+            let bound = crate::http_resume::Bound {
+                exact: None,
+                ceiling: super::download_bound::free_space_ceiling(folder),
+            };
+            crate::http_resume::fetch(&source, bound, file, progress, cancelled)
+        }
+    }
+}
+
 /// Lowercase hex SHA-256 of a local file.
 pub fn file_sha256(path: &Path) -> Result<String, String> {
     sha256_file(path)
@@ -123,10 +168,7 @@ type FeedReader = Box<dyn Read + Send + Sync>;
 fn open_feed_file(feed: &str, name: &str) -> Result<(FeedReader, Option<u64>), String> {
     match classify_feed(feed) {
         Feed::Local(dir) => {
-            let path = dir.join(name);
-            let file = std::fs::File::open(&path)
-                .map_err(|error| format!("Update-Feed {}: {error}", path.display()))?;
-            let size = file.metadata().map(|metadata| metadata.len()).ok();
+            let (file, size) = open_local(&dir.join(name))?;
             Ok((Box::new(file), size))
         }
         Feed::Http(base) => {
@@ -142,3 +184,15 @@ fn open_feed_file(feed: &str, name: &str) -> Result<(FeedReader, Option<u64>), S
         }
     }
 }
+
+/// A file of a folder feed and its length.
+fn open_local(path: &Path) -> Result<(std::fs::File, Option<u64>), String> {
+    let file = std::fs::File::open(path)
+        .map_err(|error| format!("Update-Feed {}: {error}", path.display()))?;
+    let size = file.metadata().map(|metadata| metadata.len()).ok();
+    Ok((file, size))
+}
+
+#[cfg(test)]
+#[path = "feed_resume_tests.rs"]
+mod resume_tests;
