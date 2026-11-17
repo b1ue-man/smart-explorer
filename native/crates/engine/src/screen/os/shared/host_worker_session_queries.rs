@@ -24,6 +24,8 @@ use super::{session_mark, session_target, PARENT_ENV, SCREEN_HOST_WORKER_SWITCH}
 use crate::screen::core::app_icon::{AuthorizedIconEntry, IconRef, IconReply};
 use crate::screen::core::host_backend::ScreenHostBackend;
 use crate::screen::core::negotiate::{CodecKind, CodecOffer};
+use crate::screen::core::pixel_convert::FrameSize;
+use crate::screen::core::virtual_display_host::DisplayFacts;
 use crate::screen::core::window_list::{AppEntry, WindowEntry, WindowList};
 use crate::screen::core::wire::{from_json, to_json, MAX_WINDOWS_BYTES};
 #[cfg(target_os = "linux")]
@@ -61,6 +63,15 @@ pub enum SessionQuery {
         #[serde(default)]
         app: Option<AppEntry>,
     },
+    /// The facts of the session's X server, after its display was set to
+    /// `size` when one is named, or its monitor's own mode was given back
+    /// with `restore` (virtual display, plan 2026-11-17 P5).
+    Display {
+        #[serde(default)]
+        size: Option<FrameSize>,
+        #[serde(default)]
+        restore: bool,
+    },
 }
 
 /// The answer of the session's account.
@@ -70,6 +81,12 @@ pub enum SessionAnswer {
     Windows(WindowList),
     Encoders(Vec<CodecOffer>),
     Icon(Option<IconReply>),
+    /// The X server's facts and the display size after a change.
+    Display {
+        facts: DisplayFacts,
+        #[serde(default)]
+        size: Option<FrameSize>,
+    },
     Failed(String),
 }
 
@@ -277,6 +294,12 @@ pub fn answer(
             .icon(AuthorizedIconEntry::App(&app))
             .map_or_else(failed, SessionAnswer::Icon),
         SessionQuery::Icon { .. } => SessionAnswer::Icon(None),
+        SessionQuery::Display { size, restore } => {
+            crate::screen::os::virtual_display::answer_query(size, restore).map_or_else(
+                failed,
+                |(facts, size)| SessionAnswer::Display { facts, size },
+            )
+        }
     }
 }
 

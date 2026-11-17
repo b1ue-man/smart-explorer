@@ -99,10 +99,19 @@ pub async fn advertised_sources(
 ) -> ashpd::desktop::screencast::SelectSourcesOptions {
     use ashpd::desktop::screencast::{CursorMode, SelectSourcesOptions, SourceType};
     let wanted = SourceType::Monitor | SourceType::Window;
-    let types = match screencast.available_source_types().await {
-        Ok(available) if !(available & wanted).is_empty() => available & wanted,
+    let available = screencast.available_source_types().await.ok();
+    let mut types = match available {
+        Some(available) if !(available & wanted).is_empty() => available & wanted,
         _ => wanted,
     };
+    // Plan 2026-11-17 P5: the compositor's own display in the viewer's size
+    // as well, when the session asked for it and the portal names it; the
+    // preferred size goes into the stream's format (`spa_pod`).
+    let virtual_display = crate::screen::os::virtual_display::portal_request().is_some();
+    if virtual_display && available.is_some_and(|available| available.contains(SourceType::Virtual))
+    {
+        types |= SourceType::Virtual;
+    }
     let modes = screencast.available_cursor_modes().await.ok();
     let offers = |mode: CursorMode| modes.as_ref().is_some_and(|modes| modes.contains(mode));
     let (cursor, mode) =

@@ -13,6 +13,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use super::input_model::InputCapabilities;
 use super::negotiate::{CodecOffer, MAX_CODEC_OFFERS};
 use super::pixel_convert::FrameSize;
+use super::virtual_display::{VirtualDisplayReport, VirtualDisplayWish};
 use super::window_list::{MonitorInfo, SourceId};
 use super::wire::{
     from_json, invalid, read_frame, recv_json, send_json, supports_version, APPROVAL_PENDING,
@@ -116,6 +117,11 @@ pub struct ScreenServerHello {
     /// `SET_DECODERS` and negotiates the pairing again in the session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub set_decoders: Option<u16>,
+    /// Virtual display (plan 2026-11-17 P5, `virtual_display.rs`): `Some(1)`
+    /// when this host reads the viewer's `virtual_display` and answers it in
+    /// `HELLO_OK`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub virtual_display: Option<u16>,
 }
 
 #[path = "wire_hello_codecs.rs"]
@@ -145,6 +151,7 @@ impl ScreenServerHello {
             codecs_v2: Some(CODECS_V2),
             rate_ceiling: Some(RATE_CEILING_V1),
             set_decoders: Some(super::set_decoders::SET_DECODERS_V1),
+            virtual_display: Some(super::virtual_display::VIRTUAL_DISPLAY_V1),
         }
     }
 
@@ -208,6 +215,15 @@ pub struct ScreenClientHello {
     /// continues when the negotiated decoder is one of them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gop_continue_decoders: Option<Vec<CodecOffer>>,
+    /// The viewer's wish for the host's display (P5), only to a host that
+    /// announced `virtual_display`; an older host ignores it, a viewer
+    /// without it keeps the old behaviour.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub virtual_display: Option<VirtualDisplayWish>,
+    /// The viewer's fixed display size („Auflösung“); absent: the display
+    /// follows `display_size` and every `SET_MODE` size.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub virtual_display_size: Option<FrameSize>,
 }
 
 impl ScreenClientHello {
@@ -243,6 +259,12 @@ impl ScreenClientHello {
             if !side.contains(&size.width) || !side.contains(&size.height) {
                 return Err(invalid("screen display size is outside 1..=16384"));
             }
+        }
+        if self
+            .virtual_display_size
+            .is_some_and(|size| !super::virtual_display::side_valid(size))
+        {
+            return Err(invalid("virtual display size is outside 1..=16384"));
         }
         if let Some(caps) = self.frame_capabilities {
             caps.validate()?;
@@ -318,6 +340,10 @@ pub struct ScreenHelloOk {
     /// HEVC and AV1 encoders, only for a viewer that sent `decoders_v2`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub encoders_v2: Option<Vec<CodecOffer>>,
+    /// What the host did with the viewer's `virtual_display` (P5); a probe
+    /// names what a viewer that asks would get.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub virtual_display: Option<VirtualDisplayReport>,
 }
 
 impl ScreenHelloOk {
@@ -329,6 +355,17 @@ impl ScreenHelloOk {
             return Err(invalid("screen hello lists more than 32 encoders"));
         }
         codecs::validate_v2(self.encoders_v2.as_deref())
+    }
+
+    /// The answer to the viewer's `virtual_display` (P5); an unsupported one
+    /// is also a limit (`virtual_display_unsupported:<reason>`).
+    pub fn set_virtual_display(&mut self, report: Option<VirtualDisplayReport>) {
+        if let Some(limit) = report.as_ref().and_then(VirtualDisplayReport::limit) {
+            if !self.limits.contains(&limit) {
+                self.limits.push(limit);
+            }
+        }
+        self.virtual_display = report;
     }
 }
 
@@ -413,4 +450,4 @@ pub async fn recv_hello_reply<R: AsyncRead + Unpin>(reader: &mut R) -> io::Resul
 
 #[cfg(test)]
 #[path = "wire_hello_tests.rs"]
-mod tests;
+pub(super) mod tests;

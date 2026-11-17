@@ -280,6 +280,9 @@ pub mod timer_resolution;
 #[cfg(not(windows))]
 #[path = "shared/timer_resolution_other.rs"]
 pub mod timer_resolution;
+// P5 (plan 2026-11-17): the virtual display in the viewer's resolution.
+#[path = "virtual_display_os.rs"]
+pub mod virtual_display;
 #[cfg(target_os = "linux")]
 #[path = "linux_os/wayland_toplevels.rs"]
 mod wayland_toplevels;

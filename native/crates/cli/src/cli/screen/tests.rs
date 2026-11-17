@@ -58,6 +58,7 @@ fn probe() -> ScreenProbeReport {
         input: InputCapabilities::default(),
         codecs: vec![CodecOffer::tiles()],
         limits: vec!["test_picture_only".into()],
+        virtual_display: None,
     }
 }
 

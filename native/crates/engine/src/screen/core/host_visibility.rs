@@ -131,6 +131,11 @@ impl Session<'_> {
             StreamMode::Preview => StreamKind::Preview,
             StreamMode::Full => StreamKind::Video,
         };
+        // P5 (plan 2026-11-17): the display follows the full view's window
+        // size when this session claimed it; at most once a second.
+        if set.mode == StreamMode::Full {
+            crate::screen::core::virtual_display_host::resize(&self.handle.id(), set.size);
+        }
         self.pipeline
             .set_mode(kind, set.size, set.fps, set.sharpness, set.lossless);
         let shown = match (kind, self.mode) {

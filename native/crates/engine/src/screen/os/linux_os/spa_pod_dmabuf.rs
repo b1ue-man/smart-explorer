@@ -155,7 +155,7 @@ pub fn enum_format_dmabuf_pod(offer: &DmaBufOffer) -> Option<Vec<u8>> {
         CHOICE_RANGE,
         TYPE_RECTANGLE,
         8,
-        &[1920, 1080, 1, 1, 16384, 16384],
+        &super::size_range(),
     );
     property(&mut body, KEY_VIDEO_FRAMERATE);
     choice(

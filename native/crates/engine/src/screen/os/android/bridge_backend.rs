@@ -86,6 +86,7 @@ impl ScreenHostBackend for BridgeBackend {
             width,
             height,
             primary: true,
+            is_virtual: false,
         }]
     }
 

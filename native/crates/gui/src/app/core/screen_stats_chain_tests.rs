@@ -54,6 +54,7 @@ fn bildkette_task_stats_viewer_lines_name_every_station() {
         fps_limit: Some("encode_time".into()),
         rate_limit: Some("link".into()),
         rate_ceiling_kbps: None,
+        virtual_display: None,
     };
     let station = Some(StationUs {
         p50_us: 1_500,

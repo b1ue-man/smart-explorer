@@ -1165,11 +1165,35 @@ BILDKETTE_TESTS = {
 }
 
 
+# The tests of the virtual display in the viewer's resolution (plan 2026-11-17 P5, TODO
+# VIRTUELLER-BILDSCHIRM), by the operating system whose "Tests of every crate" run must report each of
+# them as passed exactly once (`run(expect=...)`, as BATCH_TESTS). None needs an X server.
+# docs/tests/register.tsv names the requirement each protects.
+VIRTUAL_DISPLAY_TESTS = {
+    "both": [
+        "virtual_display_task_fit_bochs_16mib",
+        "virtual_display_task_fit_alignment_and_cap",
+        "virtual_display_task_cvt_rb_1920x1080",
+        "virtual_display_task_owner_rules",
+        "virtual_display_task_needs_virtual_facts",
+        "virtual_display_task_xorg_conf_golden",
+        "virtual_display_task_hello_compat",
+        "virtual_display_task_elevated_order",
+        "virtual_display_task_cli_options",
+    ],
+    "linux": [
+        "virtual_display_task_linux_sysfs_connectors",
+    ],
+    "windows": [],
+}
+
+
 def batch_expected():
     system = "windows" if WINDOWS else "linux"
     return (BATCH_TESTS["both"] + BATCH_TESTS[system] + VERBINDUNGEN_TESTS["both"]
             + VERBINDUNGEN_TESTS[system] + PLUGIN_TESTS["both"] + PLUGIN_TESTS[system]
-            + BILDKETTE_TESTS["both"] + BILDKETTE_TESTS[system])
+            + BILDKETTE_TESTS["both"] + BILDKETTE_TESTS[system]
+            + VIRTUAL_DISPLAY_TESTS["both"] + VIRTUAL_DISPLAY_TESTS[system])
 
 
 # Loads the netem qdisc module. The Azure kernels of the hosted runners ship sch_netem in the package

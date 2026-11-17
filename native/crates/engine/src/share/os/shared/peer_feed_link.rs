@@ -70,6 +70,7 @@ fn viewer_request(mode: SessionMode) -> ViewerRequest {
         frame_capabilities: None,
         gop_continue: false,
         gop_continue_decoders: Vec::new(),
+        virtual_display: None,
     }
 }
 

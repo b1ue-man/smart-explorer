@@ -1,7 +1,8 @@
 //! Text and JSON of `se screen` (SCR-M2). Text lines are tab-separated
 //! `key<TAB>value` like the other `se` commands; JSON follows the contracts
 //! of the strand plan: `probe` `{"device","supported","platform","view",
-//! "control","monitors","input","codecs","limits"}`, `bench` `{"codec",
+//! "control","monitors","input","codecs","limits"}` (since plan 2026-11-17
+//! P5 also `virtual_display` from a host that names it), `bench` `{"codec",
 //! "encoder","decoder","path","frames_sent","frames_shown","fps_mean",
 //! "fps_min","latency_ms":{"p50","p95","max"},"bitrate_kbps":{"mean","max"},
 //! "keyframes","recoveries","corrupt_frames","static_psnr_db"}` (`null` =
@@ -69,6 +70,13 @@ pub(super) fn probe_text(report: &ScreenProbeReport) -> String {
         format!("codecs\t{}", listed(&codecs)),
         format!("monitors\t{}", report.monitors.len()),
         format!("limits\t{}", listed(&report.limits)),
+        format!(
+            "virtual_display\t{}",
+            report
+                .virtual_display
+                .as_ref()
+                .map_or("-".to_string(), |display| display.chain_key())
+        ),
     ])
 }
 

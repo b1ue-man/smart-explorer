@@ -256,6 +256,13 @@ impl ViewState {
                     session.send(ViewerFrame::SetMode(mode));
                 }
             }
+            // P5 (plan 2026-11-17): the host takes „Monitor“ and
+            // „Auflösung“ with the hello, so the session opens again.
+            ToolbarAction::VirtualDisplay(choice) => {
+                if super::screen_toolbar_ui::apply_virtual_display(*choice) {
+                    self.reconnect(common, display);
+                }
+            }
             // „Höchste Datenrate“ at once; the relay drops it for a host
             // without `rate_ceiling_v1` and the statistics say so (BK6).
             ToolbarAction::MaxRate(rate) => {

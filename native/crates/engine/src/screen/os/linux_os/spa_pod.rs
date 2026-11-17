@@ -105,9 +105,20 @@ fn property(out: &mut Vec<u8>, key: u32) {
     word(out, 0);
 }
 
+/// The size range of every `EnumFormat`: any size from 1 × 1 to 16384 ×
+/// 16384, by default 1920 × 1080, or the size of se's own display when the
+/// session asked for one (plan 2026-11-17 P5: the compositor sizes its
+/// virtual monitor by the negotiated format).
+fn size_range() -> [u32; 6] {
+    let size = crate::screen::os::virtual_display::portal_request()
+        .filter(|size| (1..=16384).contains(&size.width) && (1..=16384).contains(&size.height))
+        .unwrap_or(FrameSize::new(1920, 1080));
+    [size.width, size.height, 1, 1, 16384, 16384]
+}
+
 /// The `EnumFormat` pod that offers raw video as shared memory: BGRx first,
 /// then RGBx, BGRA and RGBA; any size from 1 × 1 to 16384 × 16384 (default
-/// 1920 × 1080); any frame rate from 0 to 1000 (default 0/1, variable).
+/// `size_range`); any frame rate from 0 to 1000 (default 0/1, variable).
 /// There is no `VIDEO_modifier`: this is the shared memory offer; the
 /// DMA-BUF offers precede it in `dmabuf::offer_pods` (BK8b).
 pub fn enum_format_pod() -> Vec<u8> {
@@ -131,13 +142,7 @@ pub fn enum_format_pod() -> Vec<u8> {
     .map(VideoFormat::id);
     choice(&mut body, CHOICE_ENUM, TYPE_ID, 4, &formats);
     property(&mut body, KEY_VIDEO_SIZE);
-    choice(
-        &mut body,
-        CHOICE_RANGE,
-        TYPE_RECTANGLE,
-        8,
-        &[1920, 1080, 1, 1, 16384, 16384],
-    );
+    choice(&mut body, CHOICE_RANGE, TYPE_RECTANGLE, 8, &size_range());
     property(&mut body, KEY_VIDEO_FRAMERATE);
     choice(
         &mut body,

@@ -12,6 +12,10 @@
 //! - `decoder`: `auto`, `hardware` or `software` (absent: automatic). The
 //!   decoders run in the app (MediaCodec), so the app also chooses its
 //!   decoder stage itself; the core only narrows the offers.
+//! - `virtualDisplay`: `auto`, `off` or `request` and the fixed size
+//!   `virtualWidth` × `virtualHeight` (plan 2026-11-17 P5, „Monitor“ and
+//!   „Auflösung“ of the desktop viewer); absent: no wish, the host keeps
+//!   its display as before.
 use serde_json::Value;
 
 use super::super::args::{invalid, opt_bool, opt_str};
@@ -20,6 +24,7 @@ use crate::mobile::ApiError;
 use crate::screen::core::negotiate::{
     CodecKind, CodecOffer, CodecSetting, DecoderPreference, H264Profile,
 };
+use crate::screen::core::virtual_display::{VirtualDisplayChoice, VirtualDisplayWish};
 use crate::screen::core::wire_hello::SessionMode;
 
 /// The profile of an HEVC or AV1 entry: 4:2:0 (`None`) or 4:4:4.
@@ -107,4 +112,22 @@ pub(super) fn codec_args(
         })
         .transpose()?;
     Ok((codec, decoder))
+}
+
+/// `virtualDisplay` and `virtualWidth` × `virtualHeight` of
+/// `screen.viewOpen` (plan 2026-11-17 P5); `None` without `virtualDisplay`.
+pub(super) fn virtual_display_arg(args: &Value) -> Result<Option<VirtualDisplayChoice>, ApiError> {
+    let Some(text) = opt_str(args, "virtualDisplay") else {
+        return Ok(None);
+    };
+    let wish = VirtualDisplayWish::parse(text)
+        .ok_or_else(|| invalid("„virtualDisplay“ ist auto, off oder request."))?;
+    let choice = VirtualDisplayChoice {
+        wish,
+        size: size_args(args, "virtualWidth", "virtualHeight"),
+    };
+    choice
+        .validate()
+        .map_err(|error| invalid(error.to_string()))?;
+    Ok(Some(choice))
 }

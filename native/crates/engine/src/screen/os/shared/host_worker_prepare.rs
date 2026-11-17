@@ -41,10 +41,13 @@ impl Worker {
                 control,
                 working,
                 family,
+                virtual_display,
             } => {
                 if self.capture_session.is_some() {
                     return Err(io::Error::other("worker source was already prepared"));
                 }
+                // P5: the portal offers its virtual source in this size.
+                crate::screen::os::virtual_display::set_portal_request(virtual_display);
                 self.remote.bind_session(&session)?;
                 let admission = Arc::new(SessionAdmission::from_verified_parent_unbound(
                     &session,

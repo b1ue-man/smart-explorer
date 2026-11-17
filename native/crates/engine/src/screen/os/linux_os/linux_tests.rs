@@ -71,6 +71,7 @@ fn screen_task_wayland_monitors_single_portal_entry() {
             width: 0,
             height: 0,
             primary: true,
+            is_virtual: false,
         }]
     );
     for other in [

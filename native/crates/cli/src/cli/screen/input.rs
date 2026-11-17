@@ -254,6 +254,7 @@ pub(crate) fn deliver(
         // Input only: no picture is decoded.
         gop_continue: false,
         gop_continue_decoders: Vec::new(),
+        virtual_display: None,
     };
     let mut stream = screen_stream(target, request)?;
     let control = stream.control();

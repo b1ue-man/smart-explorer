@@ -60,6 +60,9 @@ pub struct ViewerRequest {
     /// The decoders that keep their references over a continuation
     /// (`gop_continue_decoders`, B-36 per codec); empty names none.
     pub gop_continue_decoders: Vec<CodecOffer>,
+    /// The viewer's choice for the host's display (plan 2026-11-17 P5);
+    /// `None` names none, as before.
+    pub virtual_display: Option<super::virtual_display::VirtualDisplayChoice>,
 }
 
 /// Why a session did not start or ended.

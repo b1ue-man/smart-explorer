@@ -86,6 +86,8 @@ fn screen_task_viewer_launch_args() {
             max_rate: None,
             codec: None,
             decoder: None,
+            virtual_display: None,
+            display_size: None,
             json: true,
         }
     );
@@ -216,4 +218,49 @@ fn bildkette_task_codec_cli_codec_and_decoder_options() {
     );
     assert!(Wrapper::try_parse_from(["screen", "view", "Laptop", "--codec", "vp9"]).is_err());
     assert!(Wrapper::try_parse_from(["screen", "view", "Laptop", "--decoder", "gpu"]).is_err());
+}
+
+/// Plan 2026-11-17 P5: `--virtual-display auto|off|request` and
+/// `--display-size WxH|window` („Monitor“ and „Auflösung“ of the viewer);
+/// anything else is refused before the window opens.
+#[test]
+fn virtual_display_task_cli_options() {
+    use super::{parse_display_size, parse_virtual_display, DisplaySize};
+    use crate::screen::core::pixel_convert::FrameSize;
+    use crate::screen::core::virtual_display::VirtualDisplayWish;
+    let view = Wrapper::try_parse_from([
+        "screen",
+        "view",
+        "Laptop",
+        "--virtual-display",
+        "request",
+        "--display-size",
+        "2560x1440",
+    ])
+    .unwrap();
+    let ScreenCommand::View(args) = view.command else {
+        panic!("not the view command");
+    };
+    assert_eq!(args.virtual_display, Some(VirtualDisplayWish::Request));
+    assert_eq!(
+        args.display_size,
+        Some(DisplaySize::Fixed(FrameSize::new(2560, 1440)))
+    );
+    assert_eq!(parse_virtual_display("auto"), Ok(VirtualDisplayWish::Auto));
+    assert_eq!(parse_virtual_display("OFF"), Ok(VirtualDisplayWish::Off));
+    assert_eq!(parse_display_size("window"), Ok(DisplaySize::Window));
+    assert_eq!(
+        parse_display_size("1920×1080"),
+        Ok(DisplaySize::Fixed(FrameSize::new(1920, 1080)))
+    );
+    for wrong in ["on", "virtual", ""] {
+        assert!(parse_virtual_display(wrong).is_err(), "{wrong}");
+    }
+    for wrong in ["0x1080", "16385x100", "big", "1920"] {
+        assert!(parse_display_size(wrong).is_err(), "{wrong}");
+    }
+    let refused = ["screen", "view", "Laptop", "--virtual-display", "mirror"];
+    assert!(Wrapper::try_parse_from(refused).is_err());
+    let refused = ["screen", "view", "Laptop", "--display-size", "huge"];
+    assert!(Wrapper::try_parse_from(refused).is_err());
 }

@@ -24,6 +24,9 @@ pub struct HostMetadata {
     pub input: InputCapabilities,
     pub monitors: Vec<MonitorInfo>,
     pub limits: Vec<String>,
+    /// A probe only: what a viewer that asks for se's own display would get
+    /// (plan 2026-11-17 P5); no other session asks the display here.
+    pub virtual_display: Option<super::virtual_display::VirtualDisplayReport>,
 }
 
 impl HostMetadata {
@@ -32,14 +35,19 @@ impl HostMetadata {
         principal: &ProvenPrincipal,
         mode: SessionMode,
     ) -> Job<Self> {
-        jobs::spawn_start(context, principal, mode.capabilities(), |context, _| {
-            let backend = context.backend.as_ref();
+        // A probe names what se's own display would do (plan 2026-11-17 P5).
+        let probe = mode == SessionMode::Probe;
+        jobs::spawn_start(context, principal, mode.capabilities(), move |host, _| {
+            let backend = host.backend.as_ref();
             Ok(Self {
                 platform: backend.platform(),
                 encoders: backend.encoders(),
                 input: backend.input(),
                 monitors: backend.monitors(),
                 limits: backend.limits(),
+                virtual_display: probe
+                    .then(|| backend.virtual_display())
+                    .and_then(super::virtual_display_host::capability),
             })
         })
     }

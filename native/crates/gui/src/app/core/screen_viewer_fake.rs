@@ -60,6 +60,7 @@ pub(super) fn hello(view: CapabilityDecision) -> ScreenHelloOk {
         family_version: None,
         icon_version: None,
         encoders_v2: None,
+        virtual_display: None,
         frame_contract: None,
         authorization: ScreenAuthorization {
             view,

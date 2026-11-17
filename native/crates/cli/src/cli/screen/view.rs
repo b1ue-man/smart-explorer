@@ -1,5 +1,6 @@
 //! `se screen view DEVICE [--source QUELLE] [--control] [--fullscreen]
-//! [--max-rate RATE] [--codec CODEC] [--decoder DECODER] [--json]`
+//! [--max-rate RATE] [--codec CODEC] [--decoder DECODER]
+//! [--virtual-display auto|off|request] [--display-size WxH|window] [--json]`
 //! and `se screen grid [--room RAUM] [--json]` (SCR-M7): open the desktop
 //! viewer window of the GUI program (`--screen-view <ziel-json>`,
 //! `--screen-grid [--room <id>]`, V5) as a process of its own and return.
@@ -13,6 +14,8 @@ use serde_json::{json, Value};
 use super::DeviceChoice;
 use crate::app::start_request::StartRequest;
 use crate::screen::core::negotiate::{CodecSetting, DecoderPreference};
+use crate::screen::core::pixel_convert::FrameSize;
+use crate::screen::core::virtual_display::{parse_size, VirtualDisplayWish};
 use crate::screen::core::window_list::SourceId;
 
 #[derive(Args, Debug, PartialEq, Eq)]
@@ -43,8 +46,40 @@ pub(super) struct ViewArgs {
     /// hardware or software
     #[arg(long, value_name = "DECODER", value_parser = parse_decoder)]
     decoder: Option<DecoderPreference>,
+    /// „Monitor“ of the desktop viewer, stored before it opens: auto (se's
+    /// own display only when the device has no monitor), off (the physical
+    /// monitor as it is) or request (se's own display also at a monitor)
+    #[arg(long, value_name = "WAHL", value_parser = parse_virtual_display)]
+    virtual_display: Option<VirtualDisplayWish>,
+    /// „Auflösung“ of se's own display, stored before the viewer opens:
+    /// WxH (e.g. 2560x1440) or window (follow the viewer's window)
+    #[arg(long, value_name = "GRÖSSE", value_parser = parse_display_size)]
+    display_size: Option<DisplaySize>,
     #[arg(long, help = "Print machine-readable JSON")]
     json: bool,
+}
+
+/// `--virtual-display auto|off|request` (plan 2026-11-17 P5).
+pub(super) fn parse_virtual_display(text: &str) -> Result<VirtualDisplayWish, String> {
+    VirtualDisplayWish::parse(text)
+        .ok_or_else(|| format!("invalid virtual display: {text} (auto, off or request)"))
+}
+
+/// `--display-size`: the viewer's window or a fixed size.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum DisplaySize {
+    Window,
+    Fixed(FrameSize),
+}
+
+/// `window`, or `WxH` with sides of 1 to 16384.
+pub(super) fn parse_display_size(text: &str) -> Result<DisplaySize, String> {
+    if text.trim().eq_ignore_ascii_case("window") {
+        return Ok(DisplaySize::Window);
+    }
+    parse_size(text)
+        .map(DisplaySize::Fixed)
+        .ok_or_else(|| format!("invalid display size: {text} (WxH such as 2560x1440, or window)"))
 }
 
 /// `--codec auto|h264|hevc|av1|lossless` (BK6).
@@ -194,6 +229,14 @@ pub(super) fn run_view(args: ViewArgs) -> Result<i32, String> {
     if args.codec.is_some() || args.decoder.is_some() {
         crate::app::screen_prefs::set_codec_choice(args.codec, args.decoder)
             .map_err(|error| format!("cannot store the codec choice: {error}"))?;
+    }
+    if args.virtual_display.is_some() || args.display_size.is_some() {
+        let size = args.display_size.map(|size| match size {
+            DisplaySize::Window => None,
+            DisplaySize::Fixed(size) => Some(size),
+        });
+        crate::app::screen_prefs::set_virtual_display_choice(args.virtual_display, size)
+            .map_err(|error| format!("cannot store the display choice: {error}"))?;
     }
     let target = target_json(
         &choice,

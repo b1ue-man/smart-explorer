@@ -12,6 +12,9 @@
 //! work the same way (`set_codec_choice`, `se screen view --codec
 //! --decoder`); „Codec: Verlustfrei“ replaces the switch „Verlustfrei“ with
 //! its meaning, and a stored `lossless` of an older viewer becomes it.
+//! „Monitor“ and „Auflösung“ (plan 2026-11-17 P5, `se screen view
+//! --virtual-display --display-size`) as well (`set_virtual_display_choice`);
+//! never chosen means „Automatisch“, following the window.
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
@@ -19,6 +22,8 @@ use std::sync::{Mutex, PoisonError};
 use serde::{Deserialize, Serialize};
 
 pub use crate::screen::core::negotiate::{CodecSetting, DecoderPreference};
+use crate::screen::core::pixel_convert::FrameSize;
+pub use crate::screen::core::virtual_display::{VirtualDisplayChoice, VirtualDisplayWish};
 
 const SCHEMA: u32 = 1;
 
@@ -58,6 +63,10 @@ pub struct ViewerPrefs {
     /// „Dekodierer“ (4.10, BK6); absent is „Automatisch“.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub decoder: Option<DecoderPreference>,
+    /// „Monitor“ and „Auflösung“ (P5); absent is „Automatisch“ following
+    /// the window.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub virtual_display: Option<VirtualDisplayChoice>,
 }
 
 fn schema() -> u32 {
@@ -75,6 +84,7 @@ impl Default for ViewerPrefs {
             max_rate_bps: None,
             codec: None,
             decoder: None,
+            virtual_display: None,
         }
     }
 }
@@ -140,6 +150,42 @@ pub fn set_codec_choice(
     prefs.save_to(&prefs_path())
 }
 
+/// „Monitor“ and „Auflösung“ of this process: unread (`None`) or the value.
+static VIRTUAL_DISPLAY: Mutex<Option<Option<VirtualDisplayChoice>>> = Mutex::new(None);
+
+/// The stored „Monitor“ and „Auflösung“; never chosen is „Automatisch“
+/// following the window (`VirtualDisplayChoice::default`).
+pub fn virtual_display_choice() -> VirtualDisplayChoice {
+    let mut known = VIRTUAL_DISPLAY
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    let stored =
+        *known.get_or_insert_with(|| ViewerPrefs::load_from(&prefs_path()).virtual_display);
+    stored.unwrap_or_default()
+}
+
+/// Stores „Monitor“ (`None` keeps it) and „Auflösung“ (`None` keeps it,
+/// `Some(None)` follows the window) at once.
+pub fn set_virtual_display_choice(
+    wish: Option<VirtualDisplayWish>,
+    size: Option<Option<FrameSize>>,
+) -> io::Result<()> {
+    let mut chosen = virtual_display_choice();
+    if let Some(wish) = wish {
+        chosen.wish = wish;
+    }
+    if let Some(size) = size {
+        chosen.size = size;
+    }
+    chosen.validate()?;
+    *VIRTUAL_DISPLAY
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner) = Some(Some(chosen));
+    let mut prefs = ViewerPrefs::load_from(&prefs_path());
+    prefs.virtual_display = Some(chosen);
+    prefs.save_to(&prefs_path())
+}
+
 impl ViewerPrefs {
     /// „Codec“; a file of a viewer before BK6 has only `lossless`.
     pub fn codec_setting(&self) -> CodecSetting {
@@ -176,6 +222,13 @@ impl ViewerPrefs {
         // Like the rate: the codec choice this process knows wins (BK6).
         if let Some(known) = *CODEC.lock().unwrap_or_else(PoisonError::into_inner) {
             stored.apply_codec(known);
+        }
+        // And „Monitor“ and „Auflösung“ (P5).
+        if let Some(known) = *VIRTUAL_DISPLAY
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+        {
+            stored.virtual_display = known;
         }
         stored.save_to(&prefs_path())
     }
