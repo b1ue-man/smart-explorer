@@ -46,7 +46,7 @@ fn bildkette_task_win_w4_scaled_gpu_input_stays_within_two_codec_input_claims() 
     );
     plan.bind_contract(Some(contract)).unwrap();
     HostOutputPlan::new(
-        HostContract::V2(contract),
+        HostContract::Versioned(contract),
         size,
         HostCodecPlan::MediaFoundation {
             output_buffer_bytes: size.bgra_len() as u64,
@@ -68,8 +68,11 @@ fn bildkette_task_win_w4_scaled_gpu_input_stays_within_two_codec_input_claims() 
             assert_eq!((staging_slice.bytes(), scaled_slice.bytes()), (yuv, yuv));
             assert_eq!(grant.live_bytes().unwrap(), 2 * yuv);
             let probe = grant.claim(CaptureOwner::CodecInput, yuv).unwrap();
-            let third = grant.claim(CaptureOwner::CodecInput, yuv).unwrap_err();
-            assert_eq!(third.kind(), io::ErrorKind::WouldBlock);
+            let third = grant.claim(CaptureOwner::CodecInput, yuv);
+            assert_eq!(
+                third.err().map(|error| error.kind()),
+                Some(io::ErrorKind::WouldBlock)
+            );
             drop(probe);
             Ok(())
         },

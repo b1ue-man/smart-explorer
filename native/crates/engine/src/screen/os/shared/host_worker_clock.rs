@@ -28,9 +28,10 @@ use std::thread::JoinHandle;
 mod capture;
 #[path = "host_worker_encode.rs"]
 mod encode;
+pub(in crate::screen::os) use encode::EncoderOpener;
 #[cfg(all(test, windows))]
 pub(in crate::screen::os) use encode::Encoding;
-pub(in crate::screen::os) use encode::{EncoderOpener, Registry};
+pub(super) use encode::Registry;
 
 /// Without an order and without open credit the capture stage rests
 /// (hidden viewer, long back pressure); the next order wakes it.
