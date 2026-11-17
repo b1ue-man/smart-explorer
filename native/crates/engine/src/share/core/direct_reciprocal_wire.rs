@@ -8,6 +8,7 @@ use super::direct_protocol::{validate_direct_lookup_id, DirectPeerIdentity};
 use super::direct_reciprocal::{DirectReciprocalError, DirectRelationMaterial};
 
 pub const DIRECT_RECIPROCAL_CAPABILITY: &str = "direct_reciprocal_v1";
+pub const CODE_RENEWAL_CAPABILITY: &str = "code_renewal_v1";
 pub const MAX_DIRECT_REPAIR_FRAME: usize = 8 * 1024;
 
 const MAGIC: &[u8; 4] = b"SEDR";

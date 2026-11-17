@@ -247,7 +247,15 @@ fn install(
     mut error: Option<String>,
 ) {
     let mut materials = Vec::new();
+    let mut legacy = Vec::new();
     for code in &state.retiring {
+        for peer in code.pending.iter().filter(|peer| peer.legacy) {
+            legacy.push((
+                code.lookup_id.clone(),
+                peer.device_id.clone(),
+                peer.public_key.clone(),
+            ));
+        }
         match ShareIdentity::retiring_secret_with(storage, &code.lookup_id) {
             Ok(Some(mut secret)) => {
                 materials.push(RetiringMaterial {
@@ -282,10 +290,11 @@ fn install(
     let withdrawn = profiles
         .map(ShareProfiles::withdrawn_direct_keys)
         .unwrap_or_default();
-    registry::install(
+    registry::install_with_legacy(
         &identity.node_id,
         &identity.direct_lookup_id,
         materials,
+        legacy,
         withdrawn,
         state.status(deferred, error),
     );

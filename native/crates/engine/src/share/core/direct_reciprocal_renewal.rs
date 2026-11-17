@@ -5,6 +5,7 @@
 //! initiator's commit, sent only after the new data are durable.
 use crate::share::direct_reciprocal::DirectRelationMaterial;
 use crate::share::direct_reciprocal_session::DirectRepairReceiver;
+use crate::share::direct_reciprocal_wire::CODE_RENEWAL_CAPABILITY;
 use crate::share::identity::code_renewal_registry as registry;
 use crate::share::identity_store::code_renewal_store;
 use crate::share::session::IncomingSession;
@@ -58,6 +59,24 @@ pub(super) fn with_retiring(
     }
 }
 
+/// Non-reciprocal stream (`Ctrl::Fs`, `Ctrl::Exec`) on an authorized Direct
+/// session: an older peer without `code_renewal_v1` does not reopen its
+/// completed reciprocal task after a renewal, so using a retiring lookup id
+/// here proves it stays on the old data (T3).
+pub(in crate::share) fn note_legacy_session(
+    session: &IncomingSession,
+    local_node: impl FnOnce() -> String,
+) {
+    if session.requested(CODE_RENEWAL_CAPABILITY) {
+        return;
+    }
+    let Some(used_lookup_id) = session.direct_relation_id() else {
+        return;
+    };
+    let local_node = local_node();
+    spawn_mark_legacy(&local_node, session.peer_pins(), used_lookup_id);
+}
+
 /// After a completed exchange: the peer now holds `current_lookup_id`
 /// (confirmation) or kept the retiring `used_lookup_id` without renewal
 /// support (older peer). Runs the durable bookkeeping off the async task;
@@ -69,6 +88,10 @@ pub(super) fn record_outcome(
     current_lookup_id: &str,
     used_lookup_id: &str,
 ) {
+    if !holds_current {
+        spawn_mark_legacy(local_node, peer, used_lookup_id);
+        return;
+    }
     let (device_id, public_key, peer_node) = peer;
     if !registry::is_pending(local_node, device_id, public_key) {
         return;
@@ -78,26 +101,57 @@ pub(super) fn record_outcome(
     let public_key = public_key.to_string();
     let peer_node = peer_node.to_string();
     let current = current_lookup_id.to_string();
-    let used = used_lookup_id.to_string();
     // Detached: the exchange is complete either way; a failure shows in
     // the renewal status and the next exchange confirms again.
     drop(tokio::task::spawn_blocking(move || {
-        if holds_current {
-            code_renewal_store::confirm_peer(
-                &local_node,
-                &device_id,
-                &public_key,
-                &peer_node,
-                &current,
-            );
-        } else {
-            code_renewal_store::mark_legacy(
-                &local_node,
-                &device_id,
-                &public_key,
-                &peer_node,
-                &used,
-            );
-        }
+        code_renewal_store::confirm_peer(
+            &local_node,
+            &device_id,
+            &public_key,
+            &peer_node,
+            &current,
+        );
+    }));
+}
+
+struct LegacyMarkGuard {
+    local_node: String,
+    lookup_id: String,
+    device_id: String,
+    public_key: String,
+}
+
+impl Drop for LegacyMarkGuard {
+    fn drop(&mut self) {
+        registry::end_legacy_mark(
+            &self.local_node,
+            &self.lookup_id,
+            &self.device_id,
+            &self.public_key,
+        );
+    }
+}
+
+fn spawn_mark_legacy(local_node: &str, peer: (&str, &str, &str), used_lookup_id: &str) {
+    let (device_id, public_key, peer_node) = peer;
+    if !registry::begin_legacy_mark(local_node, used_lookup_id, device_id, public_key, peer_node) {
+        return;
+    }
+    let guard = LegacyMarkGuard {
+        local_node: local_node.to_string(),
+        lookup_id: used_lookup_id.to_string(),
+        device_id: device_id.to_string(),
+        public_key: public_key.to_string(),
+    };
+    let peer_node = peer_node.to_string();
+    drop(tokio::task::spawn_blocking(move || {
+        code_renewal_store::mark_legacy(
+            &guard.local_node,
+            &guard.device_id,
+            &guard.public_key,
+            &peer_node,
+            &guard.lookup_id,
+        );
+        drop(guard);
     }));
 }

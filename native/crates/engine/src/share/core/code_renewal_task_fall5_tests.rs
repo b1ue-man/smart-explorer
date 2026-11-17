@@ -374,6 +374,34 @@ fn code_renewal_task_a_push_to_a_waiting_peer_carries_the_retiring_data() {
     );
     assert!(registry::is_pending(host, "device-p", "key-p"));
     assert!(!registry::is_pending(host, "device-q", "key-q"));
+    // Legacy-mark claims match only an unflagged pending peer on the retiring id.
+    let claim = |l, d, k, n| registry::begin_legacy_mark(host, l, d, k, n);
+    assert!(!claim("lookup-neu", waiting.0, waiting.1, waiting.2));
+    assert!(!claim("lookup-alt", "device-q", "key-q", "node-q"));
+    assert!(!claim("lookup-alt", waiting.0, waiting.1, "node-other"));
+    assert!(claim("lookup-alt", waiting.0, waiting.1, waiting.2));
+    assert!(!claim("lookup-alt", waiting.0, waiting.1, waiting.2));
+    registry::end_legacy_mark(host, "lookup-alt", waiting.0, waiting.1);
+    assert!(claim("lookup-alt", waiting.0, waiting.1, waiting.2));
+    registry::install_with_legacy(
+        host,
+        "lookup-neu",
+        vec![RetiringMaterial {
+            lookup_id: "lookup-alt".into(),
+            secret: Zeroizing::new(vec![1; 32]),
+            pending: vec![
+                (waiting.0.into(), waiting.1.into(), waiting.2.into()),
+                ("device-r".into(), "key-r".into(), String::new()),
+            ],
+        }],
+        vec![("lookup-alt".into(), waiting.0.into(), waiting.1.into())],
+        Vec::new(),
+        Default::default(),
+    );
+    registry::end_legacy_mark(host, "lookup-alt", waiting.0, waiting.1);
+    assert!(!claim("lookup-alt", waiting.0, waiting.1, waiting.2));
+    assert!(claim("lookup-alt", "device-r", "key-r", "key-r"));
+    registry::end_legacy_mark(host, "lookup-alt", "device-r", "key-r");
     // After the renewal ended the same peer gets nothing.
     registry::install(
         host,
@@ -383,6 +411,7 @@ fn code_renewal_task_a_push_to_a_waiting_peer_carries_the_retiring_data() {
         Default::default(),
     );
     assert!(registry::pending_material_for(host, waiting.0, waiting.1, waiting.2).is_none());
+    assert!(!claim("lookup-alt", waiting.0, waiting.1, waiting.2));
 }
 
 #[test]

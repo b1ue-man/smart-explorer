@@ -34,6 +34,7 @@ mod outgoing_gate;
 pub(super) use outgoing_gate::OutgoingRepairPersistGate;
 #[path = "direct_reciprocal_renewal.rs"]
 mod renewal;
+pub(super) use renewal::note_legacy_session;
 
 /// Keeps admission and configuration exclusion live inside an uncancellable
 /// `spawn_blocking` persistence call even if its async exchange times out.

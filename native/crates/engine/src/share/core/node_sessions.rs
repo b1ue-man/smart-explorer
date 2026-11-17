@@ -11,7 +11,7 @@ use super::direct_reciprocal_session::{
     AuthenticatedDirectSession, DirectRepairSessionError, DirectSessionAuthorization,
 };
 use super::direct_reciprocal_transport::DirectReciprocalTransportResult;
-use super::direct_reciprocal_wire::DIRECT_RECIPROCAL_CAPABILITY;
+use super::direct_reciprocal_wire::{CODE_RENEWAL_CAPABILITY, DIRECT_RECIPROCAL_CAPABILITY};
 use super::framing::{recv_ctrl, send_ctrl};
 use super::identity::ShareIdentity;
 use super::io_deadline;
@@ -352,6 +352,7 @@ impl ShareIrohNode {
         ];
         if kind == "direct" {
             requested_capabilities.push(DIRECT_RECIPROCAL_CAPABILITY.to_string());
+            requested_capabilities.push(CODE_RENEWAL_CAPABILITY.to_string());
         }
         let remote_device = endpoint.presence.device_id.clone();
         let remote_node = endpoint.presence.node_id.clone();

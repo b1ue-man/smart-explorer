@@ -317,6 +317,9 @@ async fn handle_peer_stream(
             .await;
         }
     };
+    super::direct_reciprocal_transport::note_legacy_session(&session, || {
+        node.endpoint.id().to_string()
+    });
     let (req, requested_lease) = match ctrl {
         Ctrl::Fs { req, lease } => (req, lease),
         Ctrl::Exec { req } => return handle_exec_stream(&mut send, req, context.exec_slots).await,

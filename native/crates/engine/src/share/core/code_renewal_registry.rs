@@ -28,9 +28,21 @@ pub struct RetiringMaterial {
 struct NodeView {
     current_lookup_id: String,
     retiring: Vec<RetiringMaterial>,
+    legacy: HashSet<(String, String, String)>,
+    marking_legacy: HashSet<(String, String, String)>,
     withdrawn: HashSet<String>,
     published: HashSet<String>,
     status: CodeRenewalStatus,
+}
+
+fn still_pending(retiring: &[RetiringMaterial], entry: &(String, String, String)) -> bool {
+    retiring.iter().any(|material| {
+        material.lookup_id == entry.0
+            && material
+                .pending
+                .iter()
+                .any(|(device, key, _)| *device == entry.1 && *key == entry.2)
+    })
 }
 
 fn views() -> MutexGuard<'static, HashMap<String, NodeView>> {
@@ -52,6 +64,26 @@ pub fn install(
     withdrawn: Vec<String>,
     status: CodeRenewalStatus,
 ) {
+    install_with_legacy(
+        node_id,
+        current_lookup_id,
+        retiring,
+        Vec::new(),
+        withdrawn,
+        status,
+    );
+}
+
+/// As `install`, with the `(lookup_id, device_id, public_key)` entries already
+/// marked `legacy` in the durable state so repeated streams skip I/O.
+pub fn install_with_legacy(
+    node_id: &str,
+    current_lookup_id: &str,
+    retiring: Vec<RetiringMaterial>,
+    legacy: Vec<(String, String, String)>,
+    withdrawn: Vec<String>,
+    status: CodeRenewalStatus,
+) {
     if node_id.is_empty() {
         return;
     }
@@ -59,12 +91,71 @@ pub fn install(
     let view = views.entry(node_id.to_string()).or_default();
     view.current_lookup_id = current_lookup_id.to_string();
     view.retiring = retiring;
+    let retiring_ref = &view.retiring;
+    view.legacy = legacy
+        .into_iter()
+        .filter(|entry| still_pending(retiring_ref, entry))
+        .collect();
+    view.marking_legacy
+        .retain(|entry| still_pending(retiring_ref, entry));
     view.withdrawn = withdrawn
         .into_iter()
         .filter(|key| !key.is_empty())
         .take(MAX_WITHDRAWN_KEYS)
         .collect();
     view.status = status;
+}
+
+/// Claims an unflagged pending peer of `lookup_id` for a durable `mark_legacy`
+/// write; `false` when not retiring, not pending, already legacy, or in flight.
+pub fn begin_legacy_mark(
+    node_id: &str,
+    lookup_id: &str,
+    device_id: &str,
+    public_key: &str,
+    peer_node: &str,
+) -> bool {
+    if node_id.is_empty() || lookup_id.is_empty() || device_id.is_empty() || public_key.is_empty() {
+        return false;
+    }
+    let mut views = views();
+    let Some(view) = views.get_mut(node_id) else {
+        return false;
+    };
+    if lookup_id == view.current_lookup_id {
+        return false;
+    }
+    let waiting = view
+        .retiring
+        .iter()
+        .find(|material| material.lookup_id == lookup_id)
+        .is_some_and(|material| {
+            material.pending.iter().any(|(device, key, node)| {
+                device == device_id
+                    && key == public_key
+                    && (node == peer_node || (node.is_empty() && key == peer_node))
+            })
+        });
+    if !waiting {
+        return false;
+    }
+    let entry = (
+        lookup_id.to_string(),
+        device_id.to_string(),
+        public_key.to_string(),
+    );
+    !view.legacy.contains(&entry) && view.marking_legacy.insert(entry)
+}
+
+/// Releases the in-flight claim of `begin_legacy_mark`.
+pub fn end_legacy_mark(node_id: &str, lookup_id: &str, device_id: &str, public_key: &str) {
+    if let Some(view) = views().get_mut(node_id) {
+        view.marking_legacy.remove(&(
+            lookup_id.to_string(),
+            device_id.to_string(),
+            public_key.to_string(),
+        ));
+    }
 }
 
 /// Records a bookkeeping failure for the status of every surface.
