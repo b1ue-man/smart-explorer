@@ -335,6 +335,10 @@ pub trait ScreenHostBackend: Send + Sync {
     fn graphical_session(&self) -> bool;
     fn monitors(&self) -> Vec<MonitorInfo>;
     fn encoders(&self) -> Vec<CodecOffer>;
+    /// D6 (plan 2026-11-17 P3): codecs whose encoder passed its check.
+    fn codec_trust(&self) -> super::negotiate::CodecTrust {
+        super::negotiate::CodecTrust::ALL
+    }
     fn input(&self) -> InputCapabilities;
     /// Platform limits for `HELLO_OK` (`consent_each_session`, …).
     fn limits(&self) -> Vec<String>;

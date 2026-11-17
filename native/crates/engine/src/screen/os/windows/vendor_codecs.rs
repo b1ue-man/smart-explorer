@@ -13,12 +13,15 @@
 //!   the adapter, a new enough driver or a session nothing is listed and
 //!   nothing changes; the only trace is the codec list (`se screen codec
 //!   --json`, with the settings an AMF component refused).
-//! - Opened per session only on the capture's own device
+//! - Opened per session on the capture's own device
 //!   (`d3d_input::attach_device` with the vendor's PCI id): textures of the
-//!   capture never cross adapters (BK2a E4). Another adapter, no capture
-//!   device yet or a GPU path switched off refuse the open, and the next
-//!   encoder of the rank opens (on a hybrid laptop the hardware MFT of the
-//!   capture's adapter, `mf_enum.rs`).
+//!   capture never cross adapters (BK2a E4). Plan 2026-11-17 P3 (b): with
+//!   the capture on another adapter or vendor (a VM's display adapter, the
+//!   iGPU of a hybrid laptop) or no capture device yet, a device of its own
+//!   on the vendor's adapter with the CPU upload of every picture
+//!   (`d3d_input::own_for_vendor`); without admission (the run-time check,
+//!   `bench --local`) always such a device. A GPU path switched off after a
+//!   failure still refuses, and the next encoder of the rank opens.
 //! - A vendor encoder that fails while encoding gives way to the next one
 //!   through the host process's `refused` list (`host_worker_produce.rs`).
 //! - Hooked into the codec list by `codec_facade.rs` (Windows
@@ -31,7 +34,7 @@ use windows::Win32::Graphics::Direct3D11::ID3D11Device;
 use windows::Win32::Graphics::Dxgi::{IDXGIAdapter, IDXGIDevice};
 
 use super::dxgi_adapters;
-use super::mf_encoder::d3d_input;
+use super::mf_encoder::d3d_input::{self, GpuInput, InputRoute};
 use crate::screen::core::capture_admission::CaptureGrant;
 use crate::screen::core::codec_registry::EncoderFactory;
 use crate::screen::core::frame_budget::FrameLimits;
@@ -50,6 +53,9 @@ mod amf_settings;
 #[cfg(test)]
 #[path = "bildkette_vendor_task_tests.rs"]
 mod bildkette_vendor_task_tests;
+#[cfg(test)]
+#[path = "bildkette_verify_win_task_tests.rs"]
+mod bildkette_verify_win_task_tests;
 #[cfg(test)]
 #[path = "bildkette_w1_vendor_task_tests.rs"]
 mod bildkette_w1_vendor_task_tests;
@@ -171,6 +177,24 @@ fn adapter_device(vendor: u32) -> Option<ID3D11Device> {
         .map(|set| set.device)
 }
 
+/// Plan 4.10a with P3 (b): whether the capture's adapter has an encoder of
+/// `codec` that takes its textures (its vendor interface or a hardware
+/// MFT); a vendor encoder of another adapter then gives way to it instead
+/// of opening on a device of its own (the iGPU of a hybrid laptop).
+fn capture_adapter_encodes(codec: CodecKind) -> bool {
+    let Some(capture) = d3d_input::capture_adapter() else {
+        return false;
+    };
+    let found = found();
+    let index = CODECS.iter().position(|own| *own == codec);
+    let vendor = match (dxgi_adapters::vendor_of_luid(capture), index) {
+        (Some(VENDOR_NVIDIA), Some(index)) => found.nvenc[index].is_some(),
+        (Some(VENDOR_AMD), Some(index)) => found.amf[index].is_some(),
+        _ => false,
+    };
+    vendor || super::mf_common::hardware_mft_on(codec, capture)
+}
+
 /// The PCI vendor id of the adapter `device` runs on.
 pub(super) fn vendor_of(device: &ID3D11Device) -> Option<u32> {
     let dxgi: IDXGIDevice = device.cast().ok()?;
@@ -229,23 +253,38 @@ pub(super) struct VendorFactory {
 }
 
 impl VendorFactory {
+    /// The capture's device when it is the vendor's GPU, else (P3 (b)) a
+    /// device of its own on the vendor's adapter when the capture runs on
+    /// none or another one; without admission always one of its own.
+    fn input(&self, size: FrameSize, name: &str, admitted: bool) -> io::Result<GpuInput> {
+        let pci = self.vendor.pci_vendor();
+        if !admitted {
+            return d3d_input::own_for_vendor(pci, size);
+        }
+        match d3d_input::attach_device(size, |device| vendor_of(device) == Some(pci)) {
+            Ok(gpu) => Ok(gpu),
+            Err(reason) => match d3d_input::input_route(Err(reason), true) {
+                InputRoute::OwnDevice if !capture_adapter_encodes(self.codec) => {
+                    d3d_input::own_for_vendor(pci, size)
+                }
+                _ => Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    format!("{name}: not on the capture's device ({reason:?})"),
+                )),
+            },
+        }
+    }
+
     fn create(
         &self,
         choice: &CodecChoice,
         size: FrameSize,
         fps: u32,
-        grant: CaptureGrant,
+        grant: Option<CaptureGrant>,
     ) -> io::Result<Box<dyn ScreenEncoder>> {
         check_request(self.codec, self.max, choice, size)?;
-        let (name, pci) = (self.vendor.name(self.codec), self.vendor.pci_vendor());
-        let gpu = d3d_input::attach_device(size, |device| vendor_of(device) == Some(pci)).map_err(
-            |reason| {
-                io::Error::new(
-                    io::ErrorKind::Unsupported,
-                    format!("{name}: not on the capture's device ({reason:?})"),
-                )
-            },
-        )?;
+        let name = self.vendor.name(self.codec);
+        let gpu = self.input(size, &name, grant.is_some())?;
         let device = gpu.device().clone();
         let (fps, codec) = (fps.max(1), self.codec);
         // r1: no fixed ceiling; the pairing's, then the session's own.
@@ -253,17 +292,27 @@ impl VendorFactory {
         let encoder: Box<dyn ScreenEncoder> = match self.vendor {
             Vendor::Nvenc => {
                 let session = nvenc_encode::NvencSession::open(&device, codec, size, fps)?;
-                let hull =
-                    vendor_encode::VendorEncoder::new(session, &name, codec, size, grant, gpu)
-                        .with_ceiling(ceiling);
-                Box::new(hull) as Box<dyn ScreenEncoder>
+                let hull = match grant {
+                    Some(grant) => {
+                        vendor_encode::VendorEncoder::new(session, &name, codec, size, grant, gpu)
+                    }
+                    None => {
+                        vendor_encode::VendorEncoder::plain(session, &name, codec, size, fps, gpu)
+                    }
+                };
+                Box::new(hull.with_ceiling(ceiling)) as Box<dyn ScreenEncoder>
             }
             Vendor::Amf => {
                 let session = amf_encode::AmfSession::open(&device, codec, size, fps)?;
-                let hull =
-                    vendor_encode::VendorEncoder::new(session, &name, codec, size, grant, gpu)
-                        .with_ceiling(ceiling);
-                Box::new(hull) as Box<dyn ScreenEncoder>
+                let hull = match grant {
+                    Some(grant) => {
+                        vendor_encode::VendorEncoder::new(session, &name, codec, size, grant, gpu)
+                    }
+                    None => {
+                        vendor_encode::VendorEncoder::plain(session, &name, codec, size, fps, gpu)
+                    }
+                };
+                Box::new(hull.with_ceiling(ceiling)) as Box<dyn ScreenEncoder>
             }
         };
         Ok(encoder)
@@ -297,17 +346,20 @@ impl EncoderFactory for VendorFactory {
             .clone()
     }
 
-    /// Only admitted captures: the input is the capture's texture.
+    /// The vendor's adapter (P3: the key of its verdicts).
+    fn device(&self) -> String {
+        dxgi_adapters::identity_of_vendor(self.vendor.pci_vendor())
+    }
+
+    /// P3 (b): without admission (the run-time check, `bench --local`) on a
+    /// device of its own, BGRA pictures copied up.
     fn open(
         &self,
-        _choice: &CodecChoice,
-        _size: FrameSize,
-        _fps: u32,
+        choice: &CodecChoice,
+        size: FrameSize,
+        fps: u32,
     ) -> io::Result<Box<dyn ScreenEncoder>> {
-        Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "vendor encoders need an admitted capture on the GPU",
-        ))
+        self.create(choice, size, fps, None)
     }
 
     fn open_admitted(
@@ -317,6 +369,6 @@ impl EncoderFactory for VendorFactory {
         fps: u32,
         grant: CaptureGrant,
     ) -> io::Result<Box<dyn ScreenEncoder>> {
-        self.create(choice, size, fps, grant)
+        self.create(choice, size, fps, Some(grant))
     }
 }

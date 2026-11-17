@@ -98,11 +98,10 @@ impl Worker {
             }
         };
         // An encoder that fails while encoding gives way to every remaining
-        // stage of the rank once (`refused`, W4 B3).
+        // stage of the rank once (`refused`, W4 B3); the stages are counted
+        // only after a failure (plan 2026-11-17 P3).
         let mut request = std::borrow::Cow::Borrowed(request);
-        let max_attempts = codec_inventory::registry()
-            .encoder_stage_count(&request)
-            .max(1);
+        let mut max_attempts: Option<usize> = None;
         let mut attempt = 0;
         let (frame, running) = loop {
             attempt += 1;
@@ -127,7 +126,12 @@ impl Worker {
                     if !self.refused.contains(&factory) {
                         self.refused.push(factory);
                     }
-                    if attempt >= max_attempts {
+                    let stages = *max_attempts.get_or_insert_with(|| {
+                        codec_inventory::registry()
+                            .encoder_stage_count(&request)
+                            .max(1)
+                    });
+                    if attempt >= stages {
                         return failed(ScreenErrorCode::EncoderFailed, error);
                     }
                     request.to_mut().keyframe = true;

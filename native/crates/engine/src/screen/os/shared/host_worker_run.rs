@@ -180,8 +180,13 @@ pub(super) fn run() -> i32 {
     // this account, without a source and without the update-stop watch.
     if queries::requested() {
         let backend = super::super::platform_backend();
-        return queries::serve(io::stdin(), io::stdout(), &*backend, || {
-            codec_inventory::registry().encoder_offers()
+        // Plan 2026-11-17 P3: `VerifyCodecs` checks the newer encoders first.
+        return queries::serve_codecs(io::stdin(), io::stdout(), &*backend, |checked| {
+            if checked {
+                codec_inventory::warm_up()
+            } else {
+                codec_inventory::registry().encoder_offers()
+            }
         });
     }
     let _stop =

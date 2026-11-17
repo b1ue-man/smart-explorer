@@ -14,6 +14,14 @@
 //! `screen_decode_guard.rs`). The tiles are never given up: they are every
 //! pairing's last fallback. The mark lasts for the process; the next viewer
 //! start tries the codec again.
+//!
+//! Plan 2026-11-17 „Windows-Bild“ P3: a picture that comes out of a later
+//! decoder call than its own (`lag` > 0) counts as a failure, not as shown:
+//! such a decoder holds the newest picture back, on a still screen for
+//! good. `LAG_LIMIT` late pictures in a row give the codec up even after it
+//! showed pictures. Decoders that failed their run-time check are left out
+//! of the offers by the register (`CodecRegistry::decoder_offers`) before
+//! `usable_offers` sees them.
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::{Duration, Instant};
 
@@ -21,6 +29,9 @@ use super::negotiate::{CodecKind, CodecOffer};
 
 /// Failed key frames of one codec without any picture before it is given up.
 pub const FAILURE_LIMIT: u32 = 3;
+/// Late pictures in a row (`DecoderGuard::on_picture` with a lag) that
+/// give a codec up even after it showed pictures.
+pub const LAG_LIMIT: u32 = FAILURE_LIMIT;
 /// Time from the codec's first record without any picture before it is
 /// given up: the host sends a key frame at once and answers a key frame
 /// request within one capture interval, and a hardware decoder that opens
@@ -66,6 +77,8 @@ pub struct DecoderGuard {
     failures: u32,
     shown: bool,
     given_up: bool,
+    /// Late pictures in a row.
+    lagged: u32,
 }
 
 impl DecoderGuard {
@@ -92,10 +105,20 @@ impl DecoderGuard {
         self.verdict(now)
     }
 
-    /// A picture of `codec` was shown: the codec works in this session.
-    pub fn on_picture(&mut self, codec: CodecKind, now: Instant) {
+    /// A picture of `codec` was shown; `lag` pictures submitted after it
+    /// are still in the decoder. Without lag the codec works in this
+    /// session; a late picture counts as a failure. The codec to give up,
+    /// once.
+    pub fn on_picture(&mut self, codec: CodecKind, now: Instant, lag: usize) -> Option<CodecKind> {
         self.track(codec, now);
-        self.shown = true;
+        if lag == 0 {
+            self.shown = true;
+            self.lagged = 0;
+        } else {
+            self.failures = self.failures.saturating_add(1);
+            self.lagged = self.lagged.saturating_add(1);
+        }
+        self.verdict(now)
     }
 
     /// Any other event of the session (statistics come once a second).
@@ -105,13 +128,14 @@ impl DecoderGuard {
 
     fn verdict(&mut self, now: Instant) -> Option<CodecKind> {
         let codec = self.codec?;
-        if self.shown || self.given_up || codec == CodecKind::Tiles {
+        let lagging = self.lagged >= LAG_LIMIT;
+        if (self.shown && !lagging) || self.given_up || codec == CodecKind::Tiles {
             return None;
         }
         let silent = self
             .since
             .is_some_and(|since| now.saturating_duration_since(since) >= SILENCE_LIMIT);
-        if self.failures >= FAILURE_LIMIT || silent {
+        if lagging || self.failures >= FAILURE_LIMIT || silent {
             self.given_up = true;
             return Some(codec);
         }

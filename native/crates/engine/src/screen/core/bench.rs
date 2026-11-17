@@ -12,7 +12,11 @@
 //! gives p50 and p95 per station of the picture path (`bench_stages.rs`);
 //! with `--source` the host captures that source instead of the test
 //! picture (no barcode, no PSNR), and a host that announces
-//! `frame_timing_v1` adds its own stations (`bench_host.rs`, BK0).
+//! `frame_timing_v1` adds its own stations (`bench_host.rs`, BK0). Plan
+//! 2026-11-17 „Windows-Bild“ P3: the barcode is checked against the
+//! decoder's own identity of its picture, late pictures, decode errors and
+//! decoders that did not open are counted, and the report keeps its
+//! counters when nothing arrived intact (`failure`).
 use std::collections::BTreeMap;
 use std::io;
 use std::time::{Duration, Instant};
@@ -20,6 +24,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 
 use super::codec_registry::CodecRegistry;
+use super::decoded_frame::DecodedFrame;
 use super::gop_stream::{now_us, path_of, PictureEvent};
 use super::host_backend::ScreenDecoder;
 use super::negotiate::{negotiate, CodecKind, CodecOffer, CodecPreference};
@@ -138,6 +143,15 @@ pub struct BenchReport {
     /// Milliseconds from each disruption to the next good frame.
     pub recoveries: Vec<f64>,
     pub corrupt_frames: u64,
+    /// Pictures that came out of a later decoder call than their own (P3).
+    #[serde(default)]
+    pub late_frames: u64,
+    /// Records the decoder refused (P3).
+    #[serde(default)]
+    pub decode_errors: u64,
+    /// Picture groups no decoder opened for (P3).
+    #[serde(default)]
+    pub decoder_open_failures: u64,
     /// Lowest PSNR of the static text block; `null` = infinite.
     pub static_psnr_db: Option<f64>,
     /// p50 and p95 in milliseconds per station of the picture path; left
@@ -154,6 +168,10 @@ pub struct BenchReport {
     /// Stages and limits the host reported (`frame_timing::ChainReport`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host_chain: Option<super::frame_timing::ChainReport>,
+    /// Why the measurement has no result (no picture arrived intact); the
+    /// counters stay in the report (P3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure: Option<String>,
 }
 
 /// The current picture group and its decoder.
@@ -229,9 +247,7 @@ pub async fn run_source(
     }
     let (path, _) = path_of(&session.connection);
     session.close();
-    let mut report = measure
-        .report(&encoder, path.key())
-        .map_err(ViewerError::Io)?;
+    let mut report = measure.report(&encoder, path.key());
     host.finish(&measure.clock, &mut report);
     report.source = source;
     Ok(report)
@@ -283,6 +299,7 @@ fn picture(
         let Ok(next) = codecs.open_decoder(&header) else {
             // No decoder for this stream: nothing of it can be shown.
             *decoding = None;
+            measure.open_failures += 1;
             measure.recovery.on_disruption(now_us());
             return None;
         };
@@ -299,12 +316,17 @@ fn picture(
             measure.stages.record_since(stages::DECODE, decode_started);
             measure.decoder = active.name();
             let shown_us = now_us();
-            measure.shown(active.picture(), &record, shown_us, false);
+            // P3: the picture the decoder gave, which may be an older one.
+            let frame = active
+                .decoded_frame()
+                .unwrap_or_else(|| DecodedFrame::from_record(&record));
+            measure.shown(active.picture(), frame, record.frame_id, shown_us, false);
             None
         }
         Ok(false) => None,
         Err(_) => {
             *decoding = None;
+            measure.decode_errors += 1;
             measure.recovery.on_disruption(now_us());
             Some(KeyframeReason::DecodeError)
         }
@@ -351,6 +373,8 @@ pub fn run_local(options: BenchOptions, codecs: &CodecRegistry) -> io::Result<Be
     let end = Instant::now() + Duration::from_secs(u64::from(options.seconds));
     let mut frame_id = 0u64;
     let mut next = Instant::now();
+    // A key frame first and after a decode error (P3: the run goes on).
+    let mut key_next = true;
     measure.codec = Some(choice.codec);
     while Instant::now() < end {
         frame_id += 1;
@@ -362,7 +386,7 @@ pub fn run_local(options: BenchOptions, codecs: &CodecRegistry) -> io::Result<Be
             .record_since(stages::CAPTURE, capture_started);
         let encode_started = Instant::now();
         super::convert_clock::arm();
-        let encoded = encoder.encode(&image, frame_id == 1, target_bps);
+        let encoded = encoder.encode(&image, std::mem::take(&mut key_next), target_bps);
         let convert_us = super::convert_clock::take();
         let encoded = encoded?;
         let total_us = u64::try_from(encode_started.elapsed().as_micros()).unwrap_or(u64::MAX);
@@ -386,10 +410,25 @@ pub fn run_local(options: BenchOptions, codecs: &CodecRegistry) -> io::Result<Be
             };
             measure.received.record(now_us(), bytes);
             let decode_started = Instant::now();
-            let decoded = decoder.decode(&record)?;
+            let decoded = match decoder.decode(&record) {
+                Ok(decoded) => decoded,
+                Err(_) => {
+                    // P3: counted; a new decoder from the next key frame.
+                    measure.decode_errors += 1;
+                    measure.recovery.on_disruption(now_us());
+                    decoder = codecs
+                        .open_decoder(&header)
+                        .inspect_err(|_| measure.open_failures += 1)?;
+                    key_next = true;
+                    break;
+                }
+            };
             if decoded {
                 measure.stages.record_since(stages::DECODE, decode_started);
-                measure.shown(decoder.picture(), &record, now_us(), true);
+                let frame = decoder
+                    .decoded_frame()
+                    .unwrap_or_else(|| DecodedFrame::from_record(&record));
+                measure.shown(decoder.picture(), frame, record.frame_id, now_us(), true);
             }
         }
         measure.highest_frame = frame_id;
@@ -398,7 +437,7 @@ pub fn run_local(options: BenchOptions, codecs: &CodecRegistry) -> io::Result<Be
             std::thread::sleep(wait);
         }
     }
-    measure.report(&encoder.name(), "local")
+    Ok(measure.report(&encoder.name(), "local"))
 }
 
 #[cfg(test)]

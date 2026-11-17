@@ -21,6 +21,8 @@ use tokio::{io::AsyncWrite, sync::watch};
 pub struct HostMetadata {
     pub platform: HostPlatform,
     pub encoders: Vec<CodecOffer>,
+    /// D6 (plan 2026-11-17 P3): the host's trust of the newer codecs.
+    pub trust: super::negotiate::CodecTrust,
     pub input: InputCapabilities,
     pub monitors: Vec<MonitorInfo>,
     pub limits: Vec<String>,
@@ -37,6 +39,7 @@ impl HostMetadata {
             Ok(Self {
                 platform: backend.platform(),
                 encoders: backend.encoders(),
+                trust: backend.codec_trust(),
                 input: backend.input(),
                 monitors: backend.monitors(),
                 limits: backend.limits(),
@@ -110,11 +113,7 @@ pub enum Request {
     Families,
 }
 impl Request {
-    pub fn start(
-        self,
-        context: &HostContext,
-        principal: &ProvenPrincipal,
-    ) -> Job<HostFrame> {
+    pub fn start(self, context: &HostContext, principal: &ProvenPrincipal) -> Job<HostFrame> {
         jobs::spawn(
             context,
             principal,

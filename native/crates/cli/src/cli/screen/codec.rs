@@ -11,13 +11,21 @@
 //! text; JSON `[{"key","component","license"}]` or
 //! `{"key","component","license","text"}`. Exit codes: 0 success, 1 error
 //! with text.
+//!
+//! Plan 2026-11-17 „Windows-Bild“ P3: every encoder and decoder row names
+//! its run-time check (`verdict`: `verified`, `structural`, `failed` with
+//! `reason`, `unchecked`; absent for the tiles). `se screen codec verify`
+//! forgets the verdicts of this version and checks every encoder again with
+//! a round trip of the test picture at 1280 × 720 through the local
+//! decoders; `--json` prints `{"checks": [...], "codecs": {...}}`.
 use std::io::{IsTerminal, Write};
 
 use clap::{Args, Subcommand};
 
 use crate::screen::core::codec_registry::{
-    CodecEntry, CodecReport, OpenH264State, OPENH264_NOTICE,
+    CodecEntry, CodecReport, OpenH264State, VerifyLine, OPENH264_NOTICE,
 };
+use crate::screen::core::codec_verdicts::VerdictView;
 use crate::screen::os::{codec_inventory, openh264_action, openh264_license, OpenH264Action};
 
 #[derive(Args, Debug, PartialEq, Eq)]
@@ -40,6 +48,10 @@ enum CodecCommand {
         /// The license to print in full, e.g. openh264
         name: Option<String>,
     },
+    #[command(
+        about = "Check every encoder again with a round trip of the test picture through the local decoders"
+    )]
+    Verify,
 }
 
 #[derive(Debug, PartialEq, Eq, Subcommand)]
@@ -59,6 +71,17 @@ enum OpenH264Command {
 pub(super) fn run(args: CodecArgs) -> Result<i32, String> {
     if let Some(CodecCommand::Licenses { name }) = &args.command {
         print!("{}", licenses(name.as_deref(), args.json)?);
+        return Ok(0);
+    }
+    if let Some(CodecCommand::Verify) = &args.command {
+        let (checks, report) = codec_inventory::verify();
+        if args.json {
+            let value = serde_json::json!({ "checks": checks, "codecs": report });
+            let json = serde_json::to_string_pretty(&value).map_err(|error| error.to_string())?;
+            println!("{json}");
+        } else {
+            print!("{}{}", checks_text(&checks), text(&report));
+        }
         return Ok(0);
     }
     if let Some(CodecCommand::Openh264 { action }) = &args.command {
@@ -151,6 +174,31 @@ pub(super) fn licenses(name: Option<&str>, json: bool) -> Result<String, String>
     Ok(out)
 }
 
+/// The German words of a verdict (P3).
+pub(super) fn verdict_text(verdict: &VerdictView) -> String {
+    match (verdict.state.as_str(), verdict.reason.as_deref()) {
+        ("verified", _) => "geprüft".into(),
+        ("structural", _) => "Bitstrom geprüft (kein lokaler Dekodierer)".into(),
+        ("failed", Some(reason)) => format!("Prüfung fehlgeschlagen: {reason}"),
+        ("failed", None) => "Prüfung fehlgeschlagen".into(),
+        _ => "ungeprüft".into(),
+    }
+}
+
+/// The lines of `se screen codec verify`.
+fn checks_text(checks: &[VerifyLine]) -> String {
+    let mut out = String::from("Prüfung:\n");
+    for check in checks {
+        let label = format!("{} ({})", check.codec.key(), check.profile);
+        let verdict = verdict_text(&check.verdict);
+        out.push_str(&format!("  {label:<18} {}: {verdict}\n", check.encoder));
+    }
+    if checks.is_empty() {
+        out.push_str("  kein Kodierer zu prüfen\n");
+    }
+    out
+}
+
 fn row(entry: &CodecEntry) -> String {
     // The names of the standard (BK6: HEVC `main`/`main_444`, AV1
     // `main`/`high`); a report of an older `se` has the wire keys only.
@@ -174,7 +222,15 @@ fn row(entry: &CodecEntry) -> String {
     } else {
         format!("  abgelehnt: {}", entry.refused_settings.join(", "))
     };
-    format!("  {codec:<18} {kind:<8}  {}{refused}\n", entry.name)
+    let verdict = entry
+        .verdict
+        .as_ref()
+        .map(|verdict| format!("  [{}]", verdict_text(verdict)))
+        .unwrap_or_default();
+    format!(
+        "  {codec:<18} {kind:<8}  {}{refused}{verdict}\n",
+        entry.name
+    )
 }
 
 /// The text of `se screen codec`.

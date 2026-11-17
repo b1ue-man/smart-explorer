@@ -4,7 +4,9 @@
 //! `decoder_health`) is given up for this process: a host that announced
 //! `set_decoders_v1` negotiates again without it (`SET_DECODERS`, P1), any
 //! other host switches to the lossless tiles (`SET_MODE`, as the hybrid
-//! fallback does). The window names the change.
+//! fallback does). The window names the change. A picture that came out of
+//! a later decoder call than its own counts as a failure (plan 2026-11-17
+//! „Windows-Bild“ P3, `DecoderGuard::on_picture`).
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 
@@ -35,8 +37,12 @@ impl DecodeState {
         }
     }
 
-    pub(super) fn guard_picture(&mut self, codec: CodecKind) {
-        self.guard.on_picture(codec, Instant::now());
+    /// A decoded picture of `codec`; `lag` pictures submitted after it are
+    /// still in the decoder.
+    pub(super) fn guard_picture(&mut self, codec: CodecKind, lag: usize) {
+        if let Some(codec) = self.guard.on_picture(codec, Instant::now(), lag) {
+            self.give_up(codec);
+        }
     }
 
     pub(super) fn guard_tick(&mut self) {

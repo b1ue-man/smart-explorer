@@ -368,6 +368,11 @@ fn measure_size(
             seconds: SECONDS,
         };
         let report = run_local(options, codecs).map_err(text)?;
+        // P3: a run without an intact picture keeps its report; here it
+        // stays an error, as before.
+        if let Some(failure) = &report.failure {
+            return Err(failure.clone());
+        }
         fields.push(field("codec", &report.codec));
         fields.push(field("bilder", report.frames_shown));
         fields.push(field("fps", one_decimal(report.fps_mean)));

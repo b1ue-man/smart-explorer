@@ -1027,6 +1027,20 @@ BILDKETTE_TESTS = {
         "bildkette_task_r1_convert_station_apart_from_encode",
         "bildkette_task_r1_new_paths_and_causes_pack",
         "verbindungen_task_metadata_presence_background_scope_marks_only_its_thread",
+        # Plan 2026-11-17 „Windows-Bild“ P3: run-time check of the codecs.
+        "bildkette_task_verify_tiles_round_trip_verified",
+        "bildkette_task_verify_garbage_encoder_failed_garbled",
+        "bildkette_task_verify_slow_encoder_failed_slow",
+        "bildkette_task_verify_late_encoder_and_late_decoder_attributed",
+        "bildkette_task_verify_missing_keyframe_failed",
+        "bildkette_task_verify_no_reference_decoder_structural_or_missing_parameter_sets",
+        "bildkette_task_verify_open_skips_failed_factory_and_offers_drop_it",
+        "bildkette_task_verify_verdict_store_key_change_and_crash_marker",
+        "bildkette_task_verify_negotiate_unverified_hevc_after_verified_h264",
+        "bildkette_task_verify_negotiate_verified_newer_codec_keeps_b30",
+        "bildkette_task_verify_encode_does_not_rebuild_registry_per_picture",
+        "bildkette_task_verify_bench_counts_late_not_corrupt",
+        "bildkette_task_verify_guard_gives_up_lagging_decoder",
     ],
     "linux": [
         "bildkette_task_r1_linux_capture_path_reaches_the_chain",
@@ -1161,6 +1175,9 @@ BILDKETTE_TESTS = {
         "bildkette_task_win_decode_open_refusal_per_size",
         "bildkette_task_win_decode_stage_name",
         "bildkette_task_rate_windows_session_timer_is_high_resolution",
+        # Plan 2026-11-17 P3: input route (b) and key-frame rule D8.
+        "bildkette_task_verify_vendor_route_without_capture_uses_own_device",
+        "bildkette_task_verify_mf_keyframe_needs_idr_unit",
     ],
 }
 

@@ -24,6 +24,11 @@ mod preference;
 pub use preference::{
     decoder_preference, set_decoder_preference, CodecPreference, CodecSetting, DecoderPreference,
 };
+// D6 of plan 2026-11-17 „Windows-Bild“ P3: the B-30 rank of the newer
+// codecs only for a checked host encoder.
+#[path = "negotiate_trust.rs"]
+mod trust;
+pub use trust::CodecTrust;
 
 /// Most offers one list of a hello may carry: codec × profile × hardware
 /// gives 4 H.264 entries plus `tiles` in version 1; 32 leaves room for later
@@ -107,17 +112,6 @@ impl CodecKind {
             (Self::Av1, Some(H264Profile::High)) => "high",
             (Self::Hevc | Self::Av1, _) => "main",
             _ => "",
-        }
-    }
-
-    /// Order within a tier (B-30): the newer codecs first only when both
-    /// sides run in hardware, otherwise H.264 first.
-    fn rank(self, both_hardware: bool) -> u8 {
-        match (self, both_hardware) {
-            (Self::Av1, true) | (Self::H264, false) => 0,
-            (Self::Hevc, _) => 1,
-            (Self::H264, true) | (Self::Av1, false) => 2,
-            (Self::Tiles, _) => 3,
         }
     }
 }
@@ -370,6 +364,18 @@ pub fn negotiate_for_contract(
     preference: CodecPreference,
     contract: Option<super::frame_budget::FrameContract>,
 ) -> Vec<CodecChoice> {
+    negotiate_trusted(encoders, decoders, preference, contract, CodecTrust::ALL)
+}
+
+/// `negotiate_for_contract` of a host whose `trust` names the newer codecs
+/// with a checked encoder (D6, `negotiate_trust.rs`).
+pub fn negotiate_trusted(
+    encoders: &[CodecOffer],
+    decoders: &[CodecOffer],
+    preference: CodecPreference,
+    contract: Option<super::frame_budget::FrameContract>,
+    trust: CodecTrust,
+) -> Vec<CodecChoice> {
     if contract.is_some_and(|c| c.validate().is_err()) {
         return Vec::new();
     }
@@ -425,7 +431,7 @@ pub fn negotiate_for_contract(
                 ranked.push((
                     (
                         tier(encoder.hardware, decoder.hardware),
-                        codec.rank(both),
+                        trust.rank(codec, both),
                         profile_rank,
                     ),
                     ei,

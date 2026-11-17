@@ -3,7 +3,7 @@
 //! that showed a picture and the tiles are never given up.
 use std::time::{Duration, Instant};
 
-use super::{DecoderGuard, FAILURE_LIMIT, SILENCE_LIMIT};
+use super::{DecoderGuard, FAILURE_LIMIT, LAG_LIMIT, SILENCE_LIMIT};
 use crate::screen::core::negotiate::CodecKind;
 
 #[test]
@@ -39,7 +39,7 @@ fn bildkette_task_decoder_guard_keeps_a_codec_that_showed_a_picture_and_the_tile
     let start = Instant::now();
     let mut guard = DecoderGuard::default();
     guard.on_record(CodecKind::H264, start);
-    guard.on_picture(CodecKind::H264, start);
+    guard.on_picture(CodecKind::H264, start, 0);
     for _ in 0..FAILURE_LIMIT * 2 {
         assert_eq!(guard.on_failure(CodecKind::H264, start), None);
     }
@@ -50,4 +50,41 @@ fn bildkette_task_decoder_guard_keeps_a_codec_that_showed_a_picture_and_the_tile
         assert_eq!(guard.on_failure(CodecKind::Tiles, start), None);
     }
     assert_eq!(guard.on_tick(start + SILENCE_LIMIT * 3), None);
+}
+
+/// Plan 2026-11-17 „Windows-Bild“ P3: a picture that came out of a later
+/// decoder call than its own is a failure; late pictures in a row give the
+/// codec up even after it showed a picture in time.
+#[test]
+fn bildkette_task_verify_guard_gives_up_lagging_decoder() {
+    let start = Instant::now();
+    let mut guard = DecoderGuard::default();
+    assert_eq!(guard.on_record(CodecKind::Hevc, start), None);
+    for _ in 1..FAILURE_LIMIT {
+        assert_eq!(guard.on_picture(CodecKind::Hevc, start, 1), None);
+    }
+    assert_eq!(
+        guard.on_picture(CodecKind::Hevc, start, 1),
+        Some(CodecKind::Hevc)
+    );
+    let mut guard = DecoderGuard::default();
+    assert_eq!(guard.on_picture(CodecKind::Av1, start, 0), None);
+    for _ in 1..LAG_LIMIT {
+        assert_eq!(guard.on_picture(CodecKind::Av1, start, 2), None);
+    }
+    assert_eq!(
+        guard.on_picture(CodecKind::Av1, start, 2),
+        Some(CodecKind::Av1)
+    );
+    // A picture in time in between starts the count again.
+    let mut guard = DecoderGuard::default();
+    for lag in [0, 1, 0, 1] {
+        assert_eq!(guard.on_picture(CodecKind::H264, start, lag), None);
+    }
+    assert_eq!(guard.on_tick(start + SILENCE_LIMIT * 2), None);
+    // The tiles are never given up.
+    let mut guard = DecoderGuard::default();
+    for _ in 0..LAG_LIMIT * 2 {
+        assert_eq!(guard.on_picture(CodecKind::Tiles, start, 3), None);
+    }
 }

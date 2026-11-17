@@ -61,6 +61,7 @@ Examples:
   se screen bench Laptop --seconds 20 --json
   se screen bench --local --size 1920x1080
   se screen codec --json
+  se screen codec verify --json
   se screen codec openh264 enable
   se screen portal forget --json
   se screen sessions --json
@@ -107,7 +108,9 @@ enum ScreenCommand {
     Grid(view::GridArgs),
     #[command(about = "Measure the screen path with the test picture")]
     Bench(bench::BenchArgs),
-    #[command(about = "Show the screen codecs; switch OpenH264 on, off or remove it")]
+    #[command(
+        about = "Show the screen codecs and their run-time check; check again; switch OpenH264 on, off or remove it"
+    )]
     Codec(codec::CodecArgs),
     #[cfg(target_os = "linux")]
     #[command(about = "Forget the stored Wayland screen grant (Linux)")]

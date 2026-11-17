@@ -23,6 +23,11 @@
 //! Hybrid laptops (merge W1, plan 4.10a): hardware encoders carry their
 //! adapter (`mf_enum::Entry`); with an admitted capture, an MFT of another
 //! adapter gives way while the capture's adapter has an MFT of the codec.
+//!
+//! Plan 2026-11-17 „Windows-Bild“ P3: the factories are made once per
+//! process (`codecs`), so their offers, read with an activation and up to
+//! 64 output types per transform, are read once and not with every build
+//! of the register.
 use std::cell::Cell;
 use std::ffi::c_void;
 use std::io;
@@ -51,7 +56,7 @@ mod mf_enum;
 pub(super) use mf_enum::available;
 use mf_enum::confirmed_offers;
 pub(super) use mf_enum::{
-    activate_codec, adapter_of, prefer_capture_adapter, subtype, Entry, Kind,
+    activate_codec, adapter_of, hardware_mft_on, prefer_capture_adapter, subtype, Entry, Kind,
 };
 
 /// Whether the encoders write HEVC and AV1 output types (B-23): since merge
@@ -150,9 +155,19 @@ pub(super) fn ensure_com() {
     });
 }
 
+/// Encoder and decoder factories of the transforms.
+type MfFactories = (Vec<Arc<dyn EncoderFactory>>, Vec<Arc<dyn DecoderFactory>>);
+
 /// The factories of the transforms found: hardware encoders before the
 /// software encoder, then the decoders; HEVC and AV1 after H.264 (BK6).
-pub(super) fn codecs() -> (Vec<Arc<dyn EncoderFactory>>, Vec<Arc<dyn DecoderFactory>>) {
+/// Made once per process (P3), with their cached offers.
+pub(super) fn codecs() -> MfFactories {
+    static CODECS: OnceLock<MfFactories> = OnceLock::new();
+    let (encoders, decoders) = CODECS.get_or_init(build);
+    (encoders.clone(), decoders.clone())
+}
+
+fn build() -> MfFactories {
     let found = mf_enum::found();
     let mut encoders: Vec<Arc<dyn EncoderFactory>> = Vec::new();
     let software: Vec<Entry> = found
@@ -231,6 +246,14 @@ struct MfEncoderFactory {
 impl EncoderFactory for MfEncoderFactory {
     fn name(&self) -> String {
         self.name.clone()
+    }
+
+    /// The adapter of a hardware MFT (P3: the key of its verdicts).
+    fn device(&self) -> String {
+        match (self.kind, self.adapter) {
+            (Kind::HardwareEncoder, Some(luid)) => super::dxgi_adapters::identity_of(luid),
+            _ => String::new(),
+        }
     }
 
     /// B-21 on a probe of the hardware MFT (`mf_encoder_sync::probe_refused`): the
@@ -439,5 +462,14 @@ impl DecoderFactory for MfDecoderFactory {
     /// (`mf_decoder::keeps_references`).
     fn keeps_references(&self, codec: CodecKind) -> bool {
         codec == self.codec && super::mf_decoder::keeps_references(codec)
+    }
+
+    /// The adapter of the hardware stage (P3), the default one.
+    fn device(&self) -> String {
+        if super::mf_decoder::hardware_offered(self.codec) {
+            super::dxgi_adapters::identity_of_first()
+        } else {
+            String::new()
+        }
     }
 }

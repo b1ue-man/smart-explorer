@@ -157,8 +157,10 @@ impl WorkerBackend {
         Ok(list)
     }
 
+    /// The register this process keeps (plan 2026-11-17 P3: built again
+    /// only when the OpenH264 switch changes, not for every picture).
     fn codecs(&self) -> CodecRegistry {
-        super::super::codec_inventory::inventory(self.openh264_dir.as_deref(), false).registry
+        super::super::codec_inventory::kept(self.openh264_dir.as_deref())
     }
 
     /// The desktop program a query of the followed session runs (E47);
@@ -231,11 +233,33 @@ impl ScreenHostBackend for WorkerBackend {
     /// The offer of the account the host processes run as: for a worker
     /// that follows a session (E47) that account's codec inventory, asked
     /// in its own process (never its OpenH264 store loaded here); otherwise
-    /// this process's, as before.
+    /// this process's, as before. P3: HEVC and AV1 are offered once
+    /// checked; their check runs in a short host process of its own
+    /// (`session_queries::warm_up`, once per process), so a later session
+    /// offers what passed.
     fn encoders(&self) -> Vec<CodecOffer> {
-        self.session_program()
+        if let Some(offers) = self
+            .session_program()
             .and_then(super::session_queries::followed_offers)
-            .unwrap_or_else(|| self.codecs().encoder_offers())
+        {
+            // Only an account with video encoders has any to check.
+            if offers.iter().any(|offer| offer.codec.is_video()) {
+                super::session_queries::warm_up(self.session_program());
+            }
+            return offers;
+        }
+        let codecs = self.codecs();
+        if codecs.unchecked_newer() {
+            super::session_queries::warm_up(self.session_program());
+        }
+        codecs.encoder_offers()
+    }
+
+    /// D6 (P3): the trust of the account whose offer `encoders` names.
+    fn codec_trust(&self) -> crate::screen::core::negotiate::CodecTrust {
+        self.session_program()
+            .and_then(super::session_queries::followed_trust)
+            .unwrap_or_else(|| self.codecs().codec_trust())
     }
 
     fn input(&self) -> InputCapabilities {

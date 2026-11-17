@@ -11,8 +11,8 @@
 //! and nothing restarts; the new pairing applies when the switch goes off.
 use super::*;
 use crate::screen::core::gop_continue::ContinueOffers;
-use crate::screen::core::negotiate::{negotiate_for_contract, CodecOffer, CodecPreference};
-use crate::screen::core::set_decoders::{renegotiate, SetDecoders};
+use crate::screen::core::negotiate::{negotiate_trusted, CodecOffer, CodecPreference, CodecTrust};
+use crate::screen::core::set_decoders::{renegotiate_trusted, SetDecoders};
 
 /// What the session knows to negotiate again.
 pub(super) struct PairingState {
@@ -27,6 +27,8 @@ pub(super) struct PairingState {
     video_session: bool,
     /// What the viewer announced about continuations (B-36).
     pub(super) continuation: ContinueOffers,
+    /// D6 (plan 2026-11-17 P3): the host's trust of the newer codecs.
+    trust: CodecTrust,
 }
 
 impl PairingState {
@@ -38,6 +40,7 @@ impl PairingState {
             viewer_fps,
             video_session: choice.codec.is_video(),
             continuation: ContinueOffers::default(),
+            trust: CodecTrust::ALL,
         }
     }
 
@@ -69,6 +72,12 @@ impl Pipeline {
         self.pairing.continuation = continuation;
     }
 
+    /// D6 (plan 2026-11-17 P3): `SET_DECODERS` ranks with the trust of the
+    /// opening.
+    pub fn set_codec_trust(&mut self, trust: CodecTrust) {
+        self.pairing.trust = trust;
+    }
+
     /// Whether the decoder of the running pairing keeps its references over
     /// a continuation (B-36 per codec).
     pub(super) fn continuation_offered(&self) -> bool {
@@ -79,11 +88,12 @@ impl Pipeline {
     /// The continuation announcement of the frame applies either way.
     pub fn set_decoders(&mut self, set: &SetDecoders) -> bool {
         self.pairing.continuation = set.continuation();
-        let Some(next) = renegotiate(
+        let Some(next) = renegotiate_trusted(
             &self.pairing.encoders,
             &set.decoders,
             self.negotiated_contract,
             self.pairing.video_session,
+            self.pairing.trust,
         ) else {
             if self.continue_from.is_some() && !self.continuation_offered() {
                 self.reset_stream();
@@ -112,11 +122,12 @@ impl Pipeline {
             self.quality_policy.note_failed_codec(current_codec);
         }
         let failed_codecs = std::mem::take(&mut self.quality_policy.failed_codecs);
-        let choices = negotiate_for_contract(
+        let choices = negotiate_trusted(
             &self.pairing.encoders,
             &set.decoders,
             CodecPreference::Auto,
             self.negotiated_contract,
+            self.pairing.trust,
         );
         let mut fallbacks = codec_fallbacks(&choices, &next.choice);
         fallbacks.retain(|choice| !failed_codecs.contains(&choice.codec));

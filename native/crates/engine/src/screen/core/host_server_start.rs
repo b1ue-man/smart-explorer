@@ -156,11 +156,14 @@ pub(super) async fn prepare(
     // HEVC and AV1 only from a viewer that named them in `decoders_v2`
     // (B-31); `HELLO_OK` named the host's in `encoders_v2` for it.
     let decoders = hello.all_decoders();
-    let mut choices = negotiate_for_contract(
+    // D6 (plan 2026-11-17 P3): the newer codecs first only when trusted.
+    let negotiate = super::super::negotiate::negotiate_trusted;
+    let mut choices = negotiate(
         &metadata.encoders,
         &decoders,
         CodecPreference::Auto,
         contract,
+        metadata.trust,
     );
     if choices.is_empty()
         && contract.is_some_and(|contract| contract.hybrid_regions)
@@ -169,11 +172,12 @@ pub(super) async fn prepare(
         if let Some(contract) = contract.as_mut() {
             contract.hybrid_regions = false;
         }
-        choices = negotiate_for_contract(
+        choices = negotiate(
             &metadata.encoders,
             &decoders,
             CodecPreference::Auto,
             contract,
+            metadata.trust,
         );
     }
     let choice = choices.first().copied().ok_or(Failure::Encoder)?;

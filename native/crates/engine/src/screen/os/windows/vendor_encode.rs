@@ -23,6 +23,10 @@
 //!   `refused` list and opens the next encoder (plan 4.10a).
 //! - B-36: `recover_references` asks the session for a reference to the last
 //!   confirmed picture instead of a key frame.
+//! - Plan 2026-11-17 P3 (b): on a device of its own (`GpuInput::is_own`) a
+//!   GPU failure does not switch the capture's route; without admission
+//!   (`plain`: the run-time check, `bench --local`) a BGRA picture is
+//!   copied up and the access unit collected in plain bytes (`encode`).
 use std::io;
 
 use windows::Win32::Graphics::Direct3D11::ID3D11Texture2D;
@@ -92,6 +96,10 @@ pub(super) fn avc_level_for(size: FrameSize, fps: u32) -> u8 {
         .unwrap_or(62) as u8
 }
 
+#[path = "vendor_encode_plain.rs"]
+mod plain;
+pub(super) use plain::UnitSink;
+
 // B-36 bookkeeping lives in `core::ref_recovery` (plan „Bildkette“ B-36).
 #[cfg(test)]
 pub(super) use crate::screen::core::ref_recovery::LtrPlan;
@@ -131,8 +139,12 @@ pub(super) struct VendorEncoder<S: VendorSession> {
     name: String,
     codec: CodecKind,
     size: FrameSize,
-    grant: CaptureGrant,
+    /// `None`: opened without admission (P3, `plain`).
+    grant: Option<CaptureGrant>,
     gpu: GpuInput,
+    /// Frame rate of a session opened without admission (its pictures
+    /// come without a request).
+    plain_fps: u32,
     frames: u64,
     rate: Option<RateParams>,
     /// The ceiling of the codec pairing (`with_ceiling`, r1).
@@ -163,8 +175,9 @@ impl<S: VendorSession> VendorEncoder<S> {
             name: name.into(),
             codec,
             size,
-            grant,
+            grant: Some(grant),
             gpu,
+            plain_fps: 0,
             frames: 0,
             rate: None,
             ceiling_bps: u64::from(u32::MAX),
@@ -219,7 +232,7 @@ impl<S: VendorSession> VendorEncoder<S> {
 /// `hw_encode_common::video_prefix`); parameter sets in `unit` replace the
 /// kept ones. Whether `unit` is a key frame by its stream marks.
 pub(super) fn append_unit(
-    bytes: &mut AdmittedBytes,
+    bytes: &mut impl UnitSink,
     maximum: usize,
     codec: CodecKind,
     kept: &mut Option<Vec<u8>>,
@@ -243,7 +256,7 @@ pub(super) fn append_unit(
         *kept = own;
     }
     if bytes
-        .len()
+        .written()
         .saturating_add(prefix.len())
         .saturating_add(unit.len())
         > maximum
@@ -257,9 +270,9 @@ pub(super) fn append_unit(
     } else {
         0
     };
-    bytes.extend_from_slice(&unit[..at])?;
-    bytes.extend_from_slice(&prefix)?;
-    bytes.extend_from_slice(&unit[at..])?;
+    bytes.put(&unit[..at])?;
+    bytes.put(&prefix)?;
+    bytes.put(&unit[at..])?;
     Ok(keyframe)
 }
 
@@ -314,22 +327,28 @@ impl<S: VendorSession> ScreenEncoder for VendorEncoder<S> {
         image: &Picture,
         request: &StageRequest,
     ) -> io::Result<CapturedEncodedFrame> {
-        let maximum = capture_limit(&self.grant, image, request, self.size)?;
-        let texture = match self.gpu.texture(&self.grant, image) {
+        let grant = self
+            .grant
+            .clone()
+            .ok_or_else(|| io::Error::other("vendor encoder has no capture grant"))?;
+        let maximum = capture_limit(&grant, image, request, self.size)?;
+        let texture = match self.gpu.texture(&grant, image) {
             Ok(texture) => texture,
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                 self.refresh = true;
                 return Err(error);
             }
             Err(error) => {
-                d3d_input::disable(&format!("{}: {error}", self.name));
+                // A device of its own is not the capture's (P3).
+                if !self.gpu.is_own() {
+                    d3d_input::disable(&format!("{}: {error}", self.name));
+                }
                 return Err(error);
             }
         };
         let rate = self.rate(request.target_bps, request.fps);
         let idr = request.keyframe || self.frames == 0;
-        let mut bytes =
-            AdmittedBytes::buffer(&self.grant, CaptureOwner::CodecOutput, maximum as u64)?;
+        let mut bytes = AdmittedBytes::buffer(&grant, CaptureOwner::CodecOutput, maximum as u64)?;
         let picture = VendorPicture {
             texture: &texture,
             frame_id: request.frame_id,
@@ -351,7 +370,11 @@ impl<S: VendorSession> ScreenEncoder for VendorEncoder<S> {
     }
 
     fn name(&self) -> String {
-        format!("{} [GPU input (D3D11)]", self.name)
+        if self.gpu.is_own() {
+            format!("{} [GPU input (D3D11, own device)]", self.name)
+        } else {
+            format!("{} [GPU input (D3D11)]", self.name)
+        }
     }
 
     fn size(&self) -> FrameSize {
@@ -362,15 +385,13 @@ impl<S: VendorSession> ScreenEncoder for VendorEncoder<S> {
         self.refresh
     }
 
+    /// P3: a picture without admission (`plain`, `vendor_encode_plain.rs`).
     fn encode(
         &mut self,
-        _frame: &BgraImage,
-        _keyframe: bool,
-        _target_bps: u64,
+        frame: &BgraImage,
+        keyframe: bool,
+        target_bps: u64,
     ) -> io::Result<EncodedFrame> {
-        Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "vendor encoder requires encode_captured",
-        ))
+        self.encode_plain(frame, keyframe, target_bps)
     }
 }

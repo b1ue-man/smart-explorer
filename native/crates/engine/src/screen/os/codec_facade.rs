@@ -101,6 +101,22 @@ pub(super) fn openh264_switched_on() -> bool {
     false
 }
 
+/// Whether the OpenH264 store `dir` (`None`: this user's) is switched on:
+/// the key of the register a process keeps (plan 2026-11-17 P3,
+/// `codec_inventory::registry`).
+#[cfg(any(windows, target_os = "linux"))]
+pub(super) fn openh264_store_switched_on(dir: Option<&Path>) -> bool {
+    dir.map_or_else(openh264_install::OpenH264Store::for_user, |dir| {
+        openh264_install::OpenH264Store::at(dir.to_path_buf())
+    })
+    .switched_on()
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
+pub(super) fn openh264_store_switched_on(_dir: Option<&Path>) -> bool {
+    false
+}
+
 /// What the user does with OpenH264 (`se screen codec openh264 …`, the
 /// codec view).
 #[derive(Clone, Debug, PartialEq, Eq)]

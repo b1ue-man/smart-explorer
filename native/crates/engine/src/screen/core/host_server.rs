@@ -451,6 +451,7 @@ pub async fn serve(context: HostContext, viewer: ProvenViewer) -> io::Result<()>
         sharp,
         super::gop_continue::ContinueOffers::from_hello(&hello),
     );
+    pipeline.set_codec_trust(metadata.trust);
     pipeline.set_codec_fallbacks(fallbacks);
     if let Some(tiles) = negotiate_for_contract(
         &metadata.encoders,

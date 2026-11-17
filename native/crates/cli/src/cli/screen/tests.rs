@@ -83,11 +83,15 @@ fn bench() -> BenchReport {
         keyframes: 2,
         recoveries: vec![250.0],
         corrupt_frames: 0,
+        late_frames: 0,
+        decode_errors: 0,
+        decoder_open_failures: 0,
         static_psnr_db: None,
         stages_ms: Default::default(),
         source: None,
         host_timing: None,
         host_chain: None,
+        failure: None,
     }
 }
 
@@ -150,6 +154,10 @@ fn screen_task_cli_json_shapes() {
         "keyframes",
         "recoveries",
         "corrupt_frames",
+        // Plan 2026-11-17 P3: the decoder's counters are always there.
+        "late_frames",
+        "decode_errors",
+        "decoder_open_failures",
         "static_psnr_db",
     ];
     assert_eq!(keys(&measured), sorted(&expected));

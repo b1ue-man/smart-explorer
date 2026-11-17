@@ -72,11 +72,15 @@ fn report() -> BenchReport {
         keyframes: 1,
         recoveries: Vec::new(),
         corrupt_frames: 0,
+        late_frames: 0,
+        decode_errors: 0,
+        decoder_open_failures: 0,
         static_psnr_db: None,
         stages_ms,
         source: None,
         host_timing: None,
         host_chain: None,
+        failure: None,
     }
 }
 
@@ -194,4 +198,56 @@ fn bildkette_task_bench_old_reader_and_old_report() {
     real.source = Some("monitor:0".into());
     let json = serde_json::to_value(&real).unwrap();
     assert_eq!(json["source"], "monitor:0");
+}
+
+/// Plan 2026-11-17 „Windows-Bild“ P3: the barcode is read against the
+/// picture the decoder names; a late picture counts late, not corrupt, and
+/// a run without an intact picture keeps its counters.
+#[test]
+fn bildkette_task_verify_bench_counts_late_not_corrupt() {
+    use super::measure::Measure;
+    use crate::screen::core::decoded_frame::DecodedFrame;
+    let size = FrameSize::new(256, 144);
+    let mut picture = BgraImage::new(size).unwrap();
+    crate::screen::core::synthetic::render(1, &mut picture).unwrap();
+    let first = DecodedFrame {
+        frame_id: 1,
+        capture_ts_us: 10,
+        keyframe: true,
+    };
+    let wrong = DecodedFrame {
+        frame_id: 3,
+        capture_ts_us: 30,
+        keyframe: false,
+    };
+    let mut measure = Measure::new(size);
+    // Picture 1 out of the call of record 2: late, intact.
+    measure.shown(&picture, first, 2, 1_000, true);
+    // The decoder names picture 3, the barcode reads 1: corrupt.
+    measure.shown(&picture, wrong, 3, 2_000, true);
+    measure.decode_errors = 1;
+    measure.open_failures = 2;
+    let report = measure.report("fake", "local");
+    assert_eq!(
+        (
+            report.frames_shown,
+            report.late_frames,
+            report.corrupt_frames
+        ),
+        (1, 1, 1)
+    );
+    assert_eq!(report.keyframes, 1);
+    assert_eq!((report.decode_errors, report.decoder_open_failures), (1, 2));
+    assert_eq!(report.failure, None);
+    let mut nothing = Measure::new(size);
+    nothing.shown(&picture, wrong, 3, 2_000, true);
+    nothing.decode_errors = 4;
+    let report = nothing.report("fake", "direct");
+    let text = "no frame of the test picture arrived intact";
+    assert_eq!(report.failure.as_deref(), Some(text));
+    assert_eq!((report.corrupt_frames, report.decode_errors), (1, 4));
+    let json = serde_json::to_value(&report).unwrap();
+    assert_eq!(json["late_frames"], 0);
+    assert_eq!(json["decode_errors"], 4);
+    assert_eq!(json["failure"], text);
 }

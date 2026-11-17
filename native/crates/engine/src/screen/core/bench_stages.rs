@@ -133,11 +133,15 @@ mod tests {
             keyframes: 1,
             recoveries: Vec::new(),
             corrupt_frames: 0,
+            late_frames: 0,
+            decode_errors: 0,
+            decoder_open_failures: 0,
             static_psnr_db: None,
             stages_ms,
             source: None,
             host_timing: None,
             host_chain: None,
+            failure: None,
         }
     }
 
