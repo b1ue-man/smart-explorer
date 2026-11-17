@@ -50,5 +50,5 @@ Der direkte NVENC-Weg stand im Register an erster Stelle, gewählt wurde der Med
 ## Bitrate (Nutzer 2026-11-17)
 
 - Nutzer: „av1 braucht n haufen daten, 84mbit/s ist durchaus drin … shadowpc braucht mit ner latens von 20-30ms und gestochen scharfen bildern … in der selben auflösung weniger“, „h.264 capped bei 800kbit/s aus irgend nem grund und ruckelt … nicht ok“, „av1 ist zu viel. punkt.“
-- Anforderung: jeder Kodierer hält nachweislich die von se gesetzte Datenrate ein (AV1 unter H.264 bei gleicher Qualität); hält er sie nicht, wird er umkonfiguriert oder übersprungen. Keine künstliche Obergrenze unter der Leitung (H.264 800 kbit/s ist ein Fehler). Ziel wie Shadow: 20–30 ms Latenz, scharfes Bild.
+- Anforderung: jeder Kodierer hält nachweislich die von se gesetzte Datenrate ein (AV1 unter H.264 bei gleicher Qualität); hält er sie nicht, wird er umkonfiguriert oder übersprungen. Keine künstliche Obergrenze unter der Leitung (H.264 800 kbit/s ist ein Fehler). Ziel wie Shadow: unter 20 ms Latenz (Nutzer nach erneutem Nachsehen: „<20 bei shadow“), scharfes Bild.
 - Paket P7: Analyse läuft (Ratenmodell, Anwendung je Kodierer, Verlustfrei in der echten Sitzung).
