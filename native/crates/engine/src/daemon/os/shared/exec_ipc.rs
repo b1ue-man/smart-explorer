@@ -164,7 +164,16 @@ pub fn connect(
     )
     .map_err(|error| error.to_string())?;
     let (exec_id, control_token) = match read_response(&mut stream).map_err(|error| {
-        format!("Worker-IPC fuer unabhaengigen Exec-Abbruch inkompatibel oder getrennt: {error}")
+        // A read past the 20 s limit reports WouldBlock (EAGAIN) on Unix and
+        // TimedOut on Windows: the peer did not confirm the start in time.
+        if matches!(
+            error.kind(),
+            io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+        ) {
+            "Die Gegenstelle hat den Start des Befehls nicht innerhalb von 20 s bestätigt (nicht erreichbar oder beschäftigt)".to_string()
+        } else {
+            format!("Worker-IPC fuer unabhaengigen Exec-Abbruch inkompatibel oder getrennt: {error}")
+        }
     })? {
         IpcResponse::ExecControlledReady {
             exec_id,
