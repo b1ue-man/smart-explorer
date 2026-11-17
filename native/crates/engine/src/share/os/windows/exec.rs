@@ -16,6 +16,8 @@ mod exec_account_install;
 mod exec_account_job_tests;
 #[path = "exec_account_pipes.rs"]
 mod exec_account_pipes;
+#[path = "exec_account_rdp.rs"]
+mod exec_account_rdp;
 #[path = "exec_account_s4u.rs"]
 mod exec_account_s4u;
 #[path = "exec_account_scm.rs"]
@@ -47,7 +49,7 @@ mod exec_self_test;
 mod exec_supervisor;
 
 pub use self::exec_account_choices::account_choices;
-pub use self::exec_account_client::{resolve_account, run_as_supported};
+pub use self::exec_account_client::{remote_rdp_password, resolve_account, run_as_supported};
 pub use self::exec_account_setup::{
     exec_accounts_apply, Elevation, ExecAccountsAction, ExecAccountsOutcome,
 };

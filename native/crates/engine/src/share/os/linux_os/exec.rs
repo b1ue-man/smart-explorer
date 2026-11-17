@@ -394,6 +394,15 @@ pub fn terminal_supported() -> bool {
     exec_pty::terminal_supported()
 }
 
+/// Whether the account service configuration lets the worker of `uid` use
+/// `account` (the xrdp sign-in follows Exec, plan 2026-11-17 P4).
+pub fn helper_allows(uid: u32, account: &str) -> bool {
+    exec_helper_config::load()
+        .ok()
+        .flatten()
+        .is_some_and(|config| config.allows(uid, account))
+}
+
 /// A root worker, or a worker the account service serves, may start a job
 /// as another account (PRM-M5, PRM-M6).
 pub fn run_as_supported() -> bool {

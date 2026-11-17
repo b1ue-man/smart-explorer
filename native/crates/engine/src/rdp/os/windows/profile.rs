@@ -1,7 +1,9 @@
-//! Owner-protected native client profile. Kept read-only and non-replaceable
-//! until the exact spawned client exits; contains no username or password.
-//! The address is the device address (design 4.3); `prompt for
-//! credentials:i:0` lets saved credentials of that address apply.
+//! Owner-protected native client profile of a RemoteApp (since P4 the whole
+//! desktop starts without a file, `clients.rs`). Kept read-only and
+//! non-replaceable until the exact spawned client exits; it names the host's
+//! account (`username:s:`, `domain:s:`), never a password. The address is
+//! the device address (design 4.3); `prompt for credentials:i:0` lets saved
+//! credentials of that address apply.
 use std::os::windows::{
     ffi::OsStrExt,
     fs::{MetadataExt, OpenOptionsExt},
@@ -32,7 +34,12 @@ pub(super) struct Profile {
     parent: Option<File>,
 }
 impl Profile {
-    pub(super) fn create(listener: SocketAddr, alias: Option<&str>) -> Result<Self, String> {
+    pub(super) fn create(
+        listener: SocketAddr,
+        alias: Option<&str>,
+        account: Option<&crate::rdp::core::HostAccount>,
+    ) -> Result<Self, String> {
+        let body = crate::rdp::core::mstsc_profile_body(listener, alias, account)?;
         let token = crate::share::tcp_forward::TunnelId::generate()?;
         let directory = std::env::temp_dir().join(format!("smart-explorer-rdp-{}", token.as_str()));
         let path = directory.join("session.rdp");
@@ -67,17 +74,6 @@ impl Profile {
             return Err("RDP profile directory is not a plain directory".into());
         }
         profile.parent = Some(parent);
-        let mut body = format!(
-            "full address:s:{listener}\r\nauthentication level:i:2\r\nenablecredsspsupport:i:1\r\nprompt for credentials:i:0\r\n"
-        );
-        if let Some(alias) = alias {
-            if !crate::rdp::core::PublishedApp::valid_alias(alias) {
-                return Err("Invalid published RemoteApp alias".into());
-            }
-            body.push_str(&format!("disableconnectionsharing:i:1\r\nremoteapplicationmode:i:1\r\nremoteapplicationprogram:s:||{alias}\r\nremoteapplicationname:s:{alias}\r\nalternate shell:s:||{alias}\r\n"));
-        } else {
-            body.push_str("remoteapplicationmode:i:0\r\n");
-        }
         let mut expected = vec![0xff, 0xfe];
         expected.extend(body.encode_utf16().flat_map(u16::to_le_bytes));
         let path_w: Vec<u16> = profile

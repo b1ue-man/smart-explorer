@@ -59,6 +59,11 @@ pub enum HelperRequest {
     Stop { session: String },
     /// Whether a session of this connection still runs.
     Status { session: String },
+    /// Windows (RDP sign-in, plan 2026-11-17 P4): a new random password for
+    /// `se-remote`; with `for_rdp` the account is also admitted to Remote
+    /// Desktop (group Remote Desktop Users). Services before 0.5.198 refuse
+    /// the request as unknown; the worker then names the reason.
+    RemotePassword { for_rdp: bool },
 }
 
 impl HelperRequest {
@@ -95,6 +100,10 @@ pub enum HelperReply {
     Status {
         active: bool,
         empty: bool,
+    },
+    /// The password `RemotePassword` set; its Debug form never shows it.
+    RemotePassword {
+        password: crate::share::apps_wire::ManagedSecret,
     },
     Error {
         code: HelperErrorCode,

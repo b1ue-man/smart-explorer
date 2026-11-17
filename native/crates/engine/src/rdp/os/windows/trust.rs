@@ -8,10 +8,13 @@
 //! `<device address>:<port>` (assumption A6: mstsc then skips the warning,
 //! also on a name mismatch, under one of the two names).
 //!
-//! se-managed service credentials (GNOME desktop sharing) are handed to
-//! mstsc as a generic credential `TERMSRV/<device address>` that lives only
-//! for this logon session (`CRED_PERSIST_SESSION`) and is deleted when the
-//! RDP session ends. Account passwords never pass through se.
+//! se-managed service credentials (GNOME desktop sharing) and, since P4
+//! (plan 2026-11-17), the sign-in the host issues for its account (a new
+//! se-remote password, an xrdp token, the password stored on the host) are
+//! handed to mstsc as a generic credential `TERMSRV/<device address>` that
+//! lives only for this logon session (`CRED_PERSIST_SESSION`) and is deleted
+//! when the last RDP session to that address ends. This computer stores no
+//! account password of another device.
 use crate::rdp::core::{CertificateSha1, HostService};
 use crate::rdp::os::shared::clients::Credentials;
 use std::net::{IpAddr, SocketAddr};
@@ -56,6 +59,32 @@ pub fn read_cert_hash(name: &str) -> Option<Vec<u8>> {
         .ok()?;
     let value = key.get_raw_value("CertHash").ok()?;
     (value.vtype == RegType::REG_BINARY).then_some(value.bytes)
+}
+
+/// P4 (plan 2026-11-17): the account mstsc proposes for this listener,
+/// `UsernameHint` (the value mstsc itself keeps after a sign-in, assumption
+/// K1), under both names, so mstsc no longer proposes this computer's
+/// domain. Holds no password.
+pub fn write_username_hint(listener: SocketAddr, account: &str) -> Result<(), String> {
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    for name in server_names(listener) {
+        let path = format!(r"{SERVERS}\{name}");
+        let (key, _) = hkcu
+            .create_subkey(&path)
+            .map_err(|error| format!(r"HKCU\{path}: {error}"))?;
+        key.set_value("UsernameHint", &account)
+            .map_err(|error| format!(r"HKCU\{path}\UsernameHint: {error}"))?;
+    }
+    Ok(())
+}
+
+/// The stored `UsernameHint` of one name, for the task tests.
+#[cfg(any(test, feature = "test-support"))]
+pub fn read_username_hint(name: &str) -> Option<String> {
+    let key = RegKey::predef(HKEY_CURRENT_USER)
+        .open_subkey(format!(r"{SERVERS}\{name}"))
+        .ok()?;
+    key.get_value::<String, _>("UsernameHint").ok()
 }
 
 fn wide(text: &str) -> Vec<u16> {

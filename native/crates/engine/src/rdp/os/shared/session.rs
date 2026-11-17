@@ -3,7 +3,9 @@
 //! start time, design 2.7.1) and lives as long as the client and its QUIC
 //! connection (design 2.6); the daemon holds its own handle of the process.
 use super::clients::Credentials;
-use crate::rdp::core::{AuthenticatedProbe, ClientCapability, StartRequest};
+use crate::rdp::core::{
+    AuthenticatedProbe, ClientCapability, HostAccount, LoginView, StartRequest,
+};
 use crate::share::{
     tcp_forward::{TunnelId, TunnelView},
     PeerOpenTarget,
@@ -26,7 +28,7 @@ use ownership::{owners, PendingStart};
 mod open_device;
 #[cfg(any(target_os = "android", all(unix, any(test, feature = "test-support"))))]
 pub use open_device::open_device;
-pub use open_device::{open_device_session, open_device_with, OpenOptions};
+pub use open_device::{open_device_session, open_device_with, OpenOptions, DEVICE_OFFLINE};
 #[cfg(test)]
 #[path = "einrichtung_open_task_tests.rs"]
 mod einrichtung_open_task_tests;
@@ -39,6 +41,10 @@ pub struct SessionView {
     pub session_notice: String,
     pub certificate_sha256: String,
     pub remote_app: Option<String>,
+    /// P4: the account and how the device signs this session in; `None`
+    /// for se-managed GNOME credentials and credentials typed in the GUI.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub login: Option<LoginView>,
 }
 
 /// What one start needs besides the probe and the request.
@@ -47,6 +53,10 @@ pub struct StartContext {
     /// The device address of design 4.3; `None` = 127.0.0.1.
     pub bind: Option<Ipv4Addr>,
     pub credentials: Option<Credentials>,
+    /// P4: the host's account the client proposes without a password.
+    pub account: Option<HostAccount>,
+    /// P4: what the session view shows about the sign-in.
+    pub login: Option<LoginView>,
     /// `None` (default): no time limit for the host's answer (design 2.6).
     pub wait: Option<Duration>,
 }
@@ -121,7 +131,9 @@ impl RdpSession {
             .as_str()
             .to_string();
         let trust = super::clients::prepare_trust(listener, &service, credentials)?;
-        let client_process = super::clients::launch(request, &service, listener, credentials)?;
+        let account = context.account.as_ref();
+        let client_process =
+            super::clients::launch(request, &service, listener, credentials, account)?;
         let mut child = client_process.child;
         let pid = child.id();
         let bound = crate::share::os_sockets::process_identity(pid)
@@ -142,6 +154,7 @@ impl RdpSession {
             session_notice: service.session_mode.notice().into(),
             certificate_sha256: certificate,
             remote_app: request.remote_app.clone(),
+            login: context.login,
         };
         Ok(Self {
             child,

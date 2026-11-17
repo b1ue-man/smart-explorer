@@ -2,9 +2,11 @@
 //! rule r3 „die eine freigabe muss reichen, der rest muss laufen“): the
 //! present relation, a fresh authenticated probe, the host's self-setup
 //! when nothing is startable yet, the service of the smallest rank, this
-//! OS's client, the whole desktop (or one published RemoteApp), then the
+//! OS's client, the whole desktop (or one published RemoteApp), the sign-in
+//! with the device's account (P4, `viewer_login.rs`), then the
 //! process-bound tunnel on the device address.
 use super::super::clients::{choose_client, Credentials};
+use super::super::viewer_login::{host_login, Login};
 use super::{ownership::adopt_owned, RdpSession, SessionView, StartContext};
 use crate::rdp::core::{
     AuthenticatedProbe, CertificatePolicy, ClientCapability, HostService, SessionMode, StartRequest,
@@ -24,6 +26,11 @@ pub struct OpenOptions {
     /// Typed into the desktop GUI's own dialog (Linux without
     /// `sdl-freerdp3`, design 2.8); se-managed credentials need none.
     pub credentials: Option<Credentials>,
+    /// P4: the desktop GUI asks once for the password of the device's
+    /// account: a host that needs it ends the start with
+    /// `rdp_login_entry_needed: <account>` before any tunnel exists. Without
+    /// it (CLI, MCP, se Desktop) the RDP program asks.
+    pub ask_password: bool,
     /// `None` (default): no time limit for the host's answers.
     pub wait: Option<Duration>,
 }
@@ -157,7 +164,7 @@ pub fn open_device_session(
     } else {
         off_between_sessions(&probe, wanted).map(|found| found.id.clone())
     };
-    let (probe, service, credentials) = match off {
+    let (probe, service, login) = match off {
         Some(id) => {
             // The checks that need no listener run before the switch-on (E29, P3).
             checked_before_switch_on(probe.service(&id)?, &client, options.remote_app.as_deref())?;
@@ -168,31 +175,31 @@ pub fn open_device_session(
                 crate::daemon::apps_rdp_credential(target.clone(), &id, wait)?;
             let (fresh, _) = crate::daemon::apps_rdp_probe_v2(target.clone(), wait, &mut pending)?;
             let service = fresh.choose_service(Some(id.as_str()))?.clone();
-            (
-                fresh,
-                service,
-                Some(Credentials {
-                    username,
-                    domain: None,
-                    password,
-                }),
-            )
+            let credentials = Credentials {
+                username,
+                domain: None,
+                password,
+            };
+            (fresh, service, Login::given(Some(credentials)))
         }
         None => {
             let service = probe.choose_service(wanted)?.clone();
             StartRequest::derive(&service, &client, options.remote_app.clone()).validate(&probe)?;
-            let credentials = if service.managed_credentials {
+            let login = if service.managed_credentials {
                 let (username, password) =
                     crate::daemon::apps_rdp_credential(target.clone(), &service.id, wait)?;
-                Some(Credentials {
+                Login::given(Some(Credentials {
                     username,
                     domain: None,
                     password,
-                })
+                }))
+            } else if options.credentials.is_some() {
+                Login::given(options.credentials)
             } else {
-                options.credentials
+                // P4: the grant's account; a host up to 0.5.197 starts as before.
+                host_login(&target, &service.id, wait, options.ask_password)?
             };
-            (probe, service, credentials)
+            (probe, service, login)
         }
     };
     let request = StartRequest::derive(&service, &client, options.remote_app);
@@ -200,7 +207,9 @@ pub fn open_device_session(
         .map_err(|error| format!("Geräteadresse nicht verfügbar: {error}"))?;
     let context = StartContext {
         bind: Some(bind),
-        credentials,
+        credentials: login.credentials,
+        account: login.account,
+        login: login.view,
         wait,
     };
     RdpSession::start(target, probe, &request, context, pending)

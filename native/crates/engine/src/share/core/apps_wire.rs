@@ -38,6 +38,21 @@ pub enum AppsCommand {
     RdpCredential {
         service_id: String,
     },
+    /// P4 (0.5.198): the grant's account and how the host signs the viewer
+    /// in. Hosts up to 0.5.197 refuse this variant as unknown; the viewer
+    /// then starts as before and names the reason.
+    RdpLogin {
+        service_id: String,
+        /// Only state and account: no password and no side effect.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        status_only: bool,
+    },
+    /// P4: the password of the grant's account, typed once on the viewer;
+    /// the host checks and stores it. `None` forgets it.
+    RdpStorePassword {
+        service_id: String,
+        password: Option<ManagedSecret>,
+    },
     /// Locally listening services that steering exposes (CLI/MCP without feed).
     LocalServices,
 }
@@ -70,6 +85,16 @@ pub enum AppsResult {
     RdpCredential {
         username: String,
         password: ManagedSecret,
+    },
+    /// Answer to `RdpLogin` and `RdpStorePassword` (P4); `secret` only for
+    /// `automatic`/`stored` and never in a status answer.
+    RdpLoginInfo {
+        username: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        domain: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        secret: Option<ManagedSecret>,
+        state: crate::rdp::core::LoginState,
     },
     LocalServices {
         services: Vec<super::loopback_services::LoopbackService>,
@@ -203,10 +228,7 @@ impl AppsClientHello {
         Ok(())
     }
 }
-pub async fn send<W: AsyncWrite + Unpin, T: Serialize>(
-    out: &mut W,
-    value: &T,
-) -> io::Result<()> {
+pub async fn send<W: AsyncWrite + Unpin, T: Serialize>(out: &mut W, value: &T) -> io::Result<()> {
     let bytes = serde_json::to_vec(value).map_err(io::Error::other)?;
     if bytes.len() > MAX_PACKET {
         return Err(io::Error::other("complete device-command result exceeds bounded IPC-compatible frame; no partial inventory returned"));
@@ -215,9 +237,7 @@ pub async fn send<W: AsyncWrite + Unpin, T: Serialize>(
     out.write_all(&bytes).await?;
     out.flush().await
 }
-pub async fn receive<R: AsyncRead + Unpin, T: DeserializeOwned>(
-    input: &mut R,
-) -> io::Result<T> {
+pub async fn receive<R: AsyncRead + Unpin, T: DeserializeOwned>(input: &mut R) -> io::Result<T> {
     receive_bounded(input, MAX_PACKET).await
 }
 pub async fn receive_hello<R: AsyncRead + Unpin, T: DeserializeOwned>(

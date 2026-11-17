@@ -1,10 +1,14 @@
 mod client_trust;
 pub mod clients;
 mod gnome;
+/// Sign-in with the grant's account: xrdp with a one-time se token (P4).
+pub mod host_login;
 pub mod host_setup;
 mod inventory;
 mod krdp;
 mod xrdp;
+/// Token list, PAM line and PAM helper of the xrdp sign-in (P4).
+pub mod xrdp_token;
 use crate::rdp::core::{HostProbe, RDP_PROBE_VERSION_V2};
 
 pub fn probe() -> HostProbe {

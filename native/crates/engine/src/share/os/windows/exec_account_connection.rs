@@ -18,12 +18,15 @@ use windows_sys::Win32::Storage::FileSystem::FlushFileBuffers;
 use windows_sys::Win32::System::Pipes::{DisconnectNamedPipe, ImpersonateNamedPipeClient};
 use windows_sys::Win32::System::Threading::{GetCurrentThread, OpenThreadToken};
 
+use crate::share::access_grant::REMOTE_ACCOUNT_NAME;
+use crate::share::apps_wire::ManagedSecret;
 use crate::share::exec_helper_protocol::{
     read_frame, write_frame, HelperErrorCode, HelperReply, HelperRequest, HELPER_PROTOCOL,
 };
 
 use super::exec_account_config::{load_config, ServiceConfig};
 use super::exec_account_files::append_log;
+use super::exec_account_rdp::new_remote_password;
 use super::exec_account_s4u::{check_account, probe};
 use super::exec_account_security::{token_user, Sid};
 use super::exec_account_service::{lock, Shared};
@@ -160,6 +163,7 @@ impl Connection {
                 ),
                 HelperRequest::Stop { session } => self.stop(&session),
                 HelperRequest::Status { session } => self.status(&session),
+                HelperRequest::RemotePassword { for_rdp } => self.remote_password(&config, for_rdp),
             };
             write_frame(stream, &reply)?;
         }
@@ -188,6 +192,31 @@ impl Connection {
                 HelperReply::Started { session: id }
             }
             Err(refusal) => self.refused(account, refusal),
+        }
+    }
+
+    /// RDP sign-in (plan 2026-11-17 P4): a new password of `se-remote` for a
+    /// user the configuration allows `se-remote`; the log names no password.
+    fn remote_password(&self, config: &ServiceConfig, for_rdp: bool) -> HelperReply {
+        let account = REMOTE_ACCOUNT_NAME;
+        if !config.allows(&self.caller, account) {
+            return self.refused(account, not_allowed(account, &self.caller));
+        }
+        if let Err(refusal) = check_account(account) {
+            return self.refused(account, refusal.reply());
+        }
+        match new_remote_password(for_rdp) {
+            Ok(password) => {
+                self.log(if for_rdp {
+                    "set a new password of se-remote for a Remote Desktop session"
+                } else {
+                    "set a new password of se-remote that nobody receives"
+                });
+                HelperReply::RemotePassword {
+                    password: ManagedSecret::new(password),
+                }
+            }
+            Err(error) => self.refused(account, (HelperErrorCode::StartFailed, error.to_string())),
         }
     }
 

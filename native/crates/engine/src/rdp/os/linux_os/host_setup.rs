@@ -40,6 +40,9 @@ pub enum SystemStep {
     ConfigureXrdp,
     InstallGnomeRd,
     InstallKrdp,
+    /// P4: token directory of the invoking worker and the PAM line of xrdp.
+    XrdpLogin,
+    XrdpLoginRemove,
 }
 impl SystemStep {
     pub fn parse(name: &str) -> Option<Self> {
@@ -48,6 +51,8 @@ impl SystemStep {
             "configure-xrdp" => Self::ConfigureXrdp,
             "install-gnome-rd" => Self::InstallGnomeRd,
             "install-krdp" => Self::InstallKrdp,
+            "xrdp-login" => Self::XrdpLogin,
+            "xrdp-login-remove" => Self::XrdpLoginRemove,
             _ => return None,
         })
     }
@@ -57,12 +62,14 @@ impl SystemStep {
             Self::ConfigureXrdp => "configure-xrdp",
             Self::InstallGnomeRd => "install-gnome-rd",
             Self::InstallKrdp => "install-krdp",
+            Self::XrdpLogin => "xrdp-login",
+            Self::XrdpLoginRemove => "xrdp-login-remove",
         }
     }
     fn packages(self) -> &'static [&'static str] {
         match self {
             Self::InstallXrdp => &["xrdp", "xorgxrdp"],
-            Self::ConfigureXrdp => &[],
+            Self::ConfigureXrdp | Self::XrdpLogin | Self::XrdpLoginRemove => &[],
             Self::InstallGnomeRd => &["gnome-remote-desktop"],
             Self::InstallKrdp => &["krdp"],
         }
@@ -362,6 +369,9 @@ fn system_step(step: SystemStep) -> SetupState {
     if !is_root() {
         return SetupState::Failed("system_step_needs_root".into());
     }
+    if let Some(state) = super::xrdp_token::system_step(step) {
+        return state;
+    }
     let result = (|| {
         if step != SystemStep::ConfigureXrdp {
             let fresh_xrdp = find_tool(&["xrdp"]).is_none();
@@ -378,13 +388,14 @@ fn system_step(step: SystemStep) -> SetupState {
         }
         if matches!(step, SystemStep::InstallXrdp | SystemStep::ConfigureXrdp) {
             configure_xrdp()?;
+            super::xrdp_token::install_with_xrdp();
         }
         Ok::<(), SetupState>(())
     })();
     result.err().unwrap_or(SetupState::Done)
 }
 
-fn system(step: SystemStep) -> SetupState {
+pub(super) fn system(step: SystemStep) -> SetupState {
     if is_root() {
         system_step(step)
     } else {
@@ -455,9 +466,7 @@ pub fn issue_credential(
 /// Rotation after a revocation and withdrawal when no device steers any
 /// more concern only the GNOME sharing se manages (xrdp set up by se listens
 /// on loopback only and stays).
-pub use super::gnome::{
-    rotate_credential as rotate_credentials, withdraw as withdraw_managed,
-};
+pub use super::gnome::{rotate_credential as rotate_credentials, withdraw as withdraw_managed};
 
 /// What decides whether this process can show a polkit prompt: root, and
 /// the graphical session of its environment (fixed for the process).

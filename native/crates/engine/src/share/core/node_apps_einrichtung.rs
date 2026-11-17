@@ -1,7 +1,9 @@
 //! Host side of design 9.2: RDP probe v1/v2, the RDP self-setup on a
-//! viewer's request (T4), se-managed RDP credentials and the list of local
-//! services that „Bildschirm steuern: Erlauben“ exposes. Probes are admitted
-//! like the v1 probe (screen-view metadata); everything else needs steering.
+//! viewer's request (T4), se-managed RDP credentials, the sign-in with the
+//! grant's account (P4, `RdpLogin`, `RdpStorePassword`) and the list of
+//! local services that „Bildschirm steuern: Erlauben“ exposes. Probes are
+//! admitted like the v1 probe (screen-view metadata); everything else needs
+//! steering.
 use super::super::*;
 use crate::rdp::core::SetupTrigger;
 use crate::share::tcp_sockets::local_services;
@@ -82,6 +84,61 @@ impl ShareIrohNode {
                     password: apps_wire::ManagedSecret::new(issued.1),
                 })
             }
+            // P4 (plan 2026-11-17): the grant's account and how the viewer
+            // signs in. Steering is checked before and after (as
+            // `RdpCredential`); a right that ended meanwhile withdraws what
+            // was issued (tokens, a se-remote password, stored passwords).
+            AppsCommand::RdpLogin {
+                service_id,
+                status_only,
+            } => {
+                let account = self.steering_account(principal)?;
+                if !*status_only {
+                    // A start may set the xrdp sign-in up first (polkit) or
+                    // start the account service: `Pending` ends the viewer's
+                    // first-reply wait; no fixed limit follows (rule r7).
+                    apps_wire::send(send, &AppsReply::Pending).await?;
+                }
+                let (node, proven) = (self.clone(), principal.clone());
+                let (id, status_only) = (service_id.clone(), *status_only);
+                let info = tokio::task::spawn_blocking(move || {
+                    use crate::rdp::host_login::{login_info, with_steering, withdraw, Viewer};
+                    let viewer = Viewer::new(&proven.device_id, &proven.public_key);
+                    with_steering(
+                        || node.require_steering(&proven).map_err(|e| e.to_string()),
+                        || login_info(&id, &viewer, &account, status_only),
+                        |issued| withdraw(&viewer, issued),
+                    )
+                })
+                .await
+                .map_err(eio)?
+                .map_err(|reason| io::Error::new(io::ErrorKind::PermissionDenied, reason))?;
+                Ok(login_result(info))
+            }
+            // P4: the password of the grant's account, typed once on the
+            // viewer; checked (at most five wrong ones per hour) and stored
+            // on this device. `None` forgets it.
+            AppsCommand::RdpStorePassword {
+                service_id,
+                password,
+            } => {
+                let account = self.steering_account(principal)?;
+                let (node, proven) = (self.clone(), principal.clone());
+                let (id, password) = (service_id.clone(), password.clone());
+                let info = tokio::task::spawn_blocking(move || {
+                    use crate::rdp::host_login::{store_password, with_steering, withdraw, Viewer};
+                    let viewer = Viewer::new(&proven.device_id, &proven.public_key);
+                    with_steering(
+                        || node.require_steering(&proven).map_err(|e| e.to_string()),
+                        || store_password(&id, &viewer, &account, password.as_ref()),
+                        |issued| withdraw(&viewer, issued),
+                    )
+                })
+                .await
+                .map_err(eio)?
+                .map_err(|reason| io::Error::new(io::ErrorKind::PermissionDenied, reason))?;
+                Ok(login_result(info))
+            }
             AppsCommand::LocalServices => {
                 self.require_steering(principal)?;
                 let listing = tokio::task::spawn_blocking(local_services)
@@ -119,6 +176,33 @@ impl ShareIrohNode {
             ));
         }
         Ok(())
+    }
+
+    /// Steering now, and the account the grant of the proven relation names
+    /// (P4: as Exec and the machine login).
+    fn steering_account(
+        &self,
+        principal: &ProvenPrincipal,
+    ) -> io::Result<crate::share::access_grant::AccountProfile> {
+        self.require_steering(principal)?;
+        let state = self
+            .auth
+            .lock()
+            .map_err(|_| eio("authorization unavailable"))?;
+        principal_grant(&state, principal)
+            .map(|grant| grant.access_grant().account)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::PermissionDenied, "relationship ended"))
+    }
+}
+
+/// The `RdpLoginInfo` reply of a checked sign-in decision.
+fn login_result(info: crate::rdp::core::LoginInfo) -> AppsResult {
+    let (username, domain, secret, state) = info.into_wire();
+    AppsResult::RdpLoginInfo {
+        username,
+        domain,
+        secret,
+        state,
     }
 }
 

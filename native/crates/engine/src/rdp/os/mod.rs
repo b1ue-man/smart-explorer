@@ -27,10 +27,7 @@ mod platform {
         pub fn ensure(_: &HostProbe, _: Option<&str>) -> SetupState {
             impossible().unwrap_or_else(|| SetupState::Failed("platform".into()))
         }
-        pub fn issue_credential(
-            _: &HostService,
-            _: &str,
-        ) -> Result<(String, String), String> {
+        pub fn issue_credential(_: &HostService, _: &str) -> Result<(String, String), String> {
             Err("This platform hosts no RDP service".into())
         }
         pub fn rotate_credentials(_: &str) -> Result<(), String> {
@@ -45,6 +42,33 @@ mod platform {
         pub fn run_system_step(_: &str, _: Option<&str>) -> (String, i32) {
             ("state=impossible:platform".into(), 1)
         }
+    }
+    /// No RDP host here, so no sign-in with the device's account (P4).
+    pub mod host_login {
+        use crate::rdp::core::{HostAccount, LoginInfo};
+        use crate::rdp::os::shared::host_login::{Automatic, Viewer};
+        use crate::share::access_grant::AccountProfile;
+        const NONE: &str = "Dieses Gerät ist kein RDP-Host";
+        pub fn supports(_: &str) -> Result<(), String> {
+            Err(NONE.into())
+        }
+        pub fn account(_: &AccountProfile) -> Result<HostAccount, String> {
+            Err(NONE.into())
+        }
+        pub fn automatic(
+            _: &str,
+            _: &AccountProfile,
+            _: &HostAccount,
+            _: &Viewer,
+            _: bool,
+        ) -> Automatic {
+            Automatic::No
+        }
+        pub fn verify(_: &HostAccount, _: &str) -> Result<bool, String> {
+            Err(NONE.into())
+        }
+        pub fn withdraw(_: &Viewer, _: &LoginInfo) {}
+        pub fn coverage_ended(_: &dyn Fn(&Viewer) -> bool, _: bool) {}
     }
     pub mod clients {
         use crate::rdp::core::{ClientCapability, HostService, StartRequest};
@@ -63,3 +87,16 @@ mod platform {
     }
 }
 pub use platform::probe;
+
+/// `se --rdp-xrdp-login` (pam_exec of xrdp-sesman, P4): 0 accepts the
+/// login with a se token; other platforms host no xrdp.
+pub fn xrdp_login_check() -> i32 {
+    #[cfg(target_os = "linux")]
+    {
+        platform::xrdp_token::pam_check()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        1
+    }
+}

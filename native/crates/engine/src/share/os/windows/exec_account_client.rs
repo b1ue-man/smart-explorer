@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 
 use windows_sys::Win32::Foundation::ERROR_ACCESS_DENIED;
 
+use crate::share::apps_wire::ManagedSecret;
 use crate::share::exec_client_messages::{ACCOUNT_HELPER_UNAVAILABLE, ACCOUNT_NOT_ALLOWED};
 use crate::share::exec_helper_protocol::{
     account_start_error, read_frame, write_frame, HelperErrorCode, HelperReply, HelperRequest,
@@ -248,6 +249,17 @@ impl AccountSession {
             HelperReply::Status { active, empty } => Ok(!active && empty),
             other => Err(unexpected(&other)),
         }
+    }
+}
+
+/// RDP sign-in (plan 2026-11-17 P4, decision 5): a new password of
+/// `se-remote` from the account service; `for_rdp` also admits the account
+/// to Remote Desktop. A service before 0.5.198 refuses the request.
+pub fn remote_rdp_password(for_rdp: bool) -> io::Result<ManagedSecret> {
+    let mut connection = ServiceConnection::open().map_err(OpenFailure::into_error)?;
+    match connection.request(&HelperRequest::RemotePassword { for_rdp })? {
+        HelperReply::RemotePassword { password } => Ok(password),
+        other => Err(unexpected(&other)),
     }
 }
 

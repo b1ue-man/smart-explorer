@@ -27,6 +27,8 @@ struct State {
     tunnels_at: Option<Instant>,
     /// The background service's setup state (design 3.4, threat T-R6).
     setup: Option<crate::rdp::host_setup::SetupStatus>,
+    /// P4: passwords of this device's accounts other devices stored here.
+    stored_passwords: usize,
     listing: bool,
     error: Option<String>,
 }
@@ -66,6 +68,7 @@ pub fn this_device(ui: &mut egui::Ui) {
     });
     refresh(ui.ctx(), &shared);
     let mut close = None;
+    let mut forget = false;
     {
         let state = shared.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(setup) = &state.setup {
@@ -115,12 +118,31 @@ pub fn this_device(ui: &mut egui::Ui) {
                 }
             });
         }
+        if state.stored_passwords > 0 {
+            ui.horizontal_wrapped(|ui| {
+                let count = match state.stored_passwords {
+                    1 => "ein Kennwort".to_string(),
+                    many => format!("{many} Kennwörter"),
+                };
+                ui.label(format!(
+                    "Andere Geräte haben hier {count} für die Remote-Desktop-Anmeldung hinterlegt; das Ende von „Bildschirm steuern“ löscht sie."
+                ));
+                forget = ui.button("Hinterlegte Kennwörter löschen").clicked();
+            });
+        }
         if let Some(error) = &state.error {
             ui.colored_label(egui::Color32::RED, error);
         }
     }
     if let Some(id) = close {
         close_tunnel(ui.ctx(), &shared, id);
+    }
+    if forget {
+        spawn(ui.ctx(), &shared, "this-device-rdp-forget", |state| {
+            crate::rdp::host_login::forget_all();
+            let mut state = state.lock().unwrap_or_else(PoisonError::into_inner);
+            state.stored_passwords = crate::rdp::host_login::stored_count();
+        });
     }
 }
 
@@ -152,7 +174,9 @@ fn refresh(ctx: &egui::Context, shared: &Shared) {
             let setup = crate::daemon::share_worker_snapshot()
                 .ok()
                 .and_then(|snapshot| snapshot.rdp_setup);
+            let stored = crate::rdp::host_login::stored_count();
             let mut state = state.lock().unwrap_or_else(PoisonError::into_inner);
+            state.stored_passwords = stored;
             if let Some(setup) = setup {
                 // A setup that just ended shows its new result: probe again.
                 if state

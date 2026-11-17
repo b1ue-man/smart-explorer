@@ -12,6 +12,11 @@ fn main() {
             }
         }
     }
+    // P4: `pam_exec` of xrdp-sesman runs `se --rdp-xrdp-login` as root; it
+    // answers with its exit code alone, before any other setup of this program.
+    if let Some(code) = smart_explorer::rdp::run_xrdp_login_if_requested(&arguments) {
+        std::process::exit(code);
+    }
     if let Some(result) = smart_explorer::mcp_launcher::runtime_contract_probe(&arguments) {
         match result {
             Ok(code) => std::process::exit(code),

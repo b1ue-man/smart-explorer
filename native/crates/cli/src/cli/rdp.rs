@@ -4,7 +4,9 @@
 //! service, client, certificate trust and the session's life itself and
 //! owns the native client until it ends. Older switches stay accepted so
 //! scripts keep working; they no longer change anything. No CLI-supplied
-//! inventory, certificate pin or password.
+//! inventory or certificate pin; the only password is the one `se rdp
+//! password` reads without echo (or from standard input) and hands to the
+//! device, which checks and stores it (plan 2026-11-17 P4).
 use crate::desktop::core::tiles::identity_of;
 use crate::{rdp::AuthenticatedProbe, share::PeerOpenTarget};
 use clap::{Args, Subcommand};
@@ -48,6 +50,11 @@ enum RdpCommand {
         #[arg(long)]
         json: bool,
     },
+    /// The password of the device's account, typed once: the device checks
+    /// it and stores it for this computer, so Remote Desktop signs in
+    /// without asking. Read from the terminal without echo, or from standard
+    /// input; never an argument.
+    Password(PasswordArgs),
     /// The fixed elevated steps of this host's RDP and login self-setup,
     /// started through `pkexec` or UAC by the setup itself (design 3.3,
     /// E44). `--system` once or several times: the steps run in this order in
@@ -61,6 +68,21 @@ enum RdpCommand {
         #[arg(long)]
         user_sid: Option<String>,
     },
+}
+
+/// `se rdp password <device> [--forget | --status]` (plan 2026-11-17 P4).
+#[derive(Args, Debug, Default, PartialEq, Eq)]
+pub(crate) struct PasswordArgs {
+    /// Share endpoint, saved device name, device ID or fingerprint prefix.
+    pub(crate) device: String,
+    /// Deletes the password the device stored for this computer.
+    #[arg(long, conflicts_with = "status")]
+    pub(crate) forget: bool,
+    /// Shows the account and how the device signs this computer in.
+    #[arg(long)]
+    pub(crate) status: bool,
+    #[arg(long)]
+    pub(crate) json: bool,
 }
 
 /// `se rdp open`: only the device, optionally one published RemoteApp.
@@ -202,6 +224,7 @@ pub(super) fn run(
             json,
             &json!({"id":id,"closed":crate::rdp::close(TunnelId::parse(&id)?)?}),
         ),
+        RdpCommand::Password(args) => password(&args)?,
         RdpCommand::HostSetup { system, user_sid } => {
             let (lines, code) =
                 crate::rdp::host_setup::run_system_steps(&system, user_sid.as_deref());
@@ -247,6 +270,59 @@ fn open_and_wait(open: &OpenArgs) -> Result<(), String> {
         return Err(format!("Native RDP client exited with {status}"));
     }
     Ok(())
+}
+
+/// `se rdp password`: the state, the forgetting, or the password typed once
+/// (decision 3 of P4). The password leaves this computer only towards the
+/// device over the authenticated share connection.
+fn password(args: &PasswordArgs) -> Result<(), String> {
+    use crate::rdp::core::LoginState;
+    use crate::rdp::viewer_login::{login_status, store_password};
+    let (device, key, name) = device_identity(&args.device)?;
+    let info = if args.forget {
+        store_password(&device, &key, None, None)?
+    } else if args.status {
+        login_status(&device, &key, None)?
+    } else {
+        let info = login_status(&device, &key, None)?;
+        match &info.state {
+            LoginState::Automatic => {
+                return Err(format!("{}; es braucht kein Kennwort", info.view().text))
+            }
+            LoginState::Unsupported(_) => return Err(info.view().text),
+            LoginState::EntryNeeded | LoginState::Stored => {}
+        }
+        let Some(account) = info.account.as_ref().map(|account| account.qualified()) else {
+            return Err(info.view().text);
+        };
+        let prompt = format!(
+            "Kennwort von {account} auf {name}; wird auf {name} gespeichert (Eingabe verborgen): "
+        );
+        let secret = crate::share::apps_wire::ManagedSecret::new(read_password(&prompt)?);
+        store_password(&device, &key, Some(secret), None)?
+    };
+    let view = info.view();
+    if args.json {
+        println!("{}", json!({ "login": view }));
+    } else {
+        println!("{}", view.text);
+    }
+    Ok(())
+}
+
+/// The password without echo from a terminal, otherwise one line of
+/// standard input; never empty.
+fn read_password(prompt: &str) -> Result<String, String> {
+    use std::io::IsTerminal;
+    let typed = if std::io::stdin().is_terminal() {
+        super::os::read_hidden_line(prompt)?
+    } else {
+        super::setup::read_stdin_secret()?
+    };
+    if typed.is_empty() {
+        return Err("Kein Kennwort eingegeben".into());
+    }
+    Ok(typed)
 }
 
 fn output(json: bool, value: &serde_json::Value) {

@@ -162,6 +162,12 @@ impl Service {
                 }
                 (true, HelperRequest::Stop { session }) => self.stop(&session),
                 (true, HelperRequest::Status { session }) => self.status(&session),
+                // Only the Windows service sets se-remote's RDP password;
+                // xrdp signs in with a se token (P4).
+                (true, HelperRequest::RemotePassword { .. }) => HelperReply::Error {
+                    code: HelperErrorCode::BadRequest,
+                    detail: "remote_password exists only on Windows".into(),
+                },
             };
             write_frame(&mut &self.stream, &reply)?;
         }

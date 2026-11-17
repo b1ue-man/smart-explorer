@@ -257,8 +257,8 @@ mod apps_ipc;
 mod apps_ipc_client;
 pub use apps_ipc_client::{
     apps_catalog, apps_command, apps_icon, apps_launch, apps_local_grants, apps_local_services,
-    apps_rdp_credential, apps_rdp_prepare, apps_rdp_probe, apps_rdp_probe_v2, apps_receipt,
-    apps_set_local_grant,
+    apps_rdp_credential, apps_rdp_login, apps_rdp_prepare, apps_rdp_probe, apps_rdp_probe_v2,
+    apps_rdp_store_password, apps_receipt, apps_set_local_grant,
 };
 #[path = "os/shared/login_ipc.rs"]
 mod login_ipc;
