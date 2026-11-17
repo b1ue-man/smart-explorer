@@ -36,3 +36,12 @@ Der direkte NVENC-Weg stand im Register an erster Stelle, gewählt wurde der Med
 - P5 offen: virtueller Bildschirm in der Auflösung des Betrachters (Linux, Windows; Recherche).
 - P6 offen: Maschinenanmeldung der Selbsteinrichtung unter Linux.
 - Danach: eine Suite, ein Release, lokale Installationen.
+
+## Entscheidungen zum virtuellen Bildschirm unter Windows (Nutzer 2026-11-17)
+
+- Weg: den MIT-lizenzierten „Virtual Display Driver“ (VirtualDrivers) mitliefern; ein eigenes Code-Signatur-Zertifikat ist keine Option (Nutzer: „b, a ist keine option. ich habe kein problem beim update iw auf ok zu drücken, nur beim nutzen dann noch irgend ein setup machen zu müssen“).
+- Befund 2026-11-17: Release 24.10.27 (`VirtualDisplayDriver-x64.zip`) trägt im Katalog `mttvdd.cat` nur ein selbst ausgestelltes Zertifikat „CN = Virtual Display Driver“; dessen `installCert.bat` trägt es als vertrauenswürdig ein. Dieses fremde Zertifikat wird nicht übernommen.
+- Signatur: im erhöhten Schritt des Updates erzeugt se auf dem Gerät ein eigenes Code-Signatur-Zertifikat, signiert den Katalog, trägt das Zertifikat in `LocalMachine\Root` und `LocalMachine\TrustedPublisher` ein und löscht den privaten Schlüssel sofort.
+- Nur bei Änderung (Nutzer: „wenn ein update nichts am treiber ändert möchte ich nicht neu signieren müssen“): signiert und installiert wird nur, wenn der mitgelieferte Treiber (SHA-256 des Katalogs und der Treiberdateien) vom installierten abweicht, der Treiber fehlt oder nicht funktioniert.
+- Nutzung: ohne physischen Monitor legt se den virtuellen Monitor in der Auflösung des Betrachters ohne Abfrage an.
+- Ungeprüft bis zum Gerätelauf: Annahme eines lokal signierten Benutzermodus-Treibers bei Secure Boot; DXGI-Aufnahme eines IddCx-Monitors.
