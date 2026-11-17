@@ -986,7 +986,8 @@ die Zahlenwerte unten Schätzungen und als solche gekennzeichnet. Architekturüb
 - **Sendebündel (E5).** Das Bündel (40 Segmente, 80 Datagramme) gilt für `Files` und `Tcp` und für die
   Richtung, in der die Verbindung gewählt wurde; eine eingehende Verbindung bekommt es nur, wenn die ALPN
   im ersten Initial-Paket lesbar ist (`docs/GOTCHAS.md`, Abschnitt „Connections per purpose“). M1 hat den
-  Wert bestätigt: Mit vier Verbindungen ist 40/80 auf jeder Plattform schneller. Nur die Einzelverbindung auf
+  Wert bestätigt: Mit vier Verbindungen ist 40/80 auf Linux x86_64 (934,9 gegen 749,2 MiB/s) und
+  Linux aarch64 (807,8 gegen 605,4 MiB/s) schneller; der Windows-Wert mit vier Verbindungen liegt nur im Joblog. Nur die Einzelverbindung auf
   Linux aarch64 ist um 5,8 % langsamer. M9 (ACK-Frequenz) brachte unter 10 % (Plan, Abschnitt F).
   Vendor-Patch und Relay-Grenze: `vendor/SMART_EXPLORER_QUIC_PROFILES.md`.
 - **Messausgabe.** Die Zeilen von M1 und M9 tragen `gezaehlt_mib`, die Größe eines gezählten Laufs: 1024
