@@ -196,6 +196,7 @@ impl ScreenHostBackend for LinuxBackend {
                 width: 0,
                 height: 0,
                 primary: true,
+                is_virtual: false,
             }],
             SessionKind::X11 => x11_rb_monitors().unwrap_or_default(),
         }

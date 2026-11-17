@@ -129,6 +129,10 @@ pub mod synthetic;
 pub mod tiles_codec;
 pub mod viewer_client;
 pub mod viewer_reconstruct;
+// P5 (plan 2026-11-17): the virtual display in the viewer's resolution.
+pub mod virtual_display;
+pub mod virtual_display_config;
+pub mod virtual_display_host;
 pub mod window_list;
 pub mod wire;
 pub mod wire_binary;

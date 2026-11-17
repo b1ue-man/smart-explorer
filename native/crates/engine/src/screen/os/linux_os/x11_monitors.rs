@@ -2,13 +2,16 @@
 //! RandR 1.5, else the CRTCs of the current screen resources with the name
 //! of their first output. Source ids are `monitor:<output name>` with every
 //! character outside visible ASCII (0x21..=0x7E) replaced by `_`; position
-//! and size are pixels of the X11 root window.
+//! and size are pixels of the X11 root window. An output of the Xorg driver
+//! `dummy` or a virtual output of VM graphics is marked `virtual` (plan
+//! 2026-11-17 P5, `virtual_display::virtual_output_name`).
 use std::io;
 
 use x11rb::connection::Connection;
 use x11rb::protocol::randr::ConnectionExt as _;
 use x11rb::protocol::xproto::{ConnectionExt as _, Window};
 
+use crate::screen::core::virtual_display::virtual_output_name;
 use crate::screen::core::window_list::{MonitorInfo, MAX_ID_BYTES};
 
 /// Id of a monitor named `name`: visible ASCII only, at most 64 bytes; an
@@ -63,6 +66,7 @@ fn randr_monitors<C: Connection>(conn: &C, root: Window) -> io::Result<Vec<Monit
         let name = String::from_utf8_lossy(&name.name).into_owned();
         monitors.push(MonitorInfo {
             id: monitor_id(&name),
+            is_virtual: virtual_output_name(&name),
             name,
             x: i32::from(monitor.x),
             y: i32::from(monitor.y),
@@ -109,6 +113,7 @@ fn crtc_monitors<C: Connection>(conn: &C, root: Window) -> io::Result<Vec<Monito
         let name = String::from_utf8_lossy(&output_info.name).into_owned();
         monitors.push(MonitorInfo {
             id: monitor_id(&name),
+            is_virtual: virtual_output_name(&name),
             name,
             x: i32::from(info.x),
             y: i32::from(info.y),
@@ -135,5 +140,6 @@ fn root_monitor<C: Connection>(conn: &C, root: Window) -> io::Result<Vec<Monitor
         width: u32::from(geometry.width),
         height: u32::from(geometry.height),
         primary: true,
+        is_virtual: false,
     }])
 }

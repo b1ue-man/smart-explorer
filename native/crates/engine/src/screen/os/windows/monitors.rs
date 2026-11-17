@@ -105,6 +105,7 @@ fn entry_of(handle: HMONITOR) -> Option<MonitorEntry> {
             width: u32::try_from(rect.right - rect.left).unwrap_or(0),
             height: u32::try_from(rect.bottom - rect.top).unwrap_or(0),
             primary: info.monitorInfo.dwFlags & MONITORINFOF_PRIMARY != 0,
+            is_virtual: false,
         },
         handle,
         device,

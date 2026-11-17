@@ -327,6 +327,8 @@ fn view_open(args: &Value) -> Result<Value, ApiError> {
         // B-36: the Android sink opens a decoder per picture group.
         gop_continue: false,
         gop_continue_decoders: Vec::new(),
+        // P5: „Monitor“ and „Auflösung“ (`screen_view_codecs.rs`).
+        virtual_display: codecs::virtual_display_arg(args)?,
     };
     let id = run::start(mode, target.peer(), request, own_device())?;
     Ok(json!({ "session": id }))

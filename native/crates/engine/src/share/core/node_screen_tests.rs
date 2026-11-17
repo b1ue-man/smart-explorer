@@ -64,6 +64,7 @@ fn request(mode: SessionMode, source: SourceId, size: FrameSize, fps: u16) -> Vi
         max_fps: fps,
         gop_continue: false,
         gop_continue_decoders: Vec::new(),
+        virtual_display: None,
     }
 }
 
@@ -252,6 +253,7 @@ impl ScreenHostBackend for Desktop {
             width: 640,
             height: 360,
             primary: true,
+            is_virtual: false,
         }]
     }
     fn encoders(&self) -> Vec<CodecOffer> {

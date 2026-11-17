@@ -43,6 +43,7 @@ impl PreparedWorker {
                 control,
                 working: broker.working_bytes(),
                 family,
+                virtual_display: crate::screen::core::virtual_display_host::portal_size(session),
             };
             let info = match link
                 .ask(&WorkerRequest::CaptureControl(request), OPEN_TIMEOUT)

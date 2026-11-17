@@ -56,6 +56,7 @@ fn hello(monitors: Vec<MonitorInfo>) -> ScreenHelloOk {
         family_version: None,
         icon_version: None,
         encoders_v2: None,
+        virtual_display: None,
         frame_contract: None,
         authorization: ScreenAuthorization {
             view: CapabilityDecision::Allow,
@@ -79,6 +80,7 @@ fn monitor(id: &str, primary: bool) -> MonitorInfo {
         width: 1920,
         height: 1080,
         primary,
+        is_virtual: false,
     }
 }
 

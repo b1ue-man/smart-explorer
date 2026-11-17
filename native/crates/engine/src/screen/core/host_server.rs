@@ -124,8 +124,10 @@ impl Start<'_> {
             frame_contract,
             icon_version: self.icon_version,
             family_version: self.family_version,
+            virtual_display: None,
         };
         ok.offer_encoders(&metadata.encoders, self.hello);
+        ok.set_virtual_display(metadata.virtual_display.clone());
         ok
     }
 
@@ -353,6 +355,7 @@ pub async fn serve(context: HostContext, viewer: ProvenViewer) -> io::Result<()>
         sharp,
         fallbacks,
         admission,
+        display,
     } = match startup::prepare(
         &context,
         &principal,
@@ -417,8 +420,11 @@ pub async fn serve(context: HostContext, viewer: ProvenViewer) -> io::Result<()>
                 .await;
         }
     }
-    let ok = start.hello_ok(&metadata, authorization, approval, contract);
+    let mut ok = start.hello_ok(&metadata, authorization, approval, contract);
+    ok.set_virtual_display(display.report);
     start.accepted(ok).await?;
+    // P5: the claim on the display's size ends with the session.
+    let _display = display.claim;
     let result = Some(approval_result(approval));
     log_event(
         context.audit,

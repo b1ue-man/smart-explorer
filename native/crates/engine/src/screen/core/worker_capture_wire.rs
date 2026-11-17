@@ -203,6 +203,10 @@ pub enum CaptureRequest {
         control: bool,
         working: u64,
         family: Option<super::worker_family::OpenFamily>,
+        /// The size of se's own display a Wayland host process offers its
+        /// portal (plan 2026-11-17 P5, `virtual_display_host::portal_size`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        virtual_display: Option<FrameSize>,
     },
     Plan(OutputWire),
     Activate {

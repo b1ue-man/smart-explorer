@@ -223,6 +223,7 @@ impl ScreenHostBackend for Backend {
             width: 64,
             height: 64,
             primary: true,
+            is_virtual: false,
         }]
     }
     fn encoders(&self) -> Vec<CodecOffer> {
@@ -417,6 +418,8 @@ pub fn hello(mode: SessionMode, metadata: bool) -> ScreenClientHello {
         decoders_v2: None,
         gop_continue: None,
         gop_continue_decoders: None,
+        virtual_display: None,
+        virtual_display_size: None,
     }
 }
 

@@ -81,6 +81,11 @@ pub struct StreamRequest {
     /// over a continuation (`gop_continue_decoders` of the hello).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub gop_continue_decoders: Vec<CodecOffer>,
+    /// „Monitor“ and „Auflösung“ of the viewer (plan 2026-11-17 P5): se's
+    /// own display at the host; absent asks for none (a daemon of v0.5.197
+    /// ignores it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub virtual_display: Option<crate::screen::core::virtual_display::VirtualDisplayChoice>,
 }
 
 impl StreamRequest {
@@ -147,6 +152,10 @@ pub struct ProbeReport {
     pub input: InputCapabilities,
     pub codecs: Vec<CodecOffer>,
     pub limits: Vec<String>,
+    /// What a viewer that asks for se's own display would get (plan
+    /// 2026-11-17 P5); absent from a host before it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub virtual_display: Option<crate::screen::core::virtual_display::VirtualDisplayReport>,
 }
 
 /// The replies of `ScreenIpcRequest`.

@@ -188,7 +188,17 @@ impl ScreenLink {
             // this field (or of v0.5.196) ignores it.
             gop_continue_decoders: (!request.gop_continue_decoders.is_empty())
                 .then(|| request.gop_continue_decoders.clone()),
+            virtual_display: None,
+            virtual_display_size: None,
         };
+        // Plan 2026-11-17 P5: the viewer's „Monitor“ and „Auflösung“, only
+        // to a host that announced it.
+        let announced = server.virtual_display
+            == Some(crate::screen::core::virtual_display::VIRTUAL_DISPLAY_V1);
+        if let Some(choice) = request.virtual_display.filter(|_| announced) {
+            hello.virtual_display = Some(choice.wish);
+            hello.virtual_display_size = choice.size;
+        }
         hello.proof = hmac_proof(
             &self.endpoint.relation_secret,
             &screen_transcript(server, &hello),

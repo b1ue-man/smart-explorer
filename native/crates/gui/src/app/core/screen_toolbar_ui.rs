@@ -90,6 +90,8 @@ pub enum ToolbarAction {
     Display(super::screen_prefs::DisplayChoice),
     /// „Höchste Datenrate“ in bit/s, `None` automatic (B-09).
     MaxRate(Option<u64>),
+    /// „Monitor“ and „Auflösung“ (plan 2026-11-17 P5).
+    VirtualDisplay(super::screen_prefs::VirtualDisplayChoice),
     LowLatency(bool),
     Stats(bool),
     Key(u16),
@@ -455,11 +457,16 @@ fn view_row(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Vec<ToolbarAction
     // „Codec“ (replaces „Verlustfrei“), „Dekodierer“, „Höchste Datenrate“.
     codec_rows::codec_rows(ui, out);
     codec_rows::max_rate_row(ui, input, out);
+    // „Monitor“ and „Auflösung“ of the host (plan 2026-11-17 P5).
+    display_rows::display_rows(ui, input, out);
 }
 
 #[path = "screen_toolbar_codec.rs"]
 mod codec_rows;
 pub use codec_rows::apply_codec;
+#[path = "screen_toolbar_display.rs"]
+mod display_rows;
+pub use display_rows::apply_virtual_display;
 
 /// Draws the toolbar and returns what the user chose.
 pub fn show(ui: &mut egui::Ui, input: &ToolbarInput) -> Vec<ToolbarAction> {

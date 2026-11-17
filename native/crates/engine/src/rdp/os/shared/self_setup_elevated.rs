@@ -1,6 +1,8 @@
 //! One operating-system approval for the RDP and the login step of a trigger
-//! (E44, L14). Both self-setups hand their elevated step to this bundle
-//! instead of raising pkexec or UAC themselves. A trigger (T1–T4) announces
+//! (E44, L14), and for the driver setup of the virtual display (plan
+//! 2026-11-17 P5, party `Display`, `screen/os/linux_os/virtual_display_setup.rs`).
+//! The self-setups hand their elevated step to this bundle instead of
+//! raising pkexec or UAC themselves. A trigger (T1–T4) announces
 //! both setups before either can hand in a step; the bundle starts once every
 //! announced setup has handed in its step or finished without one, so one
 //! `se rdp host-setup --system <login> --system <rdp>` runs both steps under
@@ -12,29 +14,36 @@ use std::sync::{Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 /// The setups that hand in elevated steps, in the fixed order of their steps
-/// in the one call: the login step first, the RDP step second.
+/// in the one call: the login step first, the RDP step second, the display
+/// step (virtual display, P5) last.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Party {
     Login,
     Rdp,
+    Display,
 }
 
 impl Party {
-    const ALL: [Party; 2] = [Party::Login, Party::Rdp];
+    const ALL: [Party; PARTIES] = [Party::Login, Party::Rdp, Party::Display];
     fn index(self) -> usize {
         match self {
             Party::Login => 0,
             Party::Rdp => 1,
+            Party::Display => 2,
         }
     }
 }
+
+/// Number of parties.
+const PARTIES: usize = 3;
 
 /// How long a handed-in step waits for an announced setup that has not
 /// decided yet. The RDP setup probes first (PowerShell or tool calls with a
 /// 10 s guard each), the login setup hashes the app image.
 pub const GATHER: Duration = Duration::from_secs(30);
 
-/// Most steps one elevated process runs (one per setup today).
+/// Most steps one elevated process runs (one per setup today, three
+/// setups).
 pub const MAX_STEPS: usize = 4;
 
 /// Exit codes that end the whole call before any step ran: pkexec's
@@ -45,6 +54,13 @@ const LAUNCH_CODES: [i32; 4] = [126, 127, 1223, 1224];
 /// The exit codes only the login step returns (`login::core::self_plan::exit`).
 fn login_code(code: i32) -> bool {
     (40..=47).contains(&code)
+}
+
+/// The exit codes only the display step returns
+/// (`screen::os::virtual_display::setup::exit`: 50 is a success that takes
+/// effect after sign-out or restart).
+fn display_code(code: i32) -> bool {
+    (50..=55).contains(&code)
 }
 
 /// What the elevated process reported. Windows' `Start-Process -Verb RunAs`
@@ -72,7 +88,7 @@ pub struct ElevatedCall {
     pub parties: Vec<Party>,
     /// Whose launcher starts the call: the RDP setup's when it takes part
     /// (it checked the administrator-owned `se` and knows the Windows user
-    /// SID), otherwise the login setup's.
+    /// SID), otherwise the first party's.
     pub launcher: Party,
 }
 
@@ -129,6 +145,8 @@ pub fn step_code(call: &ElevatedCall, party: Party, code: Option<i32>) -> Option
     }
     let owner = if login_code(code) {
         Party::Login
+    } else if display_code(code) {
+        Party::Display
     } else {
         Party::Rdp
     };
@@ -164,9 +182,9 @@ pub fn run_steps(
 #[derive(Default)]
 struct Board {
     /// Announced setups per party that have not decided yet.
-    deciding: [usize; 2],
-    pending: [Option<(String, Launcher)>; 2],
-    results: [Option<Outcome>; 2],
+    deciding: [usize; PARTIES],
+    pending: [Option<(String, Launcher)>; PARTIES],
+    results: [Option<Outcome>; PARTIES],
     executing: bool,
 }
 

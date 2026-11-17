@@ -85,6 +85,7 @@ fn x11_ids_and_classes() {
             width: 100,
             height: 100,
             primary: true,
+            is_virtual: false,
         },
         MonitorInfo {
             id: "B".into(),
@@ -94,6 +95,7 @@ fn x11_ids_and_classes() {
             width: 100,
             height: 100,
             primary: false,
+            is_virtual: false,
         },
     ];
     assert_eq!(x11_windows::monitor_at(&monitors, 99, 50), Some("A".into()));

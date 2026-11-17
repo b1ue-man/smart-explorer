@@ -486,6 +486,13 @@ pub trait ScreenHostBackend: Send + Sync {
     fn release_input(&self, events: &[InputEvent]) -> Result<(), ControlBlock> {
         self.inject(events)
     }
+    /// The virtual display in the viewer's resolution (plan 2026-11-17 P5);
+    /// `None`: this host never changes its display (the old behaviour).
+    fn virtual_display(
+        &self,
+    ) -> Option<std::sync::Arc<dyn super::virtual_display_host::VirtualDisplayDriver>> {
+        None
+    }
 }
 
 #[path = "host_backend_consent.rs"]

@@ -2,7 +2,8 @@ use super::*;
 use crate::screen::core::negotiate::H264Profile;
 use crate::share::relation_proof::EXEC_TRANSCRIPT_PREFIX;
 
-fn server_hello() -> ScreenServerHello {
+/// Also the fixture of `wire_tests.rs`.
+pub(crate) fn server_hello() -> ScreenServerHello {
     ScreenServerHello::new(
         "c".repeat(32),
         "host-device".into(),
@@ -12,7 +13,8 @@ fn server_hello() -> ScreenServerHello {
     )
 }
 
-fn client_hello() -> ScreenClientHello {
+/// Also the fixture of `wire_tests.rs`.
+pub(crate) fn client_hello() -> ScreenClientHello {
     ScreenClientHello {
         family_version: None,
         icon_version: None,
@@ -20,6 +22,8 @@ fn client_hello() -> ScreenClientHello {
         decoders_v2: None,
         gop_continue: None,
         gop_continue_decoders: None,
+        virtual_display: None,
+        virtual_display_size: None,
         frame_capabilities: None,
         protocol_version: SCREEN_PROTOCOL_VERSION,
         relation_kind: "direct".into(),

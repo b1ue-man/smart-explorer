@@ -422,6 +422,8 @@ pub fn coverage_ended(steering_remains: bool) {
         return;
     }
     crate::login::self_setup::request(crate::login::core::self_plan::LoginTrigger::CoverageEnded);
+    // The virtual display's driver files go with the last right (P5).
+    crate::screen::os::virtual_display::coverage_ended(steering_remains);
     let spawned = std::thread::Builder::new()
         .name("rdp-credential-rotate".into())
         .spawn(move || {
@@ -466,6 +468,10 @@ pub fn run_system_steps(steps: &[String], user_sid: Option<&str>) -> (Vec<String
 pub fn run_system_step(step: &str, user_sid: Option<&str>) -> (String, i32) {
     if step.starts_with("login-service") {
         return crate::login::self_setup::run_system_step(step);
+    }
+    // The driver of the virtual display (plan 2026-11-17 P5).
+    if step.starts_with("virtual-display") {
+        return crate::screen::os::virtual_display::run_system_step(step);
     }
     platform::run_system_step(step, user_sid)
 }

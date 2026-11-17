@@ -13,6 +13,7 @@ fn monitor(id: &str) -> MonitorInfo {
         width: 1920,
         height: 1080,
         primary: id == "0",
+        is_virtual: false,
     }
 }
 

@@ -134,6 +134,7 @@ impl ShareHost {
                     gop_continue: false,
                     gop_continue_decoders: Vec::new(),
                     expected_node: metadata_pin,
+                    virtual_display: None,
                 };
                 return self.screen_stream(stream, &target, request, true);
             }
@@ -196,6 +197,7 @@ impl ShareHost {
             input: Default::default(),
             codecs: Vec::new(),
             limits: Vec::new(),
+            virtual_display: None,
         };
         let device = target.endpoint_prefix();
         let (service, link) = match self.screen_link(target) {
@@ -224,6 +226,7 @@ impl ShareHost {
                     input: hello.input.clone(),
                     codecs: hello.all_encoders(),
                     limits: hello.limits.clone(),
+                    virtual_display: hello.virtual_display.clone(),
                 })
             }
             Err(ViewerError::Unsupported) => Ok(unsupported(device, false)),
@@ -340,6 +343,7 @@ impl ShareHost {
             gop_continue: request.gop_continue,
             // B-36 per codec: the decoders of the client that continue.
             gop_continue_decoders: request.gop_continue_decoders,
+            virtual_display: request.virtual_display,
         };
         let redial = reconnect::Redial {
             service: service.clone(),
@@ -394,6 +398,7 @@ fn viewer_request(
         frame_capabilities: None,
         gop_continue: false,
         gop_continue_decoders: Vec::new(),
+        virtual_display: None,
     }
 }
 

@@ -181,6 +181,11 @@ pub struct ChainReport {
     /// (`rate_control::honour::HonourVerdict`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rate_honour: Option<String>,
+    /// The host's display for this session (plan 2026-11-17 P5,
+    /// `VirtualDisplayReport::chain_key`): `active:1920x1080:randr`, …;
+    /// absent for a session whose viewer sent no wish.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub virtual_display: Option<String>,
 }
 
 /// The capture API a session uses.

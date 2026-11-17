@@ -381,6 +381,18 @@ impl ScreenHostBackend for WorkerBackend {
             .encoder)
     }
 
+    /// The display of this installation's host (plan 2026-11-17 P5); the
+    /// programs of the task tests never change the runner's display.
+    fn virtual_display(
+        &self,
+    ) -> Option<Arc<dyn crate::screen::core::virtual_display_host::VirtualDisplayDriver>> {
+        match &self.program {
+            WorkerProgram::Installation { .. } => crate::screen::os::virtual_display::driver(),
+            #[cfg(any(test, feature = "test-support"))]
+            WorkerProgram::Fixed { .. } | WorkerProgram::InProcess => None,
+        }
+    }
+
     fn inject(&self, events: &[InputEvent]) -> Result<(), ControlBlock> {
         #[cfg(any(test, feature = "test-support"))]
         if self.program == WorkerProgram::InProcess {

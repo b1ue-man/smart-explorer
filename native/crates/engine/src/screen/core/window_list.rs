@@ -89,6 +89,15 @@ pub struct MonitorInfo {
     pub height: u32,
     #[serde(default)]
     pub primary: bool,
+    /// A display without a screen (plan 2026-11-17 P5): an output of the
+    /// Xorg driver `dummy` or a virtual output of VM graphics. Absent in the
+    /// JSON when false, as from an older host.
+    #[serde(
+        default,
+        rename = "virtual",
+        skip_serializing_if = "std::ops::Not::not"
+    )]
+    pub is_virtual: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

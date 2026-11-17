@@ -7,6 +7,7 @@ use crate::screen::core::{
     host_backend::ScreenSource,
     host_codec_adapters::{HostCodecPlan, HostContract, HostOutputPlan},
     pixel_convert::FrameSize,
+    virtual_display_host::{self, SessionStart, Started},
 };
 
 pub(super) struct Ready {
@@ -18,6 +19,8 @@ pub(super) struct Ready {
     /// The pairings of the other video codecs, best first (merge W2).
     pub fallbacks: Vec<super::super::negotiate::CodecChoice>,
     pub admission: Arc<SessionAdmission>,
+    /// The virtual display in the viewer's size (plan 2026-11-17 P5).
+    pub display: Started,
 }
 pub(super) enum Failure {
     Capture(io::Error),
@@ -114,6 +117,8 @@ pub(super) async fn prepare(
     if stop.borrow().is_some() {
         return Err(Failure::Cancelled);
     }
+    // P5: the display gets the viewer's size before the source is prepared.
+    let display = virtual_display(context, principal, hello, source_id, handle, &session).await;
     let prepared = {
         let context = context.clone();
         let principal = principal.clone();
@@ -218,5 +223,40 @@ pub(super) async fn prepare(
         sharp,
         fallbacks,
         admission,
+        display,
     })
+}
+
+/// The virtual display for a viewer that sent a wish (plan 2026-11-17 P5):
+/// the platform's display calls run on a worker thread. Only a monitor is
+/// a display (a window, a window family and the test picture keep the
+/// host's display). The driver setup with an elevation is offered only to a
+/// viewer that may steer this screen; `capture` names the source
+/// preparation of a Wayland host.
+async fn virtual_display(
+    context: &HostContext,
+    principal: &ProvenPrincipal,
+    hello: &ScreenClientHello,
+    source: &SourceId,
+    handle: &SessionHandle,
+    capture: &str,
+) -> Started {
+    let monitor = matches!(source, SourceId::Monitor(_));
+    if hello.virtual_display.is_none() || hello.metadata_only || !monitor {
+        return Started::default();
+    }
+    let start = SessionStart {
+        session: handle.id(),
+        capture: capture.to_string(),
+        mode: hello.mode,
+        metadata_only: hello.metadata_only,
+        wish: hello.virtual_display,
+        fixed: hello.virtual_display_size,
+        display_size: hello.display_size,
+        may_setup: super::super::family_listing::admitted(context, principal, true),
+    };
+    let driver = context.backend.virtual_display();
+    tokio::task::spawn_blocking(move || virtual_display_host::start(driver, &start))
+        .await
+        .unwrap_or_default()
 }

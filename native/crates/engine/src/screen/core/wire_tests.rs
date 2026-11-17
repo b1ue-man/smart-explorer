@@ -16,6 +16,7 @@ use crate::screen::core::wire_binary::{
     MAX_RECORD_BYTES, RECORD_HEADER_BYTES,
 };
 use crate::screen::core::wire_control::*;
+use crate::screen::core::wire_hello::tests::{client_hello, server_hello};
 use crate::screen::core::wire_hello::*;
 use crate::share::access_grant::{Capability, CapabilityDecision};
 use tokio::runtime::Builder;
@@ -25,51 +26,12 @@ fn run<F: std::future::Future>(future: F) -> F::Output {
     runtime.unwrap().block_on(future)
 }
 
-fn server_hello() -> ScreenServerHello {
-    ScreenServerHello::new(
-        "c".repeat(32),
-        "host-device".into(),
-        "host-key".into(),
-        "host-fingerprint".into(),
-        "host-node".into(),
-    )
-}
-
-fn client_hello() -> ScreenClientHello {
-    ScreenClientHello {
-        family_version: None,
-        icon_version: None,
-        metadata_only: false,
-        decoders_v2: None,
-        gop_continue: None,
-        gop_continue_decoders: None,
-        frame_capabilities: None,
-        protocol_version: SCREEN_PROTOCOL_VERSION,
-        relation_kind: "direct".into(),
-        relation_id: "lookup".into(),
-        device_id: "viewer".into(),
-        device_name: "Laptop".into(),
-        public_key: "viewer-key".into(),
-        fingerprint: "viewer-fingerprint".into(),
-        node_id: "viewer-node".into(),
-        client_nonce: "n".repeat(32),
-        proof: "proof".into(),
-        mode: SessionMode::Control,
-        source: Some(SourceId::Window("0x2a".into())),
-        decoders: vec![
-            CodecOffer::h264(H264Profile::High, true),
-            CodecOffer::tiles(),
-        ],
-        display_size: Some(FrameSize::new(2560, 1440)),
-        max_fps: 60,
-    }
-}
-
 fn replies() -> Vec<HelloReply> {
     let accepted = ScreenHelloOk {
         family_version: None,
         icon_version: None,
         encoders_v2: None,
+        virtual_display: None,
         frame_contract: None,
         authorization: ScreenAuthorization {
             view: CapabilityDecision::Allow,
@@ -95,6 +57,7 @@ fn replies() -> Vec<HelloReply> {
             width: 2560,
             height: 1440,
             primary: true,
+            is_virtual: false,
         }],
         limits: vec![LIMIT_NO_KEY_EVENTS.into()],
         approval: ApprovalKind::Once,

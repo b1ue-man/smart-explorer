@@ -73,6 +73,8 @@ pub fn preview_request(offers: &[CodecOffer], edge: u32, interval_ms: u64) -> St
         decoder: Some(super::screen_prefs::decoder_choice()),
         gop_continue: false,
         gop_continue_decoders: Vec::new(),
+        // A preview never changes the host's display (plan 2026-11-17 P5).
+        virtual_display: None,
     })
 }
 
@@ -120,6 +122,8 @@ pub fn full_request(
         decoder: Some(super::screen_prefs::decoder_choice()),
         gop_continue: false,
         gop_continue_decoders: Vec::new(),
+        // „Monitor“ and „Auflösung“ (plan 2026-11-17 P5).
+        virtual_display: Some(super::screen_prefs::virtual_display_choice()),
     })
 }
 

@@ -304,6 +304,7 @@ impl ChainMeter {
             rate_ceiling_kbps: rates.user_ceiling_bps.map(|bps| bps / 1000),
             encoder_rate_kbps: rates.encoder_bps.map(|bps| bps / 1000),
             rate_honour: rates.honour.map(|verdict| verdict.key().to_string()),
+            virtual_display: None,
         }
     }
 
@@ -318,6 +319,10 @@ impl ChainMeter {
 /// without the viewer's clock offset they mean nothing on the host. A
 /// session of the test picture names it as its capture path.
 pub fn publish(view: &mut SessionView, stats: &mut HostStats, requested: bool) {
+    // P5: the display this session's viewer asked for.
+    if let Some(chain) = stats.chain.as_mut() {
+        chain.virtual_display = super::virtual_display_host::chain_key(&view.id);
+    }
     if view.source == "synthetic" {
         if let Some(chain) = stats.chain.as_mut() {
             chain.capture_path = Some(super::frame_timing::CapturePath::TestPicture.key().into());
