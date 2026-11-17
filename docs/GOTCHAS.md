@@ -742,6 +742,20 @@ confirmed it. Paths are below `native/crates/engine/src/screen/os/` unless noted
   documented (assumption: no). If it does, one dialog appears at the first Wayland start after the
   update.
 
+**Fallbacks added after the report of 2026-11-17 (Windows to Windows black; TODO `VERB-WIN-SCHWARZ`)**
+
+- *First DXGI picture* (`windows/dxgi_first_picture.rs`): without a reference picture only a frame with
+  `LastPresentTime != 0` and `AccumulatedFrames > 0` is read (WebRTC and Sunshine read only such frames);
+  a timed-out wait without a reference rebuilds the duplication, up to three times, and after a read
+  skipped for want of an admitted image once more. After three rebuilds any frame is read again.
+- *Codec without picture* (`core/decoder_health.rs`, desktop viewer `screen_decode_guard.rs`): 3 failed
+  key frames or 5 s from the codec's first record without a shown picture give the codec up for the
+  process (its offers leave every hello and `SET_DECODERS`); the session negotiates again, or with a host
+  without `set_decoders_v1` switches to the lossless tiles. The 5 s are an assumption, not a measurement.
+  A decoder that delivers correctly decoded black pixels is not detected.
+- *Media Foundation hardware stage* (`windows/mf_decoder.rs`): any error before the stage's first picture
+  ends the hardware stage for the process, so the next key frame opens in software.
+
 **Assumptions to check first when a device misbehaves (each has a visible effect; none was run)**
 
 - *VA-API.* The driver takes packed sequence and picture headers but writes the slice headers itself

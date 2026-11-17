@@ -16,6 +16,7 @@ impl DecodeState {
         }
         self.check_awaiting();
         self.poll_switch();
+        self.guard_tick();
         match event {
             StreamEvent::Pending(_) => self
                 .shared

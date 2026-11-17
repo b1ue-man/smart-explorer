@@ -422,6 +422,9 @@ impl Encoding {
             request.choice.codec,
             &frame.records,
         ) {
+            // The encoder references this picture, the viewer never gets it:
+            // the next picture comes from a new encoder as a key frame.
+            self.running = None;
             return Err(reference.wrap(failed(ScreenErrorCode::EncoderFailed, error)));
         }
         let keyframe = frame.keyframe;
@@ -461,7 +464,10 @@ impl Encoding {
                 self.running = None;
                 Err(unchanged())
             }
-            Err(error) => Err(reference.wrap(failed(ScreenErrorCode::CaptureFailed, error))),
+            Err(error) => {
+                self.running = None;
+                Err(reference.wrap(failed(ScreenErrorCode::CaptureFailed, error)))
+            }
         }
     }
 }

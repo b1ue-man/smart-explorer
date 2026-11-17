@@ -81,6 +81,9 @@ pub fn preview_request(offers: &[CodecOffer], edge: u32, interval_ms: u64) -> St
 /// decoders do (`screen_decode_local`); a preview raised to the full view
 /// keeps its session, so both ask.
 fn announced(mut request: StreamRequest) -> StreamRequest {
+    // Codecs that gave no picture in this process stay out (fix of
+    // 2026-11-17, `decoder_health`).
+    request.decoders = crate::screen::core::decoder_health::usable_offers(&request.decoders);
     request.gop_continue = super::screen_decode_local::announces(&request);
     request.gop_continue_decoders = super::screen_decode_local::continuing(&request);
     request

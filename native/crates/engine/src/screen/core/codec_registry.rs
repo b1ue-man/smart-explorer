@@ -266,15 +266,16 @@ impl CodecRegistry {
         ordered_offers(self.encoders.iter().map(|factory| factory.offers()))
     }
 
-    /// The viewer's decoders for its hello.
+    /// The viewer's decoders for its hello, without the codecs that gave no
+    /// picture in this process (`decoder_health`).
     pub fn decoder_offers(&self) -> Vec<CodecOffer> {
-        ordered_offers(self.decoders.iter().map(|factory| {
+        super::decoder_health::usable_offers(&ordered_offers(self.decoders.iter().map(|factory| {
             factory
                 .offers()
                 .into_iter()
                 .map(|offer| offer.with_pixel_access(true))
                 .collect()
-        }))
+        })))
     }
 
     /// The register as `se screen codec` shows it.

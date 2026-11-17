@@ -78,6 +78,8 @@ pub struct DecodeState {
     last_shown: Option<Instant>,
     started: Instant,
     chain: continuation::Chain,
+    /// Watch over the negotiated codec (`screen_decode_guard.rs`).
+    guard: crate::screen::core::decoder_health::DecoderGuard,
     // Declared last: decoder/pending pictures must die before the session lease.
     shared: Arc<Shared>,
     memory: crate::screen::core::frame_memory::MemoryHold,
@@ -87,6 +89,8 @@ pub struct DecodeState {
 mod continuation;
 #[path = "screen_decode_events.rs"]
 mod events;
+#[path = "screen_decode_guard.rs"]
+mod guard;
 
 impl DecodeState {
     pub fn new(
@@ -116,6 +120,7 @@ impl DecodeState {
             last_shown: None,
             started: Instant::now(),
             chain: Default::default(),
+            guard: Default::default(),
         }
     }
 
@@ -154,6 +159,7 @@ impl DecodeState {
                 })
             }
             Err(error) => {
+                self.guard_failure(header.codec);
                 self.shared.cancel_presentation();
                 let text = format!("Das Bild kann nicht dekodiert werden: {error}");
                 self.shared.update(|info| info.notice = Some(text));
@@ -221,6 +227,7 @@ impl DecodeState {
         let first_of_frame = self.last_record != Some((header.gop_id, record.frame_id));
         self.last_record = Some((header.gop_id, record.frame_id));
         let keyframe = record.flags & FLAG_KEYFRAME != 0;
+        self.guard_record(header.codec);
         if fresh && !self.stream_start(&header, &record) {
             return;
         }
@@ -317,6 +324,7 @@ impl DecodeState {
                 self.gop = Some(gop);
             }
             Err(error) => {
+                self.guard_failure(header.codec);
                 // The failed picture was never shown; the shown one stays
                 // without receipts until the requested key frame.
                 self.shared.suspend_presentation();
@@ -362,6 +370,7 @@ impl DecodeState {
             // Left out by the preview's shortest gap (BK0: dropped pictures).
             info.latency.dropped += u64::from(!due);
         });
+        self.guard_picture(gop.header.codec);
         if !due {
             return;
         }

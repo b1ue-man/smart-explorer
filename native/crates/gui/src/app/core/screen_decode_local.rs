@@ -152,6 +152,13 @@ fn registry() -> Option<Arc<CodecRegistry>> {
     lock(&REGISTRY).clone()
 }
 
+/// `SET_DECODERS` with the decoders this process still offers, after a
+/// codec gave no picture (`screen_decode_guard.rs`); `None` without the
+/// register (task tests with fake decoders).
+pub fn usable_decoders_frame() -> Option<SetDecoders> {
+    registry().map(|registry| super::screen_pool::decoders_frame(&registry.decoder_offers()))
+}
+
 /// B-36: whether `request` may announce `gop_continue`.
 pub fn announces(request: &StreamRequest) -> bool {
     registry().is_some_and(|registry| announces_with(&registry, request))

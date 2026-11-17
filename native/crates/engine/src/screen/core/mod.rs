@@ -63,6 +63,7 @@ pub mod control_sender;
 pub mod convert_clock;
 pub mod cursor_overlay;
 pub mod decoded_frame;
+pub mod decoder_health;
 pub mod feed_host;
 pub mod frame_budget;
 pub mod frame_memory;

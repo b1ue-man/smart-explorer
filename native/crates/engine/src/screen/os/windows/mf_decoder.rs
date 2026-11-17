@@ -71,6 +71,8 @@ pub(super) struct MfDecoder {
     noted: Option<HardwareFailure>,
     /// The hardware stage ended; every further record is refused.
     failed: Option<HardwareFailure>,
+    /// This decoder delivered a picture.
+    produced: bool,
     /// The picture of the stream head.
     size: FrameSize,
     /// The decoder's picture with its padding.
@@ -176,6 +178,7 @@ impl MfDecoder {
             readback: device.map(d3d::TextureReadback::new),
             noted: None,
             failed: None,
+            produced: false,
             size: header.size,
             allocated: header.size,
             picture: BgraImage::new_with_limits(header.size, limits)?,
@@ -313,6 +316,7 @@ impl MfDecoder {
                     let identity = self.identities.take(token)?;
                     self.convert(&out)?;
                     self.decoded = Some(identity);
+                    self.produced = true;
                     shown = true;
                 }
                 Output::NeedInput => return Ok(shown),
@@ -333,11 +337,16 @@ impl MfDecoder {
         let Some(readback) = &self.readback else {
             return;
         };
-        let failure = stage::classify(
-            d3d::hresult_of(error),
-            readback.device_lost(),
-            self.noted.take(),
-        );
+        // A hardware decoder that fails before its first picture is not
+        // used again (fix of 2026-11-17): an error it does not classify
+        // (E_FAIL, a rejected output) would otherwise repeat at every key
+        // frame and leave the window black; the next key frame opens the
+        // software stage.
+        let noted = self
+            .noted
+            .take()
+            .or_else(|| (!self.produced).then_some(HardwareFailure::OutputUnusable));
+        let failure = stage::classify(d3d::hresult_of(error), readback.device_lost(), noted);
         if let Some(failure) = failure {
             remember(failure, (self.size.width, self.size.height));
             self.failed = Some(failure);

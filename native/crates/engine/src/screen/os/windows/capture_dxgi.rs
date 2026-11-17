@@ -21,6 +21,8 @@ use windows::Win32::Graphics::Dxgi::{
     DXGI_ERROR_WAIT_TIMEOUT, DXGI_OUTDUPL_FRAME_INFO,
 };
 
+#[path = "dxgi_first_picture.rs"]
+mod first_picture;
 #[path = "dxgi_output.rs"]
 mod output;
 #[path = "dxgi_pointer.rs"]
@@ -158,6 +160,8 @@ pub(super) struct DxgiCapture {
     pointer: Option<pointer::DxgiPointer>,
     /// `DXGI_ERROR_ACCESS_LOST` since the last picture.
     lost: bool,
+    /// The way to the first picture of a duplication (`dxgi_first_picture`).
+    first: first_picture::FirstPicture,
     /// Since when, and with which result, rebuilding the duplication fails.
     failing: Option<(Instant, Option<HRESULT>)>,
 }
@@ -175,6 +179,7 @@ impl DxgiCapture {
             recovery: CaptureRecovery::active(),
             pointer: None,
             lost: false,
+            first: first_picture::FirstPicture::default(),
             failing: None,
         })
     }
@@ -349,7 +354,15 @@ impl Grabber for DxgiCapture {
         match acquired {
             Ok(()) => {}
             Err(error) if error.code() == DXGI_ERROR_WAIT_TIMEOUT => {
-                return Ok(self.again(keyframe))
+                // No picture yet on a still screen: a new duplication's
+                // first frame carries the whole desktop.
+                if self.last.is_none() && self.first.rebuild() {
+                    return match self.reopen() {
+                        Ok(()) => Ok(SourcePicture::Unchanged),
+                        Err(error) => paused(error),
+                    };
+                }
+                return Ok(self.again(keyframe));
             }
             Err(error) if error.code() == DXGI_ERROR_ACCESS_LOST => {
                 drop(resource);
@@ -378,9 +391,11 @@ impl Grabber for DxgiCapture {
         } else {
             (regions::Verdict::Unknown, None)
         };
-        let changed = !had_reference
-            || pointer_moved
-            || (info.AccumulatedFrames > 0 && verdict != regions::Verdict::Unchanged);
+        let changed = if had_reference {
+            pointer_moved || (info.AccumulatedFrames > 0 && verdict != regions::Verdict::Unchanged)
+        } else {
+            self.first.readable(&info)
+        };
         if pointer_moved {
             // The regions do not name the pointer's old and new place.
             regions = None;
@@ -416,6 +431,7 @@ impl Grabber for DxgiCapture {
                 let picture = Picture::Gpu(picture);
                 self.size = picture.size();
                 self.last = Some(picture.clone());
+                self.first.delivered();
                 Ok(SourcePicture::Frame(picture))
             }
             Some(Ok(Some(Read::Cpu(mut builder)))) => {
@@ -438,13 +454,15 @@ impl Grabber for DxgiCapture {
                     CaptureOwner::SourcePixels,
                 ) {
                     Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                        return Ok(SourcePicture::Unchanged)
+                        self.first.missed();
+                        return Ok(SourcePicture::Unchanged);
                     }
                     result => result?,
                 };
                 self.size = image.size();
                 let picture = Picture::Cpu(image);
                 self.last = Some(picture.clone());
+                self.first.delivered();
                 Ok(SourcePicture::Frame(picture))
             }
             Some(Ok(None)) => {
@@ -452,6 +470,7 @@ impl Grabber for DxgiCapture {
                 Ok(SourcePicture::Paused(SessionState::Starting))
             }
             Some(Err(error)) if error.kind() == io::ErrorKind::WouldBlock => {
+                self.first.missed();
                 Ok(SourcePicture::Unchanged)
             }
             Some(Err(error)) => Err(error),
