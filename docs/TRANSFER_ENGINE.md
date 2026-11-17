@@ -963,8 +963,8 @@ die Zahlenwerte unten Schätzungen und als solche gekennzeichnet. Architekturüb
   den inneren Regler: Cubic, mit `bbr3` BBRv3.
 - **Rückzug (E2).** Läuft im Prozess irgendeine interaktive Sitzung (Bildschirm als Gastgeber oder
   Betrachter, Exec mit Terminal, TCP-Tunnel), begrenzen alle Dateiverbindungen ihr Fenster so, dass die
-  zusätzliche Warteschlangenverzögerung beim Ziel T bleibt (Vorgabe 25 ms, Schätzung; M2 wählt unter 15, 25
-  und 50 ms). Ohne interaktive Sitzung ist der Regler durchlässig, die Übertragung ist genau so schnell wie
+  zusätzliche Warteschlangenverzögerung beim Ziel T bleibt (25 ms; M2 hat 15, 25 und 50 ms gemessen,
+  alle bestehen, 25 ms hat die kürzere Bildlatenz; Plan `2026-11-14-verbindungen-je-zweck`, Abschnitt F). Ohne interaktive Sitzung ist der Regler durchlässig, die Übertragung ist genau so schnell wie
   mit Cubic allein; M2 prüft das mit der Variante `bulk_rueckzug` gegen `bulk_cubic` (Ziel: mindestens 95 %
   des Durchsatzes von Cubic). Unter Rückzug wächst das Fenster höchstens um 1 MSS je Rundlaufzeit (RFC 6817);
   eine neue Verbindung während einer Sitzung beginnt damit nicht mit dem Cubic-Anlauf. Eine Übertragung
@@ -985,8 +985,9 @@ die Zahlenwerte unten Schätzungen und als solche gekennzeichnet. Architekturüb
   bisher und es ist keine Aushandlung nötig.
 - **Sendebündel (E5).** Das Bündel (40 Segmente, 80 Datagramme) gilt für `Files` und `Tcp` und für die
   Richtung, in der die Verbindung gewählt wurde; eine eingehende Verbindung bekommt es nur, wenn die ALPN
-  im ersten Initial-Paket lesbar ist (`docs/GOTCHAS.md`, Abschnitt „Connections per purpose“). Der Wert ist
-  eine Schätzung nach den Messungen von noq PR #636 und #645; M1 und M9 (ACK-Frequenz) entscheiden.
+  im ersten Initial-Paket lesbar ist (`docs/GOTCHAS.md`, Abschnitt „Connections per purpose“). M1 hat den
+  Wert bestätigt: Mit vier Verbindungen ist 40/80 auf jeder Plattform schneller. Nur die Einzelverbindung auf
+  Linux aarch64 ist um 5,8 % langsamer. M9 (ACK-Frequenz) brachte unter 10 % (Plan, Abschnitt F).
   Vendor-Patch und Relay-Grenze: `vendor/SMART_EXPLORER_QUIC_PROFILES.md`.
 - **Messausgabe.** Die Zeilen von M1 und M9 tragen `gezaehlt_mib`, die Größe eines gezählten Laufs: 1024
   im Regelfall, kleiner, wenn die Aufwärmrate drei Läufe zu 1 GiB nicht in die 60 Sekunden je Fall passen
