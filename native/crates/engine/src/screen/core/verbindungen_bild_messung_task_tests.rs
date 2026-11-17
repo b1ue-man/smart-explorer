@@ -112,6 +112,8 @@ struct PairRun {
     latency_p50_ms: f64,
     latency_p95_ms: f64,
     latency_max_ms: f64,
+    /// Every shown frame's latency in milliseconds (for p99, B1).
+    latencies_ms: Vec<f64>,
     /// Time between two shown frames that took longer than two frame
     /// intervals, in milliseconds.
     gaps_ms: Vec<f64>,
@@ -250,6 +252,7 @@ async fn pair_run(
     let mut viewer_stages = StageSamples::default();
     let mut latency = LatencySamples::default();
     let mut arrivals: Vec<u64> = Vec::new();
+    let mut latencies_ms: Vec<f64> = Vec::new();
     let mut shown = 0u64;
     let deadline = tokio::time::sleep(Duration::from_secs(u64::from(seconds) + 2));
     tokio::pin!(deadline);
@@ -289,7 +292,9 @@ async fn pair_run(
                     viewer_stages.record_since(stages::DECODE, started);
                     let now = now_us();
                     shown += 1;
-                    latency.record(now.saturating_sub(record.capture_ts_us));
+                    let delay = now.saturating_sub(record.capture_ts_us);
+                    latency.record(delay);
+                    latencies_ms.push(delay as f64 / 1000.0);
                     arrivals.push(now);
                 }
             }
@@ -329,6 +334,7 @@ async fn pair_run(
         latency_p50_ms: summary.p50_ms,
         latency_p95_ms: summary.p95_ms,
         latency_max_ms: summary.max_ms,
+        latencies_ms,
         gaps_ms,
     })
 }
@@ -461,6 +467,10 @@ fn verbindungen_messung_task_m7_bild_unter_verlust() -> Result<(), String> {
                 field("bilder", run.frames_shown),
                 field("bild_p50_ms", one_decimal(run.latency_p50_ms)),
                 field("bild_p95_ms", one_decimal(run.latency_p95_ms)),
+                field(
+                    "bild_p99_ms",
+                    one_decimal(percentile(&run.latencies_ms, 0.99))
+                ),
                 field("bild_max_ms", one_decimal(run.latency_max_ms)),
                 field("bildintervall_ms", one_decimal(interval_ms)),
                 field("luecken", run.gaps_ms.len()),

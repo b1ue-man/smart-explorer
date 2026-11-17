@@ -442,20 +442,18 @@ def _loss(view: _View, out: _Lines, key: str, rtts: dict) -> None:
         rtt = rtts[profile]
         p50 = view.value("M7", "paar_1080p", "bild_p50_ms", profile)
         p95 = view.value("M7", "paar_1080p", "bild_p95_ms", profile)
+        p99 = view.value("M7", "paar_1080p", "bild_p99_ms", profile)
         top = view.value("M7", "paar_1080p", "bild_max_ms", profile)
         gap_p95 = view.value("M7", "paar_1080p", "luecke_p95_ms", profile)
         gap_max = view.value("M7", "paar_1080p", "luecke_max_ms", profile)
         interval = view.value("M7", "paar_1080p", "bildintervall_ms", profile)
-        # B1: p99 more than 2 x RTT above p50, or a stall above 200 ms more than once a minute. The line has no
-        # p99; it lies between p95 and the maximum. A stall in the 10 s of the measurement is at least six a
-        # minute.
-        sure_yes = p95 - p50 > 2 * rtt or gap_max > STALL_MS
-        sure_no = top - p50 <= 2 * rtt and gap_max <= STALL_MS
-        verdict = "ja" if sure_yes else "nein" if sure_no else "unbekannt"
+        # B1: p99 more than 2 x RTT above p50, or a stall above 200 ms more than once a minute. A stall in the
+        # 10 s of the measurement is at least six a minute.
+        verdict = _yes(p99 - p50 > 2 * rtt or gap_max > STALL_MS)
         out.add("bedingung", "B1", ("erfuellt", verdict), plattform=key, profil=profile, rtt_ms=rtt,
-                bild_p50_ms=_f(p50), bild_p95_ms=_f(p95), bild_max_ms=_f(top), luecke_max_ms=_f(gap_max),
-                grenze_p99_aufschlag_ms=_f(2 * rtt), grenze_stillstand_ms=_f(STALL_MS), grenze_quelle="Plan",
-                hinweis="p99 liegt zwischen p95 und Maximum" if verdict == "unbekannt" else "-")
+                bild_p50_ms=_f(p50), bild_p95_ms=_f(p95), bild_p99_ms=_f(p99), bild_max_ms=_f(top),
+                luecke_max_ms=_f(gap_max), grenze_p99_aufschlag_ms=_f(2 * rtt), grenze_stillstand_ms=_f(STALL_MS),
+                grenze_quelle="Plan")
         limit = 2 * rtt + 2 * interval
         out.add("bedingung", "B4", ("erfuellt", _yes(gap_p95 > limit)), plattform=key, profil=profile,
                 erholzeit_luecke_p95_ms=_f(gap_p95), grenze_ms=_f(limit), grenze_quelle="Plan")

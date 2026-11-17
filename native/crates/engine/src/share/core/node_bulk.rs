@@ -44,10 +44,11 @@ const LOSS_SHARE: f64 = 0.01;
 /// Datagrams a sample needs before its loss counts.
 const LOSS_MIN_DATAGRAMS: u64 = 1000;
 /// Bytes per second (both directions) at which one connection's driver
-/// nears the rate of one core (estimate, Z-P6). Plan 2026-11-14 E5/N1: set
-/// to 80 % of the single-connection rate measured by M1 on the slowest
-/// measured platform once that measurement exists.
-const DRIVER_RATE: f64 = 250.0 * 1024.0 * 1024.0;
+/// nears the rate of one core. Plan 2026-11-14 E5/N1: 80 % of the
+/// single-connection rate M1 measured on the slowest platform (suite run
+/// 44016047636: Windows x86_64 207.1 MiB/s with bundles 40/80; Linux
+/// aarch64 302.3, Linux x86_64 481.0).
+const DRIVER_RATE: f64 = 165.7 * 1024.0 * 1024.0;
 /// Time a background build of one extra connection may take (handshake,
 /// hello, session proof and path admission).
 const BUILD_BUDGET: Duration = Duration::from_secs(20);
