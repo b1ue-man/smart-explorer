@@ -9,7 +9,11 @@ pub(super) fn p18d_deadline_wakes_without_screen_and_later_admission_wakes_idle_
     rt.block_on(async {
         let (auth, principal) = fixture();
         let host = NodeAccess::new();
-        let watcher = tokio::spawn(access_expiry(Arc::downgrade(&auth), host.registry.clone()));
+        let watcher = tokio::spawn(access_expiry(
+            Arc::downgrade(&auth),
+            host.registry.clone(),
+            crate::share::exec_server::host_connections::ExecHostConnections::new(),
+        ));
         // Let the watcher subscribe with an empty registry first.
         tokio::task::yield_now().await;
         let mut state = auth.lock().unwrap();
