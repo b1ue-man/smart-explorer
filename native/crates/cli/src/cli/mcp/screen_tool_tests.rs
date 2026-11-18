@@ -28,6 +28,7 @@ fn screen_task_mcp_screen_tool_schema() {
             "device",
             "max_bytes",
             "max_edge",
+            "on",
             "probe",
             "source",
             "wait"
@@ -36,12 +37,14 @@ fn screen_task_mcp_screen_tool_schema() {
     assert_eq!(
         properties["action"]["enum"],
         // `families` since 1aea1216 (window-family selectors for `screen_window`).
-        json!(["devices", "probe", "windows", "families", "snapshot"])
+        // `audio` since plan 2026-11-17 P9 (the viewer's „Ton“).
+        json!(["devices", "probe", "windows", "families", "snapshot", "audio"])
     );
     for integer in ["max_edge", "max_bytes", "wait"] {
         assert_eq!(properties[integer]["type"], "integer", "{integer}");
     }
     assert_eq!(properties["probe"]["type"], "boolean");
+    assert_eq!(properties["on"]["type"], "boolean");
     assert!(DESCRIPTION.len() <= 2_048);
     for fact in ["approval_pending", "1568", "no live video", "`wait`"] {
         assert!(DESCRIPTION.contains(fact), "{fact}");
@@ -118,6 +121,9 @@ fn mcp_task_screen_refuses_unnamed_devices_and_unknown_actions() {
     assert!(call(json!({})).unwrap_err().contains("`action`"));
     let error = call(json!({"action": "snapshot", "device": "x", "source": "screen"}));
     assert!(error.is_err());
+    // `audio` refuses a non-boolean before it stores anything.
+    let error = call(json!({"action": "audio", "on": "yes"})).unwrap_err();
+    assert!(error.contains("`on`"), "{error}");
 }
 
 /// The tool `screen_input` (SCR-M6): one input per call, every input kind

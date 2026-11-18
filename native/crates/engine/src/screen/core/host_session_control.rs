@@ -137,6 +137,12 @@ impl Session<'_> {
                 }
                 Ok(())
             }
+            // The host's sound on or off (P9); without an attached capture
+            // link (no `audio` in `HELLO_OK`) nothing happens.
+            ViewerFrame::Audio(on) => {
+                crate::screen::os::audio::set_wanted(self.connection, on);
+                Ok(())
+            }
         }
     }
 

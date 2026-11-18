@@ -105,17 +105,11 @@ mod worker_lifetime;
 mod worker_lifetime;
 /// Elsewhere the host process ends with the end of its input alone.
 #[cfg(not(any(windows, target_os = "linux")))]
-mod worker_lifetime {
-    pub(super) fn prepare(_command: &mut std::process::Command) {}
-
-    pub(super) fn bind(_child: &std::process::Child) -> std::io::Result<()> {
-        Ok(())
-    }
-
-    pub(super) fn arm_worker() -> std::io::Result<()> {
-        Ok(())
-    }
-}
+#[path = "shared/worker_lifetime_other.rs"]
+mod worker_lifetime;
+// Plan 2026-11-17 P9 „Audio“: capture process, datagrams, playback.
+#[path = "shared/audio.rs"]
+pub mod audio;
 
 #[cfg(all(test, any(windows, target_os = "linux")))]
 #[path = "native_ffi/batches_capture_codec_task_tests.rs"]

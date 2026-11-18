@@ -29,7 +29,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
 use crate::daemon::ipc_protocol::screen::{
-    RateCeilingState, RelayEnd, RelayHello, RELAY_END, RELAY_HELLO,
+    RateCeilingState, RelayEnd, RelayHello, RELAY_AUDIO, RELAY_END, RELAY_HELLO,
 };
 use crate::screen::core::frame_budget::FrameContract;
 use crate::screen::core::frame_memory::MemoryHold;
@@ -373,7 +373,10 @@ pub(super) async fn relay_session(
     let mut plan: Option<Schedule> = None;
     let mut opened = Instant::now();
     loop {
+        // The host's sound (P9) reaches the viewer beside the relay loop.
+        let audio = crate::screen::os::audio::relay(&session.connection, &out, RELAY_AUDIO);
         let (code, detail) = super::relay_loop(&mut session, &out, &mut input, &mut modes).await;
+        drop(audio);
         session.close();
         if code != EndReason::SessionChanged.key() {
             end(&out, code, detail).await;
@@ -416,6 +419,10 @@ pub(super) async fn relay_session(
                 // (P1): the new session opened with the first request's.
                 if let Some(set) = modes.decoders() {
                     let _ = next.control.send(ViewerFrame::SetDecoders(set)).await;
+                }
+                // The host's sound (P9), only to a host that answered it.
+                if let Some(on) = modes.audio().filter(|_| next.hello.audio.is_some()) {
+                    let _ = next.control.send(ViewerFrame::Audio(on)).await;
                 }
                 if session
                     .cursor_wish

@@ -90,6 +90,7 @@ fn screen_task_viewer_launch_args() {
             display: None,
             virtual_display: None,
             display_size: None,
+            audio: None,
             json: true,
         }
     );
@@ -299,4 +300,20 @@ fn virtual_display_task_cli_options() {
     assert!(Wrapper::try_parse_from(refused).is_err());
     let refused = ["screen", "view", "Laptop", "--display-size", "huge"];
     assert!(Wrapper::try_parse_from(refused).is_err());
+}
+
+#[test]
+fn audio_task_cli_audio_option() {
+    use super::parse_audio;
+    let view = Wrapper::try_parse_from(["screen", "view", "Laptop", "--audio", "off"]).unwrap();
+    let ScreenCommand::View(args) = view.command else {
+        panic!("not the view command");
+    };
+    assert_eq!(args.audio, Some(false));
+    assert_eq!(parse_audio("on"), Ok(true));
+    assert_eq!(parse_audio(" off "), Ok(false));
+    for wrong in ["", "yes", "ON", "1"] {
+        assert!(parse_audio(wrong).is_err(), "{wrong}");
+    }
+    assert!(Wrapper::try_parse_from(["screen", "view", "Laptop", "--audio", "loud"]).is_err());
 }

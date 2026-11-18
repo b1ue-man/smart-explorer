@@ -31,6 +31,11 @@
 //! `allow(dead_code)` on their module; each such declaration names them.
 
 pub mod app_icon;
+// Plan 2026-11-17 P9 „Audio“: the host's sound (format, jitter buffer, codec).
+pub mod audio_codec;
+pub mod audio_convert;
+pub mod audio_jitter;
+pub mod audio_wire;
 pub mod authorize;
 #[cfg(test)]
 mod batches_4k_task_tests;
