@@ -43,6 +43,8 @@ pub mod honour;
 pub mod model;
 #[path = "rate_probe.rs"]
 pub mod probe;
+#[path = "rate_queue.rs"]
+pub mod queue;
 #[path = "rate_windows.rs"]
 mod rate_windows;
 pub use model::RateLimit;
@@ -162,6 +164,8 @@ pub struct RateController {
     app_limited_now: bool,
     /// The honour of the session's encoder (`honour`, plan 2026-11-17).
     honour: honour::SessionHonour,
+    /// Delivery rate, round-trip floor and refusals (`queue`, P9).
+    queue: queue::QueueState,
 }
 
 impl RateController {
@@ -194,6 +198,7 @@ impl RateController {
             stale_halved: None,
             app_limited_now: false,
             honour: honour::SessionHonour::default(),
+            queue: queue::QueueState::default(),
         }
     }
 
@@ -238,6 +243,7 @@ impl RateController {
 
     pub fn set_timing(&mut self, rtt_us: u64, frame_interval_us: u64) {
         self.interval_us = rtt_us.max(frame_interval_us).max(1);
+        self.queue.set_rtt(rtt_us);
     }
 
     /// The stream of the pipeline: `table_bps` is `model::start_table_bps`
@@ -269,6 +275,7 @@ impl RateController {
         if elapsed_us > 0 {
             self.encode_timing.push(now_us, elapsed_us);
         }
+        self.honour.on_encoded_at(now_us);
     }
 
     /// Frames per second the encoding of this session carries (B-02).
@@ -279,11 +286,14 @@ impl RateController {
     pub fn on_frame_sent(&mut self, bytes: u64, now_us: u64) {
         self.started = true;
         self.sent.push(now_us, bytes);
+        self.queue.on_sent(bytes, now_us);
     }
 
-    /// A frame was dropped before encoding (queue guard, sender credit).
+    /// A frame was dropped before encoding (queue guard, sender credit): a
+    /// target above what the line delivers sinks to it (`on_queue_full`).
     pub fn on_back_pressure(&mut self, now_us: u64) {
         self.pressure_us = Some(now_us);
+        self.on_queue_full(now_us);
     }
 
     /// The cumulative congestion events of the path, read once a second; a
@@ -322,6 +332,7 @@ impl RateController {
     /// size shows as delay, so the delay window starts over after one.
     pub fn on_frame_acked(&mut self, sample: AckSample, now_us: u64) -> DelaySignal {
         self.received.push(sample.recv_us, sample.bytes);
+        self.queue.on_acked(sample.send_us, now_us);
         if sample.keyframe {
             self.gradient.reset();
             self.overuse_streak = 0;
@@ -368,6 +379,11 @@ impl RateController {
     /// `INTERVAL_GROWTH`.
     fn grow(&mut self, now_us: u64, signal: DelaySignal) {
         if now_us.saturating_sub(self.last_update_us) < self.interval_us {
+            return;
+        }
+        // A frame the queue could not take (P9): the sender already has
+        // more than the line carries.
+        if self.growth_held(now_us) {
             return;
         }
         let ramping = self.probe.ramping();

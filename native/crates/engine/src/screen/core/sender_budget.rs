@@ -1,5 +1,6 @@
 //! One bounded picture/control allowance per authenticated peer, shared by windows.
 use super::pacing::guard_bytes;
+use super::rate_control::queue::frames_allowance;
 use super::rate_control::PathKind;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock, Weak};
@@ -63,7 +64,12 @@ impl SenderBudget {
     ) -> Option<EncodePermit> {
         let mut state = self.shared.lock().ok()?;
         state.flows.get_mut(&self.id)?.requested_us = now_us;
-        let picture_cap = guard_bytes(bps, path, rtt_us).max(1);
+        // P9: two frames of the session always fit (one on the line, the
+        // next one encoded meanwhile), as in the pacer's queue guard; on the
+        // relay within its guard.
+        let last_frame = state.flows.get(&self.id).map_or(0, |flow| flow.estimate);
+        let two_frames = frames_allowance(last_frame, path);
+        let picture_cap = guard_bytes(bps, path, rtt_us).max(two_frames).max(1);
         let total: u64 = state
             .flows
             .values()

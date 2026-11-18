@@ -120,6 +120,9 @@ pub struct Pacer {
     /// The rate the line was measured to carry (`set_drain_rate`); the
     /// unacknowledged bytes drain at most this fast.
     drain_bps: Option<u64>,
+    /// P9: the delivered rate and the round-trip floor the queue guard
+    /// follows (`set_queue`); without them the guard of `guard_bytes`.
+    queue: Option<(u64, u64)>,
 }
 
 impl Default for Pacer {
@@ -135,6 +138,7 @@ impl Default for Pacer {
             resets: 0,
             timing: None,
             drain_bps: None,
+            queue: None,
         }
     }
 }
@@ -170,7 +174,7 @@ impl Pacer {
             } else {
                 self.delta_bytes
             };
-            if self.unacked_bytes + expected > guard_bytes(target_bps, path, rtt_us) {
+            if self.unacked_bytes + expected > self.guard(target_bps, path, rtt_us) {
                 self.dropped += 1;
                 return PaceDecision::DropBeforeEncode;
             }
@@ -194,6 +198,40 @@ impl Pacer {
     /// sessions).
     pub fn set_drain_rate(&mut self, bps: u64) {
         self.drain_bps = Some(bps.max(1));
+    }
+
+    /// P9: the rate the line delivered (`RateController::queue_rate_bps`)
+    /// and the smallest round trip of the path; the queue guard follows
+    /// them from now on (`guard`).
+    pub fn set_queue(&mut self, rate_bps: u64, base_rtt_us: u64) {
+        self.queue = Some((rate_bps, base_rtt_us));
+    }
+
+    /// Unacknowledged bytes the next frame may join. After `set_queue` the
+    /// delivered rate over the round-trip floor plus two frames
+    /// (`rate_control::queue::queue_cap_bytes`): at most about one frame
+    /// waits beyond what the line drains, and a frame larger than the
+    /// bandwidth-delay product is sent while the next one is encoded.
+    /// Before it the target over the round trip plus `QUEUE_ALLOWANCE_US`.
+    pub fn guard(&self, target_bps: u64, path: PathKind, rtt_us: u64) -> u64 {
+        match self.queue {
+            Some((rate_bps, base_rtt_us)) => {
+                // Before the first delta frame its size is unknown: the key
+                // frame's stands for it (a lossless stream's frames are alike).
+                let frame = if self.keyframe_due || self.delta_bytes == 0 {
+                    self.key_bytes.max(self.delta_bytes)
+                } else {
+                    self.delta_bytes
+                };
+                super::rate_control::queue::queue_cap_bytes(
+                    rate_bps.min(target_bps),
+                    base_rtt_us,
+                    frame,
+                    path,
+                )
+            }
+            None => guard_bytes(target_bps, path, rtt_us),
+        }
     }
 
     /// The stale time and the frame limit for the next decision.

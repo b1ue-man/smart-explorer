@@ -11,7 +11,7 @@
 //! another encoder it keeps running at the session's correction.
 use std::io;
 
-use super::{HonourMeter, HonourVerdict};
+use super::{FrameInterval, HonourMeter, HonourVerdict};
 use crate::screen::core::capture_image::CapturedImage;
 use crate::screen::core::capture_picture::Picture;
 use crate::screen::core::host_backend::{CapturedEncodedFrame, EncodedFrame, ScreenEncoder};
@@ -33,6 +33,8 @@ pub fn guard(
         inner: encoder,
         meter: HonourMeter::watching(),
         can_demote,
+        interval: FrameInterval::default(),
+        opened: std::time::Instant::now(),
     })
 }
 
@@ -41,6 +43,9 @@ pub struct RateGuard {
     meter: HonourMeter,
     /// Another encoder of the codec is left in the stage's rank.
     can_demote: bool,
+    /// The interval of the frames it delivers (P9, `FrameInterval`).
+    interval: FrameInterval,
+    opened: std::time::Instant,
 }
 
 impl RateGuard {
@@ -57,6 +62,9 @@ impl RateGuard {
         commanded_bps: u64,
         fps: u32,
     ) -> io::Result<()> {
+        let now_us = u64::try_from(self.opened.elapsed().as_micros()).unwrap_or(u64::MAX);
+        self.interval.on_frame(now_us);
+        let fps = self.interval.budget_fps(fps);
         self.meter
             .on_frame(bytes, keyframe, commanded_bps, commanded_bps, fps);
         if self.inner.rate_state().is_some_and(|state| state.refused) {
