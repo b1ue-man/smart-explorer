@@ -186,8 +186,11 @@ jobs:
   windows-gnu:
     if: inputs.part == 'suite'
     runs-on: ubuntu-24.04
-    # Measured: 15 min (run 41488739503).
-    timeout-minutes: 50
+    # Measured: 15 min (run 41488739503). On 2026-11-18 the package mirror
+    # took 30 and 41 min for MinGW alone (runs 44359117852, attempt 1 and 2)
+    # and the job hit its limit while compiling; the job limit covers a slow
+    # mirror, and the install step retries with short network timeouts.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
         with:
@@ -199,7 +202,11 @@ jobs:
           targets: x86_64-pc-windows-gnu
 
       - name: MinGW-w64
-        run: sudo apt-get update && sudo apt-get install -y mingw-w64
+        timeout-minutes: 45
+        run: |
+          apt_opts="-o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30"
+          sudo apt-get $apt_opts update
+          sudo apt-get $apt_opts install -y --no-install-recommends mingw-w64
 
       - name: Every test binary and program, GNU ld
         timeout-minutes: 40
