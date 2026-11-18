@@ -143,7 +143,7 @@ internal fun wishLabelRes(wish: String): Int = when (wish) {
 internal fun ColumnScope.DisplayMenuItems(settings: ViewSettings, onSettings: (ViewSettings) -> Unit, onCustom: () -> Unit) {
     val display = settings.display
     Text(
-        stringResource(R.string.screen_view_monitor),
+        stringResource(R.string.screen_view_display_monitor),
         style = MaterialTheme.typography.labelMedium,
         modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
     )

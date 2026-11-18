@@ -124,7 +124,7 @@
     <string name="screen_view_max_rate_invalid">Bitte eine positive Zahl eingeben, zum Beispiel 20 oder 7,5.</string>
     <string name="screen_view_max_rate_set">Übernehmen</string>
     <string name="screen_view_max_rate_cancel">Abbrechen</string>
-    <string name="screen_view_monitor">Monitor</string>
+    <string name="screen_view_display_monitor">Monitor</string>
     <string name="screen_view_monitor_auto">Automatisch (eigener nur ohne Monitor am Gerät)</string>
     <string name="screen_view_monitor_off">Physischer Monitor</string>
     <string name="screen_view_monitor_request">Eigener (virtuell)</string>
