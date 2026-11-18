@@ -11,7 +11,7 @@ pub(super) fn status(session: &Session) -> Result<CallToolResult, String> {
     let runtime = crate::mcp_launcher::status_value();
     if runtime["state"] == "update_in_progress" || runtime["state"] == "update_recovery_required" {
         return Ok(response::ok(
-            json!({"mcp":{"runtime":runtime,"session_directory":session.directory,"jobs":session.jobs.list().iter().map(|job|job.summary_value()).collect::<Vec<_>>()}}),
+            json!({"mcp":{"runtime":runtime,"update_failure":update_failure(),"session_directory":session.directory,"jobs":session.jobs.list().iter().map(|job|job.summary_value()).collect::<Vec<_>>()}}),
         ));
     }
     let _operation = crate::mcp_launcher::operation()?;
@@ -38,6 +38,7 @@ pub(super) fn status(session: &Session) -> Result<CallToolResult, String> {
             "session_directory": session.directory,
             "running_jobs": running,
             "runtime": crate::mcp_launcher::status_value(),
+            "update_failure": update_failure(),
         },
         "plugins": crate::cli::plugin::status_value(),
         "background": crate::cli::background::status_value(),
@@ -45,6 +46,16 @@ pub(super) fn status(session: &Session) -> Result<CallToolResult, String> {
         "vaults": crate::cli::vault::output::vaults_summary(),
         "sync_setups": sync_summary(),
     })))
+}
+
+/// The update helper's last failure or the unfinished update of this
+/// installation: `error`, German `reason`, `next_action` (what happens next
+/// on its own) and `pending` (`updater::UpdateFailure`); `null` without one.
+/// The runtime state alone only says `update_recovery_required`.
+fn update_failure() -> Value {
+    crate::updater::last_update_failure()
+        .and_then(|failure| serde_json::to_value(failure).ok())
+        .unwrap_or(Value::Null)
 }
 
 /// How many sync setups exist and how to read them; the settings themselves

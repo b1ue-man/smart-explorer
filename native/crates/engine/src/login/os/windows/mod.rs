@@ -17,8 +17,8 @@ pub use protected::{gateway_state_directory, open_protected, paths, ProtectedFil
 pub use sas::secure_attention;
 pub use self_platform::{
     connect_grants, create_stage_file, elevation, open_image, privileged, read_self_record,
-    run_elevated, run_install_script, stage_root, write_self_record, APP_FILE, SCRIPT, SCRIPT_NAME,
-    STAGE_IMAGE,
+    run_elevated, run_elevated_launched, run_install_script, stage_root, write_self_record,
+    APP_FILE, SCRIPT, SCRIPT_NAME, STAGE_IMAGE,
 };
 pub use service::run_broker;
 pub use session::{binding, finish_helper, helper_binding_matches, prepare_helper, run_probe};

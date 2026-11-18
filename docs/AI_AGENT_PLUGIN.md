@@ -392,6 +392,12 @@ außerhalb eines tatsächlichen Runtimeprozesses `null`.
 `reconnect_required` bezeichnet eine nicht mehr zugelassene Generation;
 `new_process_for_new_capabilities` zeigt neue Fähigkeiten bei weiterhin
 kompatibler alter Sitzung. `busy` allein verlangt kein Neuverbinden.
+Ein fehlgeschlagenes oder unterbrochenes Update steht daneben als
+`update_failure` (MCP `status`: `mcp.update_failure`, auch im gesperrten
+Zustand; `se plugin status --json`: Bericht `runtime`) mit `error`, `reason`,
+`next_action` und `pending`, denselben Texten wie `se update --check`; die
+Desktopseite zeigt „Letztes Update: <Grund>“ und „Als Nächstes: <Schritt>“.
+Ohne Fehler ist der Wert `null`.
 
 Seit 0.5.197 überdauert die Verbindung eines Agenten ein Update (Ursache U2 der
 Pluginprüfung vom 2026-11-14). Grund: Claude Code startet einen

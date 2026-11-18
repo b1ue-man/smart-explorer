@@ -6,10 +6,12 @@ use crate::login::{
     core::{gateway_types, self_grants::ConsoleAbilities},
     os::shared::{
         denied, nonce,
+        script_output::{self, ScriptOutcome},
         self_channel::{self, Caller, Record},
         self_install::{Elevation, ScriptCall},
     },
 };
+use crate::rdp::host_setup::elevated::Launched;
 use std::{
     ffi::OsStr,
     fs::{self, File, OpenOptions},
@@ -127,7 +129,32 @@ pub fn create_stage_file(path: &Path) -> io::Result<File> {
         .open(path)
 }
 
-pub fn run_install_script(stage: &Path, call: &ScriptCall<'_>) -> io::Result<i32> {
+/// The bundled pkexec call with its output captured: the child's
+/// `login_state=` line carries the step's own message (no time limit, as
+/// `run_elevated`). Its error output also goes on to this process's log.
+pub fn run_elevated_launched(se: &Path, steps: &[String]) -> Result<Launched, String> {
+    let output = Command::new(PKEXEC)
+        .arg(se)
+        .args(crate::rdp::host_setup::elevated::system_args(steps))
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|error| format!("pkexec: {error}"))?;
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    if !stderr.is_empty() {
+        eprint!("{stderr}");
+    }
+    let code = output
+        .status
+        .code()
+        .ok_or_else(|| "pkexec ended without exit code".to_string())?;
+    Ok(Launched {
+        code: Some(code),
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr,
+    })
+}
+
+pub fn run_install_script(stage: &Path, call: &ScriptCall<'_>) -> io::Result<ScriptOutcome> {
     let bash = ["/bin/bash", "/usr/bin/bash"]
         .into_iter()
         .find(|path| Path::new(path).is_file())
@@ -156,14 +183,13 @@ pub fn run_install_script(stage: &Path, call: &ScriptCall<'_>) -> io::Result<i32
             command.arg("uninstall");
         }
     }
-    let status = command
+    command
         .env_clear()
         .env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
         .env("LC_ALL", "C")
         .current_dir("/")
-        .stdin(Stdio::null())
-        .status()?;
-    Ok(status.code().unwrap_or(-1))
+        .stdin(Stdio::null());
+    script_output::run(&mut command)
 }
 
 fn record_path(record: Record) -> io::Result<PathBuf> {

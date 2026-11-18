@@ -146,7 +146,7 @@ pub(super) fn probe(report: &mut HostProbe) {
 }
 
 /// One `krdpserverrc` `[General]` value through `kreadconfig6`.
-fn general(key: &str) -> Result<String, String> {
+pub(super) fn general(key: &str) -> Result<String, String> {
     let tool = find_tool(&["kreadconfig6"]).ok_or_else(|| "kreadconfig6_missing".to_string())?;
     let args = ["--file", "krdpserverrc", "--group", "General", "--key", key];
     capture(&tool, &args).map(|value| value.trim().to_string())
@@ -194,7 +194,7 @@ pub(super) fn configure() -> SetupState {
 }
 
 /// The KRdp user unit that se configures.
-const KRDP_UNIT: &str = "app-org.kde.krdpserver.service";
+pub(super) const KRDP_UNIT: &str = "app-org.kde.krdpserver.service";
 /// E29: a KRdp that se sets up listens on loopback. KRdp (`server/main.cpp`,
 /// read 2026-11-08) has no configuration key and no environment variable for
 /// its listen address; `--address` defaults to 0.0.0.0 and is a command-line

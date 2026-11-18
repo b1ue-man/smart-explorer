@@ -1266,6 +1266,13 @@ RDP_KONTO_TESTS = {
         "rdp_konto_task_freerdp_password_only_on_stdin",
         "rdp_konto_task_xrdp_pam_line_inserted_once_before_common_auth",
         "rdp_konto_task_xrdp_token_bound_to_user_and_tunnel",
+        # login-rest (2026-11-18): installer message, root worker account, vendor PAM file, KRdp.
+        "login_selbst_task_script_failure_carries_installer_line",
+        "rdp_konto_task_xrdp_vendor_pam_file_gets_an_etc_override",
+        "rdp_konto_task_root_worker_signs_in_as_desktop_user",
+        "rdp_konto_task_krdp_only_for_the_session_account",
+        "rdp_konto_task_krdp_users_list_keeps_other_entries",
+        "rdp_konto_task_krdp_password_replaced_when_a_recipient_ends",
     ],
     "linux": [],
     "windows": [

@@ -117,8 +117,9 @@ pub fn write_host_evidence(_: &[u8]) -> io::Result<()> {
 // Login self-setup (E21): no privileged login host on this platform.
 use crate::login::os::shared::{
     self_channel::Record,
-    self_install::{Elevation, ScriptCall},
+    self_install::{Elevation, ScriptCall, ScriptOutcome},
 };
+use crate::rdp::host_setup::elevated::Launched;
 pub const APP_FILE: &str = "smart_explorer";
 pub const SCRIPT_NAME: &str = "install-login-service";
 pub const SCRIPT: &str = "";
@@ -132,6 +133,9 @@ pub fn elevation() -> Result<Elevation, String> {
 pub fn run_elevated(_: &Path, _: &[String]) -> Result<i32, String> {
     Err("unsupported".into())
 }
+pub fn run_elevated_launched(_: &Path, _: &[String]) -> Result<Launched, String> {
+    Err("unsupported".into())
+}
 pub fn stage_root() -> io::Result<std::path::PathBuf> {
     unavailable()
 }
@@ -141,7 +145,7 @@ pub fn open_image(_: &Path) -> io::Result<File> {
 pub fn create_stage_file(_: &Path) -> io::Result<File> {
     unavailable()
 }
-pub fn run_install_script(_: &Path, _: &ScriptCall<'_>) -> io::Result<i32> {
+pub fn run_install_script(_: &Path, _: &ScriptCall<'_>) -> io::Result<ScriptOutcome> {
     unavailable()
 }
 pub fn read_self_record(_: Record, _: usize) -> io::Result<Option<Vec<u8>>> {

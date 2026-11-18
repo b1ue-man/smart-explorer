@@ -27,6 +27,7 @@ pub mod gateway;
 pub mod gateway_client;
 pub mod host_status;
 pub mod provision;
+pub mod script_output;
 pub mod self_channel;
 pub mod self_install;
 pub mod self_setup;

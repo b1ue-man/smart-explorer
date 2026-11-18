@@ -91,9 +91,25 @@ fn host_line(report: &Value) -> String {
             else { "Aktive Agentensitzung zugelassen".into() };
             let next = if runtime["state"].as_str() != Some("busy") && runtime["reconnect_required"].as_bool() == Some(true) { " · Agentensitzung neu verbinden" }
                 else if runtime["new_process_for_new_capabilities"].as_bool() == Some(true) { " · Neue Fähigkeiten benötigen eine neue Agentensitzung" } else { "" };
-            format!("Agentenanbindung: {state} · {session}{next}")
+            format!(
+                "Agentenanbindung: {state} · {session}{next}{}",
+                update_failure_text(&report["update_failure"])
+            )
         }
         _ => "Status dieser Agentenanbindung wird von dieser App-Version nicht erkannt; Diagnose öffnen.".into(),
+    }
+}
+
+/// Reason and next automatic step of a failed or unfinished update, from
+/// the runtime report's `update_failure` (`updater::UpdateFailure`); empty
+/// without one.
+fn update_failure_text(failure: &Value) -> String {
+    match (failure["reason"].as_str(), failure["next_action"].as_str()) {
+        (Some(reason), Some(next)) => {
+            format!("\nLetztes Update: {reason}\nAls Nächstes: {next}")
+        }
+        (Some(reason), None) => format!("\nLetztes Update: {reason}"),
+        _ => String::new(),
     }
 }
 
@@ -315,6 +331,18 @@ mod tests {
             host_line(&codex),
             "Codex: nicht gefunden · MCP-Eintrag unbekannt · Skill nicht erzeugt"
         );
+        // A blocked runtime names the update's reason and next step.
+        let runtime = json!({"host": "runtime",
+            "runtime": {"state": "update_recovery_required", "active_servers": []},
+            "update_failure": {"reason": "Grund", "next_action": "Nächster Lauf"}});
+        assert_eq!(
+            host_line(&runtime),
+            "Agentenanbindung: Aktualisierung muss wiederhergestellt werden · Keine aktive \
+             Agentensitzung gemeldet\nLetztes Update: Grund\nAls Nächstes: Nächster Lauf"
+        );
+        let healthy = json!({"host": "runtime",
+            "runtime": {"state": "ready", "active_servers": []}, "update_failure": null});
+        assert!(!host_line(&healthy).contains("Letztes Update"));
         assert_eq!(
             outcome_line(&json!({"host": "codex", "installed": true})),
             "codex: installiert – neue Agenten-Sitzung starten"

@@ -52,14 +52,14 @@ timeouts“. Nach Kopplung und „Bildschirm steuern: Erlauben“ tut die Person
 
 | Oberfläche | Vorher (0.5.188) | Jetzt |
 |---|---|---|
-| Desktop-Geräteseite, Remote Desktop | Beziehung wählen, „RDP-Fähigkeiten abfragen“, Dienst, Client, Darstellung, Lebensdauer, drei Kästchen, „Remote Desktop öffnen“, Fingerprint im mstsc-Dialog vergleichen (mindestens 7 Bedienschritte) | „Remote Desktop“ (1 Klick); Benutzer und Kennwort einmal im RDP-Programm (Linux ohne `sdl-freerdp3`: in der Anmeldemaske der Geräteseite, nur über die Standardeingabe des Programms weitergereicht) |
+| Desktop-Geräteseite, Remote Desktop | Beziehung wählen, „RDP-Fähigkeiten abfragen“, Dienst, Client, Darstellung, Lebensdauer, drei Kästchen, „Remote Desktop öffnen“, Fingerprint im mstsc-Dialog vergleichen (mindestens 7 Bedienschritte) | „Remote Desktop“ (1 Klick); se meldet mit dem Konto an, das die Freigabe des Geräts nennt: se-remote (Windows), xrdp (Einmal-Token; ein Root-Dienst nimmt das Konto der grafischen Sitzung) und KRdp (se's KRdp-Benutzer `se-krdp`, nur für das Konto der Plasma-Sitzung) automatisch, sonst einmal das Kennwort im Dialog „Kennwort von <Konto> auf <Gerät>; wird auf <Gerät> gespeichert“ (danach 1 Klick ohne Abfrage); Statuszeile und „Hinterlegtes Kennwort löschen“; mstsc startet den Desktop ohne `.rdp`-Datei, also ohne Sicherheitswarnung mit Häkchen (Linux ohne `sdl-freerdp3`: Anmeldemaske der Geräteseite, nur über die Standardeingabe des Programms weitergereicht) |
 | Desktop-Geräteseite, Fenster | „Fensterliste abrufen / aktualisieren“, Kästchen „mit Steuerrecht“, „Öffnen“ (2–3 Klicks) | Liste steht da; „Steuern“/„Ansehen“ (1 Klick) |
 | Desktop-Geräteseite, Dienste | Zielhost, Zielport, lokaler Port, Lebensdauer, Kästchen, „Starten“, Hostfreigabe je Port | Dienste stehen mit Adresse da; „Öffnen“ bzw. „Adresse kopieren“ (1 Klick) oder direkt `http://127.x.y.z:Port` im eigenen Programm (0 Klicks); „Öffnen“ und „Schließen“ auch für Dienste über dem Budget (1 Klick, E50) |
 | Desktop-Geräteseite, Programme | Beziehung wählen, „Programmkatalog abfragen“, „Starten“; bei unklarem Ergebnis „Ergebnis abfragen“, Kästchen „neuen Auftrag“; „Bestätigtes Appfenster öffnen“ | „Starten“ (1 Klick); Klärung, Neustart nach Entsperren und Fensteröffnung macht se |
 | se Desktop | Kachelmenü ohne Remote Desktop, keine Fenster, keine Dienste | Kachelmenü „Remote Desktop“, RemoteApps, „Fenster (n)“, „Dienste (n)“ (1 Klick); Tooltip listet Fenster und Dienste |
 | Android | RDP-Abfrage-Knopf ohne Startmöglichkeit; TCP mit Lebensdauer und Kästchen; Fenster mit Aktualisieren und Steuerkästchen; Programme mit Kästchen und Abfrageknopf | RDP-Dialog nennt nur Grund und Stand; Dienste „Öffnen“/„Schließen“ (1 Tippen); Fensterliste aus dem Feed (1 Tippen); Programme klären sich selbst |
-| CLI | `se rdp open <gerät> --service … --client … --acknowledge-local-access --acknowledge-session-effect [--acknowledge-certificate-dialog]`; `se tcp start … --acknowledge-local-access` | `se rdp open <gerät>` (`--service`, `--client`, `--wait` übersteuern weiterhin, verborgen); `se tcp services <gerät>`; `se tcp start <gerät> --target-port P`; `se tcp open <gerät> <port>` und `se tcp close-service <gerät> <port>` für Dienste über dem Budget (E50) |
-| MCP | `rdp open` mit `service`, `client`, Bestätigungen; `tcp_forward start` mit `acknowledge_local_access` | `rdp open` mit nur `device`; `tcp_forward services`; `start` ohne Bestätigung; `tcp_forward` mit `open_service` und `close_service` (E50) |
+| CLI | `se rdp open <gerät> --service … --client … --acknowledge-local-access --acknowledge-session-effect [--acknowledge-certificate-dialog]`; `se tcp start … --acknowledge-local-access` | `se rdp open <gerät>` (`--service`, `--client`, `--wait` übersteuern weiterhin, verborgen); `se tcp services <gerät>`; `se tcp start <gerät> --target-port P`; `se tcp open <gerät> <port>` und `se tcp close-service <gerät> <port>` für Dienste über dem Budget (E50); `se rdp password <gerät>` (Kennwort ohne Echo oder über stdin, `--status`, `--forget`) |
+| MCP | `rdp open` mit `service`, `client`, Bestätigungen; `tcp_forward start` mit `acknowledge_local_access` | `rdp open` mit nur `device`; `tcp_forward services`; `start` ohne Bestätigung; `tcp_forward` mit `open_service` und `close_service` (E50); `rdp` `login_status` und `forget_password` (keine Kennworteingabe); `status` mit `mcp.update_failure` (Grund und nächster automatischer Schritt eines fehlgeschlagenen Updates) |
 
 Zustandstexte, die jede Oberfläche gleich zeigt: „Remote Desktop wird geöffnet
 … fragt es dort einmal nach der Administratorfreigabe“ (Einrichtung läuft),
@@ -70,6 +70,18 @@ Zustandstexte, die jede Oberfläche gleich zeigt: „Remote Desktop wird geöffn
 „Hostsitzung gesperrt – zum Entsperren den Bildschirm öffnen“. Die Texte des
 Einrichtungsstands stammen aus `SetupState::text` (`N/engine/src/rdp/core/types.rs`), die
 Projektion aus `N/gui/src/desktop/core/tile_feed.rs`.
+
+Zustandstexte der Anmeldung mit dem Konto des Geräts (`LoginState::text`,
+`N/engine/src/rdp/core/login.rs`): „Anmeldung als <Konto>: automatisch“,
+„… mit dem auf dem Gerät hinterlegten Kennwort“, „… Kennwort einmal
+hinterlegen (Geräteseite oder `se rdp password`), sonst fragt das
+RDP-Programm“, „Anmeldung mit dem Konto des Geräts hier nicht möglich
+(<Grund>) …“ (zum Beispiel KRdp mit gesperrtem KWallet, ein Root-Dienst ohne
+grafische Sitzung bei xrdp ohne `AllowRootLogin`), „Anmeldung mit dem Konto
+des Geräts nicht verfügbar (Gegenstelle vor 0.5.198 oder abgelehnt) …“ und
+bei se-remote „Die Anmeldung als se-remote trennt die Sitzung der am Gerät
+angemeldeten Person“. Die Maschinenanmeldung nennt bei einem gescheiterten
+Einrichtungsschritt dessen eigene letzte Meldung („Meldung des Schritts: …“).
 
 Zeitgrenzen: keine Bedienwartezeit und keine Lebensdauer als Vorgabe. Probe,
 Start, Katalog, Belege und Symbolabruf warten, bis das Gerät antwortet, die

@@ -49,6 +49,12 @@ pub enum Automatic {
     Available,
     /// The secret of this session.
     Secret(ManagedSecret),
+    /// The service signs in with its own account, not the grant's (KRdp:
+    /// se's KRdp user); `secret` is `None` when asked with `status_only`.
+    Service {
+        account: HostAccount,
+        secret: Option<ManagedSecret>,
+    },
     /// Automatic would apply but cannot run; the reason.
     Unsupported(String),
 }
@@ -90,6 +96,9 @@ pub fn login_info(
     match automatic {
         Automatic::Secret(secret) => return Ok(info(Some(secret), LoginState::Automatic)),
         Automatic::Available => return Ok(info(None, LoginState::Automatic)),
+        Automatic::Service { account, secret } => {
+            return Ok(LoginInfo::new(Some(account), secret, LoginState::Automatic))
+        }
         Automatic::Unsupported(reason) => return Ok(LoginInfo::unsupported(reason)),
         Automatic::No => {}
     }
@@ -137,7 +146,7 @@ pub fn store_password(
     // An account that signs in automatically (or would, but cannot here)
     // takes no typed password: its password is se's own.
     match platform::automatic(service_id, profile, &account, viewer, true) {
-        Automatic::Available | Automatic::Secret(_) => {
+        Automatic::Available | Automatic::Secret(_) | Automatic::Service { .. } => {
             return Err(format!(
                 "{} meldet sich automatisch an; es braucht kein Kennwort",
                 account.qualified()

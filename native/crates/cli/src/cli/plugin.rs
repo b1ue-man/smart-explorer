@@ -192,7 +192,11 @@ pub(super) fn run(args: PluginArgs) -> Result<i32, String> {
         }
         Command::Status { json } => {
             let mut reports = vec![claude::status(&executable), codex::status(&executable)];
-            reports.push(serde_json::json!({"host":"runtime","runtime":crate::mcp_launcher::status_value(),"launcher_error":launcher_error}));
+            // `update_failure`: reason and next automatic step of a failed or
+            // unfinished update (the plugin page shows them).
+            let failure = crate::updater::last_update_failure()
+                .and_then(|failure| serde_json::to_value(failure).ok());
+            reports.push(serde_json::json!({"host":"runtime","runtime":crate::mcp_launcher::status_value(),"launcher_error":launcher_error,"update_failure":failure}));
             print(&reports, json)?;
             Ok(0)
         }
