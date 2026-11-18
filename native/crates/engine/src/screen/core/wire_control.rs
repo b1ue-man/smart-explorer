@@ -337,6 +337,9 @@ pub enum ViewerFrame {
     /// `set_display.rs`); only after the host answered `live` in
     /// `HELLO_OK.virtual_display`.
     SetDisplay(super::virtual_display::VirtualDisplayChoice),
+    /// `AUDIO` (plan 2026-11-17 P9): the host's sound on or off; only after
+    /// the host answered `audio` in `HELLO_OK` (`audio_wire.rs`).
+    Audio(bool),
 }
 
 /// Viewer to host: `u64` big-endian, the ceiling in bit/s, 0 automatic.

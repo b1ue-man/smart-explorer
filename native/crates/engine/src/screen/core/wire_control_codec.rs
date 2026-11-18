@@ -70,6 +70,7 @@ pub fn encode_viewer_frame(frame: &ViewerFrame) -> io::Result<(u8, Vec<u8>)> {
             choice.validate()?;
             (super::super::set_display::SET_DISPLAY, to_json(choice)?)
         }
+        ViewerFrame::Audio(on) => (super::super::audio_wire::AUDIO, vec![u8::from(*on)]),
     })
 }
 
@@ -152,6 +153,9 @@ pub fn decode_viewer_frame(tag: u8, payload: &[u8]) -> io::Result<ViewerFrame> {
             let choice: super::super::virtual_display::VirtualDisplayChoice = from_json(payload)?;
             choice.validate()?;
             ViewerFrame::SetDisplay(choice)
+        }
+        super::super::audio_wire::AUDIO if payload == [0] || payload == [1] => {
+            ViewerFrame::Audio(payload[0] != 0)
         }
         _ => return Err(invalid("unknown screen frame from the viewer")),
     })

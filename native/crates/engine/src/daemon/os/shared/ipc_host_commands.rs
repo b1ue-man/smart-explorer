@@ -168,6 +168,11 @@ fn state_snapshot(state: &mut ShareHostState, drain: bool, now: i64) -> ShareWor
         peer_feeds: crate::share::peer_feed::views(),
         rdp_setup: Some(crate::rdp::host_setup::status()),
         code_renewal: state.identity.as_ref().and_then(CodeRenewalView::of),
+        // Only while connected: the value belongs to the current server.
+        server_qad: state
+            .signal_connected
+            .then(crate::share::server_qad_status)
+            .flatten(),
     }
 }
 

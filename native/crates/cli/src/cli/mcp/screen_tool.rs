@@ -29,7 +29,7 @@ const DEFAULT_MAX_EDGE: u64 = 1568;
 /// Seconds to wait for the device's user unless the call says otherwise.
 const DEFAULT_WAIT_SECS: u64 = 30;
 
-pub(super) const DESCRIPTION: &str = "Looks at the screen of a paired device: `devices` lists the devices and their screen rights, `probe` shows platform, monitors, codecs, limits and `virtual_display` (whether the device can show its desktop on se's own display in the viewer's resolution; a viewer chooses it with `se screen view --virtual-display auto|off|request --display-size WxH`; with `live: true` the viewer's „Monitor“ and „Auflösung“ change it within the running session), `windows` lists the windows that run there, `families` returns confirmed versioned window-family selectors, `snapshot` returns one still picture (PNG image, long edge at most 1568 px unless `max_edge` says otherwise). The other device must have granted „screen view“; if it asks its user, the call waits up to `wait` seconds (default 30) and then fails with `approval_pending`. There is no live video and no way to answer a confirmation through this tool; input goes through the tool `screen_input`.";
+pub(super) const DESCRIPTION: &str = "Looks at the screen of a paired device: `devices` lists the devices and their screen rights, `probe` shows platform, monitors, codecs, limits and `virtual_display` (whether the device can show its desktop on se's own display in the viewer's resolution; a viewer chooses it with `se screen view --virtual-display auto|off|request --display-size WxH`; with `live: true` the viewer's „Monitor“ and „Auflösung“ change it within the running session), `windows` lists the windows that run there, `families` returns confirmed versioned window-family selectors, `snapshot` returns one still picture (PNG image, long edge at most 1568 px unless `max_edge` says otherwise), `audio` reads or sets („on“) whether the desktop viewer plays the device's sound („Ton“, default on; also `se screen view --audio on|off`). The other device must have granted „screen view“; if it asks its user, the call waits up to `wait` seconds (default 30) and then fails with `approval_pending`. There is no live video and no way to answer a confirmation through this tool; input goes through the tool `screen_input`.";
 
 const DEVICE: &str = "Device: a `share://direct/<id>` or `share://room/<room>/<device>` endpoint, a name, an id or a fingerprint prefix; `devices` lists them.";
 
@@ -37,8 +37,8 @@ pub(super) fn properties() -> Value {
     json!({
         "action": {
             "type": "string",
-            "enum": ["devices", "probe", "windows", "families", "snapshot"],
-            "description": "devices, probe, windows, confirmed families or snapshot."
+            "enum": ["devices", "probe", "windows", "families", "snapshot", "audio"],
+            "description": "devices, probe, windows, confirmed families, snapshot or audio (the viewer's „Ton“)."
         },
         "device": {"type": "string", "description": DEVICE},
         "source": {
@@ -63,6 +63,10 @@ pub(super) fn properties() -> Value {
             "type": "integer",
             "minimum": 0,
             "description": "Seconds to wait for the device's user to answer its question (default 30)."
+        },
+        "on": {
+            "type": "boolean",
+            "description": "audio: play the device's sound in the desktop viewer (true) or not (false); omitted reads the setting."
         }
     })
 }
@@ -118,6 +122,19 @@ fn snapshot(args: &Args) -> Result<CallToolResult, String> {
     )?;
     let fitted = fit(&still.image, Some(edge), max_bytes).map_err(|error| error.to_string())?;
     Ok(image_result(&fitted, &still.source, &device))
+}
+
+/// `audio` (plan 2026-11-17 P9): the desktop viewer's „Ton“, read or set.
+fn audio(args: &Args) -> Result<CallToolResult, String> {
+    match args.value("on") {
+        None => {}
+        Some(Value::Bool(on)) => crate::app::screen_audio::set_audio(*on)
+            .map_err(|error| format!("cannot store the audio choice: {error}"))?,
+        Some(_) => return Err("argument `on` must be true or false".into()),
+    }
+    Ok(response::ok(
+        json!({"audio": crate::app::screen_audio::audio_on()}),
+    ))
 }
 
 pub(super) const INPUT_DESCRIPTION: &str = "Clicks, moves the pointer, scrolls, types text, presses a key or a key combination, or runs an Android system action on the screen of a paired device (one input per call). The other device must have granted „screen control“ to this device; if it asks its user, the call waits up to `wait` seconds (default 30) and then fails with `approval_pending`. Coordinates are pixels of the source or percentages (`50%`). The answer says whether the input was delivered or why the device blocked it (`elevated_window`, `secure_desktop`, `control_unavailable`, `unsupported_on_host`). Ctrl+Alt+Delete is never sent.";
@@ -204,6 +221,7 @@ pub(super) fn screen(args: &Args) -> Result<CallToolResult, String> {
             Ok(response::ok(crate::cli::screen::windows_value(&list)))
         }
         "snapshot" => snapshot(args),
+        "audio" => audio(args),
         "families" => {
             let (target, _) = crate::cli::screen::device_target(&args.string("device")?)?;
             // The device feed first (design 5.2); the device is asked only
@@ -222,7 +240,7 @@ pub(super) fn screen(args: &Args) -> Result<CallToolResult, String> {
             ))
         }
         other => Err(format!(
-            "unknown action `{other}`: use devices, probe, windows, families or snapshot"
+            "unknown action `{other}`: use devices, probe, windows, families, snapshot or audio"
         )),
     }
 }

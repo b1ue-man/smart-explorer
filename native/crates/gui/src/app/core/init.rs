@@ -486,6 +486,7 @@ impl App {
             share_routes: None,
             share_worker_relay_url: String::new(),
             share_worker_candidates: Vec::new(),
+            share_worker_server_qad: None,
             share_discovery: super::share_discovery_state::DiscoveryUiState::default(),
             quickshare: None,
             qs_devices: Vec::new(),

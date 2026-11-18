@@ -1,7 +1,8 @@
 //! `se screen view DEVICE [--source QUELLE] [--control] [--fullscreen]
 //! [--max-rate RATE] [--codec CODEC] [--decoder DECODER]
 //! [--decoder-library LIBRARY] [--display DISPLAY]
-//! [--virtual-display auto|off|request] [--display-size WxH|window] [--json]`
+//! [--virtual-display auto|off|request] [--display-size WxH|window]
+//! [--audio on|off] [--json]`
 //! and `se screen grid [--room RAUM] [--json]` (SCR-M7): open the desktop
 //! viewer window of the GUI program (`--screen-view <ziel-json>`,
 //! `--screen-grid [--room <id>]`, V5) as a process of its own and return.
@@ -70,6 +71,10 @@ pub(super) struct ViewArgs {
     /// opens: WxH (e.g. 2560x1440) or window (follow the viewer's window)
     #[arg(long, value_name = "GRÖSSE", value_parser = parse_display_size)]
     display_size: Option<DisplaySize>,
+    /// „Ton“ of the desktop viewer, stored before it opens: on (the
+    /// device's sound plays in the viewer, the default) or off
+    #[arg(long, value_name = "AN_AUS", value_parser = parse_audio)]
+    audio: Option<bool>,
     #[arg(long, help = "Print machine-readable JSON")]
     json: bool,
 }
@@ -91,6 +96,15 @@ pub(super) fn parse_display(text: &str) -> Result<DisplayChoice, String> {
 pub(super) fn parse_virtual_display(text: &str) -> Result<VirtualDisplayWish, String> {
     VirtualDisplayWish::parse(text)
         .ok_or_else(|| format!("invalid virtual display: {text} (auto, off or request)"))
+}
+
+/// `--audio on|off` (plan 2026-11-17 P9).
+pub(super) fn parse_audio(text: &str) -> Result<bool, String> {
+    match text.trim() {
+        "on" => Ok(true),
+        "off" => Ok(false),
+        _ => Err(format!("invalid audio: {text} (on or off)")),
+    }
 }
 
 /// `--display-size`: the viewer's window or a fixed size.
@@ -269,6 +283,10 @@ pub(super) fn run_view(args: ViewArgs) -> Result<i32, String> {
         });
         crate::app::screen_prefs::set_virtual_display_choice(args.virtual_display, size)
             .map_err(|error| format!("cannot store the display choice: {error}"))?;
+    }
+    if let Some(on) = args.audio {
+        crate::app::screen_audio::set_audio(on)
+            .map_err(|error| format!("cannot store the audio choice: {error}"))?;
     }
     let target = target_json(
         &choice,

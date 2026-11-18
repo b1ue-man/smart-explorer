@@ -16,11 +16,12 @@ pub(super) use super::direct_messages::{
 pub(super) const CAPABILITY: &str = "tracked_direct_v1";
 
 /// Server capabilities in the order `hello_ok` lists them.
-const SUPPORTED_CAPABILITIES: [&str; 4] = [
+const SUPPORTED_CAPABILITIES: [&str; 5] = [
     CAPABILITY,
     super::discovery::CAPABILITY,
     super::idle::CAPABILITY,
     super::login::CAPABILITY,
+    super::qad_reach::CAPABILITY,
 ];
 
 pub(super) fn negotiate_capabilities(offered: Vec<String>) -> HashSet<String> {

@@ -92,6 +92,8 @@ pub enum ToolbarAction {
     MaxRate(Option<u64>),
     /// „Monitor“ and „Auflösung“ (plan 2026-11-17 P5).
     VirtualDisplay(super::screen_prefs::VirtualDisplayChoice),
+    /// „Ton“: the host's sound on or off (plan 2026-11-17 P9).
+    Audio(bool),
     LowLatency(bool),
     Stats(bool),
     Key(u16),
@@ -451,6 +453,7 @@ fn view_row(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Vec<ToolbarAction
         );
     }
     toggle(ui, input.stats_on, "Statistik", ToolbarAction::Stats);
+    super::screen_audio::toolbar_row(ui, input.info, out);
     // „Codec“ (replaces „Verlustfrei“), „Dekodierer“, „Höchste Datenrate“.
     codec_rows::codec_rows(ui, input, out);
     codec_rows::max_rate_row(ui, input, out);

@@ -417,8 +417,7 @@ pub struct App {
     /// Every copy, upload, download and remote copy (each with its own
     /// progress and cancellation), finished ones and Explorer hand-overs.
     pub(in crate::app) transfer_center: super::transfer_center::TransferCenter,
-    /// In-flight one-shot remote op (new folder, rename, download-to).
-    /// Ok(notice)/Err(msg); the worker includes the op context in both.
+    /// In-flight one-shot remote op (new folder, rename, download-to); Ok/Err with its context.
     pub(in crate::app) remote_op_rx: Option<Receiver<Result<String, String>>>,
     /// In-flight runtime activation of the SSH agent on the live connection
     /// (#24): the deployed `AgentBackend` + its version, or an error message.
@@ -490,6 +489,7 @@ pub struct App {
     pub(in crate::app) share_routes: Option<crate::share::ShareRouteSnapshot>,
     pub(in crate::app) share_worker_relay_url: String,
     pub(in crate::app) share_worker_candidates: Vec<String>,
+    pub(in crate::app) share_worker_server_qad: Option<crate::share::ServerQadStatus>,
     pub(in crate::app) share_discovery: super::share_discovery_state::DiscoveryUiState,
 
     // Quick Share (Android) LAN discovery — started lazily when Teilen opens.

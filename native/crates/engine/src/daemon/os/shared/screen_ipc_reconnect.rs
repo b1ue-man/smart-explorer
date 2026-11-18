@@ -6,12 +6,23 @@
 //! a new connection to the same device (`ShareService::screen_link`), the
 //! same node pin, the same request and the same signed handshake
 //! (`session_memory::handshake`), so the host checks the right exactly as
-//! for a new session. It tries at most once per second and for at most
-//! 30 s, also when a new session ends at once with `session_changed` again
-//! (one plan, `SETTLED_AFTER`). While the right holds it tries on: a host
-//! that is not reached or whose new session is not ready yet (`NOT_READY`)
-//! is tried again; any other refusal ends the session with the refusal's
-//! code, and after 30 s the session ends visibly with `session_changed`.
+//! for a new session. It tries at most once per second and for as long as
+//! the attempts make progress (plan 2026-11-17 P9: no total limit): 30 s
+//! after the attempt that got further than every attempt before it (the
+//! device reached, then its host answered), also when a new session ends at
+//! once with `session_changed` again (one plan, `SETTLED_AFTER`). While the
+//! right holds it tries on: a host that is not reached or whose new session
+//! is not ready yet (`NOT_READY`) is tried again; any other refusal ends the
+//! session with the refusal's code, and without progress for 30 s the
+//! session ends visibly with `session_changed`.
+//!
+//! P9 („das Verbinden zum Remote-Bildschirm schlägt regelmäßig fehl“): the
+//! first opening of a session follows the same plan. A first handshake that
+//! fails in a way that may pass (the device not reached, the host's session
+//! or capture not ready yet) is tried again with a new connection instead of
+//! ending the viewer's attempt at once; when the attempts stop making
+//! progress the session ends with the last failure's code, its step
+//! (connection, handshake, host) and the number of attempts.
 //! The first accepted hello stays the client's (it takes no second one):
 //! the new session's frames and pictures follow on the same relay when its
 //! frame contract is the one the client accepted (`reads`), else the session
@@ -20,16 +31,14 @@
 //! where the viewer left the old one by replaying what its `SET_MODE` frames
 //! chose (`ModeMemory`: source, raise from the group view, picture size) and
 //! its pointer wish. Any other end is passed on as before.
-use std::future::Future;
 use std::io;
-use std::pin::Pin;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use tokio::sync::mpsc;
 
 use crate::daemon::ipc_protocol::screen::{
-    RateCeilingState, RelayEnd, RelayHello, RELAY_END, RELAY_HELLO,
+    RateCeilingState, RelayEnd, RelayHello, RELAY_AUDIO, RELAY_END, RELAY_HELLO,
 };
 use crate::screen::core::frame_budget::FrameContract;
 use crate::screen::core::frame_memory::MemoryHold;
@@ -45,7 +54,8 @@ use crate::share::{PeerOpenTarget, ShareService};
 
 /// Least time between two attempts.
 pub(super) const RECONNECT_EVERY: Duration = Duration::from_secs(1);
-/// Longest time the relay tries after a session switch.
+/// Longest time the relay tries without progress (P9: counted from the
+/// last attempt that got further than all before it).
 pub(super) const RECONNECT_FOR: Duration = Duration::from_secs(30);
 /// A session built again that ends with `session_changed` sooner than this
 /// continues the plan of its reconnection instead of starting a new one.
@@ -65,6 +75,11 @@ const PIN_CLOSE: u32 = 0x5345;
 #[path = "screen_ipc_mode_memory.rs"]
 mod mode_memory;
 pub(super) use mode_memory::ModeMemory;
+#[path = "screen_ipc_retry_plan.rs"]
+mod retry_plan;
+use retry_plan::retryable;
+#[cfg_attr(not(test), allow(unused_imports))]
+pub(super) use retry_plan::{again, Clock, Dial, Outcome, Pending, Schedule, Step, SystemClock};
 
 #[cfg(test)]
 #[path = "bildschirm_wechsel_task_tests.rs"]
@@ -98,140 +113,6 @@ pub(super) fn rate_state(frame: &ViewerFrame, host_takes_it: bool) -> Option<Vec
     wire::to_json(&RateCeilingState::of(*ceiling, host_takes_it)).ok()
 }
 
-/// What the reconnection does next.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Step {
-    /// One attempt now, with at most `remaining` for it.
-    Attempt { remaining: Duration },
-    /// The next attempt is due after this time.
-    Wait(Duration),
-    /// The 30 s are over.
-    GiveUp,
-}
-
-/// The time plan of one reconnection: at most one attempt per
-/// `RECONNECT_EVERY`, none after `RECONNECT_FOR`.
-pub(super) struct Schedule {
-    start: Instant,
-    next: Instant,
-}
-
-impl Schedule {
-    pub(super) fn new(now: Instant) -> Self {
-        Self {
-            start: now,
-            next: now,
-        }
-    }
-
-    pub(super) fn step(&mut self, now: Instant) -> Step {
-        let elapsed = now.saturating_duration_since(self.start);
-        if elapsed >= RECONNECT_FOR {
-            return Step::GiveUp;
-        }
-        if now < self.next {
-            return Step::Wait(self.next - now);
-        }
-        self.next = now + RECONNECT_EVERY;
-        Step::Attempt {
-            remaining: RECONNECT_FOR - elapsed,
-        }
-    }
-}
-
-/// A future the reconnection waits for.
-pub(super) type Pending<T> = Pin<Box<dyn Future<Output = T> + Send>>;
-
-/// The clock of the reconnection (a simulated one in the task tests).
-pub(super) trait Clock: Send {
-    fn now(&self) -> Instant;
-    fn sleep(&self, time: Duration) -> Pending<()>;
-}
-
-/// The clock of the system.
-pub(super) struct SystemClock;
-
-impl Clock for SystemClock {
-    fn now(&self) -> Instant {
-        Instant::now()
-    }
-    fn sleep(&self, time: Duration) -> Pending<()> {
-        Box::pin(tokio::time::sleep(time))
-    }
-}
-
-/// One new connection and handshake to the same device.
-pub(super) trait Dial: Send {
-    type Session: Send + 'static;
-    fn dial(&self, remaining: Duration) -> Pending<Result<Self::Session, ViewerError>>;
-}
-
-/// How a reconnection ended.
-pub(super) enum Outcome<S> {
-    Opened(S),
-    Refused(ViewerError),
-    GaveUp,
-    ViewerClosed,
-}
-
-/// Whether a failed attempt may be repeated: the device was not reached, or
-/// its new session is not ready yet (`NOT_READY`). Any other refusal of the
-/// host is final.
-fn retryable(error: &ViewerError) -> bool {
-    match error {
-        ViewerError::Io(_) => true,
-        ViewerError::Refused(code) => NOT_READY.iter().any(|ready| ready.key() == code.as_str()),
-        ViewerError::Unsupported => false,
-    }
-}
-
-/// Waits for `wait`; `None` when the client closed meanwhile. Control frames
-/// of the client arriving now belong to the ended session and are dropped.
-async fn unless_closed<T>(
-    mut wait: Pending<T>,
-    input: &mut mpsc::Receiver<Option<ViewerFrame>>,
-) -> Option<T> {
-    loop {
-        tokio::select! {
-            biased;
-            frame = input.recv() => {
-                if !matches!(frame, Some(Some(_))) {
-                    return None;
-                }
-            }
-            value = &mut wait => return Some(value),
-        }
-    }
-}
-
-/// Builds the session again after `session_changed` by the plan `schedule`:
-/// one dial per attempt.
-pub(super) async fn again<D: Dial, C: Clock>(
-    dialer: D,
-    clock: C,
-    schedule: &mut Schedule,
-    input: &mut mpsc::Receiver<Option<ViewerFrame>>,
-) -> Outcome<D::Session> {
-    loop {
-        match schedule.step(clock.now()) {
-            Step::GiveUp => return Outcome::GaveUp,
-            Step::Wait(time) => {
-                if unless_closed(clock.sleep(time), input).await.is_none() {
-                    return Outcome::ViewerClosed;
-                }
-            }
-            Step::Attempt { remaining } => {
-                match unless_closed(dialer.dial(remaining), input).await {
-                    None => return Outcome::ViewerClosed,
-                    Some(Ok(session)) => return Outcome::Opened(session),
-                    Some(Err(error)) if retryable(&error) => {}
-                    Some(Err(error)) => return Outcome::Refused(error),
-                }
-            }
-        }
-    }
-}
-
 /// The dialer of the relay: a new link to the same device, the node pin,
 /// the handshake.
 struct LinkDialer {
@@ -240,6 +121,18 @@ struct LinkDialer {
     expected_node: Option<String>,
     request: ViewerRequest,
     metadata: bool,
+    /// The viewer hears of a confirmation (first opening only).
+    pending: Option<mpsc::Sender<(u8, Vec<u8>)>>,
+}
+
+/// `error` of the step `step` (P9: the viewer reads where it failed).
+fn at_step(step: &str, error: ViewerError) -> ViewerError {
+    match error {
+        ViewerError::Io(error) => {
+            ViewerError::Io(io::Error::new(error.kind(), format!("{step}: {error}")))
+        }
+        other => other,
+    }
 }
 
 impl Dial for LinkDialer {
@@ -250,11 +143,13 @@ impl Dial for LinkDialer {
         let expected = self.expected_node.clone();
         let request = self.request.clone();
         let metadata = self.metadata;
+        let pending = self.pending.clone();
         Box::pin(async move {
             let opened = async move {
                 let link = tokio::task::spawn_blocking(move || service.screen_link(&target))
                     .await
-                    .map_err(|error| ViewerError::Io(io::Error::other(error)))??;
+                    .map_err(|error| ViewerError::Io(io::Error::other(error)))?
+                    .map_err(|error| at_step("Verbindung zum Gerät", error))?;
                 if let Some(expected) = expected {
                     if link.connection.remote_id().to_string() != expected {
                         link.connection.close(
@@ -264,14 +159,14 @@ impl Dial for LinkDialer {
                         return Err(ViewerError::Refused("screen_node_changed".into()));
                     }
                 }
-                open(link, &request, metadata, None).await
+                open(link, &request, metadata, pending).await
             };
             tokio::time::timeout(remaining, opened)
                 .await
                 .unwrap_or_else(|_| {
                     Err(ViewerError::Io(io::Error::new(
                         io::ErrorKind::TimedOut,
-                        "the screen host did not answer after the session switch",
+                        "Handshake: the screen host did not answer in time",
                     )))
                 })
         })
@@ -288,6 +183,7 @@ async fn open(
 ) -> Result<ViewerSession, ViewerError> {
     let connection = link.connection.clone();
     let build = |server: &_| link.client_hello(server, request);
+    let step = |error| at_step("Handshake", error);
     let announce = |capability| {
         if let (Some(out), Ok(json)) =
             (&pending, wire::to_json(&RelayHello::Pending { capability }))
@@ -296,9 +192,11 @@ async fn open(
         }
     };
     if metadata {
-        crate::screen::core::viewer_client::handshake_metadata(connection, build, announce).await
+        crate::screen::core::viewer_client::handshake_metadata(connection, build, announce)
+            .await
+            .map_err(step)
     } else {
-        handshake(connection, build, announce).await
+        handshake(connection, build, announce).await.map_err(step)
     }
 }
 
@@ -339,6 +237,39 @@ pub(super) async fn relay_session(
 ) {
     let mut session = match open(link, &request, metadata, Some(out.clone())).await {
         Ok(session) => session,
+        // P9: a first opening that may pass is tried again while it makes
+        // progress, with a new connection each time.
+        Err(error) if retryable(&error) => {
+            let dialer = LinkDialer {
+                service: redial.service.clone(),
+                target: redial.target.clone(),
+                expected_node: redial.expected_node.clone(),
+                request: request.clone(),
+                metadata,
+                pending: Some(out.clone()),
+            };
+            let now = Instant::now();
+            let mut schedule = Schedule::new(now);
+            schedule.failed(now, &error);
+            match again(dialer, SystemClock, &mut schedule, &mut input).await {
+                Outcome::Opened(session) => session,
+                Outcome::Refused(error) => {
+                    end(&out, error.code(), Some(error.detail())).await;
+                    return;
+                }
+                Outcome::GaveUp => {
+                    let (code, detail) = schedule
+                        .gave_up()
+                        .unwrap_or_else(|| (error.code(), error.detail()));
+                    end(&out, code, Some(detail)).await;
+                    return;
+                }
+                Outcome::ViewerClosed => {
+                    end(&out, EndReason::ViewerClosed.key().into(), None).await;
+                    return;
+                }
+            }
+        }
         Err(error) => {
             end(&out, error.code(), Some(error.detail())).await;
             return;
@@ -373,7 +304,10 @@ pub(super) async fn relay_session(
     let mut plan: Option<Schedule> = None;
     let mut opened = Instant::now();
     loop {
+        // The host's sound (P9) reaches the viewer beside the relay loop.
+        let audio = crate::screen::os::audio::relay(&session.connection, &out, RELAY_AUDIO);
         let (code, detail) = super::relay_loop(&mut session, &out, &mut input, &mut modes).await;
+        drop(audio);
         session.close();
         if code != EndReason::SessionChanged.key() {
             end(&out, code, detail).await;
@@ -385,6 +319,7 @@ pub(super) async fn relay_session(
             expected_node: redial.expected_node.clone(),
             request: request.clone(),
             metadata,
+            pending: None,
         };
         // A session that changed again at once keeps the plan it was built
         // by: one attempt per second and 30 s in all, whatever the host does.
@@ -421,6 +356,10 @@ pub(super) async fn relay_session(
                 // viewer task drops it for a host without `live`.
                 if let Some(choice) = modes.display() {
                     let _ = next.control.send(ViewerFrame::SetDisplay(choice)).await;
+                }
+                // The host's sound (P9), only to a host that answered it.
+                if let Some(on) = modes.audio().filter(|_| next.hello.audio.is_some()) {
+                    let _ = next.control.send(ViewerFrame::Audio(on)).await;
                 }
                 if session
                     .cursor_wish

@@ -71,8 +71,14 @@ impl CaptureRecovery {
     }
 
     /// A rebuild refused with a passing duplication result pauses; the
-    /// producer stays absent and the next capture rebuilds it again.
+    /// producer stays absent and the next capture rebuilds it again. Plan
+    /// 2026-11-17 P9: so does a rebuild that found the capture memory still
+    /// held by older pictures (`WouldBlock`, they are released meanwhile);
+    /// it made the monitor fall back to Graphics Capture for good before.
     pub(in super::super) fn paused_by_duplication(error: io::Error) -> io::Result<SourceFrame> {
+        if error.kind() == io::ErrorKind::WouldBlock {
+            return Ok(SourceFrame::Paused(SessionState::Starting));
+        }
         let code = error
             .get_ref()
             .and_then(|inner| inner.downcast_ref::<windows::core::Error>())
@@ -112,5 +118,10 @@ mod tests {
         // A lost device or any other failure still ends the capture.
         assert_eq!(paused(windows::Win32::Foundation::E_INVALIDARG), None);
         assert!(CaptureRecovery::paused_by_duplication(io::Error::other("monitor gone")).is_err());
+        // P9: capture memory still held by older pictures waits.
+        assert!(matches!(
+            CaptureRecovery::paused_by_duplication(io::Error::from(io::ErrorKind::WouldBlock)),
+            Ok(SourceFrame::Paused(SessionState::Starting))
+        ));
     }
 }

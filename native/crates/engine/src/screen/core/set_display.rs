@@ -29,8 +29,8 @@ use super::window_list::{MonitorInfo, SourceId};
 use super::wire_hello::ScreenHelloOk;
 
 /// Viewer to host: JSON `VirtualDisplayChoice`. The next free tag after
-/// `FRAME_TIMING` (52).
-pub const SET_DISPLAY: u8 = 53;
+/// `AUDIO` (53, `audio_wire.rs`).
+pub const SET_DISPLAY: u8 = 54;
 /// Largest payload of `SET_DISPLAY` (a wish and a size as JSON).
 pub const MAX_SET_DISPLAY_BYTES: usize = 256;
 

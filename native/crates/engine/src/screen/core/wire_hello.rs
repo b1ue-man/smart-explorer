@@ -224,6 +224,10 @@ pub struct ScreenClientHello {
     /// follows `display_size` and every `SET_MODE` size.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub virtual_display_size: Option<FrameSize>,
+    /// The host's sound (plan 2026-11-17 P9, `audio_wire.rs`): `Some(1)`
+    /// when this viewer plays it; an older host ignores it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio: Option<u16>,
 }
 
 impl ScreenClientHello {
@@ -344,6 +348,10 @@ pub struct ScreenHelloOk {
     /// names what a viewer that asks would get.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub virtual_display: Option<VirtualDisplayReport>,
+    /// The host sends its sound in this format after the viewer's `AUDIO`
+    /// (P9); absent from older hosts and from hosts that cannot capture it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio: Option<super::audio_wire::AudioAccept>,
 }
 
 impl ScreenHelloOk {

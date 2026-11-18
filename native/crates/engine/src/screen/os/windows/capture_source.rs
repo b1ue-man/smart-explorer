@@ -15,14 +15,10 @@
 //! BK3b: a picture may stay on the GPU (`capture_picture`); `capture` gives
 //! CPU pixels (merge W1: exact BGRA). Input has its own way (`WindowsInput`).
 use std::io;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
-use windows::core::HRESULT;
-use windows::Win32::Foundation::{E_ACCESSDENIED, HWND};
-use windows::Win32::Graphics::Dxgi::{
-    DXGI_ERROR_NOT_CURRENTLY_AVAILABLE, DXGI_ERROR_SESSION_DISCONNECTED, DXGI_ERROR_UNSUPPORTED,
-};
+use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::WindowsAndMessaging::{IsIconic, IsWindow};
 
 use super::secure_desktop;
@@ -120,6 +116,10 @@ pub(super) trait Grabber: Send {
     fn fallback_cause(&self) -> Option<FallbackCause> {
         None
     }
+    /// The failed step and result code behind `fallback_cause` (P9).
+    fn fallback_detail(&self) -> Option<crate::screen::core::capture_fallback::FallbackDetail> {
+        None
+    }
 }
 
 /// Reads a grabber's reference generation from any thread.
@@ -179,133 +179,13 @@ pub(super) fn capture_rank(monitor: bool, graphics_capture: bool) -> Vec<Capture
     rank
 }
 
-/// Why a monitor left Desktop Duplication for Graphics Capture.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum FallbackCause {
-    /// `DXGI_ERROR_UNSUPPORTED` or `DXGI_ERROR_NOT_CURRENTLY_AVAILABLE`.
-    Unsupported,
-    /// `DXGI_ERROR_ACCESS_LOST`, and the new duplication failed.
-    AccessLost,
-    /// The output is no longer the one of its adapter (no result code).
-    AdapterChanged,
-    /// Any other refused duplication.
-    Failed,
-}
-
-impl FallbackCause {
-    pub(super) fn key(self) -> &'static str {
-        match self {
-            Self::Unsupported => "dxgi_unsupported",
-            Self::AccessLost => "dxgi_access_lost",
-            Self::AdapterChanged => "dxgi_adapter_changed",
-            Self::Failed => "dxgi_failed",
-        }
-    }
-}
-
-/// How long a duplication refused with a documented passing result
-/// (`DXGI_ERROR_UNSUPPORTED` during a desktop or mode switch) is retried
-/// before Graphics Capture takes over [P: the first-picture wait].
-pub(super) const FALLBACK_AFTER: Duration = FIRST_FRAME_WAIT;
-
-/// The fallback a duplication that has been failing for `failing_for` with
-/// `code` (`None`: an error without result code) asks for; `lost` when the
-/// duplication was lost before. The secure desktop (`E_ACCESSDENIED`) and an
-/// inactive session pause instead, as before.
-pub(super) fn fallback_cause(
-    code: Option<HRESULT>,
-    lost: bool,
-    failing_for: Duration,
-) -> Option<FallbackCause> {
-    let Some(code) = code else {
-        return Some(FallbackCause::AdapterChanged);
-    };
-    if code == E_ACCESSDENIED || code == DXGI_ERROR_SESSION_DISCONNECTED {
-        return None;
-    }
-    let lost_or = |cause| {
-        Some(if lost {
-            FallbackCause::AccessLost
-        } else {
-            cause
-        })
-    };
-    if code == DXGI_ERROR_UNSUPPORTED || code == DXGI_ERROR_NOT_CURRENTLY_AVAILABLE {
-        return if failing_for >= FALLBACK_AFTER {
-            lost_or(FallbackCause::Unsupported)
-        } else {
-            None
-        };
-    }
-    lost_or(FallbackCause::Failed)
-}
-
-/// The Windows result code inside an I/O error, if there is one.
-pub(super) fn result_code(error: &io::Error) -> Option<HRESULT> {
-    error
-        .get_ref()
-        .and_then(|inner| inner.downcast_ref::<windows::core::Error>())
-        .map(windows::core::Error::code)
-}
-
-/// What the session of this host process captures with (one process serves
-/// one session, like the pointer overlay).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(super) struct CaptureReport {
-    pub path: Option<CapturePath>,
-    /// Graphics Capture cannot limit its delivery to the frame interval.
-    pub rate_capped: bool,
-    pub fallback: Option<FallbackCause>,
-}
-
-impl CaptureReport {
-    /// The session's limits in the strings of `host_backend.rs`:
-    /// `capture_border` only under Graphics Capture, `capture_rate_capped`
-    /// when its rate could not be set.
-    pub(super) fn limits(&self) -> Vec<&'static str> {
-        let mut limits = Vec::new();
-        if self.path == Some(CapturePath::GraphicsCapture) {
-            limits.push(super::host_backend::LIMIT_CAPTURE_BORDER);
-            if self.rate_capped {
-                limits.push(super::host_backend::LIMIT_CAPTURE_RATE_CAPPED);
-            }
-        }
-        limits
-    }
-}
-
-static REPORT: Mutex<CaptureReport> = Mutex::new(CaptureReport {
-    path: None,
-    rate_capped: false,
-    fallback: None,
-});
-
-/// The report of this process's session (error output and tests; its way to
-/// `se screen sessions --json` is open, bk2b-bericht.md Ungeklärtes 1).
-#[cfg_attr(not(test), allow(dead_code))]
-pub(super) fn report() -> CaptureReport {
-    *REPORT
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-}
-
-/// Changes the report; a changed path or limit goes to the host process's
-/// error output.
-pub(super) fn update_report(change: impl FnOnce(&mut CaptureReport)) {
-    let mut report = REPORT
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let before = *report;
-    change(&mut report);
-    if *report != before {
-        eprintln!(
-            "screen capture: path {}, limits [{}], fallback {}",
-            report.path.map_or("none", CapturePath::key),
-            report.limits().join(","),
-            report.fallback.map_or("none", FallbackCause::key)
-        );
-    }
-}
+#[path = "capture_fallback_report.rs"]
+mod fallback_report;
+#[cfg_attr(not(test), allow(unused_imports))]
+pub(super) use fallback_report::{
+    detail_of, fallback_bits, fallback_cause, log_failure, rebuild_fallback, report, result_code,
+    update_report, CaptureReport, FallbackCause, FALLBACK_AFTER,
+};
 
 /// The questions that decide whether a capture pauses.
 pub(super) trait StateProbe {

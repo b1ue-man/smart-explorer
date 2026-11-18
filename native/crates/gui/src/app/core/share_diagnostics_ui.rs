@@ -62,6 +62,10 @@ impl App {
             ui.label("Signaling:");
             ui.add(egui::Label::new(self.share_status.clone()).wrap());
         });
+        // The server's QAD self-check (TODO DIREKT-INTERNET), as `se share status`.
+        if let Some(qad) = &self.share_worker_server_qad {
+            ui.add(egui::Label::new(qad.status_line()).wrap());
+        }
         ui.horizontal_wrapped(|ui| {
             ui.label("SmartExplorer-Fingerprint:");
             let fingerprint = self

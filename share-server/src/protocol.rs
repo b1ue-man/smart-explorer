@@ -213,6 +213,14 @@ pub(super) enum Out {
     HelloOk {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         capabilities: Vec<String>,
+        /// `qad_status_v1`: whether QAD is reachable from outside
+        /// (`qad_reach.rs`); absent for other clients.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        qad: Option<super::qad_reach::QadReport>,
+    },
+    /// `qad_status_v1`: the QAD verdict changed (`qad_reach.rs`).
+    QadStatus {
+        qad: super::qad_reach::QadReport,
     },
     /// `key_login_v1`: 16 random bytes (hex) the client signs.
     HelloChallenge {

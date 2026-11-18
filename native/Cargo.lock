@@ -5242,6 +5242,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7c87def4c32ab89d880effc9e097653c8da5d6ef28e6b539d313baaacfbafcbe"
 
 [[package]]
+name = "opus-rs"
+version = "0.1.40"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5d664b01dda81206fd3c80582eafd8dfef0e936eea1c2ac90ed408823bbb410c"
+
+[[package]]
 name = "orbclient"
 version = "0.3.53"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7233,6 +7239,7 @@ dependencies = [
  "opaque-ke",
  "openh264",
  "openh264-sys2",
+ "opus-rs",
  "png",
  "quick-xml 0.39.2",
  "rand 0.10.1",

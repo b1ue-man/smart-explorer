@@ -87,6 +87,7 @@ impl ViewState {
 
     /// Opens the session when the profiles are read and name the device.
     pub fn ensure_session(&mut self, common: &Common, display: FrameSize) {
+        super::screen_audio::follow(self.session.as_ref());
         if self.session.is_some() || self.refused.is_some() {
             return;
         }
@@ -132,6 +133,7 @@ impl ViewState {
     }
 
     pub fn end_session(&mut self) {
+        super::screen_audio::forget();
         self.widget.retire();
         if let Some(session) = self.session.take() {
             self.widget.release_input(&session);
@@ -284,6 +286,7 @@ impl ViewState {
                 },
             ]),
             ToolbarAction::System(action) => self.send_system(*action),
+            ToolbarAction::Audio(on) => super::screen_audio::switch(self.session.as_ref(), *on),
             _ => {}
         }
     }
