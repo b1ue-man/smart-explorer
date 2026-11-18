@@ -282,7 +282,16 @@ impl ScreenStream {
             }
             None => 0,
         };
-        let (tag, payload) = read_relay_budgeted(&mut self.events, MAX_RELAY_BYTES, record_limit)?;
+        let (tag, payload) = loop {
+            let (tag, payload) =
+                read_relay_budgeted(&mut self.events, MAX_RELAY_BYTES, record_limit)?;
+            // The host's sound (P9) goes to this process's player, not to
+            // the picture's event queue.
+            if tag != super::ipc_protocol::screen::RELAY_AUDIO {
+                break (tag, payload);
+            }
+            crate::screen::os::audio::deliver(&payload);
+        };
         let event = decode_event(tag, &payload)?;
         match &event {
             StreamEvent::Accepted { hello, .. } => {

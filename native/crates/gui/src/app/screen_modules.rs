@@ -42,6 +42,10 @@ mod screen_icon_requests;
 mod screen_icons;
 #[path = "core/screen_pool.rs"]
 mod screen_pool;
+// „Ton“ of the viewer (plan 2026-11-17 P9); public for `se screen view
+// --audio` and the MCP tool `screen`.
+#[path = "core/screen_audio.rs"]
+pub mod screen_audio;
 // Public for `se screen view --max-rate` (plan 2026-11-14 „Bildkette“ B-09).
 #[path = "core/screen_prefs.rs"]
 pub mod screen_prefs;
