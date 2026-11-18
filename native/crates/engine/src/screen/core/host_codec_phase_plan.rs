@@ -212,9 +212,14 @@ impl HostOutputPlan {
         }
         // Both tile encoders can retain their tile/hash allocations during a
         // snapshot. Include explicit output Vec headers and IPC fixed heads.
-        let tile_scratch = add(
-            64 * 64 * 4,
-            (lz4_flex::block::get_maximum_output_size(64 * 64 * 4) + 4) as u64,
+        // P9: every tile encoder keeps one wave of slots (`TILE_WAVE` tiles
+        // compressed on all cores at once, `tiles_parallel.rs`).
+        let tile_scratch = mul(
+            add(
+                64 * 64 * 4,
+                (lz4_flex::block::get_maximum_output_size(64 * 64 * 4) + 4) as u64,
+            )?,
+            super::super::tiles_codec::TILE_WAVE as u64,
         )?;
         let scratch = mul(
             tile_scratch,

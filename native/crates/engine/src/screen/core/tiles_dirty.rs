@@ -105,6 +105,12 @@ impl DirtyTiles {
         }
     }
 
+    /// The marks row by row (`columns` per row), so that an encoder can
+    /// look at the rows of tiles on several threads (`tiles_parallel.rs`).
+    pub fn marks_mut(&mut self) -> &mut [bool] {
+        &mut self.marked
+    }
+
     /// How many tiles are marked (statistics, tests).
     pub fn count(&self) -> usize {
         self.marked.iter().filter(|tile| **tile).count()
