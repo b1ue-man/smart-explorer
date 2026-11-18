@@ -36,7 +36,9 @@ fn capture_restart() -> (
     )
     .unwrap();
     let peak = first.peak_bytes();
-    let capacity = peak + MIB;
+    // The margin holds a parallel tile snapshot (one wave of tile slots
+    // per tile encoder, P9 `TILE_WAVE`).
+    let capacity = peak + 4 * MIB;
     assert!(2 * peak > capacity);
     let pool = Arc::new(MemoryPool::default());
     let admission = pool

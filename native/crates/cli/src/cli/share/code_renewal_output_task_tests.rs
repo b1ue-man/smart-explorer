@@ -171,6 +171,7 @@ fn code_renewal_surface_task_status_document_keeps_its_keys_and_contacts() {
         "routes",
         "rooms",
         "running",
+        "server_qad",
         "worker",
     ];
     expected.sort_unstable();

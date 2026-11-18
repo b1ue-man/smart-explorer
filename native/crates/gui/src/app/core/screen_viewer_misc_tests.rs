@@ -297,7 +297,10 @@ fn screen_task_viewer_toolbar_labels() {
         "Einpassen",
         "1:1",
         "Vollbild",
-        "Schärfe vor Flüssigkeit",
+        // „Scharf (GPU)“ is an entry of „Codec“ (P9), no switch of its own.
+        "Monitor: Automatisch",
+        "Auflösung: Fenstergröße",
+        "Ton",
         "Niedrigste Latenz (Bildrisse möglich)",
         "Statistik",
         // „Codec“ replaces the switch „Verlustfrei“ (BK6, one of its entries).

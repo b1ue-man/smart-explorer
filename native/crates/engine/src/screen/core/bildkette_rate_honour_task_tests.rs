@@ -206,8 +206,8 @@ fn bildkette_task_rate_encoders_open_at_session_target() {
     assert!(include_str!("../os/windows/mf_encoder.rs").contains(opened));
     assert!(include_str!("../os/windows/mf_encoder_sync.rs").contains(opened));
     let vendor = include_str!("../os/windows/vendor_codecs.rs");
-    assert!(vendor.contains("NvencSession::open_at(&device, codec, size, fps, bps)"));
-    assert!(vendor.contains("AmfSession::open_at(&device, codec, size, fps, bps)"));
+    assert!(vendor.contains("NvencSession::open_at(&device, codec, size, fps, bps, quality)"));
+    assert!(vendor.contains("AmfSession::open_at(&device, codec, size, fps, bps, quality)"));
     let nvenc = include_str!("../os/windows/nvenc_encode.rs");
     let amf = include_str!("../os/windows/amf_encode.rs");
     for text in [nvenc, amf] {

@@ -364,7 +364,8 @@ fn bildkette_task_codec_v2_new_peers_and_an_old_reader() {
     )[0];
     assert_eq!(
         (first.codec, first.encoder_hardware, first.decoder_hardware),
-        (CodecKind::Av1, true, true)
+        // AV1 is never first in Automatic (P9 „av1 ist zu viel“).
+        (CodecKind::Hevc, true, true)
     );
     // A v2 list never repeats a legacy codec.
     viewer.decoders_v2 = Some(vec![high(true)]);

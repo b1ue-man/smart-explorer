@@ -193,7 +193,8 @@ mod tests {
         tiles.note(SIZE, Some(&FrameRegions::default()));
         assert_eq!(tiles.count(), 2);
         // The last partial row and column are reachable.
-        tiles.mark_rect(rect(2870, 1790, 10, 10));
+        // Row 28 starts at 1792 (64-pixel tiles).
+        tiles.mark_rect(rect(2870, 1795, 10, 5));
         assert!(tiles.marked(44, 28));
         assert_eq!(tiles.count(), 3);
     }

@@ -64,10 +64,10 @@ fn virtual_display_windows_task_best_mode() {
         best_mode(size(1900, 1000), &modes).map(|mode| mode.size),
         Some(size(1600, 900))
     );
-    // Equal area: 1920 × 1200 (16:10) wins over 1200 × 1920 for 16:10.
+    // Equal area: 1920 × 1200 wins over 1200 × 1920 for a wide window.
     assert_eq!(
         best_mode(
-            size(2000, 2000),
+            size(3000, 2000),
             &listed(&[size(1920, 1200), size(1200, 1920)])
         )
         .map(|mode| mode.size),
