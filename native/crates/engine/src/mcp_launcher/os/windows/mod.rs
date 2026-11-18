@@ -15,12 +15,32 @@ mod persistence;
 mod security;
 #[path = "spawn.rs"]
 mod spawn;
+#[cfg(test)]
+#[path = "verbatim_tests.rs"]
+mod verbatim_tests;
 pub(in crate::mcp_launcher) use persistence::*;
 pub(in crate::mcp_launcher) use spawn::*;
 pub(in crate::mcp_launcher) const CLI_NAME: &str = "se.exe";
 pub(in crate::mcp_launcher) const LAUNCHER_NAME: &str = "se-mcp-launcher.exe";
 
+/// `path` in the verbatim form (`\\?\C:\…`) `std::fs::canonicalize` gives:
+/// `Installation::load` keeps its canonical root while callers pass the
+/// root they were given (`C:\…` from the app, `\\?\C:\…` from the
+/// installer), so both sides of a check are brought to the same form.
+fn verbatim(path: &Path) -> std::path::PathBuf {
+    use std::path::{Component, Prefix};
+    match path.components().next() {
+        Some(Component::Prefix(prefix)) if matches!(prefix.kind(), Prefix::Disk(_)) => {
+            let mut text = std::ffi::OsString::from("\\\\?\\");
+            text.push(path.as_os_str());
+            std::path::PathBuf::from(text)
+        }
+        _ => path.to_path_buf(),
+    }
+}
+
 pub(in crate::mcp_launcher) fn validate_tree(root: &Path, path: &Path) -> Result<(), String> {
+    let (root, path) = (&*verbatim(root), &*verbatim(path));
     if !root.is_absolute() || !path.starts_with(root) {
         return Err("runtime_path_outside_installation".into());
     }

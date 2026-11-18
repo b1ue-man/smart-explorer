@@ -131,7 +131,19 @@ pub(super) fn run(raw: &[String]) -> Result<(), String> {
         manifest: state.join("installer-staging.json"),
         pin_file: state.join("installer-pin.txt"),
     };
+    // The bundle stops a running background worker before it replaces the
+    // files; without the app start (GuiAck) nothing else starts it again, so
+    // a silent setup left the device unreachable until the next sign-in.
+    let restart = install_mode != InstallMode::GuiAck
+        && !is_elevated_context()
+        && smart_explorer::daemon::worker_answers();
+    let installed_cli = args.cli_target.clone();
     super::apply_update(args).map_err(|e| e.message)?;
+    if restart {
+        if let Err(error) = restart_worker(&installed_cli, &version) {
+            super::logging::append_log(&format!("install-bundle: {error}"));
+        }
+    }
     println!(
         "{}",
         serde_json::json!({"version":version,"status":"installed","completion":if install_mode==InstallMode::GuiAck {"gui_startup_ack"}else{"verified_installation"},"gui_started":install_mode==InstallMode::GuiAck,"user_mcp_started":false,"profile_refresh":if profile_refresh_deferred(&root) {"deferred_original_user_start"}else{"attempted_with_verified_installed_generator"},"note":if install_mode==InstallMode::GuiAck {"The normal app startup was acknowledged."}else{"Installed payload hashes and CLI product version were verified. No GUI or user MCP process was started; the next user start negotiates its daemon contract."}})
@@ -175,6 +187,35 @@ pub(super) fn is_elevated_context() -> bool {
             CloseHandle(token);
             ok == 0 || elevation.TokenIsElevated != 0
         }
+    }
+}
+/// Lets the installed `se` start its background worker again
+/// (`se update --complete-install <version> --restart-worker`, the path of
+/// `se update`), within `WORKER_START_LIMIT`.
+fn restart_worker(cli: &std::path::Path, version: &str) -> Result<(), String> {
+    const WORKER_START_LIMIT: std::time::Duration = std::time::Duration::from_secs(60);
+    let mut child = std::process::Command::new(cli)
+        .args(["update", "--complete-install", version, "--restart-worker"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|error| format!("worker restart: start {}: {error}", cli.display()))?;
+    let deadline = std::time::Instant::now() + WORKER_START_LIMIT;
+    loop {
+        if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
+            return if status.success() {
+                Ok(())
+            } else {
+                Err(format!("worker restart: se exited with {status}"))
+            };
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("worker restart: no answer within 60 s".into());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
     }
 }
 pub(super) fn verify_completion(args: &ApplyArgs) -> Result<(), String> {
