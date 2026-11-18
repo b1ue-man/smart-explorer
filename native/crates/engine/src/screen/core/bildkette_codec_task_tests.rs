@@ -190,7 +190,7 @@ fn host_encoders() -> Vec<CodecOffer> {
 }
 
 /// B-30: hardware/hardware before hardware/software; within hardware/
-/// hardware AV1, HEVC, H.264; otherwise H.264 before software AV1; 4:2:0
+/// hardware HEVC, H.264, AV1 (P9 2026-11-17: AV1 never first); otherwise H.264 before software AV1; 4:2:0
 /// before 4:4:4; tiles last.
 #[test]
 fn bildkette_task_codec_rank_of_the_pairings() {
@@ -198,9 +198,9 @@ fn bildkette_task_codec_rank_of_the_pairings() {
     assert_eq!(
         rows(&host_encoders(), &viewer),
         vec![
-            (CodecKind::Av1, None, true, true),
             (CodecKind::Hevc, None, true, true),
             (CodecKind::H264, HIGH, true, true),
+            (CodecKind::Av1, None, true, true),
             (CodecKind::Av1, None, false, true),
             TILES,
         ]

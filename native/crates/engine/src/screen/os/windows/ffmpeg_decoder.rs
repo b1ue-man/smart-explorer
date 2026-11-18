@@ -324,12 +324,13 @@ impl FfmpegDecoder {
         Ok(self.drain()? || shown)
     }
 
-    /// A hardware failure ends this decoder's stage for the process when it
-    /// is the device's or comes before the first picture (`ffmpeg_codecs`).
+    /// A hardware failure ends this decoder's stage of its codec for the
+    /// process when it is the device's or comes before the first picture
+    /// (`ffmpeg_codecs`, P9: never the hardware of the other codecs).
     fn on_error(&self) {
         let lost = self.device.as_ref().is_some_and(|device| device.lost());
         if self.stage.hardware() && (lost || !self.produced) {
-            super::ffmpeg_codecs::give_up(self.codec, self.stage, lost);
+            super::ffmpeg_codecs::give_up(self.codec, self.stage);
         }
     }
 }

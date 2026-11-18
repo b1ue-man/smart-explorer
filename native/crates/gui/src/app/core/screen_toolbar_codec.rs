@@ -11,17 +11,72 @@
 //! goes out as `SET_DECODERS` as well,
 //! „Verlustfrei“ switches at once, a new data rate goes out as
 //! `RATE_CEILING`.
-use eframe::egui;
+//!
+//! P9 (plan 2026-11-17): each closed list names the choice and what the
+//! running session applies (`screen_toolbar_state.rs`): „Codec:
+//! Automatisch (AV1)“, „Dekodierer: Hardware (wird angewendet …)“ until the
+//! session answered, „Codec: H.264 → läuft: AV1“ when it runs otherwise.
+use std::time::Instant;
+
+use eframe::egui::{self, RichText, WidgetText};
 
 use super::super::screen_prefs::{CodecSetting, DecoderPreference};
+use super::applied::{self, Applied, PendingChoices, SessionFacts, Setting};
 use super::{ToolbarAction, ToolbarInput};
 
+/// The facts of the running session the lists compare with.
+fn session_facts(ui: &egui::Ui, input: &ToolbarInput) -> SessionFacts {
+    let info = input.info;
+    SessionFacts {
+        codec: info
+            .and_then(|info| info.stream.as_ref())
+            .map(|stream| stream.codec),
+        decoder: info.and_then(|info| info.decoder.clone()),
+        direct_showing: super::super::screen_direct::showing(ui.ctx()),
+        pictures: info.map_or(0, |info| info.pictures),
+    }
+}
+
+/// The changes of this window that wait for the session (egui's memory).
+fn with_pending<R>(ui: &egui::Ui, edit: impl FnOnce(&mut PendingChoices) -> R) -> R {
+    let id = egui::Id::new("screen_toolbar_pending");
+    let mut pending = ui
+        .data(|data| data.get_temp::<PendingChoices>(id))
+        .unwrap_or_default();
+    let result = edit(&mut pending);
+    ui.data_mut(|data| data.insert_temp(id, pending));
+    result
+}
+
+/// Whether `setting` waits for the session now.
+fn waits(ui: &egui::Ui, setting: Setting, facts: &SessionFacts, now: Instant) -> bool {
+    with_pending(ui, |pending| pending.pending(setting, facts, now))
+}
+
+/// `setting` changed now.
+fn changed(ui: &egui::Ui, setting: Setting, facts: &SessionFacts, now: Instant) {
+    with_pending(ui, |pending| pending.start(setting, facts, now));
+}
+
+/// The closed list's text; one that runs otherwise in the warning colour.
+fn list_text(ui: &egui::Ui, name: &str, chosen: &str, state: &Applied) -> WidgetText {
+    let text = RichText::new(applied::list_text(name, chosen, state));
+    match state {
+        Applied::Other(_) => text.color(crate::app::theme::warning(ui)).into(),
+        Applied::Pending => text.italics().into(),
+        Applied::Unknown | Applied::Applied(_) => text.into(),
+    }
+}
+
 /// „Codec“ and „Dekodierer“ as two drop-down lists.
-pub(super) fn codec_rows(ui: &mut egui::Ui, out: &mut Vec<ToolbarAction>) {
+pub(super) fn codec_rows(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Vec<ToolbarAction>) {
+    let facts = session_facts(ui, input);
+    let now = Instant::now();
     let codec = super::super::screen_prefs::codec_setting();
+    let state = applied::codec_state(codec, &facts, waits(ui, Setting::Codec, &facts, now));
     let mut chosen = codec;
     let _ = egui::ComboBox::from_id_salt("screen_codec")
-        .selected_text(format!("Codec: {}", codec.label()))
+        .selected_text(list_text(ui, "Codec", codec.label(), &state))
         .show_ui(ui, |ui| {
             for setting in CodecSetting::ALL {
                 ui.selectable_value(&mut chosen, setting, setting.label());
@@ -31,11 +86,13 @@ pub(super) fn codec_rows(ui: &mut egui::Ui, out: &mut Vec<ToolbarAction>) {
         .on_hover_text(codec_hint());
     if chosen != codec {
         out.push(ToolbarAction::Codec(chosen));
+        changed(ui, Setting::Codec, &facts, now);
     }
     let decoder = super::super::screen_prefs::decoder_choice();
+    let state = applied::decoder_state(decoder, &facts, waits(ui, Setting::Decoder, &facts, now));
     let mut picked = decoder;
     let _ = egui::ComboBox::from_id_salt("screen_decoder")
-        .selected_text(format!("Dekodierer: {}", decoder.label()))
+        .selected_text(list_text(ui, "Dekodierer", decoder.label(), &state))
         .show_ui(ui, |ui| {
             for choice in DecoderPreference::ALL {
                 ui.selectable_value(&mut picked, choice, choice.label());
@@ -45,8 +102,24 @@ pub(super) fn codec_rows(ui: &mut egui::Ui, out: &mut Vec<ToolbarAction>) {
         .on_hover_text("Automatisch: Hardware, bei Fehlern Software.");
     if picked != decoder {
         out.push(ToolbarAction::Decoder(picked));
+        changed(ui, Setting::Decoder, &facts, now);
     }
-    output_rows(ui, out);
+    output_rows(ui, &facts, now, out);
+}
+
+/// The hover text of „Codec“: the mode „Scharf (GPU)“ (plan 2026-11-17 P9)
+/// is named once the list offers it (`CodecSetting` with key `sharp`).
+fn codec_hint() -> String {
+    use crate::screen::core::sharp_mode::{SHARP_HINT, SHARP_KEY};
+    let mut hint = String::from(
+        "Automatisch wählt nach Hardware beider Geräte, AV1 nie zuerst; \
+         Verlustfrei überträgt Kacheln.",
+    );
+    if CodecSetting::parse(SHARP_KEY).is_some() {
+        hint.push('\n');
+        hint.push_str(SHARP_HINT);
+    }
+    hint
 }
 
 /// The hover text of „Codec“: the mode „Scharf (GPU)“ (plan 2026-11-17 P9)
@@ -68,26 +141,37 @@ fn codec_hint() -> String {
 /// „Anzeige: Automatisch / Direct3D 11 / wgpu“ (plan 2026-11-17 P8), on
 /// Windows, where both libraries and both displays exist.
 #[cfg(windows)]
-fn output_rows(ui: &mut egui::Ui, out: &mut Vec<ToolbarAction>) {
+fn output_rows(
+    ui: &mut egui::Ui,
+    facts: &SessionFacts,
+    now: Instant,
+    out: &mut Vec<ToolbarAction>,
+) {
     use super::super::screen_prefs::{DecoderLibrary, DisplayChoice};
     let library = super::super::screen_prefs::decoder_library_choice();
+    let state = applied::library_state(library, facts, waits(ui, Setting::Library, facts, now));
     let mut chosen = library;
     let _ = egui::ComboBox::from_id_salt("screen_decoder_library")
-        .selected_text(format!("Bibliothek: {}", library.label()))
+        .selected_text(list_text(ui, "Bibliothek", library.label(), &state))
         .show_ui(ui, |ui| {
             for choice in DecoderLibrary::ALL {
                 ui.selectable_value(&mut chosen, choice, choice.label());
             }
         })
         .response
-        .on_hover_text("Automatisch: FFmpeg (D3D11VA, DXVA2, Software), sonst Media Foundation.");
+        .on_hover_text(
+            "Automatisch: erst Hardware (FFmpeg D3D11VA/DXVA2, dann Media Foundation), \
+             danach Software.",
+        );
     if chosen != library {
         out.push(ToolbarAction::DecoderLibrary(chosen));
+        changed(ui, Setting::Library, facts, now);
     }
     let display = super::super::screen_prefs::display_choice();
+    let state = applied::display_state(display, facts, waits(ui, Setting::Display, facts, now));
     let mut picked = display;
     let _ = egui::ComboBox::from_id_salt("screen_display")
-        .selected_text(format!("Anzeige: {}", display.label()))
+        .selected_text(list_text(ui, "Anzeige", display.label(), &state))
         .show_ui(ui, |ui| {
             for choice in DisplayChoice::ALL {
                 ui.selectable_value(&mut picked, choice, choice.label());
@@ -97,12 +181,19 @@ fn output_rows(ui: &mut egui::Ui, out: &mut Vec<ToolbarAction>) {
         .on_hover_text("Automatisch: Direct3D 11 ohne CPU-Umweg, sonst wgpu.");
     if picked != display {
         out.push(ToolbarAction::Display(picked));
+        changed(ui, Setting::Display, facts, now);
     }
 }
 
 /// One library and one display elsewhere: nothing to choose.
 #[cfg(not(windows))]
-fn output_rows(_ui: &mut egui::Ui, _out: &mut Vec<ToolbarAction>) {}
+fn output_rows(
+    _ui: &mut egui::Ui,
+    _facts: &SessionFacts,
+    _now: Instant,
+    _out: &mut Vec<ToolbarAction>,
+) {
+}
 
 /// Stores a „Codec“ or „Dekodierer“ choice in `prefs` and the process
 /// (`set_codec_choice`); `true` when the session must change its decoders:
@@ -128,8 +219,11 @@ pub fn apply_codec(
             prefs.decoder = Some(*decoder);
             true
         }
-        // P8: another library opens the session again; another display
-        // takes effect at the next picture (`screen_direct.rs`).
+        // P8/P9: another library takes over at the next key frame when one
+        // of its decoders decodes the running stream (`switch_decoder`) and
+        // goes out as `SET_DECODERS` with the register's offers of now;
+        // another display takes effect at the next picture
+        // (`screen_direct.rs`), also after a presenter that failed.
         ToolbarAction::DecoderLibrary(library) => {
             let _ = super::super::screen_prefs::set_output_choice(Some(*library), None);
             prefs.decoder_library = Some(*library);
@@ -168,6 +262,17 @@ pub(super) fn max_rate_row(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Ve
             .speed(speed)
             .suffix(" Mbit/s");
         changed |= ui.add(field).changed();
+    }
+    // P9: what the session does with the ceiling.
+    if limited
+        && input.info.is_some_and(|info| {
+            info.rate_ceiling == crate::daemon::RateCeilingState::UnsupportedByHost
+        })
+    {
+        ui.colored_label(
+            crate::app::theme::warning(ui),
+            "vom Gerät nicht unterstützt",
+        );
     }
     if changed {
         let rate = limited.then(|| (mbit * 1e6).round().max(MIN_BITRATE_BPS as f64) as u64);

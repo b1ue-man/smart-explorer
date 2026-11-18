@@ -250,7 +250,7 @@ impl ViewState {
                 }
             }
             ToolbarAction::Control(on) => self.take_control(common, display, *on),
-            ToolbarAction::Sharpness(_) | ToolbarAction::Codec(_) => {
+            ToolbarAction::Codec(_) => {
                 if let Some(session) = &self.session {
                     let mode = full_set_mode(None, display, &common.prefs);
                     session.send(ViewerFrame::SetMode(mode));

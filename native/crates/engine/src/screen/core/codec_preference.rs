@@ -10,10 +10,21 @@
 //! (`set_decoder_preference`): the desktop viewer, the Android viewer and
 //! `se screen view` each set it before they open decoders, and every
 //! decoder factory of the register reads it when it opens.
+//!
+//! Plan 2026-11-17 P9 („Automatisch“ took software although hardware
+//! decodes the stream in 0.4 ms instead of 10 ms): the register opens in
+//! passes (`DecoderPreference::passes`). „Automatisch“ tries every hardware
+//! decoder of every library first (FFmpeg D3D11VA/DXVA2, then Media
+//! Foundation hardware) and only then any software decoder; before, the
+//! first library's software stage came before the second library's
+//! hardware. During a pass the factories read the pass as the choice
+//! (`with_decoder_pass`, per thread: the decode thread opens).
+use std::cell::Cell;
 use std::sync::atomic::{AtomicU8, Ordering};
 
 use serde::{Deserialize, Serialize};
 
+use super::super::sharp_mode;
 use super::{CodecKind, CodecOffer};
 
 /// `--codec` of `se screen bench` and the filter of the negotiation.
@@ -24,6 +35,9 @@ pub enum CodecPreference {
     H264,
     Hevc,
     Av1,
+    /// „Scharf (GPU)“ (P9 Zwischenmodus, `sharp_mode.rs`): H.264 and HEVC
+    /// on the GPU encoder, never AV1; the tiles stay the last fallback.
+    Sharp,
     Tiles,
 }
 
@@ -34,6 +48,7 @@ impl CodecPreference {
             "h264" => Some(Self::H264),
             "hevc" => Some(Self::Hevc),
             "av1" => Some(Self::Av1),
+            sharp_mode::SHARP_KEY => Some(Self::Sharp),
             "tiles" => Some(Self::Tiles),
             _ => None,
         }
@@ -45,6 +60,7 @@ impl CodecPreference {
             Self::H264 => "h264",
             Self::Hevc => "hevc",
             Self::Av1 => "av1",
+            Self::Sharp => sharp_mode::SHARP_KEY,
             Self::Tiles => "tiles",
         }
     }
@@ -55,7 +71,7 @@ impl CodecPreference {
             Self::H264 => Some(CodecKind::H264),
             Self::Hevc => Some(CodecKind::Hevc),
             Self::Av1 => Some(CodecKind::Av1),
-            Self::Auto | Self::Tiles => None,
+            Self::Auto | Self::Sharp | Self::Tiles => None,
         }
     }
 
@@ -64,6 +80,7 @@ impl CodecPreference {
     pub fn admits(self, codec: CodecKind) -> bool {
         match (self, codec) {
             (Self::Auto, _) => true,
+            (Self::Sharp, kind) => sharp_mode::sharp_codec(kind) || kind == CodecKind::Tiles,
             (Self::Tiles, kind) => kind == CodecKind::Tiles,
             (named, kind) => named.codec() == Some(kind),
         }
@@ -72,6 +89,9 @@ impl CodecPreference {
     /// The viewer's decoder offers for this choice: the named codec and the
     /// tiles (every peer's last fallback stays), only the tiles, or all.
     pub fn filter_decoders(self, offers: &[CodecOffer]) -> Vec<CodecOffer> {
+        if self == Self::Sharp {
+            return sharp_mode::sharp_decoders(offers);
+        }
         offers
             .iter()
             .filter(|offer| offer.codec == CodecKind::Tiles || self.admits(offer.codec))
@@ -89,16 +109,19 @@ pub enum CodecSetting {
     H264,
     Hevc,
     Av1,
+    /// „Scharf (GPU)“: `sharp_mode.rs`, sent as `SET_MODE` `sharpness`.
+    Sharp,
     /// „Verlustfrei“: the tile codec through `SET_MODE` `lossless`.
     Lossless,
 }
 
 impl CodecSetting {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Auto,
         Self::H264,
         Self::Hevc,
         Self::Av1,
+        Self::Sharp,
         Self::Lossless,
     ];
 
@@ -112,6 +135,7 @@ impl CodecSetting {
             Self::H264 => "h264",
             Self::Hevc => "hevc",
             Self::Av1 => "av1",
+            Self::Sharp => sharp_mode::SHARP_KEY,
             Self::Lossless => "lossless",
         }
     }
@@ -122,6 +146,7 @@ impl CodecSetting {
             Self::H264 => "H.264",
             Self::Hevc => "HEVC",
             Self::Av1 => "AV1",
+            Self::Sharp => sharp_mode::SHARP_LABEL,
             Self::Lossless => "Verlustfrei",
         }
     }
@@ -140,6 +165,12 @@ impl CodecSetting {
         self == Self::Lossless
     }
 
+    /// `SET_MODE` `sharpness`: „Scharf (GPU)“ (it replaces the switch
+    /// „Schärfe vor Flüssigkeit“, which set the same bit).
+    pub fn sharpness(self) -> bool {
+        self == Self::Sharp
+    }
+
     /// The negotiation filter: „Verlustfrei“ negotiates like „Automatisch“
     /// and switches to the tiles at run time, as the old switch did.
     pub fn preference(self) -> CodecPreference {
@@ -148,6 +179,7 @@ impl CodecSetting {
             Self::H264 => CodecPreference::H264,
             Self::Hevc => CodecPreference::Hevc,
             Self::Av1 => CodecPreference::Av1,
+            Self::Sharp => CodecPreference::Sharp,
         }
     }
 }
@@ -206,6 +238,17 @@ impl DecoderPreference {
             .collect()
     }
 
+    /// The passes the register opens a decoder in, in order (P9):
+    /// „Automatisch“ every hardware stage of every decoder before any
+    /// software stage; „Hardware“ and „Software“ one pass of their kind.
+    pub fn passes(self) -> &'static [DecoderPreference] {
+        match self {
+            Self::Automatic => &[Self::Hardware, Self::Software],
+            Self::Hardware => &[Self::Hardware],
+            Self::Software => &[Self::Software],
+        }
+    }
+
     fn code(self) -> u8 {
         match self {
             Self::Automatic => 0,
@@ -215,6 +258,27 @@ impl DecoderPreference {
     }
 }
 
+thread_local! {
+    /// The pass the register runs on this thread (`with_decoder_pass`).
+    static PASS: Cell<Option<DecoderPreference>> = const { Cell::new(None) };
+}
+
+/// Restores the pass that ran before, also when `open` panics.
+struct PassGuard(Option<DecoderPreference>);
+
+impl Drop for PassGuard {
+    fn drop(&mut self) {
+        PASS.with(|pass| pass.set(self.0));
+    }
+}
+
+/// Runs `open` with `pass` as this thread's decoder choice: the factories
+/// a pass of the register opens read it through `decoder_preference`.
+pub fn with_decoder_pass<T>(pass: DecoderPreference, open: impl FnOnce() -> T) -> T {
+    let _restore = PassGuard(PASS.with(|current| current.replace(Some(pass))));
+    open()
+}
+
 static DECODER_PREFERENCE: AtomicU8 = AtomicU8::new(0);
 
 /// Sets the decoder choice of this process (viewer start, a change).
@@ -222,11 +286,19 @@ pub fn set_decoder_preference(preference: DecoderPreference) {
     DECODER_PREFERENCE.store(preference.code(), Ordering::Release);
 }
 
-/// The decoder choice of this process; automatic until one is set.
+/// The decoder choice of this process; automatic until one is set. Inside
+/// `with_decoder_pass` it is that pass.
 pub fn decoder_preference() -> DecoderPreference {
+    if let Some(pass) = PASS.with(Cell::get) {
+        return pass;
+    }
     match DECODER_PREFERENCE.load(Ordering::Acquire) {
         1 => DecoderPreference::Hardware,
         2 => DecoderPreference::Software,
         _ => DecoderPreference::Automatic,
     }
 }
+
+#[cfg(test)]
+#[path = "p9_decoder_passes_task_tests.rs"]
+mod p9_decoder_passes_task_tests;

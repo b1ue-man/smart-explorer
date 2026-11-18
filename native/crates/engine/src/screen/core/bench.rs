@@ -92,6 +92,8 @@ impl BenchOptions {
         match self.codec {
             CodecPreference::Auto => Ok(offers),
             CodecPreference::Tiles => Ok(vec![CodecOffer::tiles()]),
+            // P9 „Scharf (GPU)“: H.264, HEVC and the tiles.
+            CodecPreference::Sharp => Ok(CodecPreference::Sharp.filter_decoders(&offers)),
             named => {
                 let kind = named.codec();
                 let chosen: Vec<CodecOffer> = offers

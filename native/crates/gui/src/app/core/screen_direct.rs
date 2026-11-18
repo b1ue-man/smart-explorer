@@ -200,8 +200,11 @@ pub struct DirectPlace {
 #[derive(Default)]
 pub struct DirectView {
     surface: Option<platform::Surface>,
-    /// Making the presenter failed: this window stays on wgpu/glow.
+    /// Making the presenter failed: this window stays on wgpu/glow until
+    /// the user chooses „Anzeige“ again (P9: a new choice tries again).
     unavailable: bool,
+    /// The „Anzeige“ the last frame saw.
+    chosen: Option<super::screen_prefs::DisplayChoice>,
     /// The `CURSOR_OVERLAY` wish sent last.
     overlay: Option<bool>,
 }
@@ -256,7 +259,17 @@ impl DirectView {
         let parent = ctx
             .data(|data| data.get_temp::<usize>(egui::Id::new("screen_parent_hwnd")))
             .unwrap_or(0);
-        let enabled = super::screen_prefs::display_choice().direct() && !self.unavailable;
+        let choice = super::screen_prefs::display_choice();
+        if self
+            .chosen
+            .replace(choice)
+            .is_some_and(|before| before != choice)
+        {
+            // P9: a new „Anzeige“ applies in the running session and gives
+            // a presenter that failed before another try.
+            self.unavailable = false;
+        }
+        let enabled = choice.direct() && !self.unavailable;
         if !enabled || parent == 0 {
             self.detach(session);
         } else if self.surface.is_none() {

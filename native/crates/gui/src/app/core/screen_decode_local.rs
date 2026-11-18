@@ -16,7 +16,8 @@
 //!   „Codec: Automatisch“ continues once HEVC or AV1 is negotiated.
 //! - P1: a new „Codec“ or „Dekodierer“ goes out as `SET_DECODERS` when the
 //!   host announced it (`ViewerSession::set_decoders`); otherwise the
-//!   session opens again.
+//!   session opens again. P9: the offers come from the register at that
+//!   moment (`current_offers`), so a new „Dekodierer-Bibliothek“ counts.
 //! - „Dekodierer“ changes without a new session when a decoder of the new
 //!   choice decodes the running stream (`CodecRegistry::decodes_with`):
 //!   the decode thread asks for a key frame and opens the new decoder for
@@ -157,6 +158,14 @@ fn registry() -> Option<Arc<CodecRegistry>> {
 /// register (task tests with fake decoders).
 pub fn usable_decoders_frame() -> Option<SetDecoders> {
     registry().map(|registry| super::screen_pool::decoders_frame(&registry.decoder_offers()))
+}
+
+/// P9: the decoders this process offers now. „Dekodierer-Bibliothek“
+/// changes them while the viewer runs (the backend's offers are those of
+/// the viewer's start), so every request and `SET_DECODERS` asks the
+/// register; without it (task tests with fake decoders) `fallback`.
+pub fn current_offers(fallback: &[CodecOffer]) -> Vec<CodecOffer> {
+    registry().map_or_else(|| fallback.to_vec(), |registry| registry.decoder_offers())
 }
 
 /// B-36: whether `request` may announce `gop_continue`.
