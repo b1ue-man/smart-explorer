@@ -317,3 +317,34 @@ fn audio_task_cli_audio_option() {
     }
     assert!(Wrapper::try_parse_from(["screen", "view", "Laptop", "--audio", "loud"]).is_err());
 }
+
+/// Rule „Wahl gilt“ (2026-11-18): `--max-rate` below the encoders' lowest
+/// rate and the Windows-only `--decoder-library`/`--display` on another
+/// system are refused with a reason instead of being changed or stored
+/// without effect.
+#[test]
+fn wahlgilt_task_cli_refuses_what_would_not_apply() {
+    use super::{check_windows_only, parse_max_rate, MaxRate};
+    use crate::app::screen_prefs::DisplayChoice;
+    use crate::screen::core::decoder_library::DecoderLibrary;
+    use crate::screen::core::rate_control::MIN_BITRATE_BPS;
+    assert_eq!(MIN_BITRATE_BPS, 150_000);
+    assert_eq!(parse_max_rate("150k"), Ok(MaxRate::Bps(150_000)));
+    for low in ["149999", "100k", "0.1M", "1"] {
+        let error = parse_max_rate(low).unwrap_err();
+        assert!(error.contains("at least 150 kbit/s"), "{low}: {error}");
+    }
+    let refused = ["screen", "view", "Laptop", "--max-rate", "64k"];
+    assert!(Wrapper::try_parse_from(refused).is_err());
+    let library = Some(DecoderLibrary::Ffmpeg);
+    let display = Some(DisplayChoice::Wgpu);
+    assert_eq!(check_windows_only(library, display, true), Ok(()));
+    assert_eq!(check_windows_only(None, None, false), Ok(()));
+    let both = check_windows_only(library, display, false).unwrap_err();
+    assert!(both.starts_with("--decoder-library, --display: "), "{both}");
+    let one = check_windows_only(None, display, false).unwrap_err();
+    assert!(
+        one.starts_with("--display: only the Windows viewer"),
+        "{one}"
+    );
+}

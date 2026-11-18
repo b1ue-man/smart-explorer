@@ -52,12 +52,14 @@ fn bildkette_task_win_capture_fallback_causes() {
         fallback_cause(Some(DXGI_ERROR_UNSUPPORTED), true, FALLBACK_AFTER),
         Some(FallbackCause::AccessLost)
     );
+    // Fix of 2026-11-18: E_INVALIDARG settles for `FALLBACK_AFTER` first.
+    assert_eq!(fallback_cause(Some(E_INVALIDARG), true, now), None);
     assert_eq!(
-        fallback_cause(Some(E_INVALIDARG), true, now),
+        fallback_cause(Some(E_INVALIDARG), true, FALLBACK_AFTER),
         Some(FallbackCause::AccessLost)
     );
     assert_eq!(
-        fallback_cause(Some(E_INVALIDARG), false, now),
+        fallback_cause(Some(E_INVALIDARG), false, FALLBACK_AFTER),
         Some(FallbackCause::Failed)
     );
     // The output left its adapter: no result code.

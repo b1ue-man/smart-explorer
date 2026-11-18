@@ -81,6 +81,17 @@ impl DecodeState {
                         info.state = SessionState::Starting;
                     }
                 });
+                // The stored „Verlustfrei“/„Scharf (GPU)“ (user rule
+                // 2026-11-18): only `SET_MODE` carries them to the host.
+                if let Some(mode) = self.shared.opening_mode() {
+                    let _ = (self.send)(&ViewerFrame::SetMode(mode));
+                }
+                // A chosen „Dekodier-Bibliothek“ that is absent is named,
+                // never replaced by the other one.
+                if let Some(library) = crate::screen::core::decoder_library::chosen_missing() {
+                    let text = crate::screen::core::decoder_library::missing_text(library);
+                    self.shared.update(|info| info.notice = Some(text));
+                }
                 if self.take_control {
                     let take = ControlRequest {
                         action: ControlAction::Take,
@@ -180,16 +191,18 @@ impl DecodeState {
                 {
                     self.shared.suspend_presentation();
                 }
+                // Every change of the host's encoder and a chosen codec it
+                // cannot keep are named (user rule 2026-11-18).
+                let chosen = self.shared.codec_choice();
+                if let Some(stream) = report.stream.as_ref() {
+                    self.shared.note_stream(stream.codec);
+                }
                 self.shared.update(|info| {
                     info.state = report.state;
-                    if let Some(reason) = report
-                        .reason
-                        .as_deref()
-                        .and_then(|value| value.strip_prefix("encoder_fallback_to_tiles: "))
-                    {
-                        info.notice = Some(format!(
-                            "Videoencoder nicht verfügbar; verlustfreie Übertragung. {reason}"
-                        ));
+                    if let Some(text) = report.reason.as_deref().and_then(|reason| {
+                        super::super::screen_texts::codec_reason_text(reason, Some(chosen))
+                    }) {
+                        info.notice = Some(text);
                     }
                     info.reason = report.reason;
                     if report.stream.is_some() {

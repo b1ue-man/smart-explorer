@@ -28,6 +28,10 @@ use crate::screen::core::wire_hello::{ScreenErrorCode, ScreenHelloOk, SessionMod
 
 pub use super::screen_chain_window::LatencyWindow;
 
+#[path = "screen_session_choice.rs"]
+mod choice;
+pub use choice::tiles_allowed;
+
 /// The planes or the pixels of a decoded picture.
 pub enum PictureData {
     Bgra(BgraImage),
@@ -139,7 +143,12 @@ pub struct Shared {
     pub(super) presentation: Mutex<super::screen_presented::PresentationState>,
     visibility: Mutex<Option<(ViewerVisibility, bool)>>,
     decoder_mode: Mutex<SetMode>,
+    /// The viewer switched to the tiles itself (`screen_session_choice.rs`).
     pub(super) lossless_fallback: AtomicBool,
+    /// The „Codec“ this session runs for (`screen_session_choice.rs`).
+    codec: Mutex<crate::screen::core::negotiate::CodecSetting>,
+    /// The codec of the session's first stream (`screen_session_choice.rs`).
+    first_codec: Mutex<Option<crate::screen::core::negotiate::CodecKind>>,
     pub(super) memory: Mutex<Option<Arc<crate::screen::core::frame_memory::MemoryLease>>>,
     /// Returned picture storage and local decoder switches (V1).
     pub(super) local: super::screen_decode_local::DecodeLocal,
@@ -172,6 +181,8 @@ impl Shared {
                 lossless: false,
             }),
             lossless_fallback: AtomicBool::new(false),
+            codec: Mutex::new(Default::default()),
+            first_codec: Mutex::new(None),
             local: Default::default(),
             direct: Default::default(),
         })
@@ -222,22 +233,6 @@ impl Shared {
 
     pub fn present_gap_ms(&self) -> u64 {
         self.present_gap_ms.load(Ordering::Relaxed)
-    }
-
-    pub(super) fn decoder_mode(&self, frame: &mut ViewerFrame) {
-        if let ViewerFrame::SetMode(mode) = frame {
-            mode.lossless |= self.lossless_fallback.load(Ordering::Acquire);
-            *lock(&self.decoder_mode) = mode.clone();
-        }
-    }
-    pub(super) fn request_lossless(&self) -> Option<SetMode> {
-        if self.lossless_fallback.swap(true, Ordering::AcqRel) {
-            return None;
-        }
-        let mut mode = lock(&self.decoder_mode);
-        mode.lossless = true;
-        mode.source = None;
-        Some(mode.clone())
     }
 
     /// The session ended without a relay end (it never opened, or the
@@ -300,7 +295,7 @@ impl ViewerSession {
         let (outbox, inbox) = mpsc::channel();
         request.expected_node = target.expected_node.clone();
         let shared = Shared::new(prefer_yuv, present_gap_ms);
-        *lock(&shared.decoder_mode) = SetMode {
+        let opening = SetMode {
             mode: if request.mode == SessionMode::Preview {
                 StreamMode::Preview
             } else {
@@ -312,6 +307,9 @@ impl ViewerSession {
             sharpness: false,
             lossless: false,
         };
+        // The stored „Codec“ goes out once the host accepted (user rule
+        // 2026-11-18, `screen_session_choice.rs`).
+        shared.set_opening(opening, request.codec.unwrap_or_default());
         shared.update(|info| {
             info.family = request
                 .source

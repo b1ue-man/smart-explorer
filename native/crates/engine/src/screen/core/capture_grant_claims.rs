@@ -1,9 +1,33 @@
 //! Root/member claim accounting and serialized retirement notifications.
+//!
+//! Fix of 2026-11-18 (host log of a Windows VM): a claim on a retired grant
+//! is refused with a typed error (`RetiredClaim`), so a claimant can tell
+//! the expected turnover of a capture (a new capture path or generation
+//! issues its own grant and the old one retires) from a failure of its own;
+//! an encoder took that refusal for a GPU failure and switched the GPU path
+//! off for the whole session. Kind and text of the error stay as before.
+use std::fmt;
 use std::io;
 
 use super::super::capture_plan::CaptureOwner;
 use super::super::wire::invalid;
 use super::{Backing, CaptureGrant, CaptureSlice, GrantInner};
+
+/// The refusal of a claim on a retired grant (`CaptureGrant::claim`).
+#[derive(Debug)]
+struct RetiredClaim;
+
+impl fmt::Display for RetiredClaim {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("retired capture grant cannot authorize new claims")
+    }
+}
+
+impl std::error::Error for RetiredClaim {}
+
+#[cfg(test)]
+#[path = "shadowhost_grant_task_tests.rs"]
+mod shadowhost_grant_task_tests;
 
 impl Drop for GrantInner {
     fn drop(&mut self) {
@@ -20,7 +44,16 @@ impl Drop for GrantInner {
 impl CaptureGrant {
     pub fn claim(&self, owner: CaptureOwner, bytes: u64) -> io::Result<CaptureSlice> {
         self.claim_if_active(owner, bytes)?
-            .ok_or_else(|| invalid("retired capture grant cannot authorize new claims"))
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, RetiredClaim))
+    }
+
+    /// Whether `error` is the refusal of a claim on a retired grant: the
+    /// capture this grant belonged to was replaced (expected turnover), not
+    /// a failure of the claimant.
+    pub fn is_retired_claim(error: &io::Error) -> bool {
+        error
+            .get_ref()
+            .is_some_and(|inner| inner.is::<RetiredClaim>())
     }
 
     /// Retirement and a last transport claim decide under the same ledger

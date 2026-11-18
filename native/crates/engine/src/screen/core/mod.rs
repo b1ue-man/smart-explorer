@@ -78,6 +78,7 @@ pub mod decoder_health;
 pub mod decoder_library;
 pub mod feed_host;
 pub mod ffmpeg_plan;
+pub mod first_picture;
 pub mod frame_budget;
 pub mod frame_memory;
 pub mod frame_protocol;
@@ -143,6 +144,7 @@ pub mod snapshot;
 pub mod synthetic;
 pub mod tiles_codec;
 pub mod tiles_dirty;
+pub mod tiles_rate;
 pub mod viewer_client;
 pub mod viewer_reconstruct;
 // P5 (plan 2026-11-17): the virtual display in the viewer's resolution.

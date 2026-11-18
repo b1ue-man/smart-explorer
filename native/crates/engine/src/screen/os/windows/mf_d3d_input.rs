@@ -13,9 +13,12 @@
 //!   where its size differs, and wraps it with `MFCreateDXGISurfaceBuffer`;
 //!   a picture of the CPU path is converted on all cores into a staging
 //!   texture and copied up.
-//! - After any GPU failure the CPU path holds for the rest of the session
-//!   (`disable`, sticky in this host process); `capture_route` names the
-//!   other cases of the CPU path.
+//! - After a GPU failure the CPU path holds for the capture device the
+//!   failure belongs to (`disable`; fix of 2026-11-18: no longer for the
+//!   whole host process, a new capture device tries the GPU path again, and
+//!   a claim on a grant that retired with a change of the capture path is
+//!   turnover, never a failure: `GpuInput::texture`, `owned`);
+//!   `capture_route` names the other cases of the CPU path.
 //! - Package BK12 (B-22): the vendor encoders NVENC and AMF open on the
 //!   capture's device itself (`attach_device`, no device manager) and take
 //!   the same textures (`GpuInput::texture`).
@@ -38,10 +41,19 @@ use windows::Win32::Media::MediaFoundation::{
 
 #[path = "mf_d3d_own.rs"]
 mod own;
+#[path = "mf_d3d_route.rs"]
+mod route;
 #[path = "mf_d3d_surface.rs"]
 mod surface;
 pub(in crate::screen::os) use own::{attach_own, input_route, own_for_vendor, InputRoute};
+pub(in crate::screen::os) use route::{
+    encoder_route, EncoderFacts, GpuSwitch, Switched, SystemReason,
+};
 pub(in crate::screen::os) use surface::detach;
+
+#[cfg(test)]
+#[path = "shadowhost_gpu_task_tests.rs"]
+mod shadowhost_gpu_task_tests;
 
 use super::video_convert::{nv12_len, nv12_texture, Ring, VideoConverter};
 use crate::screen::core::capture_admission::{CaptureGrant, CaptureOwner, CaptureSlice};
@@ -51,51 +63,6 @@ use crate::screen::os::capture_readback::{capture_route, CaptureFacts, CpuReason
 use crate::screen::os::d3d_device::DeviceSet;
 use crate::screen::os::mf_capture_media::{next_tag, ring_picture, upload, RingPicture};
 use crate::screen::os::mf_common::adapter_of;
-
-/// Why a hardware encoder takes NV12 in system memory.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in crate::screen::os) enum SystemReason {
-    Disabled,
-    /// No capture device seen yet in this process.
-    NoCapture,
-    NoVideo,
-    /// The MFT does not report `MF_SA_D3D11_AWARE`.
-    NotD3D11Aware,
-    /// MFT and capture on different adapters (hybrid laptops).
-    OtherAdapter,
-    ManagerRefused,
-    /// BK12: the capture's device is not the vendor encoder's GPU.
-    OtherVendor,
-}
-
-/// What the encoder side knows when a hardware MFT opens.
-#[derive(Clone, Copy, Debug)]
-pub(in crate::screen::os) struct EncoderFacts {
-    pub disabled: bool,
-    pub capture: bool,
-    pub video: bool,
-    pub aware: bool,
-    pub capture_adapter: Option<u64>,
-    pub encoder_adapter: Option<u64>,
-}
-
-/// Decision B-20 at open: textures only into an MFT that is D3D11-aware and
-/// on the capture's adapter (an MFT without the LUID attribute is tried; its
-/// refusal of the manager keeps system memory).
-pub(in crate::screen::os) fn encoder_route(facts: EncoderFacts) -> Result<(), SystemReason> {
-    let adapters = (facts.capture_adapter, facts.encoder_adapter);
-    let other_adapter = matches!(adapters, (Some(capture), Some(encoder)) if capture != encoder);
-    [
-        (facts.disabled, SystemReason::Disabled),
-        (!facts.capture, SystemReason::NoCapture),
-        (!facts.video, SystemReason::NoVideo),
-        (!facts.aware, SystemReason::NotD3D11Aware),
-        (other_adapter, SystemReason::OtherAdapter),
-    ]
-    .into_iter()
-    .find_map(|(refused, reason)| refused.then_some(reason))
-    .map_or(Ok(()), Err)
-}
 
 /// The device the capture reads its pictures on.
 struct Capture {
@@ -111,7 +78,7 @@ struct Bridge {
     capture: Option<Capture>,
     /// Device pointer and token of the encoder that takes textures.
     armed: Option<(usize, u64)>,
-    disabled: Option<String>,
+    disabled: GpuSwitch,
     ring: Option<Arc<Ring>>,
     tag: u16,
     token: u64,
@@ -123,7 +90,7 @@ struct Bridge {
 static BRIDGE: Mutex<Bridge> = Mutex::new(Bridge {
     capture: None,
     armed: None,
-    disabled: None,
+    disabled: GpuSwitch::new(),
     ring: None,
     tag: 0,
     token: 0,
@@ -140,14 +107,24 @@ pub(in crate::screen::os) fn gone() -> io::Error {
     io::Error::new(io::ErrorKind::WouldBlock, "GPU picture is no longer held")
 }
 
-/// The CPU path for the rest of this session (host process).
+/// The CPU path for the capture device the failure belongs to (the armed
+/// encoder's device, else the capture's); a failure of an earlier capture
+/// device leaves the current one on the GPU path (fix of 2026-11-18).
 pub(in crate::screen::os) fn disable(reason: &str) {
     let mut state = bridge();
-    if state.disabled.is_none() {
-        eprintln!("screen GPU path off for this session, CPU path from now on: {reason}");
-        state.disabled = Some(reason.to_string());
-    }
+    let current = state.capture.as_ref().map(|capture| capture.raw);
+    let failed = state.armed.map(|(device, _)| device).or(current);
     state.armed = None;
+    match state.disabled.fail(failed, current, reason) {
+        Switched::Off => eprintln!(
+            "screen GPU path off for this capture device, CPU path until the capture \
+             changes its device: {reason}"
+        ),
+        Switched::AlreadyOff => {}
+        Switched::Earlier => eprintln!(
+            "screen GPU path stays on: the failure belongs to an earlier capture device: {reason}"
+        ),
+    }
 }
 
 /// A still image (`se screen snapshot`) asks for the exact BGRA of the next
@@ -188,6 +165,11 @@ pub(in crate::screen::os) fn route_capture(
     let raw = devices.device.as_raw() as usize;
     let mut state = bridge();
     if state.capture.as_ref().map(|capture| capture.raw) != Some(raw) {
+        if let Some(reason) = state.disabled.capture_on(raw) {
+            eprintln!(
+                "screen GPU path tried again on the new capture device (it was off: {reason})"
+            );
+        }
         state.capture = Some(Capture {
             raw,
             device: devices.device.clone(),
@@ -199,7 +181,7 @@ pub(in crate::screen::os) fn route_capture(
     let video = state.capture.as_ref().is_some_and(|capture| capture.video);
     let decided = capture_route(facts(
         state.armed.map(|(device, _)| device),
-        state.disabled.is_some(),
+        state.disabled.is_off(),
         video,
     ));
     // A still image takes this picture exactly (the CPU route is exact
@@ -238,6 +220,17 @@ pub(in crate::screen::os) fn ring_for(
     Ok((ring, tag))
 }
 
+/// A claim refused because its grant retired (the capture changed its path
+/// or generation, fix of 2026-11-18) is turnover: the picture is skipped
+/// like one no longer held, never a GPU failure; other errors stay.
+pub(in crate::screen::os) fn turnover(error: io::Error) -> io::Error {
+    if CaptureGrant::is_retired_claim(&error) {
+        gone()
+    } else {
+        error
+    }
+}
+
 /// An NV12 texture with its claim (`CodecInput`, the budget of the CPU
 /// conversion it replaces).
 pub(in crate::screen::os) struct Owned {
@@ -251,7 +244,9 @@ pub(in crate::screen::os) fn owned(
     size: FrameSize,
     cpu: Option<D3D11_CPU_ACCESS_FLAG>,
 ) -> io::Result<Owned> {
-    let claim = grant.claim(CaptureOwner::CodecInput, nv12_len(size))?;
+    let claim = grant
+        .claim(CaptureOwner::CodecInput, nv12_len(size))
+        .map_err(turnover)?;
     Ok(Owned {
         texture: nv12_texture(device, size, cpu)?,
         claim,
@@ -333,7 +328,7 @@ fn arm(
             .capture
             .as_ref()
             .map(|c| (c.raw, c.device.clone(), c.context.clone(), c.luid, c.video));
-        (capture, state.disabled.is_some())
+        (capture, state.disabled.is_off())
     };
     encoder_route(EncoderFacts {
         disabled,
@@ -402,6 +397,11 @@ impl GpuInput {
         picture: &Picture,
     ) -> io::Result<ID3D11Texture2D> {
         self.finish();
+        // Fix of 2026-11-18: the grant of a capture that changed its path
+        // retired; this encoder ends with it (the pipeline opens the next).
+        if grant.is_retired()? {
+            return Err(gone());
+        }
         grant.check_identity(picture.source(), picture.generation())?;
         if picture.size() != self.size {
             return Err(io::Error::other("picture size differs from the encoder"));

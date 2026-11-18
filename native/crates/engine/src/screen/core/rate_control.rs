@@ -166,6 +166,8 @@ pub struct RateController {
     honour: honour::SessionHonour,
     /// Delivery rate, round-trip floor and refusals (`queue`, P9).
     queue: queue::QueueState,
+    /// The byte budget of the tiles under the target (`tiles_rate`, 2026-11-18).
+    tiles: crate::screen::core::tiles_rate::TileBudget,
 }
 
 impl RateController {
@@ -199,6 +201,7 @@ impl RateController {
             app_limited_now: false,
             honour: honour::SessionHonour::default(),
             queue: queue::QueueState::default(),
+            tiles: Default::default(),
         }
     }
 
@@ -281,6 +284,18 @@ impl RateController {
     /// Frames per second the encoding of this session carries (B-02).
     pub fn encode_capacity_fps(&self) -> Option<u32> {
         self.encode_timing.capacity_fps()
+    }
+
+    /// Whether a picture of the tiles may be taken at `now_us` (plan
+    /// 2026-11-18 „Netzrate“): their sent bytes stay within the target E.
+    pub fn tiles_admit(&self, now_us: u64) -> bool {
+        self.tiles.admits(now_us)
+    }
+
+    /// A picture of the tiles of `bytes` was sent at `now_us` under E.
+    pub fn on_tiles_sent(&mut self, now_us: u64, bytes: u64) {
+        let target = self.target_bps();
+        self.tiles.on_sent(now_us, bytes, target);
     }
 
     pub fn on_frame_sent(&mut self, bytes: u64, now_us: u64) {

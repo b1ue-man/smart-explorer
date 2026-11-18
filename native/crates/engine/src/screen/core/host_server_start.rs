@@ -25,7 +25,9 @@ pub(super) struct Ready {
 pub(super) enum Failure {
     Capture(io::Error),
     Source(super::super::host_backend::SourceRefusal),
-    Encoder,
+    /// No pairing; with the reason when a chosen codec has none (plan
+    /// 2026-11-18, logged already).
+    Encoder(Option<String>),
     Cancelled,
 }
 struct PreparedOutput {
@@ -34,6 +36,40 @@ struct PreparedOutput {
 }
 
 impl Start<'_> {
+    /// Refuses with `code`; `logged` when the cause has an entry already.
+    pub(super) async fn refuse(&mut self, code: ScreenErrorCode, logged: bool) -> io::Result<()> {
+        self.refuse_with(code, logged, None).await
+    }
+
+    /// `refuse` with the reason in words for the viewer (plan 2026-11-18:
+    /// a chosen codec without a pairing names why).
+    pub(super) async fn refuse_with(
+        &mut self,
+        code: ScreenErrorCode,
+        logged: bool,
+        message: Option<String>,
+    ) -> io::Result<()> {
+        if !logged {
+            let reason = Some(code.key());
+            log_event(
+                self.context.audit,
+                self.principal,
+                self.mode,
+                "session_refused",
+                None,
+                reason,
+            );
+        }
+        let refused = HelloReply::Refused(match message {
+            Some(message) => ScreenHelloError::with_message(code, message),
+            None => ScreenHelloError::new(code),
+        });
+        send_hello_reply(&mut *self.send, &refused).await?;
+        let _ = self.send.finish();
+        let _ = tokio::time::timeout(CLOSE_GRACE, self.connection.closed()).await;
+        Ok(())
+    }
+
     /// `HELLO_OK` metadata from a blocking job; a stop of `handle` cancels it.
     pub(super) async fn metadata(
         &self,
@@ -201,30 +237,44 @@ pub(super) async fn prepare(
     // (B-31); `HELLO_OK` named the host's in `encoders_v2` for it.
     let decoders = hello.all_decoders();
     // D6 (plan 2026-11-17 P3): the newer codecs first only when trusted.
-    let negotiate = super::super::negotiate::negotiate_trusted;
-    let mut choices = negotiate(
-        &metadata.encoders,
-        &decoders,
-        CodecPreference::Auto,
-        contract,
-        metadata.trust,
-    );
-    if choices.is_empty()
+    // Plan 2026-11-18 „Netzrate“: the viewer's choice, read from its
+    // decoders (`preference_named_by`: a chosen codec names no tiles); a
+    // chosen codec without a pairing ends the start with its reason.
+    let preference = super::super::negotiate::preference_named_by(&decoders);
+    let negotiate = |contract| {
+        super::super::negotiate::negotiate_chosen(
+            &metadata.encoders,
+            &decoders,
+            preference,
+            contract,
+            metadata.trust,
+        )
+    };
+    let mut choices = negotiate(contract);
+    if !choices.as_ref().is_ok_and(|choices| !choices.is_empty())
         && contract.is_some_and(|contract| contract.hybrid_regions)
         && decoders.iter().any(|offer| offer.codec.is_video())
     {
         if let Some(contract) = contract.as_mut() {
             contract.hybrid_regions = false;
         }
-        choices = negotiate(
-            &metadata.encoders,
-            &decoders,
-            CodecPreference::Auto,
-            contract,
-            metadata.trust,
-        );
+        choices = negotiate(contract);
     }
-    let choice = choices.first().copied().ok_or(Failure::Encoder)?;
+    let choices = match choices {
+        Ok(choices) => choices,
+        Err(refused) => {
+            log_event(
+                context.audit,
+                principal,
+                hello.mode,
+                "session_refused",
+                None,
+                Some(&refused.to_string()),
+            );
+            return Err(Failure::Encoder(Some(refused.to_string())));
+        }
+    };
+    let choice = choices.first().copied().ok_or(Failure::Encoder(None))?;
     let sharp = super::super::negotiate::sharp_alternative(&choices, &choice);
     let fallbacks = super::super::host_pipeline::codec_fallbacks(&choices, &choice);
     admission
@@ -285,8 +335,21 @@ async fn virtual_display(
     capture: &str,
 ) -> Started {
     let monitor = matches!(source, SourceId::Monitor(_));
-    if hello.virtual_display.is_none() || hello.metadata_only || !monitor {
+    if hello.virtual_display.is_none() || hello.metadata_only {
         return Started::default();
+    }
+    if !monitor {
+        // „Wahl gilt“: the chosen window wins; the report says why.
+        let report = super::super::virtual_display::VirtualDisplayReport::not_monitor(
+            hello.virtual_display,
+            hello.virtual_display_size,
+            hello.mode,
+            hello.metadata_only,
+        );
+        return Started {
+            report,
+            claim: None,
+        };
     }
     let start = SessionStart {
         session: handle.id(),

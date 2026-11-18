@@ -6,9 +6,9 @@
 //! atomically at every change by the user. Full screen is not stored.
 //!
 //! „Höchste Datenrate“ is changed by the toolbar and by `se screen view
-//! --max-rate` directly (`set_max_rate_bps`); the value this process last
-//! set or read is the one every later `save` writes, so a save of the other
-//! settings never takes an older value back. „Codec“ and „Dekodierer“ (BK6)
+//! --max-rate` directly (`set_max_rate_bps`); a save of the other settings
+//! writes only what this process changed (`ViewerPrefs::save`), so it never
+//! takes a value back that another process stored meanwhile. „Codec“ and „Dekodierer“ (BK6)
 //! work the same way (`set_codec_choice`, `se screen view --codec
 //! --decoder`); „Codec: Verlustfrei“ replaces the switch „Verlustfrei“ with
 //! its meaning, and a stored `lossless` of an older viewer becomes it.
@@ -152,6 +152,10 @@ pub fn prefs_path() -> PathBuf {
         .join("screen")
         .join("viewer.json")
 }
+
+/// The settings this process loaded at its start, or saved last
+/// (`ViewerPrefs::save`).
+static LOADED: Mutex<Option<ViewerPrefs>> = Mutex::new(None);
 
 /// „Höchste Datenrate“ of this process: unread (`None`) or the value.
 static MAX_RATE: Mutex<Option<Option<u64>>> = Mutex::new(None);
@@ -303,9 +307,12 @@ impl ViewerPrefs {
         self.decoder = decoder;
     }
 
-    /// The stored settings, or the defaults.
+    /// The stored settings, or the defaults; they are what this process
+    /// started from (`save` writes only what it changed since).
     pub fn load() -> Self {
-        Self::load_from(&prefs_path())
+        let prefs = Self::load_from(&prefs_path());
+        *LOADED.lock().unwrap_or_else(PoisonError::into_inner) = Some(prefs.clone());
+        prefs
     }
 
     pub fn load_from(path: &Path) -> Self {
@@ -315,27 +322,46 @@ impl ViewerPrefs {
             .unwrap_or_default()
     }
 
-    /// Stores the settings; „Höchste Datenrate“ is the process's current value.
+    /// Stores the settings this process changed (user rule 2026-11-18):
+    /// the file is read again and only the fields that differ from what this
+    /// process loaded are written, so a value `se screen view` or the MCP
+    /// tool changed meanwhile stays. „Höchste Datenrate“, „Codec“,
+    /// „Dekodierer“, „Dekodierer-Bibliothek“, „Anzeige“, „Monitor“,
+    /// „Auflösung“ and „Ton“ are written by their own setters at once.
     pub fn save(&self) -> io::Result<()> {
-        let mut stored = self.clone();
-        stored.max_rate_bps = max_rate_bps();
-        // Like the rate: the codec choice this process knows wins (BK6).
-        if let Some(known) = *CODEC.lock().unwrap_or_else(PoisonError::into_inner) {
-            stored.apply_codec(known);
+        let mut loaded = LOADED.lock().unwrap_or_else(PoisonError::into_inner);
+        let base = loaded.clone().unwrap_or_default();
+        self.save_changes_to(&base, &prefs_path())?;
+        *loaded = Some(self.clone());
+        Ok(())
+    }
+
+    /// Writes the fields of `self` that differ from `base` over the file at
+    /// `path` as it is now.
+    pub fn save_changes_to(&self, base: &Self, path: &Path) -> io::Result<()> {
+        let mut stored = Self::load_from(path);
+        macro_rules! changed {
+            ($($field:ident),*) => {$(
+                if self.$field != base.$field {
+                    stored.$field = self.$field;
+                }
+            )*};
         }
-        if let Some((library, display)) = *OUTPUT.lock().unwrap_or_else(PoisonError::into_inner) {
-            (stored.decoder_library, stored.display) = (library, display);
-        }
-        // And „Monitor“ and „Auflösung“ (P5).
-        if let Some(known) = *VIRTUAL_DISPLAY
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-        {
-            stored.virtual_display = known;
-        }
-        // And „Ton“ (P9).
-        stored.audio = super::screen_audio::stored();
-        stored.save_to(&prefs_path())
+        changed!(
+            low_latency,
+            sharpness,
+            lossless,
+            fit,
+            max_rate_bps,
+            codec,
+            decoder,
+            decoder_library,
+            display,
+            virtual_display,
+            audio
+        );
+        stored.schema = SCHEMA;
+        stored.save_to(path)
     }
 
     pub fn save_to(&self, path: &Path) -> io::Result<()> {
@@ -447,3 +473,7 @@ mod bildkette_codec_tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "wahlgilt_prefs_task_tests.rs"]
+mod wahlgilt_prefs_task_tests;

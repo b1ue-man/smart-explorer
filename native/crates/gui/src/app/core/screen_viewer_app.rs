@@ -46,6 +46,9 @@ enum Transition {
 
 pub use super::screen_present::wgpu_configuration;
 
+#[path = "screen_viewer_choice.rs"]
+mod choice;
+
 pub struct ScreenViewerApp {
     common: Common,
     mode: Mode,
@@ -71,6 +74,9 @@ impl ScreenViewerApp {
                 cc.wgpu_render_state.is_some(),
             )
         });
+        // The toolbar names the window's renderer and present mode (user
+        // rule 2026-11-18, `screen_present::set_window`).
+        super::screen_present::set_window(cc.wgpu_render_state.is_none(), prefs.low_latency);
         let gpu = super::screen_render_owner::get(ctx).is_some_and(|owner| owner.yuv());
         let backend = Backend::production(ctx);
         let devices = super::screen_devices::Devices::start(ctx);
@@ -319,20 +325,8 @@ impl ScreenViewerApp {
                 | ToolbarAction::Decoder(_)
                 | ToolbarAction::DecoderLibrary(_)
                 | ToolbarAction::Display(_) => {
-                    let again = screen_toolbar_ui::apply_codec(&action, &mut self.common.prefs);
-                    if let (true, Mode::View(view)) = (again, &self.mode) {
-                        // V1: a decoder that decodes the running stream takes
-                        // over at the next key frame, without a new session.
-                        let local = matches!(
-                            action,
-                            ToolbarAction::Decoder(_) | ToolbarAction::DecoderLibrary(_)
-                        ) && view.session.as_ref().is_some_and(|s| s.switch_decoder());
-                        // P1: the host negotiates again (`SET_DECODERS`).
-                        let frame = super::screen_pool::decoders_frame(&self.common.backend.offers);
-                        let sent = view.session.as_ref().is_some_and(|s| s.set_decoders(frame));
-                        if !local && !sent {
-                            out.push(Transition::View(view.target.clone()));
-                        }
+                    if self.choice(&action, &mut out) {
+                        continue;
                     }
                 }
                 ToolbarAction::LowLatency(on) => {

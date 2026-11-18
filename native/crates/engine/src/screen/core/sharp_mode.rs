@@ -48,12 +48,13 @@ pub fn sharp_codec(codec: CodecKind) -> bool {
     matches!(codec, CodecKind::H264 | CodecKind::Hevc)
 }
 
-/// The viewer's decoder offers for this mode: H.264, HEVC and the tiles
-/// (every peer's last fallback stays), without AV1.
+/// The viewer's decoder offers for this mode: H.264 and HEVC, without AV1
+/// and without the tiles (plan 2026-11-18 „Netzrate“: the mode stays on the
+/// GPU encoders of its codecs and is never replaced by the tiles).
 pub fn sharp_decoders(offers: &[CodecOffer]) -> Vec<CodecOffer> {
     offers
         .iter()
-        .filter(|offer| offer.codec == CodecKind::Tiles || sharp_codec(offer.codec))
+        .filter(|offer| sharp_codec(offer.codec))
         .copied()
         .collect()
 }
@@ -175,8 +176,12 @@ mod tests {
     fn sharp_mode_task_decoders_and_quality() {
         let decoders = sharp_decoders(&hardware_offers());
         assert!(decoders.iter().all(|offer| offer.codec != CodecKind::Av1));
-        assert!(decoders.iter().any(|offer| offer.codec == CodecKind::Tiles));
-        assert_eq!(decoders.len(), hardware_offers().len() - 1);
+        assert!(decoders.iter().all(|offer| offer.codec != CodecKind::Tiles));
+        let others = hardware_offers()
+            .iter()
+            .filter(|offer| matches!(offer.codec, CodecKind::Av1 | CodecKind::Tiles))
+            .count();
+        assert_eq!(decoders.len(), hardware_offers().len() - others);
         let offers = hardware_offers();
         let choices = negotiate(&offers, &offers, CodecPreference::Auto);
         for choice in &choices {

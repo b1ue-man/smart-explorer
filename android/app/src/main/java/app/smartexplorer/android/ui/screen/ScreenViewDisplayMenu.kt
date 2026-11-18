@@ -137,16 +137,20 @@ internal fun wishLabelRes(wish: String): Int = when (wish) {
 
 /**
  * The entries „Monitor“ and „Auflösung“ of the settings menu. A change goes to [onSettings]; „Eigene Größe …“ opens
- * [DisplaySizeDialog] through [onCustom].
+ * [DisplaySizeDialog] through [onCustom]. [stateLine] says what was chosen, what the host did and why
+ * ([ScreenDisplayReportText.line], as the desktop viewer's state line).
  */
 @Composable
-internal fun ColumnScope.DisplayMenuItems(settings: ViewSettings, onSettings: (ViewSettings) -> Unit, onCustom: () -> Unit) {
+internal fun ColumnScope.DisplayMenuItems(settings: ViewSettings, onSettings: (ViewSettings) -> Unit, onCustom: () -> Unit, stateLine: String = "") {
     val display = settings.display
     Text(
         stringResource(R.string.screen_view_display_monitor),
         style = MaterialTheme.typography.labelMedium,
         modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
     )
+    if (stateLine.isNotEmpty()) {
+        Text(stateLine, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp))
+    }
     ViewerDisplayChoice.WISHES.forEach { wish ->
         DropdownMenuItem(
             text = { Text(stringResource(wishLabelRes(wish))) },

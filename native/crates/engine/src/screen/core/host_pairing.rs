@@ -9,10 +9,11 @@
 //! reference, so the next frame is a key frame of a new encoder in a new
 //! picture group. Under „Verlustfrei“ the effective choice stays the tiles
 //! and nothing restarts; the new pairing applies when the switch goes off.
+use super::quality::FallbackScope;
 use super::*;
 use crate::screen::core::gop_continue::ContinueOffers;
-use crate::screen::core::negotiate::{negotiate_trusted, CodecOffer, CodecPreference, CodecTrust};
-use crate::screen::core::set_decoders::{renegotiate_trusted, SetDecoders};
+use crate::screen::core::negotiate::{negotiate_chosen, CodecOffer, CodecTrust};
+use crate::screen::core::set_decoders::{renegotiate_for, SetDecoders};
 
 /// What the session knows to negotiate again.
 pub(super) struct PairingState {
@@ -85,16 +86,25 @@ impl Pipeline {
     }
 
     /// `SET_DECODERS`: negotiates again; `true` when the pairing changed.
-    /// The continuation announcement of the frame applies either way.
+    /// The continuation announcement of the frame applies either way. Plan
+    /// 2026-11-18 „Netzrate“: under the viewer's new choice; a chosen codec
+    /// without a pairing ends the session at the next tick with its reason.
     pub fn set_decoders(&mut self, set: &SetDecoders) -> bool {
         self.pairing.continuation = set.continuation();
-        let Some(next) = renegotiate_trusted(
+        let next = match renegotiate_for(
             &self.pairing.encoders,
             &set.decoders,
             self.negotiated_contract,
             self.pairing.video_session,
             self.pairing.trust,
-        ) else {
+        ) {
+            Ok(next) => next,
+            Err(refused) => {
+                self.quality_policy.pending_error = Some(refused.to_string());
+                return false;
+            }
+        };
+        let Some(next) = next else {
             if self.continue_from.is_some() && !self.continuation_offered() {
                 self.reset_stream();
             }
@@ -103,6 +113,7 @@ impl Pipeline {
         if let Some(limit) = next.tile_limit {
             self.tile_limit = Some(limit);
         }
+        self.quality_policy.mode.chosen = next.preference;
         if next.choice == self.pairing.current && next.sharp == self.pairing.sharp {
             let failed = &self.quality_policy.failed_codecs;
             let fallbacks = next
@@ -122,13 +133,14 @@ impl Pipeline {
             self.quality_policy.note_failed_codec(current_codec);
         }
         let failed_codecs = std::mem::take(&mut self.quality_policy.failed_codecs);
-        let choices = negotiate_trusted(
+        let choices = negotiate_chosen(
             &self.pairing.encoders,
             &set.decoders,
-            CodecPreference::Auto,
+            next.preference,
             self.negotiated_contract,
             self.pairing.trust,
-        );
+        )
+        .unwrap_or_default();
         let mut fallbacks = codec_fallbacks(&choices, &next.choice);
         fallbacks.retain(|choice| !failed_codecs.contains(&choice.codec));
         let mut chosen = next.choice;
@@ -144,15 +156,25 @@ impl Pipeline {
                 failed = true;
             }
         }
+        // A chosen codec whose encoders all failed here never becomes the
+        // tiles (plan 2026-11-18): the session ends with the reason.
+        let scope = FallbackScope::of(next.preference, self.quality_policy.mode.sharpness);
+        let refused = (failed && !scope.tiles_allowed()).then(|| {
+            format!(
+                "chosen_codec_failed: {}: no encoder of the chosen codec is left",
+                scope.key()
+            )
+        });
         self.pairing.current = next.choice;
         self.pairing.sharp = next.sharp;
         let mode = self.quality_policy.mode;
         let mut policy = QualityPolicy::new(chosen, self.pairing.viewer_fps);
         policy.mode = mode;
-        policy.encoder_failed = failed;
+        policy.encoder_failed = failed && refused.is_none();
         // W4: the pairing's fallbacks without the codecs that failed here.
         policy.fallbacks = fallbacks;
         policy.failed_codecs = failed_codecs;
+        policy.pending_error = refused;
         self.quality_policy = policy;
         // `set_sharp_choice` keeps an alternative of the running codec.
         let effective = self.choice;

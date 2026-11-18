@@ -79,12 +79,26 @@ impl ScreenErrorCode {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ScreenHelloError {
     pub code: String,
+    /// The reason in words (plan 2026-11-18 „Netzrate“, e.g.
+    /// `chosen_codec_unavailable: av1: …`); absent before, and an older
+    /// viewer ignores it (no hello has `deny_unknown_fields`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
 }
 
 impl ScreenHelloError {
     pub fn new(code: ScreenErrorCode) -> Self {
         Self {
             code: code.key().into(),
+            message: None,
+        }
+    }
+
+    /// `new` with the reason in words.
+    pub fn with_message(code: ScreenErrorCode, message: String) -> Self {
+        Self {
+            message: Some(message),
+            ..Self::new(code)
         }
     }
 

@@ -208,7 +208,7 @@ class ScreenDecoder(
                     if(rejectedHybridGop==info.gop) return
                     frameEpoch=presentationEpoch()
                     releaseCodec(); hybrid?.close();hybrid=null;bitmap=null
-                    hybrid = ScreenHybridDecoder(info.width,info.height,pulls.budget) {running}; hybridGop=gop
+                    hybrid = ScreenHybridDecoder(info.width,info.height,pulls.budget,choice().decoder) {running}; hybridGop=gop
                 }
                 if(rejectedHybridGop==hybridGop) return
                 require(hybridGop==gop)

@@ -39,22 +39,27 @@ pub(in crate::screen::os) enum InputRoute {
 }
 
 /// The route of an encoder at its opening (pure, for the task tests): the
-/// capture's textures when it armed; a device of its own when the capture
-/// runs on no or another adapter and the encoder takes D3D11 textures
-/// (`aware`); otherwise system memory, as before (a GPU path switched off
-/// after a failure, a capture device without video support, a refused
-/// device manager).
+/// capture's textures when it armed; a device of its own when the encoder
+/// takes D3D11 textures (`aware`) and the capture runs on no or another
+/// adapter, or (fix of 2026-11-18) its GPU path is off after a failure or
+/// its device has no video support: the hardware MFT of a VM host was
+/// opened on system memory then ("system memory input (Disabled)") and
+/// failed, so the session ended on the tile codec. Otherwise system memory,
+/// as before (an MFT without D3D11, a refused device manager); an own device
+/// that fails in operation falls back to system memory in the encoder.
 pub(in crate::screen::os) fn input_route(
     attached: Result<(), SystemReason>,
     aware: bool,
 ) -> InputRoute {
     match attached {
         Ok(()) => InputRoute::Capture,
-        Err(SystemReason::NoCapture | SystemReason::OtherAdapter | SystemReason::OtherVendor)
-            if aware =>
-        {
-            InputRoute::OwnDevice
-        }
+        Err(
+            SystemReason::NoCapture
+            | SystemReason::OtherAdapter
+            | SystemReason::OtherVendor
+            | SystemReason::Disabled
+            | SystemReason::NoVideo,
+        ) if aware => InputRoute::OwnDevice,
         Err(_) => InputRoute::SystemMemory,
     }
 }

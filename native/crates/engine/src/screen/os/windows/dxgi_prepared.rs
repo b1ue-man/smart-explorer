@@ -7,7 +7,7 @@ use std::fmt;
 use std::io;
 use std::time::Instant;
 
-use super::output::{find_output, rotation};
+use super::output::{adapter_text, find_output, rotation};
 use crate::screen::core::capture_admission::CaptureSlice;
 use crate::screen::core::capture_fallback::FallbackStep;
 use crate::screen::core::pixel_convert::{BgraRotation, FrameSize};
@@ -24,11 +24,15 @@ pub(in crate::screen::os) struct PreparedDxgi {
     pub(super) output: IDXGIOutput1,
     pub(super) devices: DeviceSet,
     pub(super) device: String,
+    /// Name, PCI vendor and LUID of the output's adapter (host log, fix of
+    /// 2026-11-18).
+    pub(super) adapter: String,
     monitor: usize,
 }
 impl PreparedDxgi {
     pub(in crate::screen::os) fn prepare(device: &str) -> io::Result<Self> {
         let (adapter, output) = find_output(device)?;
+        let adapter_name = adapter_text(&adapter);
         // Device creation has no requested capture pixels. The actual feature
         // level, queried here, determines the metadata-only texture limits.
         let devices = d3d_device::create_on(Some(&adapter)).map_err(io::Error::other)?;
@@ -40,6 +44,7 @@ impl PreparedDxgi {
             output,
             devices,
             device: device.into(),
+            adapter: adapter_name,
             monitor,
         };
         prepared.geometry()?;

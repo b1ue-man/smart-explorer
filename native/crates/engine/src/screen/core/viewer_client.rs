@@ -79,7 +79,8 @@ impl ViewerError {
     /// The code key as surfaces show it (`permission_denied`, …).
     pub fn code(&self) -> String {
         match self {
-            Self::Refused(code) => code.clone(),
+            // Only the key: a reason in words follows it after „: “.
+            Self::Refused(code) => refusal_key(code).into(),
             Self::Unsupported => ScreenErrorCode::ScreenUnsupported.key().into(),
             Self::Io(_) => "connection_failed".into(),
         }
@@ -87,11 +88,20 @@ impl ViewerError {
 
     pub fn detail(&self) -> String {
         match self {
-            Self::Refused(code) => refusal_text(code),
+            Self::Refused(code) => match code.split_once(": ") {
+                Some((key, reason)) => format!("{}: {reason}", refusal_text(key)),
+                None => refusal_text(code),
+            },
             Self::Unsupported => refusal_text(ScreenErrorCode::ScreenUnsupported.key()),
             Self::Io(error) => error.to_string(),
         }
     }
+}
+
+/// The code key of a refusal text (`encoder_failed: chosen_codec_…` →
+/// `encoder_failed`), so code comparisons keep working with a reason.
+fn refusal_key(text: &str) -> &str {
+    text.split_once(": ").map_or(text, |(key, _)| key)
 }
 
 impl From<io::Error> for ViewerError {
@@ -307,7 +317,14 @@ async fn handshake_for(
             HelloReply::Pending(pending) => on_pending(pending.capability),
             HelloReply::Refused(refused) => {
                 connection.close(VIEWER_CLOSE, b"refused");
-                return Err(ViewerError::Refused(refused.code));
+                // The host's reason in words travels with the code
+                // (`encoder_failed: chosen_codec_unavailable: av1: …`); a
+                // refusal without one keeps the bare code key.
+                let reason = match refused.message {
+                    Some(message) => format!("{}: {message}", refused.code),
+                    None => refused.code,
+                };
+                return Err(ViewerError::Refused(reason));
             }
         }
     };

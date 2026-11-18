@@ -7,6 +7,10 @@ use crate::screen::core::session_state::SessionState;
 use crate::screen::core::wire_control::ControlBlock;
 use crate::screen::core::wire_hello::ScreenErrorCode;
 
+#[path = "screen_codec_notice.rs"]
+mod codec_notice;
+pub use codec_notice::{codec_detail_text, codec_reason_text};
+
 /// `base` with `: detail` when the host gave a diagnostic text.
 fn with_detail(base: &str, detail: Option<&str>) -> String {
     match detail.map(str::trim).filter(|detail| !detail.is_empty()) {
@@ -97,9 +101,9 @@ pub fn error_text(code: &str, detail: Option<&str>) -> String {
         ScreenErrorCode::CaptureFailed => {
             with_detail("Die Aufnahme am Gerät ist fehlgeschlagen", detail)
         }
-        ScreenErrorCode::EncoderFailed => {
-            with_detail("Die Kodierung am Gerät ist fehlgeschlagen", detail)
-        }
+        // A chosen codec the host cannot keep is named (user rule 2026-11-18).
+        ScreenErrorCode::EncoderFailed => codec_detail_text(detail)
+            .unwrap_or_else(|| with_detail("Die Kodierung am Gerät ist fehlgeschlagen", detail)),
         ScreenErrorCode::SessionLimit => {
             "Das Gerät bedient schon die höchstmögliche Zahl von Ansichten".into()
         }
@@ -116,12 +120,17 @@ fn end_reason_text(key: &str, detail: Option<&str>) -> String {
         "update_stop" => "Das Gerät wird aktualisiert".into(),
         "connection_lost" => "Die Verbindung zum Gerät ist abgebrochen".into(),
         "connection_failed" => with_detail("Die Verbindung zum Gerät ist fehlgeschlagen", detail),
-        "failed" => with_detail("Die Sitzung ist fehlgeschlagen", detail),
+        "failed" => codec_detail_text(detail)
+            .unwrap_or_else(|| with_detail("Die Sitzung ist fehlgeschlagen", detail)),
         "session_changed" => {
             "Die Benutzersitzung am Gerät hat gewechselt; die Ansicht konnte nicht neu aufgebaut werden"
                 .into()
         }
-        other => error_text(other, detail),
+        // A refusal with the host's reason arrives as `encoder_failed:
+        // chosen_codec_unavailable: …` (user rule 2026-11-18).
+        other => codec_detail_text(Some(other))
+            .or_else(|| codec_detail_text(detail))
+            .unwrap_or_else(|| error_text(other, detail)),
     }
 }
 

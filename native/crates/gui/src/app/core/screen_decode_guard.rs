@@ -7,12 +7,17 @@
 //! fallback does). The window names the change. A picture that came out of
 //! a later decoder call than its own counts as a failure (plan 2026-11-17
 //! „Windows-Bild“ P3, `DecoderGuard::on_picture`).
+//!
+//! User rule of 2026-11-18: only „Codec: Automatisch“ gives a codec up and
+//! moves on. Under a named codec the session keeps it and the window shows
+//! the error with the guard's reason (`named_text`); under „Verlustfrei“
+//! the switch to the tiles is that choice and marks nothing.
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 
 use super::DecodeState;
 use crate::screen::core::decoder_health;
-use crate::screen::core::negotiate::CodecKind;
+use crate::screen::core::negotiate::{CodecKind, CodecSetting};
 use crate::screen::core::wire_control::ViewerFrame;
 
 fn label(codec: CodecKind) -> &'static str {
@@ -22,6 +27,16 @@ fn label(codec: CodecKind) -> &'static str {
         CodecKind::Av1 => "AV1",
         CodecKind::Tiles => "Kacheln",
     }
+}
+
+/// The error of a named codec that brings no picture: the codec stays.
+pub fn named_text(codec: CodecKind, chosen: CodecSetting, reason: &str) -> String {
+    format!(
+        "{} liefert auf diesem Gerät kein Bild ({reason}). Gewählt ist „{}“; die Verbindung \
+         wechselt nicht, nur „Codec: Automatisch“ weicht auf einen anderen Codec aus.",
+        label(codec),
+        chosen.label()
+    )
 }
 
 impl DecodeState {
@@ -52,6 +67,26 @@ impl DecodeState {
     }
 
     fn give_up(&mut self, codec: CodecKind) {
+        let chosen = self.shared.codec_choice();
+        if chosen != CodecSetting::Auto {
+            let reason = self.guard.reason();
+            eprintln!(
+                "screen viewer: {} gave no picture ({reason}); chosen codec kept",
+                label(codec)
+            );
+            if chosen == CodecSetting::Lossless {
+                // „Verlustfrei“ chose the tiles: that is no fallback.
+                if let Some(mode) = self.shared.request_lossless() {
+                    if (self.send)(&ViewerFrame::SetMode(mode)).is_err() {
+                        self.connection_lost();
+                    }
+                }
+                return;
+            }
+            let text = named_text(codec, chosen, &reason);
+            self.shared.update(|info| info.notice = Some(text));
+            return;
+        }
         decoder_health::mark_unusable(codec);
         eprintln!(
             "screen viewer: {} gave no picture; codec given up",
@@ -88,3 +123,7 @@ impl DecodeState {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "wahlgilt_guard_task_tests.rs"]
+mod wahlgilt_guard_task_tests;

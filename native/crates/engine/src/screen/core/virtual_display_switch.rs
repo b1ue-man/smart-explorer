@@ -12,18 +12,15 @@ use std::sync::Arc;
 
 use super::super::pixel_convert::FrameSize;
 use super::super::set_display::{physical_size, Shown};
+pub use super::super::virtual_display::REASON_PHYSICAL_MODE_REFUSED;
 use super::super::virtual_display::{
     VirtualDisplayChoice, VirtualDisplayReport, VirtualDisplayState, VirtualDisplayWish,
-    REASON_OFF, REASON_PHYSICAL,
+    ADJUST_PHYSICAL_MODE, ADJUST_REFUSED, REASON_OFF, REASON_PHYSICAL,
 };
 use super::SessionStart;
 use super::{
     decide, ensure_thread, lock, shared, DisplayProbe, Shared, VirtualDisplayDriver, SHARED,
 };
-
-/// Reason of `Inactive` when the physical monitor lists no mode for the
-/// fixed size or refused it.
-pub const REASON_PHYSICAL_MODE_REFUSED: &str = "physical_mode_refused";
 
 /// The answer of `switch`: the session's new report and the monitor it
 /// showed.
@@ -57,6 +54,8 @@ pub fn switch(session: &str, choice: VirtualDisplayChoice, capture: &str) -> Opt
         let old_capture = std::mem::replace(&mut known.start.capture, capture.to_string());
         known.start.wish = Some(choice.wish);
         known.start.fixed = choice.size;
+        // The source prepared next is the host's choice for this display.
+        known.track.display_changed();
         let context = known.clone();
         state.planner.release(session);
         state.reports.remove(session);
@@ -78,12 +77,16 @@ pub fn switch(session: &str, choice: VirtualDisplayChoice, capture: &str) -> Opt
 }
 
 /// The session's source changed (`SET_MODE`) or was prepared again: its
-/// monitor, `None` for a window, a family or the test picture.
+/// monitor, `None` for a window, a family or the test picture. After the
+/// opening and after `SET_DISPLAY` the source is the host's choice: a
+/// monitor other than the viewer's is reported as moved
+/// (`VirtualDisplayReport::source`).
 pub fn source_changed(session: &str, monitor: Option<String>) {
     let Some(shared) = SHARED.get() else {
         return;
     };
     if let Some(known) = lock(&shared.state).sessions.get_mut(session) {
+        known.track.prepared(monitor.as_deref());
         known.start.monitor = monitor;
     }
 }
@@ -98,6 +101,8 @@ pub fn rebind_capture(session: &str, capture: &str) {
     let Some(known) = state.sessions.get_mut(session) else {
         return;
     };
+    // `SET_MODE` with a source: the viewer chose it.
+    known.track.viewer_chooses();
     let old = std::mem::replace(&mut known.start.capture, capture.to_string());
     if let Some(size) = state.portal.remove(&old) {
         state.portal.insert(capture.to_string(), size);
@@ -160,8 +165,10 @@ pub(super) fn physical(
             drop(state);
             // The background thread gives the mode back after the last session.
             ensure_thread(shared);
+            // „Wahl gilt“: a mode other than the fixed size is reported.
             VirtualDisplayReport::new(VirtualDisplayState::Inactive, Some(shown), &probe.driver)
                 .with_reason(reason)
+                .with_requested(size, ADJUST_PHYSICAL_MODE)
         }
         Err(error) => {
             eprintln!(
@@ -170,6 +177,7 @@ pub(super) fn physical(
             );
             VirtualDisplayReport::new(VirtualDisplayState::Inactive, probe.current, &probe.driver)
                 .with_reason(REASON_PHYSICAL_MODE_REFUSED)
+                .with_requested(size, &format!("{ADJUST_REFUSED}: {error}"))
         }
     }
 }

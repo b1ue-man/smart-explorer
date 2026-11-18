@@ -40,6 +40,10 @@ mod switch;
 use switch::physical;
 pub use switch::{rebind_capture, source_changed, switch, Switched, REASON_PHYSICAL_MODE_REFUSED};
 
+#[path = "virtual_display_annotate.rs"]
+mod annotate;
+pub use annotate::chain_key;
+
 /// What a starting session brings.
 #[derive(Clone, Debug)]
 pub struct SessionStart {
@@ -103,6 +107,8 @@ impl Drop for DisplayClaim {
 struct SessionContext {
     driver: Arc<dyn VirtualDisplayDriver>,
     start: SessionStart,
+    /// The viewer's monitor and the one the host moved it to.
+    track: annotate::SourceTrack,
 }
 
 /// The report of one session: its own, or the display's (a session whose
@@ -221,6 +227,7 @@ pub fn start(driver: Option<Arc<dyn VirtualDisplayDriver>>, start: &SessionStart
         SessionContext {
             driver: driver.clone(),
             start: start.clone(),
+            track: annotate::SourceTrack::opened(start.monitor.clone()),
         },
     );
     let claim = DisplayClaim {
@@ -302,6 +309,7 @@ fn decide(
                 .insert(start.capture.clone(), size);
         }
         let report = VirtualDisplayReport::new(VirtualDisplayState::Offered, size, &probe.driver);
+        let report = annotate::with_reason(report, start.fixed, DriverLimit::NONE, true, false);
         return own(&start.session, report);
     }
     let beyond_limit = wanted
@@ -336,7 +344,7 @@ fn decide(
         let now = if immediate { u64::MAX } else { now_ms() };
         state.planner.due(probe.limit, now)
     };
-    let mut report = match due {
+    let report = match due {
         Due::Now(size) => apply(shared, driver, size, &probe.driver),
         Due::Later(_) | Due::Idle => {
             let state = lock(&shared.state);
@@ -349,6 +357,7 @@ fn decide(
             })
         }
     };
+    let mut report = annotate::requested(report, start, probe.limit, matches!(due, Due::Later(_)));
     if let Some(progress) = &setup {
         report = setup_report(progress, report.size(), &probe.driver);
         lock(&shared.state)
@@ -406,17 +415,6 @@ pub fn portal_size(capture: &str) -> Option<FrameSize> {
     let shared = SHARED.get()?;
     let state = lock(&shared.state);
     state.portal.get(capture).copied()
-}
-
-/// `HostStats.chain.virtual_display` of a session: `None` for a session
-/// that sent no wish.
-pub fn chain_key(session: &str) -> Option<String> {
-    let shared = SHARED.get()?;
-    let state = lock(&shared.state);
-    match state.reports.get(session)? {
-        Entry::Own(report) => Some(report.chain_key()),
-        Entry::Display => state.display.as_ref().map(VirtualDisplayReport::chain_key),
-    }
 }
 
 fn ensure_thread(shared: &'static Shared) {

@@ -76,6 +76,9 @@ pub(super) const VA_ATTRIB_NOT_SUPPORTED: u32 = 0x8000_0000;
 pub(super) const VA_RT_FORMAT_YUV420: u32 = 0x0000_0001;
 pub(super) const VA_RT_FORMAT_RGB32: u32 = 0x0002_0000;
 pub(super) const VA_RC_CBR: u32 = 0x0000_0002;
+/// Quality-defined VBR (va.h `VA_RC_QVBR`): `quality_factor` 1–51 under
+/// `bits_per_second` as the peak; sharp mode of plan 2026-11-17 P9.
+pub(super) const VA_RC_QVBR: u32 = 0x0000_0400;
 pub(super) const VA_ENC_PACKED_HEADER_SEQUENCE: u32 = 0x0000_0001;
 pub(super) const VA_ENC_PACKED_HEADER_PICTURE: u32 = 0x0000_0002;
 pub(super) const VA_ENC_PACKED_HEADER_SLICE: u32 = 0x0000_0004;

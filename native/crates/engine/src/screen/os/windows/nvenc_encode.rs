@@ -392,7 +392,7 @@ impl NvencSession {
         quality: Option<u8>,
     ) -> io::Result<Self> {
         let api = super::nvenc_ffi::load().map_err(io::Error::other)?;
-        let encoder = open_session(&api, device)?;
+        let encoder = open_session(&api, device, Some(codec))?;
         let core = Core::open_at(api, encoder, codec, size, fps, bps, quality)?;
         Ok(Self {
             core,

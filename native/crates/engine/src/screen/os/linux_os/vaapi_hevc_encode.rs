@@ -59,6 +59,7 @@ impl VaHevcSession {
         caps: &VaVideoEncodeCaps,
         video_proc: bool,
         size: FrameSize,
+        quality: Option<u8>,
     ) -> io::Result<Self> {
         let layout = HevcLayout::new(size, caps.blocks);
         let packed = (if caps.packed & PARAM_PACKED == PARAM_PACKED {
@@ -74,6 +75,7 @@ impl VaHevcSession {
             surface: layout.surface(),
             recon: 2,
             video_proc,
+            quality,
         };
         Ok(Self {
             layout,
@@ -131,7 +133,8 @@ impl VaHevcSession {
             }
         }
         if idr || self.rate != Some(*rate) {
-            VaEncodeBase::add_rate(&mut buffers, rate, !idr && self.rate.is_some())?;
+            self.base
+                .add_rate(&mut buffers, rate, !idr && self.rate.is_some())?;
         }
         if idr {
             self.base.add_quality(&mut buffers)?;

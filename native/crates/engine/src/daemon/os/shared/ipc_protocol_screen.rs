@@ -90,7 +90,9 @@ pub struct StreamRequest {
 
 impl StreamRequest {
     /// The decoders the hello names under the viewer's codec and decoder
-    /// choice; the tiles always stay (every peer's last fallback).
+    /// choice; the tiles stay under „Automatisch“ and „Verlustfrei“ only
+    /// (plan 2026-11-18 „Netzrate“: a chosen codec is never replaced; the
+    /// host reads the choice from the missing tiles).
     pub fn chosen_decoders(&self) -> Vec<CodecOffer> {
         let codec = self.codec.unwrap_or_default().preference();
         let offers = codec.filter_decoders(&self.decoders);
@@ -296,12 +298,10 @@ mod tests {
         request.codec = Some(CodecSetting::Av1);
         request.decoder = Some(DecoderPreference::Software);
         let chosen = request.chosen_decoders();
+        // A chosen codec offers no tiles (plan 2026-11-18 „Netzrate“).
         assert_eq!(
             chosen,
-            vec![
-                CodecOffer::video(CodecKind::Av1, false, false),
-                CodecOffer::tiles()
-            ]
+            vec![CodecOffer::video(CodecKind::Av1, false, false)]
         );
         // „Verlustfrei“ negotiates like „Automatisch“ (SET_MODE switches).
         request.codec = Some(CodecSetting::Lossless);

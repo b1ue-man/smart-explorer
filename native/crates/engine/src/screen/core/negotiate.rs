@@ -30,6 +30,10 @@ pub use preference::{
 #[path = "negotiate_trust.rs"]
 mod trust;
 pub use trust::CodecTrust;
+// Plan 2026-11-18 „Netzrate“: a chosen codec is never replaced.
+#[path = "negotiate_chosen.rs"]
+mod chosen;
+pub use chosen::{negotiate_chosen, preference_named_by, ChosenUnavailable};
 
 /// Most offers one list of a hello may carry: codec × profile × hardware
 /// gives 4 H.264 entries plus `tiles` in version 1; 32 leaves room for later

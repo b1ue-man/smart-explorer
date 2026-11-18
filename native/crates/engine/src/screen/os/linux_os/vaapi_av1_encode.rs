@@ -61,6 +61,7 @@ impl VaAv1Session {
         caps: &VaVideoEncodeCaps,
         video_proc: bool,
         size: FrameSize,
+        quality: Option<u8>,
     ) -> io::Result<Self> {
         let tools = Av1Tools::new(caps.features, caps.blocks, caps.ext2, caps.prediction);
         let layout = Av1Layout::new(size, &tools);
@@ -77,6 +78,7 @@ impl VaAv1Session {
             surface: layout.surface(),
             recon: 2,
             video_proc,
+            quality,
         };
         Ok(Self {
             layout,
@@ -124,7 +126,8 @@ impl VaAv1Session {
             buffers.add(VA_ENC_SEQUENCE_PARAMETER_BUFFER, &seq)?;
         }
         if key || self.rate != Some(*rate) {
-            VaEncodeBase::add_rate(&mut buffers, rate, !key && self.rate.is_some())?;
+            self.base
+                .add_rate(&mut buffers, rate, !key && self.rate.is_some())?;
         }
         if key {
             self.base.add_quality(&mut buffers)?;

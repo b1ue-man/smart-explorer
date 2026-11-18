@@ -7,7 +7,6 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use super::screen_pool::{preview_request, ViewOpen};
-use super::screen_prefs::ViewerPrefs;
 use super::screen_session::{
     Backend, DecoderOpener, Opener, ProbeInfo, Prober, StreamLink, ViewerSession,
 };
@@ -183,7 +182,6 @@ pub(super) fn open_preview(fake: &Fake, backend: &Backend) -> ViewerSession {
 pub(super) fn open() -> ViewOpen {
     ViewOpen {
         display: DISPLAY,
-        prefs: ViewerPrefs::default(),
         prefer_yuv: false,
     }
 }

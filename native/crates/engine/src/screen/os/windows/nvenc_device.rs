@@ -10,9 +10,11 @@
 //! reference invalidation) are shared with Linux since merge W2
 //! (`native_ffi/nvenc_api.rs`, re-exported below).
 use std::io;
+use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use windows::core::Interface;
 use windows::Win32::Graphics::Direct3D11::{ID3D11Device, ID3D11Texture2D};
+use windows::Win32::Graphics::Dxgi::IDXGIDevice;
 use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::System::Threading::CreateEventW;
 
@@ -23,6 +25,7 @@ use super::nvenc_ffi::{
     NV_ENC_INPUT_RESOURCE_TYPE_DIRECTX, NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS_VER,
     NV_ENC_REGISTER_RESOURCE_VER,
 };
+use crate::screen::os::nvenc_shared::api::VersionRefusals;
 // Merge W2: the calls without a device are shared with Linux.
 use crate::screen::core::negotiate::CodecKind;
 use crate::screen::core::pixel_convert::FrameSize;
@@ -59,8 +62,39 @@ pub(super) const REGISTERED_SLOTS: usize = 4;
 /// earlier capture generation; ring slots alternate every picture).
 pub(super) const REGISTERED_IDLE: u64 = 8;
 
-/// Opens an NVENC session on the D3D11 `device`.
-pub(super) fn open_session(api: &NvApi, device: &ID3D11Device) -> io::Result<Ptr> {
+/// Fix of 2026-11-18: the driver's refusals of API 12.1 in this process,
+/// per adapter and codec (`nvenc_api::VersionRefusals`).
+static REFUSALS: Mutex<VersionRefusals> = Mutex::new(VersionRefusals::new());
+
+fn refusals() -> MutexGuard<'static, VersionRefusals> {
+    REFUSALS.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// The packed LUID of the adapter `device` runs on (0 when unknown).
+fn adapter_of(device: &ID3D11Device) -> u64 {
+    let Ok(dxgi) = device.cast::<IDXGIDevice>() else {
+        return 0;
+    };
+    // SAFETY: plain queries of the live DXGI device and its adapter.
+    unsafe { dxgi.GetAdapter().and_then(|adapter| adapter.GetDesc()) }.map_or(0, |desc| {
+        crate::screen::os::dxgi_adapters::packed(desc.AdapterLuid)
+    })
+}
+
+/// Opens an NVENC session on the D3D11 `device` for `codec` (`None`: the
+/// probe of every codec). Fix of 2026-11-18: a driver that refused the API
+/// version for `codec` on this adapter is reported as not available
+/// (`Unsupported`) for that codec and adapter only, without asking it
+/// again in this process; other codecs and adapters are still tried.
+pub(super) fn open_session(
+    api: &NvApi,
+    device: &ID3D11Device,
+    codec: Option<CodecKind>,
+) -> io::Result<Ptr> {
+    let key = codec.map(|codec| (adapter_of(device), codec));
+    if let Some(reason) = key.and_then(|(adapter, codec)| refusals().refused(adapter, codec)) {
+        return Err(io::Error::new(io::ErrorKind::Unsupported, reason));
+    }
     let open = api.functions.open_encode_session_ex.ok_or_else(missing)?;
     let mut params = NvEncOpenSessionParams::zeroed();
     params.version = NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS_VER;
@@ -71,6 +105,12 @@ pub(super) fn open_session(api: &NvApi, device: &ID3D11Device) -> io::Result<Ptr
     // SAFETY: versioned parameters naming a live device (the caller keeps
     // it for the session's life) and a writable session slot.
     let result = unsafe { open(&mut params, &mut encoder) };
+    if let Some((adapter, codec)) = key {
+        if let Some(reason) = refusals().note(adapter, codec, result) {
+            eprintln!("screen {reason}");
+            return Err(io::Error::new(io::ErrorKind::Unsupported, reason));
+        }
+    }
     status(
         api,
         std::ptr::null_mut(),
@@ -91,7 +131,7 @@ pub(super) fn probe(device: &ID3D11Device) -> [Option<FrameSize>; 3] {
     let Ok(api) = super::nvenc_ffi::load() else {
         return [None; 3];
     };
-    let Ok(encoder) = open_session(&api, device) else {
+    let Ok(encoder) = open_session(&api, device, None) else {
         return [None; 3];
     };
     let size = |codec| {

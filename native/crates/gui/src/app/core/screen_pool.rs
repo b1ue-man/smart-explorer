@@ -1,10 +1,13 @@
 //! Requests and the switch between the group view and the full view
-//! (SCR-M7, U25-3/10). A tile that streams a preview under „Bildschirm
-//! ansehen = Erlauben“ becomes the full view over the same connection
-//! (`SET_MODE` to `full`), and the full view goes back to a preview of its
-//! tile the same way. Under „Fragen“ a preview has no picture and the full
-//! view needs a new session, because the host asks its user for it
-//! (`screen_task_grid_switch_reuses_connection`).
+//! (SCR-M7, U25-3/10). The full view always opens its own session with the
+//! full request (user rule of 2026-11-18): a preview's hello caps the frame
+//! rate at the preview's (the host never goes above the hello's `max_fps`)
+//! and carries no „Monitor“/„Auflösung“ wish, so a raised preview ran the
+//! full view at one picture a second without the chosen display. Under
+//! „Fragen“ the host asks its user for the new session as before. The full
+//! view goes back to a preview of its tile over the same connection
+//! (`SET_MODE` to `preview`) when the host allows viewing without asking
+//! (`screen_task_grid_switch_tile_reuses_connection`).
 use crate::daemon::StreamRequest;
 
 use super::screen_prefs::ViewerPrefs;
@@ -160,7 +163,6 @@ pub fn preview_set_mode(edge: u32, interval_ms: u64) -> SetMode {
 /// How the full view opens.
 pub struct ViewOpen {
     pub display: FrameSize,
-    pub prefs: ViewerPrefs,
     /// The draw code takes planes (GPU path).
     pub prefer_yuv: bool,
 }
@@ -174,32 +176,17 @@ fn view_allowed(session: &ViewerSession) -> bool {
             .is_some_and(|hello| hello.authorization.view == CapabilityDecision::Allow)
 }
 
-/// Group → view: the tile's preview session becomes the full view when the
-/// host allows viewing without asking and no control is wanted; any other
-/// case ends it and opens a new session in the mode `view` (or `control`),
-/// for which the host asks if it has to.
+/// Group → view: the tile's preview session ends and the full view opens
+/// a session of its own in the mode `view` (or `control`) with the full
+/// request: the full frame rate and the „Monitor“/„Auflösung“ wish, which a
+/// preview's hello does not carry (module head).
 pub fn to_view(
     backend: &Backend,
     tile: Option<ViewerSession>,
     target: &ScreenTarget,
     open: &ViewOpen,
 ) -> ViewerSession {
-    if let Some(mut session) = tile {
-        if !target.control && session.mode == SessionMode::Preview && view_allowed(&session) {
-            let source = target.source.clone();
-            session.send(ViewerFrame::SetMode(full_set_mode(
-                source,
-                open.display,
-                &open.prefs,
-            )));
-            // The full view draws the host's pointer itself again (P6); the
-            // frame only leaves for a host whose session negotiated that.
-            session.send(ViewerFrame::CursorOverlay(true));
-            session.set_prefer_yuv(open.prefer_yuv);
-            session.set_present_gap_ms(0);
-            session.mode = SessionMode::View;
-            return session;
-        }
+    if let Some(session) = tile {
         session.close();
     }
     ViewerSession::open(

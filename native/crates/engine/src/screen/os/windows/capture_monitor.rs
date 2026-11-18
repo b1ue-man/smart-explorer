@@ -15,11 +15,16 @@
 //! opens again with the generation after the failed try. Every switch and
 //! its reason (step and result code, `FallbackDetail`) goes to the host log
 //! and with the report to the viewer.
+//!
+//! Fix of 2026-11-18: a fallback soon after Desktop Duplication came back
+//! continues the retry plan with a doubled wait (`next_plan`) instead of
+//! starting at 2 s again; the host log of a Windows VM showed the monitor
+//! switching between both paths every few seconds.
 use std::io;
 use std::time::{Duration, Instant};
 
 use crate::screen::core::capture_admission::CaptureGrant;
-use crate::screen::core::capture_fallback::RetryPlan;
+use crate::screen::core::capture_fallback::{RetryPlan, RETRY_LONGEST};
 use crate::screen::core::capture_picture::SourcePicture;
 use crate::screen::core::frame_budget::FrameLimits;
 use crate::screen::core::host_backend::SourceFrame;
@@ -38,6 +43,33 @@ pub(in crate::screen::os) struct MonitorGrabber {
     pub(in crate::screen::os) first: Option<OpenFallback>,
     /// P9: while on the fallback, when the first path is tried again.
     pub(in crate::screen::os) retry: Option<RetryPlan>,
+    /// Fix of 2026-11-18: since when the first path is back and the plan
+    /// that brought it back (`next_plan`).
+    pub(in crate::screen::os) back: Option<(Instant, RetryPlan)>,
+}
+
+/// Fix of 2026-11-18 (host log of a Windows VM): how long Desktop
+/// Duplication must hold after it came back before a new fallback starts
+/// its retries at `RETRY_FIRST` again: as long as the longest wait between
+/// two tries [assumption A-SHADOWHOST-STABLE].
+pub(in crate::screen::os) const STABLE_AFTER: Duration = RETRY_LONGEST;
+
+/// The retry plan of a fallback at `now` (pure, for the task tests). The
+/// first path came back at `back.0` with the plan `back.1`: a fallback
+/// before `STABLE_AFTER` continues that plan with a doubled wait, so a path
+/// that comes back and fails again is tried after 2, 4, 8 … 60 s instead of
+/// every 2 s; a first path that held longer starts a new plan.
+pub(in crate::screen::os) fn next_plan(
+    back: Option<(Instant, RetryPlan)>,
+    now: Instant,
+) -> RetryPlan {
+    match back {
+        Some((since, mut plan)) if now.saturating_duration_since(since) < STABLE_AFTER => {
+            plan.failed(now);
+            plan
+        }
+        _ => RetryPlan::new(now),
+    }
 }
 
 impl MonitorGrabber {
@@ -58,7 +90,7 @@ impl MonitorGrabber {
             generation: previous,
         });
         if self.first.is_some() {
-            self.retry = Some(RetryPlan::new(Instant::now()));
+            self.retry = Some(next_plan(self.back.take(), Instant::now()));
         }
         capture_source::update_report(|report| {
             report.fallback = Some(cause);
@@ -93,7 +125,7 @@ impl MonitorGrabber {
         match first(previous) {
             Ok(grabber) => {
                 self.current = grabber;
-                self.retry = None;
+                self.back = self.retry.take().map(|plan| (now, plan));
                 capture_source::update_report(|report| {
                     report.fallback = None;
                     report.detail = None;
@@ -235,3 +267,7 @@ impl Grabber for Retired {
         false
     }
 }
+
+#[cfg(test)]
+#[path = "shadowhost_capture_task_tests.rs"]
+mod shadowhost_capture_task_tests;

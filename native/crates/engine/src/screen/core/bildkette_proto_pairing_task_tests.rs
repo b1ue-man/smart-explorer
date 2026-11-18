@@ -190,7 +190,9 @@ fn bildkette_task_proto_continuation_follows_the_running_pairing() {
         assert!(pipeline.encoder_epoch > epoch);
         assert!(pipeline.pacer.keyframe_due());
         // H.264 is not among the continuing decoders; HEVC stays the W2 fallback.
-        assert!(pipeline.set_decoders(&set(vec![h264(), hevc()], vec![hevc()])));
+        // (The tiles in the list keep „Automatisch“, plan 2026-11-18.)
+        let automatic = vec![h264(), hevc(), CodecOffer::tiles()];
+        assert!(pipeline.set_decoders(&set(automatic, vec![hevc()])));
         assert_eq!(pipeline.choice.codec, CodecKind::H264);
         assert_eq!(pipeline.quality_policy.fallbacks.len(), 1);
         assert_eq!(pipeline.quality_policy.fallbacks[0].codec, CodecKind::Hevc);

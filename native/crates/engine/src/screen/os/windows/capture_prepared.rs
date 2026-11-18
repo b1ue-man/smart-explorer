@@ -262,6 +262,7 @@ impl PreparedSource for PreparedWindows {
                     fallback,
                     first,
                     retry: None,
+                    back: None,
                 }),
                 Err(failure) => {
                     // B-12: a duplication refused at activation (for example
@@ -291,6 +292,7 @@ impl PreparedSource for PreparedWindows {
                                 fallback: Some(open),
                                 first,
                                 retry,
+                                back: None,
                             }) as Box<dyn Grabber>
                         }
                         _ => return Err(refused(failure)),

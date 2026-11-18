@@ -10,7 +10,12 @@
 //! the driver offers (`VAConfigAttribEncQualityRange`,
 //! `VAEncMiscParameterTypeQualityLevel`) with every sequence, the same
 //! low-latency choice as NVENC's P1/"ultra low latency"; a failed
-//! conversion of a DMA-BUF is marked (`ConversionFailed`).
+//! conversion of a DMA-BUF is marked (`ConversionFailed`). Plan 2026-11-17
+//! P9 with the rule „Wahl gilt“ of 2026-11-18: „Scharf (GPU)“ opens the
+//! config with quality-defined VBR (`VA_RC_QVBR`, `quality_factor` = the
+//! session's quality target, the rate as its peak) where the driver lists it
+//! (`VAConfigAttribRateControl`); a driver without it refuses the session
+//! (`SHARP_UNSUPPORTED`) instead of encoding CBR silently.
 use std::ffi::{c_int, c_uint, c_void};
 use std::io;
 
@@ -21,12 +26,12 @@ use super::vaapi_ffi::{
     VaCodedBufferSegment, VaConfigAttrib, VaDisplay, VaId, VA_CONFIG_ATTRIB_ENC_PACKED_HEADERS,
     VA_CONFIG_ATTRIB_RATE_CONTROL, VA_CONFIG_ATTRIB_RT_FORMAT, VA_ENC_CODED_BUFFER,
     VA_ENC_MISC_PARAMETER_BUFFER, VA_ENC_PACKED_HEADER_DATA_BUFFER,
-    VA_ENC_PACKED_HEADER_PARAMETER_BUFFER, VA_INVALID_ID, VA_PROGRESSIVE, VA_RC_CBR,
+    VA_ENC_PACKED_HEADER_PARAMETER_BUFFER, VA_INVALID_ID, VA_PROGRESSIVE, VA_RC_CBR, VA_RC_QVBR,
     VA_RT_FORMAT_YUV420,
 };
 use super::vaapi_h264_abi::{
-    VaEncMisc, VaEncMiscQualityLevel, VaEncPackedHeaderParameter, VA_ENC_MISC_FRAME_RATE,
-    VA_ENC_MISC_HRD, VA_ENC_MISC_QUALITY_LEVEL, VA_ENC_MISC_RATE_CONTROL,
+    VaEncMisc, VaEncMiscQualityLevel, VaEncMiscRateControl, VaEncPackedHeaderParameter,
+    VA_ENC_MISC_FRAME_RATE, VA_ENC_MISC_HRD, VA_ENC_MISC_QUALITY_LEVEL, VA_ENC_MISC_RATE_CONTROL,
 };
 use super::vaapi_h264_headers::misc_params;
 use super::vaapi_surface as surface;
@@ -35,6 +40,11 @@ use crate::screen::core::pixel_convert::FrameSize;
 use crate::screen::core::wire::invalid;
 
 pub(super) type Deliver<'a> = &'a mut dyn FnMut(&[&[u8]]) -> io::Result<()>;
+
+/// The error text of a VA-API session that cannot carry „Scharf (GPU)“.
+pub(super) const SHARP_UNSUPPORTED: &str =
+    "sharp_quality_unsupported: the VA-API driver lists no quality-defined VBR (VA_RC_QVBR) \
+for this profile";
 
 /// What a codec session asks of the shared layer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -50,6 +60,8 @@ pub(super) struct EncodeSetup {
     /// Reconstructed surfaces besides the input.
     pub recon: usize,
     pub video_proc: bool,
+    /// The constant quality of sharp mode (1–51, P9); `None`: CBR.
+    pub quality: Option<u8>,
 }
 
 /// One VA encoding context with its surfaces; dropped with the display.
@@ -63,6 +75,8 @@ pub(super) struct VaEncodeBase {
     converter: Option<Converter>,
     /// The fastest quality level of the driver, `None` with a single one.
     quality_level: Option<u32>,
+    /// The constant quality of sharp mode (QVBR), `None`: CBR.
+    quality: Option<u8>,
     // Dropped last: every id above belongs to this display.
     pub display: VaDisplay,
 }
@@ -70,9 +84,24 @@ pub(super) struct VaEncodeBase {
 impl VaEncodeBase {
     pub(super) fn open(display: VaDisplay, setup: &EncodeSetup) -> io::Result<Self> {
         let attribute = |kind, value| VaConfigAttrib { kind, value };
+        let listed = match setup.quality {
+            Some(_) => super::vaapi_probe::attributes(
+                &display,
+                setup.va_profile,
+                setup.entrypoint,
+                &[VA_CONFIG_ATTRIB_RATE_CONTROL],
+            )
+            .first()
+            .copied()
+            .unwrap_or(super::vaapi_ffi::VA_ATTRIB_NOT_SUPPORTED),
+            None => 0,
+        };
         let mut attribs = vec![
             attribute(VA_CONFIG_ATTRIB_RT_FORMAT, VA_RT_FORMAT_YUV420),
-            attribute(VA_CONFIG_ATTRIB_RATE_CONTROL, VA_RC_CBR),
+            attribute(
+                VA_CONFIG_ATTRIB_RATE_CONTROL,
+                rate_control(setup.quality, listed)?,
+            ),
         ];
         if setup.packed_headers != 0 {
             attribs.push(attribute(
@@ -106,7 +135,8 @@ impl VaEncodeBase {
             coded: VA_INVALID_ID,
             size: setup.size,
             converter: None,
-            quality_level: fastest_quality_level(range[0]),
+            quality_level: range.first().copied().and_then(fastest_quality_level),
+            quality: setup.quality,
             display,
         };
         let coded = setup.surface;
@@ -236,13 +266,16 @@ impl VaEncodeBase {
     }
 
     /// Adds the rate control, HRD and frame rate misc parameters of `rate`
-    /// (B-21: CBR, buffer of one frame; `reset` on a change at run time).
+    /// (B-21: CBR, buffer of one frame; `reset` on a change at run time;
+    /// sharp mode: the quality factor of QVBR, P9).
     pub(super) fn add_rate(
+        &self,
         buffers: &mut Buffers<'_>,
         rate: &RateParams,
         reset: bool,
     ) -> io::Result<()> {
         let (control, hrd, frame_rate) = misc_params(rate, reset);
+        let control = with_quality(control, self.quality);
         let misc = VA_ENC_MISC_PARAMETER_BUFFER;
         let control = VaEncMisc {
             kind: VA_ENC_MISC_RATE_CONTROL,
@@ -327,6 +360,33 @@ impl VaEncodeBase {
     }
 }
 
+/// The rate control of the config: CBR, or QVBR for sharp mode (`quality`)
+/// when the driver lists it in `listed` (`VAConfigAttribRateControl`);
+/// otherwise the session is refused (`SHARP_UNSUPPORTED`).
+pub(super) fn rate_control(quality: Option<u8>, listed: u32) -> io::Result<u32> {
+    let qvbr = listed != super::vaapi_ffi::VA_ATTRIB_NOT_SUPPORTED && listed & VA_RC_QVBR != 0;
+    match (quality, qvbr) {
+        (None, _) => Ok(VA_RC_CBR),
+        (Some(_), true) => Ok(VA_RC_QVBR),
+        (Some(_), false) => Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            SHARP_UNSUPPORTED,
+        )),
+    }
+}
+
+/// `control` with the quality factor of QVBR (va.h `quality_factor`, 1–51,
+/// lower is better) for sharp mode; unchanged for CBR.
+pub(super) fn with_quality(
+    mut control: VaEncMiscRateControl,
+    quality: Option<u8>,
+) -> VaEncMiscRateControl {
+    if let Some(quality) = quality {
+        control.quality_factor = u32::from(quality.clamp(1, 51));
+    }
+    control
+}
+
 /// The fastest of `range` quality levels (`VAConfigAttribEncQualityRange`):
 /// the largest value, as "a value of 1 represents the highest quality" and
 /// higher quality means lower speed (va.h 2.20.0 lines 2700-2706); `None`
@@ -354,3 +414,7 @@ impl Drop for VaEncodeBase {
         unsafe { (self.display.api.destroy_config)(self.display.handle, self.config) };
     }
 }
+
+#[cfg(test)]
+#[path = "wahlgilt_vaapi_task_tests.rs"]
+mod wahlgilt_vaapi_task_tests;

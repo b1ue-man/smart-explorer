@@ -11,23 +11,21 @@ use crate::screen::os::mf_encoder::d3d_input::{
 fn bildkette_task_verify_vendor_route_without_capture_uses_own_device() {
     assert_eq!(input_route(Ok(()), true), InputRoute::Capture);
     // No capture device yet (a check, `bench --local`), the capture on a
-    // VM's display adapter or the iGPU: a device of its own.
+    // VM's display adapter or the iGPU: a device of its own. Fix of
+    // 2026-11-18: so does a GPU path switched off after a failure and a
+    // capture device without video support.
     for reason in [
         SystemReason::NoCapture,
         SystemReason::OtherAdapter,
         SystemReason::OtherVendor,
+        SystemReason::Disabled,
+        SystemReason::NoVideo,
     ] {
         assert_eq!(input_route(Err(reason), true), InputRoute::OwnDevice);
         assert_eq!(input_route(Err(reason), false), InputRoute::SystemMemory);
     }
-    // As before: a GPU path switched off after a failure, a device without
-    // video support, an MFT without D3D11, a refused device manager.
-    for reason in [
-        SystemReason::Disabled,
-        SystemReason::NoVideo,
-        SystemReason::NotD3D11Aware,
-        SystemReason::ManagerRefused,
-    ] {
+    // As before: an MFT without D3D11, a refused device manager.
+    for reason in [SystemReason::NotD3D11Aware, SystemReason::ManagerRefused] {
         assert_eq!(input_route(Err(reason), true), InputRoute::SystemMemory);
     }
     // The measured VM: capture on the virtual adapter, the encoder on the

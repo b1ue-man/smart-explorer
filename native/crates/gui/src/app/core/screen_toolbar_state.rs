@@ -180,11 +180,24 @@ pub fn codec_state(chosen: CodecSetting, facts: &SessionFacts, pending: bool) ->
     )
 }
 
+/// The running tiles against a decoder or library choice: the tiles have one
+/// decoder of their own, so a named choice does not apply while they run
+/// (user rule 2026-11-18: never „angewendet“ when it is not).
+fn tiles_state(named: bool) -> Applied {
+    if named {
+        Applied::Other(TILES_RUNNING.into())
+    } else {
+        Applied::Applied(Some(TILES_RUNNING.into()))
+    }
+}
+
+/// What runs instead of a decoder while the tiles stream.
+pub const TILES_RUNNING: &str = "Kacheln";
+
 /// „Dekodierer“: the stage of the decoder that opened.
 pub fn decoder_state(chosen: DecoderPreference, facts: &SessionFacts, pending: bool) -> Applied {
     if facts.codec == Some(CodecKind::Tiles) {
-        // The tiles have one decoder; every choice applies to the next video codec.
-        return Applied::Applied(None);
+        return tiles_state(chosen != DecoderPreference::Automatic);
     }
     let Some(hardware) = facts.decoder.as_deref().and_then(decoder_hardware) else {
         return Applied::Unknown;
@@ -201,8 +214,12 @@ pub fn decoder_state(chosen: DecoderPreference, facts: &SessionFacts, pending: b
 
 /// „Bibliothek“: the library of the decoder that opened.
 pub fn library_state(chosen: DecoderLibrary, facts: &SessionFacts, pending: bool) -> Applied {
+    // A chosen library this process does not have is named, not replaced.
+    if let Some(missing) = crate::screen::core::decoder_library::chosen_missing() {
+        return Applied::Other(format!("{} nicht vorhanden", missing.label()));
+    }
     if facts.codec == Some(CodecKind::Tiles) {
-        return Applied::Applied(None);
+        return tiles_state(chosen != DecoderLibrary::Automatic);
     }
     let Some(running) = facts.decoder.as_deref().and_then(decoder_library) else {
         return Applied::Unknown;
@@ -219,33 +236,57 @@ pub fn library_state(chosen: DecoderLibrary, facts: &SessionFacts, pending: bool
 
 /// „Anzeige“: whether the Direct3D 11 presenter shows the picture. Only
 /// FFmpeg's D3D11VA pictures can go that way; every other picture is drawn
-/// by wgpu under every choice.
+/// by the window (wgpu, or glow when wgpu had no surface). The state names
+/// the way the picture really takes and why (user rule 2026-11-18).
 pub fn display_state(chosen: DisplayChoice, facts: &SessionFacts, pending: bool) -> Applied {
+    let window = super::super::screen_present::window_renderer_label();
+    let error = super::super::screen_direct::last_error();
+    display_state_in(chosen, facts, pending, window, error.as_deref())
+}
+
+/// `display_state` with the window's renderer (`wgpu`, `OpenGL (glow)`)
+/// and the Direct3D 11 display's last error.
+pub fn display_state_in(
+    chosen: DisplayChoice,
+    facts: &SessionFacts,
+    pending: bool,
+    window: &str,
+    direct_error: Option<&str>,
+) -> Applied {
     if facts.pictures == 0 {
         return Applied::Unknown;
     }
-    let running = if facts.direct_showing {
-        DisplayChoice::Direct3d11
-    } else {
-        DisplayChoice::Wgpu
-    };
+    if facts.direct_showing {
+        let running = Some(DisplayChoice::Direct3d11.label().to_string());
+        let matches = chosen != DisplayChoice::Wgpu;
+        return verdict(
+            Some(matches),
+            pending,
+            running,
+            chosen == DisplayChoice::Automatic,
+        );
+    }
     let d3d11_picture = facts
         .decoder
         .as_deref()
         .is_some_and(|name| name.contains("[D3D11VA]"));
-    let matches = match chosen {
-        DisplayChoice::Automatic => true,
-        DisplayChoice::Wgpu => !facts.direct_showing,
-        // A picture that is no D3D11VA texture is wgpu's by design.
-        DisplayChoice::Direct3d11 => facts.direct_showing || !d3d11_picture,
-    };
-    let auto = chosen == DisplayChoice::Automatic;
-    verdict(
-        Some(matches),
-        pending,
-        Some(running.label().to_string()),
-        auto,
-    )
+    match chosen {
+        DisplayChoice::Automatic => Applied::Applied(Some(window.to_string())),
+        DisplayChoice::Wgpu if window == "wgpu" => Applied::Applied(None),
+        DisplayChoice::Wgpu => Applied::Other(window.to_string()),
+        DisplayChoice::Direct3d11 if pending => Applied::Pending,
+        DisplayChoice::Direct3d11 => {
+            let why = match (direct_error, d3d11_picture) {
+                (Some(error), _) => format!("Direct3D 11 nicht verfügbar: {error}"),
+                (None, true) => "Direct3D 11 zeigt das Bild noch nicht".to_string(),
+                (None, false) => format!(
+                    "Bild ist keine D3D11VA-Textur ({})",
+                    facts.decoder.as_deref().unwrap_or("Kacheln")
+                ),
+            };
+            Applied::Other(format!("{window} – {why}"))
+        }
+    }
 }
 
 /// Characters a closed list shows of a free text (a window title) at most:

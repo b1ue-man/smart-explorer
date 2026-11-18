@@ -72,7 +72,8 @@ fn p9_task_toolbar_names_the_applied_state() {
         codec_state(CodecSetting::Av1, &av1_sw, true),
         Applied::Applied(None)
     );
-    // „Verlustfrei“ runs as the tiles; the decoder lists apply to the next video codec.
+    // „Verlustfrei“ runs as the tiles; a named decoder does not apply to them
+    // (user rule 2026-11-18), „Automatisch“ names them.
     let tiles = facts(CodecKind::Tiles, "tiles", false, 5);
     assert_eq!(
         codec_state(CodecSetting::Lossless, &tiles, false),
@@ -84,7 +85,7 @@ fn p9_task_toolbar_names_the_applied_state() {
     );
     assert_eq!(
         decoder_state(DecoderPreference::Hardware, &tiles, false),
-        Applied::Applied(None)
+        Applied::Other("Kacheln".into())
     );
     // Library.
     let mf = facts(CodecKind::Av1, MF_HW, false, 5);
@@ -96,24 +97,26 @@ fn p9_task_toolbar_names_the_applied_state() {
         library_state(DecoderLibrary::Automatic, &mf, false),
         Applied::Applied(Some("Media Foundation".into()))
     );
-    // Display: D3D11VA pictures shown by wgpu do not match „Direct3D 11“;
-    // other pictures are wgpu's under every choice.
+    // Display: a picture „Direct3D 11“ does not show names the way it takes
+    // and why (user rule 2026-11-18).
+    let display =
+        |chosen, facts: &SessionFacts| display_state_in(chosen, facts, false, "wgpu", None);
     let d3d11 = facts(CodecKind::Av1, FFMPEG_HW, false, 5);
     assert_eq!(
-        display_state(DisplayChoice::Direct3d11, &d3d11, false),
-        Applied::Other("wgpu".into())
+        display(DisplayChoice::Direct3d11, &d3d11),
+        Applied::Other("wgpu – Direct3D 11 zeigt das Bild noch nicht".into())
     );
     assert_eq!(
-        display_state(DisplayChoice::Direct3d11, &mf, false),
-        Applied::Applied(None)
+        display(DisplayChoice::Direct3d11, &mf),
+        Applied::Other(format!("wgpu – Bild ist keine D3D11VA-Textur ({MF_HW})"))
     );
     let shown = facts(CodecKind::Av1, FFMPEG_HW, true, 5);
     assert_eq!(
-        display_state(DisplayChoice::Wgpu, &shown, false),
+        display(DisplayChoice::Wgpu, &shown),
         Applied::Other("Direct3D 11".into())
     );
     assert_eq!(
-        display_state(DisplayChoice::Automatic, &shown, false),
+        display(DisplayChoice::Automatic, &shown),
         Applied::Applied(Some("Direct3D 11".into()))
     );
     // Before the first facts nothing is claimed.
@@ -123,7 +126,7 @@ fn p9_task_toolbar_names_the_applied_state() {
         Applied::Unknown
     );
     assert_eq!(
-        display_state(DisplayChoice::Wgpu, &none, true),
+        display_state_in(DisplayChoice::Wgpu, &none, true, "wgpu", None),
         Applied::Unknown
     );
 }
@@ -167,4 +170,62 @@ fn p9_task_toolbar_cuts_long_list_texts() {
     assert_eq!(cut.chars().count(), SHORT_TEXT);
     assert!(cut.ends_with('…'));
     assert_eq!(short_text(&"x".repeat(SHORT_TEXT)), "x".repeat(SHORT_TEXT));
+}
+
+/// Findings 5 and 7 of the user rule of 2026-11-18: no list says
+/// „angewendet“ for a choice the session does not run.
+#[test]
+fn wahlgilt_task_toolbar_never_claims_an_unapplied_choice() {
+    let tiles = facts(CodecKind::Tiles, "tiles", false, 5);
+    for named in [DecoderPreference::Hardware, DecoderPreference::Software] {
+        assert_eq!(
+            decoder_state(named, &tiles, false),
+            Applied::Other("Kacheln".into())
+        );
+    }
+    assert_eq!(
+        decoder_state(DecoderPreference::Automatic, &tiles, false),
+        Applied::Applied(Some("Kacheln".into()))
+    );
+    assert_eq!(
+        library_state(DecoderLibrary::MediaFoundation, &tiles, false),
+        Applied::Other("Kacheln".into())
+    );
+    // „Direct3D 11“ chosen, the presenter failed: its error is named.
+    let d3d11 = facts(CodecKind::Hevc, "FFmpeg hevc [D3D11VA]", false, 5);
+    assert_eq!(
+        display_state_in(
+            DisplayChoice::Direct3d11,
+            &d3d11,
+            false,
+            "wgpu",
+            Some("no device")
+        ),
+        Applied::Other("wgpu – Direct3D 11 nicht verfügbar: no device".into())
+    );
+    // „wgpu“ chosen while glow draws the window.
+    let shown = facts(CodecKind::Hevc, MF_HW, false, 5);
+    assert_eq!(
+        display_state_in(DisplayChoice::Wgpu, &shown, false, "OpenGL (glow)", None),
+        Applied::Other("OpenGL (glow)".into())
+    );
+    assert_eq!(
+        display_state_in(DisplayChoice::Wgpu, &shown, false, "wgpu", None),
+        Applied::Applied(None)
+    );
+    assert_eq!(
+        display_state_in(
+            DisplayChoice::Automatic,
+            &shown,
+            false,
+            "OpenGL (glow)",
+            None
+        ),
+        Applied::Applied(Some("OpenGL (glow)".into()))
+    );
+    // Tiles are no D3D11VA texture either.
+    assert_eq!(
+        display_state_in(DisplayChoice::Direct3d11, &tiles, false, "wgpu", None),
+        Applied::Other("wgpu – Bild ist keine D3D11VA-Textur (tiles)".into())
+    );
 }

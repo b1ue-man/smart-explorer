@@ -286,15 +286,17 @@ pub fn is_own_mode(name: &str) -> bool {
 
 #[path = "virtual_display_fit.rs"]
 mod fit;
-pub use fit::{cvt_rb, fit_mode, DriverLimit, ModeTiming};
+pub use fit::{adjust_reason, cvt_rb, fit_mode, fit_reason, DriverLimit, ModeTiming};
 #[path = "virtual_display_owner.rs"]
 mod owner;
 pub use owner::{owner, Claim, Due, Planner};
 #[path = "virtual_display_report.rs"]
 mod report;
 pub use report::{
-    VirtualDisplayReport, VirtualDisplayState, REASON_AVAILABLE, REASON_OFF, REASON_PHYSICAL,
-    REASON_SETUP,
+    adjust_text, VirtualDisplayReport, VirtualDisplayState, ADJUST_DRIVER, ADJUST_DRIVER_LIMIT,
+    ADJUST_MODE_RULES, ADJUST_OTHER_SESSION, ADJUST_PENDING, ADJUST_PHYSICAL_MODE, ADJUST_REFUSED,
+    REASON_AVAILABLE, REASON_OFF, REASON_PHYSICAL, REASON_PHYSICAL_MODE_REFUSED, REASON_SETUP,
+    REASON_SOURCE_NOT_MONITOR,
 };
 
 /// The rules of the Windows virtual display (driver of VirtualDrivers).
@@ -310,3 +312,6 @@ mod virtual_display_task_tests;
 #[cfg(test)]
 #[path = "virtual_display_windows_task_tests.rs"]
 mod virtual_display_windows_task_tests;
+#[cfg(test)]
+#[path = "wahlgilt_display_task_tests.rs"]
+mod wahlgilt_display_task_tests;

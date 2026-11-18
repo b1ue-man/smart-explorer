@@ -47,7 +47,9 @@ impl NvencVideoFactory {
                 format!("NVENC cannot encode {}x{}", size.width, size.height),
             ));
         }
-        let session = NvencSession::open_codec(size, fps, self.codec)?;
+        // P9: the constant quality of sharp mode for an admitted session.
+        let quality = super::nvenc_encode::admitted_quality(grant.as_ref());
+        let session = NvencSession::open_codec(size, fps, self.codec, quality)?;
         let encoder = HwH264Encoder::new(session, factory_name(self.codec), size, fps, grant);
         // Merge W2: the bit rate up to the pairing's level, no fixed ceiling.
         let ceiling = codec_ceiling_bps(choice, size, fps);

@@ -22,10 +22,17 @@
 //! showed pictures. Decoders that failed their run-time check are left out
 //! of the offers by the register (`CodecRegistry::decoder_offers`) before
 //! `usable_offers` sees them.
+//!
+//! User rule of 2026-11-18 („jede Einstellung wird genau so verwendet“):
+//! only „Codec: Automatisch“ gives a codec up and moves on. A named codec
+//! (H.264, HEVC, AV1, „Scharf (GPU)“) is never marked here; the viewer shows
+//! the error with its reason instead (`DecoderGuard::reason`). Choosing a
+//! codec by name takes a mark of an earlier „Automatisch“ back
+//! (`forget_chosen`), so a codec given up before is offered for that choice.
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::{Duration, Instant};
 
-use super::negotiate::{CodecKind, CodecOffer};
+use super::negotiate::{CodecKind, CodecOffer, CodecPreference};
 
 /// Failed key frames of one codec without any picture before it is given up.
 pub const FAILURE_LIMIT: u32 = 3;
@@ -53,6 +60,24 @@ fn bit(codec: CodecKind) -> u8 {
 /// This process does not offer `codec` again.
 pub fn mark_unusable(codec: CodecKind) {
     UNUSABLE.fetch_or(bit(codec), Ordering::AcqRel);
+}
+
+/// The user chose `preference` by name: the codecs it names are offered
+/// again even when an earlier „Automatisch“ gave them up. „Automatisch“
+/// and the tiles keep the marks.
+pub fn forget_chosen(preference: CodecPreference) {
+    UNUSABLE.fetch_and(!chosen_bits(preference), Ordering::AcqRel);
+}
+
+/// The marks a choice by name takes back (`forget_chosen`).
+fn chosen_bits(preference: CodecPreference) -> u8 {
+    if matches!(preference, CodecPreference::Auto | CodecPreference::Tiles) {
+        return 0;
+    }
+    [CodecKind::H264, CodecKind::Hevc, CodecKind::Av1]
+        .into_iter()
+        .filter(|codec| preference.admits(*codec))
+        .fold(0, |bits, codec| bits | bit(codec))
 }
 
 /// Whether this process still offers `codec`.
@@ -126,6 +151,27 @@ impl DecoderGuard {
         self.verdict(now)
     }
 
+    /// Why the watched codec counts as without picture, in German for the
+    /// viewer's message: late pictures, failed key frames or silence.
+    pub fn reason(&self) -> String {
+        if self.lagged >= LAG_LIMIT {
+            format!(
+                "{} Bilder in Folge kamen verspätet aus dem Dekodierer",
+                self.lagged
+            )
+        } else if self.failures >= FAILURE_LIMIT {
+            format!(
+                "{} Schlüsselbilder ließen sich nicht dekodieren",
+                self.failures
+            )
+        } else {
+            format!(
+                "{} s lang kein Bild aus dem Dekodierer",
+                SILENCE_LIMIT.as_secs()
+            )
+        }
+    }
+
     fn verdict(&mut self, now: Instant) -> Option<CodecKind> {
         let codec = self.codec?;
         let lagging = self.lagged >= LAG_LIMIT;
@@ -146,3 +192,37 @@ impl DecoderGuard {
 #[cfg(test)]
 #[path = "bildkette_decoder_guard_task_tests.rs"]
 mod bildkette_decoder_guard_task_tests;
+
+#[cfg(test)]
+mod wahlgilt_tests {
+    use super::*;
+
+    /// User rule 2026-11-18: a codec chosen by name is offered again after
+    /// an earlier „Automatisch“ gave it up; „Automatisch“ and „Verlustfrei“
+    /// take no mark back. The process value itself is not switched here:
+    /// parallel tests read the offers.
+    #[test]
+    fn wahlgilt_task_named_codec_takes_its_mark_back() {
+        assert_eq!(chosen_bits(CodecPreference::Auto), 0);
+        assert_eq!(chosen_bits(CodecPreference::Tiles), 0);
+        assert_eq!(chosen_bits(CodecPreference::Av1), bit(CodecKind::Av1));
+        assert_eq!(chosen_bits(CodecPreference::H264), bit(CodecKind::H264));
+        assert_eq!(chosen_bits(CodecPreference::Hevc), bit(CodecKind::Hevc));
+        // „Scharf (GPU)“ names H.264 and HEVC, never AV1.
+        assert_eq!(
+            chosen_bits(CodecPreference::Sharp),
+            bit(CodecKind::H264) | bit(CodecKind::Hevc)
+        );
+        // The reason names what the guard saw.
+        let start = Instant::now();
+        let mut guard = DecoderGuard::default();
+        for _ in 0..FAILURE_LIMIT {
+            let _ = guard.on_failure(CodecKind::Hevc, start);
+        }
+        assert!(guard.reason().contains("Schlüsselbilder"));
+        let mut silent = DecoderGuard::default();
+        let _ = silent.on_record(CodecKind::Av1, start);
+        assert_eq!(silent.on_tick(start + SILENCE_LIMIT), Some(CodecKind::Av1));
+        assert!(silent.reason().contains("kein Bild"));
+    }
+}

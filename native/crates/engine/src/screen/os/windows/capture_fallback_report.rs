@@ -12,7 +12,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use windows::core::HRESULT;
-use windows::Win32::Foundation::E_ACCESSDENIED;
+use windows::Win32::Foundation::{E_ACCESSDENIED, E_INVALIDARG};
 use windows::Win32::Graphics::Dxgi::{
     DXGI_ERROR_NOT_CURRENTLY_AVAILABLE, DXGI_ERROR_SESSION_DISCONNECTED, DXGI_ERROR_UNSUPPORTED,
 };
@@ -78,7 +78,41 @@ pub(in crate::screen::os) fn fallback_cause(
             None
         };
     }
+    // Fix of 2026-11-18: `E_INVALIDARG` is retried as long as the passing
+    // results before it falls back (`settling`).
+    if code == E_INVALIDARG && failing_for < FALLBACK_AFTER {
+        return None;
+    }
     lost_or(FallbackCause::Failed)
+}
+
+/// How far apart a settling rebuild (`settling`) is tried again.
+pub(in crate::screen::os) const SETTLE_STEP: Duration = Duration::from_millis(100);
+
+/// Fix of 2026-11-18 (host log of a Windows VM): whether a rebuild that has
+/// been failing for `failing_for` in `step` with `code` waits and is tried
+/// again (every `SETTLE_STEP`) instead of falling back at once.
+/// `IDXGIOutput1::DuplicateOutput` documents `E_INVALIDARG` for a device
+/// that is invalid or of another adapter and for "the calling application is
+/// already duplicating this desktop output" (Microsoft Learn,
+/// `IDXGIOutput1::DuplicateOutput`, return values). After a lost duplication
+/// the rebuild is refused that way although the device is created on the
+/// output's own adapter from an `IDXGIFactory1` (`dxgi_output.rs`,
+/// `d3d_device::create_on`), also with the output found again and a new
+/// device, while a duplication opened two seconds later succeeds: the
+/// release of the old duplication had not finished [assumption
+/// A-SHADOWHOST-SETTLE: the release completes within `FALLBACK_AFTER`; if
+/// not, Graphics Capture takes over as before, with the backoff of
+/// `capture_monitor.rs`]. At activation `fallback_cause` is asked with
+/// `FALLBACK_AFTER` and falls back at once, as before.
+pub(in crate::screen::os) fn settling(
+    step: FallbackStep,
+    code: Option<HRESULT>,
+    failing_for: Duration,
+) -> bool {
+    step == FallbackStep::DuplicateOutput
+        && code == Some(E_INVALIDARG)
+        && failing_for < FALLBACK_AFTER
 }
 
 /// P9: the fallback of a rebuild that failed in `step` with `error`. Only a

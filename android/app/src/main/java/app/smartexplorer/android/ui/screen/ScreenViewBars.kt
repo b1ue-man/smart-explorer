@@ -34,17 +34,20 @@ import app.smartexplorer.android.screen.ScreenIconRef
 import app.smartexplorer.android.screen.ScreenIconTarget
 
 /**
- * What the viewer asks the host for besides the picture: the shown source, the switch „Schärfe vor Flüssigkeit“ and
- * the [choice] of codec, decoder and highest data rate. The old switch „Verlustfrei“ is the codec choice `lossless`.
+ * What the viewer asks the host for besides the picture: the shown source and the [choice] of codec, decoder and
+ * highest data rate. The old switches „Verlustfrei“ and „Schärfe“ are the codec choices `lossless` and `sharp`
+ * („Scharf (GPU)“, the same `SET_MODE` bit `sharpness`, as on the desktop viewer); both are stored with the codec.
  */
 data class ViewSettings(
     val source: String? = null,
-    val sharpness: Boolean = false,
     val choice: ViewerCodecChoice = ViewerCodecChoice(),
     /** „Monitor“ and „Auflösung“ (P5/P9): live to a host that answers `setDisplay`, else with a new session. */
     val display: ViewerDisplayChoice = ViewerDisplayChoice(),
 ) {
     val lossless: Boolean get() = choice.lossless
+
+    /** `SET_MODE` `sharpness`: only the codec „Scharf (GPU)“ sets it. */
+    val sharpness: Boolean get() = choice.sharp
 }
 
 private val ACTION_LABELS = mapOf(
@@ -93,6 +96,8 @@ internal fun ScreenTopBar(
     onClose: () -> Unit,
     /** Codec, decoder stage and the answer to „Höchste Datenrate“ of the running picture chain (one line, may be empty). */
     info: String = "",
+    /** „Monitor“/„Auflösung“: chosen, what the host did and why ([ScreenDisplayReportText.line]). */
+    displayLine: String = "",
     nativePixels: Boolean = false,
     onNativePixels: () -> Unit = {},
     immersive: Boolean = false,
@@ -115,7 +120,7 @@ internal fun ScreenTopBar(
                 }
                 TextButton(onClick = onNativePixels) { Text(if (nativePixels) "Einpassen" else "1:1") }
                 TextButton(onClick = onFullscreen) { Text(if (immersive) "Vollbild verlassen" else "Vollbild") }
-                SettingsMenu(settings, onSettings)
+                SettingsMenu(settings, onSettings, displayLine)
                 TextButton(onClick = onClose, modifier = Modifier.testTag("screen_view_close")) { Text(stringResource(R.string.screen_view_close)) }
             }
             if (immersive) Text("Zurück oder Randgeste · Strg+Alt+Pause · Strg+Alt+Umschalt+F · F11", style = MaterialTheme.typography.bodySmall)
@@ -216,7 +221,7 @@ private fun ActionsMenu(
 }
 
 @Composable
-private fun SettingsMenu(settings: ViewSettings, onSettings: (ViewSettings) -> Unit) {
+private fun SettingsMenu(settings: ViewSettings, onSettings: (ViewSettings) -> Unit, displayLine: String) {
     var open by remember { mutableStateOf(false) }
     var rateDialog by remember { mutableStateOf(false) }
     var sizeDialog by remember { mutableStateOf(false) }
@@ -232,15 +237,11 @@ private fun SettingsMenu(settings: ViewSettings, onSettings: (ViewSettings) -> U
     Box {
         TextButton(onClick = { open = true }) { Text("⋮") }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-            DropdownMenuItem(
-                text = { Text(stringResource(R.string.screen_view_sharpness)) },
-                trailingIcon = { Checkbox(checked = settings.sharpness, onCheckedChange = null) },
-                onClick = { onSettings(settings.copy(sharpness = !settings.sharpness)) },
-            )
-            // „Codec“ (with „Verlustfrei“ in its place), „Dekodierer“ and „Höchste Datenrate“ (BK7b).
+            // „Codec“ (with „Scharf (GPU)“ and „Verlustfrei“ in the place of the old switches), „Dekodierer“ and
+            // „Höchste Datenrate“ (BK7b, P9).
             CodecMenuItems(settings, onSettings, onRate = { open = false; rateDialog = true })
             // „Monitor“ and „Auflösung“ of the host's display (P5/P9).
-            DisplayMenuItems(settings, onSettings, onCustom = { open = false; sizeDialog = true })
+            DisplayMenuItems(settings, onSettings, onCustom = { open = false; sizeDialog = true }, stateLine = displayLine)
         }
     }
 }

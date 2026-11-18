@@ -107,6 +107,11 @@ impl Planner {
         owner(&self.claims).and_then(|claim| fit_mode(claim.size, limit))
     }
 
+    /// The session that decides the size now (`owner`).
+    pub fn owner_session(&self) -> Option<&str> {
+        owner(&self.claims).map(|claim| claim.session.as_str())
+    }
+
     /// The size se asked the display for last (`changed`).
     pub fn applied(&self) -> Option<FrameSize> {
         self.applied

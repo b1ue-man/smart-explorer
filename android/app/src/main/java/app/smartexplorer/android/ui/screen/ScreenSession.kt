@@ -33,6 +33,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.decodeFromJsonElement
@@ -71,6 +72,16 @@ data class ScreenSessionState(
     val errorDetail: String? = null,
     /** An automatic codec fallback, separate from a terminal session error. */
     val codecFallback: String? = null,
+    /** The codec of the session's first picture group (`tiles`: the host cannot switch it to video in the session). */
+    val firstCodec: String? = null,
+    /** The viewer's codec choice („Codec“) the host's codec reports are read against ([ScreenCodecNotices]). */
+    val chosenCodec: String = ViewerCodecChoice.CODEC_AUTO,
+    /** The chosen codec is not in force: the host or this phone cannot run it (a visible error with its reason). */
+    val codecError: String? = null,
+    /** `virtualDisplay` of the `accepted` event: what the host did with „Monitor“/„Auflösung“; `null` = no report. */
+    val virtualDisplay: JsonObject? = null,
+    /** `chain.virtualDisplay` of the latest statistics: the host's display now (`VirtualDisplayReport::chain_key`). */
+    val chainVirtualDisplay: String? = null,
     val stats: JsonObject? = null,
     /** `rateCeiling` of the `accepted` event: `automatic`, `applied` or `unsupported_by_host` (B-09); `null` before it. */
     val rateCeiling: String? = null,
@@ -112,26 +123,36 @@ data class ScreenSessionState(
             monitors = (event.body["monitors"] as? JsonArray)
                 ?.map { screenJson.decodeFromJsonElement<ScreenMonitor>(it) }.orEmpty(),
             limits = (event.body["limits"] as? JsonArray)?.map { it.toString().trim('"') }.orEmpty(),
+            virtualDisplay = event.body["virtualDisplay"] as? JsonObject,
             state = if (state == "connecting" || state == "waiting_for_approval") "starting" else state,
         )
         is ScreenViewEvent.VisibilityAck -> this
-        is ScreenViewEvent.State -> copy(state=event.state,reason=event.reason,
-            codecFallback=event.reason?.takeIf {it.startsWith("encoder_fallback_to_tiles: ")}
-                ?.removePrefix("encoder_fallback_to_tiles: ")?.let {"Videocodec-Fallback: Verlustfreie Übertragung gewählt. $it"} ?: codecFallback)
+        is ScreenViewEvent.State -> ScreenCodecNotices.parse(event.reason, chosenCodec).let { notice ->
+            // Every `encoder_fallback_to_<codec>` shows chosen against running; a codec the user named that the host left is an error.
+            copy(state = event.state, reason = event.reason,
+                codecFallback = notice?.takeIf { !it.error }?.text ?: codecFallback,
+                codecError = notice?.takeIf { it.error }?.text ?: codecError)
+        }
         is ScreenViewEvent.Stream -> copy(
             stream = event,
+            firstCodec = firstCodec ?: event.codec,
             streams = (streams + (event.gop to event)).let { all ->
                 // The decoder only looks up the groups of the pictures it holds.
                 if (all.size <= STREAM_CACHE) all else all.entries.drop(all.size - STREAM_CACHE).associate { it.key to it.value }
             },
         )
-        is ScreenViewEvent.Stats -> copy(stats = event.body)
+        is ScreenViewEvent.Stats -> copy(
+            stats = event.body,
+            chainVirtualDisplay = ((event.body["chain"] as? JsonObject)?.get("virtualDisplay") as? JsonPrimitive)?.contentOrNull,
+        )
         is ScreenViewEvent.RateCeiling -> copy(rateCeiling = event.state, rateAnswers = rateAnswers + 1)
         is ScreenViewEvent.ControlState -> copy(holder = event.holder, blocked = event.blocked)
         is ScreenViewEvent.Windows -> copy(windows = runCatching { screenJson.decodeFromJsonElement<ScreenWindows>(event.body) }.getOrNull())
         is ScreenViewEvent.Family -> copy(family = screenJson.decodeFromJsonElement<FamilyState>(event.body))
-        is ScreenViewEvent.Error -> copy(errorCode = event.code, errorDetail = event.detail)
-        is ScreenViewEvent.Ended -> copy(ended = event, state = "ended")
+        is ScreenViewEvent.Error -> copy(errorCode = event.code, errorDetail = event.detail,
+            codecError = ScreenCodecNotices.parse(event.detail, chosenCodec)?.takeIf { it.error }?.text ?: codecError)
+        is ScreenViewEvent.Ended -> copy(ended = event, state = "ended",
+            codecError = ScreenCodecNotices.parse(event.detail, chosenCodec)?.takeIf { it.error }?.text ?: codecError)
     }
 
     companion object {
@@ -332,6 +353,18 @@ class ScreenSession(private val target: ScreenTarget, private val backend: Scree
         snapshot
     }
 
+    /**
+     * The user chose the codec [codec] („Codec“, also the live switches „Verlustfrei“ and „Scharf (GPU)“ through
+     * `SET_MODE`): an automatic lossless fallback of the codec before no longer overrules it, and the notices about the
+     * codec before go (user rule of 2026-11-18: every choice is used exactly as made).
+     */
+    internal fun chooseCodec(codec: String) = synchronized(lock) {
+        if (mutable.value.chosenCodec == codec) return@synchronized
+        forceLossless = false
+        codecFallbackGop = null
+        mutable.value = mutable.value.copy(chosenCodec = codec, codecFallback = null, codecError = null)
+    }
+
     internal fun restoreChoice(snapshot: ChoiceSnapshot) = synchronized(lock) {
         choice = snapshot.choice
         forceLossless = snapshot.forceLossless
@@ -356,7 +389,10 @@ class ScreenSession(private val target: ScreenTarget, private val backend: Scree
     suspend fun open(mode: String, source: String?, displayWidth: Int, displayHeight: Int, maxFps: Int, decoders: List<DecoderOffer>, choice: ViewerCodecChoice = ViewerCodecChoice()) {
         this.choice = choice
         this.openedMaxRateBps = choice.maxRateBps
-        synchronized(lock) {wantedMode=ScreenModeRequest(if(mode=="preview") "preview" else "full")}
+        synchronized(lock) {
+            wantedMode=ScreenModeRequest(if(mode=="preview") "preview" else "full")
+            mutable.value = mutable.value.copy(chosenCodec = choice.codec)
+        }
         val backlog = ArrayList<ScreenViewEvent>()
         collector = scope.launch(start = CoroutineStart.UNDISPATCHED) {
             backend.events.collect { event ->
@@ -411,7 +447,10 @@ class ScreenSession(private val target: ScreenTarget, private val backend: Scree
 
     private fun applyEvent(event: ScreenViewEvent) {
         val old = mutable.value
-        if(event is ScreenViewEvent.State && event.reason?.startsWith("encoder_fallback_to_tiles: ")==true) forceLossless=true
+        // The host fell back to the tiles: the viewer keeps them only where the choice allows it („Automatisch“,
+        // „Verlustfrei“); under a named codec the fallback is an error ([ScreenCodecNotices]) and changes nothing here.
+        if (event is ScreenViewEvent.State &&
+            ScreenCodecNotices.parse(event.reason, old.chosenCodec)?.let { it.running == "tiles" && !it.error } == true) forceLossless = true
         val familyLayoutChanged = event is ScreenViewEvent.Family &&
             screenJson.decodeFromJsonElement<FamilyState>(event.body).snapshot?.layout_revision != old.family?.snapshot?.layout_revision
         if (event is ScreenViewEvent.Stream && old.stream?.gop != event.gop ||
@@ -504,6 +543,12 @@ class ScreenSession(private val target: ScreenTarget, private val backend: Scree
         if(closed || id==0L || current.ended!=null || forceLossless ||
             !current.streams.containsKey(gopId) || codecFallbackGop==gopId) return@synchronized
         if(mode!="full" && mode!="preview") return@synchronized
+        if (!ViewerCodecChoice.tilesFallbackAllowed(current.chosenCodec)) {
+            // A named codec never gives way to the tiles on its own: the reason is shown, the choice stays.
+            codecFallbackGop = gopId
+            mutable.value = current.copy(codecError = ScreenCodecNotices.decoderUnavailable(current.chosenCodec, choice.decoder, reason))
+            return@synchronized
+        }
         codecFallbackGop=gopId;forceLossless=true;rejectedGop=current.stream?.gop;displayEpoch++
         latestComplete=null;lastPresented=null
         mutable.value=mutable.value.copy(inputReady=false,

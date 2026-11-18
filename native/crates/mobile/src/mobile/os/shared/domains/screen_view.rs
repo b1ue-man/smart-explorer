@@ -312,15 +312,7 @@ fn view_open(args: &Value) -> Result<Value, ApiError> {
         decoders: codecs::decoders_arg(args, mode)?,
         display_size: size_args(args, "displayWidth", "displayHeight"),
         max_fps: fps_arg(args, "maxFps")?.unwrap_or(30),
-        max_rate_bps: match opt_i64(args, "maxRate") {
-            None => None,
-            Some(rate) => Some(
-                u64::try_from(rate)
-                    .ok()
-                    .filter(|rate| *rate > 0)
-                    .ok_or_else(|| invalid("„maxRate“ ist eine positive Zahl (bit/s)."))?,
-            ),
-        },
+        max_rate_bps: codecs::max_rate_arg(args, false)?.flatten(),
         frame_capabilities,
         expected_node: opt_str(args, "expectedNodeId").map(str::to_string),
         codec,
@@ -352,15 +344,7 @@ fn set_mode(args: &Value) -> Result<Value, ApiError> {
     };
     // „Höchste Datenrate“ changed live (BK7b): 0 is automatic. The frame leaves only for a
     // host that announced `rate_ceiling_v1` (`viewer_client_tasks.rs`).
-    let ceiling = opt_i64(args, "maxRate")
-        .map(|rate| {
-            u64::try_from(rate)
-                .map(|rate| (rate > 0).then_some(rate))
-                .map_err(|_| {
-                    invalid("„maxRate“ ist 0 (automatisch) oder eine positive Zahl (bit/s).")
-                })
-        })
-        .transpose()?;
+    let ceiling = codecs::max_rate_arg(args, true)?;
     session.send(&ViewerFrame::SetMode(SetMode {
         mode,
         source: source_arg(args)?,

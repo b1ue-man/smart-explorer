@@ -174,7 +174,10 @@ impl Readback {
                 )
             },
         );
-        let (ring, tag) = match found {
+        // Fix of 2026-11-18: a grant that retired with a change of the
+        // capture path refuses the ring's claims; that is turnover (the
+        // picture is skipped), never a failure of the GPU path.
+        let (ring, tag) = match found.map_err(d3d_input::turnover) {
             Ok(found) => found,
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Err(error),
             Err(error) => {

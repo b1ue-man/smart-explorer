@@ -6,7 +6,8 @@ import java.math.BigDecimal
 
 /**
  * What this viewer chooses for the picture chain (plan 2026-11-14 `bildkette.md` 4.10, package BK7b): the codec
- * (`auto`, `h264`, `hevc`, `av1`, or `lossless`, which replaces the switch „Verlustfrei“ with the same meaning), the decoder
+ * (`auto`, `h264`, `hevc`, `av1`, `sharp` „Scharf (GPU)“, which replaces the switch „Schärfe“ and sets the same `SET_MODE`
+ * bit `sharpness`, or `lossless`, which replaces the switch „Verlustfrei“ with the same meaning), the decoder
  * stage (`auto`, `hardware`, `software`) and the highest data rate in bit/s (`null` = automatic). The values are
  * the ones of `screen.viewOpen` (`codec`, `decoder`, `maxRate`).
  */
@@ -18,13 +19,39 @@ data class ViewerCodecChoice(
     /** The old switch „Verlustfrei“: it is the codec choice `lossless`. */
     val lossless: Boolean get() = codec == CODEC_LOSSLESS
 
+    /** „Scharf (GPU)“ (plan 2026-11-17 P9): H.264/HEVC on the host's GPU encoder, `SET_MODE` `sharpness`. */
+    val sharp: Boolean get() = codec == CODEC_SHARP
+
     companion object {
         const val CODEC_AUTO = "auto"
         const val CODEC_H264 = "h264"
         const val CODEC_HEVC = "hevc"
         const val CODEC_AV1 = "av1"
+        const val CODEC_SHARP = "sharp"
         const val CODEC_LOSSLESS = "lossless"
-        val CODECS = listOf(CODEC_AUTO, CODEC_H264, CODEC_HEVC, CODEC_AV1, CODEC_LOSSLESS)
+        /** The order of the desktop viewer (`CodecSetting::ALL`). */
+        val CODECS = listOf(CODEC_AUTO, CODEC_H264, CODEC_HEVC, CODEC_AV1, CODEC_SHARP, CODEC_LOSSLESS)
+
+        /** The host's floor of every data rate (`rate_control::MIN_BITRATE_BPS`): 0,15 Mbit/s. */
+        const val MIN_RATE_BPS = 150_000L
+
+        /**
+         * Whether the viewer may fall back to the lossless tiles on its own (a host's `encoder_fallback_to_tiles`, a
+         * decoder of the phone that cannot run the picture): only under „Automatisch“, and under „Verlustfrei“, whose
+         * codec the tiles are. A named codec never gives way to another one (user rule of 2026-11-18).
+         */
+        fun tilesFallbackAllowed(codec: String): Boolean = codec == CODEC_AUTO || codec == CODEC_LOSSLESS
+
+        /** The choices that name a video codec („Scharf (GPU)“ runs on H.264/HEVC). */
+        val VIDEO_CODECS = listOf(CODEC_H264, CODEC_HEVC, CODEC_AV1, CODEC_SHARP)
+
+        /**
+         * Whether going to [next] must open a new session instead of `screen.viewSetDecoders`: a session whose first
+         * picture group came as tiles ([firstCodec] `tiles`) cannot be switched to video by the host's `SET_DECODERS`,
+         * so a video codec chosen then opens the session again with that choice.
+         */
+        fun reopenForVideo(firstCodec: String?, next: ViewerCodecChoice): Boolean =
+            firstCodec == "tiles" && next.codec in VIDEO_CODECS
 
         const val DECODER_AUTO = "auto"
         const val DECODER_HARDWARE = "hardware"
@@ -53,12 +80,22 @@ data class ViewerCodecChoice(
 
         /**
          * Mbit/s as typed (`20`, `7,5` or `7.5`) in bit/s (SI: 1 Mbit/s = 1 000 000 bit/s); `null` for text that
-         * is no positive number or does not fit a `Long`. Blank text is automatic and the caller's case.
+         * is no positive number, lies below [MIN_RATE_BPS] (the host would raise it silently) or does not fit a `Long`.
+         * Blank text is automatic and the caller's case.
          */
         fun parseMbit(text: String): Long? {
+            val bps = typedBps(text) ?: return null
+            return if (bps >= MIN_RATE_BPS) bps else null
+        }
+
+        /** The typed text is a positive rate below [MIN_RATE_BPS]: the dialog names the floor instead of the format. */
+        fun belowMinimum(text: String): Boolean = typedBps(text)?.let { it < MIN_RATE_BPS } == true
+
+        private fun typedBps(text: String): Long? {
             val mbit = text.trim().replace(',', '.').toDoubleOrNull() ?: return null
             val bps = mbit * 1_000_000.0
-            return if (mbit.isFinite() && bps >= 1.0 && bps < 9.0e18) bps.toLong() else null
+            // Rounded, not cut: 0,15 Mbit/s is 150 000 bit/s although 0.15 × 10⁶ is not exact in binary.
+            return if (mbit.isFinite() && bps >= 1.0 && bps < 9.0e18) Math.round(bps) else null
         }
     }
 }
@@ -126,9 +163,20 @@ object ScreenDecoderPolicy {
         return !hardwareExists && choice.codec == codec
     }
 
+    /** The decoders of [candidates] in the stage the choice „Dekodierer“ allows (also the hybrid decoder's H.264 ones). */
+    fun <T> inStage(decoder: String, candidates: List<T>, hardware: (T) -> Boolean): List<T> =
+        candidates.filter { stageAllowed(decoder, hardware(it)) }
+
+    /** Whether the choice leaves [codec] (HEVC or AV1) open: „Automatisch“, the codec itself, „Scharf (GPU)“ for HEVC. */
+    private fun videoOpen(choice: ViewerCodecChoice, codec: String): Boolean = when (choice.codec) {
+        ViewerCodecChoice.CODEC_AUTO -> true
+        ViewerCodecChoice.CODEC_SHARP -> codec == ViewerCodecChoice.CODEC_HEVC
+        else -> choice.codec == codec
+    }
+
     /** The HEVC and AV1 offers: only the codecs the choice leaves open, only the decoders [allows] lets run. */
     fun videoOffers(caps: List<VideoDecoderCaps>, choice: ViewerCodecChoice): List<DecoderOffer> {
-        val open = caps.filter { it.codec in VIDEO && (choice.codec == ViewerCodecChoice.CODEC_AUTO || choice.codec == it.codec) }
+        val open = caps.filter { it.codec in VIDEO && videoOpen(choice, it.codec) }
         return open
             .filter { cap -> allows(choice, cap.codec, cap.hardware, caps.any { it.codec == cap.codec && it.hardware }) }
             .map { cap ->

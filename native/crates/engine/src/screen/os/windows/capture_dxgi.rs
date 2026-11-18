@@ -44,13 +44,15 @@ mod output;
 pub(super) mod pointer;
 #[path = "dxgi_prepared.rs"]
 mod prepared;
+#[path = "dxgi_rebuild.rs"]
+mod rebuild;
 #[path = "dxgi_regions.rs"]
 pub(super) mod regions;
 #[path = "dxgi_wait.rs"]
 pub(super) mod wait;
 pub(super) use binding::OutputBinding;
 use output::rotation;
-use prepared::{duplicate, stale, Failing, Live};
+use prepared::{duplicate, Failing, Live};
 pub(super) use prepared::{DxgiFailure, PreparedDxgi};
 
 pub(super) struct DxgiCapture {
@@ -74,6 +76,8 @@ pub(super) struct DxgiCapture {
     follow_desktop: bool,
     /// P9: the output was found again in this streak of failures.
     reattached: bool,
+    /// Fix of 2026-11-18: the last rebuild while a refusal settles.
+    tried: Option<Instant>,
 }
 impl DxgiCapture {
     pub(super) fn open(prepared: PreparedDxgi, budget: CaptureBudget) -> io::Result<Self> {
@@ -101,6 +105,7 @@ impl DxgiCapture {
             failing: None,
             follow_desktop: false,
             reattached: false,
+            tried: None,
         })
     }
     /// A user session's capture follows the input desktop (P9); the login
@@ -113,24 +118,6 @@ impl DxgiCapture {
     pub(super) fn with_pointer(mut self) -> Self {
         self.pointer = Some(pointer::DxgiPointer::attach());
         self
-    }
-    fn note_failure(&mut self, failure: &DxgiFailure) {
-        let code = capture_source::result_code(&failure.error);
-        // A streak of the same failure is logged once.
-        if self
-            .failing
-            .is_none_or(|failing| failing.step != failure.step || failing.code != code)
-        {
-            capture_source::log_failure(failure.step, &failure.error);
-        }
-        self.failing = Some(Failing {
-            since: self
-                .failing
-                .map_or_else(Instant::now, |failing| failing.since),
-            step: failure.step,
-            kind: failure.error.kind(),
-            code: capture_source::result_code(&failure.error),
-        });
     }
     /// An `AcquireNextFrame` or `ReleaseFrame` error: the duplication is
     /// rebuilt like a lost one; a second one before any picture counts as a
@@ -192,43 +179,6 @@ impl DxgiCapture {
         self.readback.reset();
         self.last = None;
         self.budget.suspend();
-    }
-    fn rebuild(&mut self) -> Result<(), DxgiFailure> {
-        self.recovery.request(true);
-        self.stop();
-        match self.duplicate_again() {
-            Err(failure) if stale(&failure) && !self.reattached => {
-                // P9: the output found again, with a device on its adapter,
-                // once per streak of failures.
-                self.reattached = true;
-                capture_source::log_failure(failure.step, &failure.error);
-                let prepared = PreparedDxgi::prepare(&self.prepared.device)
-                    .map_err(DxgiFailure::at(FallbackStep::DeviceCreate))?;
-                eprintln!(
-                    "screen capture: output {} found again with a new device",
-                    self.prepared.device
-                );
-                self.prepared = prepared;
-                self.duplicate_again()
-            }
-            result => result,
-        }
-    }
-    fn duplicate_again(&mut self) -> Result<(), DxgiFailure> {
-        let geometry = self
-            .prepared
-            .geometry()
-            .map_err(DxgiFailure::at(FallbackStep::OutputCheck))?;
-        self.budget
-            .replace(geometry)
-            .map_err(DxgiFailure::at(FallbackStep::CaptureMemory))?;
-        self.live = Some(duplicate(
-            &self.prepared,
-            &self.budget,
-            self.follow_desktop,
-        )?);
-        self.size = geometry.displayed();
-        Ok(())
     }
 }
 impl Grabber for DxgiCapture {
@@ -450,17 +400,7 @@ impl Grabber for DxgiCapture {
         }
     }
     fn reopen(&mut self) -> io::Result<()> {
-        match self.rebuild() {
-            Ok(()) => {
-                self.failing = None;
-                self.reattached = false;
-                Ok(())
-            }
-            Err(failure) => {
-                self.note_failure(&failure);
-                Err(failure.error)
-            }
-        }
+        self.reopen_settling()
     }
     fn set_capture_active(&mut self, active: bool) -> io::Result<()> {
         self.recovery.request(active);

@@ -361,6 +361,7 @@ fn bildkette_task_win_capture_monitor_falls_back_to_graphics_capture() {
         })),
         first: None,
         retry: None,
+        back: None,
     };
     assert!(matches!(
         monitor.capture(false).unwrap(),
@@ -386,6 +387,7 @@ fn bildkette_task_win_capture_monitor_falls_back_to_graphics_capture() {
         fallback: None,
         first: None,
         retry: None,
+        back: None,
     };
     assert!(paused.reopen().is_ok());
     let mut failed = MonitorGrabber {
@@ -396,6 +398,7 @@ fn bildkette_task_win_capture_monitor_falls_back_to_graphics_capture() {
         fallback: None,
         first: None,
         retry: None,
+        back: None,
     };
     assert!(failed.reopen().is_err());
 }
@@ -447,6 +450,7 @@ fn p9_task_win_capture_monitor_fallback_is_temporary() {
             }
         })),
         retry: None,
+        back: None,
     };
     // The duplication asks for the fallback: Graphics Capture, a retry plan.
     let _ = monitor.capture(false).unwrap();

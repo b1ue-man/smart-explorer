@@ -184,7 +184,7 @@ mod fallback_report;
 #[cfg_attr(not(test), allow(unused_imports))]
 pub(super) use fallback_report::{
     detail_of, fallback_bits, fallback_cause, log_failure, rebuild_fallback, report, result_code,
-    update_report, CaptureReport, FallbackCause, FALLBACK_AFTER,
+    settling, update_report, CaptureReport, FallbackCause, FALLBACK_AFTER, SETTLE_STEP,
 };
 
 /// The questions that decide whether a capture pauses.

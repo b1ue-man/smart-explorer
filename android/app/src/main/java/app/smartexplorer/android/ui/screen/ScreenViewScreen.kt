@@ -365,6 +365,8 @@ fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, a
         val previous = settings
         settings = next
         if (previous.choice != next.choice) ScreenViewPrefs.save(context, next.choice)
+        // A new codec (also the live „Verlustfrei“ and „Scharf (GPU)“) ends an automatic lossless fallback of the one before.
+        if (previous.choice.codec != next.choice.codec) session?.chooseCodec(next.choice.codec)
         if (previous.display != next.display) {
             ScreenDisplayPrefs.save(context, next.display)
             // P9: a host that answered `setDisplay` switches its display within the session (`screen.viewSetDisplay`);
@@ -395,7 +397,9 @@ fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, a
             switchJobs[0]?.cancel()
             switchJobs[0] = scope.launch {
                 val prior = own?.prepareDecoderSwitch(next.choice)
-                val switched = if (own != null && own.id != 0L) {
+                // A session that began with tiles cannot become video through `SET_DECODERS`: a new session with the choice.
+                val tilesStart = ViewerCodecChoice.reopenForVideo(own?.state?.value?.firstCodec, next.choice)
+                val switched = if (own != null && own.id != 0L && !tilesStart) {
                     try {
                         val offers = backend.offers(next.choice).map {
                             Core.json.encodeToJsonElement(app.smartexplorer.android.api.DecoderOffer.serializer(), it)
@@ -438,6 +442,8 @@ fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, a
     val status = when {
         ended != null -> ScreenTexts.endText(context, ended.code, ended.detail)
         failure != null -> failure.orEmpty()
+        // The chosen codec is not in force: its reason, not a silent other codec (user rule of 2026-11-18).
+        ui.codecError != null -> ui.codecError.orEmpty()
         !ui.inputReady && controlOn -> "Warte auf vollständiges aktuelles Bild …"
         failures > 3 -> stringResource(R.string.screen_view_decode_failed)
         ui.blocked != null && sending -> ScreenTexts.blockedText(context, ui.blocked.orEmpty())
@@ -594,6 +600,7 @@ fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, a
                         onStatus = if (failures > 3 && !settings.lossless) ({ failures = 0; applySettings(settings.copy(choice = settings.choice.copy(codec = ViewerCodecChoice.CODEC_LOSSLESS))) }) else null,
                         onClose = { releaseInputs(); onClose() },
                         info = info,
+                        displayLine = if (ui.accepted) ScreenDisplayReportText.line(settings.display, ui.virtualDisplay, ui.chainVirtualDisplay) else "",
                         nativePixels = nativePixels,
                         onNativePixels = { nativePixels = !nativePixels },
                         immersive = immersive,

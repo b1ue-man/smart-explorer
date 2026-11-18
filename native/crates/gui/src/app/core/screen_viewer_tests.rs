@@ -40,26 +40,33 @@ use crate::share::access_grant::CapabilityDecision;
 use crate::share::ShareStatus;
 
 #[test]
-fn screen_task_grid_switch_reuses_connection() {
-    // Allowed without asking: the tile's connection becomes the full view
-    // and goes back to its tile; the host accepts it once.
+fn screen_task_grid_switch_tile_reuses_connection() {
+    // Allowed without asking: the full view opens its own session with the
+    // full request (user rule 2026-11-18: a preview's hello caps the rate
+    // and has no display wish); back to the group it stays as the tile.
     let fake = Fake::new(CapabilityDecision::Allow);
     let backend = fake.backend();
     let preview = open_preview(&fake, &backend);
     fake.accept(0);
     wait_for("the host's accept", || preview.info().accepted == 1);
     let view = to_view(&backend, Some(preview), &target(), &open());
-    assert_eq!(fake.opens(), 1, "the full view opened no second connection");
+    wait_for("the full view's own connection", || fake.opens() == 2);
+    wait_for("the end of the preview", || fake.closed(0));
     assert_eq!(view.mode, SessionMode::View);
-    wait_for("SET_MODE full", || set_modes(&fake) == [StreamMode::Full]);
-    assert_eq!(view.info().accepted, 1);
-    assert!(!fake.closed(0));
+    let requests = fake.inner.requests.lock().unwrap().clone();
+    assert_eq!(requests[1].mode, SessionMode::View);
+    assert_eq!(requests[1].max_fps, super::screen_pool::full_fps());
+    assert!(requests[1].virtual_display.is_some());
+    assert!(set_modes(&fake).is_empty(), "no SET_MODE raises a preview");
+    fake.accept(1);
+    wait_for("the full view's accept", || view.info().accepted == 1);
     let tile = to_tile(view, 320, 1000).expect("the connection stays for the tile");
     assert_eq!(tile.mode, SessionMode::Preview);
     wait_for("SET_MODE preview", || {
-        set_modes(&fake) == [StreamMode::Full, StreamMode::Preview]
+        set_modes(&fake).contains(&StreamMode::Preview)
     });
-    assert_eq!(fake.opens(), 1);
+    assert_eq!(fake.opens(), 2);
+    assert!(!fake.closed(1));
 
     // Under „Fragen“ the preview has no picture: the full view is a new
     // connection, for which the host asks; the preview ends.

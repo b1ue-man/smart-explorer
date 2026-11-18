@@ -416,6 +416,17 @@ impl ScreenEncoder for AsyncEncoder {
                 self.refresh = true;
                 Err(error)
             }
+            // Fix of 2026-11-18: the capture changed its path and its grant
+            // retired; turnover, never a GPU failure (it switched the GPU
+            // path off for the session before). The pipeline opens the
+            // encoder of the new grant.
+            Err(error) if turnover(&grant, &error) => {
+                self.refresh = true;
+                Err(io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    format!("the capture changed its path: {error}"),
+                ))
+            }
             Err(error) if self.gpu.is_some() => self.gpu_failed(error),
             Err(error) => Err(error),
         }
@@ -456,6 +467,12 @@ impl ScreenEncoder for AsyncEncoder {
     ) -> io::Result<EncodedFrame> {
         self.encode_plain(frame, keyframe, target_bps)
     }
+}
+
+/// Whether `error` of an encode under `grant` is the turnover of a capture
+/// (its grant retired), not a failure of the encoder or its GPU path.
+fn turnover(grant: &CaptureGrant, error: &io::Error) -> bool {
+    CaptureGrant::is_retired_claim(error) || grant.is_retired().unwrap_or(false)
 }
 
 impl Drop for AsyncEncoder {

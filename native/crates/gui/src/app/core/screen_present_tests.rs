@@ -196,11 +196,17 @@ fn p9_present_task_lowest_latency_applies_live_on_direct3d11() {
     assert!(!direct_allows_tearing(true, false));
     assert!(!direct_allows_tearing(false, true));
     assert!(!direct_allows_tearing(false, false));
-    assert_eq!(latency_note(false, false), None);
-    assert_eq!(latency_note(false, true), None);
-    assert_eq!(latency_note(true, true), None);
+    let facts = |changed, direct_showing| LatencyFacts {
+        changed,
+        direct_showing,
+        low_latency: false,
+        glow: false,
+    };
+    assert_eq!(latency_text(facts(false, false)), None);
+    assert_eq!(latency_text(facts(false, true)), None);
+    assert_eq!(latency_text(facts(true, true)), None);
     assert_eq!(
-        latency_note(true, false),
+        latency_text(facts(true, false)),
         Some("Wirkt beim nächsten Start des Betrachters.")
     );
     // The switch's value is what the presenter reads next.
@@ -208,4 +214,39 @@ fn p9_present_task_lowest_latency_applies_live_on_direct3d11() {
     assert!(low_latency());
     set_low_latency(false);
     assert!(!low_latency());
+}
+
+/// Finding 8 of the user rule of 2026-11-18: with „Niedrigste Latenz“ on,
+/// the hint names the present mode that really runs (Direct3D 11 without
+/// tearing support, wgpu's `AutoNoVsync` that may end as Fifo, glow).
+#[test]
+fn wahlgilt_task_lowest_latency_names_the_real_present_mode() {
+    let on = |direct_showing, glow| LatencyFacts {
+        changed: false,
+        direct_showing,
+        low_latency: true,
+        glow,
+    };
+    let direct = latency_text(on(true, false)).unwrap();
+    assert!(direct.starts_with("Direct3D 11:") && direct.contains("DXGI Tearing"));
+    let wgpu = latency_text(on(false, false)).unwrap();
+    assert!(wgpu.contains("AutoNoVsync") && wgpu.contains("Fifo"));
+    let glow = latency_text(on(false, true)).unwrap();
+    assert!(glow.starts_with("OpenGL (glow): VSync aus"));
+    // A change still waits for the next start where the surface keeps it.
+    let changed = LatencyFacts {
+        changed: true,
+        ..on(false, false)
+    };
+    assert_eq!(
+        latency_text(changed),
+        Some("Wirkt beim nächsten Start des Betrachters.")
+    );
+    // Glow is allowed by „Automatisch“ and „Direct3D 11“, never by „wgpu“.
+    use super::super::screen_launch::{glow_allowed, wgpu_refused_text};
+    use super::super::screen_prefs::DisplayChoice;
+    assert!(glow_allowed(DisplayChoice::Automatic));
+    assert!(glow_allowed(DisplayChoice::Direct3d11));
+    assert!(!glow_allowed(DisplayChoice::Wgpu));
+    assert!(wgpu_refused_text("no adapter").contains("no adapter"));
 }

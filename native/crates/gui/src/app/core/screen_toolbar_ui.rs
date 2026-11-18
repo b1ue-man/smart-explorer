@@ -199,6 +199,13 @@ fn source_text(input: &ToolbarInput) -> String {
 }
 
 fn device_row(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Vec<ToolbarAction>) {
+    wrap::item(ui, "device", |ui| device_list(ui, input, out));
+    if wrap::item(ui, "all_devices", |ui| ui.button("Alle Geräte").clicked()) {
+        out.push(ToolbarAction::AllDevices);
+    }
+}
+
+fn device_list(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Vec<ToolbarAction>) {
     ui.label("Gerät:");
     egui::ComboBox::from_id_salt("screen_viewer_device")
         .selected_text(input.current_name)
@@ -214,9 +221,6 @@ fn device_row(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Vec<ToolbarActi
                 }
             }
         });
-    if ui.button("Alle Geräte").clicked() {
-        out.push(ToolbarAction::AllDevices);
-    }
 }
 
 fn source_icon(
@@ -241,110 +245,115 @@ fn source_row(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Vec<ToolbarActi
         .limits
         .iter()
         .any(|limit| limit == "android_system_selected_source");
-    ui.label("Quelle:");
-    let opened = egui::ComboBox::from_id_salt("screen_viewer_source")
-        .selected_text(applied::short_text(&source_text(input)))
-        .show_ui(ui, |ui| {
-            if ui
-                .selectable_label(
-                    input.source.is_none() || input.source == whole_screen(hello).as_ref(),
-                    if system_selected {
-                        "Android-Systemauswahl"
-                    } else {
-                        "Ganzer Bildschirm"
-                    },
-                )
-                .clicked()
-            {
-                out.push(ToolbarAction::Source(whole_screen(hello)));
-            }
-            for (label, source) in monitor_sources(hello) {
+    let opened = wrap::item(ui, "source", |ui| {
+        ui.label("Quelle:");
+        egui::ComboBox::from_id_salt("screen_viewer_source")
+            .selected_text(applied::short_text(&source_text(input)))
+            .show_ui(ui, |ui| {
                 if ui
-                    .selectable_label(input.source == Some(&source), label)
+                    .selectable_label(
+                        input.source.is_none() || input.source == whole_screen(hello).as_ref(),
+                        if system_selected {
+                            "Android-Systemauswahl"
+                        } else {
+                            "Ganzer Bildschirm"
+                        },
+                    )
                     .clicked()
                 {
-                    out.push(ToolbarAction::Source(Some(source)));
+                    out.push(ToolbarAction::Source(whole_screen(hello)));
                 }
-            }
-            ui.separator();
-            if system_selected {
-                ui.label("Die Quelle wird auf dem Android-Gerät im Systemdialog ausgewählt.");
-            }
-            if hello
-                .limits
-                .iter()
-                .any(|limit| limit == "wayland_window_pick_on_host")
-            {
-                ui.label("Das Fenster wählt der Nutzer am Gerät im Systemdialog.");
-            }
-            let windows = input.info.and_then(|info| info.windows.as_ref());
-            for window in windows
-                .map(|list| list.windows.as_slice())
-                .unwrap_or_default()
-            {
-                let source = SourceId::Window(window.id.clone());
-                let label = format!("{} ({})", window.title, window.app);
-                ui.push_id(("window", &window.id), |ui| {
-                    ui.horizontal(|ui| {
-                        source_icon(
-                            ui,
-                            input,
-                            IconTarget::Window {
-                                id: window.id.clone(),
-                            },
-                            window.icon.as_ref(),
-                        );
-                        let selectable = !hello
-                            .limits
-                            .iter()
-                            .any(|limit| limit == "wayland_window_pick_on_host");
-                        if ui
-                            .add_enabled(
-                                selectable,
-                                egui::SelectableLabel::new(input.source == Some(&source), label),
-                            )
-                            .clicked()
-                        {
-                            out.push(ToolbarAction::Source(Some(source)));
-                        }
-                    })
-                });
-            }
-            for app in windows.map(|list| list.apps.as_slice()).unwrap_or_default() {
-                ui.push_id(("app", &app.app_id), |ui| {
-                    ui.horizontal(|ui| {
-                        source_icon(
-                            ui,
-                            input,
-                            IconTarget::App {
-                                app_id: app.app_id.clone(),
-                            },
-                            app.icon.as_ref(),
-                        );
-                        let source = SourceId::Window(app.app_id.clone());
-                        let selectable = hello.platform
-                            == crate::screen::core::wire_hello::HostPlatform::Android
-                            && !system_selected
-                            && SourceId::parse(&source.to_string()).is_ok();
-                        if ui
-                            .add_enabled(
-                                selectable,
-                                egui::SelectableLabel::new(
-                                    input.source == Some(&source),
-                                    &app.name,
-                                ),
-                            )
-                            .clicked()
-                        {
-                            out.push(ToolbarAction::Source(Some(source)));
-                        }
-                    })
-                });
-            }
-            if ui.button("Aktualisieren").clicked() {
-                out.push(ToolbarAction::RefreshWindows);
-            }
-        });
+                for (label, source) in monitor_sources(hello) {
+                    if ui
+                        .selectable_label(input.source == Some(&source), label)
+                        .clicked()
+                    {
+                        out.push(ToolbarAction::Source(Some(source)));
+                    }
+                }
+                ui.separator();
+                if system_selected {
+                    ui.label("Die Quelle wird auf dem Android-Gerät im Systemdialog ausgewählt.");
+                }
+                if hello
+                    .limits
+                    .iter()
+                    .any(|limit| limit == "wayland_window_pick_on_host")
+                {
+                    ui.label("Das Fenster wählt der Nutzer am Gerät im Systemdialog.");
+                }
+                let windows = input.info.and_then(|info| info.windows.as_ref());
+                for window in windows
+                    .map(|list| list.windows.as_slice())
+                    .unwrap_or_default()
+                {
+                    let source = SourceId::Window(window.id.clone());
+                    let label = format!("{} ({})", window.title, window.app);
+                    ui.push_id(("window", &window.id), |ui| {
+                        ui.horizontal(|ui| {
+                            source_icon(
+                                ui,
+                                input,
+                                IconTarget::Window {
+                                    id: window.id.clone(),
+                                },
+                                window.icon.as_ref(),
+                            );
+                            let selectable = !hello
+                                .limits
+                                .iter()
+                                .any(|limit| limit == "wayland_window_pick_on_host");
+                            if ui
+                                .add_enabled(
+                                    selectable,
+                                    egui::SelectableLabel::new(
+                                        input.source == Some(&source),
+                                        label,
+                                    ),
+                                )
+                                .clicked()
+                            {
+                                out.push(ToolbarAction::Source(Some(source)));
+                            }
+                        })
+                    });
+                }
+                for app in windows.map(|list| list.apps.as_slice()).unwrap_or_default() {
+                    ui.push_id(("app", &app.app_id), |ui| {
+                        ui.horizontal(|ui| {
+                            source_icon(
+                                ui,
+                                input,
+                                IconTarget::App {
+                                    app_id: app.app_id.clone(),
+                                },
+                                app.icon.as_ref(),
+                            );
+                            let source = SourceId::Window(app.app_id.clone());
+                            let selectable = hello.platform
+                                == crate::screen::core::wire_hello::HostPlatform::Android
+                                && !system_selected
+                                && SourceId::parse(&source.to_string()).is_ok();
+                            if ui
+                                .add_enabled(
+                                    selectable,
+                                    egui::SelectableLabel::new(
+                                        input.source == Some(&source),
+                                        &app.name,
+                                    ),
+                                )
+                                .clicked()
+                            {
+                                out.push(ToolbarAction::Source(Some(source)));
+                            }
+                        })
+                    });
+                }
+                if ui.button("Aktualisieren").clicked() {
+                    out.push(ToolbarAction::RefreshWindows);
+                }
+            })
+    });
     // The list is read once when the field opens.
     let id = ui.id().with("screen_viewer_windows_asked");
     let asked = ui.data(|data| data.get_temp::<bool>(id)).unwrap_or(false);
@@ -359,6 +368,10 @@ fn source_row(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Vec<ToolbarActi
 }
 
 fn control_row(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Vec<ToolbarAction>) {
+    wrap::item(ui, "control", |ui| control_items(ui, input, out));
+}
+
+fn control_items(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Vec<ToolbarAction>) {
     let Some(hello) = input.info.and_then(|info| info.hello.as_ref()) else {
         return;
     };
@@ -398,69 +411,27 @@ fn keys_menu(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Vec<ToolbarActio
     if keys.is_empty() && actions.is_empty() {
         return;
     }
-    ui.add_enabled_ui(input.control_on, |ui| {
-        ui.menu_button("Tasten ▾", |ui| {
-            for (usage, label) in &keys {
-                if ui.button(*label).clicked() {
-                    out.push(ToolbarAction::Key(*usage));
-                    ui.close_menu();
+    wrap::item(ui, "keys", |ui| {
+        ui.add_enabled_ui(input.control_on, |ui| {
+            ui.menu_button("Tasten ▾", |ui| {
+                for (usage, label) in &keys {
+                    if ui.button(*label).clicked() {
+                        out.push(ToolbarAction::Key(*usage));
+                        ui.close_menu();
+                    }
                 }
-            }
-            if !keys.is_empty() && !actions.is_empty() {
-                ui.separator();
-            }
-            for action in actions {
-                if ui.button(action_label(*action)).clicked() {
-                    out.push(ToolbarAction::System(*action));
-                    ui.close_menu();
+                if !keys.is_empty() && !actions.is_empty() {
+                    ui.separator();
                 }
-            }
+                for action in actions {
+                    if ui.button(action_label(*action)).clicked() {
+                        out.push(ToolbarAction::System(*action));
+                        ui.close_menu();
+                    }
+                }
+            });
         });
     });
-}
-
-fn view_row(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Vec<ToolbarAction>) {
-    let fit = input.prefs.fit;
-    if ui.selectable_label(fit == Fit::Fit, "Einpassen").clicked() && fit != Fit::Fit {
-        out.push(ToolbarAction::Fit(Fit::Fit));
-    }
-    if ui.selectable_label(fit == Fit::Actual, "1:1").clicked() && fit != Fit::Actual {
-        out.push(ToolbarAction::Fit(Fit::Actual));
-    }
-    if ui
-        .selectable_label(input.fullscreen, "Vollbild")
-        .on_hover_text("Vollbild verlassen: Strg+Alt+Pause oder Strg+Alt+Umschalt+F; F11 schaltet Vollbild um.")
-        .clicked()
-    {
-        out.push(ToolbarAction::Fullscreen);
-    }
-    let mut low_latency = input.prefs.low_latency;
-    if ui
-        .checkbox(&mut low_latency, "Niedrigste Latenz (Bildrisse möglich)")
-        .changed()
-    {
-        // P9: the Direct3D 11 display presents with it from its next picture.
-        super::screen_present::set_low_latency(low_latency);
-        out.push(ToolbarAction::LowLatency(low_latency));
-    }
-    let direct = super::screen_direct::showing(ui.ctx());
-    if let Some(note) = super::screen_present::latency_note(input.low_latency_changed, direct) {
-        ui.add(egui::Label::new(RichText::new(note).small()).wrap());
-    }
-    let mut toggle =
-        |ui: &mut egui::Ui, value: bool, text: &str, make: fn(bool) -> ToolbarAction| {
-            let mut changed = value;
-            if ui.checkbox(&mut changed, text).changed() {
-                out.push(make(changed));
-            }
-        };
-    toggle(ui, input.stats_on, "Statistik", ToolbarAction::Stats);
-    super::screen_audio::toolbar_row(ui, input.info, out);
-    // „Codec“ (replaces „Verlustfrei“), „Dekodierer“, „Höchste Datenrate“.
-    codec_rows::codec_rows(ui, input, out);
-    codec_rows::max_rate_row(ui, input, out);
-    // „Monitor“ and „Auflösung“ of the host (plan 2026-11-17 P5).
-    display_rows::display_rows(ui, input, out);
 }
 
 #[cfg_attr(not(windows), allow(dead_code))] // library and display: Windows
@@ -471,6 +442,10 @@ mod codec_rows;
 pub use codec_rows::apply_codec;
 #[path = "screen_toolbar_display.rs"]
 mod display_rows;
+#[path = "screen_toolbar_view.rs"]
+mod view_rows;
+#[path = "screen_toolbar_wrap.rs"]
+mod wrap;
 pub use display_rows::{apply_virtual_display, send_live};
 
 /// Draws the toolbar and returns what the user chose. P9 (plan 2026-11-17):
@@ -486,7 +461,7 @@ pub fn show(ui: &mut egui::Ui, input: &ToolbarInput) -> Vec<ToolbarAction> {
         source_row(ui, input, &mut out);
         control_row(ui, input, &mut out);
         keys_menu(ui, input, &mut out);
-        view_row(ui, input, &mut out);
+        view_rows::view_row(ui, input, &mut out);
     });
     out
 }

@@ -97,6 +97,46 @@ pub fn fit_mode(wanted: FrameSize, limit: DriverLimit) -> Option<FrameSize> {
     None
 }
 
+/// Why `fit_mode` does not set `wanted` exactly within `limit` (rule
+/// „Wahl gilt“ of 2026-11-18: the report names it): `ADJUST_MODE_RULES`
+/// when se's own rules change it already, `ADJUST_DRIVER_LIMIT` when only the
+/// driver's limit does; `None` when `wanted` is set as it is.
+pub fn fit_reason(wanted: FrameSize, limit: DriverLimit) -> Option<&'static str> {
+    if fit_mode(wanted, limit) == Some(wanted) {
+        None
+    } else if fit_mode(wanted, DriverLimit::NONE) != Some(wanted) {
+        Some(super::ADJUST_MODE_RULES)
+    } else {
+        Some(super::ADJUST_DRIVER_LIMIT)
+    }
+}
+
+/// Why the display shows `shown` instead of the viewer's fixed size
+/// `fixed` (`None`: it shows `fixed`): another session decides
+/// (`deciding` false), se's rules or the driver's limit fitted it
+/// (`fit_reason`), the change waits for the gap (`pending`), or the driver
+/// set another size or none.
+pub fn adjust_reason(
+    fixed: FrameSize,
+    shown: Option<FrameSize>,
+    limit: DriverLimit,
+    deciding: bool,
+    pending: bool,
+) -> Option<&'static str> {
+    if shown == Some(fixed) {
+        return None;
+    }
+    Some(if !deciding {
+        super::ADJUST_OTHER_SESSION
+    } else if shown.is_some() && shown == fit_mode(fixed, limit) {
+        fit_reason(fixed, limit).unwrap_or(super::ADJUST_DRIVER)
+    } else if pending {
+        super::ADJUST_PENDING
+    } else {
+        super::ADJUST_DRIVER
+    })
+}
+
 /// One display mode: pixel clock (kHz) and the horizontal and vertical
 /// timings of the X11 mode line. CVT reduced blanking has `+hsync -vsync`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

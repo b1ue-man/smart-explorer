@@ -72,13 +72,17 @@ impl VaVideoEncoderFactory {
         let api = super::vaapi_ffi::load().map_err(io::Error::other)?;
         let display = VaDisplay::open(api, &self.device.node)?;
         let video_proc = self.device.video_proc;
+        // P9: the constant quality of sharp mode for an admitted session.
+        let quality = grant
+            .as_ref()
+            .and_then(|_| crate::screen::core::rate_control::model::session_quality());
         match codec {
             CodecKind::Hevc => {
-                let session = VaHevcSession::open(display, &self.caps, video_proc, size)?;
+                let session = VaHevcSession::open(display, &self.caps, video_proc, size, quality)?;
                 Ok(self.wrap(session, (choice, size, fps), grant))
             }
             CodecKind::Av1 => {
-                let session = VaAv1Session::open(display, &self.caps, video_proc, size)?;
+                let session = VaAv1Session::open(display, &self.caps, video_proc, size, quality)?;
                 Ok(self.wrap(session, (choice, size, fps), grant))
             }
             CodecKind::H264 | CodecKind::Tiles => Err(io::Error::new(

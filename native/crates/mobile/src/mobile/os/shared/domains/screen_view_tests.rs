@@ -369,3 +369,131 @@ fn screen_task_android_key_names_known() {
         );
     }
 }
+
+/// „Codec: Scharf (GPU)“ of the app reaches the core as the setting `sharp`
+/// with its `SET_MODE` bit, „Dekodierer“ as chosen (user rule of
+/// 2026-11-18: every choice is used exactly as made); an unknown codec is an
+/// error, not the automatic one.
+#[test]
+fn wahlgilt_codec_sharp_reaches_the_core() {
+    use crate::screen::core::negotiate::{CodecSetting, DecoderPreference};
+    let (codec, decoder) =
+        super::codecs::codec_args(&json!({ "codec": "sharp", "decoder": "hardware" })).unwrap();
+    assert_eq!(codec, Some(CodecSetting::Sharp));
+    assert_eq!(decoder, Some(DecoderPreference::Hardware));
+    assert!(CodecSetting::Sharp.sharpness() && !CodecSetting::Sharp.lossless());
+    let unknown = super::codecs::codec_args(&json!({ "codec": "gpu" }));
+    assert_eq!(unknown.unwrap_err().kind, "invalid");
+}
+
+/// „Höchste Datenrate“ below the host's floor (0,15 Mbit/s) is refused with
+/// its reason instead of being raised by the host without a word; 0 stays
+/// „automatisch“ in `viewSetMode`.
+#[test]
+fn wahlgilt_max_rate_below_the_floor_is_refused() {
+    use super::codecs::max_rate_arg;
+    let floor = crate::screen::core::rate_control::MIN_BITRATE_BPS;
+    assert_eq!(max_rate_arg(&json!({}), false).unwrap(), None);
+    let at_floor = json!({ "maxRate": floor });
+    assert_eq!(max_rate_arg(&at_floor, false).unwrap(), Some(Some(floor)));
+    assert_eq!(max_rate_arg(&at_floor, true).unwrap(), Some(Some(floor)));
+    let below = json!({ "maxRate": floor - 1 });
+    assert_eq!(max_rate_arg(&below, false).unwrap_err().kind, "invalid");
+    assert_eq!(max_rate_arg(&below, true).unwrap_err().kind, "invalid");
+    let zero = json!({ "maxRate": 0 });
+    assert_eq!(max_rate_arg(&zero, false).unwrap_err().kind, "invalid");
+    assert_eq!(max_rate_arg(&zero, true).unwrap(), Some(None));
+    let negative = json!({ "maxRate": -1 });
+    assert_eq!(max_rate_arg(&negative, true).unwrap_err().kind, "invalid");
+}
+
+/// The app's „Monitor“/„Auflösung“ line reads what the host did (`accepted`,
+/// with `requested`, `adjusted`, `source`) and does now (`stats`).
+#[test]
+fn wahlgilt_accepted_and_stats_carry_the_virtual_display_report() {
+    let hello: crate::screen::core::wire_hello::ScreenHelloOk = serde_json::from_value(json!({
+        "authorization": { "view": "allow", "control": "off" }, "platform": "windows",
+        "encoders": [], "monitors": [], "limits": [], "approval": "once",
+        "virtual_display": {
+            "state": "unsupported", "width": 0, "height": 0, "driver": "windows",
+            "reason": "driver_missing", "requested": { "width": 2560, "height": 1440 },
+            "adjusted": "driver_limit", "source": "monitor:2", "source_chosen": "monitor:1",
+        },
+    }))
+    .unwrap();
+    let accepted = accepted_fields(&hello, "direct");
+    assert_eq!(accepted["virtualDisplay"]["state"], "unsupported");
+    assert_eq!(accepted["virtualDisplay"]["reason"], "driver_missing");
+    assert_eq!(accepted["virtualDisplay"]["driver"], "windows");
+    assert_eq!(accepted["virtualDisplay"]["requested"]["width"], 2560);
+    assert_eq!(accepted["virtualDisplay"]["requested"]["height"], 1440);
+    assert_eq!(accepted["virtualDisplay"]["adjusted"], "driver_limit");
+    assert_eq!(accepted["virtualDisplay"]["source"], "monitor:2");
+    assert_eq!(accepted["virtualDisplay"]["sourceChosen"], "monitor:1");
+    let stats = stats_fields(&crate::screen::core::wire_control::HostStats {
+        target_kbps: 6000,
+        sent_kbps: 5000,
+        fps: 30,
+        path: crate::screen::core::rate_control::PathKind::Relay,
+        keyframes: 0,
+        dropped_before_encode: 0,
+        stream_resets: 0,
+        unacked_bytes: 0,
+        frame_timing: None,
+        chain: Some(crate::screen::core::frame_timing::ChainReport {
+            virtual_display: Some(
+                "active:1920x1080:windows;requested=2560x1440;adjusted=driver_limit;source=monitor:2"
+                    .into(),
+            ),
+            ..Default::default()
+        }),
+        stations: None,
+    });
+    assert_eq!(
+        stats["chain"]["virtualDisplay"],
+        "active:1920x1080:windows;requested=2560x1440;adjusted=driver_limit;source=monitor:2"
+    );
+}
+
+/// The app's decoder list goes to the host through the core's
+/// `chosen_decoders`: under a named codec it holds that codec alone, no
+/// tiles (the host reads the choice from it and never replaces it); under
+/// „Automatisch“ the tiles stay the last fallback.
+#[test]
+fn wahlgilt_named_codec_offers_no_tiles_to_the_host() {
+    use crate::screen::core::negotiate::CodecKind;
+    let request = |codec: &str| {
+        let args = json!({
+            "codec": codec,
+            "decoders": [
+                { "codec": "h264", "profile": "high", "hardware": true },
+                { "codec": "hevc", "profile": "main", "hardware": true },
+                { "codec": "tiles" },
+            ],
+        });
+        let (codec, decoder) = super::codecs::codec_args(&args).unwrap();
+        crate::daemon::StreamRequest {
+            expected_node: None,
+            mode: SessionMode::View,
+            source: None,
+            decoders: super::codecs::decoders_arg(&args, SessionMode::View).unwrap(),
+            display_size: None,
+            frame_capabilities: None,
+            max_fps: 30,
+            max_rate_bps: None,
+            codec,
+            decoder,
+            gop_continue: false,
+            gop_continue_decoders: Vec::new(),
+            virtual_display: None,
+        }
+        .chosen_decoders()
+    };
+    let kinds = |codec: &str| -> Vec<CodecKind> {
+        request(codec).iter().map(|offer| offer.codec).collect()
+    };
+    assert_eq!(kinds("hevc"), vec![CodecKind::Hevc]);
+    assert_eq!(kinds("h264"), vec![CodecKind::H264]);
+    assert!(kinds("auto").contains(&CodecKind::Tiles));
+    assert!(!kinds("sharp").contains(&CodecKind::Av1));
+}

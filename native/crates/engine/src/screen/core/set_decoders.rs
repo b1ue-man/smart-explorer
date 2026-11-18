@@ -23,6 +23,10 @@
 //!   `CodecPreference::Auto` as `host_server_start.rs`). A changed pairing
 //!   starts a new picture group with a key frame in the new codec
 //!   (`Pipeline::set_decoders`); an unchanged one changes nothing.
+//! - Plan 2026-11-18 „Netzrate“: the ranking follows the viewer's choice as
+//!   its decoders name it (`negotiate::preference_named_by`); a chosen codec
+//!   negotiates its own pairings only (`negotiate_chosen`) and one the host
+//!   lacks ends the session with the reason (`renegotiate_for`).
 use std::io;
 
 use serde::{Deserialize, Serialize};
@@ -31,8 +35,9 @@ use super::frame_budget::FrameContract;
 use super::gop_continue::ContinueOffers;
 use super::host_pipeline::codec_fallbacks;
 use super::negotiate::{
-    negotiate_for_contract, negotiate_trusted, sharp_alternative, CodecChoice, CodecKind,
-    CodecOffer, CodecPreference, CodecTrust, MAX_COMBINED_OFFERS,
+    negotiate_chosen, negotiate_for_contract, preference_named_by, sharp_alternative,
+    ChosenUnavailable, CodecChoice, CodecKind, CodecOffer, CodecPreference, CodecTrust,
+    MAX_COMBINED_OFFERS,
 };
 use super::pixel_convert::FrameSize;
 use super::wire::invalid;
@@ -95,6 +100,8 @@ pub struct Pairing {
     pub fallbacks: Vec<CodecChoice>,
     /// The tile codec's size limit for the new offers.
     pub tile_limit: Option<FrameSize>,
+    /// The viewer's choice its decoders name (plan 2026-11-18).
+    pub preference: CodecPreference,
 }
 
 /// Negotiates the host's `encoders` against the viewer's new `decoders`
@@ -121,11 +128,30 @@ pub fn renegotiate_trusted(
     video_session: bool,
     trust: CodecTrust,
 ) -> Option<Pairing> {
-    let choices = negotiate_trusted(encoders, decoders, CodecPreference::Auto, contract, trust);
-    let choice = choices
+    renegotiate_for(encoders, decoders, contract, video_session, trust)
+        .ok()
+        .flatten()
+}
+
+/// `renegotiate_trusted` under the viewer's choice (plan 2026-11-18): `Err`
+/// names why a chosen codec has no pairing; `Ok(None)` when no pairing
+/// exists for this session.
+pub fn renegotiate_for(
+    encoders: &[CodecOffer],
+    decoders: &[CodecOffer],
+    contract: Option<FrameContract>,
+    video_session: bool,
+    trust: CodecTrust,
+) -> Result<Option<Pairing>, ChosenUnavailable> {
+    let preference = preference_named_by(decoders);
+    let choices = negotiate_chosen(encoders, decoders, preference, contract, trust)?;
+    let Some(choice) = choices
         .iter()
         .copied()
-        .find(|choice| video_session || choice.codec == CodecKind::Tiles)?;
+        .find(|choice| video_session || choice.codec == CodecKind::Tiles)
+    else {
+        return Ok(None);
+    };
     let sharp = sharp_alternative(&choices, &choice);
     let fallbacks = if video_session {
         codec_fallbacks(&choices, &choice)
@@ -135,12 +161,13 @@ pub fn renegotiate_trusted(
     let tile_limit = negotiate_for_contract(encoders, decoders, CodecPreference::Tiles, contract)
         .first()
         .map(|tiles| tiles.max_size);
-    Some(Pairing {
+    Ok(Some(Pairing {
         choice,
         sharp,
         fallbacks,
         tile_limit,
-    })
+        preference,
+    }))
 }
 
 #[cfg(test)]

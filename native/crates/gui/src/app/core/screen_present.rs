@@ -113,11 +113,89 @@ pub fn direct_allows_tearing(low_latency: bool, tearing_supported: bool) -> bool
     low_latency && tearing_supported
 }
 
-/// The hint under „Niedrigste Latenz“ (`changed`: switched since the
-/// window opened); none while the Direct3D 11 display shows the picture,
-/// where the switch applies at once.
+/// The renderer of the viewer window (set when the window opens): wgpu,
+/// or glow when wgpu had no surface.
+static WINDOW_GLOW: AtomicU8 = AtomicU8::new(0);
+// 0: not opened yet.
+const WINDOW_WGPU: u8 = 1;
+const WINDOW_IS_GLOW: u8 = 2;
+/// „Niedrigste Latenz“ as the window opened with it (its surface keeps it).
+static OPENED_LOW_LATENCY: AtomicU8 = AtomicU8::new(LATENCY_UNREAD);
+
+/// The window opened with `glow` (else wgpu) and „Niedrigste Latenz“
+/// `low_latency` (`ScreenViewerApp::new`).
+pub fn set_window(glow: bool, low_latency: bool) {
+    let window = if glow { WINDOW_IS_GLOW } else { WINDOW_WGPU };
+    WINDOW_GLOW.store(window, Ordering::Release);
+    OPENED_LOW_LATENCY.store(latency_state(low_latency), Ordering::Release);
+}
+
+/// The name of the window's renderer in the toolbar.
+pub fn window_renderer_label() -> &'static str {
+    match WINDOW_GLOW.load(Ordering::Acquire) {
+        WINDOW_IS_GLOW => "OpenGL (glow)",
+        // Not opened yet (tests) or wgpu.
+        _ => "wgpu",
+    }
+}
+
+/// What decides how „Niedrigste Latenz“ reaches the screen now.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LatencyFacts {
+    /// Switched since the window opened.
+    pub changed: bool,
+    /// The Direct3D 11 display shows the picture.
+    pub direct_showing: bool,
+    /// The switch now.
+    pub low_latency: bool,
+    /// The window draws with glow.
+    pub glow: bool,
+}
+
+/// The hint under „Niedrigste Latenz“ (user rule 2026-11-18): it names the
+/// present mode that really runs. A change waits for the next start where
+/// the window's surface keeps its mode; the Direct3D 11 display applies it
+/// at once without tearing where DXGI reports no tearing support; the wgpu
+/// window asks for `AutoNoVsync`, which wgpu turns into Fifo (with VSync)
+/// where the surface has neither Immediate nor Mailbox, and eframe 0.29
+/// does not say which one it took; glow asks the driver for no VSync.
+pub fn latency_text(facts: LatencyFacts) -> Option<&'static str> {
+    if facts.direct_showing {
+        return facts.low_latency.then_some(
+            "Direct3D 11: ohne Warten auf VSync; Bildrisse nur, wo DXGI Tearing meldet, \
+             sonst das neueste Bild zur nächsten Bildwiederholung.",
+        );
+    }
+    if facts.changed {
+        return Some("Wirkt beim nächsten Start des Betrachters.");
+    }
+    match (facts.low_latency, facts.glow) {
+        (false, _) => None,
+        (true, true) => Some(
+            "OpenGL (glow): VSync aus beim Treiber angefordert; ob er es einhält, meldet er nicht.",
+        ),
+        (true, false) => Some(
+            "wgpu: AutoNoVsync angefordert – Immediate oder Mailbox, wo die Oberfläche es \
+             kann, sonst Fifo mit VSync (eframe meldet den gewählten Modus nicht).",
+        ),
+    }
+}
+
+/// `latency_text` for this window (`changed`: switched since the window
+/// opened).
 pub fn latency_note(changed: bool, direct_showing: bool) -> Option<&'static str> {
-    (changed && !direct_showing).then_some("Wirkt beim nächsten Start des Betrachters.")
+    let opened = OPENED_LOW_LATENCY.load(Ordering::Acquire);
+    let low_latency = low_latency();
+    latency_text(LatencyFacts {
+        changed: changed && opened != latency_state(low_latency),
+        direct_showing,
+        low_latency: if direct_showing || opened == LATENCY_UNREAD {
+            low_latency
+        } else {
+            opened == LATENCY_ON
+        },
+        glow: WINDOW_GLOW.load(Ordering::Acquire) == WINDOW_IS_GLOW,
+    })
 }
 
 /// The present mode of the viewer window.

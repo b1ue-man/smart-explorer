@@ -109,6 +109,7 @@ fn screen_task_hello_maps_onto_relation_proof() {
     );
     let future = ScreenHelloError {
         code: "future_code".into(),
+        message: None,
     };
     assert_eq!(future.known_code(), None);
     for code in ScreenErrorCode::ALL {

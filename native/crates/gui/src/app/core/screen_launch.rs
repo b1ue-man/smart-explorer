@@ -35,8 +35,13 @@ fn viewport(title: &str) -> egui::ViewportBuilder {
         .with_icon(crate::window_icon())
 }
 
-/// Opens the viewer window with wgpu, and with the CPU path (glow) when the
-/// window cannot get a wgpu surface.
+/// Opens the viewer window with wgpu. When the window gets no wgpu surface
+/// it draws with glow only where „Anzeige“ allows that (user rule
+/// 2026-11-18, `glow_allowed`): under „Automatisch“, and under „Direct3D
+/// 11“, whose presenter does not depend on the window's renderer. A chosen
+/// „wgpu“ that is not available opens an error window with the reason,
+/// whose button sets „Anzeige: Automatisch“ and opens with glow at the
+/// user's word, never on its own.
 fn run_viewer(start: Start, title: &str) -> i32 {
     // P8: FFmpeg loads (or this user's copy downloads) while the window opens.
     crate::screen::os::prepare_ffmpeg();
@@ -54,12 +59,25 @@ fn run_viewer(start: Start, title: &str) -> i32 {
         wgpu,
         Box::new(move |cc| Ok(Box::new(ScreenViewerApp::new(cc, first, first_prefs)))),
     );
-    if result.is_ok() {
-        return 0;
+    let error = match result {
+        Ok(()) => return 0,
+        Err(error) => error.to_string(),
+    };
+    if !glow_allowed(super::screen_prefs::display_choice()) {
+        let message = wgpu_refused_text(&error);
+        if !error_window_with_choice(&message, "Mit „Anzeige: Automatisch“ öffnen") {
+            return 1;
+        }
+        let automatic = super::screen_prefs::DisplayChoice::Automatic;
+        let _ = super::screen_prefs::set_output_choice(None, Some(automatic));
     }
-    eprintln!("Smart Explorer: wgpu nicht verfügbar, Bild wird auf der CPU gezeichnet");
+    eprintln!(
+        "Smart Explorer: wgpu nicht verfügbar ({error}), Bild wird mit OpenGL (glow) gezeichnet"
+    );
     let glow = eframe::NativeOptions {
         renderer: eframe::Renderer::Glow,
+        // „Niedrigste Latenz“ under glow: no VSync asked of the driver.
+        vsync: !second_prefs.low_latency,
         viewport: viewport(title),
         ..Default::default()
     };
@@ -68,6 +86,20 @@ fn run_viewer(start: Start, title: &str) -> i32 {
         glow,
         Box::new(move |cc| Ok(Box::new(ScreenViewerApp::new(cc, second, second_prefs)))),
     ))
+}
+
+/// Whether the window may draw with glow when wgpu has no surface.
+pub fn glow_allowed(choice: super::screen_prefs::DisplayChoice) -> bool {
+    choice != super::screen_prefs::DisplayChoice::Wgpu
+}
+
+/// The error of a chosen „wgpu“ that is not available.
+pub fn wgpu_refused_text(error: &str) -> String {
+    format!(
+        "Anzeige „wgpu“ ist gewählt, aber wgpu bekommt keine Fensteroberfläche: {error}. \
+         Das Fenster weicht nicht von selbst auf OpenGL (glow) aus; „Anzeige: \
+         Automatisch“ erlaubt das."
+    )
 }
 
 /// `--screen-view <ziel-json>`.
@@ -147,6 +179,51 @@ pub fn open_grid(room: Option<&str>) -> Result<(), String> {
     spawn(&StartRequest::ScreenGrid {
         room: room.map(str::to_string),
     })
+}
+
+/// An error window with `message`, „Schließen“ and a button `choice`;
+/// `true` when the user clicked `choice`.
+fn error_window_with_choice(message: &str, choice: &'static str) -> bool {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    struct ChoiceWindow(String, &'static str, Arc<AtomicBool>);
+    impl eframe::App for ChoiceWindow {
+        fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+            if crate::app::update_stop_ui::close_requested(ctx) {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ui.label(&self.0);
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button(self.1).clicked() {
+                        self.2.store(true, Ordering::Release);
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                    if ui.button("Schließen").clicked() {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                });
+            });
+        }
+    }
+    let chosen = Arc::new(AtomicBool::new(false));
+    let options = eframe::NativeOptions {
+        renderer: eframe::Renderer::Glow,
+        viewport: egui::ViewportBuilder::default()
+            .with_title("Bildschirm – Smart Explorer")
+            .with_app_id(APP_ID)
+            .with_inner_size([560.0, 200.0])
+            .with_icon(crate::window_icon()),
+        ..Default::default()
+    };
+    let (text, flag) = (message.to_string(), chosen.clone());
+    let _ = super::screen_render_app::run_native(
+        APP_ID,
+        options,
+        Box::new(move |_cc| Ok(Box::new(ChoiceWindow(text, choice, flag)))),
+    );
+    chosen.load(Ordering::Acquire)
 }
 
 /// A button of the pages that starts the viewer.

@@ -392,6 +392,8 @@ impl Pipeline {
     }
 }
 
+#[path = "host_fallback.rs"]
+mod fallback;
 #[path = "host_pipeline_init.rs"]
 mod initialization;
 #[path = "host_pipeline_produce.rs"]

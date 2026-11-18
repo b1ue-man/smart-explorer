@@ -18,14 +18,19 @@
 //!   `virtualWidth` × `virtualHeight` (plan 2026-11-17 P5, „Monitor“ and
 //!   „Auflösung“ of the desktop viewer); absent: no wish, the host keeps
 //!   its display as before.
+//! - `maxRate`: „Höchste Datenrate“ in bit/s, at least the host's floor
+//!   `MIN_BITRATE_BPS` (0,15 Mbit/s): a lower rate is refused with its
+//!   reason instead of being raised by the host without a word (user rule
+//!   of 2026-11-18: a choice is used exactly as made).
 use serde_json::Value;
 
-use super::super::args::{invalid, opt_bool, opt_str};
+use super::super::args::{invalid, opt_bool, opt_i64, opt_str};
 use super::size_args;
 use crate::mobile::ApiError;
 use crate::screen::core::negotiate::{
     CodecKind, CodecOffer, CodecSetting, DecoderPreference, H264Profile,
 };
+use crate::screen::core::rate_control::MIN_BITRATE_BPS;
 use crate::screen::core::virtual_display::{VirtualDisplayChoice, VirtualDisplayWish};
 use crate::screen::core::wire_hello::SessionMode;
 
@@ -132,4 +137,32 @@ pub(super) fn virtual_display_arg(args: &Value) -> Result<Option<VirtualDisplayC
         .validate()
         .map_err(|error| invalid(error.to_string()))?;
     Ok(Some(choice))
+}
+
+/// `maxRate` of `screen.viewOpen` (`zero_automatic` false: absent is
+/// automatic) and of `screen.viewSetMode` (`zero_automatic` true: 0 is
+/// automatic, `Some(None)`); `None` without `maxRate`. A rate below
+/// `MIN_BITRATE_BPS` is an error, not a rate the host raises silently.
+pub(super) fn max_rate_arg(
+    args: &Value,
+    zero_automatic: bool,
+) -> Result<Option<Option<u64>>, ApiError> {
+    let Some(rate) = opt_i64(args, "maxRate") else {
+        return Ok(None);
+    };
+    if zero_automatic && rate == 0 {
+        return Ok(Some(None));
+    }
+    match u64::try_from(rate) {
+        Ok(rate) if rate >= MIN_BITRATE_BPS => Ok(Some(Some(rate))),
+        _ => Err(invalid(format!(
+            "„maxRate“ ist {}mindestens {MIN_BITRATE_BPS} bit/s (0,15 Mbit/s): \
+             darunter arbeitet der Host nicht und würde die Rate von selbst anheben.",
+            if zero_automatic {
+                "0 (automatisch) oder "
+            } else {
+                ""
+            }
+        ))),
+    }
 }

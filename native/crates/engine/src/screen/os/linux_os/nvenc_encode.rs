@@ -61,6 +61,28 @@ impl NvRate for RateParams {
     }
 }
 
+/// The rate of a session with its constant quality of „Scharf (GPU)“ (P9,
+/// rule „Wahl gilt“ of 2026-11-18: Linux applies it as Windows does, VBR
+/// with `targetQuality` under the rate as its peak, `nvenc_settings.rs`).
+pub(super) struct SessionRate<'a>(pub(super) &'a RateParams, pub(super) Option<u8>);
+
+impl NvRate for SessionRate<'_> {
+    fn cbr(&self) -> (u32, u32, u32) {
+        self.0.cbr()
+    }
+
+    fn quality(&self) -> Option<u8> {
+        self.1
+    }
+}
+
+/// The quality target an admitted session opens with (sharp mode, P9); the
+/// run-time check and `bench --local` (no admission) measure CBR, as on
+/// Windows (`vendor_codecs.rs`).
+pub(super) fn admitted_quality(grant: Option<&CaptureGrant>) -> Option<u8> {
+    grant.and_then(|_| crate::screen::core::rate_control::model::session_quality())
+}
+
 type Deliver<'a> = &'a mut dyn FnMut(&[&[u8]]) -> io::Result<()>;
 
 /// The NVENC encoder of this system.
@@ -89,7 +111,7 @@ impl NvencEncoderFactory {
                 format!("NVENC cannot encode {}x{}", size.width, size.height),
             ));
         }
-        let session = NvencSession::open(size, fps)?;
+        let session = NvencSession::open(size, fps, admitted_quality(grant.as_ref()))?;
         let encoder = HwH264Encoder::new(session, NVENC_NAME.into(), size, fps, grant);
         // Merge W2: the bit rate up to the pairing's level, no fixed ceiling.
         Ok(Box::new(
@@ -137,6 +159,8 @@ pub(super) struct NvencSession {
     init: Box<NvEncInitializeParams>,
     config: Box<NvEncConfig>,
     rate: RateParams,
+    /// The constant quality of sharp mode (P9); `None`: CBR.
+    quality: Option<u8>,
     /// A rate the driver refused (plan 2026-11-17): the session keeps the
     /// running one and does not ask for this one again.
     refused: Option<RateParams>,
@@ -156,12 +180,18 @@ pub(super) struct NvencSession {
 unsafe impl Send for NvencSession {}
 
 impl NvencSession {
-    fn open(size: FrameSize, fps: u32) -> io::Result<Self> {
-        Self::open_codec(size, fps, CodecKind::H264)
+    fn open(size: FrameSize, fps: u32, quality: Option<u8>) -> io::Result<Self> {
+        Self::open_codec(size, fps, CodecKind::H264, quality)
     }
 
-    /// A session of `codec` (H.264, HEVC or AV1, BK6).
-    pub(super) fn open_codec(size: FrameSize, fps: u32, codec: CodecKind) -> io::Result<Self> {
+    /// A session of `codec` (H.264, HEVC or AV1, BK6) with the constant
+    /// `quality` of sharp mode (`None`: CBR).
+    pub(super) fn open_codec(
+        size: FrameSize,
+        fps: u32,
+        codec: CodecKind,
+        quality: Option<u8>,
+    ) -> io::Result<Self> {
         let guid = super::nvenc_codecs::encode_guid(codec)
             .ok_or_else(|| io::Error::new(io::ErrorKind::Unsupported, "NVENC has no tiles"))?;
         let api = super::nvenc_ffi::load().map_err(io::Error::other)?;
@@ -181,6 +211,7 @@ impl NvencSession {
             init: Box::new(NvEncInitializeParams::zeroed()),
             config: Box::new(NvEncConfig::zeroed()),
             rate: RateParams::for_target(START_DIRECT_BPS, fps),
+            quality,
             refused: None,
             frames: 0,
             codec,
@@ -211,7 +242,8 @@ impl NvencSession {
         };
         status(&api, encoder, result, "nvEncGetEncodePresetConfigEx")?;
         *session.config = preset.preset_cfg;
-        apply_codec_settings(&mut session.config, &session.rate, codec);
+        let rate = SessionRate(&session.rate, session.quality);
+        apply_codec_settings(&mut session.config, &rate, codec);
         apply_codec_references(&mut session.config, codec, invalidation);
         session.fill_init();
         let initialize = f.initialize_encoder.ok_or_else(missing)?;
@@ -266,7 +298,11 @@ impl NvencSession {
         let reconfigure = self.api.functions.reconfigure_encoder.ok_or_else(missing)?;
         let previous = self.rate;
         self.rate = *rate;
-        apply_codec_settings(&mut self.config, rate, self.codec);
+        apply_codec_settings(
+            &mut self.config,
+            &SessionRate(rate, self.quality),
+            self.codec,
+        );
         apply_codec_references(&mut self.config, self.codec, self.invalidation);
         self.fill_init();
         let mut params = Box::new(NvEncReconfigureParams::zeroed());
@@ -277,7 +313,8 @@ impl NvencSession {
         let checked = status(&self.api, self.encoder, result, "nvEncReconfigureEncoder");
         if checked.is_err() {
             self.rate = previous;
-            apply_codec_settings(&mut self.config, &previous, self.codec);
+            let restored = SessionRate(&previous, self.quality);
+            apply_codec_settings(&mut self.config, &restored, self.codec);
             apply_codec_references(&mut self.config, self.codec, self.invalidation);
             self.fill_init();
             self.refused = Some(*rate);

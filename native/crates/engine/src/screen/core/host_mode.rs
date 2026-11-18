@@ -23,10 +23,13 @@ impl Pipeline {
         self.set_quality_mode(current.update(kind, size, fps, current.sharpness, current.lossless));
     }
 
-    pub(super) fn set_quality_mode(&mut self, mode: QualityMode) {
+    pub(super) fn set_quality_mode(&mut self, mut mode: QualityMode) {
         let previous = self.quality_policy.mode;
         let previous_fps = self.max_fps;
         let previous_choice = self.choice;
+        // The viewer's codec choice comes with the opening and `SET_DECODERS`
+        // (plan 2026-11-18); a mode copied before it keeps the current one.
+        mode.chosen = previous.chosen;
         self.quality_policy.mode = mode;
         self.kind = mode.kind;
         self.choice = self.quality_choice();

@@ -6,6 +6,14 @@
 //! (`wire_binary::GopHeader::codec`) and opens the matching decoder, as it
 //! does for the switch to the tiles. A viewer of 0.5.196 names only H.264
 //! and the tiles (`decoders`), so its session keeps H.264 → tiles.
+//!
+//! Plan 2026-11-18 „Netzrate“ (user rule of 2026-11-18): a failed encoder
+//! first gives way to another encoder of the same codec (hardware, then
+//! software; `codec_fallbacks` lists those pairings first), then, only under
+//! „Automatisch“, to another video codec, and the tiles only when no lossy
+//! encoder is left. A chosen codec (H.264, HEVC, AV1) never changes; „Scharf
+//! (GPU)“ stays on the GPU encoders of H.264 and HEVC (`FallbackScope`).
+//! Without an encoder of its scope the session ends with a clear error.
 #[cfg(test)]
 #[path = "batches_quality_task_tests.rs"]
 mod batches_task_tests;
@@ -13,7 +21,14 @@ mod batches_task_tests;
 #[path = "bildkette_w2_codec_fallback_task_tests.rs"]
 mod codec_fallback_tests;
 
+#[cfg(test)]
+#[path = "netzrate_task_tests.rs"]
+mod netzrate_task_tests;
+
 use super::{CodecChoice, CodecKind, FrameSize, Pipeline, StreamKind};
+use crate::screen::core::first_picture::FirstPictureWatch;
+use crate::screen::core::negotiate::CodecPreference;
+use crate::screen::core::sharp_mode;
 
 /// Complete coalesced state: omitting fps must not discard a pending rate
 /// request, including a full -> preview -> full sequence during capture.
@@ -26,6 +41,9 @@ pub(super) struct QualityMode {
     pub preview_fps: u32,
     pub sharpness: bool,
     pub lossless: bool,
+    /// The codec the viewer chose (`set_codec_preference`); a `SET_MODE`
+    /// keeps it. „Automatisch“ until the opening names another.
+    pub chosen: CodecPreference,
 }
 impl QualityMode {
     pub(super) fn update(
@@ -89,24 +107,126 @@ pub(super) struct QualityPolicy {
     pub(super) fallbacks: Vec<CodecChoice>,
     /// Video codecs whose encoder stages all failed in this session (W4, B3).
     pub(super) failed_codecs: Vec<CodecKind>,
+    /// Silent answers before the first picture of a video encoder.
+    pub(super) first_picture: FirstPictureWatch,
+    /// A chosen codec lost its last pairing (`SET_DECODERS`): the next tick
+    /// ends the session with this reason (plan 2026-11-18).
+    pub(super) pending_error: Option<String>,
 }
 
-/// The pairings a session may fall back to when the encoder of `choice`'s
-/// codec fails: per other video codec its best pairing among `choices` (the
-/// negotiation's rank order, B-30), 4:2:0 only, in that order. Empty for a
-/// viewer that named no other video codec (0.5.196: H.264 and tiles).
-pub fn codec_fallbacks(choices: &[CodecChoice], choice: &CodecChoice) -> Vec<CodecChoice> {
-    let mut codecs = vec![choice.codec];
-    let mut fallbacks = Vec::new();
-    for other in choices {
-        if !other.codec.is_video()
-            || other.codec.chroma_444(other.profile)
-            || codecs.contains(&other.codec)
-        {
-            continue;
+/// Which pairings may stand in for a failed encoder (plan 2026-11-18).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FallbackScope {
+    /// „Automatisch“: every video codec, the tiles last.
+    Automatic,
+    /// A chosen codec: its other encoders only, never the tiles.
+    Codec(CodecKind),
+    /// „Scharf (GPU)“: the GPU encoders of H.264 and HEVC only.
+    Sharp,
+}
+
+impl FallbackScope {
+    /// The scope of the viewer's choice; `sharpness` is „Scharf (GPU)“ as
+    /// `SET_MODE` sends it.
+    pub fn of(chosen: CodecPreference, sharpness: bool) -> Self {
+        if sharpness || chosen == CodecPreference::Sharp {
+            Self::Sharp
+        } else {
+            chosen.codec().map_or(Self::Automatic, Self::Codec)
         }
-        codecs.push(other.codec);
-        fallbacks.push(*other);
+    }
+
+    /// Whether `choice` may stand in for a failed encoder.
+    pub fn admits(self, choice: &CodecChoice) -> bool {
+        match self {
+            Self::Automatic => choice.codec.is_video(),
+            Self::Codec(codec) => choice.codec == codec,
+            Self::Sharp => sharp_mode::sharp_codec(choice.codec) && choice.encoder_hardware,
+        }
+    }
+
+    /// Whether the tiles may take over when no encoder of the scope is left.
+    pub fn tiles_allowed(self) -> bool {
+        self == Self::Automatic
+    }
+
+    /// The choice as the error names it.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Automatic => "auto",
+            Self::Codec(codec) => codec.key(),
+            Self::Sharp => sharp_mode::SHARP_KEY,
+        }
+    }
+}
+
+/// Whether the stage tried the encoders of `b` when it failed for `a`: the
+/// same codec, profile and limits (`CodecRegistry::matching_encoders` takes
+/// every encoder of the codec within them, hardware first or software
+/// first after the pairing's flag).
+fn same_encoders(a: &CodecChoice, b: &CodecChoice) -> bool {
+    a.codec == b.codec
+        && a.profile == b.profile
+        && a.max_macroblocks_per_second == b.max_macroblocks_per_second
+        && a.max_size == b.max_size
+        && a.max_pixels == b.max_pixels
+}
+
+/// The pairing that stands in for `failed` within `scope`, taken out of
+/// `fallbacks` (their order: `codec_fallbacks`). `stage_tried`: the stage
+/// already tried every encoder of `failed`'s limits (an encoder error);
+/// pairings with the same limits are given up with it. A silent encoder
+/// (`first_picture`) was not refused by the stage: the pairing of the other
+/// stage opens the encoders in the other order. Pairings outside the scope
+/// stay in the list.
+pub fn next_fallback(
+    fallbacks: &mut Vec<CodecChoice>,
+    failed: &CodecChoice,
+    stage_tried: bool,
+    scope: FallbackScope,
+) -> Option<CodecChoice> {
+    fallbacks.retain(|choice| choice != failed && !(stage_tried && same_encoders(choice, failed)));
+    let index = fallbacks.iter().position(|choice| scope.admits(choice))?;
+    Some(fallbacks.remove(index))
+}
+
+/// The pairings a session may fall back to when the encoder of `choice`
+/// fails, in this order (plan 2026-11-18): the other pairings of the same
+/// codec and chroma with another encoder stage or other limits (hardware
+/// before software, the negotiation's rank, B-30), then per other video
+/// codec in rank order its 4:2:0 pairings likewise. Empty for a viewer that
+/// named no other pairing (0.5.196: H.264 and tiles).
+pub fn codec_fallbacks(choices: &[CodecChoice], choice: &CodecChoice) -> Vec<CodecChoice> {
+    let key = |c: &CodecChoice| {
+        (
+            c.codec,
+            c.encoder_hardware,
+            c.max_macroblocks_per_second,
+            c.max_size,
+            c.max_pixels,
+        )
+    };
+    let mut codecs = vec![choice.codec];
+    for other in choices {
+        if other.codec.is_video() && !codecs.contains(&other.codec) {
+            codecs.push(other.codec);
+        }
+    }
+    let mut seen = vec![key(choice)];
+    let mut fallbacks = Vec::new();
+    for codec in codecs {
+        for other in choices.iter().filter(|other| other.codec == codec) {
+            let chroma = if codec == choice.codec {
+                choice.codec.chroma_444(choice.profile)
+            } else {
+                false
+            };
+            if other.codec.chroma_444(other.profile) != chroma || seen.contains(&key(other)) {
+                continue;
+            }
+            seen.push(key(other));
+            fallbacks.push(*other);
+        }
     }
     fallbacks
 }
@@ -120,6 +240,8 @@ impl QualityPolicy {
             encoder_failed: false,
             fallbacks: Vec::new(),
             failed_codecs: Vec::new(),
+            first_picture: FirstPictureWatch::default(),
+            pending_error: None,
             mode: QualityMode {
                 kind: StreamKind::Video,
                 full_size: None,
@@ -128,6 +250,7 @@ impl QualityPolicy {
                 preview_fps: 1,
                 sharpness: false,
                 lossless: false,
+                chosen: CodecPreference::Auto,
             },
         }
     }
@@ -140,6 +263,10 @@ impl QualityPolicy {
         // P9: sharpness (lossless) no longer caps the rate at 15 frames/s;
         // the hardware is the limit (encoding capacity, line, viewer).
         requested.clamp(1, self.viewer_fps)
+    }
+    /// Which pairings may stand in for a failed encoder.
+    pub(super) fn scope(&self) -> FallbackScope {
+        FallbackScope::of(self.mode.chosen, self.mode.sharpness)
     }
     pub(super) fn note_failed_codec(&mut self, codec: CodecKind) {
         if codec.is_video() && !self.failed_codecs.contains(&codec) {
@@ -191,24 +318,58 @@ impl Pipeline {
         self.quality_policy.fallbacks = fallbacks;
     }
 
-    /// The encoder of the session's codec failed: the next pairing of
-    /// another video codec, with a new picture group (whose header names
-    /// the codec); `None` when no other one was negotiated (then the tiles).
+    /// The codec the viewer chose (plan 2026-11-18): at the opening, before
+    /// the session's actor copies the mode. „Automatisch“ when not called.
+    pub fn set_codec_preference(&mut self, chosen: CodecPreference) {
+        self.quality_policy.mode.chosen = chosen;
+    }
+
+    /// The encoder of the session's pairing failed and the stage tried every
+    /// encoder of its limits: the next pairing of the scope
+    /// (`next_fallback`), with a new picture group (whose header names the
+    /// codec); `None` when none is left (then the tiles under
+    /// „Automatisch“, else an error).
     pub(super) fn fall_back_to_next_codec(&mut self) -> Option<CodecChoice> {
-        let failed = self.choice.codec;
+        self.fall_back_within(true)
+    }
+
+    /// The encoder opened but delivered no first picture (`first_picture`).
+    pub(super) fn fall_back_after_silence(&mut self) -> Option<CodecChoice> {
+        self.fall_back_within(false)
+    }
+
+    fn fall_back_within(&mut self, stage_tried: bool) -> Option<CodecChoice> {
+        let failed = self.choice;
+        let scope = self.quality_policy.scope();
         let policy = &mut self.quality_policy;
-        policy.note_failed_codec(failed);
-        let exhausted = &policy.failed_codecs;
+        policy.first_picture.restart();
+        // A failed 4:4:4 pairing (B-32) or a pairing taken for the size gives
+        // way to the session's own pairing first.
+        if failed != policy.original
+            && policy.original.codec.is_video()
+            && !policy.fallbacks.contains(&policy.original)
+        {
+            policy.fallbacks.insert(0, policy.original);
+        }
+        let exhausted = policy.failed_codecs.clone();
         policy
             .fallbacks
             .retain(|choice| !exhausted.contains(&choice.codec));
-        if policy.fallbacks.is_empty() {
-            return None;
+        let next = next_fallback(&mut policy.fallbacks, &failed, stage_tried, scope);
+        let same_left = next.is_some_and(|next| next.codec == failed.codec)
+            || policy
+                .fallbacks
+                .iter()
+                .any(|choice| choice.codec == failed.codec);
+        if !same_left {
+            policy.note_failed_codec(failed.codec);
         }
-        let next = policy.fallbacks.remove(0);
+        let next = next?;
         policy.original = next;
         policy.sharp = None;
-        self.pairing.on_codec_fallback(failed, next);
+        if next.codec != failed.codec {
+            self.pairing.on_codec_fallback(failed.codec, next);
+        }
         self.choice = next;
         self.quality.size = self.fitted_size();
         self.invalidate_reference();

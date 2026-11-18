@@ -80,7 +80,6 @@ impl ViewState {
     pub fn open_options(common: &Common, display: FrameSize) -> ViewOpen {
         ViewOpen {
             display,
-            prefs: common.prefs.clone(),
             prefer_yuv: common.gpu,
         }
     }
@@ -252,8 +251,11 @@ impl ViewState {
                 }
             }
             ToolbarAction::Control(on) => self.take_control(common, display, *on),
-            ToolbarAction::Codec(_) => {
+            ToolbarAction::Codec(codec) => {
                 if let Some(session) = &self.session {
+                    // The viewer's own switch to the tiles ends with a new
+                    // choice (user rule 2026-11-18).
+                    session.codec_chosen(*codec);
                     let mode = full_set_mode(None, display, &common.prefs);
                     session.send(ViewerFrame::SetMode(mode));
                 }

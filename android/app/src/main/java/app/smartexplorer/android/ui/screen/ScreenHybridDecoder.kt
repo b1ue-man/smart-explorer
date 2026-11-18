@@ -14,9 +14,14 @@ import android.media.MediaFormat
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
-/** V2 composite owns one confirmed frame; staging pixels are never presented. */
+/**
+ * V2 composite owns one confirmed frame; staging pixels are never presented. [decoder] is the viewer's choice
+ * „Dekodierer“ (`auto`, `hardware`, `software`): only H.264 decoders of that stage run ([ScreenDecoderPolicy.inStage]).
+ */
 internal class ScreenHybridDecoder(private val width: Int, private val height: Int,
-    private val budget:ScreenBufferBudget=ScreenBufferBudget.LEGACY, private val isRunning: () -> Boolean = {true}) {
+    private val budget:ScreenBufferBudget=ScreenBufferBudget.LEGACY,
+    private val decoder: String = ViewerCodecChoice.DECODER_AUTO,
+    private val isRunning: () -> Boolean = {true}) {
     private data class Stamp(val generation: Long, val frame: Long, val base: Long)
     private data class Rect(val x: Int, val y: Int, val w: Int, val h: Int)
     private val bytes = budget.checkedBytes(width, height)
@@ -173,7 +178,7 @@ internal class ScreenHybridDecoder(private val width: Int, private val height: I
             if(data[at]==0.toByte() && data[at+1]==0.toByte() && data[at+2]==1.toByte() && data[at+3].toInt() and 31==7) {profile=data[at+4].toInt() and 255;break}
         }
         val refused=mutableListOf<String>()
-        val candidates=MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos.mapNotNull {info ->
+        val usable=MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos.mapNotNull {info ->
             try {
                 if(info.isEncoder || info.isAlias || info.supportedTypes.none {it.equals("video/avc",true)}) return@mapNotNull null
                 val caps=info.getCapabilitiesForType("video/avc")
@@ -186,7 +191,15 @@ internal class ScreenHybridDecoder(private val width: Int, private val height: I
                 val requested=ScreenCodecLatency.requestDecoder(caps,format)
                 if(!caps.isFormatSupported(format)) null else Triple(info,format,requested)
             } catch(e: RuntimeException) {refused+="${info.name}: Fähigkeiten unbestätigt (${e.javaClass.simpleName})";null}
-        }.sortedWith(compareByDescending<Triple<MediaCodecInfo,MediaFormat,Boolean>> {it.third}.thenByDescending {it.first.isHardwareAccelerated})
+        }
+        // „Dekodierer: Hardware“ or „Software“ is used exactly as chosen: a decoder of the other stage never stands in.
+        val candidates=ScreenDecoderPolicy.inStage(decoder,usable) {it.first.isHardwareAccelerated}
+            .sortedWith(compareByDescending<Triple<MediaCodecInfo,MediaFormat,Boolean>> {it.third}.thenByDescending {it.first.isHardwareAccelerated})
+        if(candidates.isEmpty() && usable.isNotEmpty()) {
+            val stage=if(decoder==ViewerCodecChoice.DECODER_HARDWARE) "Hardware" else "Software"
+            throw ScreenCodecLatency.Unavailable("Android-Hybriddecoder",
+                "kein H.264-Dekodierer der gewählten Stufe „$stage“; vorhanden: ${usable.joinToString {it.first.name}.take(256)}")
+        }
         for((position,candidate) in candidates.withIndex()) {
             if(!isRunning()) throw CancellationException()
             val remaining=deadline-System.nanoTime()

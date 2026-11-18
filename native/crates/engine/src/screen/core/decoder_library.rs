@@ -2,9 +2,11 @@
 //! P8; the user's „lösch das andere nicht“): which library decodes on
 //! Windows. `Automatic` is FFmpeg (D3D11VA, DXVA2, software) and Media
 //! Foundation where FFmpeg does not open; `Ffmpeg` and `MediaFoundation`
-//! take that library alone. A chosen library that this process does not
-//! have at all leaves the other in place, so a choice never leaves the
-//! window without a decoder. The choice of this process lives here like
+//! take that library alone. User rule of 2026-11-18 („jede Einstellung
+//! wird genau so verwendet“): a chosen library that this process does not
+//! have is not replaced by the other; the gate notes it (`chosen_missing`)
+//! and the viewer shows „<Bibliothek> nicht vorhanden“. Only „Automatisch“
+//! takes whichever library is there. The choice of this process lives here like
 //! „Dekodierer“ (`negotiate::set_decoder_preference`): the desktop viewer
 //! and `se screen view` set it, the decoder factories read it when they
 //! offer and open. Elsewhere (Linux, Android) there is one library and the
@@ -58,10 +60,11 @@ impl DecoderLibrary {
 }
 
 /// Whether the decoders of `library` (`Ffmpeg` or `MediaFoundation`) may
-/// offer and open under `choice`: the chosen one, both under `Automatic`,
-/// and the other one where the chosen one has no decoder in this process
-/// (`ffmpeg_present`: the FFmpeg DLLs loaded; `media_foundation_present`:
-/// Media Foundation has a decoder transform).
+/// offer and open under `choice`: the chosen one alone, both under
+/// `Automatic`. The other library never stands in for a chosen one; when
+/// the facts show the chosen one absent (`ffmpeg_present`: the FFmpeg DLLs
+/// loaded; `media_foundation_present`: Media Foundation has a decoder
+/// transform), that is noted for the viewer's message (`chosen_missing`).
 pub fn library_allowed(
     library: DecoderLibrary,
     choice: DecoderLibrary,
@@ -71,10 +74,53 @@ pub fn library_allowed(
     match (choice, library) {
         (DecoderLibrary::Automatic, _) => true,
         (chosen, own) if chosen == own => true,
-        (DecoderLibrary::Ffmpeg, DecoderLibrary::MediaFoundation) => !ffmpeg_present,
-        (DecoderLibrary::MediaFoundation, DecoderLibrary::Ffmpeg) => !media_foundation_present,
+        (DecoderLibrary::Ffmpeg, DecoderLibrary::MediaFoundation) => {
+            note_presence(DecoderLibrary::Ffmpeg, ffmpeg_present);
+            false
+        }
+        (DecoderLibrary::MediaFoundation, DecoderLibrary::Ffmpeg) => {
+            note_presence(DecoderLibrary::MediaFoundation, media_foundation_present);
+            false
+        }
         _ => false,
     }
+}
+
+/// The library the gate last found absent while it was chosen (code, 0: none).
+static MISSING: AtomicU8 = AtomicU8::new(0);
+
+fn note_presence(chosen: DecoderLibrary, present: bool) {
+    let code = chosen.code();
+    if present {
+        let _ = MISSING.compare_exchange(code, 0, Ordering::AcqRel, Ordering::Acquire);
+    } else {
+        MISSING.store(code, Ordering::Release);
+    }
+}
+
+fn of_code(code: u8) -> DecoderLibrary {
+    match code {
+        1 => DecoderLibrary::Ffmpeg,
+        2 => DecoderLibrary::MediaFoundation,
+        _ => DecoderLibrary::Automatic,
+    }
+}
+
+/// The chosen library when the gate found it absent in this process; the
+/// viewer shows „<Bibliothek> nicht vorhanden“. `None` under „Automatisch“
+/// and while the chosen one is there (or was not checked yet).
+pub fn chosen_missing() -> Option<DecoderLibrary> {
+    let missing = of_code(MISSING.load(Ordering::Acquire));
+    (missing != DecoderLibrary::Automatic && missing == decoder_library()).then_some(missing)
+}
+
+/// The viewer's text for a chosen library that is absent.
+pub fn missing_text(library: DecoderLibrary) -> String {
+    format!(
+        "Dekodier-Bibliothek „{}“ nicht vorhanden; sie wird nicht durch eine andere ersetzt \
+         (nur „Automatisch“ weicht aus)",
+        library.label()
+    )
 }
 
 static DECODER_LIBRARY: AtomicU8 = AtomicU8::new(0);
@@ -86,22 +132,18 @@ pub fn set_decoder_library(library: DecoderLibrary) {
 
 /// The library choice of this process; automatic until one is set.
 pub fn decoder_library() -> DecoderLibrary {
-    match DECODER_LIBRARY.load(Ordering::Acquire) {
-        1 => DecoderLibrary::Ffmpeg,
-        2 => DecoderLibrary::MediaFoundation,
-        _ => DecoderLibrary::Automatic,
-    }
+    of_code(DECODER_LIBRARY.load(Ordering::Acquire))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// P8: FFmpeg and Media Foundation stay selectable; the default is
-    /// automatic (FFmpeg first); a missing chosen library never leaves the
-    /// viewer without a decoder (FFmpeg DLLs absent: Media Foundation).
+    /// P8 and the user rule of 2026-11-18: FFmpeg and Media Foundation stay
+    /// selectable, the default is automatic (FFmpeg first); a chosen
+    /// library is never replaced by the other, also when it is absent.
     #[test]
-    fn bildkette_task_ffmpeg_library_choice_and_fallback() {
+    fn wahlgilt_task_library_choice_never_takes_the_other() {
         use DecoderLibrary::*;
         assert_eq!(DecoderLibrary::default(), Automatic);
         for choice in DecoderLibrary::ALL {
@@ -116,6 +158,7 @@ mod tests {
         // Automatic: both, FFmpeg's factories stand first in the register.
         assert!(library_allowed(Ffmpeg, Automatic, true, true));
         assert!(library_allowed(MediaFoundation, Automatic, true, true));
+        assert!(library_allowed(Ffmpeg, Automatic, false, true));
         // A chosen library alone while it is present.
         assert!(library_allowed(Ffmpeg, Ffmpeg, true, true));
         assert!(!library_allowed(MediaFoundation, Ffmpeg, true, true));
@@ -126,10 +169,16 @@ mod tests {
             true
         ));
         assert!(!library_allowed(Ffmpeg, MediaFoundation, true, true));
-        // DLLs absent: Media Foundation decodes whatever was chosen.
-        assert!(library_allowed(MediaFoundation, Ffmpeg, false, true));
-        // No Media Foundation (Windows N, Server): FFmpeg decodes.
-        assert!(library_allowed(Ffmpeg, MediaFoundation, true, false));
+        // Chosen and absent: the other one does not stand in.
+        assert!(!library_allowed(MediaFoundation, Ffmpeg, false, true));
+        assert!(!library_allowed(Ffmpeg, MediaFoundation, true, false));
+        assert_eq!(of_code(Ffmpeg.code()), Ffmpeg);
+        assert_eq!(of_code(MediaFoundation.code()), MediaFoundation);
+        assert_eq!(
+            missing_text(Ffmpeg),
+            "Dekodier-Bibliothek „FFmpeg“ nicht vorhanden; sie wird nicht durch eine andere \
+             ersetzt (nur „Automatisch“ weicht aus)"
+        );
         // The process value is not switched here: factories of parallel
         // tests read it.
         assert!(DecoderLibrary::ALL

@@ -76,7 +76,11 @@ impl VaEncoderFactory {
         }
         let api = super::vaapi_ffi::load().map_err(io::Error::other)?;
         let display = VaDisplay::open(api, &self.device.node)?;
-        let session = VaH264Session::open(display, caps, self.device.video_proc, size)?;
+        // P9: the constant quality of sharp mode for an admitted session.
+        let quality = grant
+            .as_ref()
+            .and_then(|_| crate::screen::core::rate_control::model::session_quality());
+        let session = VaH264Session::open(display, caps, self.device.video_proc, size, quality)?;
         let name = self.name();
         let encoder = HwH264Encoder::new(session, name, size, fps, grant);
         // Merge W2: the bit rate up to the pairing's level and the level the
@@ -140,6 +144,7 @@ impl VaH264Session {
         caps: &VaEncodeCaps,
         video_proc: bool,
         size: FrameSize,
+        quality: Option<u8>,
     ) -> io::Result<Self> {
         let layout = Layout::new(size);
         let setup = EncodeSetup {
@@ -150,6 +155,7 @@ impl VaH264Session {
             surface: layout.coded(),
             recon: 2,
             video_proc,
+            quality,
         };
         Ok(Self {
             caps: caps.clone(),
@@ -212,7 +218,8 @@ impl VaH264Session {
             }
         }
         if idr || self.rate != Some(*rate) {
-            VaEncodeBase::add_rate(&mut buffers, rate, !idr && self.rate.is_some())?;
+            self.base
+                .add_rate(&mut buffers, rate, !idr && self.rate.is_some())?;
         }
         if idr {
             self.base.add_quality(&mut buffers)?;

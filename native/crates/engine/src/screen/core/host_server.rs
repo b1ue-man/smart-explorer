@@ -25,7 +25,7 @@ use super::gop_stream::path_of;
 use super::host_backend::{ConsentBroker, ScreenHostBackend, SessionIndicator};
 use super::host_metadata::{self, HostMetadata};
 use super::host_pipeline::Pipeline;
-use super::negotiate::{negotiate_for_contract, CodecPreference};
+use super::negotiate::{negotiate_for_contract, preference_named_by, CodecPreference};
 use super::registry::{NewSession, ScreenRegistry, SessionHandle};
 use super::session_state::{EndReason, SessionState};
 use super::window_list::SourceId;
@@ -85,26 +85,6 @@ struct Start<'a> {
 }
 
 impl Start<'_> {
-    /// Refuses with `code`; `logged` when the cause has an entry already.
-    async fn refuse(&mut self, code: ScreenErrorCode, logged: bool) -> io::Result<()> {
-        if !logged {
-            let reason = Some(code.key());
-            log_event(
-                self.context.audit,
-                self.principal,
-                self.mode,
-                "session_refused",
-                None,
-                reason,
-            );
-        }
-        let refused = HelloReply::Refused(ScreenHelloError::new(code));
-        send_hello_reply(&mut *self.send, &refused).await?;
-        let _ = self.send.finish();
-        let _ = tokio::time::timeout(CLOSE_GRACE, self.connection.closed()).await;
-        Ok(())
-    }
-
     fn hello_ok(
         &self,
         metadata: &HostMetadata,
@@ -370,8 +350,11 @@ pub async fn serve(context: HostContext, viewer: ProvenViewer) -> io::Result<()>
     {
         Ok(ready) => ready,
         Err(startup::Failure::Cancelled) => return Ok(()),
-        Err(startup::Failure::Encoder) => {
-            return start.refuse(ScreenErrorCode::EncoderFailed, false).await
+        Err(startup::Failure::Encoder(reason)) => {
+            let logged = reason.is_some();
+            return start
+                .refuse_with(ScreenErrorCode::EncoderFailed, logged, reason)
+                .await;
         }
         Err(startup::Failure::Capture(error)) => {
             log_event(
@@ -460,6 +443,9 @@ pub async fn serve(context: HostContext, viewer: ProvenViewer) -> io::Result<()>
     );
     pipeline.set_codec_trust(metadata.trust);
     pipeline.set_codec_fallbacks(fallbacks);
+    // Plan 2026-11-18 „Netzrate“: the viewer's codec choice as its decoders
+    // name it; a chosen codec is never replaced by another or the tiles.
+    pipeline.set_codec_preference(preference_named_by(&hello.all_decoders()));
     if let Some(tiles) = negotiate_for_contract(
         &metadata.encoders,
         &hello.decoders,

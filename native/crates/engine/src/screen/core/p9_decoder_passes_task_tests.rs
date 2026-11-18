@@ -215,5 +215,6 @@ fn p9_task_sharp_codec_setting() {
         .iter()
         .map(|offer| offer.codec)
         .collect();
-    assert_eq!(kept, [CodecKind::Hevc, CodecKind::Tiles]);
+    // Plan 2026-11-18 „Netzrate“: a chosen mode offers no tiles.
+    assert_eq!(kept, [CodecKind::Hevc]);
 }

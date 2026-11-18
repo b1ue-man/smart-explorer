@@ -7,6 +7,7 @@
 //! budget still decide before every credit; a refused credit waits for an
 //! acknowledgement or the next tick.
 use super::*;
+use crate::screen::core::first_picture::StageAnswer;
 use crate::screen::core::host_stage::{StreamHint, StreamReport};
 use crate::screen::core::pacing::codec_cap;
 use crate::screen::core::rate_control::model::start_table_bps;
@@ -32,6 +33,10 @@ impl Pipeline {
             self.reset_stream();
             self.chain_ready = true;
             return Ok(Produced::Reset);
+        }
+        if let Some(text) = self.quality_policy.pending_error.take() {
+            self.fallback_notice = Some(text.clone());
+            return Err(PipelineError::encoder(io::Error::other(text)));
         }
         if !self.capture_active || self.capture_transition.is_some() {
             return Ok(Produced::Idle);
@@ -59,6 +64,11 @@ impl Pipeline {
         // needs at least 2 x 2 pixels and is bounded by its pairing's rate.
         let video = self.choice.codec.is_video();
         if video && (fitted.width < 2 || fitted.height < 2) {
+            // A chosen codec waits for a picture it can carry (plan
+            // 2026-11-18); only „Automatisch“ takes the tiles meanwhile.
+            if !self.quality_policy.scope().tiles_allowed() {
+                return Ok(Produced::Idle);
+            }
             self.fall_back_to_tiles();
             self.chain_ready = true;
             return Ok(Produced::Reset);
@@ -76,6 +86,17 @@ impl Pipeline {
             // Only a fallback that changes the codec lets the next tick
             // follow at once; the tiles without a size wait for the tick.
             self.chain_ready = video;
+            // Plan 2026-11-18: another pairing of the scope that carries the
+            // size first; the tiles only under „Automatisch“.
+            if video && self.fit_pairing_for_size() {
+                return Ok(Produced::Reset);
+            }
+            if video && !self.quality_policy.scope().tiles_allowed() {
+                return Err(self.chosen_codec_failed(io::Error::other(format!(
+                    "no pairing carries {}x{} at one frame a second",
+                    size.width, size.height
+                ))));
+            }
             self.fall_back_to_tiles();
             return Ok(Produced::Reset);
         };
@@ -123,6 +144,12 @@ impl Pipeline {
         }
         self.rate.set_timing(rtt_us, self.clock.interval_us());
         let mut target = self.rate.target_bps();
+        // Plan 2026-11-18 „Netzrate“ M1: the tiles keep the target E (link,
+        // user ceiling, codec ceiling) by their byte budget; dirty tiles
+        // wait for the next picture, none is lost (`tiles_rate.rs`).
+        if !video && !self.rate.tiles_admit(now) {
+            return Ok(Produced::Idle);
+        }
         // B-35: the stale time follows the smoothed round trip of the path
         // (`path_of` reads noq's smoothed estimate) and the cadence.
         self.pacer.set_timing(rtt_us, self.clock.interval_us());
@@ -237,14 +264,18 @@ impl Pipeline {
             };
         }
         match produced {
+            // Nothing for the encoder: a still screen is no encoder failure.
             Ok(Captured::Unchanged) => Ok(Produced::Idle),
-            Ok(Captured::Paused(state)) => Ok(Produced::Paused(state)),
+            Ok(Captured::Paused(state)) => {
+                self.quality_policy.first_picture.restart();
+                Ok(Produced::Paused(state))
+            }
             Ok(Captured::Encoded {
                 frame,
                 capture_ts_us,
                 encoder,
             }) => {
-                let encoded_bytes = frame.records.iter().map(|r| r.len() as u64).sum();
+                let encoded_bytes: u64 = frame.records.iter().map(|r| r.len() as u64).sum();
                 let waited = encoding_started
                     .elapsed()
                     .as_micros()
@@ -279,46 +310,91 @@ impl Pipeline {
                     self.continue_from = None;
                 }
                 self.running = Some((encoder, size));
+                // A new picture group needs a key frame (or a continuation):
+                // an encoder that delivers nothing or never a key frame left
+                // the picture black (AV1, 2026-11-18); it counts as silent.
+                if frame.records.is_empty() {
+                    return self.on_silent_answer(&request, StageAnswer::EncodedNothing);
+                }
+                if request.choice.codec.is_video()
+                    && self.gop.is_none()
+                    && !frame.keyframe
+                    && self.continue_from.is_none()
+                {
+                    self.pacer.request_keyframe();
+                    return self.on_silent_answer(&request, StageAnswer::NoKeyFrame);
+                }
                 // The host process drew the picture with the id it expected
                 // for it; the ids stay increasing either way.
                 let frame_id = report
                     .and_then(|report| report.frame_id)
                     .map_or(request.frame_id, |id| id.max(request.frame_id));
                 self.next_frame_id = frame_id;
-                self.send(
-                    connection,
-                    frame,
-                    frame_id,
-                    capture_ts_us,
-                    size,
-                    permit,
-                    work_epoch,
-                )
-                .await
+                let sent = self
+                    .send(
+                        connection,
+                        frame,
+                        frame_id,
+                        capture_ts_us,
+                        size,
+                        permit,
+                        work_epoch,
+                    )
+                    .await;
+                if matches!(sent, Ok(Produced::Sent)) {
+                    self.quality_policy.first_picture.restart();
+                    if !request.choice.codec.is_video() {
+                        self.rate.on_tiles_sent(now_us(), encoded_bytes);
+                    }
+                }
+                sent
             }
-            // Merge W2: the next negotiated codec first (HEVC → H.264), the
-            // lossless tiles only when no other one is left.
+            // Merge W2 and plan 2026-11-18: another encoder of the scope
+            // first, the lossless tiles only under „Automatisch“.
             Err(failure)
                 if failure.code == ScreenErrorCode::EncoderFailed
                     && self.choice.codec != CodecKind::Tiles =>
             {
-                if let Some(next) = self.fall_back_to_next_codec() {
-                    self.fallback_notice = Some(format!(
-                        "encoder_fallback_to_{}: {}",
-                        next.codec.key(),
-                        failure.error
-                    ));
-                    return Ok(Produced::Reset);
-                }
-                self.quality_policy.note_failed_codec(self.choice.codec);
-                self.quality_policy.encoder_failed = true;
-                self.fallback_notice =
-                    Some(format!("encoder_fallback_to_tiles: {}", failure.error));
-                self.fall_back_to_tiles();
-                Ok(Produced::Reset)
+                self.give_up_encoder(failure.error, true)
             }
             Err(failure) => Err(failure),
         }
+    }
+
+    /// The encoder of the session's pairing failed (`stage_tried`: the stage
+    /// tried every encoder of its limits): the next pairing of the scope
+    /// (hardware, then software, then under „Automatisch“ the next codec);
+    /// without one the tiles under „Automatisch“, else a clear error.
+    pub(super) fn give_up_encoder(
+        &mut self,
+        error: io::Error,
+        stage_tried: bool,
+    ) -> Result<Produced, PipelineError> {
+        let failed = self.choice;
+        let next = if stage_tried {
+            self.fall_back_to_next_codec()
+        } else {
+            self.fall_back_after_silence()
+        };
+        if let Some(next) = next {
+            self.fallback_notice = Some(format!(
+                "encoder_fallback_to_{}: {} {} gave way to {} {}: {error}",
+                next.codec.key(),
+                failed.codec.key(),
+                super::fallback::stage_name(&failed),
+                next.codec.key(),
+                super::fallback::stage_name(&next),
+            ));
+            return Ok(Produced::Reset);
+        }
+        if !self.quality_policy.scope().tiles_allowed() {
+            return Err(self.chosen_codec_failed(error));
+        }
+        self.quality_policy.note_failed_codec(self.choice.codec);
+        self.quality_policy.encoder_failed = true;
+        self.fallback_notice = Some(format!("encoder_fallback_to_tiles: {error}"));
+        self.fall_back_to_tiles();
+        Ok(Produced::Reset)
     }
 
     /// One picture may be encoded ahead of its frame when the unacknowledged

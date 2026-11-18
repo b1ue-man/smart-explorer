@@ -87,6 +87,28 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+/// The last error of the Direct3D 11 display in this process; cleared when a
+/// presenter is made again (user rule 2026-11-18: the toolbar and the status
+/// line name it instead of a log line only).
+static LAST_ERROR: Mutex<Option<String>> = Mutex::new(None);
+
+/// The Direct3D 11 display's last error (`screen_toolbar_state::display_state`).
+pub fn last_error() -> Option<String> {
+    lock(&LAST_ERROR).clone()
+}
+
+/// Notes `error` for the toolbar and shows it in the session's status line.
+fn report(shared: &Shared, error: &str) {
+    *lock(&LAST_ERROR) = Some(error.to_string());
+    let chosen = super::screen_prefs::display_choice();
+    let text = format!(
+        "Anzeige „{}“: Direct3D 11 nicht verfügbar ({error}); das Bild zeigt das Fenster ({}).",
+        chosen.label(),
+        super::screen_present::window_renderer_label()
+    );
+    shared.update(|info| info.notice = Some(text));
+}
+
 /// The session's link to its window's presenter (`Shared::direct`).
 #[derive(Default)]
 pub struct DirectSlot {
@@ -169,8 +191,7 @@ pub(super) fn deliver(
         Ok(false) => *lock(&shared.direct.held) = Some(presented),
         Err(error) => {
             shared.direct.set(None);
-            let text = format!("Direct3D 11: {error}; Anzeige über wgpu");
-            shared.update(|info| info.notice = Some(text));
+            report(shared, &error.to_string());
             return false;
         }
     }
@@ -274,10 +295,19 @@ impl DirectView {
             self.detach(session);
         } else if self.surface.is_none() {
             match platform::Surface::new() {
-                Ok(surface) => self.surface = Some(surface),
+                Ok(surface) => {
+                    self.surface = Some(surface);
+                    *lock(&LAST_ERROR) = None;
+                }
                 Err(error) => {
                     self.unavailable = true;
-                    eprintln!("Bildschirm: Direct3D 11 nicht verfügbar: {error}");
+                    // Under „Automatisch“ wgpu takes over by design; a chosen
+                    // „Direct3D 11“ names it (user rule 2026-11-18).
+                    if choice == super::screen_prefs::DisplayChoice::Direct3d11 {
+                        report(&session.shared, &error.to_string());
+                    } else {
+                        *lock(&LAST_ERROR) = Some(error.to_string());
+                    }
                 }
             }
         }
@@ -294,7 +324,7 @@ impl DirectView {
         if let Some(surface) = self.surface.as_mut() {
             let placement = placement.as_ref().map(|(geometry, show)| (geometry, *show));
             if let Err(error) = surface.update(parent, placement) {
-                eprintln!("Bildschirm: Direct3D-11-Fenster: {error}");
+                report(&session.shared, &format!("Fenster: {error}"));
                 self.unavailable = true;
                 self.detach(session);
             }
@@ -321,7 +351,7 @@ impl DirectView {
             match presenter.show_held(owner(&session.shared)) {
                 Ok(true) => (session.presented_callback(stamp))(),
                 Ok(false) => *lock(&session.shared.direct.held) = Some(stamp),
-                Err(error) => eprintln!("Bildschirm: Direct3D 11: {error}"),
+                Err(error) => report(&session.shared, &error.to_string()),
             }
         } else if session.shared.awaiting_floor(&stamp) {
             *lock(&session.shared.direct.held) = Some(stamp);

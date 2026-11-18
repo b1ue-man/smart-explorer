@@ -86,15 +86,22 @@ impl CodecPreference {
         }
     }
 
-    /// The viewer's decoder offers for this choice: the named codec and the
-    /// tiles (every peer's last fallback stays), only the tiles, or all.
+    /// The viewer's decoder offers for this choice: all under „Automatisch“
+    /// (the tiles last fallback), only the tiles for the tiles, the named
+    /// codec's alone (plan 2026-11-18 „Netzrate“: a chosen codec is never
+    /// replaced, so it offers no tiles; the host reads the choice from that,
+    /// `negotiate::preference_named_by`), H.264 and HEVC for „Scharf (GPU)“.
     pub fn filter_decoders(self, offers: &[CodecOffer]) -> Vec<CodecOffer> {
         if self == Self::Sharp {
             return sharp_mode::sharp_decoders(offers);
         }
         offers
             .iter()
-            .filter(|offer| offer.codec == CodecKind::Tiles || self.admits(offer.codec))
+            .filter(|offer| match self {
+                Self::Auto => true,
+                Self::Tiles => offer.codec == CodecKind::Tiles,
+                named => named.codec() == Some(offer.codec),
+            })
             .copied()
             .collect()
     }

@@ -122,6 +122,7 @@
     <string name="screen_view_max_rate_mbit">%1$s Mbit/s</string>
     <string name="screen_view_max_rate_prompt">Höchste Datenrate in Mbit/s (leer: automatisch)</string>
     <string name="screen_view_max_rate_invalid">Bitte eine positive Zahl eingeben, zum Beispiel 20 oder 7,5.</string>
+    <string name="screen_view_max_rate_minimum">Mindestens %1$s Mbit/s: Darunter arbeitet das Gerät nicht, es würde die Rate von selbst anheben.</string>
     <string name="screen_view_max_rate_set">Übernehmen</string>
     <string name="screen_view_max_rate_cancel">Abbrechen</string>
     <string name="screen_view_display_monitor">Monitor</string>

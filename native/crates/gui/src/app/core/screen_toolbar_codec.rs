@@ -75,15 +75,17 @@ pub(super) fn codec_rows(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Vec<
     let codec = super::super::screen_prefs::codec_setting();
     let state = applied::codec_state(codec, &facts, waits(ui, Setting::Codec, &facts, now));
     let mut chosen = codec;
-    let _ = egui::ComboBox::from_id_salt("screen_codec")
-        .selected_text(list_text(ui, "Codec", codec.label(), &state))
-        .show_ui(ui, |ui| {
-            for setting in CodecSetting::ALL {
-                ui.selectable_value(&mut chosen, setting, setting.label());
-            }
-        })
-        .response
-        .on_hover_text(codec_hint());
+    let _ = super::wrap::item(ui, "codec", |ui| {
+        egui::ComboBox::from_id_salt("screen_codec")
+            .selected_text(list_text(ui, "Codec", codec.label(), &state))
+            .show_ui(ui, |ui| {
+                for setting in CodecSetting::ALL {
+                    ui.selectable_value(&mut chosen, setting, setting.label());
+                }
+            })
+            .response
+            .on_hover_text(codec_hint())
+    });
     if chosen != codec {
         out.push(ToolbarAction::Codec(chosen));
         changed(ui, Setting::Codec, &facts, now);
@@ -91,15 +93,17 @@ pub(super) fn codec_rows(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Vec<
     let decoder = super::super::screen_prefs::decoder_choice();
     let state = applied::decoder_state(decoder, &facts, waits(ui, Setting::Decoder, &facts, now));
     let mut picked = decoder;
-    let _ = egui::ComboBox::from_id_salt("screen_decoder")
-        .selected_text(list_text(ui, "Dekodierer", decoder.label(), &state))
-        .show_ui(ui, |ui| {
-            for choice in DecoderPreference::ALL {
-                ui.selectable_value(&mut picked, choice, choice.label());
-            }
-        })
-        .response
-        .on_hover_text("Automatisch: Hardware, bei Fehlern Software.");
+    let _ = super::wrap::item(ui, "decoder", |ui| {
+        egui::ComboBox::from_id_salt("screen_decoder")
+            .selected_text(list_text(ui, "Dekodierer", decoder.label(), &state))
+            .show_ui(ui, |ui| {
+                for choice in DecoderPreference::ALL {
+                    ui.selectable_value(&mut picked, choice, choice.label());
+                }
+            })
+            .response
+            .on_hover_text("Automatisch: Hardware, bei Fehlern Software.")
+    });
     if picked != decoder {
         out.push(ToolbarAction::Decoder(picked));
         changed(ui, Setting::Decoder, &facts, now);
@@ -136,18 +140,20 @@ fn output_rows(
     let library = super::super::screen_prefs::decoder_library_choice();
     let state = applied::library_state(library, facts, waits(ui, Setting::Library, facts, now));
     let mut chosen = library;
-    let _ = egui::ComboBox::from_id_salt("screen_decoder_library")
-        .selected_text(list_text(ui, "Bibliothek", library.label(), &state))
-        .show_ui(ui, |ui| {
-            for choice in DecoderLibrary::ALL {
-                ui.selectable_value(&mut chosen, choice, choice.label());
-            }
-        })
-        .response
-        .on_hover_text(
-            "Automatisch: erst Hardware (FFmpeg D3D11VA/DXVA2, dann Media Foundation), \
+    let _ = super::wrap::item(ui, "library", |ui| {
+        egui::ComboBox::from_id_salt("screen_decoder_library")
+            .selected_text(list_text(ui, "Bibliothek", library.label(), &state))
+            .show_ui(ui, |ui| {
+                for choice in DecoderLibrary::ALL {
+                    ui.selectable_value(&mut chosen, choice, choice.label());
+                }
+            })
+            .response
+            .on_hover_text(
+                "Automatisch: erst Hardware (FFmpeg D3D11VA/DXVA2, dann Media Foundation), \
              danach Software.",
-        );
+            )
+    });
     if chosen != library {
         out.push(ToolbarAction::DecoderLibrary(chosen));
         changed(ui, Setting::Library, facts, now);
@@ -155,15 +161,17 @@ fn output_rows(
     let display = super::super::screen_prefs::display_choice();
     let state = applied::display_state(display, facts, waits(ui, Setting::Display, facts, now));
     let mut picked = display;
-    let _ = egui::ComboBox::from_id_salt("screen_display")
-        .selected_text(list_text(ui, "Anzeige", display.label(), &state))
-        .show_ui(ui, |ui| {
-            for choice in DisplayChoice::ALL {
-                ui.selectable_value(&mut picked, choice, choice.label());
-            }
-        })
-        .response
-        .on_hover_text("Automatisch: Direct3D 11 ohne CPU-Umweg, sonst wgpu.");
+    let _ = super::wrap::item(ui, "display", |ui| {
+        egui::ComboBox::from_id_salt("screen_display")
+            .selected_text(list_text(ui, "Anzeige", display.label(), &state))
+            .show_ui(ui, |ui| {
+                for choice in DisplayChoice::ALL {
+                    ui.selectable_value(&mut picked, choice, choice.label());
+                }
+            })
+            .response
+            .on_hover_text("Automatisch: Direct3D 11 ohne CPU-Umweg, sonst wgpu.")
+    });
     if picked != display {
         out.push(ToolbarAction::Display(picked));
         changed(ui, Setting::Display, facts, now);

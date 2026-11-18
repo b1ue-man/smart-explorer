@@ -18,6 +18,8 @@
 use std::ffi::{c_char, c_int};
 use std::io;
 
+use crate::screen::core::negotiate::CodecKind;
+
 use super::abi::{
     Guid, NvEncCapsParam, NvEncCreateBitstreamBuffer, NvEncCreateInputBuffer, NvEncEventParams,
     NvEncInitializeParams, NvEncLockBitstream, NvEncLockInputBuffer, NvEncMapInputResource,
@@ -27,6 +29,115 @@ use super::abi::{
 
 pub(in crate::screen::os) type NvEncStatus = c_int;
 pub(in crate::screen::os) const NV_ENC_SUCCESS: NvEncStatus = 0;
+/// `NV_ENC_ERR_INVALID_VERSION`: position 15 of `NVENCSTATUS`.
+pub(in crate::screen::os) const NV_ENC_ERR_INVALID_VERSION: NvEncStatus = 15;
+
+/// The names of `NVENCSTATUS` in enum order (`NV_ENC_SUCCESS` = 0 to
+/// `NV_ENC_ERR_NEED_MORE_OUTPUT` = 26; no member has an explicit value).
+const STATUS_NAMES: [&str; 27] = [
+    "NV_ENC_SUCCESS",
+    "NV_ENC_ERR_NO_ENCODE_DEVICE",
+    "NV_ENC_ERR_UNSUPPORTED_DEVICE",
+    "NV_ENC_ERR_INVALID_ENCODERDEVICE",
+    "NV_ENC_ERR_INVALID_DEVICE",
+    "NV_ENC_ERR_DEVICE_NOT_EXIST",
+    "NV_ENC_ERR_INVALID_PTR",
+    "NV_ENC_ERR_INVALID_EVENT",
+    "NV_ENC_ERR_INVALID_PARAM",
+    "NV_ENC_ERR_INVALID_CALL",
+    "NV_ENC_ERR_OUT_OF_MEMORY",
+    "NV_ENC_ERR_ENCODER_NOT_INITIALIZED",
+    "NV_ENC_ERR_UNSUPPORTED_PARAM",
+    "NV_ENC_ERR_LOCK_BUSY",
+    "NV_ENC_ERR_NOT_ENOUGH_BUFFER",
+    "NV_ENC_ERR_INVALID_VERSION",
+    "NV_ENC_ERR_MAP_FAILED",
+    "NV_ENC_ERR_NEED_MORE_INPUT",
+    "NV_ENC_ERR_ENCODER_BUSY",
+    "NV_ENC_ERR_EVENT_NOT_REGISTERD",
+    "NV_ENC_ERR_GENERIC",
+    "NV_ENC_ERR_INCOMPATIBLE_CLIENT_KEY",
+    "NV_ENC_ERR_UNIMPLEMENTED",
+    "NV_ENC_ERR_RESOURCE_REGISTER_FAILED",
+    "NV_ENC_ERR_RESOURCE_NOT_REGISTERED",
+    "NV_ENC_ERR_RESOURCE_NOT_MAPPED",
+    "NV_ENC_ERR_NEED_MORE_OUTPUT",
+];
+
+/// The header name of an `NVENCSTATUS` (fix of 2026-11-18: the host log
+/// named only the number); `"unknown"` outside the enum.
+pub(in crate::screen::os) fn status_name(result: NvEncStatus) -> &'static str {
+    usize::try_from(result)
+        .ok()
+        .and_then(|index| STATUS_NAMES.get(index))
+        .copied()
+        .unwrap_or("unknown")
+}
+
+/// Fix of 2026-11-18 (host log of a Windows VM with an NVIDIA GPU:
+/// `nvEncOpenEncodeSessionEx: NVENC status 15`): the driver's refusals of
+/// API 12.1, per adapter (packed LUID) and codec. The layouts and versions
+/// of the call match `nvEncodeAPI.h` 12.1 (task tests of
+/// `shadowhost_nvenc_task_tests.rs`), and `create_functions` let a session
+/// open only after `NvEncodeAPIGetMaxSupportedVersion` reported 12.1 or
+/// newer; so `NV_ENC_ERR_INVALID_VERSION` there is a limit of the driver
+/// installation [assumption A-SHADOWHOST-NVENC-VERSION], not of this
+/// program. A refusal blocks only the codec on that adapter for this
+/// process (the same PC reported NVENC HEVC verified while H.264 was
+/// refused); it counts only while no session of that codec opened there.
+#[derive(Debug, Default)]
+pub(in crate::screen::os) struct VersionRefusals {
+    refused: Vec<(u64, CodecKind, String)>,
+    opened: Vec<(u64, CodecKind)>,
+}
+
+impl VersionRefusals {
+    pub(in crate::screen::os) const fn new() -> Self {
+        Self {
+            refused: Vec::new(),
+            opened: Vec::new(),
+        }
+    }
+
+    /// The refusal that blocks `codec` on `adapter`, if any.
+    pub(in crate::screen::os) fn refused(&self, adapter: u64, codec: CodecKind) -> Option<String> {
+        self.refused
+            .iter()
+            .find(|(own, kind, _)| *own == adapter && *kind == codec)
+            .map(|(_, _, reason)| reason.clone())
+    }
+
+    /// The result of opening a session of `codec` on `adapter`: a session
+    /// is noted, a first version refusal blocks that pair and is returned
+    /// (for the host log); everything else leaves the ledger alone.
+    pub(in crate::screen::os) fn note(
+        &mut self,
+        adapter: u64,
+        codec: CodecKind,
+        result: NvEncStatus,
+    ) -> Option<String> {
+        if result == NV_ENC_SUCCESS {
+            if !self.opened.contains(&(adapter, codec)) {
+                self.opened.push((adapter, codec));
+            }
+            return None;
+        }
+        if result != NV_ENC_ERR_INVALID_VERSION
+            || self.opened.contains(&(adapter, codec))
+            || self.refused(adapter, codec).is_some()
+        {
+            return None;
+        }
+        let reason = format!(
+            "NVENC {codec:?} not available on adapter {adapter:016x}: the driver reports API \
+             {NVENCAPI_MAJOR_VERSION}.{NVENCAPI_MINOR_VERSION} or newer but refuses its sessions \
+             (nvEncOpenEncodeSessionEx: NVENC status {result} NV_ENC_ERR_INVALID_VERSION); \
+             not tried again in this process, other codecs stay tried"
+        );
+        self.refused.push((adapter, codec, reason.clone()));
+        Some(reason)
+    }
+}
 
 pub(in crate::screen::os) const NVENCAPI_MAJOR_VERSION: u32 = 12;
 pub(in crate::screen::os) const NVENCAPI_MINOR_VERSION: u32 = 1;
@@ -251,7 +362,8 @@ pub(in crate::screen::os) fn status<A: NvTable + ?Sized>(
         })
         .unwrap_or_default();
     Err(io::Error::other(format!(
-        "{what}: NVENC status {result} {detail}"
+        "{what}: NVENC status {result} {} {detail}",
+        status_name(result)
     )))
 }
 
@@ -324,3 +436,7 @@ pub(in crate::screen::os) fn largest_picture<A: NvTable + ?Sized>(
         height.min(FrameSize::MAX.height),
     ))
 }
+
+#[cfg(test)]
+#[path = "shadowhost_nvenc_task_tests.rs"]
+mod shadowhost_nvenc_task_tests;

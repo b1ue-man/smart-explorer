@@ -154,7 +154,10 @@ impl MaxRate {
 }
 
 /// `auto`, or a positive number of bit/s with an optional decimal SI prefix
-/// (k = 10³, M = 10⁶, G = 10⁹, SI brochure 9th edition, table 7).
+/// (k = 10³, M = 10⁶, G = 10⁹, SI brochure 9th edition, table 7). Rule „Wahl
+/// gilt“ (2026-11-18): a ceiling below the lowest rate of the encoders
+/// (`MIN_BITRATE_BPS`, 150 kbit/s) is refused instead of being raised
+/// silently.
 pub(super) fn parse_max_rate(text: &str) -> Result<MaxRate, String> {
     let text = text.trim();
     if text.eq_ignore_ascii_case("auto") {
@@ -174,7 +177,42 @@ pub(super) fn parse_max_rate(text: &str) -> Result<MaxRate, String> {
     if !bps.is_finite() || bps < 1.0 || bps > u64::MAX as f64 {
         return Err(format!("invalid rate: {text} (a positive number of bit/s)"));
     }
+    let lowest = crate::screen::core::rate_control::MIN_BITRATE_BPS;
+    if (bps as u64) < lowest {
+        return Err(format!(
+            "invalid rate: {text} (at least {} kbit/s, the lowest rate of the encoders)",
+            lowest / 1000
+        ));
+    }
     Ok(MaxRate::Bps(bps as u64))
+}
+
+/// Rule „Wahl gilt“ (2026-11-18): `--decoder-library` and `--display` act
+/// only in the Windows viewer; elsewhere they are refused instead of being
+/// stored without effect. `windows`: the viewer runs on Windows.
+pub(super) fn check_windows_only(
+    library: Option<DecoderLibrary>,
+    display: Option<DisplayChoice>,
+    windows: bool,
+) -> Result<(), String> {
+    if windows {
+        return Ok(());
+    }
+    let named: Vec<&str> = [
+        library.map(|_| "--decoder-library"),
+        display.map(|_| "--display"),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    if named.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "{}: only the Windows viewer uses this choice; this system's viewer would ignore it",
+            named.join(", ")
+        ))
+    }
 }
 
 #[derive(Args, Debug, PartialEq, Eq)]
@@ -263,6 +301,7 @@ pub(crate) fn open_family(device: &str, source: &str, control: bool) -> Result<u
 }
 
 pub(super) fn run_view(args: ViewArgs) -> Result<i32, String> {
+    check_windows_only(args.decoder_library, args.display, cfg!(windows))?;
     let choice = super::select_device(&args.device)?;
     if let Some(rate) = args.max_rate {
         crate::app::screen_prefs::set_max_rate_bps(rate.bps())

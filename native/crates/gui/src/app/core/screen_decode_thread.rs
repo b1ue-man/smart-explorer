@@ -343,7 +343,15 @@ impl DecodeState {
                 self.chain.continuity.broken();
                 self.broken = Some(header.gop_id);
                 self.broken_frame = Some(record.frame_id);
+                let chosen = self.shared.codec_choice();
                 if header.frame_contract.is_some_and(|c| c.hybrid_regions)
+                    && DecoderFallback::from_error(&error).is_some()
+                    && !super::screen_session::tiles_allowed(chosen)
+                {
+                    // User rule 2026-11-18: a named codec stays; the error shows.
+                    let text = format!("Der Videodecoder liefert kein passend zugeordnetes Hybridbild ({error}). Gewählt ist „{}“; nur „Codec: Automatisch“ wechselt zur Kachelübertragung.", chosen.label());
+                    self.shared.update(|info| info.notice = Some(text));
+                } else if header.frame_contract.is_some_and(|c| c.hybrid_regions)
                     && DecoderFallback::from_error(&error).is_some()
                 {
                     if let Some(mode) = self.shared.request_lossless() {

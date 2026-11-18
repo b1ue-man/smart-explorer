@@ -21,11 +21,12 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import app.smartexplorer.android.R
 
-/** The label of a codec choice; „Verlustfrei“ is the old switch under its old name. */
+/** The label of a codec choice; „Verlustfrei“ and „Scharf (GPU)“ are the old switches under their old names. */
 internal fun codecLabelRes(codec: String): Int = when (codec) {
     ViewerCodecChoice.CODEC_H264 -> R.string.screen_view_codec_h264
     ViewerCodecChoice.CODEC_HEVC -> R.string.screen_view_codec_hevc
     ViewerCodecChoice.CODEC_AV1 -> R.string.screen_view_codec_av1
+    ViewerCodecChoice.CODEC_SHARP -> R.string.screen_view_sharpness
     ViewerCodecChoice.CODEC_LOSSLESS -> R.string.screen_view_lossless
     else -> R.string.screen_view_codec_auto
 }
@@ -37,7 +38,7 @@ internal fun decoderLabelRes(decoder: String): Int = when (decoder) {
 }
 
 /**
- * The entries „Codec“ (Automatisch, H.264, HEVC, AV1, Verlustfrei), „Dekodierer“ (Automatisch, Hardware, Software)
+ * The entries „Codec“ (Automatisch, H.264, HEVC, AV1, Scharf (GPU), Verlustfrei), „Dekodierer“ (Automatisch, Hardware, Software)
  * and „Höchste Datenrate“ of the settings menu (plan 2026-11-14 `bildkette.md` 4.10). A change goes to [onSettings];
  * the data rate opens [MaxRateDialog] through [onRate].
  */
@@ -82,6 +83,8 @@ internal fun MaxRateDialog(current: Long?, onDismiss: () -> Unit, onSet: (Long?)
     var text by remember { mutableStateOf(ViewerCodecChoice.mbitText(current)) }
     val parsed = if (text.isBlank()) null else ViewerCodecChoice.parseMbit(text)
     val invalid = text.isNotBlank() && parsed == null
+    // Below 0,15 Mbit/s the host would raise the rate without a word: the dialog says so instead (user rule 2026-11-18).
+    val belowMinimum = invalid && ViewerCodecChoice.belowMinimum(text)
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.screen_view_max_rate)) },
@@ -92,7 +95,10 @@ internal fun MaxRateDialog(current: Long?, onDismiss: () -> Unit, onSet: (Long?)
                 singleLine = true,
                 label = { Text(stringResource(R.string.screen_view_max_rate_prompt)) },
                 isError = invalid,
-                supportingText = { if (invalid) Text(stringResource(R.string.screen_view_max_rate_invalid)) },
+                supportingText = {
+                    if (belowMinimum) Text(stringResource(R.string.screen_view_max_rate_minimum, ViewerCodecChoice.mbitText(ViewerCodecChoice.MIN_RATE_BPS)))
+                    else if (invalid) Text(stringResource(R.string.screen_view_max_rate_invalid))
+                },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
             )
         },
