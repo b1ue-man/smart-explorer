@@ -1,6 +1,12 @@
 pluginManagement {
     repositories {
         google()
+        // Google's mirror of Maven Central first: Maven Central answers CI runners with
+        // HTTP 429 (suite run 44187720818, 440 refused requests); a 404 there falls through.
+        maven {
+            name = "mavenCentralGoogleMirror"
+            url = uri("https://maven-central.storage-download.googleapis.com/maven2/")
+        }
         mavenCentral()
         gradlePluginPortal()
     }
@@ -35,6 +41,12 @@ dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
     repositories {
         google()
+        // Google's mirror of Maven Central first: Maven Central answers CI runners with
+        // HTTP 429 (suite run 44187720818, 440 refused requests); a 404 there falls through.
+        maven {
+            name = "mavenCentralGoogleMirror"
+            url = uri("https://maven-central.storage-download.googleapis.com/maven2/")
+        }
         mavenCentral()
         exclusiveContent {
             forRepository {
