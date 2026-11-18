@@ -51,6 +51,26 @@ impl Start<'_> {
         host_metadata::hello(context, principal, mode, self.connection, self.send, &reply).await
     }
 
+    /// `HELLO_OK` of a streaming session with the answer to the viewer's
+    /// sound offer (plan 2026-11-17 P9); an accepted offer attaches the
+    /// capture link, which sends nothing before the viewer's `AUDIO` and
+    /// ends with the connection.
+    pub(super) async fn accepted_with_audio(&mut self, mut ok: ScreenHelloOk) -> io::Result<()> {
+        let hello = self.hello;
+        ok.audio = super::super::audio_wire::answer(
+            hello.audio,
+            self.mode,
+            hello.metadata_only,
+            crate::screen::os::audio::capture_available(),
+        );
+        let audio = ok.audio.is_some();
+        self.accepted(ok).await?;
+        if audio {
+            crate::screen::os::audio::attach(self.connection);
+        }
+        Ok(())
+    }
+
     /// A failed metadata step of the start: a stop or a leaving viewer ends
     /// it quietly like a cancelled preparation, a lost right refuses as
     /// such, any other failure (time limit, platform panic) refuses as a

@@ -15,15 +15,19 @@
 //! what the opened encoder and its H.264 level report, not by 240 Mbit/s.
 //! B-29 (BK3b): the low-power mode is switched off where the MFT offers it
 //! (`CODECAPI_AVEncLowPowerEncoder` = 0), the vendor's full-power state.
+//! Plan 2026-11-17 P9: the fastest setting of the quality/speed trade-off
+//! (`CODECAPI_AVEncCommonQualityVsSpeed` = 0, "0 = lower quality, faster
+//! encoding"), the encoder's fastest preset for the encode time of one frame.
 use std::io;
 use std::mem::ManuallyDrop;
 
 use windows::core::{Interface, GUID, VARIANT};
 use windows::Win32::Media::MediaFoundation::{
-    eAVEncCommonRateControlMode_CBR, eAVEncH264VProfile_ConstrainedBase, eAVEncH264VProfile_High,
-    CODECAPI_AVEncCommonBufferSize, CODECAPI_AVEncCommonMeanBitRate,
-    CODECAPI_AVEncCommonRateControlMode, CODECAPI_AVEncLowPowerEncoder,
-    CODECAPI_AVEncMPVDefaultBPictureCount, CODECAPI_AVEncMPVGOPSize,
+    eAVEncCommonRateControlMode_CBR, eAVEncCommonRateControlMode_Quality,
+    eAVEncH264VProfile_ConstrainedBase, eAVEncH264VProfile_High, CODECAPI_AVEncCommonBufferSize,
+    CODECAPI_AVEncCommonMeanBitRate, CODECAPI_AVEncCommonQuality,
+    CODECAPI_AVEncCommonQualityVsSpeed, CODECAPI_AVEncCommonRateControlMode,
+    CODECAPI_AVEncLowPowerEncoder, CODECAPI_AVEncMPVDefaultBPictureCount, CODECAPI_AVEncMPVGOPSize,
     CODECAPI_AVEncVideoLTRBufferControl, CODECAPI_AVEncVideoMarkLTRFrame,
     CODECAPI_AVLowLatencyMode, ICodecAPI, IMFMediaBuffer, IMFMediaType, IMFSample, IMFTransform,
     MFMediaType_Video, MFSampleExtension_CleanPoint, MFVideoFormat_H264, MFVideoFormat_NV12,
@@ -320,7 +324,7 @@ impl HardwareSettings {
 }
 
 /// Names of the B-21 settings in the order they are applied.
-pub(in crate::screen::os) const SETTINGS: [&str; 8] = [
+pub(in crate::screen::os) const SETTINGS: [&str; 9] = [
     "low_latency",
     "b_frames_0",
     "cbr",
@@ -329,6 +333,7 @@ pub(in crate::screen::os) const SETTINGS: [&str; 8] = [
     "gop_infinite",
     "ltr",
     "low_power_off",
+    "quality_speed",
 ];
 
 /// `CODECAPI_AVEncVideoLTRBufferControl`: trust mode 1 in the upper 16
@@ -398,7 +403,34 @@ pub(in crate::screen::os) fn configure_hardware(
     // B-29: full power instead of the low-power mode [assumption: 0 = off].
     let full_power = set(&CODECAPI_AVEncLowPowerEncoder, VARIANT::from(0u32));
     taken.note(SETTINGS[7], full_power);
+    let speed = set(&CODECAPI_AVEncCommonQualityVsSpeed, VARIANT::from(0u32));
+    taken.note(SETTINGS[8], speed);
     (Some(api), taken)
+}
+
+/// P9, sharp mode: `eAVEncCommonRateControlMode_Quality` at the level of
+/// `target` (`CODECAPI_AVEncCommonQuality`, `rate_model::mf_quality`); an
+/// MFT that refuses either keeps CBR. Whether it was taken.
+pub(in crate::screen::os) fn quality_mode(api: &ICodecAPI, target: u8) -> bool {
+    let quality = eAVEncCommonRateControlMode_Quality.0 as u32;
+    let level = crate::screen::core::rate_control::model::mf_quality(target);
+    if !set_value(
+        api,
+        &CODECAPI_AVEncCommonRateControlMode,
+        VARIANT::from(quality),
+    ) {
+        return false;
+    }
+    if set_value(api, &CODECAPI_AVEncCommonQuality, VARIANT::from(level)) {
+        return true;
+    }
+    let cbr = eAVEncCommonRateControlMode_CBR.0 as u32;
+    set_value(
+        api,
+        &CODECAPI_AVEncCommonRateControlMode,
+        VARIANT::from(cbr),
+    );
+    false
 }
 
 /// Marks the next frame (a key frame) as long-term reference 0.

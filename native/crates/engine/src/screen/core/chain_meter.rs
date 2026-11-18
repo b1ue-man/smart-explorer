@@ -150,6 +150,8 @@ pub struct ChainMeter {
     input_raw: Window,
     last_capture_ts: Option<u64>,
     facts: CaptureFacts,
+    /// Plan 2026-11-17 P9: step and result code of the capture's fallback.
+    fallback_detail: Option<super::capture_fallback::FallbackDetail>,
     /// Read-backs of the host process since it started (`None`: unknown).
     readbacks: Option<u64>,
     readbacks_base: Option<u64>,
@@ -252,6 +254,12 @@ impl ChainMeter {
         self.facts = self.facts.merged(facts);
     }
 
+    /// The step and result code of the capture's fallback (P9); `None` once
+    /// the capture is back on its first path.
+    pub fn set_fallback_detail(&mut self, detail: Option<super::capture_fallback::FallbackDetail>) {
+        self.fallback_detail = detail;
+    }
+
     /// The read-back count of the host process (cumulative).
     pub fn set_readbacks(&mut self, total: u64) {
         self.readbacks_base.get_or_insert(total);
@@ -289,7 +297,17 @@ impl ChainMeter {
         };
         ChainReport {
             capture_path: facts.path.map(|path| path.key().to_string()),
-            capture_fallback: facts.fallback.map(|cause| cause.key().to_string()),
+            // P9: a CPU-pixel reason only beside `convert cpu`; a Windows
+            // capture fallback with its failed step and result code, gone
+            // once the capture is back on Desktop Duplication.
+            capture_fallback: shown_fallback(facts.fallback, convert)
+                .filter(|cause| !super::capture_fallback::fallback_ended(*cause, facts.path))
+                .map(|cause| {
+                    let detail = (!cause.is_conversion())
+                        .then_some(self.fallback_detail)
+                        .flatten();
+                    super::capture_fallback::cause_text(cause.key(), detail)
+                }),
             convert: convert.map(str::to_string),
             capture_rate_capped: facts.rate_capped,
             cursor_embedded: facts.cursor_embedded,
@@ -311,6 +329,17 @@ impl ChainMeter {
     fn readbacks_delta(&self) -> Option<u64> {
         Some(self.readbacks?.saturating_sub(self.readbacks_base?))
     }
+}
+
+/// The fallback the report shows: a cause of the conversion (P9, why a
+/// picture went as CPU pixels) only while the pictures do; a picture on the
+/// GPU leaves an older one behind, as the facts keep what a newer mark does
+/// not name.
+pub(crate) fn shown_fallback(
+    fallback: Option<super::frame_timing::CaptureFallback>,
+    convert: Option<&str>,
+) -> Option<super::frame_timing::CaptureFallback> {
+    fallback.filter(|cause| !cause.is_conversion() || convert != Some("gpu"))
 }
 
 /// Copies the chain facts of `stats` into the session `view` (`se screen

@@ -42,6 +42,7 @@ mod pairing_source_tests;
 mod protocol;
 #[cfg(test)]
 mod proxy_trust_tests;
+mod qad_reach;
 mod rate_limits;
 mod registration_guard;
 mod relay;
@@ -186,6 +187,8 @@ fn main() {
     } else {
         eprintln!("se-share-server: compatibility mode (--allow-legacy-clients): clients without key login are admitted for unbound lookups only; they publish no Direct presence and reach no bound lookup");
     }
+    // Whether QAD is reachable from outside, judged from arriving devices.
+    qad_reach::start(state.clone());
     let timing = SignalTiming::new(keepalive);
     let connections = ConnectionLimiter::from_limits(&options.limits);
     let handshakes = HandshakeSlots::from_limits(&options.limits);

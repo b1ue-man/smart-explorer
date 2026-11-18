@@ -18,6 +18,40 @@ pub const QUIC_ADDR_DISC_CLOSE_REASON: &[u8] = b"finished";
 
 #[cfg(feature = "server")]
 pub use self::limits::{QadServerLimits, set_server_limits};
+#[cfg(feature = "server")]
+pub use self::observer::{QadConnectionEvent, set_connection_observer};
+
+/// Smart Explorer patch (2026-11-18): the QAD server reports each connection
+/// that completed its handshake, and its end, with the source address, so the
+/// embedding server can tell whether QAD is reachable from outside.
+#[cfg(feature = "server")]
+mod observer {
+    use std::{net::IpAddr, sync::OnceLock};
+
+    /// What happened to one QAD connection.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum QadConnectionEvent {
+        /// The handshake completed (after the address-validating Retry).
+        Established,
+        /// The established connection ended.
+        Closed,
+    }
+
+    static OBSERVER: OnceLock<fn(IpAddr, QadConnectionEvent)> = OnceLock::new();
+
+    /// Sets the function every QAD server of this process calls for its
+    /// connections; the first call wins. It runs on the connection task and
+    /// must return quickly.
+    pub fn set_connection_observer(observer: fn(IpAddr, QadConnectionEvent)) {
+        let _ = OBSERVER.set(observer);
+    }
+
+    pub(super) fn notify(source: IpAddr, event: QadConnectionEvent) {
+        if let Some(observer) = OBSERVER.get() {
+            observer(source, event);
+        }
+    }
+}
 
 /// Smart Explorer patch: admission limits of the QUIC address discovery server.
 #[cfg(feature = "server")]
@@ -552,6 +586,7 @@ pub(crate) mod server {
     ) -> Result<(), ConnectionError> {
         metrics.qad_incoming.inc();
         debug!("incoming");
+        let source = incoming.remote_address().ip();
         let connection = match incoming.await {
             Ok(conn) => conn,
             Err(e) => {
@@ -562,9 +597,11 @@ pub(crate) mod server {
         };
         metrics.qad_connections.inc();
         debug!("established");
+        super::observer::notify(source, super::QadConnectionEvent::Established);
         // wait for the client to close the connection
         let connection_err = connection.closed().await;
         metrics.qad_connections_closed.inc();
+        super::observer::notify(source, super::QadConnectionEvent::Closed);
         match connection_err {
             noq::ConnectionError::ApplicationClosed(ApplicationClose { error_code, .. })
                 if error_code == QUIC_ADDR_DISC_CLOSE_CODE =>

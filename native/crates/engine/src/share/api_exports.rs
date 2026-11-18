@@ -101,8 +101,11 @@ pub use self::relation_rights::profiles_differ_beyond_runtime;
 pub use self::removed_direct_peers::{
     ForgottenDirectPeer, PairingOrigin, RemovedDirectPeer, MAX_REMOVED_DIRECT_PEERS,
 };
+pub use self::server_qad::{server_qad_status, QadReach, ServerQadStatus, QAD_STATUS_CAPABILITY};
 pub use self::service::ShareService;
-pub use self::transport_options::{migrate_server_file, refresh_server_file, upgrade_server_file};
+pub use self::transport_options::{
+    encrypted_upgrade, migrate_server_file, refresh_server_file, upgrade_server_file,
+};
 pub use self::types::{
     DirectAccessState, DirectContact, DirectGrant, DirectGrantState, DirectRelationFlags,
     DirectRequestPolicy, ExecGrantTarget, ExecRequest, ExecResult, MemberUpsert, PeerOpenTarget,

@@ -59,6 +59,9 @@ pub(super) struct RateParams {
     pub buffer_bits: u32,
     pub initial_fullness: u32,
     pub fps: u32,
+    /// P9, sharp mode: a constant quality (1–51) with `bits_per_second` as
+    /// its ceiling instead of a constant bit rate.
+    pub quality: Option<u8>,
 }
 
 impl RateParams {
@@ -74,7 +77,13 @@ impl RateParams {
             buffer_bits: buffer,
             initial_fullness: buffer,
             fps,
+            quality: None,
         }
+    }
+
+    /// The same rate as the ceiling of a constant `quality` (P9).
+    pub(super) fn with_quality(self, quality: Option<u8>) -> Self {
+        Self { quality, ..self }
     }
 
     /// Whether `target` differs enough (2 %, the OpenH264 rule) to retune.
@@ -83,7 +92,23 @@ impl RateParams {
             i64::from(self.bits_per_second),
             i64::from(other.bits_per_second),
         );
-        (a - b).abs() * 50 >= a || self.fps != other.fps
+        (a - b).abs() * 50 >= a || self.fps != other.fps || self.quality != other.quality
+    }
+}
+
+/// The NVENC rate settings take these parameters (`nvenc_settings.rs`;
+/// here since plan 2026-11-17 P9 kept `nvenc_encode.rs` below 500 lines).
+impl super::nvenc_encode::NvRate for RateParams {
+    fn cbr(&self) -> (u32, u32, u32) {
+        (
+            self.bits_per_second,
+            self.buffer_bits,
+            self.initial_fullness,
+        )
+    }
+
+    fn quality(&self) -> Option<u8> {
+        self.quality
     }
 }
 
@@ -155,6 +180,8 @@ pub(super) struct VendorEncoder<S: VendorSession> {
     /// The ceiling of the codec pairing (`with_ceiling`, r1).
     ceiling_bps: u64,
     refresh: bool,
+    /// P9: the constant quality of sharp mode the session opened with.
+    quality: Option<u8>,
     /// HEVC VPS/SPS/PPS or the AV1 sequence header of the last key frame
     /// that carried them, put before a key frame without them.
     parameter_sets: Option<Vec<u8>>,
@@ -187,6 +214,7 @@ impl<S: VendorSession> VendorEncoder<S> {
             rate: None,
             ceiling_bps: u64::from(u32::MAX),
             refresh: false,
+            quality: crate::screen::core::rate_control::model::session_quality(),
             parameter_sets: None,
         }
     }
@@ -209,7 +237,8 @@ impl<S: VendorSession> VendorEncoder<S> {
     /// The rate for the request up to the ceiling; the running one while
     /// within 2 %.
     fn rate(&mut self, target_bps: u64, fps: u32) -> RateParams {
-        let wanted = RateParams::for_target(target_bps.min(self.ceiling(fps)), fps);
+        let wanted = RateParams::for_target(target_bps.min(self.ceiling(fps)), fps)
+            .with_quality(self.quality);
         match self.rate {
             Some(current) if !current.differs(&wanted) => current,
             _ => {

@@ -397,10 +397,11 @@ fn bildkette_task_verify_negotiate_verified_newer_codec_keeps_b30() {
     };
     // Verified HEVC keeps its B-30 rank; unchecked AV1 follows H.264.
     assert_eq!(order(trust), [HEVC, H264, CodecKind::Av1, CodecKind::Tiles]);
-    // A host that checks nothing ranks as before: AV1, HEVC, H.264.
+    // A host that checks nothing: HEVC, H.264, and AV1 last (P9: AV1
+    // never ranks first in automatic).
     assert_eq!(
         order(CodecTrust::ALL),
-        [CodecKind::Av1, HEVC, H264, CodecKind::Tiles]
+        [HEVC, H264, CodecKind::Av1, CodecKind::Tiles]
     );
     assert_eq!(
         CodecRegistry::new(Vec::new(), Vec::new()).codec_trust(),

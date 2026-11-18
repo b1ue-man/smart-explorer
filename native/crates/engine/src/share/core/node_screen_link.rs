@@ -190,6 +190,9 @@ impl ScreenLink {
                 .then(|| request.gop_continue_decoders.clone()),
             virtual_display: None,
             virtual_display_size: None,
+            // P9: the host's sound for a full session; the viewer switches
+            // it on with `AUDIO` (an older host ignores the field).
+            audio: crate::screen::core::audio_wire::offer(request.mode),
         };
         // Plan 2026-11-17 P5: the viewer's „Monitor“ and „Auflösung“, only
         // to a host that announced it.

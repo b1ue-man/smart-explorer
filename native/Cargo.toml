@@ -105,6 +105,12 @@ rayon = "1.10"
 bytes = "1.11"
 # Screen still pictures (SCR-M4): PNG encoder and decoder of `screen::core::snapshot`.
 png = "0.18"
+# The host's sound in a screen session (plan 2026-11-17 P9, `screen::core::
+# audio_codec`): Opus as a pure-Rust port of libopus 1.6 (BSD-3-Clause), no C
+# toolchain or system library on any target; `std` and `heap` only (its
+# defaults), no `libm`/`portable-atomic`. Pinned: its API (`OpusEncoder` with
+# public fields) is read at 0.1.40. See docs/GOTCHAS.md „Opus“.
+opus-rs = { version = "=0.1.40", default-features = false, features = ["std", "heap"] }
 crossbeam-channel = "0.5"
 ctrlc = "3.5"
 # The conflict editor uses deadline-aware Myers line diffs (linear auxiliary
@@ -346,6 +352,8 @@ windows = { version = "0.58", features = [
     "Win32_Graphics_Dxgi_Common",
     "Win32_Graphics_Gdi",
     "Win32_Media_MediaFoundation",
+    # Screen sound (plan 2026-11-17 P9): WASAPI loopback capture and playback.
+    "Win32_Media_Audio",
     "Win32_Security",
     # se Desktop jump list: PKEY_Title for the device entries.
     "Win32_Storage_EnhancedStorage",

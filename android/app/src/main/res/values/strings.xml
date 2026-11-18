@@ -104,7 +104,7 @@
     <string name="screen_view_keyboard">Tastatur</string>
     <string name="screen_view_close">Schließen</string>
     <string name="screen_view_more">Weitere Einstellungen</string>
-    <string name="screen_view_sharpness">Schärfe vor Flüssigkeit</string>
+    <string name="screen_view_sharpness">Scharf (GPU): Grafikkarten-Kodierung, H.264/HEVC, hohe Qualität</string>
     <string name="screen_view_lossless">Verlustfrei</string>
     <!-- Codec, Dekodierer, Höchste Datenrate (plan 2026-11-14 „Bildkette“ 4.10, BK7b) -->
     <string name="screen_view_codec">Codec</string>

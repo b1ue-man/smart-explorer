@@ -498,7 +498,16 @@ der mitgelieferte **`se-share-server`** (Linux + Windows, in
 [`release-native/share-server/`](release-native/share-server)) verschlüsselte
 Transportpakete weiterleiten; er erhält keine Relation-Secrets oder
 Dateisystemdaten im Klartext. Er vermittelt Anwesenheit und Adressen (QUIC-Adressermittlung
-auf UDP 7842, siehe [`docs/SHARE_SERVER.md`](docs/SHARE_SERVER.md)), verwaltet keine Zugänge
+auf UDP 7842, siehe [`docs/SHARE_SERVER.md`](docs/SHARE_SERVER.md)). Der Server braucht in jeder
+Firewall vor ihm, für IPv4 und IPv6, TCP 51820 (Signalisierung), TCP 51821 (Relay) und
+UDP 7842 (Adressermittlung); die Befehle für iptables/ip6tables, nftables, ufw, firewalld und
+Windows stehen in [`docs/SHARE_SERVER.md`](docs/SHARE_SERVER.md), Abschnitt „Ports and
+firewall“. Ohne UDP 7842 erfahren Geräte hinter NAT ihre öffentliche Adresse nicht und
+verbinden sich über das Internet nur über das Relay; der Server prüft das selbst und
+`se share status` zeigt es in der Zeile `server_qad` („Server: QAD von außen erreichbar“ oder
+„… nicht erreichbar“). Eine gespeicherte unverschlüsselte Server-Adresse (`tcp://…`) stellt
+die App selbst auf `wss://` desselben Servers um, sobald TLS mit gültigem Zertifikat dort
+gelingt. Er verwaltet keine Zugänge
 und führt keine Geräteliste. **Share-Server** in der Werkzeugleiste (bei schmalen Fenstern unter **»**) öffnet das Fenster **Geräte & Freigaben** (Seiten siehe „Share-Einstellungen auf jeder Oberfläche“); Server unter **Einstellungen → Verbindungen**. Der frühere Noise/TCP-Entwurf steht historisch in
 [`docs/SHARE_PLAN.md`](docs/SHARE_PLAN.md).
 
@@ -1198,6 +1207,16 @@ Remote-Laufwerke kann eine Administratorbestätigung anfordern. Zwei Wege:
    `/S /DESKTOP=1` aus. Ausgewählt führt der Installer `se desktop enable --json` aus; schlägt
    das fehl, bleibt die Installation bestehen und der Installer nennt `se desktop enable`.
    Nach dem Hauptprogramm startet der Installer se Desktop neu (`se desktop restart`).
+   Die Komponente **Virtueller Bildschirm für Fernzugriff** (im normalen Setup ausgewählt, still
+   nur mit `/S /INSTALLVDD=1`; Quellstand 2026-11-18, nicht übersetzt, nicht auf Hardware
+   gelaufen) lädt den MIT-lizenzierten Treiber von VirtualDrivers (Release 25.7.23, Größe und
+   SHA-256 in `native/vdd-driver.nsh`), signiert seinen Katalog mit einem auf dem Gerät erzeugten
+   Zertifikat, dessen privater Schlüssel sofort gelöscht wird, und installiert ihn nach einer
+   UAC-Bestätigung. Ein Update fragt nur, wenn sich der Treiber oder sein Gerät geändert hat; ein
+   unveränderter Treiber wird nicht neu signiert. Beim Fernzugriff legt se damit ohne weitere
+   Einrichtung einen eigenen Monitor in der Auflösung des Betrachters an (Menü „Monitor“ und
+   „Auflösung“ im Betrachter) und gibt dem Desktop am Sitzungsende seine Anordnung zurück.
+   Einzelheiten: [`docs/RELEASING.md`](docs/RELEASING.md).
 2. **Portable:** [`Smart Explorer.exe`](release-native/Smart%20Explorer.exe)
    herunterladen und direkt starten (keine Installation). Für Auto-Update einmalig
    die Update-Quelle setzen (siehe unten). Das portable Terminal-Binary liegt als

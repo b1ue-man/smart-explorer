@@ -70,6 +70,7 @@ fn bildkette_task_chain_host_process_crash_ends_only_its_session() {
         stage.set_stream_hint(crate::screen::core::host_stage::StreamHint {
             cadence_fps: 30,
             ahead: false,
+            quality_target: None,
         });
         let frame = stage.produce(&request(frame_id)).unwrap();
         assert!(

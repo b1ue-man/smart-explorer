@@ -24,8 +24,11 @@ use windows::Win32::Graphics::Dxgi::{
     IDXGIOutputDuplication, DXGI_OUTDUPL_FRAME_INFO, DXGI_OUTDUPL_POINTER_SHAPE_INFO,
 };
 
+use super::super::capture_slots::{CaptureBudget, CaptureKind};
+use crate::screen::core::capture_image::AdmittedRegions;
+use crate::screen::core::capture_route::pointer_patch;
 use crate::screen::core::cursor_overlay::{from_two_backgrounds, worker, CursorShape};
-use crate::screen::core::pixel_convert::{BgraRotation, FrameSize};
+use crate::screen::core::pixel_convert::{BgraRotation, FrameSize, Rect};
 
 /// `DXGI_OUTDUPL_POINTER_SHAPE_TYPE` values (windows 0.58 `Dxgi/mod.rs`).
 pub(in crate::screen::os) const SHAPE_MONOCHROME: u32 = 1;
@@ -207,6 +210,9 @@ pub(super) struct DxgiPointer {
     /// Top left of the shape on the output, displayed pixels.
     position: Option<(i32, i32)>,
     visible: bool,
+    /// P9: the area the pointer covered before the last change (left, top,
+    /// width, height), for the regions of a pointer-only change.
+    previous: Option<(i32, i32, u32, u32)>,
 }
 
 impl DxgiPointer {
@@ -220,7 +226,15 @@ impl DxgiPointer {
             serial: 0,
             position: None,
             visible: false,
+            previous: None,
         }
+    }
+
+    /// The area the pointer covers in a blended picture now.
+    fn covered(&self) -> Option<(i32, i32, u32, u32)> {
+        let (left, top) = self.position.filter(|_| self.visible)?;
+        let shape = self.shape.as_ref()?;
+        Some((left, top, shape.width, shape.height))
     }
 
     pub(super) fn take_switched(&self) -> bool {
@@ -242,6 +256,7 @@ impl DxgiPointer {
     ) -> bool {
         let overlay = worker();
         let mut changed = false;
+        let before = self.covered();
         if info.PointerShapeBufferSize > 0 {
             if let Some(image) = read_shape(duplication, info.PointerShapeBufferSize) {
                 self.serial = self.serial.wrapping_add(1);
@@ -279,7 +294,20 @@ impl DxgiPointer {
                 && (y as u32) < area.height;
             overlay.publish_position(x, y, area, inside);
         }
+        if changed {
+            self.previous = before;
+        }
         changed && self.blends()
+    }
+
+    /// The pointer a picture on the GPU route carries (plan 2026-11-17 P9,
+    /// `capture_pointer_gpu.rs`): the same condition as `blend_into`.
+    pub(super) fn on_picture(&self) -> Option<(&PointerImage, i32, i32)> {
+        if !self.blends() || !self.visible {
+            return None;
+        }
+        let (left, top) = self.position?;
+        Some((self.shape.as_ref()?, left, top))
     }
 
     /// Blends the pointer into a picture before it is frozen.
@@ -297,6 +325,46 @@ impl DxgiPointer {
             blend(pixels, delivered, native, rotation, shape, left, top);
         }
     }
+}
+
+/// P9: the regions of a picture whose blended pointer moved: the dirty and
+/// move rectangles of the duplication plus the pointer's old and new area,
+/// or only those two areas when the desktop did not change (`only`). `None`
+/// (the whole picture changed, as before) for a rotated or scaled capture,
+/// without a pointer area, or when the rectangles exceed their budget.
+pub(super) fn with_moved(
+    pointer: Option<&DxgiPointer>,
+    regions: Option<AdmittedRegions>,
+    only: bool,
+    budget: &CaptureBudget,
+) -> Option<AdmittedRegions> {
+    let geometry = budget.geometry();
+    let plain = geometry.kind == CaptureKind::Dxgi(BgraRotation::Identity)
+        && geometry.delivered == geometry.native;
+    let pointer = pointer.filter(|_| plain && (regions.is_some() || only))?;
+    let size = geometry.native;
+    let areas: Vec<Rect> = [pointer.previous, pointer.covered()]
+        .into_iter()
+        .flatten()
+        .filter_map(|(left, top, width, height)| pointer_patch(size, left, top, width, height))
+        .collect();
+    if areas.is_empty() {
+        return None;
+    }
+    let (moves, dirty) = regions.map_or((Vec::new(), Vec::new()), |regions| {
+        let all = regions.regions();
+        (all.moves.clone(), all.dirty.clone())
+    });
+    let count = dirty.len() + areas.len();
+    let mut out =
+        AdmittedRegions::new(size, budget.grant().ok()?, moves.len() as u64, count as u64).ok()?;
+    for moved in moves {
+        out.push_move(moved).ok()?;
+    }
+    for area in dirty.into_iter().chain(areas) {
+        out.push_dirty(area).ok()?;
+    }
+    Some(out)
 }
 
 fn read_shape(duplication: &IDXGIOutputDuplication, size: u32) -> Option<PointerImage> {

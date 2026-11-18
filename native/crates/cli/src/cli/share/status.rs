@@ -150,6 +150,11 @@ fn json_value(
     // device's exports, with the action that allows them. The rejected
     // sessions themselves are `routes.access`.
     value["access_gaps"] = access_gaps_value(profiles);
+    // The server's QAD self-check while connected (`null` otherwise).
+    value["server_qad"] = snapshot
+        .server_qad
+        .as_ref()
+        .map_or(serde_json::Value::Null, crate::share::ServerQadStatus::json);
     // F1 „Rechte offen“ and the Direct code's rights (plan 2026-10-31).
     value["rights_pending"] = grants::grants_rights::pending_value(profiles);
     value["code_rights"] = serde_json::json!(profiles
@@ -157,6 +162,24 @@ fn json_value(
         .as_ref()
         .map(super::rights_args::rights_value));
     value
+}
+
+/// The server's QAD self-check (TODO `DIREKT-INTERNET`) while connected:
+/// „Server: QAD von außen erreichbar/nicht erreichbar (UDP 7842)“, or that
+/// the server sent none.
+fn server_qad_line(
+    snapshot: &crate::daemon::ShareWorkerSnapshot,
+    worker_error: Option<&str>,
+) -> Option<String> {
+    if worker_error.is_some() || !snapshot.connected {
+        return None;
+    }
+    Some(match &snapshot.server_qad {
+        Some(status) => status.status_line(),
+        None => "Server: meldet keine QAD-Prüfung (UDP 7842; Share-Server ohne diese Prüfung \
+                 oder verbunden ohne TLS)"
+            .to_string(),
+    })
 }
 
 fn print_text(
@@ -183,6 +206,9 @@ fn print_text(
             .unwrap_or("-")
     );
     println!("relay_url\t{}", snapshot.relay_url);
+    if let Some(line) = server_qad_line(snapshot, worker_error) {
+        println!("server_qad\t{line}");
+    }
     for line in code_renewal_output::text_lines(snapshot.code_renewal.as_ref()) {
         println!("{line}");
     }

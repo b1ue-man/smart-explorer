@@ -333,6 +333,9 @@ pub enum ViewerFrame {
     /// `FRAME_TIMING` (BK0): station times on/off or one input probe; only
     /// after the host announced `frame_timing_v1` in `STATS`.
     FrameTiming(super::frame_timing::FrameTimingRequest),
+    /// `AUDIO` (plan 2026-11-17 P9): the host's sound on or off; only after
+    /// the host answered `audio` in `HELLO_OK` (`audio_wire.rs`).
+    Audio(bool),
 }
 
 /// Viewer to host: `u64` big-endian, the ceiling in bit/s, 0 automatic.

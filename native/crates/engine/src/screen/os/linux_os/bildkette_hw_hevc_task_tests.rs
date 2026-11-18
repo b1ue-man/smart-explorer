@@ -365,20 +365,20 @@ fn bildkette_task_linux_hw_hevc_probe_and_rank() {
             assert_eq!(row["profile_names"], serde_json::json!(["main"]));
         }
     }
-    // Hardware on both sides: AV1 before HEVC (B-30).
+    // Hardware on both sides: HEVC before AV1 (P9 2026-11-17: AV1 never first).
     let viewer = [
         CodecOffer::video(CodecKind::Hevc, false, true),
         CodecOffer::video(CodecKind::Av1, false, true),
     ];
     let choices = negotiate(&registry.encoder_offers(), &viewer, CodecPreference::Auto);
-    assert_eq!(choices[0].codec, CodecKind::Av1);
-    assert_eq!(choices[1].codec, CodecKind::Hevc);
+    assert_eq!(choices[0].codec, CodecKind::Hevc);
+    assert_eq!(choices[1].codec, CodecKind::Av1);
     // Without a device nothing changes; opening checks before the device.
     let (encoders, decoders) = super::video_ordered(&[]);
     assert!(encoders.is_empty() && decoders.is_empty());
     let registry = CodecRegistry::new(super::video_ordered(&[video_device()]).0, Vec::new());
     let error = registry
-        .open_encoder(&choices[1], FrameSize::new(1281, 720), 60)
+        .open_encoder(&choices[0], FrameSize::new(1281, 720), 60)
         .err()
         .unwrap();
     assert!(

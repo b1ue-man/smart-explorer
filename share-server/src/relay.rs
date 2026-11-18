@@ -179,6 +179,7 @@ fn start_at(address: SocketAddr, options: RelayOptions) -> Result<RelayGuard, Re
     eprintln!("se-share-server iroh relay listening on {relay_url}");
     if let Some(qad_address) = server.quic_addr() {
         eprintln!("{}", relay_qad::listening_line(qad_address));
+        super::qad_reach::listening(qad_address);
     }
     Ok(RelayGuard {
         _runtime: runtime,

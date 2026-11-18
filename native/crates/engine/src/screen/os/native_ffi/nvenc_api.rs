@@ -57,6 +57,9 @@ pub(in crate::screen::os) const NV_ENC_EVENT_PARAMS_VER: u32 = struct_version(1)
 
 pub(in crate::screen::os) const NVENC_INFINITE_GOPLENGTH: u32 = 0xffff_ffff;
 pub(in crate::screen::os) const NV_ENC_PARAMS_RC_CBR: u32 = 0x2;
+/// `NV_ENC_PARAMS_RC_VBR` (nv-codec-headers n12.1.14.0 line 265), with
+/// `targetQuality` the constant-quality mode of plan 2026-11-17 P9.
+pub(in crate::screen::os) const NV_ENC_PARAMS_RC_VBR: u32 = 0x1;
 pub(in crate::screen::os) const NV_ENC_PIC_STRUCT_FRAME: u32 = 0x01;
 pub(in crate::screen::os) const NV_ENC_PIC_TYPE_IDR: u32 = 0x03;
 pub(in crate::screen::os) const NV_ENC_PIC_FLAG_FORCEIDR: u32 = 0x2;

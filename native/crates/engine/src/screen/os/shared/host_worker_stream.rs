@@ -39,6 +39,8 @@ pub(super) struct StreamClient {
     /// latest capture facts with the read-back count (BK0).
     chain: Vec<(Station, u64)>,
     facts: Option<(CaptureFacts, u64)>,
+    /// P9: the step and result code of the capture's fallback, if any.
+    fallback: Option<crate::screen::core::capture_fallback::FallbackDetail>,
 }
 
 impl StreamClient {
@@ -67,6 +69,7 @@ impl StreamClient {
             unpacked.on_gpu = self.facts.and_then(|(prev, _)| prev.on_gpu);
         }
         self.facts = Some((unpacked, mark.readbacks));
+        self.fallback = crate::screen::core::capture_fallback::FallbackDetail::unpack(mark.facts);
     }
 }
 
@@ -98,6 +101,7 @@ impl WorkerSource {
         }
         if let Some((facts, readbacks)) = client.facts.take() {
             meter.set_facts(facts);
+            meter.set_fallback_detail(client.fallback);
             meter.set_readbacks(readbacks);
         }
     }
@@ -148,6 +152,7 @@ impl WorkerSource {
                 },
                 recover_serial: client.recover_serial,
                 last_good: client.last_good,
+                quality_target: hint.quality_target,
             }
         };
         let granted = order.granted;
@@ -160,8 +165,10 @@ impl WorkerSource {
         if let Err(error) = sent {
             return Err(self.link().lost(error));
         }
+        // P9: the deadline counts from the process's last message.
+        let activity = self.link().reader.activity();
         let answers = port.answers.lock().unwrap_or_else(PoisonError::into_inner);
-        let (mark, reply) = match answers.recv_timeout(FRAME_TIMEOUT) {
+        let (mark, reply) = match reader::progressing(&answers, &activity, FRAME_TIMEOUT) {
             Ok(Ok(Some(answer))) => answer,
             Ok(Ok(None)) | Err(RecvTimeoutError::Disconnected) => {
                 return Err(self
@@ -172,9 +179,10 @@ impl WorkerSource {
             Err(RecvTimeoutError::Timeout) => {
                 self.link().kill();
                 let text = format!(
-                    "the screen host process did not answer within {} s",
+                    "the screen host process sent nothing for {} s (STREAM)",
                     FRAME_TIMEOUT.as_secs()
                 );
+                host_log::note(None, &format!("{text}; ended"));
                 return Err(StageError::new(
                     ScreenErrorCode::CaptureFailed,
                     io::Error::new(io::ErrorKind::TimedOut, text),

@@ -113,7 +113,7 @@ impl MfDecoder {
     ) -> io::Result<Self> {
         ensure_com();
         let size = (header.size.width, header.size.height);
-        let memory = known();
+        let memory = known(header.codec);
         let wanted = stage::ranking(preference).contains(&DecodeStage::Hardware)
             && memory.allows_hardware(size)
             && header.codec.is_video();
@@ -129,7 +129,7 @@ impl MfDecoder {
                 Ok(decoder) => return Ok(decoder),
                 Err(error) => {
                     if stage.hardware() {
-                        remember(HardwareFailure::OpenRefused, size);
+                        remember(header.codec, HardwareFailure::OpenRefused, size);
                     }
                     refusals.push(format!("{}: {error}", stage.key()));
                 }
@@ -353,7 +353,7 @@ impl MfDecoder {
             .or_else(|| (!self.produced).then_some(HardwareFailure::OutputUnusable));
         let failure = stage::classify(d3d::hresult_of(error), readback.device_lost(), noted);
         if let Some(failure) = failure {
-            remember(failure, (self.size.width, self.size.height));
+            remember(self.codec, failure, (self.size.width, self.size.height));
             self.failed = Some(failure);
         }
     }

@@ -36,6 +36,9 @@ pub(crate) struct ModeMemory {
     ceiling: Option<Option<u64>>,
     /// The last `SET_DECODERS` of the viewer (P1), replayed like a mode.
     decoders: Option<crate::screen::core::set_decoders::SetDecoders>,
+    /// The last `AUDIO` of the viewer (plan 2026-11-17 P9), replayed to a
+    /// new session whose host answered `audio`.
+    audio: Option<bool>,
 }
 
 #[derive(Clone, Debug)]
@@ -57,6 +60,10 @@ impl ModeMemory {
         }
         if let ViewerFrame::SetDecoders(set) = frame {
             self.decoders = Some(set.clone());
+            return;
+        }
+        if let ViewerFrame::Audio(on) = frame {
+            self.audio = Some(*on);
             return;
         }
         let ViewerFrame::SetMode(set) = frame else {
@@ -91,6 +98,11 @@ impl ModeMemory {
     /// The ceiling a new session gets again; `None` when none was sent.
     pub(crate) fn rate_ceiling(&self) -> Option<Option<u64>> {
         self.ceiling
+    }
+
+    /// The viewer's last `AUDIO`; `None` when it sent none.
+    pub(crate) fn audio(&self) -> Option<bool> {
+        self.audio
     }
 
     /// The decoders a new session gets again; `None` when none were sent.

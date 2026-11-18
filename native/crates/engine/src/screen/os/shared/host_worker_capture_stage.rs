@@ -44,6 +44,8 @@ pub(super) fn capture_loop(shared: Arc<Shared>) {
             let waiting = state.slot.take();
             if waiting.is_some() {
                 state.dropped += 1;
+                // Its dirty rectangles go with it (P9, lossless tiles).
+                crate::screen::core::host_codec_adapters::note_dropped_picture();
             }
             state.capturing = true;
             // A key frame, a continuation (B-36), a lossless correction or a

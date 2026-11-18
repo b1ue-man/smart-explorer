@@ -42,7 +42,8 @@ fn batches_task_b6_full_preview_full_preserves_requested_quality_case() {
         .update(StreamKind::Video, Some(full), Some(48), true, true);
     assert_eq!(quality.mode.size(), Some(full));
     assert_eq!(quality.mode.full_fps, 48);
-    assert_eq!(quality.max_fps(), 15);
+    // P9: sharpness keeps the requested rate (no 15 frames/s cap).
+    assert_eq!(quality.max_fps(), 48);
     quality.mode = quality
         .mode
         .update(StreamKind::Preview, Some(preview), Some(3), true, true);
@@ -79,7 +80,7 @@ fn batches_task_b6_coalesced_modes_keep_each_requested_rate() {
     quality.mode = quality
         .mode
         .update(StreamKind::Video, None, None, true, true);
-    assert_eq!(quality.max_fps(), 15);
+    assert_eq!(quality.max_fps(), 60);
     assert_eq!(quality.mode.full_fps, 90);
     quality.mode = quality
         .mode

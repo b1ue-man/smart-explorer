@@ -215,6 +215,7 @@ fn handle_websocket(
     inbound_rate: &mut InboundRateLimiter,
 ) -> io::Result<()> {
     stream.set_write_deadline(Some(registration_deadline));
+    let tls = stream.is_tls();
     let (writer, outbound) = Writer::websocket(stream.socket())?;
     writer.set_wake(stream.notify());
     let config = WebSocketConfig {
@@ -266,11 +267,13 @@ fn handle_websocket(
             return Ok(());
         }
     }
+    let qad_witness = tls && hello.capabilities.contains(super::qad_reach::CAPABILITY);
     let Some(id) = finish_registration(hello, &writer, source, &state, timing)? else {
         flush_websocket_out(&mut websocket, &outbound)?;
         return Ok(());
     };
     let _registration = RegistrationGuard::new(id, &state);
+    let _qad_witness = qad_witness.then(|| super::qad_reach::witness(source));
 
     websocket.get_mut().set_write_deadline(None);
     let result = serve_websocket(
@@ -316,6 +319,7 @@ fn finish_registration(
         writer,
         &Out::HelloOk {
             capabilities: tracked_direct::capability_list(&hello.capabilities),
+            qad: super::qad_reach::for_hello(&hello.capabilities),
         },
     );
     Ok(Some(id))

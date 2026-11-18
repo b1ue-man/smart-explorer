@@ -167,6 +167,8 @@ fn code_renewal_surface_task_bridge_status_keeps_its_keys_and_devices_with_a_ren
         "rooms",
         "running",
         "server",
+        // The server's QAD self-check (TODO DIREKT-INTERNET, 2026-11-18).
+        "serverQad",
         "connected",
         "writeGrants",
     ];

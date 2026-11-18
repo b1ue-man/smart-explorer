@@ -13,3 +13,10 @@ pub fn capture_facts() -> CaptureFacts {
         ..CaptureFacts::default()
     }
 }
+
+/// Plan 2026-11-17 P9: the step and result code of a capture fallback for
+/// the free bits of the packed facts (`capture_fallback::FallbackDetail`);
+/// this platform reports none yet.
+pub fn capture_fallback_bits() -> u64 {
+    0
+}

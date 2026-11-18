@@ -46,6 +46,9 @@ pub struct StreamOrder {
     pub cadence_fps: u32,
     pub recover_serial: u64,
     pub last_good: u64,
+    /// P9: the quality target of sharp mode (`StreamHint::quality_target`);
+    /// a change opens a new encoder.
+    pub quality_target: Option<u8>,
 }
 
 /// Pictures a host process may encode ahead of their credit.
@@ -64,6 +67,8 @@ struct StreamWire {
     recover_serial: u64,
     #[serde(default)]
     last_good: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    quality_target: Option<u8>,
 }
 
 fn produce_wire(request: &StageRequest) -> ProduceWire {
@@ -168,6 +173,7 @@ impl WorkerRequest {
                     cadence_fps: order.cadence_fps,
                     recover_serial: order.recover_serial,
                     last_good: order.last_good,
+                    quality_target: order.quality_target,
                 })?,
             ),
             Self::Capture {
@@ -212,6 +218,7 @@ impl WorkerRequest {
                     cadence_fps: wire.cadence_fps.clamp(1, super::super::pacing::MAX_FPS),
                     recover_serial: wire.recover_serial,
                     last_good: wire.last_good,
+                    quality_target: wire.quality_target.filter(|q| (1..=51).contains(q)),
                 }))
             }
             CAPTURE => {

@@ -8,7 +8,7 @@
 //! acknowledgement or the next tick.
 use super::*;
 use crate::screen::core::host_stage::{StreamHint, StreamReport};
-use crate::screen::core::pacing::{codec_cap, guard_bytes};
+use crate::screen::core::pacing::codec_cap;
 use crate::screen::core::rate_control::model::start_table_bps;
 use crate::screen::core::rate_control::{codec_ceiling_bps, PathKind};
 
@@ -128,6 +128,11 @@ impl Pipeline {
         self.pacer.set_timing(rtt_us, self.clock.interval_us());
         // The unacknowledged bytes drain at the measured rate (plan 2026-11-17).
         self.pacer.set_drain_rate(self.rate.sustained_bps());
+        // P9: frames wait for at most what the line delivers over the
+        // round-trip floor plus two frames (`rate_control::queue`).
+        let base_rtt_us = self.rate.base_rtt_us(now).unwrap_or(rtt_us);
+        self.pacer
+            .set_queue(self.rate.queue_rate_bps(now), base_rtt_us);
         // A frame the line cannot take is dropped before encoding: for the
         // tile codec, whose size no target steers, this is how its frame rate
         // sinks to what the line carries; for every codec it is back pressure.
@@ -183,6 +188,12 @@ impl Pipeline {
             cadence_fps: (1_000_000 / self.clock.interval_us().max(1)).min(u64::from(u32::MAX))
                 as u32,
             ahead: self.ahead_allowed(target, path, rtt_us),
+            // P9: sharp mode takes a constant quality on the GPU encoders.
+            quality_target: self
+                .quality_policy
+                .mode
+                .sharpness
+                .then_some(crate::screen::core::rate_control::model::SHARP_TARGET_QUALITY),
         };
         let encoding_started = std::time::Instant::now();
         let joined = tokio::task::spawn_blocking(move || {
@@ -312,7 +323,8 @@ impl Pipeline {
 
     /// One picture may be encoded ahead of its frame when the unacknowledged
     /// bytes plus this frame and the next one (each the session's mean frame
-    /// size) stay under the queue guard of the pacer; a preview never does.
+    /// size) stay under the queue guard of the pacer (`Pacer::guard`, P9);
+    /// a preview never does.
     fn ahead_allowed(&self, target: u64, path: PathKind, rtt_us: u64) -> bool {
         if self.kind == StreamKind::Preview || self.totals.frames == 0 {
             return false;
@@ -321,7 +333,7 @@ impl Pipeline {
         self.pacer
             .unacked_bytes()
             .saturating_add(mean.saturating_mul(2))
-            <= guard_bytes(target, path, rtt_us)
+            <= self.pacer.guard(target, path, rtt_us)
     }
 
     async fn poll_prepared_source(&mut self, work_epoch: u64) -> Result<Produced, PipelineError> {

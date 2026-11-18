@@ -37,7 +37,9 @@ pub const MIN_HEIGHT: u32 = 360;
 pub const REFRESH_HZ: u32 = 60;
 /// Limit text of a host without a virtual display (`HELLO_OK` limits).
 pub const LIMIT_UNSUPPORTED_PREFIX: &str = "virtual_display_unsupported:";
-/// Reason of a Windows host until its display driver is decided (P5, E6).
+/// Former reason of a Windows host before its display driver was decided
+/// (P5, E6); a host of this version answers with the reasons of
+/// `windows_driver` instead. Kept for older hosts' answers.
 pub const WINDOWS_DRIVER_PENDING: &str = "windows_driver_pending";
 
 /// The sizes of the viewer's menu „Auflösung“; every width is a multiple of
@@ -295,9 +297,16 @@ pub use report::{
     REASON_SETUP,
 };
 
+/// The rules of the Windows virtual display (driver of VirtualDrivers).
+#[path = "virtual_display_windows.rs"]
+pub mod windows_driver;
+
 #[cfg(test)]
 #[path = "virtual_display_contract_task_tests.rs"]
 mod virtual_display_contract_task_tests;
 #[cfg(test)]
 #[path = "virtual_display_task_tests.rs"]
 mod virtual_display_task_tests;
+#[cfg(test)]
+#[path = "virtual_display_windows_task_tests.rs"]
+mod virtual_display_windows_task_tests;

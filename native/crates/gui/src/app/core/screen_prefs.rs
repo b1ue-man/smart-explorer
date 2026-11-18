@@ -89,7 +89,8 @@ pub struct ViewerPrefs {
     /// `AutoNoVsync` at the next start of the viewer (tearing possible).
     #[serde(default)]
     pub low_latency: bool,
-    /// „Schärfe vor Flüssigkeit“.
+    /// „Schärfe vor Flüssigkeit“ of older viewers; follows „Codec: Scharf
+    /// (GPU)“ (P9), read as that codec when no codec is stored.
     #[serde(default)]
     pub sharpness: bool,
     /// „Verlustfrei“ (the tile codec).
@@ -117,6 +118,9 @@ pub struct ViewerPrefs {
     /// the window.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub virtual_display: Option<VirtualDisplayChoice>,
+    /// „Ton“ (plan 2026-11-17 P9, `screen_audio.rs`); absent is on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio: Option<bool>,
 }
 
 fn schema() -> u32 {
@@ -137,6 +141,7 @@ impl Default for ViewerPrefs {
             decoder_library: None,
             display: None,
             virtual_display: None,
+            audio: None,
         }
     }
 }
@@ -279,8 +284,12 @@ pub fn set_virtual_display_choice(
 impl ViewerPrefs {
     /// „Codec“; a file of a viewer before BK6 has only `lossless`.
     pub fn codec_setting(&self) -> CodecSetting {
+        // P9: a stored switch „Schärfe vor Flüssigkeit“ is „Scharf (GPU)“.
         self.codec
-            .unwrap_or_else(|| CodecSetting::from_lossless(self.lossless))
+            .unwrap_or_else(|| match (self.lossless, self.sharpness) {
+                (false, true) => CodecSetting::Sharp,
+                (lossless, _) => CodecSetting::from_lossless(lossless),
+            })
     }
 
     /// Writes „Codec“ and „Dekodierer“; `lossless` follows „Verlustfrei“, so
@@ -289,6 +298,7 @@ impl ViewerPrefs {
         if let Some(codec) = codec {
             self.codec = Some(codec);
             self.lossless = codec.lossless();
+            self.sharpness = codec.sharpness();
         }
         self.decoder = decoder;
     }
@@ -323,6 +333,8 @@ impl ViewerPrefs {
         {
             stored.virtual_display = known;
         }
+        // And „Ton“ (P9).
+        stored.audio = super::screen_audio::stored();
         stored.save_to(&prefs_path())
     }
 
@@ -374,6 +386,36 @@ mod bildkette_codec_tests {
         ));
         assert!(chosen.lossless, "an older viewer reads its switch again");
         assert_eq!(chosen.codec_setting(), CodecSetting::Lossless);
+    }
+
+    /// P9: the switch „Schärfe vor Flüssigkeit“ is „Codec: Scharf (GPU)“:
+    /// a stored switch reads as that codec, the codec sends `sharpness` and
+    /// writes the switch along for an older viewer.
+    #[test]
+    fn p9_task_sharpness_switch_is_the_sharp_codec() {
+        let older = ViewerPrefs {
+            sharpness: true,
+            ..ViewerPrefs::default()
+        };
+        assert_eq!(older.codec_setting(), CodecSetting::Sharp);
+        assert_eq!(older.codec_setting().preference(), CodecPreference::Sharp);
+        let display = crate::screen::core::pixel_convert::FrameSize::new(1920, 1080);
+        let mode = super::super::screen_pool::full_set_mode(None, display, &older);
+        assert!(mode.sharpness && !mode.lossless);
+        let mut chosen = older.clone();
+        chosen.apply_codec((Some(CodecSetting::Auto), None));
+        assert!(!chosen.sharpness);
+        assert!(!super::super::screen_pool::full_set_mode(None, display, &chosen).sharpness);
+        chosen.apply_codec((Some(CodecSetting::Sharp), None));
+        assert!(chosen.sharpness && !chosen.lossless);
+        assert_eq!(CodecSetting::parse("sharp"), Some(CodecSetting::Sharp));
+        // Both stored switches: „Verlustfrei“ wins, as before.
+        let both = ViewerPrefs {
+            sharpness: true,
+            lossless: true,
+            ..ViewerPrefs::default()
+        };
+        assert_eq!(both.codec_setting(), CodecSetting::Lossless);
     }
 
     /// P8: „Dekodierer-Bibliothek“ and „Anzeige“ are stored beside the

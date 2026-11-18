@@ -266,6 +266,7 @@ fn order(granted: u64, ahead: u32, key_serial: u64) -> StreamOrder {
         cadence_fps: CADENCE,
         recover_serial: 0,
         last_good: 0,
+        quality_target: None,
     }
 }
 

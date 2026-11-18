@@ -1017,6 +1017,12 @@ BILDKETTE_TESTS = {
         "bildkette_task_rate_mf_h264_buffer_is_bytes",
         "bildkette_task_rate_encoders_open_at_session_target",
         "bildkette_task_rate_lossless_keyframe_not_stale_on_slower_link",
+        # Plan 2026-11-17 P9 (queue guard by delivery, refused frames, honour interval, dirty tiles).
+        "p9_rate_task_queue_guard_follows_delivery_and_keeps_two_frames",
+        "p9_rate_task_delivery_rate_measures_the_line",
+        "p9_rate_task_refused_frames_lower_a_target_above_the_line",
+        "p9_rate_task_honour_budget_counts_the_delivered_interval",
+        "p9_rate_task_dropped_pictures_mark_every_tile",
         "bildkette_task_recover_stale_time_from_rtt_and_frame_interval",
         "bildkette_task_recover_hello_with_old_peers",
         "bildkette_task_recover_continues_only_from_a_confirmed_decodable_frame",

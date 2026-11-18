@@ -29,6 +29,18 @@ pub(super) struct Names {
     pub framesize: &'static str,
     pub rate_control: &'static str,
     pub cbr: i64,
+    /// P9, sharp mode: `RATE_CONTROL_METHOD_QUALITY_VBR` (4 in all three
+    /// enums of SDK 1.4.35: VCE [105], HEVC [84], AV1 [95]) and its level
+    /// (`QvbrQualityLevel` [203], `HevcQvbrQualityLevel` [180],
+    /// `Av1QvbrQualityLevel` [217], 1-51).
+    pub quality_vbr: i64,
+    pub qvbr_level: &'static str,
+    /// The pre-analysis module and pre-encode rate control, both off: they
+    /// look at the picture before it is encoded (VCE [199], [200]; HEVC
+    /// [166], [186]; AV1 [223], [224]). The VCE pre-encode switch is an
+    /// enum (`PREENCODE_DISABLED` = 0), the others are booleans.
+    pub pre_analysis: &'static str,
+    pub pre_encode: &'static str,
     pub target: &'static str,
     pub peak: &'static str,
     pub vbv: &'static str,
@@ -70,6 +82,10 @@ pub(super) const AVC: Names = Names {
     framesize: prop::FRAMESIZE,
     rate_control: prop::RATE_CONTROL_METHOD,
     cbr: prop::RATE_CONTROL_CBR,
+    quality_vbr: 4,
+    qvbr_level: "QvbrQualityLevel",
+    pre_analysis: "EnablePreAnalysis",
+    pre_encode: "RateControlPreanalysisEnable",
     target: prop::TARGET_BITRATE,
     peak: prop::PEAK_BITRATE,
     vbv: prop::VBV_BUFFER_SIZE,
@@ -109,6 +125,10 @@ pub(super) const HEVC: Names = Names {
     framesize: "HevcFrameSize",
     rate_control: "HevcRateControlMethod",
     cbr: 3,
+    quality_vbr: 4,
+    qvbr_level: "HevcQvbrQualityLevel",
+    pre_analysis: "HevcEnablePreAnalysis",
+    pre_encode: "HevcRateControlPreAnalysisEnable",
     target: "HevcTargetBitrate",
     peak: "HevcPeakBitrate",
     vbv: "HevcVBVBufferSize",
@@ -148,6 +168,10 @@ pub(super) const AV1: Names = Names {
     framesize: "Av1FrameSize",
     rate_control: "Av1RateControlMethod",
     cbr: 3,
+    quality_vbr: 4,
+    qvbr_level: "Av1QvbrQualityLevel",
+    pre_analysis: "Av1EnablePreAnalysis",
+    pre_encode: "Av1RateControlPreEncode",
     target: "Av1TargetBitrate",
     peak: "Av1PeakBitrate",
     vbv: "Av1VBVBufferSize",

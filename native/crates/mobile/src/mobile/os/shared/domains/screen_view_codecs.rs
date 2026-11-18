@@ -7,8 +7,10 @@
 //!   `av1` (with `profile` `main`, or `main_444`/`high` for 4:4:4), or
 //!   `tiles`; `hardware`, `pixelAccess`, `maxWidth`, `maxHeight`,
 //!   `maxMacroblocks`, `maxMacroblocksPerSecond` as for H.264.
-//! - `codec`: `auto`, `h264`, `hevc`, `av1` or `lossless` (absent: automatic;
-//!   `lossless` is the switch „Verlustfrei“ and travels as `SET_MODE`).
+//! - `codec`: `auto`, `h264`, `hevc`, `av1`, `sharp` or `lossless` (absent:
+//!   automatic; `lossless` is the switch „Verlustfrei“ and travels as
+//!   `SET_MODE`; `sharp` is „Scharf (GPU)“, H.264/HEVC on the host's GPU
+//!   encoder, `SET_MODE` `sharpness`, plan 2026-11-17 P9).
 //! - `decoder`: `auto`, `hardware` or `software` (absent: automatic). The
 //!   decoders run in the app (MediaCodec), so the app also chooses its
 //!   decoder stage itself; the core only narrows the offers.
@@ -102,7 +104,7 @@ pub(super) fn codec_args(
     let codec = opt_str(args, "codec")
         .map(|text| {
             CodecSetting::parse(text)
-                .ok_or_else(|| invalid("„codec“ ist auto, h264, hevc, av1 oder lossless."))
+                .ok_or_else(|| invalid("„codec“ ist auto, h264, hevc, av1, sharp oder lossless."))
         })
         .transpose()?;
     let decoder = opt_str(args, "decoder")

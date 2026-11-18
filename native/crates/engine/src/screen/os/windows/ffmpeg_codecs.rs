@@ -10,7 +10,9 @@
 //! to `FrameSize::MAX`; „Dekodierer: Automatisch / Hardware / Software“
 //! keeps the stages of its choice (`ffmpeg_plan::stages`). A hardware stage
 //! that failed before its first picture, or whose device was lost, is not
-//! tried again in this process; the next viewer start tries it again.
+//! tried again for that codec in this process (P9: only that codec's stage;
+//! a lost device is made anew by `viewer_d3d11::shared`, so the other
+//! codecs keep their hardware); the next viewer start tries it again.
 use std::io;
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
@@ -24,23 +26,21 @@ use crate::screen::core::negotiate::{decoder_preference, CodecKind, CodecOffer, 
 use crate::screen::core::pixel_convert::FrameSize;
 use crate::screen::core::wire_binary::GopHeader;
 
-/// Hardware stages this process gave up, per codec; `None` codec: all.
-static GIVEN_UP: Mutex<Vec<(Option<CodecKind>, FfmpegStage)>> = Mutex::new(Vec::new());
+/// Hardware stages this process gave up, per codec.
+static GIVEN_UP: Mutex<Vec<(CodecKind, FfmpegStage)>> = Mutex::new(Vec::new());
 
-/// A hardware stage of `codec` failed (`device_lost`: for every codec).
-pub(super) fn give_up(codec: CodecKind, stage: FfmpegStage, device_lost: bool) {
+/// A hardware stage of `codec` failed; only that codec's stage is given up
+/// (P9: a lost device no longer ends the hardware of every codec).
+pub(super) fn give_up(codec: CodecKind, stage: FfmpegStage) {
     let mut given_up = GIVEN_UP.lock().unwrap_or_else(PoisonError::into_inner);
-    let entry = (Some(codec).filter(|_| !device_lost), stage);
-    if !given_up.contains(&entry) {
-        given_up.push(entry);
+    if !given_up.contains(&(codec, stage)) {
+        given_up.push((codec, stage));
     }
 }
 
 fn hardware_allowed(codec: CodecKind, stage: FfmpegStage) -> bool {
     let given_up = GIVEN_UP.lock().unwrap_or_else(PoisonError::into_inner);
-    !given_up
-        .iter()
-        .any(|(which, failed)| *failed == stage && which.is_none_or(|kind| kind == codec))
+    !given_up.contains(&(codec, stage))
 }
 
 /// Whether `library` may decode under this process's choice.

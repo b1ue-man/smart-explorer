@@ -404,7 +404,8 @@ fn bildkette_task_win_w4_daemon_stage_and_pipeline_complete_rank_to_tiles() {
         ["nvenc", "amf", "mf-hardware", "mf-software"]
     );
 
-    // 2. Full Pipeline chain: AV1 -> HEVC -> H.264 (all 5 stages) -> Tiles.
+    // 2. Full Pipeline chain: HEVC -> H.264 (all 5 stages) -> AV1 -> Tiles
+    // (P9 2026-11-17: AV1 ranks last among the video codecs).
     let full_log = Arc::new(CallLog::default());
     let high_hw = CodecOffer::h264(H264Profile::High, true);
     let high_sw = CodecOffer::h264(H264Profile::High, false);
@@ -423,7 +424,7 @@ fn bildkette_task_win_w4_daemon_stage_and_pipeline_complete_rank_to_tiles() {
     let backend = Arc::new(RankBackend(CodecRegistry::new(factories, Vec::new())));
     let viewer_offers = vec![av1_hw, hevc_hw, high_hw, CodecOffer::tiles()];
     let choices = negotiate(&backend.encoders(), &viewer_offers, CodecPreference::Auto);
-    assert_eq!(choices[0].codec, CodecKind::Av1);
+    assert_eq!(choices[0].codec, CodecKind::Hevc);
     let fallbacks = codec_fallbacks(&choices, &choices[0]);
 
     let rt = tokio::runtime::Builder::new_multi_thread()
@@ -472,13 +473,13 @@ fn bildkette_task_win_w4_daemon_stage_and_pipeline_complete_rank_to_tiles() {
             assert_eq!(
                 *full_log.opens.lock().unwrap(),
                 [
-                    "nvenc-av1",
                     "nvenc-hevc",
                     "nvenc",
                     "amf",
                     "mf-hardware",
                     "mf-software",
                     "openh264",
+                    "nvenc-av1",
                 ]
             );
             let PictureEvent::Record { header, .. } = rx.recv().await.unwrap() else {

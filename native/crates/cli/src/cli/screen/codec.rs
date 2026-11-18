@@ -233,6 +233,32 @@ fn row(entry: &CodecEntry) -> String {
     )
 }
 
+/// The line of mode „Scharf (GPU)“ (plan 2026-11-17 P9): the GPU encoders
+/// it uses on this device and whether one of them sends 4:4:4.
+pub(super) fn sharp_text(report: &CodecReport) -> String {
+    use crate::screen::core::sharp_mode::{SHARP_KEY, SHARP_LABEL};
+    let encoders = report.sharp_encoders();
+    if encoders.is_empty() {
+        return format!(
+            "{SHARP_LABEL} ({SHARP_KEY}): kein Video-Kodierer der Grafikkarte, \
+             Software-Video oder Kacheln\n"
+        );
+    }
+    let names: Vec<String> = encoders
+        .iter()
+        .map(|entry| format!("{} {}", entry.codec.key(), entry.name))
+        .collect();
+    let chroma = if report.sharp_444() {
+        "4:4:4, wo der Betrachter es dekodiert"
+    } else {
+        "4:2:0"
+    };
+    format!(
+        "{SHARP_LABEL} ({SHARP_KEY}): {} ({chroma})\n",
+        names.join(", ")
+    )
+}
+
 /// The text of `se screen codec`.
 pub(super) fn text(report: &CodecReport) -> String {
     let mut out = String::from("Kodierer:\n");
@@ -251,6 +277,7 @@ pub(super) fn text(report: &CodecReport) -> String {
         OpenH264State::Disabled => "aus",
         OpenH264State::Failed => "fehlerhaft",
     };
+    out.push_str(&sharp_text(report));
     out.push_str(&format!("OpenH264 {}: {state}", report.openh264.version));
     if let Some(reason) = &report.openh264.reason {
         out.push_str(&format!(" ({reason})"));
@@ -259,6 +286,47 @@ pub(super) fn text(report: &CodecReport) -> String {
     out.push_str(OPENH264_NOTICE);
     out.push('\n');
     out
+}
+
+#[cfg(test)]
+mod sharp_tests {
+    use super::{sharp_text, text};
+    use crate::screen::core::codec_registry::{
+        CodecEntry, CodecReport, OpenH264Report, OpenH264State,
+    };
+    use crate::screen::core::negotiate::CodecKind;
+
+    fn entry(codec: CodecKind, name: &str, hardware: bool, profiles: &[&str]) -> CodecEntry {
+        CodecEntry {
+            codec,
+            profiles: Vec::new(),
+            name: name.into(),
+            hardware,
+            profile_names: profiles.iter().map(|p| p.to_string()).collect(),
+            refused_settings: Vec::new(),
+            verdict: None,
+        }
+    }
+
+    #[test]
+    fn sharp_mode_task_cli_codec_names_the_mode() {
+        let mut report = CodecReport {
+            encoders: vec![
+                entry(CodecKind::Av1, "nvenc-av1", true, &["main"]),
+                entry(CodecKind::Hevc, "nvenc-hevc", true, &["main", "main_444"]),
+                entry(CodecKind::H264, "openh264", false, &["cb"]),
+            ],
+            decoders: Vec::new(),
+            openh264: OpenH264Report::new(OpenH264State::Absent, None),
+        };
+        assert_eq!(
+            sharp_text(&report),
+            "Scharf (GPU) (sharp): hevc nvenc-hevc (4:4:4, wo der Betrachter es dekodiert)\n"
+        );
+        assert!(text(&report).contains("Scharf (GPU) (sharp): hevc nvenc-hevc"));
+        report.encoders.retain(|e| !e.hardware);
+        assert!(sharp_text(&report).contains("kein Video-Kodierer der Grafikkarte"));
+    }
 }
 
 #[cfg(test)]

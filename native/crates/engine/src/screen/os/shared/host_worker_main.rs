@@ -131,6 +131,10 @@ pub fn run_screen_host_worker_if_requested(arguments: &[std::ffi::OsString]) -> 
     let requested = arguments.len() == 1
         && arguments[0]
             == std::ffi::OsStr::new(super::host_worker_client::SCREEN_HOST_WORKER_SWITCH);
+    // The capture process of the host's sound (plan 2026-11-17 P9).
+    if requested && super::audio::helper_requested() {
+        return Some(super::audio::run_helper());
+    }
     requested.then(run_host_worker)
 }
 

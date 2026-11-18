@@ -69,6 +69,8 @@ impl<S: VendorSession> VendorEncoder<S> {
             rate: None,
             ceiling_bps: u64::from(u32::MAX),
             refresh: false,
+            // The run-time check and `bench --local` measure the CBR path.
+            quality: None,
             parameter_sets: None,
         }
     }

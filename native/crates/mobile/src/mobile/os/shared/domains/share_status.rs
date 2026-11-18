@@ -32,6 +32,8 @@ pub(super) struct WorkerFacts {
     pub rdp_setup: Vec<String>,
     /// A running Direct-code renewal of this device (E17).
     pub code_renewal: Option<crate::daemon::CodeRenewalView>,
+    /// The Share server's QAD self-check while connected (`qad_status_v1`).
+    pub server_qad: Option<crate::share::ServerQadStatus>,
 }
 
 impl WorkerFacts {
@@ -48,6 +50,7 @@ impl WorkerFacts {
                 .map(|setup| setup.lines())
                 .unwrap_or_default(),
             code_renewal: snapshot.code_renewal.clone(),
+            server_qad: snapshot.server_qad,
         }
     }
 
@@ -333,7 +336,7 @@ pub(super) fn status_json(input: &StatusInput<'_>) -> Value {
         worker.lan_presence.clone()
     };
     let notices: Vec<&String> = input.notices.iter().collect();
-    json!({
+    let mut status = json!({
         "running": worker.running,
         "connected": worker.connected,
         "relayUrl": (!worker.relay_url.is_empty()).then(|| worker.relay_url.clone()),
@@ -359,7 +362,14 @@ pub(super) fn status_json(input: &StatusInput<'_>) -> Value {
         "discovery": discovery_json(input),
         "removedDevices": removed,
         "notices": notices,
-    })
+    });
+    // The server's QAD self-check while connected: `ipv4`, `ipv6` and the
+    // line of `se share status` (`null` otherwise).
+    status["serverQad"] = worker
+        .server_qad
+        .as_ref()
+        .map_or(Value::Null, crate::share::ServerQadStatus::json);
+    status
 }
 
 /// Incoming requests that still wait for this device's decision.

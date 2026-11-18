@@ -4,6 +4,7 @@ use crossbeam_channel::{bounded, Receiver};
 
 use super::discovery_signal_types::DISCOVERY_EXCHANGE_CAPABILITY;
 use super::identity::ShareIdentity;
+use super::server_qad::QAD_STATUS_CAPABILITY;
 use super::signal_connection::{send_line, SignalConnection};
 use super::signal_handshake::{await_hello_ok, SignalCapabilities, KEY_LOGIN_CAPABILITY};
 use super::wire::{ClientMsg, IDLE_KEEPALIVE_CAPABILITY, TRACKED_DIRECT_CAPABILITY};
@@ -47,10 +48,12 @@ fn connect_and_negotiate(server: &str, identity: &ShareIdentity) -> io::Result<N
                 DISCOVERY_EXCHANGE_CAPABILITY.to_string(),
                 IDLE_KEEPALIVE_CAPABILITY.to_string(),
                 KEY_LOGIN_CAPABILITY.to_string(),
+                QAD_STATUS_CAPABILITY.to_string(),
             ],
         },
     )?;
     let capabilities = await_hello_ok(&mut connection, identity)?;
+    super::server_qad::record(capabilities.server_qad);
     if capabilities.key_login {
         connection.confirm_key_login();
     }

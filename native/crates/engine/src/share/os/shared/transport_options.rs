@@ -39,31 +39,38 @@ pub fn migrate_server_file(path: &Path) -> io::Result<Option<String>> {
 /// with `tcp://host:port` gets an `http://` relay, and QUIC address
 /// discovery runs only over TLS (`endpoint_routes.rs` `relay_mode`), so such
 /// a device never learned its public address and every peer connection
-/// across the internet fell back to the relay. The encrypted alternative
-/// (`SignalServerConfig::encrypted_alternative`) is connected with the
-/// normal certificate check; only a completed TLS and WebSocket handshake
-/// rewrites the file. A server without a valid certificate for its name
-/// keeps the plaintext address. One try per process (worker start).
+/// across the internet fell back to the relay. The rule is
+/// [`encrypted_upgrade`]; this writes its result. One try per process
+/// (worker start).
 pub fn upgrade_server_file(path: &Path) -> io::Result<Option<String>> {
-    if UPGRADE_TRIED.swap(true, Ordering::AcqRel) {
-        return Ok(None);
-    }
     let Some(raw) = read_server_file(path)? else {
         return Ok(None);
     };
-    let Ok(config) = SignalServerConfig::parse_stored(&raw) else {
+    let Some(encrypted) = encrypted_upgrade(&raw) else {
         return Ok(None);
     };
-    let Some(encrypted) = config.encrypted_alternative() else {
-        return Ok(None);
-    };
-    if SignalServerConfig::parse_stored(&encrypted).is_err()
-        || super::signal_connection::SignalConnection::connect(&encrypted).is_err()
-    {
-        return Ok(None);
-    }
     write_server_file(path, &encrypted)?;
     Ok(Some(encrypted))
+}
+
+/// The encrypted address that replaces the stored plaintext address `raw`,
+/// or `None`. The encrypted alternative
+/// (`SignalServerConfig::encrypted_alternative`) is connected with the
+/// normal certificate check; only a completed TLS and WebSocket handshake
+/// yields it. A server without a valid certificate for its name keeps the
+/// plaintext address. Blocks for that network attempt, so callers holding a
+/// lock run it outside (Android: `share_server_upgrade.rs` of the mobile
+/// crate). One network attempt per process for every caller together; an
+/// address without plaintext form costs none.
+pub fn encrypted_upgrade(raw: &str) -> Option<String> {
+    let config = SignalServerConfig::parse_stored(raw).ok()?;
+    let encrypted = config.encrypted_alternative()?;
+    SignalServerConfig::parse_stored(&encrypted).ok()?;
+    if UPGRADE_TRIED.swap(true, Ordering::AcqRel) {
+        return None;
+    }
+    super::signal_connection::SignalConnection::connect(&encrypted).ok()?;
+    Some(encrypted)
 }
 
 static UPGRADE_TRIED: AtomicBool = AtomicBool::new(false);

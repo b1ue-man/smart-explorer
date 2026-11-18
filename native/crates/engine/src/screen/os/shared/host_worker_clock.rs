@@ -19,6 +19,7 @@ use super::*;
 use crate::screen::core::capture_admission::CaptureGrant;
 use crate::screen::core::capture_picture::Picture;
 use crate::screen::core::frame_budget::FrameContract;
+use crate::screen::core::host_codec_adapters::note_dropped_picture;
 use crate::screen::core::pixel_convert::FrameSize;
 use crate::screen::core::worker_wire::StreamOrder;
 use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
@@ -56,21 +57,26 @@ pub(super) fn quiet_for(request: &WorkerRequest) -> Option<bool> {
 }
 
 /// What makes an encoder: a change starts a new one with a key frame.
+/// P9: the quality target of sharp mode too (AMF takes its rate control
+/// method only before `Init`).
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct Identity {
     epoch: u64,
     choice: CodecChoice,
     contract: Option<FrameContract>,
     size: FrameSize,
+    quality: Option<u8>,
 }
 
 impl Identity {
-    fn of(request: &StageRequest) -> Self {
+    fn of(order: &StreamOrder) -> Self {
+        let request = &order.request;
         Self {
             epoch: request.encoder_epoch,
             choice: request.choice,
             contract: request.frame_contract,
             size: request.size,
+            quality: order.quality_target,
         }
     }
 }
@@ -200,7 +206,11 @@ impl State {
     fn store(&mut self, tick: Tick, serial: u64) -> Gone {
         if self.serial != serial || self.quiet > 0 || self.stopping {
             return match tick {
-                Tick::Picture(captured) => (Some(captured), None),
+                Tick::Picture(captured) => {
+                    // P9: its dirty rectangles are lost (lossless tiles).
+                    note_dropped_picture();
+                    (Some(captured), None)
+                }
                 _ => (None, None),
             };
         }
@@ -214,6 +224,7 @@ impl State {
                 let gone = self.slot.replace(captured);
                 if gone.is_some() {
                     self.dropped += 1;
+                    note_dropped_picture();
                 }
                 (gone, None)
             }
@@ -306,9 +317,11 @@ impl Stream {
                 return;
             }
             let mut gone: Gone = (None, None);
-            let identity = Identity::of(&order.request);
+            let identity = Identity::of(&order);
             if state.identity != Some(identity) {
                 state.identity = Some(identity);
+                // The next encoder of this process opens with it (P9).
+                crate::screen::core::rate_control::model::set_session_quality(order.quality_target);
                 state.serial += 1;
                 state.reset_encoder = true;
                 state.failed = false;
@@ -398,6 +411,10 @@ impl Stream {
             state.reset_encoder |= reset_encoder;
             let held = state.held.take();
             state.key_wanted |= held.is_some();
+            if state.slot.is_some() {
+                // P9: the waiting picture's dirty rectangles go with it.
+                note_dropped_picture();
+            }
             (state.slot.take(), held)
         };
         drop(gone);

@@ -1,7 +1,8 @@
 //! The D3D11 video processor of the Windows GPU path (plan 2026-11-14
 //! bildkette B-17, package BK2a): BGRA → NV12 and scaling on the device that
 //! captured the picture, NV12 textures for the encoder, and the ring of two
-//! NV12 pictures the capture thread writes and the encoder reads.
+//! NV12 pictures the capture thread writes and the encoder reads
+//! (`d3d_video_ring.rs`).
 //!
 //! Colour: the CPU reference (`core/pixel_convert.rs`, `YuvMatrix::Bt709`)
 //! takes full-range RGB and writes BT.709 limited range (Y 16–235, chroma
@@ -11,14 +12,15 @@
 //! filter are the driver's; the CPU path averages 2 × 2 for chroma and uses a
 //! box filter for scaling.
 //!
-//! Ring: two NV12 slots of the capture's native size (even), so that a
-//! picture stays valid when the encoder's size changes; one slot can be in
-//! the encoder (`busy`), the capture writes the other. Each slot owns a claim
-//! of the capture grant (`CaptureOwner::Readback`, the budget of the CPU
-//! staging texture it replaces) taken before its texture is created.
+//! Plan 2026-11-17 P9 (`overlay`): a second pass of the same processor
+//! draws a small BGRA patch (the pointer blended onto the screen under it)
+//! into an area of the picture the first pass wrote. The output target
+//! rectangle limits the pass to that area ("If this method is never called,
+//! or if the Enable parameter is FALSE, the video processor writes to the
+//! entire destination surface", `VideoProcessorSetOutputTargetRect`), so the
+//! rest of the picture stays.
 use std::io;
 use std::mem::ManuallyDrop;
-use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use windows::core::Interface;
 use windows::Win32::Foundation::RECT;
@@ -37,11 +39,14 @@ use windows::Win32::Graphics::Direct3D11::{
     D3D11_VPOV_DIMENSION_TEXTURE2D,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
-    DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_NV12, DXGI_RATIONAL, DXGI_SAMPLE_DESC,
+    DXGI_FORMAT, DXGI_FORMAT_NV12, DXGI_RATIONAL, DXGI_SAMPLE_DESC,
 };
 
-use crate::screen::core::capture_admission::{CaptureGeneration, CaptureSlice, SourceKey};
-use crate::screen::core::pixel_convert::FrameSize;
+use crate::screen::core::pixel_convert::{FrameSize, Rect};
+
+#[path = "d3d_video_ring.rs"]
+mod ring;
+pub(in crate::screen::os) use ring::Ring;
 
 /// `D3D11_VIDEO_PROCESSOR_COLOR_SPACE` bits (LSB first: Usage, RGB_Range,
 /// YCbCr_Matrix, YCbCr_xvYCC, Nominal_Range ×2): RGB, full range 0–255.
@@ -70,6 +75,15 @@ fn rect(size: FrameSize) -> RECT {
     }
 }
 
+fn area(area: Rect) -> RECT {
+    RECT {
+        left: area.x as i32,
+        top: area.y as i32,
+        right: (area.x + area.width) as i32,
+        bottom: (area.y + area.height) as i32,
+    }
+}
+
 fn unsupported(what: &str) -> io::Error {
     io::Error::new(io::ErrorKind::Unsupported, what.to_string())
 }
@@ -81,6 +95,7 @@ pub(in crate::screen::os) struct VideoConverter {
     enumerator: ID3D11VideoProcessorEnumerator,
     processor: ID3D11VideoProcessor,
     pub input: FrameSize,
+    output: FrameSize,
 }
 
 // SAFETY: the converter is used by one thread at a time (it lives behind a
@@ -164,6 +179,7 @@ impl VideoConverter {
             enumerator,
             processor,
             input,
+            output,
         })
     }
 
@@ -235,6 +251,53 @@ impl VideoConverter {
         // SAFETY: the view put into the stream above is released once.
         unsafe { ManuallyDrop::drop(&mut streams[0].pInputSurface) };
         result.map_err(io::Error::other)
+    }
+
+    /// P9: draws the BGRA `patch` (of `at`'s size) at `at` of the picture
+    /// behind `target`, which `convert` wrote before; nothing outside `at`
+    /// changes. `at` lies inside the output and has even edges, so every
+    /// 2 × 2 chroma pair is written whole. The rectangles of the whole
+    /// picture are set again afterwards, also when the pass fails.
+    pub(in crate::screen::os) fn overlay(
+        &self,
+        patch: &ID3D11Texture2D,
+        at: Rect,
+        target: &ID3D11VideoProcessorOutputView,
+    ) -> io::Result<()> {
+        if !at.fits(self.output) {
+            return Err(unsupported("pointer patch lies outside the picture"));
+        }
+        let (from, to) = (rect(FrameSize::new(at.width, at.height)), area(at));
+        // SAFETY: state setters of this converter's processor; the rects are
+        // locals that live through each call.
+        unsafe {
+            self.context
+                .VideoProcessorSetStreamSourceRect(&self.processor, 0, true, Some(&from));
+            self.context
+                .VideoProcessorSetStreamDestRect(&self.processor, 0, true, Some(&to));
+            self.context
+                .VideoProcessorSetOutputTargetRect(&self.processor, true, Some(&to));
+        }
+        let result = self.convert(patch, target);
+        let (whole_in, whole_out) = (rect(self.input), rect(self.output));
+        // SAFETY: as above; restores the rectangles `new` set.
+        unsafe {
+            self.context.VideoProcessorSetStreamSourceRect(
+                &self.processor,
+                0,
+                true,
+                Some(&whole_in),
+            );
+            self.context.VideoProcessorSetStreamDestRect(
+                &self.processor,
+                0,
+                true,
+                Some(&whole_out),
+            );
+            self.context
+                .VideoProcessorSetOutputTargetRect(&self.processor, true, Some(&whole_out));
+        }
+        result
     }
 }
 
@@ -323,150 +386,4 @@ pub(in crate::screen::os) fn with_mapped<T>(
     // SAFETY: Map succeeded above.
     unsafe { context.Unmap(texture, 0) };
     result
-}
-
-/// One NV12 picture of the ring.
-struct Slot {
-    texture: ID3D11Texture2D,
-    view: ID3D11VideoProcessorOutputView,
-    /// Tag of the picture it holds (0: none yet).
-    tag: u16,
-    /// Handed to the encoder; the capture writes the other slot.
-    busy: bool,
-    // The texture is released before its claim.
-    _claim: CaptureSlice,
-}
-
-struct RingGpu {
-    device: ID3D11Device,
-    context: ID3D11DeviceContext,
-    convert: VideoConverter,
-    slots: Vec<Slot>,
-    next: usize,
-}
-
-// SAFETY: as `VideoConverter`; every use goes through the ring's mutex.
-unsafe impl Send for RingGpu {}
-
-/// The NV12 pictures of one capture generation on one device.
-pub(in crate::screen::os) struct Ring {
-    pub source: SourceKey,
-    pub generation: CaptureGeneration,
-    /// `ID3D11Device` pointer of the capture (identity only).
-    pub device: usize,
-    pub native: FrameSize,
-    pub size: FrameSize,
-    gpu: Mutex<RingGpu>,
-}
-
-impl Ring {
-    /// Two slots, each claimed from `claim` before its texture exists.
-    pub(in crate::screen::os) fn create(
-        device: &ID3D11Device,
-        context: &ID3D11DeviceContext,
-        identity: (SourceKey, CaptureGeneration),
-        native: FrameSize,
-        mut claim: impl FnMut(u64) -> io::Result<CaptureSlice>,
-    ) -> io::Result<Self> {
-        let size = slot_size(native);
-        let convert =
-            VideoConverter::new(device, context, native, DXGI_FORMAT_B8G8R8A8_UNORM, size)?;
-        let mut slots = Vec::with_capacity(2);
-        for _ in 0..2 {
-            let claim = claim(nv12_len(size))?;
-            let texture = nv12_texture(device, size, None)?;
-            let view = convert.output_view(&texture)?;
-            slots.push(Slot {
-                texture,
-                view,
-                tag: 0,
-                busy: false,
-                _claim: claim,
-            });
-        }
-        Ok(Self {
-            source: identity.0,
-            generation: identity.1,
-            device: device.as_raw() as usize,
-            native,
-            size,
-            gpu: Mutex::new(RingGpu {
-                device: device.clone(),
-                context: context.clone(),
-                convert,
-                slots,
-                next: 0,
-            }),
-        })
-    }
-
-    fn lock(&self) -> MutexGuard<'_, RingGpu> {
-        self.gpu.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-
-    /// Converts the capture texture into the slot that is not in the
-    /// encoder and gives it `tag`. The work is submitted before the capture
-    /// releases its frame (`Flush`).
-    pub(in crate::screen::os) fn write(
-        &self,
-        source: &ID3D11Texture2D,
-        tag: u16,
-    ) -> io::Result<()> {
-        let mut gpu = self.lock();
-        let index = if gpu.slots[gpu.next].busy {
-            gpu.next ^ 1
-        } else {
-            gpu.next
-        };
-        // The slot loses its old picture before the conversion can fail.
-        gpu.slots[index].tag = 0;
-        gpu.convert.convert(source, &gpu.slots[index].view)?;
-        gpu.slots[index].tag = tag;
-        gpu.next = index ^ 1;
-        // SAFETY: submits the queued conversion of the live context.
-        unsafe { gpu.context.Flush() };
-        Ok(())
-    }
-
-    /// Device and immediate context of the ring (readback of a picture).
-    pub(in crate::screen::os) fn handles(&self) -> (ID3D11Device, ID3D11DeviceContext) {
-        let gpu = self.lock();
-        (gpu.device.clone(), gpu.context.clone())
-    }
-
-    /// The tags of both slots.
-    pub(in crate::screen::os) fn tags(&self) -> [u16; 2] {
-        let gpu = self.lock();
-        [gpu.slots[0].tag, gpu.slots[1].tag]
-    }
-
-    /// The texture of slot `index` with `tag`, marked busy until `release`;
-    /// `None` when the slot holds another picture by now.
-    pub(in crate::screen::os) fn take(&self, index: usize, tag: u16) -> Option<ID3D11Texture2D> {
-        let mut gpu = self.lock();
-        let slot = gpu.slots.get_mut(index).filter(|slot| slot.tag == tag)?;
-        slot.busy = true;
-        Some(slot.texture.clone())
-    }
-
-    pub(in crate::screen::os) fn release(&self, index: usize) {
-        if let Some(slot) = self.lock().slots.get_mut(index) {
-            slot.busy = false;
-        }
-    }
-
-    /// Runs `body` with the texture of slot `index` while it holds `tag`;
-    /// the capture cannot overwrite it meanwhile.
-    pub(in crate::screen::os) fn with_slot<T>(
-        &self,
-        index: usize,
-        tag: u16,
-        body: impl FnOnce(&ID3D11Texture2D) -> io::Result<T>,
-    ) -> io::Result<Option<T>> {
-        let gpu = self.lock();
-        match gpu.slots.get(index).filter(|slot| slot.tag == tag) {
-            Some(slot) => body(&slot.texture).map(Some),
-            None => Ok(None),
-        }
-    }
 }
