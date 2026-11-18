@@ -199,8 +199,7 @@ fn texts(shapes: &[egui::epaint::ClippedShape]) -> Vec<String> {
     out
 }
 
-fn draw(add: impl FnOnce(&mut egui::Ui)) -> Vec<String> {
-    let mut add = Some(add);
+fn draw(mut add: impl FnMut(&mut egui::Ui)) -> Vec<String> {
     let ctx = egui::Context::default();
     let input = egui::RawInput {
         screen_rect: Some(egui::Rect::from_min_size(
@@ -209,10 +208,10 @@ fn draw(add: impl FnOnce(&mut egui::Ui)) -> Vec<String> {
         )),
         ..Default::default()
     };
+    // Every pass draws again: a discarded pass (toolbar items measured,
+    // `request_discard`) is followed by one with the measured widths.
     let output = ctx.run(input, |ctx| {
-        if let Some(add) = add.take() {
-            egui::CentralPanel::default().show(ctx, add);
-        }
+        egui::CentralPanel::default().show(ctx, &mut add);
     });
     texts(&output.shapes)
 }

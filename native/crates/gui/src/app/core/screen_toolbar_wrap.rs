@@ -15,11 +15,12 @@ const ROW_START_SLACK: f32 = 0.5;
 
 /// Whether an item of `width` goes to a new row: it is wider than the rest
 /// of the row and does not already start one (an item wider than the whole
-/// bar keeps a row of its own). An item not measured yet (its first frame)
-/// starts a row too, so it never runs past the edge before its width is
-/// known; the next frame places it by that width.
+/// bar keeps a row of its own). An item not measured yet stays in the row;
+/// its pass is discarded and laid out again at once with the measured
+/// width (`item`, egui's `request_discard`), so no shown frame has it past
+/// the edge.
 pub(super) fn breaks_before(width: Option<f32>, available: f32, at_row_start: bool) -> bool {
-    !at_row_start && width.is_none_or(|width| width > available)
+    !at_row_start && width.is_some_and(|width| width > available)
 }
 
 /// One setting of the toolbar (a label with its list, a switch with its
@@ -35,8 +36,10 @@ pub(super) fn item<R>(ui: &mut egui::Ui, id: impl Hash, add: impl FnOnce(&mut eg
     let width = inner.response.rect.width();
     if known.is_none_or(|known| (known - width).abs() > ROW_START_SLACK) {
         ui.data_mut(|data| data.insert_temp(key, width));
-        // The next frame places the item by its measured width.
-        ui.ctx().request_repaint();
+        // This pass placed the item without its width (or with an old one):
+        // egui discards the pass and runs it again in the same frame
+        // (`Options::max_passes`), now with the measured width.
+        ui.ctx().request_discard("screen toolbar item measured");
     }
     inner.inner
 }
@@ -53,9 +56,7 @@ mod tests {
         assert!(!breaks_before(Some(100.0), 120.0, false));
         // Already at the start of a row: no empty row, even when wider.
         assert!(!breaks_before(Some(900.0), 600.0, true));
-        // First frame, width not yet measured: a row of its own, never past
-        // the edge; at the start of a row it stays there.
-        assert!(breaks_before(None, 500.0, false));
-        assert!(!breaks_before(None, 500.0, true));
+        // Not measured yet: placed, measured, and the pass laid out again.
+        assert!(!breaks_before(None, 10.0, false));
     }
 }
