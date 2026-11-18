@@ -4,6 +4,12 @@
 //! after its `STREAMED` mark and goes with it to the stream's own channel,
 //! so a waiting input answer never queues behind a picture; the end of the
 //! process reaches both channels.
+//!
+//! Plan 2026-11-17 P9: a wait for an answer ends only after its limit passed
+//! without any message of the process (`progressing`): a process that still
+//! asks for capture memory, reports the pointer or answers another request
+//! works and is not ended for a slow first picture (encoder start). Input
+//! keeps its strict limit (`INPUT_TIMEOUT`).
 use super::capture_broker::CaptureBroker;
 use crate::screen::core::{
     capture_transport,
@@ -13,6 +19,7 @@ use crate::screen::core::{
 };
 use std::io::{self, Read};
 use std::sync::{
+    atomic::{AtomicU64, Ordering},
     mpsc::{self, Receiver, RecvTimeoutError},
     Arc, Mutex,
 };
@@ -22,6 +29,24 @@ type Answer = io::Result<Option<WorkerReply>>;
 pub(super) type StreamAnswer = io::Result<Option<(worker_wire::StreamMark, WorkerReply)>>;
 pub(super) struct WorkerReader {
     answers: Receiver<Answer>,
+    /// Messages read from the process so far.
+    activity: Arc<AtomicU64>,
+}
+
+/// The next value of `answers`; `Timeout` only after `limit` passed without
+/// any message counted in `activity`.
+pub(super) fn progressing<T>(
+    answers: &Receiver<T>,
+    activity: &AtomicU64,
+    limit: Duration,
+) -> Result<T, RecvTimeoutError> {
+    loop {
+        let seen = activity.load(Ordering::Acquire);
+        match answers.recv_timeout(limit) {
+            Err(RecvTimeoutError::Timeout) if activity.load(Ordering::Acquire) != seen => {}
+            other => return other,
+        }
+    }
 }
 impl WorkerReader {
     pub(super) fn start(
@@ -32,6 +57,8 @@ impl WorkerReader {
         stream: mpsc::Sender<StreamAnswer>,
     ) -> io::Result<Self> {
         let (sender, answers) = mpsc::sync_channel(1);
+        let activity = Arc::new(AtomicU64::new(0));
+        let counted = activity.clone();
         std::thread::Builder::new()
             .name("screen-host-reader".into())
             .spawn(move || {
@@ -42,6 +69,7 @@ impl WorkerReader {
                         else {
                             return Ok(None);
                         };
+                        counted.fetch_add(1, Ordering::AcqRel);
                         if tag == wire::OWNED_REFERENCE {
                             // The records go from the pipe straight into
                             // their own buffers (BK3b, no transport copy).
@@ -135,9 +163,23 @@ impl WorkerReader {
                 }
                 broker.reader_ended();
             })?;
-        Ok(Self { answers })
+        Ok(Self { answers, activity })
     }
-    pub(super) fn receive(&self, timeout: Duration) -> Result<Answer, RecvTimeoutError> {
-        self.answers.recv_timeout(timeout)
+    /// The next answer; `Timeout` after `limit` without any message, or with
+    /// `strict` after `limit` without the answer (input: the stream's own
+    /// messages would keep a lost input answer waiting).
+    pub(super) fn receive(
+        &self,
+        limit: Duration,
+        strict: bool,
+    ) -> Result<Answer, RecvTimeoutError> {
+        if strict {
+            return self.answers.recv_timeout(limit);
+        }
+        progressing(&self.answers, &self.activity, limit)
+    }
+    /// The message count of the process, for the picture stream's wait.
+    pub(super) fn activity(&self) -> Arc<AtomicU64> {
+        self.activity.clone()
     }
 }

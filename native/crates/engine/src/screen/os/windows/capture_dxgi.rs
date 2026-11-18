@@ -3,150 +3,56 @@
 //! Plan 2026-11-14 bildkette: first path of a monitor (B-12), waits for the
 //! next due picture on the capture thread (B-10, `dxgi_wait.rs`), "unchanged"
 //! from dirty and move rectangles (`dxgi_regions.rs`), pointer (B-13).
+//!
+//! Plan 2026-11-17 P9 („dxgi failed → Rückfall“): every failure names its
+//! step and result code in the host log and in the fallback detail; a
+//! rebuild that fails because the retained output or its device went stale
+//! (mode change, display reconfiguration, removed or reset device, a hybrid
+//! system that moved the output) finds the output again and creates its
+//! device anew before it asks for a fallback; capture memory still held by
+//! older pictures waits instead of falling back; an `AcquireNextFrame` or
+//! `ReleaseFrame` error other than a lost duplication rebuilds once before it
+//! counts as a failure (it ended the capture before).
 use super::capture_prepared::recovery::CaptureRecovery;
-use super::capture_slots::{CaptureBudget, CaptureGeometry, CaptureKind};
+use super::capture_slots::{CaptureBudget, CaptureKind};
 use super::capture_source::{self, CapturePath, FallbackCause, Grabber, FIRST_FRAME_WAIT};
-use super::d3d_device::{self, DeviceSet, Read, Readback};
-use crate::screen::core::capture_admission::{CaptureGrant, CaptureOwner, CaptureSlice};
+use super::d3d_device::{Read, Readback};
+use crate::screen::core::capture_admission::{CaptureGrant, CaptureOwner};
+use crate::screen::core::capture_fallback::{FallbackDetail, FallbackStep};
 use crate::screen::core::capture_picture::{Picture, SourcePicture};
 use crate::screen::core::host_backend::SourceFrame;
 use crate::screen::core::pixel_convert::{BgraRotation, FrameSize};
 use crate::screen::core::session_state::SessionState;
 use std::io;
 use std::time::{Duration, Instant};
-use windows::core::{Interface, HRESULT};
+use windows::core::Interface;
 use windows::Win32::Graphics::Direct3D11::{ID3D11Texture2D, D3D11_TEXTURE2D_DESC};
 use windows::Win32::Graphics::Dxgi::{
-    IDXGIOutput1, IDXGIOutputDuplication, IDXGIResource, DXGI_ERROR_ACCESS_LOST,
-    DXGI_ERROR_WAIT_TIMEOUT, DXGI_OUTDUPL_FRAME_INFO,
+    IDXGIOutputDuplication, IDXGIResource, DXGI_ERROR_ACCESS_LOST, DXGI_ERROR_WAIT_TIMEOUT,
+    DXGI_OUTDUPL_FRAME_INFO,
 };
 
+#[path = "dxgi_binding.rs"]
+mod binding;
+#[path = "dxgi_desktop.rs"]
+mod desktop;
 #[path = "dxgi_first_picture.rs"]
 mod first_picture;
 #[path = "dxgi_output.rs"]
 mod output;
 #[path = "dxgi_pointer.rs"]
 pub(super) mod pointer;
+#[path = "dxgi_prepared.rs"]
+mod prepared;
 #[path = "dxgi_regions.rs"]
 pub(super) mod regions;
 #[path = "dxgi_wait.rs"]
 pub(super) mod wait;
-use output::{find_output, rotation};
+pub(super) use binding::OutputBinding;
+use output::rotation;
+use prepared::{duplicate, stale, Failing, Live};
+pub(super) use prepared::{DxgiFailure, PreparedDxgi};
 
-pub(super) struct PreparedDxgi {
-    output: IDXGIOutput1,
-    devices: DeviceSet,
-    device: String,
-    monitor: usize,
-}
-impl PreparedDxgi {
-    pub(super) fn prepare(device: &str) -> io::Result<Self> {
-        let (adapter, output) = find_output(device)?;
-        // Device creation has no requested capture pixels. The actual feature
-        // level, queried here, determines the metadata-only texture limits.
-        let devices = d3d_device::create_on(Some(&adapter)).map_err(io::Error::other)?;
-        let monitor = unsafe { output.GetDesc() }
-            .map_err(io::Error::other)?
-            .Monitor
-            .0 as usize;
-        let prepared = Self {
-            output,
-            devices,
-            device: device.into(),
-            monitor,
-        };
-        prepared.geometry()?;
-        Ok(prepared)
-    }
-    pub(super) fn monitor(&self) -> usize {
-        self.monitor
-    }
-    pub(super) fn geometry(&self) -> io::Result<CaptureGeometry> {
-        // SAFETY: immutable query on the retained output, never a name rebind.
-        let desc = unsafe { self.output.GetDesc() }.map_err(io::Error::other)?;
-        let end = desc
-            .DeviceName
-            .iter()
-            .position(|u| *u == 0)
-            .unwrap_or(desc.DeviceName.len());
-        if !desc.AttachedToDesktop.as_bool()
-            || desc.Monitor.0 as usize != self.monitor
-            || String::from_utf16_lossy(&desc.DeviceName[..end]) != self.device
-        {
-            return Err(io::Error::new(
-                io::ErrorKind::NotFound,
-                "original DXGI output changed",
-            ));
-        }
-        let r = desc.DesktopCoordinates;
-        let width = r
-            .right
-            .checked_sub(r.left)
-            .and_then(|n| u32::try_from(n).ok())
-            .filter(|n| *n > 0)
-            .ok_or_else(|| io::Error::other("DXGI output width unavailable"))?;
-        let height = r
-            .bottom
-            .checked_sub(r.top)
-            .and_then(|n| u32::try_from(n).ok())
-            .filter(|n| *n > 0)
-            .ok_or_else(|| io::Error::other("DXGI output height unavailable"))?;
-        let rotation = rotation(desc.Rotation)?;
-        let native = match rotation {
-            BgraRotation::Clockwise90 | BgraRotation::Clockwise270 => FrameSize::new(height, width),
-            _ => FrameSize::new(width, height),
-        };
-        let limits = self.devices.capture_limits(native)?;
-        Ok(CaptureGeometry {
-            native,
-            delivered: self.devices.delivered_size(native.width, native.height)?,
-            limits,
-            kind: CaptureKind::Dxgi(rotation),
-        })
-    }
-}
-struct Live {
-    duplication: IDXGIOutputDuplication,
-    _native: CaptureSlice,
-}
-fn duplicate(prepared: &PreparedDxgi, budget: &CaptureBudget) -> io::Result<Live> {
-    let metadata = prepared.geometry()?;
-    if metadata.native != budget.geometry().native || metadata.kind != budget.geometry().kind {
-        return Err(io::Error::other("DXGI mode changed before activation"));
-    }
-    let slice = budget.claim_native()?;
-    // SAFETY: the prepared device is on this retained output's adapter.
-    let duplication = unsafe { prepared.output.DuplicateOutput(&prepared.devices.device) }
-        .map_err(io::Error::other)?;
-    let desc = unsafe { duplication.GetDesc() };
-    if FrameSize::new(desc.ModeDesc.Width, desc.ModeDesc.Height) != metadata.native
-        || rotation(desc.Rotation)?
-            != match metadata.kind {
-                CaptureKind::Dxgi(r) => r,
-                _ => BgraRotation::Identity,
-            }
-    {
-        return Err(io::Error::other(
-            "DXGI surface metadata changed during activation",
-        ));
-    }
-    Ok(Live {
-        duplication,
-        _native: slice,
-    })
-}
-/// Geometry published to the verified login helper's existing input guard.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct OutputBinding {
-    pub device: String,
-    pub monitor: usize,
-    pub area: super::input_send::Area,
-    pub rotation: i32,
-    pub duplication_rotation: i32,
-    pub generation: u64,
-    pub size: FrameSize,
-    pub attached: bool,
-}
 pub(super) struct DxgiCapture {
     live: Option<Live>,
     prepared: PreparedDxgi,
@@ -162,12 +68,24 @@ pub(super) struct DxgiCapture {
     lost: bool,
     /// The way to the first picture of a duplication (`dxgi_first_picture`).
     first: first_picture::FirstPicture,
-    /// Since when, and with which result, rebuilding the duplication fails.
-    failing: Option<(Instant, Option<HRESULT>)>,
+    /// Since when, in which step and with which result rebuilding fails.
+    failing: Option<Failing>,
+    /// P9: put the thread on the input desktop before a duplication.
+    follow_desktop: bool,
+    /// P9: the output was found again in this streak of failures.
+    reattached: bool,
 }
 impl DxgiCapture {
     pub(super) fn open(prepared: PreparedDxgi, budget: CaptureBudget) -> io::Result<Self> {
-        let live = duplicate(&prepared, &budget)?;
+        Self::open_stepped(prepared, budget).map_err(io::Error::from)
+    }
+    /// `open` with the failed step (P9); the failure is in the host log.
+    pub(super) fn open_stepped(
+        prepared: PreparedDxgi,
+        budget: CaptureBudget,
+    ) -> Result<Self, DxgiFailure> {
+        let live = duplicate(&prepared, &budget, false)
+            .inspect_err(|failure| capture_source::log_failure(failure.step, &failure.error))?;
         let size = budget.geometry().displayed();
         Ok(Self {
             live: Some(live),
@@ -181,57 +99,61 @@ impl DxgiCapture {
             lost: false,
             first: first_picture::FirstPicture::default(),
             failing: None,
+            follow_desktop: false,
+            reattached: false,
         })
+    }
+    /// A user session's capture follows the input desktop (P9); the login
+    /// helper keeps the desktop it was bound to.
+    pub(super) fn following_input_desktop(mut self) -> Self {
+        self.follow_desktop = true;
+        self
     }
     /// Delivers the pointer to the overlay or into the pictures (B-13).
     pub(super) fn with_pointer(mut self) -> Self {
         self.pointer = Some(pointer::DxgiPointer::attach());
         self
     }
-    fn note_failure(&mut self, error: &io::Error) {
-        let code = capture_source::result_code(error);
-        let since = self.failing.map_or_else(Instant::now, |(since, _)| since);
-        self.failing = Some((since, code));
+    fn note_failure(&mut self, failure: &DxgiFailure) {
+        let code = capture_source::result_code(&failure.error);
+        // A streak of the same failure is logged once.
+        if self
+            .failing
+            .is_none_or(|failing| failing.step != failure.step || failing.code != code)
+        {
+            capture_source::log_failure(failure.step, &failure.error);
+        }
+        self.failing = Some(Failing {
+            since: self
+                .failing
+                .map_or_else(Instant::now, |failing| failing.since),
+            step: failure.step,
+            kind: failure.error.kind(),
+            code: capture_source::result_code(&failure.error),
+        });
+    }
+    /// An `AcquireNextFrame` or `ReleaseFrame` error: the duplication is
+    /// rebuilt like a lost one; a second one before any picture counts as a
+    /// failed rebuild (so the fallback can follow).
+    fn frame_failed(&mut self, step: FallbackStep, error: windows::core::Error) -> SourcePicture {
+        let failure = DxgiFailure {
+            step,
+            error: io::Error::other(error),
+        };
+        if self.lost {
+            self.note_failure(&failure);
+        } else {
+            capture_source::log_failure(step, &failure.error);
+        }
+        self.lost = true;
+        self.stop();
+        SourcePicture::Paused(SessionState::Starting)
     }
     fn live_duplication(&self) -> io::Result<&IDXGIOutputDuplication> {
         self.live
             .as_ref()
             .map(|live| &live.duplication)
             .ok_or_else(|| io::Error::other("DXGI duplication unavailable"))
-    }
-    pub(super) fn output_binding(&self) -> io::Result<OutputBinding> {
-        let output = unsafe { self.prepared.output.GetDesc() }.map_err(io::Error::other)?;
-        let duplication = unsafe { self.live_duplication()?.GetDesc() };
-        let end = output
-            .DeviceName
-            .iter()
-            .position(|u| *u == 0)
-            .unwrap_or(output.DeviceName.len());
-        let r = output.DesktopCoordinates;
-        let area = super::input_send::Area {
-            left: r.left,
-            top: r.top,
-            width: r
-                .right
-                .checked_sub(r.left)
-                .filter(|n| *n > 0)
-                .ok_or_else(|| io::Error::other("DXGI output width unavailable"))?,
-            height: r
-                .bottom
-                .checked_sub(r.top)
-                .filter(|n| *n > 0)
-                .ok_or_else(|| io::Error::other("DXGI output height unavailable"))?,
-        };
-        Ok(OutputBinding {
-            device: String::from_utf16_lossy(&output.DeviceName[..end]),
-            monitor: output.Monitor.0 as usize,
-            area,
-            rotation: output.Rotation.0,
-            duplication_rotation: duplication.Rotation.0,
-            generation: self.budget.generation(),
-            size: self.size,
-            attached: output.AttachedToDesktop.as_bool(),
-        })
     }
     fn again(&self, keyframe: bool) -> SourcePicture {
         match (&self.last, keyframe) {
@@ -270,12 +192,40 @@ impl DxgiCapture {
         self.last = None;
         self.budget.suspend();
     }
-    fn rebuild(&mut self) -> io::Result<()> {
+    fn rebuild(&mut self) -> Result<(), DxgiFailure> {
         self.recovery.request(true);
         self.stop();
-        let geometry = self.prepared.geometry()?;
-        self.budget.replace(geometry)?;
-        self.live = Some(duplicate(&self.prepared, &self.budget)?);
+        match self.duplicate_again() {
+            Err(failure) if stale(&failure) && !self.reattached => {
+                // P9: the output found again, with a device on its adapter,
+                // once per streak of failures.
+                self.reattached = true;
+                capture_source::log_failure(failure.step, &failure.error);
+                let prepared = PreparedDxgi::prepare(&self.prepared.device)
+                    .map_err(DxgiFailure::at(FallbackStep::DeviceCreate))?;
+                eprintln!(
+                    "screen capture: output {} found again with a new device",
+                    self.prepared.device
+                );
+                self.prepared = prepared;
+                self.duplicate_again()
+            }
+            result => result,
+        }
+    }
+    fn duplicate_again(&mut self) -> Result<(), DxgiFailure> {
+        let geometry = self
+            .prepared
+            .geometry()
+            .map_err(DxgiFailure::at(FallbackStep::OutputCheck))?;
+        self.budget
+            .replace(geometry)
+            .map_err(DxgiFailure::at(FallbackStep::CaptureMemory))?;
+        self.live = Some(duplicate(
+            &self.prepared,
+            &self.budget,
+            self.follow_desktop,
+        )?);
         self.size = geometry.displayed();
         Ok(())
     }
@@ -300,8 +250,20 @@ impl Grabber for DxgiCapture {
         Some(CapturePath::DesktopDuplication)
     }
     fn fallback_cause(&self) -> Option<FallbackCause> {
-        let (since, code) = self.failing?;
-        capture_source::fallback_cause(code, self.lost, since.elapsed())
+        let failing = self.failing?;
+        capture_source::rebuild_fallback(
+            failing.step,
+            failing.kind,
+            failing.code,
+            self.lost,
+            failing.since.elapsed(),
+        )
+    }
+    fn fallback_detail(&self) -> Option<FallbackDetail> {
+        self.failing.map(|failing| FallbackDetail {
+            step: failing.step,
+            code: failing.code.map(|code| code.0 as u32),
+        })
     }
     fn capture(&mut self, keyframe: bool) -> io::Result<SourceFrame> {
         self.capture_picture(keyframe)?.into_source_frame()
@@ -366,11 +328,17 @@ impl Grabber for DxgiCapture {
             }
             Err(error) if error.code() == DXGI_ERROR_ACCESS_LOST => {
                 drop(resource);
+                eprintln!(
+                    "screen capture: AcquireNextFrame: duplication lost (mode or desktop change)"
+                );
                 self.lost = true;
                 self.stop();
                 return Ok(SourcePicture::Paused(SessionState::Starting));
             }
-            Err(error) => return Err(io::Error::other(error)),
+            Err(error) => {
+                drop(resource);
+                return Ok(self.frame_failed(FallbackStep::AcquireNextFrame, error));
+            }
         }
         self.lost = false;
         self.failing = None;
@@ -417,11 +385,14 @@ impl Grabber for DxgiCapture {
             drop(picture);
             drop(regions);
             if error.code() == DXGI_ERROR_ACCESS_LOST {
+                eprintln!(
+                    "screen capture: ReleaseFrame: duplication lost (mode or desktop change)"
+                );
                 self.lost = true;
                 self.stop();
                 return Ok(SourcePicture::Paused(SessionState::Starting));
             }
-            return Err(io::Error::other(error));
+            return Ok(self.frame_failed(FallbackStep::ReleaseFrame, error));
         }
         match picture {
             // The GPU route has the overlay and no rotation: the regions and
@@ -478,12 +449,17 @@ impl Grabber for DxgiCapture {
         }
     }
     fn reopen(&mut self) -> io::Result<()> {
-        let result = self.rebuild();
-        match &result {
-            Ok(()) => self.failing = None,
-            Err(error) => self.note_failure(error),
+        match self.rebuild() {
+            Ok(()) => {
+                self.failing = None;
+                self.reattached = false;
+                Ok(())
+            }
+            Err(failure) => {
+                self.note_failure(&failure);
+                Err(failure.error)
+            }
         }
-        result
     }
     fn set_capture_active(&mut self, active: bool) -> io::Result<()> {
         self.recovery.request(active);

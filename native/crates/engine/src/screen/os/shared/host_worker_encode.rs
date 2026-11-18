@@ -95,7 +95,7 @@ fn mark(state: &State, answer: &Answer) -> StreamMark {
                 encode_us: held.encode_us,
                 convert_us: held.convert_us,
                 dropped: state.dropped,
-                facts: facts.pack(),
+                facts: facts.pack() | crate::screen::os::capture_fallback_bits(),
                 readbacks,
                 ..StreamMark::default()
             }
@@ -103,7 +103,7 @@ fn mark(state: &State, answer: &Answer) -> StreamMark {
         Answer::Plain(_) => StreamMark {
             answer: state.answered,
             dropped: state.dropped,
-            facts: facts.pack(),
+            facts: facts.pack() | crate::screen::os::capture_fallback_bits(),
             readbacks,
             ..StreamMark::default()
         },
