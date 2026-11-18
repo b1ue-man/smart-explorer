@@ -255,12 +255,13 @@ impl DxgiCapture {
             return Ok(None);
         }
         self.readback
-            .read(
+            .read_with_pointer(
                 &self.prepared.devices,
                 &texture,
                 desc.Width,
                 desc.Height,
                 &self.budget,
+                self.pointer.as_ref().and_then(|p| p.on_picture()),
             )
             .map(Some)
     }
@@ -397,8 +398,8 @@ impl Grabber for DxgiCapture {
             self.first.readable(&info)
         };
         if pointer_moved {
-            // The regions do not name the pointer's old and new place.
-            regions = None;
+            let only = had_reference && info.AccumulatedFrames == 0;
+            regions = pointer::with_moved(self.pointer.as_ref(), regions, only, &self.budget);
         }
         let picture = match resource.as_ref() {
             Some(resource) if changed => {

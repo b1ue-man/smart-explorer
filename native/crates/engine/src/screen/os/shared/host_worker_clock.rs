@@ -56,21 +56,26 @@ pub(super) fn quiet_for(request: &WorkerRequest) -> Option<bool> {
 }
 
 /// What makes an encoder: a change starts a new one with a key frame.
+/// P9: the quality target of sharp mode too (AMF takes its rate control
+/// method only before `Init`).
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct Identity {
     epoch: u64,
     choice: CodecChoice,
     contract: Option<FrameContract>,
     size: FrameSize,
+    quality: Option<u8>,
 }
 
 impl Identity {
-    fn of(request: &StageRequest) -> Self {
+    fn of(order: &StreamOrder) -> Self {
+        let request = &order.request;
         Self {
             epoch: request.encoder_epoch,
             choice: request.choice,
             contract: request.frame_contract,
             size: request.size,
+            quality: order.quality_target,
         }
     }
 }
@@ -306,9 +311,11 @@ impl Stream {
                 return;
             }
             let mut gone: Gone = (None, None);
-            let identity = Identity::of(&order.request);
+            let identity = Identity::of(&order);
             if state.identity != Some(identity) {
                 state.identity = Some(identity);
+                // The next encoder of this process opens with it (P9).
+                crate::screen::core::rate_control::model::set_session_quality(order.quality_target);
                 state.serial += 1;
                 state.reset_encoder = true;
                 state.failed = false;

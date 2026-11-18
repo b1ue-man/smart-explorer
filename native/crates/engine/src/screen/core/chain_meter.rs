@@ -289,7 +289,8 @@ impl ChainMeter {
         };
         ChainReport {
             capture_path: facts.path.map(|path| path.key().to_string()),
-            capture_fallback: facts.fallback.map(|cause| cause.key().to_string()),
+            capture_fallback: shown_fallback(facts.fallback, convert)
+                .map(|cause| cause.key().to_string()),
             convert: convert.map(str::to_string),
             capture_rate_capped: facts.rate_capped,
             cursor_embedded: facts.cursor_embedded,
@@ -311,6 +312,17 @@ impl ChainMeter {
     fn readbacks_delta(&self) -> Option<u64> {
         Some(self.readbacks?.saturating_sub(self.readbacks_base?))
     }
+}
+
+/// The fallback the report shows: a cause of the conversion (P9, why a
+/// picture went as CPU pixels) only while the pictures do; a picture on the
+/// GPU leaves an older one behind, as the facts keep what a newer mark does
+/// not name.
+pub(crate) fn shown_fallback(
+    fallback: Option<super::frame_timing::CaptureFallback>,
+    convert: Option<&str>,
+) -> Option<super::frame_timing::CaptureFallback> {
+    fallback.filter(|cause| !cause.is_conversion() || convert != Some("gpu"))
 }
 
 /// Copies the chain facts of `stats` into the session `view` (`se screen

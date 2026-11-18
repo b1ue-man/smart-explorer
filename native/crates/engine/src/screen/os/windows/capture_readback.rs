@@ -9,74 +9,35 @@
 //! BK3b): no pixels in system memory, no CPU scaling. The ring takes the
 //! `Readback` budget of the staging texture, which is freed first; the CPU
 //! readback releases the ring first.
-use super::capture_slots::{CaptureBudget, CaptureKind};
+//!
+//! Plan 2026-11-17 P9: the route of a picture and the GPU picture live in
+//! `capture_gpu_route.rs`, the pointer drawn on the GPU in
+//! `capture_pointer_gpu.rs`; every routed picture notes its route for the
+//! chain facts (`gpu_route::note_route`), and a picture on the CPU route
+//! frees the pointer textures for the staging texture first.
+use super::capture_slots::CaptureBudget;
 use super::d3d_device::DeviceSet;
-use super::mf_capture_media::RingPicture;
 use super::mf_encoder::d3d_input;
-use super::mf_encoder::video_convert::Ring;
 use crate::screen::core::capture_admission::{CaptureGrant, CaptureOwner, CaptureSlice};
 use crate::screen::core::capture_image::{AdmittedBytes, CaptureImageBuilder};
 use crate::screen::core::capture_picture::GpuPicture;
-use crate::screen::core::pixel_convert::{BgraRotation, FrameSize};
+use crate::screen::core::pixel_convert::FrameSize;
 use std::io;
-use std::sync::Arc;
-use windows::core::Interface;
 use windows::Win32::Graphics::Direct3D11::{
     ID3D11Texture2D, D3D11_BOX, D3D11_CPU_ACCESS_READ, D3D11_MAPPED_SUBRESOURCE, D3D11_MAP_READ,
     D3D11_TEXTURE2D_DESC, D3D11_USAGE_STAGING,
 };
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC};
 
-/// Why a picture is read back to the CPU instead of staying on the GPU.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in crate::screen::os) enum CpuReason {
-    /// No encoder of this process takes textures.
-    NotArmed,
-    /// The texture encoder runs on another device than this capture.
-    OtherDevice,
-    /// The GPU path failed earlier in this session.
-    Disabled,
-    /// The capture device has no video support.
-    NoVideo,
-    /// Desktop Duplication of a rotated output (the CPU rotates).
-    Rotated,
-    /// The readback scales to the capture limits.
-    Scaled,
-    /// The host blends the pointer into Desktop Duplication pictures.
-    PointerBlended,
-    /// A still image asked for this picture's exact BGRA (merge W1): one
-    /// banded readback, the NV12 ring stays for the next pictures.
-    Exact,
-}
-
-/// What the capture side knows when a picture arrives.
-#[derive(Clone, Copy, Debug)]
-pub(in crate::screen::os) struct CaptureFacts {
-    pub armed: Option<usize>,
-    pub device: usize,
-    pub disabled: bool,
-    pub video: bool,
-    pub rotated: bool,
-    pub scaled: bool,
-    pub duplication: bool,
-    /// The viewer draws the pointer itself (P6 overlay).
-    pub overlay: bool,
-}
-
-/// Rank of 4.10a, conversion: on the GPU of the capture when the encoder
-/// takes textures, else on the CPU.
-pub(in crate::screen::os) fn capture_route(facts: CaptureFacts) -> Result<(), CpuReason> {
-    match facts.armed {
-        _ if facts.disabled => Err(CpuReason::Disabled),
-        None => Err(CpuReason::NotArmed),
-        Some(device) if device != facts.device => Err(CpuReason::OtherDevice),
-        Some(_) if !facts.video => Err(CpuReason::NoVideo),
-        Some(_) if facts.rotated => Err(CpuReason::Rotated),
-        Some(_) if facts.scaled => Err(CpuReason::Scaled),
-        Some(_) if facts.duplication && !facts.overlay => Err(CpuReason::PointerBlended),
-        Some(_) => Ok(()),
-    }
-}
+#[path = "capture_gpu_route.rs"]
+mod gpu_route;
+#[path = "capture_pointer_gpu.rs"]
+mod pointer_gpu;
+use super::capture_dxgi::pointer::PointerImage;
+pub(in crate::screen::os) use gpu_route::{
+    capture_route, last_cpu_reason, CaptureFacts, CpuReason,
+};
+use pointer_gpu::{PointerAt, PointerPatch};
 
 struct Staging {
     texture: ID3D11Texture2D,
@@ -94,6 +55,8 @@ pub(super) enum Read {
 #[derive(Default)]
 pub(super) struct Readback {
     staging: Option<Staging>,
+    /// P9: the pointer drawn into pictures on the GPU.
+    patch: PointerPatch,
 }
 struct Sums {
     values: Vec<[u64; 4]>,
@@ -119,82 +82,9 @@ impl Sums {
 impl Readback {
     pub(super) fn reset(&mut self) {
         self.staging = None;
+        self.patch.release();
         // The ring belongs to this capture generation (GPU path).
         d3d_input::release_ring();
-    }
-    /// B-17: the picture goes into the NV12 ring on this device and the
-    /// pipeline gets the GPU picture of its slot; else why the CPU reads it.
-    fn gpu_picture(
-        &mut self,
-        devices: &DeviceSet,
-        source: &ID3D11Texture2D,
-        budget: &CaptureBudget,
-    ) -> io::Result<Result<GpuPicture, CpuReason>> {
-        let geometry = budget.geometry();
-        let raw = devices.device.as_raw() as usize;
-        let route = d3d_input::route_capture(devices, |armed, disabled, video| CaptureFacts {
-            armed,
-            device: raw,
-            disabled,
-            video,
-            rotated: matches!(geometry.kind, CaptureKind::Dxgi(r) if r != BgraRotation::Identity),
-            scaled: geometry.delivered != geometry.native,
-            duplication: matches!(geometry.kind, CaptureKind::Dxgi(_)),
-            overlay: crate::screen::core::cursor_overlay::worker().separated(),
-        });
-        if let Err(reason) = route {
-            return Ok(Err(reason));
-        }
-        let grant = budget.grant()?;
-        let identity = (grant.source().clone(), grant.generation());
-        let staging = &mut self.staging;
-        let found = d3d_input::ring_for(
-            |ring| {
-                ring.device == raw
-                    && ring.source == identity.0
-                    && ring.generation == identity.1
-                    && ring.native == geometry.native
-            },
-            || *staging = None,
-            || {
-                Ring::create(
-                    &devices.device,
-                    &devices.context,
-                    identity.clone(),
-                    geometry.native,
-                    |bytes| grant.claim(CaptureOwner::Readback, bytes),
-                )
-            },
-        );
-        let (ring, tag) = match found {
-            Ok(found) => found,
-            Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Err(error),
-            Err(error) => {
-                d3d_input::disable(&format!("NV12 ring: {error}"));
-                d3d_input::release_ring();
-                return Ok(Err(CpuReason::Disabled));
-            }
-        };
-        if let Err(error) = ring.write(source, tag) {
-            d3d_input::disable(&format!("video processor: {error}"));
-            drop(ring);
-            d3d_input::release_ring();
-            return Ok(Err(CpuReason::Disabled));
-        }
-        // Admitted by the capture's grant: the ring slots it names were
-        // claimed from it (`Readback`), no system memory is needed.
-        let surface = RingPicture {
-            ring: Arc::downgrade(&ring),
-            tag,
-            size: ring.size,
-        };
-        let picture = GpuPicture::new(
-            Arc::new(surface),
-            geometry.delivered,
-            geometry.limits,
-            grant,
-        )?;
-        Ok(Ok(picture))
     }
     fn staging_for(
         &mut self,
@@ -248,6 +138,21 @@ impl Readback {
         height: u32,
         budget: &CaptureBudget,
     ) -> io::Result<Read> {
+        self.read_with_pointer(devices, source, width, height, budget, None)
+    }
+    /// `read`, with the pointer a Desktop Duplication picture carries (P9,
+    /// image and top left): drawn on the GPU route, left to the caller's
+    /// blend on the CPU route.
+    pub(super) fn read_with_pointer(
+        &mut self,
+        devices: &DeviceSet,
+        source: &ID3D11Texture2D,
+        width: u32,
+        height: u32,
+        budget: &CaptureBudget,
+        pointer: Option<(&PointerImage, i32, i32)>,
+    ) -> io::Result<Read> {
+        let pointer = pointer.map(|(image, left, top)| PointerAt { image, left, top });
         let mut desc = D3D11_TEXTURE2D_DESC::default();
         // SAFETY: valid texture and out structure.
         unsafe { source.GetDesc(&mut desc) };
@@ -263,10 +168,16 @@ impl Readback {
                 "capture content differs from admitted native geometry",
             ));
         }
-        match self.gpu_picture(devices, source, budget)? {
+        let route = self.gpu_picture(devices, source, budget, pointer)?;
+        gpu_route::note_route(route.as_ref().map(|_| ()).map_err(|reason| *reason));
+        match route {
             Ok(picture) => return Ok(Read::Gpu(picture)),
-            Err(CpuReason::Exact) => return self.exact(devices, source, budget).map(Read::Cpu),
-            Err(_) => {}
+            Err(CpuReason::Exact) => {
+                // The band texture takes the budget the pointer textures held.
+                self.patch.release();
+                return self.exact(devices, source, budget).map(Read::Cpu);
+            }
+            Err(_) => self.patch.release(),
         }
         let geometry = budget.geometry();
         let grant = budget.grant()?;

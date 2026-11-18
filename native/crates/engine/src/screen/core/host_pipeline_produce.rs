@@ -183,6 +183,12 @@ impl Pipeline {
             cadence_fps: (1_000_000 / self.clock.interval_us().max(1)).min(u64::from(u32::MAX))
                 as u32,
             ahead: self.ahead_allowed(target, path, rtt_us),
+            // P9: sharp mode takes a constant quality on the GPU encoders.
+            quality_target: self
+                .quality_policy
+                .mode
+                .sharpness
+                .then_some(crate::screen::core::rate_control::model::SHARP_TARGET_QUALITY),
         };
         let encoding_started = std::time::Instant::now();
         let joined = tokio::task::spawn_blocking(move || {

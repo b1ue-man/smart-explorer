@@ -86,6 +86,9 @@ pub struct StreamHint {
     /// One more picture may be captured and encoded before its frame is due:
     /// the pacer's queue holds room for this frame and the next one.
     pub ahead: bool,
+    /// Plan 2026-11-17 P9: the constant quality of sharp mode
+    /// (`rate_model::SHARP_TARGET_QUALITY`); `None` for a constant bit rate.
+    pub quality_target: Option<u8>,
 }
 
 /// What a self-paced stage measured for the answer of its last `produce`.

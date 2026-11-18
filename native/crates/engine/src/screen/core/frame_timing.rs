@@ -244,11 +244,24 @@ pub enum CaptureFallback {
     DmabufConversion,
     DmabufConsumerCpu,
     DmabufPointerBlend,
+    /// Plan 2026-11-17 P9: why a Windows picture went to the encoder as CPU
+    /// pixels instead of staying on the GPU (`os/windows/capture_gpu_route.rs`
+    /// `CpuReason`): no encoder of the host process takes textures, the
+    /// encoder runs on another device, the GPU path failed earlier in the
+    /// session, the capture device has no video support, the output is
+    /// rotated, the capture is scaled, the pointer is blended on the CPU.
+    GpuNotArmed,
+    GpuOtherDevice,
+    GpuDisabled,
+    GpuNoVideo,
+    GpuRotated,
+    GpuScaled,
+    GpuPointerBlend,
 }
 
 impl CaptureFallback {
     /// The packing index is the position here: new causes go to the end.
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 17] = [
         Self::DxgiUnsupported,
         Self::DxgiAccessLost,
         Self::DxgiAdapterChanged,
@@ -259,6 +272,13 @@ impl CaptureFallback {
         Self::DmabufConversion,
         Self::DmabufConsumerCpu,
         Self::DmabufPointerBlend,
+        Self::GpuNotArmed,
+        Self::GpuOtherDevice,
+        Self::GpuDisabled,
+        Self::GpuNoVideo,
+        Self::GpuRotated,
+        Self::GpuScaled,
+        Self::GpuPointerBlend,
     ];
 
     /// The cause of `key`; `None` for a text no cause has.
@@ -278,7 +298,30 @@ impl CaptureFallback {
             Self::DmabufConversion => "dmabuf_conversion",
             Self::DmabufConsumerCpu => "dmabuf_consumer_cpu",
             Self::DmabufPointerBlend => "dmabuf_pointer_blend",
+            Self::GpuNotArmed => "gpu_not_armed",
+            Self::GpuOtherDevice => "gpu_other_device",
+            Self::GpuDisabled => "gpu_disabled",
+            Self::GpuNoVideo => "gpu_no_video",
+            Self::GpuRotated => "gpu_rotated",
+            Self::GpuScaled => "gpu_scaled",
+            Self::GpuPointerBlend => "gpu_pointer_blend",
         }
+    }
+
+    /// Whether the cause names the conversion of one picture (P9) rather
+    /// than the capture's path: it holds only while pictures go as CPU
+    /// pixels (`chain_meter::shown_fallback`).
+    pub fn is_conversion(self) -> bool {
+        matches!(
+            self,
+            Self::GpuNotArmed
+                | Self::GpuOtherDevice
+                | Self::GpuDisabled
+                | Self::GpuNoVideo
+                | Self::GpuRotated
+                | Self::GpuScaled
+                | Self::GpuPointerBlend
+        )
     }
 }
 
