@@ -120,7 +120,7 @@ pub fn deliver(datagram: &[u8]) {
     let started = std::thread::Builder::new()
         .name("screen-audio-output".into())
         .spawn(|| {
-            let player = player();
+            let player = self::player();
             if let Err(error) = play(player) {
                 eprintln!("screen audio: output: {error}");
             }
