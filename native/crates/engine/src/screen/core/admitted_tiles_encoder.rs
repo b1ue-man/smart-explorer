@@ -1,15 +1,21 @@
 //! Productive fixed-buffer tile encoding. Since P9 (plan 2026-11-17) the
-//! encoder hashes and compares only the tiles the capture's dirty and move
+//! encoder compares only the tiles the capture's dirty and move
 //! rectangles touched (`tiles_dirty::DirtyTiles`): a tile no rectangle of
 //! any picture since it was last looked at touched did not change. A
 //! picture the host process captured but dropped before encoding took its
 //! rectangles with it (`note_dropped_picture`), and a picture without
-//! rectangles, a key frame and a failed frame mark every tile.
+//! rectangles, a key frame and a failed frame mark every tile. The
+//! comparison and the compression run on every core (`tiles_parallel.rs`),
+//! the records keep the tile order of the sequential encoder.
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::phases::{add, mul};
 use super::*;
 use crate::screen::core::tiles_dirty::DirtyTiles;
+use parallel::{Look, TileWork, Workers};
+
+#[path = "tiles_parallel.rs"]
+mod parallel;
 
 /// Pictures captured and dropped before encoding in this process so far.
 static DROPPED_PICTURES: AtomicU64 = AtomicU64::new(0);
@@ -26,19 +32,30 @@ pub fn note_dropped_picture() {
 fn dropped_pictures() -> u64 {
     DROPPED_PICTURES.load(Ordering::Acquire)
 }
+
+/// rayon's pool where it has more than one thread, else this thread.
+fn workers() -> Workers {
+    if rayon::current_num_threads() > 1 {
+        Workers::Pool
+    } else {
+        Workers::Caller
+    }
+}
 /// The productive tile encoder owns admitted fixed scratch and previous pixels.
 pub struct AdmittedTilesEncoder {
     size: FrameSize,
     grant: super::super::capture_admission::CaptureGrant,
     previous: super::super::capture_image::CaptureImageBuilder,
-    hashes: super::super::capture_bytes::AdmittedBytes,
-    tile: super::super::capture_bytes::AdmittedBytes,
-    compressed: super::super::capture_bytes::AdmittedBytes,
+    /// `TILE_WAVE` slots of `TILE_SLOT_BYTES` (one where the grant admits
+    /// no more: the same output, compressed one tile at a time).
+    slots: super::super::capture_bytes::AdmittedBytes,
     primed: bool,
     /// The tiles that may have changed since they were last looked at.
     dirty: DirtyTiles,
     /// `dropped_pictures()` at the last frame.
     drops_seen: u64,
+    /// Change flags and wave of the parallel phases (`tiles_parallel.rs`).
+    work: TileWork,
 }
 impl AdmittedTilesEncoder {
     pub fn new(
@@ -47,33 +64,30 @@ impl AdmittedTilesEncoder {
         grant: super::super::capture_admission::CaptureGrant,
     ) -> io::Result<Self> {
         use super::super::capture_bytes::AdmittedBytes;
-        let tiles = mul(
-            u64::from(size.width.div_ceil(64)),
-            u64::from(size.height.div_ceil(64)),
-        )?;
+        use super::super::tiles_codec::{TILE_SLOT_BYTES, TILE_WAVE};
         let previous = super::super::capture_image::CaptureImageBuilder::new(
             size,
             limits,
             &grant,
             CaptureOwner::CodecInput,
         )?;
-        let hashes = AdmittedBytes::new(&grant, CaptureOwner::Metadata, mul(tiles, 8)?)?;
-        let tile = AdmittedBytes::new(&grant, CaptureOwner::FilterScratch, 64 * 64 * 4)?;
-        let compressed = AdmittedBytes::new(
+        let slots = AdmittedBytes::new(
             &grant,
             CaptureOwner::FilterScratch,
-            lz4_flex::block::get_maximum_output_size(64 * 64 * 4) as u64,
-        )?;
+            mul(TILE_WAVE as u64, TILE_SLOT_BYTES as u64)?,
+        )
+        .or_else(|_| {
+            AdmittedBytes::new(&grant, CaptureOwner::FilterScratch, TILE_SLOT_BYTES as u64)
+        })?;
         Ok(Self {
             size,
             grant,
             previous,
-            hashes,
-            tile,
-            compressed,
+            slots,
             primed: false,
             dirty: DirtyTiles::new(size),
             drops_seen: dropped_pictures(),
+            work: TileWork::new(size),
         })
     }
     fn captured(
@@ -82,7 +96,6 @@ impl AdmittedTilesEncoder {
         request: &super::super::host_stage::StageRequest,
     ) -> io::Result<super::super::host_backend::CapturedEncodedFrame> {
         use super::super::capture_records::{CaptureRecordBuilder, CapturedRecords};
-        use super::super::tiles_codec::{solid_colour, tile_hash, tile_rect};
         self.grant
             .check_identity(image.source(), image.generation())?;
         if image.size() != self.size {
@@ -109,69 +122,30 @@ impl AdmittedTilesEncoder {
             self.dirty.note(image.size(), image.image().regions());
         }
         self.drops_seen = drops;
+        // Phase 1 on every core: compare, take over changed tiles (P9).
+        let look = Look {
+            view: image.view(),
+            full,
+            visible: request.visible_rects.as_deref(),
+        };
+        self.work.look(
+            self.previous.pixels_mut(),
+            &look,
+            &mut self.dirty,
+            workers(),
+        )?;
+        // Phase 2 on every core, records in tile order on this thread.
+        let grant = &self.grant;
         let mut records: Option<CaptureRecordBuilder> = None;
         let mut count = 0u16;
-        let view = image.view();
-        let columns = self.size.width.div_ceil(64);
-        for row in 0..self.size.height.div_ceil(64) {
-            for column in 0..columns {
-                let rect = tile_rect(column, row, self.size);
-                if !full
-                    && !super::super::frame_regions::visible(rect, request.visible_rects.as_deref())
-                {
-                    continue;
-                }
-                // Untouched since it was last looked at: unchanged (P9).
-                if !full && !self.dirty.marked(column, row) {
-                    continue;
-                }
-                self.dirty.clear(column, row);
-                let hash = tile_hash(&view, rect);
-                let slot = (u64::from(row) * u64::from(columns) + u64::from(column)) as usize * 8;
-                let old = u64::from_le_bytes(
-                    self.hashes.as_slice()[slot..slot + 8]
-                        .try_into()
-                        .map_err(|_| invalid("tile hash slot is incomplete"))?,
-                );
-                let start = rect.x as usize * 4;
-                let end = start + rect.width as usize * 4;
-                let exact = old == hash
-                    && (rect.y..rect.y + rect.height).all(|y| {
-                        self.previous.view().row(y)[start..end]
-                            .chunks_exact(4)
-                            .zip(view.row(y)[start..end].chunks_exact(4))
-                            .all(|(a, b)| a[..3] == b[..3])
-                    });
-                if !full && exact {
-                    continue;
-                }
-                let length = rect.width as usize * rect.height as usize * 4;
-                let tile = &mut self.tile.as_mut_slice()[..length];
-                for y in 0..rect.height {
-                    let offset = y as usize * rect.width as usize * 4;
-                    tile[offset..offset + rect.width as usize * 4]
-                        .copy_from_slice(&view.row(rect.y + y)[start..end]);
-                }
-                for pixel in tile.chunks_exact_mut(4) {
-                    pixel[3] = 255;
-                }
-                let solid = solid_colour(tile);
-                let compressed = if solid.is_none() {
-                    lz4_flex::block::compress_into(tile, self.compressed.as_mut_slice())
-                        .map_err(|_| invalid("admitted tile compression failed"))?
-                } else {
-                    0
-                };
-                let (encoding, bytes): (u8, &[u8]) = if let Some(colour) = solid.as_ref() {
-                    (0, colour)
-                } else if compressed < tile.len() {
-                    (2, &self.compressed.as_slice()[..compressed])
-                } else {
-                    (1, tile)
-                };
+        self.work.encode(
+            self.previous.view(),
+            self.slots.as_mut_slice(),
+            workers(),
+            |rect, encoding, bytes| {
                 if records.is_none() {
                     records = Some(CaptureRecordBuilder::new(
-                        &self.grant,
+                        grant,
                         capacity,
                         packet.records as u64,
                     )?);
@@ -196,19 +170,9 @@ impl AdmittedTilesEncoder {
                 output.append(&header)?;
                 output.append(bytes)?;
                 count += 1;
-                self.hashes.as_mut_slice()[slot..slot + 8].copy_from_slice(&hash.to_le_bytes());
-                for y in rect.y..rect.y + rect.height {
-                    let target = self
-                        .previous
-                        .row_mut(y)
-                        .ok_or_else(|| invalid("tile previous row missing"))?;
-                    target[start..end].copy_from_slice(&view.row(y)[start..end]);
-                    for pixel in target[start..end].chunks_exact_mut(4) {
-                        pixel[3] = 255;
-                    }
-                }
-            }
-        }
+                Ok(())
+            },
+        )?;
         self.primed = true;
         let records = if let Some(mut records) = records {
             records.overwrite(0, &count.to_be_bytes())?;

@@ -185,3 +185,27 @@ fn bildkette_task_present_direct3d11_takes_d3d11va_textures() {
         assert!(!imports(backend, DecodedSurface::Dxva2Surface));
     }
 }
+
+/// P9: „Niedrigste Latenz“ applies live where the Direct3D 11 display owns
+/// its swap chain (tearing only with the switch and DXGI's support); the
+/// hint about the next start stays only where the wgpu window shows the
+/// picture.
+#[test]
+fn p9_present_task_lowest_latency_applies_live_on_direct3d11() {
+    assert!(direct_allows_tearing(true, true));
+    assert!(!direct_allows_tearing(true, false));
+    assert!(!direct_allows_tearing(false, true));
+    assert!(!direct_allows_tearing(false, false));
+    assert_eq!(latency_note(false, false), None);
+    assert_eq!(latency_note(false, true), None);
+    assert_eq!(latency_note(true, true), None);
+    assert_eq!(
+        latency_note(true, false),
+        Some("Wirkt beim nächsten Start des Betrachters.")
+    );
+    // The switch's value is what the presenter reads next.
+    set_low_latency(true);
+    assert!(low_latency());
+    set_low_latency(false);
+    assert!(!low_latency());
+}

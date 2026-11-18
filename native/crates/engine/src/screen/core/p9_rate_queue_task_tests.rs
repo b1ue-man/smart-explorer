@@ -211,7 +211,9 @@ fn p9_rate_task_dropped_pictures_mark_every_tile() {
     let encoder = include_str!("admitted_tiles_encoder.rs").replace("\r\n", "\n");
     assert!(encoder.contains("self.dirty.note(image.size(), image.image().regions());"));
     assert!(encoder.contains("if full || drops != self.drops_seen {"));
-    assert!(encoder.contains("if !full && !self.dirty.marked(column, row) {"));
+    // The unmarked tiles are skipped in the parallel look (P9 tiles-parallel).
+    let look = include_str!("tiles_parallel.rs").replace("\r\n", "\n");
+    assert!(look.contains("if !full && !*mark {"));
     let capture = include_str!("../os/shared/host_worker_capture_stage.rs");
     assert_eq!(capture.matches("note_dropped_picture();").count(), 1);
     let clock = include_str!("../os/shared/host_worker_clock.rs");

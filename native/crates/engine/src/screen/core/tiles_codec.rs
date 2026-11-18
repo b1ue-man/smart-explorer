@@ -27,9 +27,17 @@ pub const MAX_ENCODED_TILE_BYTES: usize = TILE_HEADER_BYTES + MAX_TILE_BYTES;
 /// Smallest record limit an encoder accepts: one worst-case tile.
 pub const MIN_RECORD_LIMIT: usize = RECORD_HEADER_BYTES + MAX_ENCODED_TILE_BYTES;
 
-const ENCODING_SOLID: u8 = 0;
-const ENCODING_RAW: u8 = 1;
-const ENCODING_LZ4: u8 = 2;
+pub(super) const ENCODING_SOLID: u8 = 0;
+pub(super) const ENCODING_RAW: u8 = 1;
+pub(super) const ENCODING_LZ4: u8 = 2;
+
+/// One slot of the parallel tile encoder (`tiles_parallel.rs`): a gathered
+/// tile and room for its LZ4 block.
+pub const TILE_SLOT_BYTES: usize = MAX_TILE_BYTES + get_maximum_output_size(MAX_TILE_BYTES);
+/// Tiles the parallel encoder compresses at once (one slot each). 32 slots
+/// keep every core of a 32-thread CPU busy and cost 1.1 MB per encoder; the
+/// host's capture plan admits them (`host_codec_phase_plan.rs`).
+pub const TILE_WAVE: usize = 32;
 
 /// Alpha bytes of two little-endian BGRA pixels in one `u64`.
 const ALPHA_MASK: u64 = 0xFF00_0000_FF00_0000;
