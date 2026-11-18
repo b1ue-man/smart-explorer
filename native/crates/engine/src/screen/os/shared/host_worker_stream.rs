@@ -148,6 +148,7 @@ impl WorkerSource {
                 },
                 recover_serial: client.recover_serial,
                 last_good: client.last_good,
+                quality_target: hint.quality_target,
             }
         };
         let granted = order.granted;

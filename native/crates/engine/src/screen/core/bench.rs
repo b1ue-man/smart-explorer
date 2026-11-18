@@ -50,7 +50,11 @@ mod host;
 pub use host::{HOST_TIMING_REPORTED, HOST_TIMING_UNSUPPORTED};
 
 pub const DEFAULT_SIZE: FrameSize = FrameSize::new(1280, 720);
-pub const DEFAULT_FPS: u16 = 30;
+/// Plan 2026-11-17 P9: the highest rate a viewer may ask for, not 30 (the
+/// measurement of v0.5.198 showed `wanted_fps 30` with a 50 fps encoder);
+/// the host's cadence then follows its source and the measured encode
+/// capacity, the hardware being the limit.
+pub const DEFAULT_FPS: u16 = super::pacing::MAX_FPS as u16;
 pub const DEFAULT_SECONDS: u32 = 10;
 /// Longest measurement: one hour.
 pub const MAX_SECONDS: u32 = 3600;

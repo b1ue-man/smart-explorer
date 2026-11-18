@@ -65,6 +65,9 @@ mod bildkette_w4_mf_task_tests;
 #[cfg(test)]
 #[path = "bildkette_w4_task_tests.rs"]
 mod bildkette_w4_task_tests;
+#[cfg(test)]
+#[path = "gpu_encode_task_tests.rs"]
+mod gpu_encode_task_tests;
 // Merge W2: layouts and HEVC/AV1 views shared with Linux (`nvenc_shared`).
 use crate::screen::os::nvenc_shared::codecs as nvenc_codecs;
 #[path = "nvenc_device.rs"]
@@ -292,11 +295,17 @@ impl VendorFactory {
         let gpu = self.input(size, &name, grant.is_some())?;
         let device = gpu.device().clone();
         let (fps, codec) = (fps.max(1), self.codec);
+        // P9: sharp mode of the admitted session; the run-time check and
+        // `bench --local` (no admission) measure the constant bit rate.
+        let quality = grant
+            .as_ref()
+            .and_then(|_| crate::screen::core::rate_control::model::session_quality());
         // r1: no fixed ceiling; the pairing's, then the session's own.
         let ceiling = crate::screen::core::rate_control::codec_ceiling_bps(choice, size, fps);
         let encoder: Box<dyn ScreenEncoder> = match self.vendor {
             Vendor::Nvenc => {
-                let session = nvenc_encode::NvencSession::open_at(&device, codec, size, fps, bps)?;
+                let session =
+                    nvenc_encode::NvencSession::open_at(&device, codec, size, fps, bps, quality)?;
                 let hull = match grant {
                     Some(grant) => {
                         vendor_encode::VendorEncoder::new(session, &name, codec, size, grant, gpu)
@@ -308,7 +317,8 @@ impl VendorFactory {
                 Box::new(hull.with_ceiling(ceiling)) as Box<dyn ScreenEncoder>
             }
             Vendor::Amf => {
-                let session = amf_encode::AmfSession::open_at(&device, codec, size, fps, bps)?;
+                let session =
+                    amf_encode::AmfSession::open_at(&device, codec, size, fps, bps, quality)?;
                 let hull = match grant {
                     Some(grant) => {
                         vendor_encode::VendorEncoder::new(session, &name, codec, size, grant, gpu)

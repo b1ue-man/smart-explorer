@@ -32,6 +32,14 @@
 //!   `CODECAPI_AVEncCommonBufferSize`: "For H.264 video … the size of the
 //!   buffer is in bytes"; the H.265 encoder page says the same).
 //! - `RateLimit`: what holds the target (`classify`).
+//! - Plan 2026-11-17 P9, sharp mode: the encoders of the GPU take a constant
+//!   quality (`SHARP_TARGET_QUALITY`, the CQ/QVBR level 18) with the session
+//!   rate as their ceiling instead of a constant bit rate; the host process
+//!   holds the target of its one session (`set_session_quality`) and the
+//!   encoder factories read it when they open (`session_quality`). Media
+//!   Foundation's quality scale is 0–100 (`mf_quality`).
+use std::sync::atomic::{AtomicU8, Ordering};
+
 use serde::{Deserialize, Serialize};
 
 use super::{MIN_BITRATE_BPS, START_RELAY_BPS};
@@ -251,4 +259,30 @@ pub fn classify(facts: &LimitFacts) -> RateLimit {
     } else {
         RateLimit::Link
     }
+}
+
+/// The constant quality of sharp mode on the encoders of the GPU (NVENC
+/// `targetQuality`, AMF `QvbrQualityLevel`; both 1–51, lower is better).
+pub const SHARP_TARGET_QUALITY: u8 = 18;
+
+/// The quality target of this host process's session; 0: none (constant
+/// bit rate). One host process serves one session.
+static SESSION_QUALITY: AtomicU8 = AtomicU8::new(0);
+
+/// The session now wants `target` (sharp mode) or a constant bit rate.
+pub fn set_session_quality(target: Option<u8>) {
+    SESSION_QUALITY.store(target.unwrap_or(0).min(51), Ordering::Relaxed);
+}
+
+/// The quality target an encoder of this process opens with.
+pub fn session_quality() -> Option<u8> {
+    Some(SESSION_QUALITY.load(Ordering::Relaxed)).filter(|target| *target > 0)
+}
+
+/// `target` (1–51, lower is better) on Media Foundation's
+/// `CODECAPI_AVEncCommonQuality` scale (0–100, higher is better), linear
+/// [assumption: no vendor documents the mapping of its MFT].
+pub fn mf_quality(target: u8) -> u32 {
+    let target = u32::from(target.min(51));
+    ((51 - target) * 100 + 25) / 51
 }

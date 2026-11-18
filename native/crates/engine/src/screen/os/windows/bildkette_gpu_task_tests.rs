@@ -33,6 +33,7 @@ fn gpu_facts() -> CaptureFacts {
         scaled: false,
         duplication: false,
         overlay: false,
+        gpu_pointer: false,
     }
 }
 
@@ -44,13 +45,18 @@ fn bildkette_task_win_gpu_capture_route_follows_the_ranks() {
         ..gpu_facts()
     };
     // Desktop Duplication: the host blends the pointer unless the viewer
-    // draws it (overlay); blending stays on the CPU path.
+    // draws it (overlay); P9: on the GPU while it can, else on the CPU path.
     assert_eq!(capture_route(duplication), Err(CpuReason::PointerBlended));
     let overlay = CaptureFacts {
         overlay: true,
         ..duplication
     };
     assert_eq!(capture_route(overlay), Ok(()));
+    let gpu_pointer = CaptureFacts {
+        gpu_pointer: true,
+        ..duplication
+    };
+    assert_eq!(capture_route(gpu_pointer), Ok(()));
     let cases = [
         (
             CaptureFacts {
@@ -106,6 +112,23 @@ fn bildkette_task_win_gpu_capture_route_follows_the_ranks() {
     for (facts, reason) in cases {
         assert_eq!(capture_route(facts), Err(reason), "{facts:?}");
     }
+    // P9: every reason for CPU pixels has its name in the chain facts; the
+    // exact readback of a still image is none.
+    use crate::screen::core::frame_timing::CaptureFallback as Cause;
+    use crate::screen::os::chain_facts::conversion_cause;
+    for (reason, cause) in [
+        (CpuReason::NotArmed, Cause::GpuNotArmed),
+        (CpuReason::OtherDevice, Cause::GpuOtherDevice),
+        (CpuReason::Disabled, Cause::GpuDisabled),
+        (CpuReason::NoVideo, Cause::GpuNoVideo),
+        (CpuReason::Rotated, Cause::GpuRotated),
+        (CpuReason::Scaled, Cause::GpuScaled),
+        (CpuReason::PointerBlended, Cause::GpuPointerBlend),
+    ] {
+        assert_eq!(conversion_cause(reason), Some(cause));
+        assert!(cause.is_conversion());
+    }
+    assert_eq!(conversion_cause(CpuReason::Exact), None);
 }
 
 #[test]
@@ -277,9 +300,11 @@ fn bildkette_task_win_gpu_ring_slot_choice() {
 
 #[test]
 fn bildkette_task_win_gpu_encoder_settings_mapping() {
-    assert_eq!(SETTINGS.len(), 8);
+    assert_eq!(SETTINGS.len(), 9);
     // B-29: the full-power state is asked for and listed when refused.
     assert_eq!(SETTINGS[7], "low_power_off");
+    // P9: the fastest quality/speed setting, listed when refused.
+    assert_eq!(SETTINGS[8], "quality_speed");
     // In bytes (plan 2026-11-17; `CODECAPI_AVEncCommonBufferSize` of H.264
     // and HEVC): one frame of 6 Mbit/s at 60 frames/s is 12 500 bytes.
     assert_eq!(one_frame_buffer(6_000_000, 60), 12_500);

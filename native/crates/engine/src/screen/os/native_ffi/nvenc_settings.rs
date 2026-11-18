@@ -8,11 +8,17 @@
 //! `lowDelayKeyFrameScale` 1 (Sunshine `:263`) and, for reference
 //! invalidation (B-36), a DPB of 5 pictures (8 for AV1) with one reference
 //! per picture (Sunshine `:291-298`, `:372`, `:408`, `:449`).
+//!
+//! Plan 2026-11-17 P9, sharp mode (`NvRate::quality`): VBR with
+//! `targetQuality` (constant quality, `nvEncodeAPI.h` n12.1.14.0 line 1517:
+//! "Target CQ (Constant Quality) level for VBR mode (range 0-51 with
+//! 0-automatic)"), the session rate as `maxBitRate` and the VBV of one frame
+//! of it; `averageBitRate` 0 leaves the rate to the quality.
 use super::abi::{Guid, NvEncConfig};
 use super::api::{
     H264_REPEAT_SPSPPS, NVENC_INFINITE_GOPLENGTH, NV_ENC_CONFIG_VER, NV_ENC_H264_PROFILE_HIGH_GUID,
-    NV_ENC_NUM_REF_FRAMES_1, NV_ENC_PARAMS_RC_CBR, NV_ENC_RC_PARAMS_VER, RC_ENABLE_LOOKAHEAD,
-    RC_ZERO_REORDER_DELAY, VUI_BT709,
+    NV_ENC_NUM_REF_FRAMES_1, NV_ENC_PARAMS_RC_CBR, NV_ENC_PARAMS_RC_VBR, NV_ENC_RC_PARAMS_VER,
+    RC_ENABLE_LOOKAHEAD, RC_ZERO_REORDER_DELAY, VUI_BT709,
 };
 use super::codecs::{apply_union, apply_union_references, set_hevc_chroma};
 use crate::screen::core::negotiate::CodecKind;
@@ -47,6 +53,10 @@ pub(in crate::screen::os) trait NvRate {
     /// yuv444 input", `nvEncodeAPI.h:1795`). 4:2:0 unless a platform says so.
     fn chroma_444(&self) -> bool {
         false
+    }
+    /// P9: the constant quality of sharp mode (1-51); `None`: CBR.
+    fn quality(&self) -> Option<u8> {
+        None
     }
 }
 
@@ -106,8 +116,19 @@ fn apply_common(config: &mut NvEncConfig, rate: &impl NvRate) {
     config.frame_interval_p = 1;
     let rc = &mut config.rc_params;
     rc.version = NV_ENC_RC_PARAMS_VER;
-    rc.rate_control_mode = NV_ENC_PARAMS_RC_CBR;
-    rc.average_bit_rate = bits;
+    match rate.quality() {
+        Some(quality) => {
+            rc.rate_control_mode = NV_ENC_PARAMS_RC_VBR;
+            rc.average_bit_rate = 0;
+            rc.target_quality = quality;
+            rc.target_quality_lsb = 0;
+        }
+        None => {
+            rc.rate_control_mode = NV_ENC_PARAMS_RC_CBR;
+            rc.average_bit_rate = bits;
+            rc.target_quality = 0;
+        }
+    }
     rc.max_bit_rate = bits;
     rc.vbv_buffer_size = buffer;
     rc.vbv_initial_delay = initial;

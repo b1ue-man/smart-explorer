@@ -40,7 +40,7 @@ pub const SHARP_HINT: &str = "Scharf: Video-Kodierer der Grafikkarte mit fester 
 /// both vendors use (NVENC `NV_ENC_RC_PARAMS::targetQuality` with VBR, AMF
 /// `QvbrQualityLevel` with quality VBR): 18 is the level commonly called
 /// visually lossless for H.264 (x264 CRF 18); lower is sharper.
-pub const SHARP_QUALITY: u8 = 18;
+pub const SHARP_QUALITY: u8 = crate::screen::core::rate_control::model::SHARP_TARGET_QUALITY;
 
 /// Whether `codec` may carry this mode: H.264 and HEVC, never AV1 („av1 ist
 /// zu viel“) and never the tiles (they are „Verlustfrei“).

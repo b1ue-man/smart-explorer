@@ -154,6 +154,15 @@ impl AsyncEncoder {
             .ok();
         let bitrate = bounded_bitrate(bps, u32::MAX);
         let (api, settings) = configure_hardware(&transform, bitrate, setup.fps);
+        // P9: sharp mode of an admitted session, where the MFT takes it.
+        let quality = grant
+            .as_ref()
+            .and_then(|_| crate::screen::core::rate_control::model::session_quality());
+        if let (Some(api), Some(target)) = (api.as_ref(), quality) {
+            if !super::mf_media::quality_mode(api, target) {
+                eprintln!("screen encoder {}: no quality mode, CBR", setup.name);
+            }
+        }
         if let Err(error) = start(&transform, &setup, bitrate) {
             if gpu.is_none() {
                 return Err(error);

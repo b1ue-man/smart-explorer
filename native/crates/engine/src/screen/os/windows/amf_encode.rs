@@ -255,21 +255,23 @@ impl AmfSession {
         size: FrameSize,
         fps: u32,
     ) -> io::Result<Self> {
-        Self::open_at(device, codec, size, fps, START_DIRECT_BPS)
+        Self::open_at(device, codec, size, fps, START_DIRECT_BPS, None)
     }
 
-    /// `open` with the rate control starting at `bps` (plan 2026-11-17).
+    /// `open` with the rate control starting at `bps` (plan 2026-11-17),
+    /// with `quality` (P9, sharp mode) as quality VBR under that peak.
     pub(super) fn open_at(
         device: &ID3D11Device,
         codec: CodecKind,
         size: FrameSize,
         fps: u32,
         bps: u64,
+        quality: Option<u8>,
     ) -> io::Result<Self> {
         let names = names(codec)
             .ok_or_else(|| io::Error::new(io::ErrorKind::Unsupported, "AMF has no tiles"))?;
         let (context, component) = context_and_encoder(device, names)?;
-        let rate = RateParams::for_target(bps, fps);
+        let rate = RateParams::for_target(bps, fps).with_quality(quality);
         let mut session = Self {
             component,
             context,

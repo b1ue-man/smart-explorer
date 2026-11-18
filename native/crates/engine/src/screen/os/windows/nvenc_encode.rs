@@ -68,16 +68,6 @@ pub(super) use crate::screen::os::nvenc_shared::settings::{
 pub(super) use super::nvenc_device::async_timeout_ms;
 use super::nvenc_device::create_completion_event;
 
-impl NvRate for RateParams {
-    fn cbr(&self) -> (u32, u32, u32) {
-        (
-            self.bits_per_second,
-            self.buffer_bits,
-            self.initial_fullness,
-        )
-    }
-}
-
 /// Device-independent asynchronous NVENC session over an `NvTable`.
 pub(super) struct Core<A: NvTable> {
     pub(super) api: A,
@@ -106,10 +96,11 @@ impl<A: NvTable> Core<A> {
         size: FrameSize,
         fps: u32,
     ) -> io::Result<Self> {
-        Self::open_at(api, encoder, codec, size, fps, START_DIRECT_BPS)
+        Self::open_at(api, encoder, codec, size, fps, START_DIRECT_BPS, None)
     }
 
-    /// `open` with the rate control starting at `bps` (plan 2026-11-17).
+    /// `open` with the rate control starting at `bps` (plan 2026-11-17),
+    /// with `quality` (P9, sharp mode) as constant quality under that peak.
     pub(super) fn open_at(
         api: A,
         encoder: Ptr,
@@ -117,6 +108,7 @@ impl<A: NvTable> Core<A> {
         size: FrameSize,
         fps: u32,
         bps: u64,
+        quality: Option<u8>,
     ) -> io::Result<Self> {
         let guid = encode_guid(codec)
             .ok_or_else(|| io::Error::new(io::ErrorKind::Unsupported, "NVENC has no tiles"))?;
@@ -138,7 +130,7 @@ impl<A: NvTable> Core<A> {
             codec,
             init: Box::new(NvEncInitializeParams::zeroed()),
             config: Box::new(NvEncConfig::zeroed()),
-            rate: RateParams::for_target(bps, fps),
+            rate: RateParams::for_target(bps, fps).with_quality(quality),
             refused: None,
             invalidation,
             history: RefHistory::new(if invalidation { rfi_dpb(codec) } else { 1 }),
@@ -386,20 +378,22 @@ impl NvencSession {
         size: FrameSize,
         fps: u32,
     ) -> io::Result<Self> {
-        Self::open_at(device, codec, size, fps, START_DIRECT_BPS)
+        Self::open_at(device, codec, size, fps, START_DIRECT_BPS, None)
     }
 
-    /// `open` with the rate control starting at `bps` (plan 2026-11-17).
+    /// `open` with the rate control starting at `bps` (plan 2026-11-17)
+    /// and the constant `quality` of sharp mode (P9).
     pub(super) fn open_at(
         device: &ID3D11Device,
         codec: CodecKind,
         size: FrameSize,
         fps: u32,
         bps: u64,
+        quality: Option<u8>,
     ) -> io::Result<Self> {
         let api = super::nvenc_ffi::load().map_err(io::Error::other)?;
         let encoder = open_session(&api, device)?;
-        let core = Core::open_at(api, encoder, codec, size, fps, bps)?;
+        let core = Core::open_at(api, encoder, codec, size, fps, bps, quality)?;
         Ok(Self {
             core,
             registered: Vec::new(),

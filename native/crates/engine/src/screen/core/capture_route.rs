@@ -10,7 +10,13 @@
 //! chain_facts.rs` reads `report()` into the `CaptureFacts` of the host
 //! process's stream mark, from there into `HostStats::chain` and `se screen
 //! sessions --json` (r1). Platform-neutral data only.
+//!
+//! Plan 2026-11-17 P9: `pointer_patch`, the area a host process redraws
+//! when it blends the pointer into a picture that stays on the GPU (Windows
+//! Desktop Duplication, `os/windows/capture_pointer_gpu.rs`).
 use std::sync::{Mutex, PoisonError};
+
+use super::pixel_convert::{FrameSize, Rect};
 
 /// The memory the picture stream of the capture uses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -93,6 +99,39 @@ pub fn note_fallback(cause: &'static str) {
 pub fn note_cursor_embedded(embedded: bool) {
     update(|report| report.cursor_embedded = Some(embedded));
 }
+
+/// The area of a picture of `native` size (its even part: the NV12 picture
+/// on the GPU has even sides) that a pointer of `width` x `height` with its
+/// top left at (`left`, `top`) covers, widened to even edges so every 2 x 2
+/// chroma pair lies wholly inside or outside it; `None` when the pointer
+/// lies outside that part or has no pixels.
+pub fn pointer_patch(
+    native: FrameSize,
+    left: i32,
+    top: i32,
+    width: u32,
+    height: u32,
+) -> Option<Rect> {
+    let span = |start: i32, length: u32, side: u32| -> Option<(u32, u32)> {
+        let limit = i64::from(side & !1);
+        let first = i64::from(start).max(0) & !1;
+        let end = (i64::from(start) + i64::from(length)).min(limit);
+        let end = (end + 1) & !1;
+        (length > 0 && end > first).then_some((first as u32, (end - first) as u32))
+    };
+    let (x, width) = span(left, width, native.width)?;
+    let (y, height) = span(top, height, native.height)?;
+    Some(Rect {
+        x,
+        y,
+        width,
+        height,
+    })
+}
+
+#[cfg(test)]
+#[path = "capture_route_tests.rs"]
+mod tests;
 
 #[cfg(test)]
 pub(crate) fn reset_for_test() {

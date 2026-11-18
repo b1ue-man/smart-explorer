@@ -20,10 +20,22 @@ pub(super) const LTR_FRAMES: i64 = 2;
 
 pub(super) type Setting = (&'static str, AmfVariant);
 
-/// Properties before `Init`.
+/// Properties before `Init`. P9: with a quality target (sharp mode) the
+/// rate control is quality VBR at that level, the session rate its peak;
+/// pre-analysis and pre-encode stay off in either mode.
 pub(super) fn static_settings(names: &Names, size: FrameSize, rate: &RateParams) -> Vec<Setting> {
     let int = AmfVariant::int64;
     let color = int(prop::COLOR_PROFILE_709);
+    let method = if rate.quality.is_some() {
+        names.quality_vbr
+    } else {
+        names.cbr
+    };
+    let pre_encode = if names.codec == CodecKind::H264 {
+        int(0)
+    } else {
+        AmfVariant::boolean(false)
+    };
     let mut settings = vec![
         (names.usage, int(names.usage_ultra_low_latency)),
         (names.profile, int(names.profile_value)),
@@ -31,7 +43,9 @@ pub(super) fn static_settings(names: &Names, size: FrameSize, rate: &RateParams)
         (names.framesize, AmfVariant::size(size.width, size.height)),
         (names.max_ltr, int(LTR_FRAMES)),
         (names.ltr_mode, int(names.ltr_keep_unused)),
-        (names.rate_control, int(names.cbr)),
+        (names.rate_control, int(method)),
+        (names.pre_analysis, AmfVariant::boolean(false)),
+        (names.pre_encode, pre_encode),
         (names.in_color_profile, color),
         (names.out_color_profile, color),
         (names.out_transfer, int(prop::TRANSFER_BT709)),
@@ -64,6 +78,9 @@ pub(super) fn static_settings(names: &Names, size: FrameSize, rate: &RateParams)
             (names.query_timeout, int(QUERY_TIMEOUT_MS)),
         ]),
         CodecKind::Tiles => {}
+    }
+    if let Some(quality) = rate.quality {
+        settings.push((names.qvbr_level, int(i64::from(quality))));
     }
     settings.extend(rate_settings(names, rate));
     settings
