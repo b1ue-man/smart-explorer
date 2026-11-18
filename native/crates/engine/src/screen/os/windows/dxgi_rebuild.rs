@@ -27,6 +27,18 @@ use super::{DxgiCapture, DxgiFailure, PreparedDxgi};
 use crate::screen::core::capture_fallback::FallbackStep;
 use crate::screen::os::capture_source::{self, SETTLE_STEP};
 
+/// The last error of a rebuild that waits for its next try (`RebuildBackoff`):
+/// the same result code, or the same kind without one.
+fn repeated(failing: &Failing) -> io::Error {
+    match failing.code {
+        Some(code) => io::Error::other(windows::core::Error::from_hresult(code)),
+        None => io::Error::new(
+            failing.kind,
+            "screen capture rebuild waits after repeated failures",
+        ),
+    }
+}
+
 /// The error a settling rebuild pauses with.
 fn settle_wait() -> io::Error {
     io::Error::new(
@@ -68,12 +80,24 @@ impl DxgiCapture {
         if self.settles() && self.tried.is_some_and(|at| at.elapsed() < SETTLE_STEP) {
             return Err(settle_wait());
         }
+        // Measurement of 2026-11-18 (a locked PC: a rebuild and a log line
+        // about every 200 ms): past its settling time a rebuild that keeps
+        // failing is tried after 1 s, 2 s, 4 s, then every 5 s
+        // (`RebuildBackoff`); in between its last error stands, so the
+        // fallback to Graphics Capture sees what it saw before.
+        if let Some(failing) = self.failing.filter(|_| !self.settles()) {
+            if !self.backoff.due(Instant::now()) {
+                return Err(repeated(&failing));
+            }
+        }
         self.tried = Some(Instant::now());
         match self.rebuild() {
             Ok(()) => {
+                let spaced = self.backoff.succeeded();
                 if let Some(failing) = self.failing {
                     eprintln!(
-                        "screen capture: duplication rebuilt after {} ms of {} failures",
+                        "screen capture: duplication rebuilt after {} ms of {} failures \
+                         ({spaced} spaced rebuilds)",
                         failing.since.elapsed().as_millis(),
                         failing.step.key()
                     );
@@ -88,6 +112,7 @@ impl DxgiCapture {
                 if self.settles() {
                     return Err(settle_wait());
                 }
+                self.backoff.failed(Instant::now());
                 Err(failure.error)
             }
         }

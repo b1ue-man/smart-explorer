@@ -203,6 +203,16 @@ impl McpUpdate {
         }
         Ok(value)
     }
+    /// Renews the stop request a fresh worker start consumed: through the
+    /// transaction (identity-bound, so retained MCP sessions stay valid) or
+    /// as the plain legacy request when this update has none.
+    pub(super) fn renew_stop(&mut self) -> Result<(), String> {
+        let marker = super::logging::appdata_dir().join("sync/daemon.stop");
+        match self.transaction.as_mut() {
+            Some(transaction) => transaction.publish_stop(&marker),
+            None => super::process::request_daemon_stop_marker(),
+        }
+    }
     pub(super) fn already_completed(&self) -> bool {
         self.already_completed
     }

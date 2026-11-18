@@ -49,9 +49,28 @@ object ScreenCodecNotices {
     /** The host's English reasons of `chosen_codec_unavailable` in German; another one stays as it came. */
     private fun reasonText(reason: String): String = when (reason.trim()) {
         "the host has no encoder of this codec" -> "Das Gerät hat keinen Kodierer dieses Codecs"
+        "the host has no GPU encoder of H.264 or HEVC" -> "Das Gerät hat keinen GPU-Kodierer für H.264/HEVC"
         "the viewer has no decoder of this codec" -> "Dieses Handy bietet keinen Dekodierer dieses Codecs an"
         "no encoder and decoder of this codec fit together" -> "Kein Kodierer und Dekodierer dieses Codecs passen zusammen"
         else -> reason.trim()
+    }
+
+    /**
+     * The reason of `chosen_codec_failed` in German (measurement of 2026-11-18, as `codec_reason_text.rs` of the
+     * desktop): `no encoder of the chosen codec is left[: <error>]`; a driver's own message follows as „Meldung: …“.
+     */
+    private fun failedReason(reason: String): String {
+        val rest = reason.trim().removePrefix("no encoder of the chosen codec is left").trim().removePrefix(":").trim()
+        val firstPicture = "no first picture from the encoder within "
+        val noPairing = "no pairing carries "
+        return when {
+            rest.isEmpty() -> ""
+            rest.startsWith(firstPicture) ->
+                ": der Kodierer lieferte ${rest.removePrefix(firstPicture).removeSuffix(" ms").trim()} ms lang kein erstes Bild"
+            rest.startsWith(noPairing) ->
+                ": keine Kodierer-Paarung schafft ${rest.removePrefix(noPairing).substringBefore(' ')} mit einem Bild pro Sekunde"
+            else -> ": Meldung: $rest"
+        }
     }
 
     /** The notice in a state reason, an error or an end detail; `null` when [text] names no codec report. */
@@ -70,7 +89,7 @@ object ScreenCodecNotices {
             val (codec, why) = codecAndReason(reason.substring(at + FAILED.length), chosen)
             return CodecNotice(
                 chosen, null,
-                "Fehler: Für den gewählten Codec „${label(codec)}“ ist kein Kodierer mehr verfügbar ($why). Es wird kein anderer Codec gesendet.",
+                "Fehler: ${label(codec)} gewählt, aber alle Kodierer dieses Codecs am Gerät sind ausgefallen${failedReason(why)}. Es wird kein anderer Codec gesendet.",
                 error = true,
             )
         }

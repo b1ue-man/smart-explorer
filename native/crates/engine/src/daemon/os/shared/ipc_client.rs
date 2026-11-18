@@ -154,6 +154,10 @@ pub fn request_daemon_replacement() -> Result<(), String> {
 }
 
 fn restart_worker_for_client() -> Result<(), String> {
+    if let Some(runtime) = crate::mcp_launcher::current_runtime() {
+        // Only the admitted installed worker, never this runtime's own image.
+        return super::runtime_hello::client(&runtime).map(|_| ());
+    }
     if crate::autostart::DAEMON_IN_PROCESS {
         // A worker thread cannot be replaced by a handoff; start or await it.
         return super::embedded::ensure_for_client(WORKER_READY_TIMEOUT);

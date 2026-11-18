@@ -61,7 +61,7 @@ pub use provision::{
 };
 pub use transaction::{
     garbage_collect, installation_stop_marker, recover_update, retain_update_stop,
-    retained_update_transaction, stop_marker_identity, stop_marker_is_owned,
+    retained_update_transaction, stop_marker_identity, stop_marker_is_owned, update_holds_stop,
     verify_recovery_targets, UpdateTransaction,
 };
 

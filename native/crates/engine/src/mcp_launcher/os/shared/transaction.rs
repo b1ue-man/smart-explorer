@@ -371,6 +371,27 @@ pub fn stop_marker_is_owned(root: &Path, marker: &Path) -> Result<bool, String> 
     }))
 }
 
+/// Whether the update transaction of the installation this process's image
+/// belongs to published `marker` and still runs. A worker start reads it
+/// before it would discard the request (`daemon::handoff`). The owner holds
+/// control.lock exclusively for a few steps; a lock busy beyond the retries
+/// counts as no update, so an unrelated holder never keeps a worker down.
+pub fn update_holds_stop(marker: &Path) -> bool {
+    let Ok(Some(installation)) = Installation::current() else {
+        return false;
+    };
+    for _ in 0..10 {
+        match stop_marker_is_owned(&installation.root, marker) {
+            Ok(owned) => return owned,
+            Err(error) if error.starts_with("lock_busy:") => {
+                std::thread::sleep(Duration::from_millis(50))
+            }
+            Err(_) => return false,
+        }
+    }
+    false
+}
+
 pub fn stop_marker_identity(
     marker: &Path,
 ) -> Option<crate::mcp_launcher::core::lifecycle::StopIdentity> {

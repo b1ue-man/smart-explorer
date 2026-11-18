@@ -91,6 +91,50 @@ pub(super) fn session_active() -> bool {
     state == WTSActive
 }
 
+/// Whether the session of this process is locked (measurement of
+/// 2026-11-18: a locked PC whose input desktop the probe above did not
+/// report kept Desktop Duplication failing with `E_INVALIDARG`). Reads
+/// `WTSSessionInfoEx`, a `WTSINFOEXW` whose level-1 data holds
+/// `SessionFlags` (Microsoft Learn, `WTSINFOEX_LEVEL1_W`); the flag is
+/// decided by `capture_lock::session_lock_flag`. A failing or short query
+/// says "not locked": the desktop probe and the capture's own errors stay.
+pub(super) fn session_locked() -> bool {
+    use windows_sys::Win32::System::RemoteDesktop::{
+        WTSFreeMemory, WTSQuerySessionInformationW, WTSSessionInfoEx, WTSINFOEXW,
+        WTS_CURRENT_SERVER_HANDLE, WTS_CURRENT_SESSION,
+    };
+    let mut buffer: *mut u16 = std::ptr::null_mut();
+    let mut bytes = 0u32;
+    // SAFETY: the out pointers address locals; the buffer the call returns
+    // is released with `WTSFreeMemory` below.
+    let queried = unsafe {
+        WTSQuerySessionInformationW(
+            WTS_CURRENT_SERVER_HANDLE,
+            WTS_CURRENT_SESSION,
+            WTSSessionInfoEx,
+            &mut buffer,
+            &mut bytes,
+        )
+    };
+    if queried == 0 || buffer.is_null() {
+        return false;
+    }
+    let flag = if bytes as usize >= std::mem::size_of::<WTSINFOEXW>() {
+        // SAFETY: the buffer holds a whole `WTSINFOEXW` (checked above); the
+        // level-1 data is the union's only member.
+        let (level, flags) = unsafe {
+            let info = buffer.cast::<WTSINFOEXW>().read_unaligned();
+            (info.Level, info.Data.WTSInfoExLevel1.SessionFlags as u32)
+        };
+        crate::screen::core::capture_lock::session_lock_flag(level, flags)
+    } else {
+        None
+    };
+    // SAFETY: the buffer came from the query above and is freed once.
+    unsafe { WTSFreeMemory(buffer.cast()) };
+    flag == Some(true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

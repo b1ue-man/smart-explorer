@@ -80,7 +80,19 @@ pub fn claim_handoff_after_singleton(generation: &str) -> io::Result<bool> {
     Ok(accepted)
 }
 
+/// An ordinary start discards an earlier stop request, except the one an
+/// update transaction published and still waits on: that start would run the
+/// image being replaced and end the update's stop (field failure 2026-11-18).
+/// The worker then refuses to start (`run_loop` logs the reason).
 pub fn discard_stop_after_singleton() -> io::Result<()> {
+    let manual = matches!(stop_control_checked(), Ok(Some(StopControl::Manual)));
+    if !crate::mcp_launcher::core::update_gate::ordinary_start_allowed(manual, || {
+        crate::mcp_launcher::update_holds_stop(&state::stop_path())
+    }) {
+        return Err(io::Error::other(
+            "Smart Explorer wird gerade aktualisiert; der Dienst startet erst nach dem Update",
+        ));
+    }
     if let Some(claimed) = claim_current_stop()? {
         claimed.consume()?;
     }

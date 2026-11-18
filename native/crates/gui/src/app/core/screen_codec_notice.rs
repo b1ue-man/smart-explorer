@@ -9,7 +9,9 @@
 //!   codec failed during the session) and `chosen_codec_unavailable:
 //!   <choice>: <detail>` (no pairing of it at the start): the chosen codec
 //!   is not available; the session ends with the encoder error and this
-//!   text instead of sending another codec.
+//!   text instead of sending another codec. Measurement of 2026-11-18: the
+//!   texts and the host's reasons in German (`core::codec_reason_text`).
+use crate::screen::core::codec_reason_text::{chosen_text, codec_key_label, fallback_detail_text};
 use crate::screen::core::negotiate::{CodecPreference, CodecSetting};
 
 const FALLBACK: &str = "encoder_fallback_to_";
@@ -55,37 +57,26 @@ pub fn codec_reason_text(reason: &str, chosen: Option<CodecSetting>) -> Option<S
         } else {
             format!("Kodierer am Gerät gewechselt: läuft jetzt {running}{chosen}.")
         };
-        return Some(with(text, detail));
+        return Some(with(text, &fallback_detail_text(detail)));
     }
-    let (rest, start) = if let Some(rest) = reason.strip_prefix(FAILED) {
-        (rest, false)
-    } else if let Some(rest) = reason.strip_prefix(UNAVAILABLE) {
+    let (rest, failed) = if let Some(rest) = reason.strip_prefix(FAILED) {
         (rest, true)
+    } else if let Some(rest) = reason.strip_prefix(UNAVAILABLE) {
+        (rest, false)
     } else {
         return None;
     };
-    // `<codec>: <reason>`, or the reason alone (a host may leave the key out).
-    let (named, detail) = match rest.split_once(':') {
-        Some((key, detail)) if CodecPreference::parse(key.trim()).is_some() => {
-            (Some(codec_label(key.trim())), detail)
-        }
-        _ => (None, rest),
+    // `<codec>: <reason>`, or the reason alone (a host may leave the key out;
+    // the viewer's choice names the codec then). Measurement of 2026-11-18:
+    // the reason in German (`codec_reason_text`), never the host's English.
+    let (label, detail) = match rest.split_once(':') {
+        Some((key, detail)) if codec_key_label(key).is_some() => (codec_key_label(key), detail),
+        _ => (chosen.map(CodecSetting::label), rest),
     };
-    let named = named.or_else(|| chosen.map(|chosen| chosen.label().to_string()));
-    let when = if start {
-        "beim Start"
-    } else {
-        "in der Sitzung"
-    };
-    let codec = named.map_or_else(
-        || "Gewählter Codec".to_string(),
-        |name| format!("Gewählter Codec „{name}“"),
-    );
-    let text = format!(
-        "{codec} ist am Gerät nicht verfügbar ({when}); es wird kein anderer gesendet, nur \
-         „Automatisch“ weicht aus. Grund:"
-    );
-    Some(with(text, detail))
+    let text = chosen_text(label, failed, detail);
+    Some(format!(
+        "{text}. Es wird kein anderer Codec gesendet, nur „Automatisch“ weicht aus."
+    ))
 }
 
 /// The text of an error detail that names the chosen codec (`encoder_failed`
@@ -117,7 +108,7 @@ mod tests {
         assert_eq!(
             tiles,
             "Videoencoder nicht verfügbar; verlustfreie Übertragung (gewählt: „Automatisch“). \
-             mf failed"
+             Meldung: mf failed"
         );
         let hevc = codec_reason_text(
             "encoder_fallback_to_hevc: av1 hardware gave way to hevc hardware: busy",
@@ -127,7 +118,11 @@ mod tests {
         assert!(hevc.starts_with(
             "Kodierer am Gerät gewechselt: läuft jetzt HEVC (gewählt: „Automatisch“)."
         ));
-        assert!(hevc.ends_with("busy"));
+        // Measurement of 2026-11-18: the detail in German as well.
+        assert!(
+            hevc.ends_with("AV1 (Hardware) → HEVC (Hardware); Meldung: busy"),
+            "{hevc}"
+        );
         for key in ["h264", "av1"] {
             let text = codec_reason_text(&format!("encoder_fallback_to_{key}: x"), None).unwrap();
             assert!(text.contains(&codec_label(key)), "{text}");
@@ -137,25 +132,31 @@ mod tests {
             None,
         )
         .unwrap();
-        assert!(failed
-            .starts_with("Gewählter Codec „AV1“ ist am Gerät nicht verfügbar (in der Sitzung)"));
-        assert!(failed.ends_with("gone"));
-        let start =
-            codec_reason_text("chosen_codec_unavailable: sharp: no GPU encoder", None).unwrap();
-        assert!(start.contains("beim Start"));
-        assert!(start.contains(CodecSetting::Sharp.label()));
+        assert_eq!(
+            failed,
+            "AV1 gewählt, aber alle AV1-Kodierer des Geräts sind ausgefallen: Meldung: gone. \
+             Es wird kein anderer Codec gesendet, nur „Automatisch“ weicht aus."
+        );
+        let start = codec_reason_text(
+            "chosen_codec_unavailable: sharp: the host has no GPU encoder of H.264 or HEVC",
+            None,
+        )
+        .unwrap();
+        assert!(start.starts_with(
+            "Scharf (GPU) gewählt, aber das Gerät hat keinen GPU-Kodierer für H.264/HEVC."
+        ));
         // The reason alone: the viewer's choice names the codec.
         let bare = codec_reason_text(
-            "chosen_codec_unavailable: no hardware encoder",
+            "chosen_codec_unavailable: the host has no encoder of this codec",
             Some(CodecSetting::Av1),
         )
         .unwrap();
-        assert!(bare.starts_with("Gewählter Codec „AV1“ ist am Gerät nicht verfügbar (beim Start)"));
-        assert!(bare.ends_with("Grund: no hardware encoder"));
+        assert!(bare.starts_with("AV1 gewählt, aber das Gerät hat keinen AV1-Kodierer."));
+        assert!(!bare.contains("the host"));
         assert_eq!(codec_reason_text("pipewire_missing", None), None);
         // As the detail of `encoder_failed`.
         let detail = codec_detail_text(Some("encoder: chosen_codec_failed: hevc: no encoder"));
-        assert!(detail.unwrap().contains("„HEVC“"));
+        assert!(detail.unwrap_or_default().starts_with("HEVC gewählt, aber"));
         assert_eq!(codec_detail_text(Some("device lost")), None);
         assert_eq!(codec_detail_text(None), None);
     }

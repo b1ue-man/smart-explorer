@@ -118,7 +118,9 @@ Section "Smart Explorer (erforderlich)" SEC_MAIN
   IfErrors bundle_failed
   IntCmp $1 0 bundle_installed
   bundle_failed:
-    MessageBox MB_OK|MB_ICONSTOP "Smart Explorer wurde nicht installiert (Exitcode $1).$\r$\nDer genaue Grund steht im Update-Protokoll:$\r$\n$APPDATA\smart_explorer\updater.log"
+    MessageBox MB_OK|MB_ICONSTOP "Smart Explorer wurde nicht installiert (Exitcode $1).$\r$\nDer genaue Grund steht im Update-Protokoll:$\r$\n$APPDATA\smart_explorer\updater.log" /SD IDOK
+    ; A silent setup ends with the code instead of waiting on a dialog.
+    SetErrorLevel 2
     Abort
   bundle_installed:
   SetOutPath "$INSTDIR"
@@ -129,7 +131,7 @@ Section "Smart Explorer (erforderlich)" SEC_MAIN
   ExecWait '"$INSTDIR\${CLI_EXE_NAME}" --install-cli-path' $1
   IntCmp $1 0 cli_path_done cli_path_failed cli_path_failed
   cli_path_failed:
-    MessageBox MB_OK|MB_ICONEXCLAMATION "se.exe wurde installiert, aber der Benutzer-PATH konnte nicht aktualisiert werden.$\r$\nTerminal-Aufruf: $INSTDIR\${CLI_EXE_NAME}"
+    MessageBox MB_OK|MB_ICONEXCLAMATION "se.exe wurde installiert, aber der Benutzer-PATH konnte nicht aktualisiert werden.$\r$\nTerminal-Aufruf: $INSTDIR\${CLI_EXE_NAME}" /SD IDOK
   cli_path_done:
 
   ; Administrative opt-in only: the normal per-user setup never executes this script.
@@ -218,7 +220,7 @@ Section /o "se Desktop (optional)" SEC_DESKTOP
   IntCmp $0 0 desktop_enable_done
     DetailPrint "se Desktop konnte nicht eingeschaltet werden (Exitcode $0); später: se desktop enable"
     IfSilent desktop_enable_done 0
-    MessageBox MB_OK|MB_ICONEXCLAMATION "se Desktop konnte nicht eingeschaltet werden (Exitcode $0).$\r$\nSmart Explorer wurde installiert; se Desktop lässt sich später mit 'se desktop enable' oder in den Einstellungen einschalten."
+    MessageBox MB_OK|MB_ICONEXCLAMATION "se Desktop konnte nicht eingeschaltet werden (Exitcode $0).$\r$\nSmart Explorer wurde installiert; se Desktop lässt sich später mit 'se desktop enable' oder in den Einstellungen einschalten." /SD IDOK
   desktop_enable_done:
 SectionEnd
 
@@ -245,12 +247,12 @@ Section "Dokany ${DOKANY_VERSION} / DLL-API ${DOKANY_API_VERSION} / Treiberproto
   StrCmp $0 "1602" dokany_cancelled
 
   IfSilent dokany_abort 0
-  MessageBox MB_OK|MB_ICONEXCLAMATION "Dokany konnte nicht installiert werden (MSI-Exitcode $0). Smart Explorer wurde installiert, Remote-Laufwerke bleiben jedoch bis zu einer erfolgreichen Dokany-Installation deaktiviert."
+  MessageBox MB_OK|MB_ICONEXCLAMATION "Dokany konnte nicht installiert werden (MSI-Exitcode $0). Smart Explorer wurde installiert, Remote-Laufwerke bleiben jedoch bis zu einer erfolgreichen Dokany-Installation deaktiviert." /SD IDOK
   Goto dokany_done
 
   dokany_cancelled:
     IfSilent dokany_abort 0
-    MessageBox MB_OK|MB_ICONEXCLAMATION "Die Dokany-UAC-Abfrage wurde abgebrochen. Smart Explorer wurde installiert; Remote-Laufwerke benötigen weiterhin Dokany ${DOKANY_VERSION}."
+    MessageBox MB_OK|MB_ICONEXCLAMATION "Die Dokany-UAC-Abfrage wurde abgebrochen. Smart Explorer wurde installiert; Remote-Laufwerke benötigen weiterhin Dokany ${DOKANY_VERSION}." /SD IDOK
     Goto dokany_done
 
   dokany_abort:
@@ -263,9 +265,9 @@ Section "Dokany ${DOKANY_VERSION} / DLL-API ${DOKANY_API_VERSION} / Treiberproto
     Call CheckDokanyRuntime
     IfSilent dokany_done 0
     StrCmp $DokanyRuntimeReady "1" 0 +3
-      MessageBox MB_OK|MB_ICONINFORMATION "Dokany ${DOKANY_VERSION} wurde installiert. Windows Installer meldet, dass ein Neustart erforderlich ist."
+      MessageBox MB_OK|MB_ICONINFORMATION "Dokany ${DOKANY_VERSION} wurde installiert. Windows Installer meldet, dass ein Neustart erforderlich ist." /SD IDOK
       Goto dokany_done
-    MessageBox MB_OK|MB_ICONINFORMATION "Dokany ${DOKANY_VERSION} wurde installiert, ist aber erst nach einem Windows-Neustart verfügbar."
+    MessageBox MB_OK|MB_ICONINFORMATION "Dokany ${DOKANY_VERSION} wurde installiert, ist aber erst nach einem Windows-Neustart verfügbar." /SD IDOK
     Goto dokany_done
 
   dokany_restart_initiated:
@@ -277,7 +279,7 @@ Section "Dokany ${DOKANY_VERSION} / DLL-API ${DOKANY_API_VERSION} / Treiberproto
     Call CheckDokanyRuntime
     StrCmp $DokanyRuntimeReady "1" dokany_done
     IfSilent dokany_abort 0
-    MessageBox MB_OK|MB_ICONEXCLAMATION "Dokany meldete eine erfolgreiche Installation, aber Smart Explorer konnte DLL-API ${DOKANY_API_VERSION} / Treiberprotokoll ${DOKANY_DRIVER_PROTOCOL_VERSION} anschließend nicht bestätigen. Remote-Laufwerke bleiben deaktiviert; bitte Windows neu starten oder Dokany erneut installieren."
+    MessageBox MB_OK|MB_ICONEXCLAMATION "Dokany meldete eine erfolgreiche Installation, aber Smart Explorer konnte DLL-API ${DOKANY_API_VERSION} / Treiberprotokoll ${DOKANY_DRIVER_PROTOCOL_VERSION} anschließend nicht bestätigen. Remote-Laufwerke bleiben deaktiviert; bitte Windows neu starten oder Dokany erneut installieren." /SD IDOK
 
   dokany_done:
 SectionEnd
@@ -295,7 +297,7 @@ Section "Virtueller Bildschirm ${VDD_RELEASE} für Fernzugriff (UAC erforderlich
   vdd_failed:
     DetailPrint "Virtueller Bildschirm: Treiber nicht installiert (Exitcode $0, Grund in %ProgramData%\SmartExplorer-VirtualDisplay\last-run.txt)"
     IfSilent vdd_done 0
-    MessageBox MB_OK|MB_ICONEXCLAMATION "Der virtuelle Bildschirm konnte nicht eingerichtet werden (Exitcode $0).$\r$\nSmart Explorer wurde installiert; der Grund steht in %ProgramData%\SmartExplorer-VirtualDisplay\last-run.txt."
+    MessageBox MB_OK|MB_ICONEXCLAMATION "Der virtuelle Bildschirm konnte nicht eingerichtet werden (Exitcode $0).$\r$\nSmart Explorer wurde installiert; der Grund steht in %ProgramData%\SmartExplorer-VirtualDisplay\last-run.txt." /SD IDOK
   vdd_done:
 SectionEnd
 

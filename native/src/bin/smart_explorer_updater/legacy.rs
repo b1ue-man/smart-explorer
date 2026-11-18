@@ -96,7 +96,11 @@ pub(crate) fn apply_update(args: LegacyApplyArgs) -> Result<(), ApplyFailure> {
     )?;
     if let Err(error) = stop_target_processes_for_update(&args.target) {
         let message = if error.needs_elevation {
-            elevation_refused(&args, "Prozessbereinigung")
+            format!(
+                "{}: {}",
+                elevation_refused(&args, "Prozessbereinigung"),
+                error.msg
+            )
         } else {
             error.msg
         };

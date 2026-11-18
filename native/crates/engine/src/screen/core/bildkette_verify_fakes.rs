@@ -292,6 +292,9 @@ pub enum Answer {
     Late,
     /// Gives a black picture.
     Broken,
+    /// Fails before its first picture, as FFmpeg's hardware-only `av1`
+    /// decoder without its acceleration („Get current frame error“).
+    NoPicture,
 }
 
 /// A fake video decoder around the tile decoder.
@@ -309,6 +312,9 @@ impl ScreenDecoder for FakeDecoder {
     }
 
     fn decode(&mut self, record: &FrameRecord) -> io::Result<bool> {
+        if self.answer == Answer::NoPicture {
+            return Err(io::Error::other("Get current frame error"));
+        }
         let parts = slices(self.codec, &record.payload)?;
         let count = parts.len();
         let mut complete = false;

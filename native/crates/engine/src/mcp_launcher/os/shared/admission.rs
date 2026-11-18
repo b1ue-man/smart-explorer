@@ -1,3 +1,4 @@
+use crate::mcp_launcher::core::update_gate::{self, StartGate};
 use crate::mcp_launcher::{os, Installation, RuntimeIdentity};
 use std::fs::File;
 use std::sync::{Mutex, OnceLock};
@@ -121,21 +122,24 @@ pub fn check_state(installation: &Installation) -> Result<(), String> {
     if installation.root.join("mcp/uninstall.v1.json").exists() {
         return Err("installation_uninstall_in_progress".into());
     }
-    if let Some(state) = installation.state()? {
-        if state.blocks_work()
-            || (state.retire_managed
-                && state.phase == crate::mcp_launcher::core::lifecycle::Phase::Committed
-                && installation.manifest == state.previous)
-        {
-            return Err(if installation.owner_alive(&state) {
-                "update_in_progress"
-            } else {
-                "update_recovery_required"
-            }
-            .into());
-        }
+    match start_gate(installation)? {
+        StartGate::Open => Ok(()),
+        StartGate::UpdateRunning => Err("update_in_progress".into()),
+        StartGate::RecoveryRequired => Err("update_recovery_required".into()),
     }
-    Ok(())
+}
+/// Whether the update record lets new work start (`core::update_gate`).
+/// The caller holds control.lock shared.
+pub(in crate::mcp_launcher) fn start_gate(
+    installation: &Installation,
+) -> Result<StartGate, String> {
+    let state = installation.state()?;
+    let blocked = update_gate::blocks(state.as_ref(), &installation.manifest);
+    Ok(update_gate::gate(blocked, || {
+        state
+            .as_ref()
+            .is_some_and(|state| installation.owner_alive(state))
+    }))
 }
 fn acquire(runtime: &RuntimeIdentity) -> Result<OperationGuard, String> {
     acquire_with(runtime, false)

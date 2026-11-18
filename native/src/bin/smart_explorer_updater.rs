@@ -39,7 +39,7 @@ use bookkeeping::PreparedBookkeeping;
 use hash::verify_sha256;
 use launch::{spawn_display_driver_step, spawn_verified_acknowledged, spawn_verified_detached};
 use logging::{append_log, default_error_file, record_failure};
-use process::{stop_target_processes_for_update, wait_for_pid_exit};
+use process::{stop_target_processes_with, wait_for_pid_exit};
 use replace::{replace_transaction_with_retries, AppliedTransaction, Replacement};
 use std::time::Duration;
 
@@ -217,10 +217,9 @@ fn apply_update(mut args: ApplyArgs) -> Result<(), ApplyFailure> {
         .into_iter()
         .filter(|target| target.exists())
     {
-        if let Err(e) = stop_target_processes_for_update(target) {
-            if e.needs_elevation {
-                return Err(elevation_refused("Prozessbereinigung").into());
-            }
+        // A fresh start consumes the request; it is renewed (stop_loop.rs).
+        // The message names PID, image or error code of what still runs.
+        if let Err(e) = stop_target_processes_with(target, &mut || mcp_update.renew_stop()) {
             return Err(e.msg.into());
         }
     }

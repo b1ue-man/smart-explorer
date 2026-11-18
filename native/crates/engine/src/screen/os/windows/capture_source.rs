@@ -23,6 +23,7 @@ use windows::Win32::UI::WindowsAndMessaging::{IsIconic, IsWindow};
 
 use super::secure_desktop;
 use crate::screen::core::capture_admission::CaptureGrant;
+use crate::screen::core::capture_lock::{pause_state, renews_after, PauseLog, PauseQuestion};
 use crate::screen::core::capture_picture::SourcePicture;
 use crate::screen::core::host_backend::{ScreenInputSink, ScreenSource, SourceFrame};
 use crate::screen::core::input_model::InputEvent;
@@ -190,24 +191,40 @@ pub(super) use fallback_report::{
 /// The questions that decide whether a capture pauses.
 pub(super) trait StateProbe {
     fn session_active(&mut self) -> bool;
+    /// The session's lock flag (measurement of 2026-11-18); a probe that
+    /// does not know it says "not locked".
+    fn session_locked(&mut self) -> bool {
+        false
+    }
     fn on_secure_desktop(&mut self) -> bool;
     fn window_exists(&mut self) -> bool;
     fn window_minimized(&mut self) -> bool;
 }
 
 /// The state that pauses the capture now, in this order: inactive session,
-/// secure desktop, and for a window one that is gone (an error: the session
-/// ends and the viewer picks another source) or minimized (asked for every
-/// capture, never derived from missing pictures).
+/// locked session (`HostLocked`, measurement of 2026-11-18), secure desktop
+/// (`capture_lock::pause_state`), and for a window one that is gone (an
+/// error: the session ends and the viewer picks another source) or minimized
+/// (asked for every capture, never derived from missing pictures). A change
+/// of the pause goes to the host log once (`PauseLog`), not per check.
 pub(super) fn state_before_capture(
     window: bool,
     probe: &mut dyn StateProbe,
 ) -> io::Result<Option<SessionState>> {
-    if !probe.session_active() {
-        return Ok(Some(SessionState::SessionInactive));
+    let paused = pause_state(|question| match question {
+        PauseQuestion::SessionActive => probe.session_active(),
+        PauseQuestion::SessionLocked => probe.session_locked(),
+        PauseQuestion::SecureDesktop => probe.on_secure_desktop(),
+    });
+    let line = PAUSE_LOG
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .line(paused);
+    if let Some(line) = line {
+        eprintln!("{line}");
     }
-    if probe.on_secure_desktop() {
-        return Ok(Some(SessionState::SecureDesktop));
+    if paused.is_some() {
+        return Ok(paused);
     }
     if window {
         if !probe.window_exists() {
@@ -223,6 +240,10 @@ pub(super) fn state_before_capture(
     Ok(None)
 }
 
+/// The pauses of this process's capture for the host log (one process
+/// serves one session).
+static PAUSE_LOG: std::sync::Mutex<PauseLog> = std::sync::Mutex::new(PauseLog::new());
+
 /// The probe of this system; `window` is the handle value of a window source.
 struct SystemProbe {
     window: usize,
@@ -237,6 +258,10 @@ impl SystemProbe {
 impl StateProbe for SystemProbe {
     fn session_active(&mut self) -> bool {
         secure_desktop::session_active()
+    }
+
+    fn session_locked(&mut self) -> bool {
+        secure_desktop::session_locked()
     }
 
     fn on_secure_desktop(&mut self) -> bool {
@@ -345,10 +370,8 @@ impl ScreenSource for WindowsSource {
             return Ok(SourcePicture::Unchanged);
         }
         if let Some(state) = state_before_capture(self.window, self.probe.as_mut())? {
-            self.renew |= matches!(
-                state,
-                SessionState::SecureDesktop | SessionState::SessionInactive
-            );
+            // The picture returns after the pause without a new connection.
+            self.renew |= renews_after(state);
             return Ok(SourcePicture::Paused(state));
         }
         if self.renew {

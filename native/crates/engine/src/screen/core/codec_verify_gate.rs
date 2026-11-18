@@ -141,6 +141,28 @@ impl Checks {
         }
         match answer.recv_timeout(self.deadline) {
             Ok(Ok(outcome)) => {
+                // Measurement of 2026-11-18: a failed check names its reason
+                // in the host log (it ended a session without one).
+                if outcome.encoder == Verdict::Structural {
+                    eprintln!(
+                        "screen codec check of {} at {}x{}: nicht prüfbar (Dekoder: {}); \
+                         admitted after the stream checks",
+                        factory.name(),
+                        size.width,
+                        size.height,
+                        outcome.detail
+                    );
+                }
+                if let Verdict::Failed(reason) = outcome.encoder {
+                    eprintln!(
+                        "screen codec check of {} at {}x{}: failed ({}): {}",
+                        factory.name(),
+                        size.width,
+                        size.height,
+                        reason.key(),
+                        outcome.detail
+                    );
+                }
                 self.store.record(&key, outcome.encoder, &outcome.detail);
                 for (index, verdict) in &outcome.decoders {
                     if let Some(decoder) = decoders.get(*index) {

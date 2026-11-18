@@ -12,7 +12,32 @@
 //! answers the encoder counts as failed and the fallback order applies
 //! (another encoder of the same codec; another codec only under
 //! „Automatisch“).
-use super::negotiate::CodecChoice;
+use super::frame_size_caps::video_keyframe;
+use super::negotiate::{CodecChoice, CodecKind};
+
+/// Whether an encoded picture of `codec` starts a picture group: its flag,
+/// or for a picture of one record its bitstream (measurement of 2026-11-18,
+/// AV1 on an AMD host: a key frame is told by the stream as well, AV1 by the
+/// frame header's `frame_type` KEY_FRAME of a shown frame, H.264/HEVC by an
+/// IDR unit, `video_keyframe`). A picture of several records (hybrid
+/// regions) keeps its flag alone: its other records are no video stream.
+pub fn starts_group<R: AsRef<[u8]>>(
+    codec: CodecKind,
+    flagged: bool,
+    records: impl IntoIterator<Item = R>,
+) -> bool {
+    if flagged {
+        return true;
+    }
+    if !codec.is_video() {
+        return false;
+    }
+    let mut records = records.into_iter();
+    match (records.next(), records.next()) {
+        (Some(only), None) => video_keyframe(codec, only.as_ref()),
+        _ => false,
+    }
+}
 
 /// What a stage answered to a key-frame request without a picture.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -68,3 +93,7 @@ impl FirstPictureWatch {
         *self = Self::default();
     }
 }
+
+#[cfg(test)]
+#[path = "rollout_first_picture_task_tests.rs"]
+mod rollout_first_picture_task_tests;

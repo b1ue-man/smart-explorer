@@ -226,7 +226,8 @@ pub async fn run_source(
                         return Err(ViewerError::Refused(reason));
                     }
                 }
-                Some(Ok(HostFrame::Error(error))) => return Err(ViewerError::Refused(error.code)),
+                // The host's reason travels with the code (2026-11-18: it was dropped).
+                Some(Ok(HostFrame::Error(error))) => return Err(ViewerError::refused_by(&error)),
                 Some(Ok(HostFrame::Stats(stats))) => {
                     if let Some(frame) = host.on_stats(stats, now_us()) {
                         let _ = session.control.send(frame).await;

@@ -58,6 +58,8 @@ pub mod capture_fallback;
 pub mod capture_grant;
 pub mod capture_image;
 pub mod capture_import;
+// Measurement of 2026-11-18: the locked screen of a host pauses the capture.
+pub mod capture_lock;
 pub mod capture_picture;
 pub mod capture_plan;
 pub mod capture_records;
@@ -66,6 +68,8 @@ pub mod capture_source_contract;
 pub mod capture_transport;
 pub mod catalog_entries;
 pub mod chain_meter;
+// Measurement of 2026-11-18: the host's codec reasons in German.
+pub mod codec_reason_text;
 pub mod codec_registry;
 // Plan 2026-11-17 „Windows-Bild“ P3: run-time check of the codecs.
 pub mod codec_verdicts;

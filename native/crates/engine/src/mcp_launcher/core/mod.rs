@@ -3,6 +3,7 @@ pub mod lifecycle;
 pub mod manifest;
 pub mod recovery;
 pub mod relay;
+pub mod update_gate;
 
 pub mod catalog;
 

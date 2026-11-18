@@ -86,10 +86,24 @@ impl ViewerError {
         }
     }
 
+    /// The refusal of an `ERROR` frame with the host's reason (`code:
+    /// detail`; measurement of 2026-11-18: `se screen bench` dropped it).
+    pub fn refused_by(error: &super::wire_control::ScreenWireError) -> Self {
+        match error.detail.as_deref().map(str::trim) {
+            Some(detail) if !detail.is_empty() => {
+                Self::Refused(format!("{}: {detail}", error.code))
+            }
+            _ => Self::Refused(error.code.clone()),
+        }
+    }
+
+    /// The text for a person: a codec reason of the host in German alone
+    /// (`codec_reason_text`), another reason after the code's text.
     pub fn detail(&self) -> String {
         match self {
             Self::Refused(code) => match code.split_once(": ") {
-                Some((key, reason)) => format!("{}: {reason}", refusal_text(key)),
+                Some((key, reason)) => super::codec_reason_text::chosen_codec_text(reason)
+                    .unwrap_or_else(|| format!("{}: {reason}", refusal_text(key))),
                 None => refusal_text(code),
             },
             Self::Unsupported => refusal_text(ScreenErrorCode::ScreenUnsupported.key()),
@@ -457,3 +471,7 @@ pub fn is_unsupported_alpn(error: &(dyn std::error::Error + 'static)) -> bool {
     }
     false
 }
+
+#[cfg(test)]
+#[path = "rollout_error_reason_task_tests.rs"]
+mod rollout_error_reason_task_tests;

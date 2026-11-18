@@ -49,8 +49,23 @@ impl Pipeline {
             "chosen_codec_failed: {}: no encoder of the chosen codec is left: {error}",
             self.quality_policy.scope().key()
         );
-        self.fallback_notice = Some(text.clone());
+        self.note_encoder(text.clone());
         PipelineError::encoder(io::Error::other(text))
+    }
+
+    /// A failure, fallback or end of the session's encoder (measurement of
+    /// 2026-11-18: such a reason reached neither the host log nor, under
+    /// `se screen bench`, the viewer): into the screen host log with its
+    /// reason and, as the next `STATE` reason, to the viewer; the error that
+    /// ends the session carries the same text as its detail.
+    pub(super) fn note_encoder(&mut self, text: String) {
+        let line = format!("screen encoder: {text}");
+        // The unit tests write no file of the account they run under.
+        #[cfg(not(test))]
+        crate::screen::os::host_worker_client::host_log::note(None, &line);
+        #[cfg(test)]
+        eprintln!("{line}");
+        self.fallback_notice = Some(text);
     }
 
     /// The pairing's macroblock rate does not carry the picture even at one

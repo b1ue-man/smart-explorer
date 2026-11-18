@@ -78,6 +78,8 @@ pub(super) struct DxgiCapture {
     reattached: bool,
     /// Fix of 2026-11-18: the last rebuild while a refusal settles.
     tried: Option<Instant>,
+    /// Measurement of 2026-11-18: rebuilds that keep failing are spaced.
+    backoff: crate::screen::core::capture_lock::RebuildBackoff,
 }
 impl DxgiCapture {
     pub(super) fn open(prepared: PreparedDxgi, budget: CaptureBudget) -> io::Result<Self> {
@@ -106,6 +108,7 @@ impl DxgiCapture {
             follow_desktop: false,
             reattached: false,
             tried: None,
+            backoff: Default::default(),
         })
     }
     /// A user session's capture follows the input desktop (P9); the login

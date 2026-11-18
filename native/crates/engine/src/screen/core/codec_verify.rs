@@ -23,8 +23,11 @@
 //! picture that does not decode or reads another barcode is the encoder's
 //! (`Garbled`) unless another decoder decodes the same stream intact; then
 //! the first decoder is `Garbled`. Without any local decoder of the codec,
-//! or when every decoder was late or did not open, the encoder is
-//! `Structural` (stream and time checked). Decoders are tried software
+//! or when every decoder was late, did not open or failed before its first
+//! picture (measurement of 2026-11-18: FFmpeg's hardware-only `av1` decoder
+//! through `dxva2_vld`), the stream is not checkable here and the encoder is
+//! `Structural` (stream and time checked, admitted; host log „nicht
+//! prüfbar“). Decoders are tried software
 //! first (the more common reference), those already failed not at all.
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -220,6 +223,12 @@ enum Decoded {
     /// A picture did not decode or reads another barcode.
     Broken(String),
     Unopened(String),
+    /// Measurement of 2026-11-18 (AMD host, FFmpeg's `av1` decoder through
+    /// `dxva2_vld`: „Your platform doesn't support hardware accelerated AV1
+    /// decoding … Get current frame error“): the decoder failed before it
+    /// gave a single picture. That is the decoder's limit, not a broken
+    /// stream; like a decoder that does not open it judges nothing.
+    NoPicture(String),
 }
 
 fn decode_with(factory: &dyn DecoderFactory, header: &GopHeader, units: &[Unit]) -> Decoded {
@@ -232,6 +241,7 @@ fn decode_with(factory: &dyn DecoderFactory, header: &GopHeader, units: &[Unit])
     } else {
         ReferenceDecoder::new(raw)
     };
+    let mut pictures = 0u32;
     for unit in units {
         let record = FrameRecord {
             frame_id: unit.frame_id,
@@ -241,6 +251,9 @@ fn decode_with(factory: &dyn DecoderFactory, header: &GopHeader, units: &[Unit])
         };
         let id = unit.frame_id;
         match decoder.decode(&record) {
+            Err(error) if pictures == 0 => {
+                return Decoded::NoPicture(format!("picture {id}: {error}"))
+            }
             Err(error) => return Decoded::Broken(format!("picture {id}: {error}")),
             Ok(false) => return Decoded::Late(format!("picture {id} came out of no call")),
             Ok(true) => {}
@@ -253,6 +266,7 @@ fn decode_with(factory: &dyn DecoderFactory, header: &GopHeader, units: &[Unit])
             Ok(BarcodeRead::Valid(read)) if read == id => {}
             read => return Decoded::Broken(format!("picture {id} reads {read:?}")),
         }
+        pictures += 1;
     }
     Decoded::Intact
 }
@@ -329,6 +343,7 @@ pub fn round_trip(
             }
             Decoded::Broken(text) => broken.push((index, text)),
             Decoded::Unopened(text) => notes.push(format!("{name} does not open: {text}")),
+            Decoded::NoPicture(text) => notes.push(format!("{name} gave no picture: {text}")),
         }
     }
     if let Some((index, text)) = broken.into_iter().next() {
@@ -339,7 +354,11 @@ pub fn round_trip(
             detail,
         });
     }
-    notes.insert(0, "no local decoder took the stream".into());
+    // No decoder judged the stream (none opened, none gave a picture, the
+    // others were late): not checkable here; the stream checks of
+    // `encode_all` (one unit per picture, key frames, parameter sets, time)
+    // passed, so the encoder is admitted as `Structural`.
+    notes.insert(0, "not checkable: no local decoder took the stream".into());
     Ok(Outcome {
         encoder: Verdict::Structural,
         decoders: judged,
@@ -358,3 +377,6 @@ mod bildkette_verify_task_tests;
 #[cfg(test)]
 #[path = "bildkette_verify_fakes.rs"]
 pub(super) mod fakes;
+#[cfg(test)]
+#[path = "rollout_verify_task_tests.rs"]
+mod rollout_verify_task_tests;

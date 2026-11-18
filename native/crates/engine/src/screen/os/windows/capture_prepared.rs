@@ -176,6 +176,9 @@ impl PreparedSource for PreparedWindows {
         let geometry = self.capture.geometry().ok().flatten();
         let state = if !secure_desktop::session_active() {
             SessionState::SessionInactive
+        } else if secure_desktop::session_locked() {
+            // Measurement of 2026-11-18: the viewer learns of the lock.
+            SessionState::HostLocked
         } else if secure_desktop::on_secure_desktop() {
             SessionState::SecureDesktop
         } else if matches!(&self.source,SourceId::Window(id) if id.parse::<usize>().ok()

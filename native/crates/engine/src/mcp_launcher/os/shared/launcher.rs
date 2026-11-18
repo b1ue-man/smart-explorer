@@ -1,4 +1,7 @@
 //! A launcher supervises exactly one immutable runtime without interpreting MCP.
+use crate::mcp_launcher::core::update_gate::{
+    worker_start, StartGate, WorkerStart, UPDATE_RECOVERY, UPDATE_RUNNING,
+};
 use crate::mcp_launcher::{os, GenerationChild, Installation, RuntimeIdentity};
 use std::io::Read;
 use std::path::Path;
@@ -279,9 +282,26 @@ pub fn refresh_current_profile() -> Result<(), String> {
     Ok(())
 }
 
+/// How long a worker start waits for a running update transaction to end.
+const UPDATE_WAIT: std::time::Duration = std::time::Duration::from_secs(45);
+
+/// Starts the installed worker for a managed runtime. Never while an update
+/// holds the installation: that worker would come from the image being
+/// replaced and discard the update's stop request (field failure 2026-11-18).
+/// The start waits up to `UPDATE_WAIT` for the transaction, then the MCP
+/// client gets `core::update_gate::UPDATE_RUNNING`.
 pub fn start_current_daemon(runtime: &RuntimeIdentity) -> Result<(), String> {
+    await_update_end(&runtime.installation.root, UPDATE_WAIT)?;
     let installation = Installation::load(&runtime.installation.root)?;
-    let _operation = crate::mcp_launcher::operation()?;
+    let _operation = crate::mcp_launcher::operation().map_err(|error| {
+        if error.starts_with("update_in_progress") {
+            UPDATE_RUNNING.to_string()
+        } else if error.starts_with("update_recovery_required") {
+            UPDATE_RECOVERY.to_string()
+        } else {
+            error
+        }
+    })?;
     let path = installation.installed_cli();
     let image = os::open_verified(
         &installation.root,
@@ -291,4 +311,22 @@ pub fn start_current_daemon(runtime: &RuntimeIdentity) -> Result<(), String> {
     let mut command = Command::new(&path);
     command.arg("--sync-daemon");
     os::spawn_current_daemon(command, image)
+}
+
+fn await_update_end(root: &Path, limit: std::time::Duration) -> Result<(), String> {
+    let deadline = std::time::Instant::now() + limit;
+    loop {
+        let installation = Installation::load(root)?;
+        let gate = match installation.lock("control.lock", false) {
+            Ok(_control) => crate::mcp_launcher::admission::start_gate(&installation)?,
+            // The update owner holds control exclusively for a few steps.
+            Err(error) if error.starts_with("lock_busy:") => StartGate::UpdateRunning,
+            Err(error) => return Err(error),
+        };
+        match worker_start(gate, std::time::Instant::now() >= deadline) {
+            WorkerStart::Start => return Ok(()),
+            WorkerStart::Refuse(message) => return Err(message.into()),
+            WorkerStart::WaitAgain => std::thread::sleep(std::time::Duration::from_millis(500)),
+        }
+    }
 }

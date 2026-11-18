@@ -7,7 +7,7 @@
 //! budget still decide before every credit; a refused credit waits for an
 //! acknowledgement or the next tick.
 use super::*;
-use crate::screen::core::first_picture::StageAnswer;
+use crate::screen::core::first_picture::{starts_group, StageAnswer};
 use crate::screen::core::host_stage::{StreamHint, StreamReport};
 use crate::screen::core::pacing::codec_cap;
 use crate::screen::core::rate_control::model::start_table_bps;
@@ -35,7 +35,7 @@ impl Pipeline {
             return Ok(Produced::Reset);
         }
         if let Some(text) = self.quality_policy.pending_error.take() {
-            self.fallback_notice = Some(text.clone());
+            self.note_encoder(text.clone());
             return Err(PipelineError::encoder(io::Error::other(text)));
         }
         if !self.capture_active || self.capture_transition.is_some() {
@@ -316,6 +316,10 @@ impl Pipeline {
                 if frame.records.is_empty() {
                     return self.on_silent_answer(&request, StageAnswer::EncodedNothing);
                 }
+                // 2026-11-18: a key frame is told by its stream as well.
+                let mut frame = frame;
+                frame.keyframe =
+                    starts_group(request.choice.codec, frame.keyframe, frame.records.iter());
                 if request.choice.codec.is_video()
                     && self.gop.is_none()
                     && !frame.keyframe
@@ -357,7 +361,12 @@ impl Pipeline {
             {
                 self.give_up_encoder(failure.error, true)
             }
-            Err(failure) => Err(failure),
+            Err(failure) => {
+                if failure.code == ScreenErrorCode::EncoderFailed {
+                    self.note_encoder(format!("encoder_failed: {}", failure.error));
+                }
+                Err(failure)
+            }
         }
     }
 
@@ -377,7 +386,7 @@ impl Pipeline {
             self.fall_back_after_silence()
         };
         if let Some(next) = next {
-            self.fallback_notice = Some(format!(
+            self.note_encoder(format!(
                 "encoder_fallback_to_{}: {} {} gave way to {} {}: {error}",
                 next.codec.key(),
                 failed.codec.key(),
@@ -392,7 +401,7 @@ impl Pipeline {
         }
         self.quality_policy.note_failed_codec(self.choice.codec);
         self.quality_policy.encoder_failed = true;
-        self.fallback_notice = Some(format!("encoder_fallback_to_tiles: {error}"));
+        self.note_encoder(format!("encoder_fallback_to_tiles: {error}"));
         self.fall_back_to_tiles();
         Ok(Produced::Reset)
     }

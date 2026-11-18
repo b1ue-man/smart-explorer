@@ -34,7 +34,14 @@ impl Encoding {
         let mut attempt = 0;
         loop {
             attempt += 1;
-            let running = self.encoder_for(&request, grant)?;
+            // Measurement of 2026-11-18: every encoder failure with its
+            // reason into the host log (this process's standard error).
+            let running = self.encoder_for(&request, grant).inspect_err(|error| {
+                eprintln!(
+                    "screen encoder: no {} encoder opens: {error}",
+                    request.choice.codec.key()
+                )
+            })?;
             // Station `convert`: the successful encoder's own conversion call (r1).
             crate::screen::core::convert_clock::arm();
             match running.encoder.encode_picture(image, &request) {
@@ -46,6 +53,7 @@ impl Encoding {
                 Err(error) => {
                     let _ = crate::screen::core::convert_clock::take();
                     let factory = running.factory.clone();
+                    eprintln!("screen encoder: {} failed: {error}", running.encoder.name());
                     self.running = None;
                     if factory == crate::screen::core::codec_registry::TILES_NAME {
                         return Err(error);
