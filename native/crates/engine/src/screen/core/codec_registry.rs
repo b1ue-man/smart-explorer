@@ -16,7 +16,8 @@
 //! run-time check, an HEVC or AV1 encoder only once it passed (H.264
 //! unchecked as well: the gate at its opening checks it first), names the
 //! verdict of every row (`CodecEntry::verdict`) and gives the host's trust
-//! of the newer codecs to the negotiation (`codec_trust`, D6).
+//! of the newer codecs to the negotiation (`codec_trust`, D6); AV1 never
+//! keeps the first rank of „Automatisch“ (`keeps_first_rank`, plan P9).
 use std::io;
 use std::sync::Arc;
 
@@ -38,6 +39,9 @@ mod open;
 #[path = "codec_registry_verify.rs"]
 mod verify;
 pub use verify::VerifyLine;
+#[path = "codec_registry_rank.rs"]
+mod rank;
+pub use rank::{first_rank_trust, keeps_first_rank};
 
 /// Text at every place that controls OpenH264 (Cisco condition 3).
 pub const OPENH264_NOTICE: &str = "OpenH264 Video Codec provided by Cisco Systems, Inc.";
@@ -291,6 +295,10 @@ fn tiles_entry() -> CodecEntry {
     }
 }
 
+#[cfg(test)]
+#[path = "codec_registry_tests.rs"]
+mod tests;
+
 impl CodecRegistry {
     /// Only the tile codec (task tests).
     #[cfg(any(test, feature = "test-support"))]
@@ -396,12 +404,13 @@ impl CodecRegistry {
     }
 
     /// D6: the newer codecs of which an encoder of this register passed
-    /// its round trip with a local decoder; every codec without checks.
+    /// its round trip with a local decoder, without AV1 (`first_rank_trust`);
+    /// every codec without checks.
     pub fn codec_trust(&self) -> CodecTrust {
         let Some(checks) = &self.checks else {
             return CodecTrust::ALL;
         };
-        let mut trust = CodecTrust::NONE;
+        let mut verified = Vec::new();
         for factory in &self.encoders {
             let (name, device) = (factory.name(), factory.device());
             for codec in [CodecKind::Hevc, CodecKind::Av1] {
@@ -409,11 +418,11 @@ impl CodecRegistry {
                     .store()
                     .summary(&name, &device, codec, None, Role::Encoder);
                 if summary.verified {
-                    trust = trust.with(codec);
+                    verified.push(codec);
                 }
             }
         }
-        trust
+        first_rank_trust(verified)
     }
 
     /// The verdict of every row of `factory` (`name`, `device`) as `role`.

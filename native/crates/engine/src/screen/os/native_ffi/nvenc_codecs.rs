@@ -197,6 +197,13 @@ pub(in crate::screen::os) fn apply_union(
     }
 }
 
+/// Sets `chromaFormatIDC` of the HEVC member to `idc` (1: 4:2:0, 3: 4:4:4;
+/// `settings::apply_chroma_444`, plan 2026-11-17 P9).
+pub(in crate::screen::os) fn set_hevc_chroma(config: &mut NvEncConfig, idc: u32) {
+    let hevc = hevc(config);
+    hevc.flags = (hevc.flags & !HEVC_CHROMA_MASK) | ((idc & 0b11) << 9);
+}
+
 /// DPB size with reference invalidation of `codec` (Sunshine: 5 for H.264
 /// and HEVC, 8 for AV1).
 pub(in crate::screen::os) fn rfi_dpb(codec: CodecKind) -> u32 {

@@ -127,9 +127,11 @@ pub mod sender_budget;
 #[allow(dead_code)]
 pub mod session_state;
 pub mod set_decoders;
+pub mod sharp_mode;
 pub mod snapshot;
 pub mod synthetic;
 pub mod tiles_codec;
+pub mod tiles_dirty;
 pub mod viewer_client;
 pub mod viewer_reconstruct;
 // P5 (plan 2026-11-17): the virtual display in the viewer's resolution.
