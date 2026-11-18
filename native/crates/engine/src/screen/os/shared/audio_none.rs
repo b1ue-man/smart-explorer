@@ -46,6 +46,10 @@ impl Output {
     pub fn write(&mut self, _samples: &[f32]) -> io::Result<()> {
         Err(unsupported())
     }
+
+    pub fn queued_us(&self) -> u32 {
+        0
+    }
 }
 
 pub fn prepare_helper(_command: &mut Command) {}

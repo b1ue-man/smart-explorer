@@ -6,8 +6,10 @@
 //!   the transit time of each packet is its arrival minus the host clock of
 //!   its last sample, `J += (|D| - J) / 16` with `D` the change of transit
 //!   between two packets;
-//! - the target depth is `1 + ceil(2 J / frame)` frames, at least
-//!   `MIN_TARGET` and at most `MAX_TARGET`;
+//! - the target depth is `ceil(2 J / frame)` frames, at least `MIN_TARGET`
+//!   (one frame: the frame in play needs no reserve of its own, the output
+//!   device holds it) and at most `MAX_TARGET`, so a quiet network costs one
+//!   frame (5 ms) and only measured jitter adds more;
 //! - playback starts (and starts again after running dry) once the target
 //!   depth is buffered; a missing frame between buffered ones is played as
 //!   lost (the decoder conceals it), running dry is silence;
@@ -19,7 +21,7 @@
 //!   on the host) starts the buffer anew.
 use std::collections::BTreeMap;
 
-use super::audio_wire::FRAME_US;
+use super::audio_wire::{AudioReport, FRAME_US};
 
 /// Smallest target depth in frames.
 pub const MIN_TARGET: usize = 1;
@@ -137,7 +139,28 @@ impl<T> JitterBuffer<T> {
     pub fn target(&self) -> usize {
         let frames = (2.0 * self.jitter_us / f64::from(FRAME_US)).ceil();
         // `frames` is a non-negative finite value of at most a few thousand.
-        (1 + frames as usize).clamp(MIN_TARGET, MAX_TARGET)
+        (frames as usize).clamp(MIN_TARGET, MAX_TARGET)
+    }
+
+    /// The statistics for `AUDIO_REPORT`; `output_us` is the device's.
+    pub fn report(&self, output_us: u32) -> AudioReport {
+        let us = |frames: usize| {
+            u32::try_from(frames)
+                .unwrap_or(u32::MAX)
+                .saturating_mul(FRAME_US)
+        };
+        AudioReport {
+            depth_us: us(self.frames.len()),
+            target_us: us(self.target()),
+            // A finite non-negative estimate; saturates far above any path.
+            jitter_us: self.jitter_us.min(f64::from(u32::MAX)) as u32,
+            output_us,
+            received: self.stats.received,
+            lost: self.stats.lost,
+            late: self.stats.late,
+            underruns: self.stats.underruns,
+            trimmed: self.stats.trimmed,
+        }
     }
 
     pub fn jitter_us(&self) -> f64 {

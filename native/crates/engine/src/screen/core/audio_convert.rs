@@ -120,6 +120,96 @@ fn downmix(frame: &[f32]) -> [f32; 2] {
     }
 }
 
+/// Converts interleaved 48 kHz stereo to a device's float format (the
+/// viewer's low-latency output, which takes the engine's mix format without
+/// conversion by the engine): left and right go to the first two channels
+/// (a mono device gets their mean), the other channels stay silent, and
+/// the rate is converted by linear interpolation.
+pub struct FromStereo48 {
+    rate: u32,
+    channels: u16,
+    step: f64,
+    phase: f64,
+    last: [f32; 2],
+}
+
+impl FromStereo48 {
+    pub fn new(rate: u32, channels: u16) -> io::Result<Self> {
+        if rate == 0 || channels == 0 || channels > MAX_CHANNELS {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "audio format has no rate or an unsupported channel count",
+            ));
+        }
+        Ok(Self {
+            rate,
+            channels,
+            step: f64::from(SAMPLE_RATE) / f64::from(rate),
+            phase: 0.0,
+            last: [0.0; 2],
+        })
+    }
+
+    /// Stereo frames that fill at most `device` device frames.
+    pub fn stereo_frames(&self, device: usize) -> usize {
+        if self.rate == SAMPLE_RATE {
+            return device;
+        }
+        // At least one frame of margin for the interpolation's phase.
+        ((device.saturating_sub(1)) as f64 * self.step).floor() as usize
+    }
+
+    /// Appends the device samples of `stereo` to `out`.
+    pub fn push(&mut self, stereo: &[f32], out: &mut Vec<f32>) {
+        let channels = usize::from(self.channels);
+        let mut emit = |left: f32, right: f32| {
+            if channels == 1 {
+                out.push((left + right) * 0.5);
+            } else {
+                out.push(left);
+                out.push(right);
+                out.extend(std::iter::repeat(0.0).take(channels - 2));
+            }
+        };
+        if self.rate == SAMPLE_RATE {
+            for frame in stereo.chunks_exact(2) {
+                emit(frame[0], frame[1]);
+            }
+            return;
+        }
+        let frames = stereo.len() / 2;
+        let at = |index: usize| -> [f32; 2] {
+            if index == 0 {
+                self.last
+            } else {
+                [stereo[2 * (index - 1)], stereo[2 * (index - 1) + 1]]
+            }
+        };
+        let mut phase = self.phase;
+        loop {
+            let base = phase.floor();
+            // `base` is a small non-negative whole number.
+            let index = base as usize;
+            if index + 1 > frames {
+                break;
+            }
+            let fraction = (phase - base) as f32;
+            let (a, b) = (at(index), at(index + 1));
+            emit(
+                a[0] + (b[0] - a[0]) * fraction,
+                a[1] + (b[1] - a[1]) * fraction,
+            );
+            phase += self.step;
+        }
+        if frames > 0 {
+            let tail = at(frames);
+            self.last = tail;
+            phase -= frames as f64;
+        }
+        self.phase = phase.max(0.0);
+    }
+}
+
 /// 16-bit samples to float (`sample / 32768`, the Opus convention).
 pub fn pcm16_to_f32(input: &[i16], out: &mut Vec<f32>) {
     out.extend(input.iter().map(|sample| f32::from(*sample) / 32_768.0));

@@ -265,6 +265,7 @@ mod tests {
             state: SessionState::Streaming,
             chain: None,
             stations: None,
+            audio: None,
         };
         assert_eq!(session_row(&session), "Laptop · steuert · verbunden");
         let request: ApprovalView = serde_json::from_value(serde_json::json!({

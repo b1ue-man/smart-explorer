@@ -223,6 +223,8 @@ pub fn view_lines(
     unmapped_keys: u64,
 ) -> Vec<String> {
     let mut lines = super::screen_stats_overlay::stats_lines(info, unmapped_keys);
+    // The host's sound (plan 2026-11-17 P9): buffer, jitter and losses.
+    lines.extend(super::screen_audio::overlay_line(info));
     lines.extend(planes.map(|planes| window_line(ctx, info.decoder.as_deref(), planes)));
     lines
 }

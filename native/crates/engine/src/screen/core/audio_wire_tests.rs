@@ -121,3 +121,55 @@ fn audio_task_audio_frame_is_one_byte_both_ways() {
     assert!(decode_viewer_frame(AUDIO, &[1, 1]).is_err());
     assert_eq!(super::super::wire::tag_limit(AUDIO), 1);
 }
+
+#[test]
+fn audio_task_report_frame_round_trips_within_its_limit() {
+    use super::super::wire_control::{decode_viewer_frame, encode_viewer_frame, ViewerFrame};
+    // The largest values still fit the tag's byte limit.
+    let report = AudioReport {
+        depth_us: u32::MAX,
+        target_us: u32::MAX,
+        jitter_us: u32::MAX,
+        output_us: u32::MAX,
+        received: u64::MAX,
+        lost: u64::MAX,
+        late: u64::MAX,
+        underruns: u64::MAX,
+        trimmed: u64::MAX,
+    };
+    let (tag, payload) = encode_viewer_frame(&ViewerFrame::AudioReport(report)).unwrap();
+    assert_eq!(tag, AUDIO_REPORT);
+    assert!(payload.len() <= AUDIO_REPORT_BYTES, "{}", payload.len());
+    assert_eq!(
+        super::super::wire::tag_limit(AUDIO_REPORT),
+        AUDIO_REPORT_BYTES
+    );
+    assert_eq!(
+        decode_viewer_frame(tag, &payload).unwrap(),
+        ViewerFrame::AudioReport(report)
+    );
+    // The JSON names every counter for `se screen sessions --json`.
+    let json = serde_json::to_value(AudioReport::default()).unwrap();
+    let mut keys: Vec<&str> = json
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys,
+        [
+            "depth_us",
+            "jitter_us",
+            "late",
+            "lost",
+            "output_us",
+            "received",
+            "target_us",
+            "trimmed",
+            "underruns"
+        ]
+    );
+    assert!(decode_viewer_frame(AUDIO_REPORT, b"{").is_err());
+}

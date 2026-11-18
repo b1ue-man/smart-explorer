@@ -88,3 +88,33 @@ fn audio_task_convert_frames_are_5ms_and_stamped_with_their_last_sample() {
     assert_eq!(f32_to_pcm16(2.0), i16::MAX);
     assert_eq!(f32_to_pcm16(-2.0), i16::MIN);
 }
+
+#[test]
+fn audio_task_convert_spreads_stereo_to_the_device_format() {
+    // Same rate: left and right on the first channels, the rest silent.
+    let mut four = FromStereo48::new(SAMPLE_RATE, 4).unwrap();
+    let mut out = Vec::new();
+    four.push(&[0.5, -0.25, 0.1, 0.2], &mut out);
+    assert_eq!(out, vec![0.5, -0.25, 0.0, 0.0, 0.1, 0.2, 0.0, 0.0]);
+    let mut mono = FromStereo48::new(SAMPLE_RATE, 1).unwrap();
+    out.clear();
+    mono.push(&[0.5, -0.25], &mut out);
+    assert_eq!(out, vec![0.125]);
+    // 48 → 44.1 kHz: one second in 10 ms chunks keeps its length, and
+    // `stereo_frames` never asks for more than the device takes.
+    let mut down = FromStereo48::new(44_100, 2).unwrap();
+    out.clear();
+    for _ in 0..100 {
+        down.push(&[0.25; 960], &mut out);
+    }
+    let frames = out.len() / 2;
+    assert!((44_098..=44_101).contains(&frames), "{frames}");
+    for device in [1usize, 2, 128, 441, 1_000] {
+        let stereo = down.stereo_frames(device);
+        let mut written = Vec::new();
+        down.push(&vec![0.0; stereo * 2], &mut written);
+        assert!(written.len() / 2 <= device, "{device}: {stereo}");
+    }
+    assert!(FromStereo48::new(0, 2).is_err());
+    assert!(FromStereo48::new(48_000, MAX_CHANNELS + 1).is_err());
+}

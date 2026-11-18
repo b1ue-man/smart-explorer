@@ -38,9 +38,22 @@ fn links() -> std::sync::MutexGuard<'static, Vec<(usize, watch::Sender<bool>)>> 
     LINKS.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+/// The port the session reaches this link through (`core/audio_port.rs`).
+pub(super) struct CaptureLink;
+
+impl crate::screen::core::audio_port::AudioHost for CaptureLink {
+    fn attach(&self, connection: &Connection) {
+        attach(connection);
+    }
+
+    fn set_wanted(&self, connection: &Connection, on: bool) {
+        set_wanted(connection, on);
+    }
+}
+
 /// Attaches the sound link to a session's connection (after `HELLO_OK`
 /// with `audio`); it ends with the connection.
-pub fn attach(connection: &Connection) {
+fn attach(connection: &Connection) {
     let (wanted, watched) = watch::channel(false);
     let id = connection.stable_id();
     links().push((id, wanted));
@@ -52,7 +65,7 @@ pub fn attach(connection: &Connection) {
 }
 
 /// The viewer's `AUDIO`: the sound on or off.
-pub fn set_wanted(connection: &Connection, on: bool) {
+fn set_wanted(connection: &Connection, on: bool) {
     let id = connection.stable_id();
     if let Some((_, wanted)) = links().iter().find(|(link, _)| *link == id) {
         wanted.send_replace(on);

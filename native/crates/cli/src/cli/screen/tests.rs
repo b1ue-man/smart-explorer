@@ -118,6 +118,7 @@ fn session() -> SessionView {
         state: SessionState::WaitingForApproval,
         chain: None,
         stations: None,
+        audio: None,
     }
 }
 

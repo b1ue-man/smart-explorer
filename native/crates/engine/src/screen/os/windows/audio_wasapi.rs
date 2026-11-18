@@ -1,18 +1,28 @@
 //! The host's sound on Windows (plan 2026-11-17 P9 „Audio“) through WASAPI
 //! in shared mode, as Sunshine captures and Moonlight plays on Windows.
 //!
+//! Latency: the shared-mode engine runs at a period of 10 ms unless a
+//! stream asks `IAudioClient3::InitializeSharedAudioStream` for a smaller
+//! one; then every stream of the endpoint runs at it (Microsoft, „Low
+//! Latency Audio“, FAQ; the inbox HDAudio driver offers 128 to 480 samples,
+//! 2.66 to 10 ms at 48 kHz). Both sides therefore open such a stream at the
+//! engine's minimum period (`audio_wasapi_streams.rs`) and fall back to the
+//! plain shared stream only where `IAudioClient3` fails.
+//!
 //! Capture: loopback of the default render endpoint (`eRender`,
-//! `eConsole`). It asks for 48 kHz stereo float with
+//! `eConsole`), beside a silent `IAudioClient3` render stream at the
+//! minimum period that keeps the engine (and with it the loopback packets)
+//! at that period. It asks for 48 kHz stereo float with
 //! `AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM` first (the audio engine converts);
 //! where that is refused it takes the mix format and the caller converts
 //! (`core/audio_convert.rs`). The capture waits on its event
 //! (`AUDCLNT_STREAMFLAGS_EVENTCALLBACK`, loopback since Windows 10) and,
 //! should the event never come, polls every `WAIT_MS`.
 //!
-//! Playback: the default render endpoint, 48 kHz stereo float with
-//! `AUTOCONVERTPCM`, event driven; the device is kept filled one engine
-//! period plus one 5 ms frame ahead, the least that survives one engine
-//! period between two refills.
+//! Playback: an `IAudioClient3` stream in the mix format (32-bit float) at
+//! the minimum period, kept two periods ahead, 48 kHz stereo converted
+//! here; otherwise 48 kHz stereo float with `AUTOCONVERTPCM`, kept one
+//! engine period plus one 5 ms frame ahead.
 use std::io;
 use std::os::windows::process::CommandExt;
 use std::process::Command;
@@ -20,17 +30,17 @@ use std::process::Command;
 use windows::core::GUID;
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::Media::Audio::{
-    eConsole, eRender, IAudioCaptureClient, IAudioClient, IAudioRenderClient, IMMDeviceEnumerator,
-    MMDeviceEnumerator, AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED,
-    AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM, AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
-    AUDCLNT_STREAMFLAGS_LOOPBACK, AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY, WAVEFORMATEX,
-    WAVEFORMATEXTENSIBLE, WAVEFORMATEXTENSIBLE_0,
+    eConsole, eRender, IAudioCaptureClient, IAudioClient, IMMDeviceEnumerator, MMDeviceEnumerator,
+    AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM,
+    AUDCLNT_STREAMFLAGS_EVENTCALLBACK, AUDCLNT_STREAMFLAGS_LOOPBACK,
+    AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY, WAVEFORMATEX, WAVEFORMATEXTENSIBLE,
+    WAVEFORMATEXTENSIBLE_0,
 };
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CoTaskMemFree, CLSCTX_ALL, COINIT_MULTITHREADED,
 };
 
-use crate::screen::core::audio_wire::{CHANNELS, FRAME_SAMPLES, SAMPLE_RATE};
+use crate::screen::core::audio_wire::{CHANNELS, SAMPLE_RATE};
 
 pub const CAPTURE_AVAILABLE: bool = true;
 
@@ -103,6 +113,11 @@ fn com() -> io::Result<()> {
 
 /// A fresh client of the default render endpoint.
 fn render_endpoint() -> io::Result<IAudioClient> {
+    activate::<IAudioClient>()
+}
+
+/// A fresh interface `T` of the default render endpoint.
+fn activate<T: windows::core::Interface>() -> io::Result<T> {
     // SAFETY: COM is initialised on this thread (`com`); the results are
     // owned interfaces.
     unsafe {
@@ -111,9 +126,7 @@ fn render_endpoint() -> io::Result<IAudioClient> {
         let device = enumerator
             .GetDefaultAudioEndpoint(eRender, eConsole)
             .map_err(os_error)?;
-        device
-            .Activate::<IAudioClient>(CLSCTX_ALL, None)
-            .map_err(os_error)
+        device.Activate::<T>(CLSCTX_ALL, None).map_err(os_error)
     }
 }
 
@@ -214,6 +227,9 @@ fn append(bytes: &[u8], kind: Samples, out: &mut Vec<f32>) {
 
 /// Loopback capture of the default render endpoint.
 pub struct Capture {
+    /// Holds the engine at its minimum period; `None` where `IAudioClient3`
+    /// failed (the engine's default period then applies).
+    keeper: Option<streams::PeriodKeeper>,
     client: IAudioClient,
     capture: IAudioCaptureClient,
     event: Event,
@@ -225,6 +241,13 @@ pub struct Capture {
 impl Capture {
     pub fn open() -> io::Result<Self> {
         com()?;
+        let keeper = match streams::PeriodKeeper::start() {
+            Ok(keeper) => Some(keeper),
+            Err(error) => {
+                eprintln!("screen audio: engine period stays at its default ({error})");
+                None
+            }
+        };
         let event = Event::new()?;
         let loopback = AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_EVENTCALLBACK;
         // 48 kHz stereo float converted by the engine first.
@@ -271,6 +294,7 @@ impl Capture {
             capture
         };
         Ok(Self {
+            keeper,
             client,
             capture,
             event,
@@ -290,6 +314,9 @@ impl Capture {
     pub fn read(&mut self, out: &mut Vec<f32>) -> io::Result<()> {
         let channels = usize::from(self.channels);
         loop {
+            if let Some(keeper) = &self.keeper {
+                keeper.top_up();
+            }
             // SAFETY: the capture client belongs to the started stream.
             let next = unsafe { self.capture.GetNextPacketSize() }.map_err(os_error)?;
             if next == 0 {
@@ -332,67 +359,42 @@ impl Drop for Capture {
     }
 }
 
-/// Playback on the default render endpoint.
+/// Playback on the default render endpoint: the low-latency stream of
+/// `IAudioClient3` at the engine's smallest period where the endpoint
+/// takes it (`audio_wasapi_streams.rs`), otherwise the plain shared stream.
 pub struct Output {
-    client: IAudioClient,
-    render: IAudioRenderClient,
     event: Event,
-    /// Frames kept in the device: one engine period and one 5 ms frame.
-    fill: u32,
+    path: Render,
+}
+
+enum Render {
+    Low(streams::LowRender),
+    Plain(streams::PlainRender),
 }
 
 impl Output {
     pub fn open() -> io::Result<Self> {
         com()?;
         let event = Event::new()?;
-        let client = render_endpoint()?;
-        let format = stereo_float();
-        let flags = AUDCLNT_STREAMFLAGS_EVENTCALLBACK
-            | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM
-            | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY;
-        // SAFETY: `format` lives across the calls; out-pointers to locals.
-        let (render, fill) = unsafe {
-            client
-                .Initialize(
-                    AUDCLNT_SHAREMODE_SHARED,
-                    flags,
-                    BUFFER_HNS,
-                    0,
-                    std::ptr::from_ref(&format).cast::<WAVEFORMATEX>(),
-                    None,
-                )
-                .map_err(os_error)?;
-            client.SetEventHandle(event.handle()).map_err(os_error)?;
-            let buffer = client.GetBufferSize().map_err(os_error)?;
-            let mut period_hns = 0i64;
-            client
-                .GetDevicePeriod(Some(std::ptr::from_mut(&mut period_hns)), None)
-                .map_err(os_error)?;
-            let period = u32::try_from(period_hns.max(0) * i64::from(SAMPLE_RATE) / 10_000_000)
-                .unwrap_or(u32::MAX);
-            let render = client
-                .GetService::<IAudioRenderClient>()
-                .map_err(os_error)?;
-            let frame = u32::try_from(FRAME_SAMPLES).unwrap_or(u32::MAX);
-            (render, period.saturating_add(frame).min(buffer))
+        let path = match streams::LowRender::open(&event) {
+            Ok(low) => Render::Low(low),
+            Err(error) => {
+                eprintln!("screen audio: low-latency output unavailable ({error}), shared mode");
+                Render::Plain(streams::PlainRender::open(&event)?)
+            }
         };
-        // SAFETY: the client is initialised.
-        unsafe { client.Start() }.map_err(os_error)?;
-        Ok(Self {
-            client,
-            render,
-            event,
-            fill,
-        })
+        Ok(Self { event, path })
     }
 
-    /// Waits until the device takes frames; how many (per channel).
+    /// Waits until the device takes frames; how many 48 kHz stereo frames.
     pub fn wait_space(&mut self) -> io::Result<usize> {
         loop {
-            // SAFETY: the client is started.
-            let queued = unsafe { self.client.GetCurrentPadding() }.map_err(os_error)?;
-            if queued < self.fill {
-                return Ok((self.fill - queued) as usize);
+            let free = match &self.path {
+                Render::Low(low) => low.free()?,
+                Render::Plain(plain) => plain.free()?,
+            };
+            if free > 0 {
+                return Ok(free);
             }
             self.event.wait();
         }
@@ -400,29 +402,23 @@ impl Output {
 
     /// Writes interleaved 48 kHz stereo; at most what `wait_space` gave.
     pub fn write(&mut self, samples: &[f32]) -> io::Result<()> {
-        let frames = u32::try_from(samples.len() / usize::from(CHANNELS))
-            .map_err(|_| io::Error::other("audio write too long"))?;
-        if frames == 0 {
-            return Ok(());
+        match &mut self.path {
+            Render::Low(low) => low.write(samples),
+            Render::Plain(plain) => plain.write(samples),
         }
-        // SAFETY: the render buffer has room for `frames` frames of the
-        // stream format (32-bit float stereo); exactly those are written
-        // and released.
-        unsafe {
-            let buffer = self.render.GetBuffer(frames).map_err(os_error)?;
-            let count = frames as usize * usize::from(CHANNELS);
-            std::ptr::copy_nonoverlapping(samples.as_ptr(), buffer.cast::<f32>(), count);
-            self.render.ReleaseBuffer(frames, 0).map_err(os_error)
+    }
+
+    /// What the device holds ahead of the speaker, in µs.
+    pub fn queued_us(&self) -> u32 {
+        match &self.path {
+            Render::Low(low) => low.queued_us(),
+            Render::Plain(plain) => plain.queued_us(),
         }
     }
 }
 
-impl Drop for Output {
-    fn drop(&mut self) {
-        // SAFETY: stopping a started client; errors leave nothing to do.
-        let _ = unsafe { self.client.Stop() };
-    }
-}
+#[path = "audio_wasapi_streams.rs"]
+mod streams;
 
 /// The capture process starts without a console window.
 pub fn prepare_helper(command: &mut Command) {

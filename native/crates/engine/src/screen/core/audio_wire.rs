@@ -32,6 +32,11 @@ use super::wire_hello::SessionMode;
 pub const AUDIO_V1: u16 = 1;
 /// Viewer to host: 1 byte, 1 sends the host's sound, 0 stops it.
 pub const AUDIO: u8 = 53;
+/// Viewer to host: what its jitter buffer saw (`AudioReport`, JSON), once a
+/// second while the sound plays; only after `HELLO_OK` with `audio`.
+pub const AUDIO_REPORT: u8 = 54;
+/// Byte limit of `AUDIO_REPORT`.
+pub const AUDIO_REPORT_BYTES: usize = 512;
 /// Sample rate of every packet (Opus' native rate).
 pub const SAMPLE_RATE: u32 = 48_000;
 /// Channels of every packet: interleaved left, right.
@@ -113,6 +118,30 @@ impl AudioAccept {
             && self.channels == CHANNELS
             && self.frame_us == FRAME_US
     }
+}
+
+/// The viewer's sound statistics (`AUDIO_REPORT`), shown by the viewer's
+/// statistics and by `se screen sessions --json` on the host (`audio`).
+/// Counters run from the start of the viewer's player.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AudioReport {
+    /// Frames buffered now, in µs.
+    pub depth_us: u32,
+    /// The depth playback waits for (from the measured jitter), in µs.
+    pub target_us: u32,
+    /// Interarrival jitter (RFC 3550), in µs.
+    pub jitter_us: u32,
+    /// What the output device holds ahead of the speaker, in µs.
+    pub output_us: u32,
+    pub received: u64,
+    /// Frames concealed because they were missing at their turn.
+    pub lost: u64,
+    /// Frames that arrived after their turn.
+    pub late: u64,
+    /// Times the buffer ran dry.
+    pub underruns: u64,
+    /// Frames dropped to cut a backlog.
+    pub trimmed: u64,
 }
 
 /// The host's decision for the viewer's `audio` offer: sound only for a

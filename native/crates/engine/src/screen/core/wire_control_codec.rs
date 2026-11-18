@@ -67,6 +67,9 @@ pub fn encode_viewer_frame(frame: &ViewerFrame) -> io::Result<(u8, Vec<u8>)> {
             (super::super::frame_timing::FRAME_TIMING, to_json(request)?)
         }
         ViewerFrame::Audio(on) => (super::super::audio_wire::AUDIO, vec![u8::from(*on)]),
+        ViewerFrame::AudioReport(report) => {
+            (super::super::audio_wire::AUDIO_REPORT, to_json(report)?)
+        }
     })
 }
 
@@ -145,6 +148,7 @@ pub fn decode_viewer_frame(tag: u8, payload: &[u8]) -> io::Result<ViewerFrame> {
         super::super::audio_wire::AUDIO if payload == [0] || payload == [1] => {
             ViewerFrame::Audio(payload[0] != 0)
         }
+        super::super::audio_wire::AUDIO_REPORT => ViewerFrame::AudioReport(from_json(payload)?),
         _ => return Err(invalid("unknown screen frame from the viewer")),
     })
 }

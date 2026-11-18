@@ -5,12 +5,22 @@
 //! sound server of current GNOME and KDE distributions, so one path covers
 //! both servers.
 //!
+//! `pa_simple_new` connects with `PA_STREAM_ADJUST_LATENCY` (PulseAudio
+//! `src/pulse/simple.c`), so the buffer attributes set the whole latency of
+//! the server: `fragsize` the source latency of a record stream, `tlength`
+//! the sink latency plus the playback buffer (PulseAudio `pa_buffer_attr`
+//! documentation). PipeWire runs its graph at the smallest quantum its
+//! clients ask for, down to `default.clock.min-quantum` = 32 samples
+//! (`pipewire.conf(5)`; without a request it runs at 1024 samples, 21 ms).
+//!
 //! Capture: a record stream of `@DEFAULT_MONITOR@`, the monitor source of
 //! the default sink (what the speakers play), 48 kHz stereo float, with a
-//! fragment of one 5 ms frame, so each read returns one frame as soon as the
-//! server has it. Playback: a playback stream on the default sink with a
-//! target length of three frames (15 ms) and a start threshold of one;
-//! `pa_simple_write` blocks while that is full, which paces the output.
+//! fragment of half a frame (2.5 ms); a read returns one 5 ms frame.
+//! Playback: a playback stream on the default sink with a target length of
+//! one and a half frames (7.5 ms: one frame written at a time plus half a
+//! frame the server consumes meanwhile), a start threshold of one frame and
+//! a request size of half a frame; `pa_simple_write` blocks while that is
+//! full, which paces the output.
 //! The capture process of a root daemon runs as the followed session's
 //! account with its variables (`XDG_RUNTIME_DIR` names its sound server).
 use std::ffi::{c_char, c_int, c_void, CStr};
@@ -65,6 +75,8 @@ type NewFn = unsafe extern "C" fn(
 type FreeFn = unsafe extern "C" fn(*mut c_void);
 type ReadFn = unsafe extern "C" fn(*mut c_void, *mut c_void, usize, *mut c_int) -> c_int;
 type WriteFn = unsafe extern "C" fn(*mut c_void, *const c_void, usize, *mut c_int) -> c_int;
+/// `pa_simple_get_latency`: µs, `(pa_usec_t) -1` on error.
+type LatencyFn = unsafe extern "C" fn(*mut c_void, *mut c_int) -> u64;
 
 /// One stream of the simple API.
 struct Simple {
@@ -72,6 +84,7 @@ struct Simple {
     free: FreeFn,
     read: ReadFn,
     write: WriteFn,
+    latency: LatencyFn,
     /// Keeps the functions above loaded; dropped last.
     _library: Library,
 }
@@ -94,6 +107,7 @@ impl Simple {
         let free: FreeFn = symbol(&library, b"pa_simple_free\0")?;
         let read: ReadFn = symbol(&library, b"pa_simple_read\0")?;
         let write: WriteFn = symbol(&library, b"pa_simple_write\0")?;
+        let latency: LatencyFn = symbol(&library, b"pa_simple_get_latency\0")?;
         let spec = SampleSpec {
             format: SAMPLE_FLOAT32LE,
             rate: SAMPLE_RATE,
@@ -132,6 +146,7 @@ impl Simple {
             free,
             read,
             write,
+            latency,
             _library: library,
         })
     }
@@ -157,7 +172,7 @@ impl Capture {
             tlength: DEFAULT,
             prebuf: DEFAULT,
             minreq: DEFAULT,
-            fragsize: FRAME_BYTES,
+            fragsize: FRAME_BYTES / 2,
         };
         let stream = Simple::open(STREAM_RECORD, Some(c"@DEFAULT_MONITOR@"), &attr)?;
         Ok(Self {
@@ -202,14 +217,25 @@ impl Output {
     pub fn open() -> io::Result<Self> {
         let attr = BufferAttr {
             maxlength: DEFAULT,
-            tlength: FRAME_BYTES * 3,
+            tlength: FRAME_BYTES * 3 / 2,
             prebuf: FRAME_BYTES,
-            minreq: FRAME_BYTES,
+            minreq: FRAME_BYTES / 2,
             fragsize: DEFAULT,
         };
         Ok(Self {
             stream: Simple::open(STREAM_PLAYBACK, None, &attr)?,
         })
+    }
+
+    /// What the server holds ahead of the speaker, in µs.
+    pub fn queued_us(&self) -> u32 {
+        let mut error: c_int = 0;
+        // SAFETY: the handle is a live playback stream.
+        let latency = unsafe { (self.stream.latency)(self.stream.handle, &mut error) };
+        if latency == u64::MAX {
+            return 0;
+        }
+        u32::try_from(latency).unwrap_or(u32::MAX)
     }
 
     /// One frame at a time: `write` blocks while the stream is full.

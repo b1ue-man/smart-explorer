@@ -39,10 +39,14 @@ mod platform;
 mod platform;
 
 pub use helper::{requested as helper_requested, run as run_helper};
-pub use host::{attach, set_wanted};
-pub use viewer::{deliver, relay, set_playing, RelayGuard};
+pub use viewer::{deliver, relay, report, set_playing, RelayGuard};
 
-/// Whether this host can capture its sound output.
-pub fn capture_available() -> bool {
-    platform::CAPTURE_AVAILABLE
+/// The sound link of this host for the session (`ScreenHostBackend::audio`
+/// of the host-process backend); `None` where this platform cannot capture
+/// its output.
+pub fn host() -> Option<std::sync::Arc<dyn crate::screen::core::audio_port::AudioHost>> {
+    platform::CAPTURE_AVAILABLE.then(|| {
+        std::sync::Arc::new(host::CaptureLink)
+            as std::sync::Arc<dyn crate::screen::core::audio_port::AudioHost>
+    })
 }
