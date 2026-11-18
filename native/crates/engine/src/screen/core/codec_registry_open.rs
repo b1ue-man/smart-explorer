@@ -364,26 +364,19 @@ impl CodecRegistry {
             }));
         }
         // „Dekodierer“ of the viewer (4.10): only implementations with a
-        // stage of the chosen kind; one of both kinds (Media Foundation)
-        // picks its stage itself from the same choice.
+        // stage of the chosen kind; one of both kinds (Media Foundation,
+        // FFmpeg) picks its stage itself from the same choice. P9:
+        // „Automatisch“ runs a hardware pass over every factory before the
+        // software pass, so Media Foundation hardware comes before FFmpeg
+        // software; during a pass the factories read the pass as the choice.
         let preference = super::super::negotiate::decoder_preference();
         let mut refusals: Vec<String> = Vec::new();
-        for factory in &self.decoders {
-            let decodes = factory.offers().iter().any(|offer| {
-                offer.decodes(header.codec, header.profile)
-                    && preference.allows(offer.hardware)
-                    && offer.supports_size_rate(header.size, 0, header.frame_contract)
+        for pass in preference.passes() {
+            let opened = super::super::negotiate::with_decoder_pass(*pass, || {
+                self.open_decoder_pass(header, *pass, &mut refusals)
             });
-            if !decodes {
-                continue;
-            }
-            if self.decoder_failed(factory.as_ref(), header.codec) {
-                refusals.push(format!("{}: failed its run-time check", factory.name()));
-                continue;
-            }
-            match factory.open(header) {
-                Ok(decoder) => return Ok(decoder),
-                Err(error) => refusals.push(format!("{}: {error}", factory.name())),
+            if let Some(decoder) = opened {
+                return Ok(decoder);
             }
         }
         Err(io::Error::new(
@@ -394,5 +387,36 @@ impl CodecRegistry {
                 format!("no decoder opened: {}", refusals.join("; "))
             },
         ))
+    }
+
+    /// One pass of `open_decoder_raw`: the first factory with a stage of
+    /// `pass` that decodes `header` and opens; refusals are collected.
+    fn open_decoder_pass(
+        &self,
+        header: &GopHeader,
+        pass: super::super::negotiate::DecoderPreference,
+        refusals: &mut Vec<String>,
+    ) -> Option<Box<dyn ScreenDecoder>> {
+        for factory in &self.decoders {
+            let decodes = factory.offers().iter().any(|offer| {
+                offer.decodes(header.codec, header.profile)
+                    && pass.allows(offer.hardware)
+                    && offer.supports_size_rate(header.size, 0, header.frame_contract)
+            });
+            if !decodes {
+                continue;
+            }
+            if self.decoder_failed(factory.as_ref(), header.codec) {
+                refusals.push(format!("{}: failed its run-time check", factory.name()));
+                continue;
+            }
+            match factory.open(header) {
+                Ok(decoder) => return Some(decoder),
+                Err(error) => {
+                    refusals.push(format!("{} ({}): {error}", factory.name(), pass.key()))
+                }
+            }
+        }
+        None
     }
 }

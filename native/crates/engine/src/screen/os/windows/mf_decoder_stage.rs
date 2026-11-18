@@ -15,6 +15,8 @@
 //! and `mf_stages` leaves it out for the Media Foundation decoder.
 use std::sync::{Mutex, PoisonError};
 
+use crate::screen::core::negotiate::CodecKind;
+
 /// The user's choice „Dekodierer: Automatisch / Hardware / Software“
 /// (4.10), set by the viewer (BK6, `negotiate::set_decoder_preference`):
 /// `Automatic` is hardware, then software, each on failure; `Hardware`
@@ -178,21 +180,67 @@ impl StageMemory {
     }
 }
 
-/// What this process learned about the hardware stage.
-static MEMORY: Mutex<StageMemory> = Mutex::new(StageMemory::new());
+/// What this process learned about the hardware stage, per codec (plan
+/// 2026-11-17 P9: a failure of one codec's hardware decoder ends the
+/// hardware stage of that codec only, never hardware decoding in general).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CodecMemory {
+    h264: StageMemory,
+    hevc: StageMemory,
+    av1: StageMemory,
+}
 
-/// A copy of this process's memory.
-pub fn known() -> StageMemory {
+impl CodecMemory {
+    pub const fn new() -> Self {
+        Self {
+            h264: StageMemory::new(),
+            hevc: StageMemory::new(),
+            av1: StageMemory::new(),
+        }
+    }
+
+    fn slot(&mut self, codec: CodecKind) -> Option<&mut StageMemory> {
+        match codec {
+            CodecKind::H264 => Some(&mut self.h264),
+            CodecKind::Hevc => Some(&mut self.hevc),
+            CodecKind::Av1 => Some(&mut self.av1),
+            CodecKind::Tiles => None,
+        }
+    }
+
+    /// What is known of `codec`'s hardware stage (nothing for the tiles).
+    pub fn of(&self, codec: CodecKind) -> StageMemory {
+        match codec {
+            CodecKind::H264 => self.h264.clone(),
+            CodecKind::Hevc => self.hevc.clone(),
+            CodecKind::Av1 => self.av1.clone(),
+            CodecKind::Tiles => StageMemory::new(),
+        }
+    }
+
+    /// Notes `failure` of `codec`'s hardware decoder of `size`.
+    pub fn record(&mut self, codec: CodecKind, failure: HardwareFailure, size: (u32, u32)) {
+        if let Some(memory) = self.slot(codec) {
+            memory.record(failure, size);
+        }
+    }
+}
+
+/// What this process learned about the hardware stage.
+static MEMORY: Mutex<CodecMemory> = Mutex::new(CodecMemory::new());
+
+/// A copy of this process's memory of `codec`.
+pub fn known(codec: CodecKind) -> StageMemory {
     MEMORY
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
-        .clone()
+        .of(codec)
 }
 
-/// Notes `failure` of a hardware decoder of `size` for this process.
-pub fn remember(failure: HardwareFailure, size: (u32, u32)) {
+/// Notes `failure` of `codec`'s hardware decoder of `size` for this process.
+pub fn remember(codec: CodecKind, failure: HardwareFailure, size: (u32, u32)) {
     let mut memory = MEMORY.lock().unwrap_or_else(PoisonError::into_inner);
-    memory.record(failure, size);
+    memory.record(codec, failure, size);
 }
 
 /// The Media Foundation stages a decoder of `size` tries in order:
@@ -386,6 +434,22 @@ mod tests {
         }
         assert_eq!(memory.demoted(), Some(HardwareFailure::OpenRefused));
         assert!(!memory.allows_hardware(QHD));
+    }
+
+    /// P9: a failure of one codec's hardware decoder ends the hardware
+    /// stage of that codec only.
+    #[test]
+    fn p9_task_win_decode_hardware_memory_per_codec() {
+        let mut memory = CodecMemory::new();
+        memory.record(CodecKind::Av1, HardwareFailure::DeviceLost, HD);
+        memory.record(CodecKind::Tiles, HardwareFailure::DeviceLost, HD);
+        assert!(!memory.of(CodecKind::Av1).allows_hardware(QHD));
+        assert!(memory.of(CodecKind::Hevc).allows_hardware(HD));
+        assert!(memory.of(CodecKind::H264).allows_hardware(HD));
+        memory.record(CodecKind::H264, HardwareFailure::OpenRefused, HD);
+        assert!(!memory.of(CodecKind::H264).allows_hardware(HD));
+        assert!(memory.of(CodecKind::H264).allows_hardware(QHD));
+        assert!(memory.of(CodecKind::Hevc).allows_hardware(HD));
     }
 
     /// The statistics and measurements name the stage.

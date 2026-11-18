@@ -68,3 +68,15 @@ fn bildkette_task_ffmpeg_device_loads_the_pinned_build() {
     let decoders = decoders(Vec::new());
     assert!(!decoders[0].offers().is_empty());
 }
+
+/// P9 (plan 2026-11-17): a failed hardware stage is given up for its codec
+/// only; the other codecs and the other hardware stage keep their hardware.
+#[test]
+fn p9_task_ffmpeg_gives_up_hardware_per_codec() {
+    give_up(CodecKind::Av1, FfmpegStage::D3d11va);
+    give_up(CodecKind::Av1, FfmpegStage::D3d11va);
+    assert!(!hardware_allowed(CodecKind::Av1, FfmpegStage::D3d11va));
+    assert!(hardware_allowed(CodecKind::Av1, FfmpegStage::Dxva2));
+    assert!(hardware_allowed(CodecKind::H264, FfmpegStage::D3d11va));
+    assert!(hardware_allowed(CodecKind::Hevc, FfmpegStage::D3d11va));
+}

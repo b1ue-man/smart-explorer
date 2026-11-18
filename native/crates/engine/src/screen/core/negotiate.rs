@@ -22,7 +22,8 @@ use super::pixel_convert::FrameSize;
 #[path = "codec_preference.rs"]
 mod preference;
 pub use preference::{
-    decoder_preference, set_decoder_preference, CodecPreference, CodecSetting, DecoderPreference,
+    decoder_preference, set_decoder_preference, with_decoder_pass, CodecPreference, CodecSetting,
+    DecoderPreference,
 };
 // D6 of plan 2026-11-17 „Windows-Bild“ P3: the B-30 rank of the newer
 // codecs only for a checked host encoder.

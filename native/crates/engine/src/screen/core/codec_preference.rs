@@ -10,6 +10,16 @@
 //! (`set_decoder_preference`): the desktop viewer, the Android viewer and
 //! `se screen view` each set it before they open decoders, and every
 //! decoder factory of the register reads it when it opens.
+//!
+//! Plan 2026-11-17 P9 („Automatisch“ took software although hardware
+//! decodes the stream in 0.4 ms instead of 10 ms): the register opens in
+//! passes (`DecoderPreference::passes`). „Automatisch“ tries every hardware
+//! decoder of every library first (FFmpeg D3D11VA/DXVA2, then Media
+//! Foundation hardware) and only then any software decoder; before, the
+//! first library's software stage came before the second library's
+//! hardware. During a pass the factories read the pass as the choice
+//! (`with_decoder_pass`, per thread: the decode thread opens).
+use std::cell::Cell;
 use std::sync::atomic::{AtomicU8, Ordering};
 
 use serde::{Deserialize, Serialize};
@@ -206,6 +216,17 @@ impl DecoderPreference {
             .collect()
     }
 
+    /// The passes the register opens a decoder in, in order (P9):
+    /// „Automatisch“ every hardware stage of every decoder before any
+    /// software stage; „Hardware“ and „Software“ one pass of their kind.
+    pub fn passes(self) -> &'static [DecoderPreference] {
+        match self {
+            Self::Automatic => &[Self::Hardware, Self::Software],
+            Self::Hardware => &[Self::Hardware],
+            Self::Software => &[Self::Software],
+        }
+    }
+
     fn code(self) -> u8 {
         match self {
             Self::Automatic => 0,
@@ -215,6 +236,27 @@ impl DecoderPreference {
     }
 }
 
+thread_local! {
+    /// The pass the register runs on this thread (`with_decoder_pass`).
+    static PASS: Cell<Option<DecoderPreference>> = const { Cell::new(None) };
+}
+
+/// Restores the pass that ran before, also when `open` panics.
+struct PassGuard(Option<DecoderPreference>);
+
+impl Drop for PassGuard {
+    fn drop(&mut self) {
+        PASS.with(|pass| pass.set(self.0));
+    }
+}
+
+/// Runs `open` with `pass` as this thread's decoder choice: the factories
+/// a pass of the register opens read it through `decoder_preference`.
+pub fn with_decoder_pass<T>(pass: DecoderPreference, open: impl FnOnce() -> T) -> T {
+    let _restore = PassGuard(PASS.with(|current| current.replace(Some(pass))));
+    open()
+}
+
 static DECODER_PREFERENCE: AtomicU8 = AtomicU8::new(0);
 
 /// Sets the decoder choice of this process (viewer start, a change).
@@ -222,11 +264,19 @@ pub fn set_decoder_preference(preference: DecoderPreference) {
     DECODER_PREFERENCE.store(preference.code(), Ordering::Release);
 }
 
-/// The decoder choice of this process; automatic until one is set.
+/// The decoder choice of this process; automatic until one is set. Inside
+/// `with_decoder_pass` it is that pass.
 pub fn decoder_preference() -> DecoderPreference {
+    if let Some(pass) = PASS.with(Cell::get) {
+        return pass;
+    }
     match DECODER_PREFERENCE.load(Ordering::Acquire) {
         1 => DecoderPreference::Hardware,
         2 => DecoderPreference::Software,
         _ => DecoderPreference::Automatic,
     }
 }
+
+#[cfg(test)]
+#[path = "p9_decoder_passes_task_tests.rs"]
+mod p9_decoder_passes_task_tests;
