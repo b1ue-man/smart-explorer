@@ -14,6 +14,7 @@ use std::ffi::{c_char, c_int, c_void, CString};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
+use std::time::{Duration, Instant};
 
 use libloading::os::windows::{
     Library, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR, LOAD_LIBRARY_SEARCH_SYSTEM32,
@@ -318,20 +319,30 @@ impl Ffmpeg {
 enum State {
     Untried,
     Loaded(Arc<Ffmpeg>),
-    Failed(String),
+    /// Why it failed and when.
+    Failed(String, Instant),
 }
 
 static STATE: Mutex<State> = Mutex::new(State::Untried);
 
+/// A failed load is tried again after this long (fix of 2026-11-18: one
+/// failure, e.g. while an update replaced the DLLs, left the main window's
+/// viewer without FFmpeg for days; under „Dekodier-Bibliothek: FFmpeg“ only
+/// the tiles were left).
+const RETRY_AFTER: Duration = Duration::from_secs(60);
+
 /// FFmpeg of this process, or why it is missing. The first call checks the
 /// DLLs against their pins (a few hundred milliseconds for 95 MB) and loads
-/// them; a failure stays until `installed` reports a new copy.
+/// them; a failure stays until `installed` reports a new copy or
+/// `RETRY_AFTER` passed.
 pub(super) fn ffmpeg() -> io::Result<Arc<Ffmpeg>> {
     let mut state = STATE.lock().unwrap_or_else(PoisonError::into_inner);
     match &*state {
         State::Loaded(ffmpeg) => return Ok(ffmpeg.clone()),
-        State::Failed(reason) => return Err(unsupported(reason.clone())),
-        State::Untried => {}
+        State::Failed(reason, at) if at.elapsed() < RETRY_AFTER => {
+            return Err(unsupported(reason.clone()))
+        }
+        State::Failed(..) | State::Untried => {}
     }
     let loaded = super::ffmpeg_runtime::verified_dir()
         .map_err(unsupported)
@@ -349,7 +360,7 @@ pub(super) fn ffmpeg() -> io::Result<Arc<Ffmpeg>> {
             Ok(ffmpeg)
         }
         Err(error) => {
-            *state = State::Failed(error.to_string());
+            *state = State::Failed(error.to_string(), Instant::now());
             Err(error)
         }
     }
@@ -363,7 +374,7 @@ pub(super) fn present() -> bool {
 /// A new copy of the DLLs was installed: the next call tries again.
 pub(super) fn installed() {
     let mut state = STATE.lock().unwrap_or_else(PoisonError::into_inner);
-    if matches!(*state, State::Failed(_)) {
+    if matches!(*state, State::Failed(..)) {
         *state = State::Untried;
     }
 }

@@ -10,37 +10,77 @@
 //! to `FrameSize::MAX`; „Dekodierer: Automatisch / Hardware / Software“
 //! keeps the stages of its choice (`ffmpeg_plan::stages`). A hardware stage
 //! that failed before its first picture, or whose device was lost, is not
-//! tried again for that codec in this process (P9: only that codec's stage;
-//! a lost device is made anew by `viewer_d3d11::shared`, so the other
-//! codecs keep their hardware); the next viewer start tries it again.
+//! tried again for that codec (P9: only that codec's stage; a lost device is
+//! made anew by `viewer_d3d11::shared`, so the other codecs keep their
+//! hardware) until the next viewer session opens (fix of 2026-11-18: it was
+//! the rest of the process, and the main window's viewer runs for days),
+//! and never so that a chosen „Dekodierer: Hardware“ is left without any
+//! stage: then the given-up stages are tried again. The offers are kept once
+//! the viewer device answered; a device that could not be made is asked
+//! again at the next hello (before, one failure left the process without
+//! hardware offers).
 use std::io;
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use super::ffmpeg_decoder::FfmpegDecoder;
 use super::ffmpeg_ffi;
 use crate::screen::core::codec_registry::DecoderFactory;
+use crate::screen::core::decoder_health::{for_session, session_epoch};
 use crate::screen::core::decoder_library::{decoder_library, library_allowed, DecoderLibrary};
 use crate::screen::core::ffmpeg_plan::{self as plan, FfmpegStage};
 use crate::screen::core::host_backend::ScreenDecoder;
-use crate::screen::core::negotiate::{decoder_preference, CodecKind, CodecOffer, H264Profile};
+use crate::screen::core::negotiate::{
+    chosen_decoder_preference, decoder_preference, CodecKind, CodecOffer, DecoderPreference,
+    H264Profile,
+};
 use crate::screen::core::pixel_convert::FrameSize;
 use crate::screen::core::wire_binary::GopHeader;
 
-/// Hardware stages this process gave up, per codec.
-static GIVEN_UP: Mutex<Vec<(CodecKind, FfmpegStage)>> = Mutex::new(Vec::new());
+/// Hardware stages given up, per codec, with the viewer session they were
+/// given up in (`decoder_health::session_epoch`).
+type GivenUpStages = (u64, Vec<(CodecKind, FfmpegStage)>);
+static GIVEN_UP: Mutex<GivenUpStages> = Mutex::new((0, Vec::new()));
 
 /// A hardware stage of `codec` failed; only that codec's stage is given up
-/// (P9: a lost device no longer ends the hardware of every codec).
+/// (P9: a lost device no longer ends the hardware of every codec), until
+/// the next viewer session opens.
 pub(super) fn give_up(codec: CodecKind, stage: FfmpegStage) {
-    let mut given_up = GIVEN_UP.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut slot = GIVEN_UP.lock().unwrap_or_else(PoisonError::into_inner);
+    let given_up = for_session(&mut *slot, session_epoch());
     if !given_up.contains(&(codec, stage)) {
         given_up.push((codec, stage));
+        eprintln!(
+            "FFmpeg: {} {} für diese Betrachter-Sitzung aufgegeben",
+            codec.key(),
+            stage.label()
+        );
     }
 }
 
 fn hardware_allowed(codec: CodecKind, stage: FfmpegStage) -> bool {
-    let given_up = GIVEN_UP.lock().unwrap_or_else(PoisonError::into_inner);
-    !given_up.contains(&(codec, stage))
+    let mut slot = GIVEN_UP.lock().unwrap_or_else(PoisonError::into_inner);
+    !for_session(&mut *slot, session_epoch()).contains(&(codec, stage))
+}
+
+/// The stages of `stages` to open: without the hardware stages given up,
+/// unless that leaves a chosen „Dekodierer: Hardware“ (`chosen`) without
+/// any stage (user rule 2026-11-18: a chosen setting is never replaced;
+/// under „Automatisch“ the register's software pass follows instead).
+fn open_stages(
+    stages: Vec<FfmpegStage>,
+    chosen: DecoderPreference,
+    allowed: impl Fn(FfmpegStage) -> bool,
+) -> Vec<FfmpegStage> {
+    let left: Vec<FfmpegStage> = stages
+        .iter()
+        .copied()
+        .filter(|stage| !stage.hardware() || allowed(*stage))
+        .collect();
+    if left.is_empty() && chosen == DecoderPreference::Hardware {
+        stages
+    } else {
+        left
+    }
 }
 
 /// Whether `library` may decode under this process's choice.
@@ -80,9 +120,14 @@ impl FfmpegFactory {
         }
     }
 
-    fn find_offers(&self, ffmpeg: &ffmpeg_ffi::Ffmpeg) -> Vec<CodecOffer> {
-        let hardware =
-            super::viewer_d3d11::shared().is_ok_and(|device| device.decodes(self.codec, None));
+    /// The offers and whether they are final: without the viewer device
+    /// the hardware stage is unknown, not absent, and is asked again.
+    fn find_offers(&self, ffmpeg: &ffmpeg_ffi::Ffmpeg) -> (Vec<CodecOffer>, bool) {
+        let device = super::viewer_d3d11::shared();
+        let known = device.is_ok();
+        let hardware = device
+            .as_ref()
+            .is_ok_and(|device| device.decodes(self.codec, None));
         let software = plan::decoder_name(self.codec, FfmpegStage::Software)
             .and_then(|name| std::ffi::CString::new(name).ok())
             // SAFETY: a name lookup in the loaded DLL.
@@ -94,7 +139,7 @@ impl FfmpegFactory {
         if software {
             offers.extend(self.stage_offers(false));
         }
-        offers
+        (offers, known)
     }
 }
 
@@ -111,11 +156,12 @@ impl DecoderFactory for FfmpegFactory {
             return offers.clone();
         }
         // Not kept while FFmpeg is missing: a copy installed later counts.
+        // Not kept while the viewer device is missing either.
         match ffmpeg_ffi::ffmpeg() {
-            Ok(ffmpeg) => self
-                .offers
-                .get_or_init(|| self.find_offers(&ffmpeg))
-                .clone(),
+            Ok(ffmpeg) => match self.find_offers(&ffmpeg) {
+                (offers, true) => self.offers.get_or_init(|| offers).clone(),
+                (offers, false) => offers,
+            },
             Err(_) => Vec::new(),
         }
     }
@@ -133,12 +179,13 @@ impl DecoderFactory for FfmpegFactory {
         let ffmpeg = ffmpeg_ffi::ffmpeg()?;
         let fits = super::viewer_d3d11::shared()
             .is_ok_and(|device| device.decodes(header.codec, Some(header.size)));
-        let stages = plan::stages(decoder_preference(), header.codec, fits, true);
+        let stages = open_stages(
+            plan::stages(decoder_preference(), header.codec, fits, true),
+            chosen_decoder_preference(),
+            |stage| hardware_allowed(header.codec, stage),
+        );
         let mut refusals = Vec::new();
         for stage in stages {
-            if stage.hardware() && !hardware_allowed(header.codec, stage) {
-                continue;
-            }
             match FfmpegDecoder::open(ffmpeg.clone(), header, stage) {
                 Ok(decoder) => return Ok(Box::new(decoder)),
                 Err(error) => refusals.push(format!("{}: {error}", stage.label())),

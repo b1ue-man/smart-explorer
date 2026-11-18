@@ -32,11 +32,14 @@ pub(super) fn display_rows(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Ve
     let current = super::super::screen_prefs::virtual_display_choice();
     let mut chosen = current;
     let _ = super::wrap::item(ui, "monitor", |ui| {
-        super::wrap::fitted(
-            ui,
-            egui::ComboBox::from_id_salt("screen_virtual_display"),
-            format!("Monitor: {}", wish_text(current.wish)),
-        )
+        ({
+            let text = format!("Monitor: {}", wish_text(current.wish));
+            super::wrap::fitted(
+                ui,
+                egui::ComboBox::from_id_salt("screen_virtual_display"),
+                text,
+            )
+        })
         .show_ui(ui, |ui| {
             for wish in VirtualDisplayWish::ALL {
                 ui.selectable_value(&mut chosen.wish, wish, wish.label());
@@ -54,11 +57,14 @@ pub(super) fn display_rows(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Ve
         .flatten();
     let shown = current.size.map_or("Fenstergröße".to_string(), size_text);
     let _ = super::wrap::item(ui, "size", |ui| {
-        super::wrap::fitted(
-            ui,
-            egui::ComboBox::from_id_salt("screen_display_size"),
-            format!("Auflösung: {shown}"),
-        )
+        ({
+            let text = format!("Auflösung: {shown}");
+            super::wrap::fitted(
+                ui,
+                egui::ComboBox::from_id_salt("screen_display_size"),
+                text,
+            )
+        })
         .show_ui(ui, |ui| {
             ui.selectable_value(&mut chosen.size, None, "Fenstergröße folgen");
             for size in SIZE_CHOICES {

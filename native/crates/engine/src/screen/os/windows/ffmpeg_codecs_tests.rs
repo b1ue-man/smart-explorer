@@ -80,3 +80,40 @@ fn p9_task_ffmpeg_gives_up_hardware_per_codec() {
     assert!(hardware_allowed(CodecKind::H264, FfmpegStage::D3d11va));
     assert!(hardware_allowed(CodecKind::Hevc, FfmpegStage::D3d11va));
 }
+
+/// Fix of 2026-11-18 („Kacheln immer“): a given-up hardware stage is left
+/// out, so „Automatisch“ moves on (DXVA2, then the software pass); a chosen
+/// „Dekodierer: Hardware“ is never left without a stage: when every
+/// hardware stage was given up, they are tried again.
+#[test]
+fn kachelfix_task_ffmpeg_given_up_stages_never_empty_a_chosen_hardware() {
+    let hardware = vec![FfmpegStage::D3d11va, FfmpegStage::Dxva2];
+    let none_given_up = |_stage: FfmpegStage| true;
+    let d3d11va_given_up = |stage: FfmpegStage| stage != FfmpegStage::D3d11va;
+    let all_given_up = |_stage: FfmpegStage| false;
+    assert_eq!(
+        open_stages(hardware.clone(), DecoderPreference::Hardware, none_given_up),
+        hardware
+    );
+    assert_eq!(
+        open_stages(
+            hardware.clone(),
+            DecoderPreference::Hardware,
+            d3d11va_given_up
+        ),
+        vec![FfmpegStage::Dxva2]
+    );
+    assert_eq!(
+        open_stages(hardware.clone(), DecoderPreference::Hardware, all_given_up),
+        hardware,
+        "a chosen „Hardware“ tries its stages again"
+    );
+    // „Automatisch“: the hardware pass opens nothing given up; the
+    // register's software pass follows.
+    assert!(open_stages(hardware.clone(), DecoderPreference::Automatic, all_given_up).is_empty());
+    let mixed = vec![FfmpegStage::D3d11va, FfmpegStage::Software];
+    assert_eq!(
+        open_stages(mixed, DecoderPreference::Automatic, all_given_up),
+        vec![FfmpegStage::Software]
+    );
+}

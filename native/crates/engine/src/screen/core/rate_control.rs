@@ -47,6 +47,8 @@ pub mod probe;
 pub mod queue;
 #[path = "rate_windows.rs"]
 mod rate_windows;
+#[path = "rate_tiles.rs"]
+mod tiles_budget;
 pub use model::RateLimit;
 use model::{GrowthFacts, INTERVAL_GROWTH};
 use rate_windows::{DelayGradient, RateWindow, RATE_WINDOW_US};
@@ -286,18 +288,6 @@ impl RateController {
         self.encode_timing.capacity_fps()
     }
 
-    /// Whether a picture of the tiles may be taken at `now_us` (plan
-    /// 2026-11-18 „Netzrate“): their sent bytes stay within the target E.
-    pub fn tiles_admit(&self, now_us: u64) -> bool {
-        self.tiles.admits(now_us)
-    }
-
-    /// A picture of the tiles of `bytes` was sent at `now_us` under E.
-    pub fn on_tiles_sent(&mut self, now_us: u64, bytes: u64) {
-        let target = self.target_bps();
-        self.tiles.on_sent(now_us, bytes, target);
-    }
-
     pub fn on_frame_sent(&mut self, bytes: u64, now_us: u64) {
         self.started = true;
         self.sent.push(now_us, bytes);
@@ -383,6 +373,7 @@ impl RateController {
         // The overuse is back pressure for one rate window: an
         // application-limited sender does not grow straight back.
         self.pressure_us = Some(now_us);
+        self.tiles.on_congestion(now_us);
         self.probe.on_limit();
         self.gradient.reset();
         self.overuse_streak = 0;
@@ -449,6 +440,7 @@ impl RateController {
         let loss = lost as f64 / sent as f64;
         let current = self.target_bps() as f64;
         self.loss_pressure = loss >= LOSS_LOW;
+        self.tiles.set_loss_limited(loss > LOSS_HIGH);
         self.loss_target = if loss > LOSS_HIGH {
             self.probe.on_limit();
             self.link_clamp(current * (1.0 - 0.5 * loss))

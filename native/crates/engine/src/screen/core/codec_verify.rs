@@ -23,11 +23,12 @@
 //! picture that does not decode or reads another barcode is the encoder's
 //! (`Garbled`) unless another decoder decodes the same stream intact; then
 //! the first decoder is `Garbled`. Without any local decoder of the codec,
-//! or when every decoder was late, did not open or failed before its first
-//! picture (measurement of 2026-11-18: FFmpeg's hardware-only `av1` decoder
-//! through `dxva2_vld`), the stream is not checkable here and the encoder is
-//! `Structural` (stream and time checked, admitted; host log „nicht
-//! prüfbar“). Decoders are tried software
+//! or when every decoder was late, did not open or failed on a hardware
+//! stage before its first picture (measurement of 2026-11-18: FFmpeg's
+//! hardware-only `av1` decoder through `dxva2_vld`; a software decoder that
+//! fails there fails the stream), the stream is not checkable here and the
+//! encoder is `Structural` (stream and time checked, admitted; host log
+//! „nicht prüfbar“). Decoders are tried software
 //! first (the more common reference), those already failed not at all.
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -227,8 +228,22 @@ enum Decoded {
     /// `dxva2_vld`: „Your platform doesn't support hardware accelerated AV1
     /// decoding … Get current frame error“): the decoder failed before it
     /// gave a single picture. That is the decoder's limit, not a broken
-    /// stream; like a decoder that does not open it judges nothing.
+    /// stream; like a decoder that does not open it judges nothing. Only a
+    /// decoder on a hardware stage (`hardware_stage`) says so: a software
+    /// decoder that fails on the first picture fails the stream (`Broken`).
     NoPicture(String),
+}
+
+/// Whether an opened decoder runs on a hardware stage, read from the stage
+/// its name carries (`ffmpeg_plan::stage_name` „FFmpeg av1 [DXVA2]“, Media
+/// Foundation „… [Hardware (D3D11VA)]“), as the viewer's statistics read it
+/// (`gui/app/core/screen_toolbar_state.rs` `decoder_hardware`). A name
+/// without such a stage counts as software.
+fn hardware_stage(name: &str) -> bool {
+    !name.contains("[Software")
+        && ["[D3D11VA]", "[DXVA2]", "[Hardware"]
+            .iter()
+            .any(|stage| name.contains(stage))
 }
 
 fn decode_with(factory: &dyn DecoderFactory, header: &GopHeader, units: &[Unit]) -> Decoded {
@@ -236,6 +251,7 @@ fn decode_with(factory: &dyn DecoderFactory, header: &GopHeader, units: &[Unit])
         Ok(raw) => raw,
         Err(error) => return Decoded::Unopened(error.to_string()),
     };
+    let hardware = hardware_stage(&raw.name());
     let mut decoder = if header.codec.is_video() {
         ReferenceDecoder::new_for_codec(raw, header.codec)
     } else {
@@ -251,7 +267,7 @@ fn decode_with(factory: &dyn DecoderFactory, header: &GopHeader, units: &[Unit])
         };
         let id = unit.frame_id;
         match decoder.decode(&record) {
-            Err(error) if pictures == 0 => {
+            Err(error) if pictures == 0 && hardware => {
                 return Decoded::NoPicture(format!("picture {id}: {error}"))
             }
             Err(error) => return Decoded::Broken(format!("picture {id}: {error}")),

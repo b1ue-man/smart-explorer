@@ -98,7 +98,15 @@ impl Pipeline {
         if self.pacer.keyframe_due() && self.gop.is_none() {
             return;
         }
-        self.invalidate_reference();
+        // A key frame of the running encoder answers it; nothing else
+        // changed, so the encoder is not opened anew (2026-11-18).
+        if self.gop.is_none() && self.pacer.frames_in_flight() == 0 {
+            self.sender.reset();
+            self.new_group();
+            self.kept_encoder = self.running.is_some();
+        } else {
+            self.reset_stream();
+        }
     }
 
     /// The id of the newest picture group the host opened with a key frame

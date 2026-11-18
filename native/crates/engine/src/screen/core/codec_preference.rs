@@ -299,6 +299,14 @@ pub fn decoder_preference() -> DecoderPreference {
     if let Some(pass) = PASS.with(Cell::get) {
         return pass;
     }
+    chosen_decoder_preference()
+}
+
+/// The decoder choice of this process as set, also inside a pass of the
+/// register (fix of 2026-11-18: a decoder stage given up in a session never
+/// leaves a chosen „Hardware“ without its stages; under „Automatisch“ the
+/// hardware pass moves on to software instead).
+pub fn chosen_decoder_preference() -> DecoderPreference {
     match DECODER_PREFERENCE.load(Ordering::Acquire) {
         1 => DecoderPreference::Hardware,
         2 => DecoderPreference::Software,

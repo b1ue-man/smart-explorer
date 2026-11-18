@@ -15,6 +15,7 @@
 //! and `mf_stages` leaves it out for the Media Foundation decoder.
 use std::sync::{Mutex, PoisonError};
 
+use crate::screen::core::decoder_health::{for_session, session_epoch};
 use crate::screen::core::negotiate::CodecKind;
 
 /// The user's choice „Dekodierer: Automatisch / Hardware / Software“
@@ -138,8 +139,9 @@ pub fn classify(
 pub const MAX_REFUSED_SIZES: usize = 8;
 
 /// What this process learned about the hardware stage. A failure in
-/// operation ends the hardware stage for the rest of the process (the next
-/// viewer start tries again); a refusal at open ends it for that stream size.
+/// operation ends the hardware stage until the next viewer session opens
+/// (fix of 2026-11-18; before: the rest of the process); a refusal at open
+/// ends it for that stream size.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct StageMemory {
     demoted: Option<HardwareFailure>,
@@ -226,21 +228,22 @@ impl CodecMemory {
     }
 }
 
-/// What this process learned about the hardware stage.
-static MEMORY: Mutex<CodecMemory> = Mutex::new(CodecMemory::new());
+/// What this process learned about the hardware stage, with the viewer
+/// session it learned it in (fix of 2026-11-18: a newer viewer session
+/// starts without it, `decoder_health::for_session`).
+static MEMORY: Mutex<(u64, CodecMemory)> = Mutex::new((0, CodecMemory::new()));
 
-/// A copy of this process's memory of `codec`.
+/// A copy of the memory of `codec` for the newest viewer session.
 pub fn known(codec: CodecKind) -> StageMemory {
-    MEMORY
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .of(codec)
+    let mut memory = MEMORY.lock().unwrap_or_else(PoisonError::into_inner);
+    for_session(&mut *memory, session_epoch()).of(codec)
 }
 
-/// Notes `failure` of `codec`'s hardware decoder of `size` for this process.
+/// Notes `failure` of `codec`'s hardware decoder of `size` until the next
+/// viewer session opens.
 pub fn remember(codec: CodecKind, failure: HardwareFailure, size: (u32, u32)) {
     let mut memory = MEMORY.lock().unwrap_or_else(PoisonError::into_inner);
-    memory.record(codec, failure, size);
+    for_session(&mut *memory, session_epoch()).record(codec, failure, size);
 }
 
 /// The Media Foundation stages a decoder of `size` tries in order:

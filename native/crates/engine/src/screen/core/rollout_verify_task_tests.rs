@@ -1,8 +1,9 @@
 //! Measurement of 2026-11-18 (AMD host, AV1): the run-time check failed the
 //! encoder because FFmpeg's `av1` decoder, which decodes only with hardware
-//! acceleration, gave no picture through `dxva2_vld`. A decoder that gives
-//! no picture at all cannot judge the stream; only a decoder that decoded a
-//! picture which reads wrong fails the encoder (`Garbled`).
+//! acceleration, gave no picture through `dxva2_vld`. A decoder on a
+//! hardware stage that gives no picture at all cannot judge the stream; a
+//! software decoder that fails on the first picture, and a decoder that
+//! decoded a picture which reads wrong, fail the encoder (`Garbled`).
 use std::sync::Arc;
 
 use super::fakes::{choice, decoder, encoder, Answer, FakeClock, Fault, SIZE};
@@ -23,7 +24,7 @@ fn rollout_task_unverifiable_decoder_does_not_fail_the_encoder() {
     };
     // (a) The only decoder gives no picture: not checkable, the encoder is
     // admitted on its stream checks, the reason names the decoder.
-    let no_picture = decoder("ffmpeg-dxva2", H264, true, Answer::NoPicture);
+    let no_picture = decoder("FFmpeg h264 [DXVA2]", H264, true, Answer::NoPicture);
     let outcome = trip(&[no_picture.clone()]);
     assert_eq!(outcome.encoder, Verdict::Structural, "{}", outcome.detail);
     assert!(
@@ -32,20 +33,35 @@ fn rollout_task_unverifiable_decoder_does_not_fail_the_encoder() {
         outcome.detail
     );
     assert!(
-        outcome.detail.contains("ffmpeg-dxva2 gave no picture"),
+        outcome
+            .detail
+            .contains("FFmpeg h264 [DXVA2] gave no picture"),
         "{}",
         outcome.detail
     );
     // The decoder is not marked either (it judged nothing).
     assert!(outcome.decoders.is_empty(), "{:?}", outcome.decoders);
     // Another decoder (D3D11VA after DXVA2) that decodes proves the encoder.
-    let intact = decoder("ffmpeg-d3d11va", H264, true, Answer::Intact);
+    let intact = decoder("FFmpeg h264 [D3D11VA]", H264, true, Answer::Intact);
     let outcome = trip(&[no_picture.clone(), intact]);
     assert_eq!(outcome.encoder, Verdict::Verified, "{}", outcome.detail);
     // (b) A decoder that decoded a picture which reads wrong still fails it.
     let broken = decoder("broken", H264, false, Answer::Broken);
     let outcome = trip(&[no_picture.clone(), broken]);
     assert_eq!(outcome.encoder, Verdict::Failed(FailReason::Garbled));
+    // (c) A software decoder that fails on the first picture judges the
+    // stream as before: the encoder fails (`Garbled`), it is not admitted
+    // as not checkable.
+    for name in ["FFmpeg h264 [Software]", "openh264"] {
+        let software = decoder(name, H264, false, Answer::NoPicture);
+        let outcome = trip(&[software]);
+        assert_eq!(
+            outcome.encoder,
+            Verdict::Failed(FailReason::Garbled),
+            "{name}: {}",
+            outcome.detail
+        );
+    }
     // The gate admits a not checkable encoder.
     let checks = Checks::new(VerdictStore::memory()).with_clock(clock.clone());
     let factory: Arc<dyn crate::screen::core::codec_registry::EncoderFactory> = good.clone();

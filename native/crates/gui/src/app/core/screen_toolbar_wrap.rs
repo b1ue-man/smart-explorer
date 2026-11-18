@@ -15,7 +15,7 @@ use eframe::egui::{self, TextStyle, WidgetText};
 /// Below this a position counts as the start of a row (layout rounding).
 const ROW_START_SLACK: f32 = 0.5;
 /// Added to a measured text: rounding of glyph positions and the frame.
-const TEXT_SLACK: f32 = 4.0;
+const TEXT_SLACK: f32 = 8.0;
 
 /// Whether an item of `width` goes to a new row: it is wider than the rest
 /// of the row and does not already start one (an item wider than the whole
@@ -46,15 +46,38 @@ fn list_width(ui: &egui::Ui, text: &str) -> f32 {
         + 2.0 * spacing.button_padding.x
 }
 
-/// A list of the toolbar that asks for the width of its text, so the row
-/// breaks before it instead of letting it grow past the edge.
+/// A list of the toolbar that asks for the width of its text and starts a
+/// new row itself when that width does not fit the rest of the row: egui's
+/// wrapping layout breaks before a button or a switch, but not before a
+/// closed list (seen on the user's screen 2026-11-18, the first row ran past
+/// the window at „Codec“). The width is in points, so the window's size and
+/// the display scaling are already in it.
 pub(super) fn fitted(
-    ui: &egui::Ui,
+    ui: &mut egui::Ui,
     list: egui::ComboBox,
     text: impl Into<WidgetText>,
 ) -> egui::ComboBox {
     let text = text.into();
-    list.width(list_width(ui, text.text())).selected_text(text)
+    let width = list_width(ui, text.text());
+    // A list wider than the whole bar keeps the bar's width and shortens
+    // its text (egui `ComboBox::wrap_mode`), so it never runs past the edge.
+    let full = ui.max_rect().width();
+    let list = if width > full {
+        list.wrap_mode(egui::TextWrapMode::Truncate)
+    } else {
+        list
+    };
+    let width = width.min(full);
+    reserve(ui, width);
+    list.width(width).selected_text(text)
+}
+
+/// Starts a new row unless `width` fits the rest of the current one.
+pub(super) fn reserve(ui: &mut egui::Ui, width: f32) {
+    let at_row_start = ui.cursor().left() <= ui.max_rect().left() + ROW_START_SLACK;
+    if breaks_before(Some(width), ui.available_width(), at_row_start) {
+        ui.end_row();
+    }
 }
 
 /// A label and the list that belongs to it stay in one row: the row breaks
@@ -63,10 +86,7 @@ pub(super) fn reserve_pair(ui: &mut egui::Ui, label: &str, list_text: &str) {
     let width = text_width(ui, label, TextStyle::Body)
         + ui.spacing().item_spacing.x
         + list_width(ui, list_text);
-    let at_row_start = ui.cursor().left() <= ui.max_rect().left() + ROW_START_SLACK;
-    if breaks_before(Some(width), ui.available_width(), at_row_start) {
-        ui.end_row();
-    }
+    reserve(ui, width);
 }
 
 /// One setting of the toolbar. Its widgets are placed in the wrapping row

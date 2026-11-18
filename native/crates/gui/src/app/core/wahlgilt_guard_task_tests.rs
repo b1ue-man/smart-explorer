@@ -1,20 +1,24 @@
 //! Finding 3 of the user rule of 2026-11-18: a named codec that brings no
-//! picture is neither given up for the process nor switched; the window
-//! shows the error with the guard's reason. „Verlustfrei“ goes to the tiles
-//! it chose without marking anything.
+//! picture is neither given up nor switched; the window shows the error
+//! with the guard's reason. „Verlustfrei“ goes to the tiles it chose
+//! without giving anything up. (Fix of 2026-11-18 „Kacheln immer“: a
+//! give-up belongs to its session, `Shared::give_up_codec`; the check of
+//! the process-wide mark became a check of the session's.)
 use std::io;
 use std::sync::{Arc, Mutex};
 
 use super::DecodeState;
-use crate::screen::core::decoder_health::{self, FAILURE_LIMIT};
+use crate::screen::core::decoder_health::FAILURE_LIMIT;
 use crate::screen::core::host_backend::ScreenDecoder;
 use crate::screen::core::negotiate::{CodecKind, CodecSetting};
 use crate::screen::core::wire_binary::GopHeader;
 use crate::screen::core::wire_control::{SetMode, StreamMode, ViewerFrame};
 
-type Sent = Arc<Mutex<Vec<ViewerFrame>>>;
+pub(super) type Sent = Arc<Mutex<Vec<ViewerFrame>>>;
 
-fn state(
+/// A decode thread's state for `codec` without a host (also the kachelfix
+/// tests of 2026-11-18).
+pub(super) fn state(
     codec: CodecSetting,
 ) -> (
     DecodeState,
@@ -64,10 +68,13 @@ fn wahlgilt_task_named_codec_without_picture_shows_the_error() {
         sent.lock().unwrap().is_empty(),
         "no SET_DECODERS, no SET_MODE"
     );
-    assert!(decoder_health::usable(CodecKind::H264), "not given up");
+    assert!(
+        shared.give_up_codec(CodecKind::H264).is_some(),
+        "not given up"
+    );
 
     // „Verlustfrei“: the tiles it chose, nothing marked.
-    let (mut decode, _shared, sent) = state(CodecSetting::Lossless);
+    let (mut decode, shared, sent) = state(CodecSetting::Lossless);
     for _ in 0..FAILURE_LIMIT {
         decode.guard_failure(CodecKind::Hevc);
     }
@@ -75,5 +82,5 @@ fn wahlgilt_task_named_codec_without_picture_shows_the_error() {
     assert!(frames
         .iter()
         .any(|frame| matches!(frame, ViewerFrame::SetMode(set) if set.lossless)));
-    assert!(decoder_health::usable(CodecKind::Hevc));
+    assert!(shared.give_up_codec(CodecKind::Hevc).is_some());
 }

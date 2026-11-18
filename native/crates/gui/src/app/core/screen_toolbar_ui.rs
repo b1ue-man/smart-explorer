@@ -208,11 +208,14 @@ fn device_row(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Vec<ToolbarActi
 
 fn device_list(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Vec<ToolbarAction>) {
     ui.label("Gerät:");
-    wrap::fitted(
-        ui,
-        egui::ComboBox::from_id_salt("screen_viewer_device"),
-        input.current_name,
-    )
+    ({
+        let text = input.current_name;
+        wrap::fitted(
+            ui,
+            egui::ComboBox::from_id_salt("screen_viewer_device"),
+            text,
+        )
+    })
     .show_ui(ui, |ui| {
         for entry in input.devices {
             let label = match &entry.room {
@@ -252,11 +255,14 @@ fn source_row(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Vec<ToolbarActi
     wrap::reserve_pair(ui, "Quelle:", &applied::short_text(&source_text(input)));
     let opened = wrap::item(ui, "source", |ui| {
         ui.label("Quelle:");
-        wrap::fitted(
-            ui,
-            egui::ComboBox::from_id_salt("screen_viewer_source"),
-            applied::short_text(&source_text(input)),
-        )
+        ({
+            let text = applied::short_text(&source_text(input));
+            wrap::fitted(
+                ui,
+                egui::ComboBox::from_id_salt("screen_viewer_source"),
+                text,
+            )
+        })
         .show_ui(ui, |ui| {
             if ui
                 .selectable_label(

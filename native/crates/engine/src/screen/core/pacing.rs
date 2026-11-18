@@ -318,6 +318,13 @@ impl Pacer {
         self.unacked_bytes
     }
 
+    /// Age at `now_us` of the oldest unacknowledged frame, if any.
+    pub fn oldest_age_us(&self, now_us: u64) -> Option<u64> {
+        self.in_flight
+            .front()
+            .map(|frame| now_us.saturating_sub(frame.sent_us))
+    }
+
     pub fn frames_in_flight(&self) -> usize {
         self.in_flight.len()
     }

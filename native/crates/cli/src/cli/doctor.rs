@@ -126,6 +126,8 @@ impl Report {
             "share_server": self.server.json(),
             // Plan 2026-11-17 P9: the diagnostics of the screen host processes.
             "screen_host_log": crate::screen::os::host_worker_client::host_log::log_path(),
+            // 2026-11-18: why the desktop viewer gave a codec up or got tiles.
+            "screen_viewer_log": crate::screen::os::host_worker_client::host_log::viewer_log_path(),
             "daemon": {
                 "running": self.daemon_running,
                 "heartbeat_age_seconds": self.heartbeat_age,
@@ -191,6 +193,10 @@ pub(super) fn run(args: DoctorArgs) -> Result<i32, String> {
     println!(
         "screen_host_log\t{}",
         crate::screen::os::host_worker_client::host_log::log_path().display()
+    );
+    println!(
+        "screen_viewer_log\t{}",
+        crate::screen::os::host_worker_client::host_log::viewer_log_path().display()
     );
     println!("daemon_running\t{}", report.daemon_running);
     println!(

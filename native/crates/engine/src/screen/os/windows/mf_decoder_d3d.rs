@@ -191,13 +191,24 @@ fn profile_of(codec: CodecKind) -> Option<windows::core::GUID> {
 }
 
 /// Whether this host decodes `codec` in hardware at all (`se screen codec`).
+/// The answer is kept once the device was made; without it the next call
+/// asks again (fix of 2026-11-18: one failure left the process without
+/// hardware offers).
 pub(super) fn hardware_offered(codec: CodecKind) -> bool {
-    static OFFERED: OnceLock<[bool; 3]> = OnceLock::new();
-    let offered = OFFERED.get_or_init(|| {
-        let device = shared().ok();
-        [CodecKind::H264, CodecKind::Hevc, CodecKind::Av1]
-            .map(|codec| device.as_ref().is_some_and(|device| device.decodes(codec)))
-    });
+    static OFFERED: Mutex<Option<[bool; 3]>> = Mutex::new(None);
+    let mut slot = OFFERED.lock().unwrap_or_else(PoisonError::into_inner);
+    let offered = match *slot {
+        Some(offered) => offered,
+        None => {
+            let Ok(device) = shared() else {
+                return false;
+            };
+            let offered = [CodecKind::H264, CodecKind::Hevc, CodecKind::Av1]
+                .map(|codec| device.decodes(codec));
+            *slot = Some(offered);
+            offered
+        }
+    };
     match codec {
         CodecKind::H264 => offered[0],
         CodecKind::Hevc => offered[1],

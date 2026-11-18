@@ -177,6 +177,8 @@ impl RateController {
         self.stale_halved = Some((now_us, stale_us));
         self.delay_target = self.link_clamp(self.target_bps() as f64 * STALE_DECREASE);
         self.sustained = Some(self.delay_target);
+        // The tiles keep the lowered target for a while (`tiles_rate`).
+        self.tiles.on_congestion(now_us);
     }
 
     /// A new path starts over from its remembered rate or the start of the

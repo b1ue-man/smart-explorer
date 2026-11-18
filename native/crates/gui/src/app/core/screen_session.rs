@@ -30,7 +30,6 @@ pub use super::screen_chain_window::LatencyWindow;
 
 #[path = "screen_session_choice.rs"]
 mod choice;
-pub use choice::tiles_allowed;
 
 /// The planes or the pixels of a decoded picture.
 pub enum PictureData {
@@ -145,6 +144,9 @@ pub struct Shared {
     decoder_mode: Mutex<SetMode>,
     /// The viewer switched to the tiles itself (`screen_session_choice.rs`).
     pub(super) lossless_fallback: AtomicBool,
+    /// Codecs this session gave up (`screen_decode_guard.rs`, fix of
+    /// 2026-11-18: for this session only, never for the process).
+    given_up: Mutex<crate::screen::core::decoder_health::GivenUp>,
     /// The „Codec“ this session runs for (`screen_session_choice.rs`).
     codec: Mutex<crate::screen::core::negotiate::CodecSetting>,
     /// The codec of the session's first stream (`screen_session_choice.rs`).
@@ -181,6 +183,7 @@ impl Shared {
                 lossless: false,
             }),
             lossless_fallback: AtomicBool::new(false),
+            given_up: Mutex::new(Default::default()),
             codec: Mutex::new(Default::default()),
             first_codec: Mutex::new(None),
             local: Default::default(),
@@ -293,6 +296,9 @@ impl ViewerSession {
         present_gap_ms: u64,
     ) -> Self {
         let (outbox, inbox) = mpsc::channel();
+        // Decoder stages a library gave up for earlier sessions are tried
+        // again (fix of 2026-11-18, `decoder_health::begin_session`).
+        crate::screen::core::decoder_health::begin_session();
         request.expected_node = target.expected_node.clone();
         let shared = Shared::new(prefer_yuv, present_gap_ms);
         let opening = SetMode {

@@ -184,6 +184,9 @@ pub struct Pipeline {
     confirmed: ConfirmedReference,
     /// After a stale stream: the next stream continues from this frame.
     continue_from: Option<u64>,
+    /// The stream was reset and the running encoder kept: its next picture
+    /// must answer the key-frame request (`reset_stream`, 2026-11-18).
+    kept_encoder: bool,
     /// The newest picture group that starts with a key frame (0: none).
     key_gop: u64,
     /// Station times and chain facts (BK0); the stage records into it too.
@@ -232,7 +235,7 @@ impl Pipeline {
             self.sender.reset();
             self.drop_encoder();
         } else {
-            self.reset_stream();
+            self.reset_stream_and_encoder();
         }
     }
 
@@ -310,16 +313,23 @@ impl Pipeline {
     /// Ends the current picture group and its encoder; the next frame is a
     /// key frame of a new encoder.
     fn drop_encoder(&mut self) {
+        self.new_group();
+        if let Some(stage) = &mut self.stage {
+            stage.encoder = None;
+        }
+        self.running = None;
+        self.kept_encoder = false;
+        self.encoder_epoch += 1;
+    }
+
+    /// Ends the current picture group; the next frame is a key frame of the
+    /// running encoder (or of a new one, `drop_encoder`).
+    fn new_group(&mut self) {
         self.work.invalidate_reference();
         self.presentation.invalidate(self.next_frame_id);
         // The old GOP's receipt cannot hold a restarted preview hostage.
         self.preview_in_flight = None;
         self.preview_sent_us = 0;
-        if let Some(stage) = &mut self.stage {
-            stage.encoder = None;
-        }
-        self.running = None;
-        self.encoder_epoch += 1;
         if let Some(gop) = self.gop.take() {
             gop.finish();
         }
@@ -340,8 +350,24 @@ impl Pipeline {
         }
     }
 
-    /// Gives the current picture stream up; the next frame is a key frame.
+    /// Gives the current picture stream up; the next frame is a key frame
+    /// of the running encoder (fix 2026-11-18: every reset opened a new
+    /// encoder, with its run-time check, though its own key frame starts a
+    /// new group as well; a changed codec, size or contract goes through
+    /// `invalidate_reference`/`resize`, which open a new one). An encoder
+    /// that answers with no key frame is replaced then (`kept_encoder`).
     fn reset_stream(&mut self) {
+        if let Some(gop) = self.gop.take() {
+            gop.reset();
+        }
+        self.pacer.on_stream_reset();
+        self.sender.reset();
+        self.new_group();
+        self.kept_encoder = self.running.is_some();
+    }
+
+    /// `reset_stream` with a new encoder.
+    fn reset_stream_and_encoder(&mut self) {
         if let Some(gop) = self.gop.take() {
             gop.reset();
         }
@@ -355,8 +381,8 @@ impl Pipeline {
     /// decoder in `gop_continue_decoders`), a confirmed picture, a video
     /// stream without hybrid regions, no key frame due and a stage that
     /// passes the wish on to its encoder, the stream goes but the encoder stays: the next
-    /// stream continues from the confirmed picture (B-36). Otherwise as
-    /// before: a new encoder and a key frame. Either way the path did not
+    /// stream continues from the confirmed picture (B-36). Otherwise the
+    /// next stream starts with a key frame (`reset_stream`). Either way the path did not
     /// carry the target (`RateController::on_stale_stream`, which halves it
     /// at most once per stale time, plan 2026-11-17).
     fn reset_stale_stream(&mut self) {
@@ -398,6 +424,8 @@ mod fallback;
 mod initialization;
 #[path = "host_pipeline_produce.rs"]
 mod producing;
+#[path = "host_pipeline_tiles.rs"]
+mod tiles_wait;
 
 /// `rects` measured in a picture of `basis` pixels, scaled to `size`.
 fn scale_visible(

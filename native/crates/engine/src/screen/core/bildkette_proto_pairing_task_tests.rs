@@ -187,7 +187,9 @@ fn bildkette_task_proto_continuation_follows_the_running_pairing() {
         pipeline.continue_from = Some(5);
         assert!(!pipeline.set_decoders(&set(decoders, Vec::new())));
         assert_eq!(pipeline.continue_from, None);
-        assert!(pipeline.encoder_epoch > epoch);
+        // Fix 2026-11-18 („Diashow“): the reset keeps the encoder; its key
+        // frame starts the new group (`Pipeline::reset_stream`).
+        assert_eq!(pipeline.encoder_epoch, epoch);
         assert!(pipeline.pacer.keyframe_due());
         // H.264 is not among the continuing decoders; HEVC stays the W2 fallback.
         // (The tiles in the list keep „Automatisch“, plan 2026-11-18.)

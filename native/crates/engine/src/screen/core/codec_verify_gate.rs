@@ -2,8 +2,13 @@
 //! opening of an encoder without a verdict one round trip runs on its own
 //! thread within the hard limit of 3 s; `Failed` skips the encoder like a
 //! refusal (`codec_registry_open.rs`), a crash inside the check is caught by
-//! the running mark of `codec_verdicts.rs`.
-use std::sync::{mpsc, Arc};
+//! the running mark of `codec_verdicts.rs`. A check that could not even run
+//! (the encoder does not open, measured 2026-11-18: NVENC HEVC with status
+//! 15 on a Windows VM, checked again at each of 50 openings in 2 minutes)
+//! leaves no verdict but is not repeated in this process (`unopened`); the
+//! opening itself still decides, as before.
+use std::collections::HashSet;
+use std::sync::{mpsc, Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use super::super::codec_registry::{DecoderFactory, EncoderFactory};
@@ -17,6 +22,8 @@ pub struct Checks {
     store: VerdictStore,
     clock: Arc<dyn VerifyClock>,
     deadline: Duration,
+    /// Encoders whose check could not run in this process (not stored).
+    unopened: Mutex<HashSet<VerdictKey>>,
 }
 
 impl Checks {
@@ -25,7 +32,16 @@ impl Checks {
             store,
             clock: Arc::new(RealClock::new()),
             deadline: DEADLINE,
+            unopened: Mutex::new(HashSet::new()),
         }
+    }
+
+    /// Whether the check of `key` could not run in this process.
+    pub fn unopened(&self, key: &VerdictKey) -> bool {
+        self.unopened
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .contains(key)
     }
 
     /// The same checks with another clock (task tests).
@@ -92,6 +108,8 @@ impl Checks {
         let key = Self::encoder_key(factory.as_ref(), choice, size);
         let verdict = match self.store.get(&key) {
             Some(verdict) => Some(verdict),
+            // Its check could not run here: not again at every opening.
+            None if self.unopened(&key) => None,
             None => self.check(factory, decoders, choice, size),
         };
         match verdict {
@@ -173,8 +191,15 @@ impl Checks {
                 Some(outcome.encoder)
             }
             Ok(Err(unchecked)) => {
-                eprintln!("screen codec check of {}: {unchecked}", factory.name());
+                eprintln!(
+                    "screen codec check of {}: {unchecked}; not checked again in this process",
+                    factory.name()
+                );
                 self.store.cancel(&key);
+                self.unopened
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .insert(key);
                 None
             }
             Err(_) => {

@@ -11,13 +11,11 @@ impl ScreenViewerApp {
     /// `true` when the session opens again before the view applies the
     /// choice to the running one.
     pub(super) fn choice(&mut self, action: &ToolbarAction, out: &mut Vec<Transition>) -> bool {
-        // A codec chosen by name is offered again even when an earlier
-        // „Automatisch“ gave it up.
+        // A codec given up under „Automatisch“ is out of its session only
+        // (fix of 2026-11-18); the new choice takes the session's give-ups
+        // back (`ViewerSession::codec_chosen`).
         let named = match action {
-            ToolbarAction::Codec(codec) => {
-                crate::screen::core::decoder_health::forget_chosen(codec.preference());
-                Some(*codec)
-            }
+            ToolbarAction::Codec(codec) => Some(*codec),
             _ => None,
         };
         let again = screen_toolbar_ui::apply_codec(action, &mut self.common.prefs);

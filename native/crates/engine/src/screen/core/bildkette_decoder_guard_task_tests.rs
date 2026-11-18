@@ -52,9 +52,9 @@ fn bildkette_task_decoder_guard_keeps_a_codec_that_showed_a_picture_and_the_tile
     assert_eq!(guard.on_tick(start + SILENCE_LIMIT * 3), None);
 }
 
-/// Plan 2026-11-17 „Windows-Bild“ P3: a picture that came out of a later
-/// decoder call than its own is a failure; late pictures in a row give the
-/// codec up even after it showed a picture in time.
+/// Plan 2026-11-17 „Windows-Bild“ P3: late pictures in a row give the codec
+/// up even after it showed a picture in time (since the fix of 2026-11-18 a
+/// late picture is no failed key frame; only the run of late ones counts).
 #[test]
 fn bildkette_task_verify_guard_gives_up_lagging_decoder() {
     let start = Instant::now();

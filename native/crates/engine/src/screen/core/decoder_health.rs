@@ -1,6 +1,6 @@
-//! Codecs whose decoding gave no picture on this device (fix of 2026-11-17:
-//! a Windows viewer stayed black while the Windows host showed its
-//! indicator).
+//! Codecs whose decoding gave no picture in a viewer session (fix of
+//! 2026-11-17: a Windows viewer stayed black while the Windows host showed
+//! its indicator).
 //!
 //! The negotiation prefers AV1, then HEVC, then H.264 when both sides offer
 //! hardware (`negotiate.rs` `rank`), and an offered decoder is never checked
@@ -8,45 +8,73 @@
 //! transform that enumerates is offered). A decoder that opens but fails at
 //! every key frame, or delivers nothing, left the window black with no
 //! message and no way back to another codec. `DecoderGuard` watches one
-//! session's codec; when that codec brings no picture, the viewer marks it
-//! here, its offers leave every later hello and `SET_DECODERS`
-//! (`usable_offers`), and the session negotiates again (desktop viewer:
+//! session's codec; when that codec brings no picture, the session notes it
+//! in its own `GivenUp` and negotiates again without it (desktop viewer:
 //! `screen_decode_guard.rs`). The tiles are never given up: they are every
-//! pairing's last fallback. The mark lasts for the process; the next viewer
-//! start tries the codec again.
+//! pairing's last fallback.
 //!
-//! Plan 2026-11-17 „Windows-Bild“ P3: a picture that comes out of a later
-//! decoder call than its own (`lag` > 0) counts as a failure, not as shown:
-//! such a decoder holds the newest picture back, on a still screen for
-//! good. `LAG_LIMIT` late pictures in a row give the codec up even after it
-//! showed pictures. Decoders that failed their run-time check are left out
-//! of the offers by the register (`CodecRegistry::decoder_offers`) before
-//! `usable_offers` sees them.
+//! Fix of 2026-11-18 („Kacheln immer“, v0.5.200): a give-up was a mark for
+//! the whole process; the main window's viewer runs for days, so one bad
+//! session (or a still screen, or one late picture) took a codec out of
+//! every later session's offers until all three were gone and only the
+//! tiles were offered. A give-up now lasts for its session only (`GivenUp`,
+//! kept by the session), and the decoder stages a library gave up last
+//! until the next viewer session opens (`begin_session`, `for_session`).
+//!
+//! A picture that comes out of a later decoder call than its own (`lag` >
+//! 0) is a picture: the decoder decodes, so neither the failure count nor
+//! the silence rule applies to it (fix of 2026-11-18; before, a late
+//! picture counted as a failed key frame). `LAG_LIMIT` late pictures in a
+//! row still give the codec up for the session: such a decoder holds the
+//! newest picture back, on a still screen for good (plan 2026-11-17
+//! „Windows-Bild“ P3). Decoders that failed their run-time check are left
+//! out of the offers by the register (`CodecRegistry::decoder_offers`)
+//! while another decoder of their codec remains.
 //!
 //! User rule of 2026-11-18 („jede Einstellung wird genau so verwendet“):
 //! only „Codec: Automatisch“ gives a codec up and moves on. A named codec
-//! (H.264, HEVC, AV1, „Scharf (GPU)“) is never marked here; the viewer shows
-//! the error with its reason instead (`DecoderGuard::reason`). Choosing a
-//! codec by name takes a mark of an earlier „Automatisch“ back
-//! (`forget_chosen`), so a codec given up before is offered for that choice.
-use std::sync::atomic::{AtomicU8, Ordering};
+//! (H.264, HEVC, AV1, „Scharf (GPU)“) is never given up; the viewer shows
+//! the error with its reason instead (`DecoderGuard::reason`).
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use super::negotiate::{CodecKind, CodecOffer, CodecPreference};
+use super::negotiate::{CodecKind, CodecOffer};
 
 /// Failed key frames of one codec without any picture before it is given up.
 pub const FAILURE_LIMIT: u32 = 3;
 /// Late pictures in a row (`DecoderGuard::on_picture` with a lag) that
 /// give a codec up even after it showed pictures.
 pub const LAG_LIMIT: u32 = FAILURE_LIMIT;
-/// Time from the codec's first record without any picture before it is
-/// given up: the host sends a key frame at once and answers a key frame
-/// request within one capture interval, and a hardware decoder that opens
-/// late (first use of the driver) is ready within a second (assumption, not
-/// measured).
+/// Time from the first record handed to the codec's decoder without any
+/// picture before it is given up: the host sends a key frame at once and
+/// answers a key frame request within one capture interval, and a hardware
+/// decoder that opens late (first use of the driver) is ready within a
+/// second (assumption, not measured).
 pub const SILENCE_LIMIT: Duration = Duration::from_secs(5);
 
-static UNUSABLE: AtomicU8 = AtomicU8::new(0);
+/// Counts the viewer sessions this process opened (`begin_session`).
+static SESSION_EPOCH: AtomicU64 = AtomicU64::new(0);
+
+/// A viewer session opens: what a decoder library gave up for earlier
+/// sessions (`for_session`) is tried again.
+pub fn begin_session() {
+    SESSION_EPOCH.fetch_add(1, Ordering::AcqRel);
+}
+
+/// The number of the newest viewer session of this process (0 before the
+/// first, and in processes that open none).
+pub fn session_epoch() -> u64 {
+    SESSION_EPOCH.load(Ordering::Acquire)
+}
+
+/// `slot` as kept for the session `epoch`: what was kept for an earlier
+/// session is gone (a decoder library's given-up stages, fix of 2026-11-18).
+pub fn for_session<T: Default>(slot: &mut (u64, T), epoch: u64) -> &mut T {
+    if slot.0 != epoch {
+        *slot = (epoch, T::default());
+    }
+    &mut slot.1
+}
 
 fn bit(codec: CodecKind) -> u8 {
     match codec {
@@ -57,41 +85,39 @@ fn bit(codec: CodecKind) -> u8 {
     }
 }
 
-/// This process does not offer `codec` again.
-pub fn mark_unusable(codec: CodecKind) {
-    UNUSABLE.fetch_or(bit(codec), Ordering::AcqRel);
-}
+/// The video codecs one viewer session gave up; never the tiles.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct GivenUp(u8);
 
-/// The user chose `preference` by name: the codecs it names are offered
-/// again even when an earlier „Automatisch“ gave them up. „Automatisch“
-/// and the tiles keep the marks.
-pub fn forget_chosen(preference: CodecPreference) {
-    UNUSABLE.fetch_and(!chosen_bits(preference), Ordering::AcqRel);
-}
-
-/// The marks a choice by name takes back (`forget_chosen`).
-fn chosen_bits(preference: CodecPreference) -> u8 {
-    if matches!(preference, CodecPreference::Auto | CodecPreference::Tiles) {
-        return 0;
+impl GivenUp {
+    /// Notes `codec`; `true` when it was not given up before.
+    pub fn insert(&mut self, codec: CodecKind) -> bool {
+        let new = bit(codec) != 0 && !self.contains(codec);
+        self.0 |= bit(codec);
+        new
     }
-    [CodecKind::H264, CodecKind::Hevc, CodecKind::Av1]
-        .into_iter()
-        .filter(|codec| preference.admits(*codec))
-        .fold(0, |bits, codec| bits | bit(codec))
-}
 
-/// Whether this process still offers `codec`.
-pub fn usable(codec: CodecKind) -> bool {
-    UNUSABLE.load(Ordering::Acquire) & bit(codec) == 0
-}
+    pub fn contains(self, codec: CodecKind) -> bool {
+        self.0 & bit(codec) != 0
+    }
 
-/// `offers` without the codecs this process gave up.
-pub fn usable_offers(offers: &[CodecOffer]) -> Vec<CodecOffer> {
-    offers
-        .iter()
-        .filter(|offer| usable(offer.codec))
-        .copied()
-        .collect()
+    /// `offers` without the codecs given up.
+    pub fn filter(self, offers: &[CodecOffer]) -> Vec<CodecOffer> {
+        offers
+            .iter()
+            .filter(|offer| !self.contains(offer.codec))
+            .copied()
+            .collect()
+    }
+
+    /// The codecs given up, for a log line.
+    pub fn keys(self) -> Vec<&'static str> {
+        [CodecKind::H264, CodecKind::Hevc, CodecKind::Av1]
+            .into_iter()
+            .filter(|codec| self.contains(*codec))
+            .map(CodecKind::key)
+            .collect()
+    }
 }
 
 /// One session's watch over the codec the host chose.
@@ -100,6 +126,7 @@ pub struct DecoderGuard {
     codec: Option<CodecKind>,
     since: Option<Instant>,
     failures: u32,
+    /// A picture of the codec came, in time or late: its decoder decodes.
     shown: bool,
     given_up: bool,
     /// Late pictures in a row.
@@ -117,7 +144,9 @@ impl DecoderGuard {
         }
     }
 
-    /// A record of `codec` arrived; the codec to give up, once.
+    /// A record of `codec` went to its decoder; the codec to give up, once.
+    /// Records skipped while the session waits for a key frame are not
+    /// handed here: the silence counts from the first record decoded.
     pub fn on_record(&mut self, codec: CodecKind, now: Instant) -> Option<CodecKind> {
         self.track(codec, now);
         self.verdict(now)
@@ -131,16 +160,15 @@ impl DecoderGuard {
     }
 
     /// A picture of `codec` was shown; `lag` pictures submitted after it
-    /// are still in the decoder. Without lag the codec works in this
-    /// session; a late picture counts as a failure. The codec to give up,
-    /// once.
+    /// are still in the decoder. Any picture shows that the decoder decodes
+    /// (no failure, no silence); `LAG_LIMIT` late ones in a row give the
+    /// codec up. The codec to give up, once.
     pub fn on_picture(&mut self, codec: CodecKind, now: Instant, lag: usize) -> Option<CodecKind> {
         self.track(codec, now);
+        self.shown = true;
         if lag == 0 {
-            self.shown = true;
             self.lagged = 0;
         } else {
-            self.failures = self.failures.saturating_add(1);
             self.lagged = self.lagged.saturating_add(1);
         }
         self.verdict(now)
@@ -152,7 +180,7 @@ impl DecoderGuard {
     }
 
     /// Why the watched codec counts as without picture, in German for the
-    /// viewer's message: late pictures, failed key frames or silence.
+    /// viewer's message and log: late pictures, failed key frames or silence.
     pub fn reason(&self) -> String {
         if self.lagged >= LAG_LIMIT {
             format!(
@@ -174,14 +202,15 @@ impl DecoderGuard {
 
     fn verdict(&mut self, now: Instant) -> Option<CodecKind> {
         let codec = self.codec?;
-        let lagging = self.lagged >= LAG_LIMIT;
-        if (self.shown && !lagging) || self.given_up || codec == CodecKind::Tiles {
+        if self.given_up || codec == CodecKind::Tiles {
             return None;
         }
+        let lagging = self.lagged >= LAG_LIMIT;
         let silent = self
             .since
             .is_some_and(|since| now.saturating_duration_since(since) >= SILENCE_LIMIT);
-        if lagging || self.failures >= FAILURE_LIMIT || silent {
+        let without_picture = !self.shown && (self.failures >= FAILURE_LIMIT || silent);
+        if lagging || without_picture {
             self.given_up = true;
             return Some(codec);
         }
@@ -194,35 +223,5 @@ impl DecoderGuard {
 mod bildkette_decoder_guard_task_tests;
 
 #[cfg(test)]
-mod wahlgilt_tests {
-    use super::*;
-
-    /// User rule 2026-11-18: a codec chosen by name is offered again after
-    /// an earlier „Automatisch“ gave it up; „Automatisch“ and „Verlustfrei“
-    /// take no mark back. The process value itself is not switched here:
-    /// parallel tests read the offers.
-    #[test]
-    fn wahlgilt_task_named_codec_takes_its_mark_back() {
-        assert_eq!(chosen_bits(CodecPreference::Auto), 0);
-        assert_eq!(chosen_bits(CodecPreference::Tiles), 0);
-        assert_eq!(chosen_bits(CodecPreference::Av1), bit(CodecKind::Av1));
-        assert_eq!(chosen_bits(CodecPreference::H264), bit(CodecKind::H264));
-        assert_eq!(chosen_bits(CodecPreference::Hevc), bit(CodecKind::Hevc));
-        // „Scharf (GPU)“ names H.264 and HEVC, never AV1.
-        assert_eq!(
-            chosen_bits(CodecPreference::Sharp),
-            bit(CodecKind::H264) | bit(CodecKind::Hevc)
-        );
-        // The reason names what the guard saw.
-        let start = Instant::now();
-        let mut guard = DecoderGuard::default();
-        for _ in 0..FAILURE_LIMIT {
-            let _ = guard.on_failure(CodecKind::Hevc, start);
-        }
-        assert!(guard.reason().contains("Schlüsselbilder"));
-        let mut silent = DecoderGuard::default();
-        let _ = silent.on_record(CodecKind::Av1, start);
-        assert_eq!(silent.on_tick(start + SILENCE_LIMIT), Some(CodecKind::Av1));
-        assert!(silent.reason().contains("kein Bild"));
-    }
-}
+#[path = "kachelfix_decoder_health_task_tests.rs"]
+mod kachelfix_decoder_health_task_tests;

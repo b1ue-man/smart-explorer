@@ -76,11 +76,10 @@ pub(super) fn codec_rows(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Vec<
     let state = applied::codec_state(codec, &facts, waits(ui, Setting::Codec, &facts, now));
     let mut chosen = codec;
     let _ = super::wrap::item(ui, "codec", |ui| {
-        super::wrap::fitted(
-            ui,
-            egui::ComboBox::from_id_salt("screen_codec"),
-            list_text(ui, "Codec", codec.label(), &state),
-        )
+        ({
+            let text = list_text(ui, "Codec", codec.label(), &state);
+            super::wrap::fitted(ui, egui::ComboBox::from_id_salt("screen_codec"), text)
+        })
         .show_ui(ui, |ui| {
             for setting in CodecSetting::ALL {
                 ui.selectable_value(&mut chosen, setting, setting.label());
@@ -97,11 +96,10 @@ pub(super) fn codec_rows(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Vec<
     let state = applied::decoder_state(decoder, &facts, waits(ui, Setting::Decoder, &facts, now));
     let mut picked = decoder;
     let _ = super::wrap::item(ui, "decoder", |ui| {
-        super::wrap::fitted(
-            ui,
-            egui::ComboBox::from_id_salt("screen_decoder"),
-            list_text(ui, "Dekodierer", decoder.label(), &state),
-        )
+        ({
+            let text = list_text(ui, "Dekodierer", decoder.label(), &state);
+            super::wrap::fitted(ui, egui::ComboBox::from_id_salt("screen_decoder"), text)
+        })
         .show_ui(ui, |ui| {
             for choice in DecoderPreference::ALL {
                 ui.selectable_value(&mut picked, choice, choice.label());
@@ -147,11 +145,14 @@ fn output_rows(
     let state = applied::library_state(library, facts, waits(ui, Setting::Library, facts, now));
     let mut chosen = library;
     let _ = super::wrap::item(ui, "library", |ui| {
-        super::wrap::fitted(
-            ui,
-            egui::ComboBox::from_id_salt("screen_decoder_library"),
-            list_text(ui, "Bibliothek", library.label(), &state),
-        )
+        ({
+            let text = list_text(ui, "Bibliothek", library.label(), &state);
+            super::wrap::fitted(
+                ui,
+                egui::ComboBox::from_id_salt("screen_decoder_library"),
+                text,
+            )
+        })
         .show_ui(ui, |ui| {
             for choice in DecoderLibrary::ALL {
                 ui.selectable_value(&mut chosen, choice, choice.label());
@@ -171,11 +172,10 @@ fn output_rows(
     let state = applied::display_state(display, facts, waits(ui, Setting::Display, facts, now));
     let mut picked = display;
     let _ = super::wrap::item(ui, "display", |ui| {
-        super::wrap::fitted(
-            ui,
-            egui::ComboBox::from_id_salt("screen_display"),
-            list_text(ui, "Anzeige", display.label(), &state),
-        )
+        ({
+            let text = list_text(ui, "Anzeige", display.label(), &state);
+            super::wrap::fitted(ui, egui::ComboBox::from_id_salt("screen_display"), text)
+        })
         .show_ui(ui, |ui| {
             for choice in DisplayChoice::ALL {
                 ui.selectable_value(&mut picked, choice, choice.label());

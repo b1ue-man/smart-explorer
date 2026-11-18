@@ -80,6 +80,7 @@ impl Pipeline {
             pairing: pairing::PairingState::new(choice, viewer_fps),
             confirmed: ConfirmedReference::default(),
             continue_from: None,
+            kept_encoder: false,
             key_gop: 0,
             chain,
         };

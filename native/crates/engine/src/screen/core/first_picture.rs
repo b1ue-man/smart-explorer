@@ -69,19 +69,29 @@ pub struct FirstPictureWatch {
     watched: Option<CodecChoice>,
     since_us: u64,
     silent: u32,
+    /// The last silent answer.
+    last_us: u64,
 }
 
 impl FirstPictureWatch {
     /// The stage answered a key-frame request for `choice` without a
     /// picture at `now_us`; `true` when the encoder counts as failed.
+    /// Fix 2026-11-18: a pause longer than the deadline between two silent
+    /// answers starts the watch over. In it the encoder got no picture (a
+    /// still screen answers „unchanged“, which is not counted), so the
+    /// time is no evidence against it; an encoder that fails gets a picture
+    /// with every request of its key frame and answers within a frame.
     pub fn on_silent(&mut self, choice: CodecChoice, now_us: u64) -> bool {
-        if self.watched != Some(choice) {
+        let idle = now_us.saturating_sub(self.last_us) > FIRST_PICTURE_DEADLINE_US;
+        if self.watched != Some(choice) || idle {
             *self = Self {
                 watched: Some(choice),
                 since_us: now_us,
                 silent: 0,
+                last_us: now_us,
             };
         }
+        self.last_us = now_us;
         self.silent = self.silent.saturating_add(1);
         self.silent >= FIRST_PICTURE_MIN_SILENT
             && now_us.saturating_sub(self.since_us) >= FIRST_PICTURE_DEADLINE_US

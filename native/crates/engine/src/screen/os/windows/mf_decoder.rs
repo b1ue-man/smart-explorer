@@ -34,7 +34,7 @@ use super::mf_encoder_sync::{stop, UNITS_PER_SECOND};
 use super::mf_media::{input_sample, process_output_bounded, set_value, video_type, Output};
 use crate::screen::core::decoded_frame::{DecodedFrame, DecoderFallback, FrameIdentities};
 use crate::screen::core::host_backend::{Chroma, ScreenDecoder, YuvPicture};
-use crate::screen::core::negotiate::CodecKind;
+use crate::screen::core::negotiate::{chosen_decoder_preference, CodecKind};
 use crate::screen::core::pixel_convert::{nv12_to_bgra, BgraImage, FrameSize, Nv12View, YuvMatrix};
 use crate::screen::core::wire_binary::{FrameRecord, GopHeader};
 
@@ -114,6 +114,17 @@ impl MfDecoder {
         ensure_com();
         let size = (header.size.width, header.size.height);
         let memory = known(header.codec);
+        // A chosen „Dekodierer: Hardware“ is never left without its stage
+        // (user rule 2026-11-18): when the memory leaves none, hardware is
+        // tried again. Under „Automatisch“ the register's software pass
+        // follows instead (`chosen_decoder_preference`, not the pass).
+        let memory = if chosen_decoder_preference() == DecoderPreference::Hardware
+            && stage::mf_stages(preference, true, &memory, size).is_empty()
+        {
+            stage::StageMemory::new()
+        } else {
+            memory
+        };
         let wanted = stage::ranking(preference).contains(&DecodeStage::Hardware)
             && memory.allows_hardware(size)
             && header.codec.is_video();

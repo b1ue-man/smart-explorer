@@ -370,10 +370,14 @@ impl CodecRegistry {
         // software pass, so Media Foundation hardware comes before FFmpeg
         // software; during a pass the factories read the pass as the choice.
         let preference = super::super::negotiate::decoder_preference();
+        // Fix of 2026-11-18: a decoder that failed its check is skipped only
+        // while another one decodes the stream under this choice (as
+        // `decoder_offers` offers it).
+        let skip_failed = self.unfailed_decoder_of(header, preference);
         let mut refusals: Vec<String> = Vec::new();
         for pass in preference.passes() {
             let opened = super::super::negotiate::with_decoder_pass(*pass, || {
-                self.open_decoder_pass(header, *pass, &mut refusals)
+                self.open_decoder_pass(header, *pass, skip_failed, &mut refusals)
             });
             if let Some(decoder) = opened {
                 return Ok(decoder);
@@ -395,18 +399,14 @@ impl CodecRegistry {
         &self,
         header: &GopHeader,
         pass: super::super::negotiate::DecoderPreference,
+        skip_failed: bool,
         refusals: &mut Vec<String>,
     ) -> Option<Box<dyn ScreenDecoder>> {
         for factory in &self.decoders {
-            let decodes = factory.offers().iter().any(|offer| {
-                offer.decodes(header.codec, header.profile)
-                    && pass.allows(offer.hardware)
-                    && offer.supports_size_rate(header.size, 0, header.frame_contract)
-            });
-            if !decodes {
+            if !decodes_header(factory.as_ref(), header, pass) {
                 continue;
             }
-            if self.decoder_failed(factory.as_ref(), header.codec) {
+            if skip_failed && self.decoder_failed(factory.as_ref(), header.codec) {
                 refusals.push(format!("{}: failed its run-time check", factory.name()));
                 continue;
             }
@@ -419,4 +419,31 @@ impl CodecRegistry {
         }
         None
     }
+
+    /// Whether a decoder without a failed check decodes `header` with a
+    /// stage of a kind `preference` allows.
+    fn unfailed_decoder_of(
+        &self,
+        header: &GopHeader,
+        preference: super::super::negotiate::DecoderPreference,
+    ) -> bool {
+        self.decoders.iter().any(|factory| {
+            decodes_header(factory.as_ref(), header, preference)
+                && !self.decoder_failed(factory.as_ref(), header.codec)
+        })
+    }
+}
+
+/// Whether `factory` offers a decoder of `header`'s stream with a stage of
+/// a kind `pass` allows.
+fn decodes_header(
+    factory: &dyn super::DecoderFactory,
+    header: &GopHeader,
+    pass: super::super::negotiate::DecoderPreference,
+) -> bool {
+    factory.offers().iter().any(|offer| {
+        offer.decodes(header.codec, header.profile)
+            && pass.allows(offer.hardware)
+            && offer.supports_size_rate(header.size, 0, header.frame_contract)
+    })
 }

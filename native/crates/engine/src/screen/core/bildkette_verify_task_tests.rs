@@ -245,7 +245,11 @@ fn bildkette_task_verify_open_skips_failed_factory_and_offers_drop_it() {
     assert_eq!(report.encoders.last().unwrap().verdict, None);
     let json = serde_json::to_value(&report).unwrap();
     assert_eq!(json["encoders"][0]["verdict"]["state"], "failed");
-    // A decoder that failed its check is neither offered nor opened.
+    // A decoder that failed its check is not offered while another decoder
+    // of its codec remains. Fix of 2026-11-18 („Kacheln immer“): the sole
+    // decoder of a codec stays offered (its verdict judged another stream;
+    // the session's guard judges the real one) instead of the codec
+    // silently leaving the hello.
     assert!(registry
         .decoder_offers()
         .iter()
@@ -254,10 +258,29 @@ fn bildkette_task_verify_open_skips_failed_factory_and_offers_drop_it() {
     checks
         .store()
         .record(&key, Verdict::Failed(FailReason::Late), "test");
-    assert!(registry
-        .decoder_offers()
-        .iter()
-        .all(|offer| offer.codec != H264));
+    assert!(
+        registry
+            .decoder_offers()
+            .iter()
+            .any(|offer| offer.codec == H264),
+        "the sole H.264 decoder stays offered"
+    );
+    let hardware = decoder("h264-hw", H264, true, Answer::Intact);
+    let both = CodecRegistry::new(Vec::new(), vec![h264_decoder.clone(), hardware])
+        .with_checks(checks.clone());
+    let offers = both.decoder_offers();
+    assert!(
+        offers
+            .iter()
+            .any(|offer| offer.codec == H264 && offer.hardware),
+        "{offers:?}"
+    );
+    assert!(
+        offers
+            .iter()
+            .all(|offer| offer.codec != H264 || offer.hardware),
+        "the failed decoder leaves while another remains: {offers:?}"
+    );
 }
 
 #[test]

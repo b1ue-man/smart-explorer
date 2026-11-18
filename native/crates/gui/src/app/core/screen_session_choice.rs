@@ -11,12 +11,16 @@
 //!   choice keeps its codec and shows the error (`request_lossless` gives
 //!   `None`). A new codec choice ends such a switch (`codec_chosen`), so the
 //!   switch never overrules what the user chose later.
+//! - Fix of 2026-11-18: a codec the viewer gave up under „Automatisch“ is
+//!   out of this session only (`give_up_codec`); a new codec choice takes
+//!   the session's give-ups back (`codec_chosen`).
 //! - A session that began with the tiles cannot be moved to a video codec
 //!   by the host (`SET_DECODERS` keeps its pairing): a new choice other than
 //!   „Verlustfrei“ opens it again (`needs_reopen`).
 use std::sync::atomic::Ordering;
 
 use super::{lock, Shared, ViewerSession};
+use crate::screen::core::decoder_health::GivenUp;
 use crate::screen::core::negotiate::{CodecKind, CodecSetting};
 use crate::screen::core::wire_control::{SetMode, StreamMode, ViewerFrame};
 
@@ -43,6 +47,14 @@ impl Shared {
         mode.lossless = true;
         mode.source = None;
         Some(mode.clone())
+    }
+
+    /// Notes that this session gave `codec` up: the codecs given up so far
+    /// when it is new, `None` when it was given up before.
+    pub(crate) fn give_up_codec(&self, codec: CodecKind) -> Option<GivenUp> {
+        let mut given_up = lock(&self.given_up);
+        let new = given_up.insert(codec);
+        new.then_some(*given_up)
     }
 
     /// The „Codec“ this session runs for.
@@ -96,12 +108,14 @@ impl ViewerSession {
     }
 
     /// A new „Codec“ was chosen: the viewer's earlier switch to the tiles
-    /// ends, and the choice counts for the session's later decisions. The
-    /// caller sends the new `SET_MODE` after this.
+    /// and its give-ups of codecs end, and the choice counts for the
+    /// session's later decisions. The caller sends the new `SET_MODE` after
+    /// this.
     pub fn codec_chosen(&self, codec: CodecSetting) {
         self.shared
             .lossless_fallback
             .store(false, Ordering::Release);
+        *lock(&self.shared.given_up) = GivenUp::default();
         *lock(&self.shared.codec) = codec;
     }
 }

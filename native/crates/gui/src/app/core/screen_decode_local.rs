@@ -28,6 +28,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use super::screen_session::PictureData;
 use crate::daemon::StreamRequest;
 use crate::screen::core::codec_registry::CodecRegistry;
+use crate::screen::core::decoder_health::GivenUp;
 use crate::screen::core::host_backend::{Chroma, ScreenDecoder, YuvPicture};
 use crate::screen::core::negotiate::{
     decoder_preference, CodecKind, CodecOffer, DecoderPreference,
@@ -153,11 +154,14 @@ fn registry() -> Option<Arc<CodecRegistry>> {
     lock(&REGISTRY).clone()
 }
 
-/// `SET_DECODERS` with the decoders this process still offers, after a
-/// codec gave no picture (`screen_decode_guard.rs`); `None` without the
-/// register (task tests with fake decoders).
-pub fn usable_decoders_frame() -> Option<SetDecoders> {
-    registry().map(|registry| super::screen_pool::decoders_frame(&registry.decoder_offers()))
+/// `SET_DECODERS` with the decoders this process offers without the codecs
+/// the session gave up (`given_up`), after a codec gave no picture
+/// (`screen_decode_guard.rs`); `None` without the register (task tests with
+/// fake decoders).
+pub fn usable_decoders_frame(given_up: GivenUp) -> Option<SetDecoders> {
+    registry().map(|registry| {
+        super::screen_pool::decoders_frame_without(&registry.decoder_offers(), given_up)
+    })
 }
 
 /// P9: the decoders this process offers now. „Dekodierer-Bibliothek“

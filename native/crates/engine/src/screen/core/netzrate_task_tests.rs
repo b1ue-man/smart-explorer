@@ -46,7 +46,7 @@ fn netzrate_task_tiles_keep_the_target_and_the_user_ceiling() {
     const SECONDS: u64 = 10;
     let mut budget = TileBudget::default();
     let bits = sent_bits(SECONDS, 200_000, |now, bytes| {
-        let admitted = budget.admits(now);
+        let admitted = budget.admits(now, CEILING);
         if admitted {
             budget.on_sent(now, bytes, CEILING);
         }
@@ -57,12 +57,18 @@ fn netzrate_task_tiles_keep_the_target_and_the_user_ceiling() {
     assert!(bits <= bound, "{bits} > {bound}");
     // The budget does not starve the stream: at least E minus one picture.
     assert!(bits + 200_000 * 8 >= CEILING * SECONDS, "{bits}");
-    // A picture larger than the budget is sent whole and moves the next.
+    // A picture larger than the budget is sent whole and moves the next;
+    // since the fix „Diashow“ (2026-11-18) the budget is a token bucket
+    // that starts with its credit, so the debt is the picture minus it.
     let mut big = TileBudget::default();
-    assert!(big.admits(0));
+    assert!(big.admits(0, CEILING));
     big.on_sent(0, 1_000_000, CEILING);
-    assert!(!big.admits(12_000_000));
-    assert_eq!(big.wait_us(0), 1_000_000 * 8 * 1_000_000 / CEILING);
+    assert!(!big.admits(12_000_000, CEILING));
+    let debt = 1_000_000 * 8 - CEILING * TILE_BURST_US / 1_000_000;
+    assert_eq!(
+        big.wait_us(0, CEILING),
+        (debt * 1_000_000).div_ceil(CEILING)
+    );
     // The rate control keeps running for the tiles: its target E holds the
     // user ceiling, and a lower link estimate (overuse, loss) lowers it.
     let mut rate = RateController::new(PathKind::Direct, 0);
@@ -78,10 +84,11 @@ fn netzrate_task_tiles_keep_the_target_and_the_user_ceiling() {
     });
     let bound = target * SECONDS + target * TILE_BURST_US / 1_000_000 + 200_000 * 8;
     assert!(bits <= bound, "{bits} > {bound}");
-    // The pipeline asks the budget before every tile picture and books it.
+    // The pipeline asks the budget before every tile picture and books it
+    // when its send starts (fix „Diashow“: not again after the send).
     let produce = include_str!("host_pipeline_produce.rs").replace("\r\n", "\n");
     assert!(produce.contains("if !video && !self.rate.tiles_admit(now) {"));
-    assert!(produce.contains("self.rate.on_tiles_sent(now_us(), encoded_bytes);"));
+    assert!(produce.contains("self.rate.on_tiles_sent(send_started_us, encoded_bytes);"));
     // Back pressure still reaches the rate control for every codec.
     assert!(produce.contains("self.rate.on_back_pressure(now);"));
 }

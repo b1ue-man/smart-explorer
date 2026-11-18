@@ -71,6 +71,47 @@ pub fn note(pid: Option<u32>, text: &str) {
     }
 }
 
+/// The file name of the desktop viewer's lines below `<app data>/logs`.
+pub const VIEWER_LOG_FILE: &str = "screen-viewer.log";
+
+/// Where the desktop viewer's screen log of this account lives (fix of
+/// 2026-11-18: why the viewer gave a codec up, offered only the tiles or
+/// switched to them was nowhere to be read). A file of its own: the viewer
+/// runs in the app's process, the host log belongs to the daemon.
+pub fn viewer_log_path() -> PathBuf {
+    crate::support_dirs::app_data_dir()
+        .join("logs")
+        .join(VIEWER_LOG_FILE)
+}
+
+fn viewer_log() -> &'static Mutex<RotatingLog> {
+    static LOG: OnceLock<Mutex<RotatingLog>> = OnceLock::new();
+    LOG.get_or_init(|| Mutex::new(RotatingLog::new(viewer_log_path(), MAX_BYTES, KEEP)))
+}
+
+/// One line of the viewer log as written: time, `viewer[pid]`, text.
+pub fn viewer_line(stamp: &str, pid: u32, text: &str) -> String {
+    format!("{stamp} viewer[{pid}] {text}")
+}
+
+/// One line of the desktop viewer's decisions about its codecs (a codec
+/// given up, only the tiles offered, the switch to the tiles) with its
+/// reason, to standard error and `screen-viewer.log`.
+pub fn viewer_note(text: &str) {
+    let stamp = chrono::Utc::now()
+        .format("%Y-%m-%dT%H:%M:%S%.3fZ")
+        .to_string();
+    let line = viewer_line(&stamp, std::process::id(), text);
+    eprintln!("{line}");
+    let written = viewer_log()
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .append(&line);
+    if let Err(error) = written {
+        eprintln!("screen viewer log {}: {error}", viewer_log_path().display());
+    }
+}
+
 /// Reads the standard error of host process `pid` into the log until the
 /// process closes it. Without a thread (the daemon has none left) the pipe
 /// closes at once; the daemon's own line says so.
@@ -106,6 +147,22 @@ pub fn forward(stderr: impl Read + Send + 'static, pid: u32) {
         note(
             None,
             &format!("host[{pid}] standard error not logged (no thread: {error})"),
+        );
+    }
+}
+
+#[cfg(test)]
+mod kachelfix_tests {
+    /// Fix of 2026-11-18: the viewer's codec decisions go to a log of their
+    /// own beside the host log, one line each with time and process.
+    #[test]
+    fn kachelfix_task_viewer_log_lines_name_the_viewer_process() {
+        let path = super::viewer_log_path();
+        assert!(path.ends_with(std::path::Path::new("logs").join("screen-viewer.log")));
+        assert_ne!(path, super::log_path());
+        assert_eq!(
+            super::viewer_line("2026-11-18T10:00:00.000Z", 42, "Kachel-Rückfall: HEVC"),
+            "2026-11-18T10:00:00.000Z viewer[42] Kachel-Rückfall: HEVC"
         );
     }
 }

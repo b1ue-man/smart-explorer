@@ -283,6 +283,27 @@ fn entries(name: String, offers: &[CodecOffer], refused: Vec<String>) -> Vec<Cod
     rows
 }
 
+/// The codecs that keep a decoder without a failed check (`judged`: each
+/// factory's offers and whether its check failed) of a kind `preference`
+/// allows. Fix of 2026-11-18: a stored decoder verdict comes from the round
+/// trip of this device's own encoder (`codec_verify.rs`), another stream;
+/// where the chosen „Dekodierer“/„Dekodierer-Bibliothek“ leave no other
+/// decoder of the codec, the failed one stays offered and the session's
+/// guard judges it on the real stream, instead of the codec silently
+/// leaving the hello (with only the tiles left under „Automatisch“).
+fn sound_codecs(
+    judged: &[Vec<(CodecOffer, bool)>],
+    preference: super::negotiate::DecoderPreference,
+) -> Vec<CodecKind> {
+    let mut sound: Vec<CodecKind> = Vec::new();
+    for (offer, failed) in judged.iter().flatten() {
+        if !failed && preference.allows(offer.hardware) && !sound.contains(&offer.codec) {
+            sound.push(offer.codec);
+        }
+    }
+    sound
+}
+
 fn tiles_entry() -> CodecEntry {
     CodecEntry {
         codec: CodecKind::Tiles,
@@ -389,18 +410,35 @@ impl CodecRegistry {
             .is_some_and(|checks| checks.decoder_failed(factory, codec))
     }
 
-    /// The viewer's decoders for its hello, without the codecs that gave no
-    /// picture in this process (`decoder_health`) and without the decoders
-    /// that failed their check (P3).
+    /// The viewer's decoders for its hello, without the decoders that failed
+    /// their check (P3) while another decoder of their codec remains under
+    /// the process's „Dekodierer“ (`sound_codecs`). A codec given up in a
+    /// session stays out of that session only (`decoder_health::GivenUp`,
+    /// fix of 2026-11-18: it was out of every later session of the process).
     pub fn decoder_offers(&self) -> Vec<CodecOffer> {
-        super::decoder_health::usable_offers(&ordered_offers(self.decoders.iter().map(|factory| {
-            factory
-                .offers()
+        let judged: Vec<Vec<(CodecOffer, bool)>> = self
+            .decoders
+            .iter()
+            .map(|factory| {
+                factory
+                    .offers()
+                    .into_iter()
+                    .map(|offer| {
+                        let failed = offer.codec.is_video()
+                            && self.decoder_failed(factory.as_ref(), offer.codec);
+                        (offer, failed)
+                    })
+                    .collect()
+            })
+            .collect();
+        let sound = sound_codecs(&judged, super::negotiate::decoder_preference());
+        ordered_offers(judged.into_iter().map(|offers| {
+            offers
                 .into_iter()
-                .filter(|offer| !self.decoder_failed(factory.as_ref(), offer.codec))
-                .map(|offer| offer.with_pixel_access(true))
+                .filter(|(offer, failed)| !failed || !sound.contains(&offer.codec))
+                .map(|(offer, _)| offer.with_pixel_access(true))
                 .collect()
-        })))
+        }))
     }
 
     /// D6: the newer codecs of which an encoder of this register passed

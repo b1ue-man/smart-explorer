@@ -82,6 +82,8 @@ pub struct DecodeState {
     chain: continuation::Chain,
     /// Watch over the negotiated codec (`screen_decode_guard.rs`).
     guard: crate::screen::core::decoder_health::DecoderGuard,
+    /// Named codecs whose missing picture went to the viewer log once.
+    reported: crate::screen::core::decoder_health::GivenUp,
     // Declared last: decoder/pending pictures must die before the session lease.
     shared: Arc<Shared>,
     memory: crate::screen::core::frame_memory::MemoryHold,
@@ -123,6 +125,7 @@ impl DecodeState {
             started: Instant::now(),
             chain: Default::default(),
             guard: Default::default(),
+            reported: Default::default(),
         }
     }
 
@@ -232,7 +235,6 @@ impl DecodeState {
         let first_of_frame = self.last_record != Some((header.gop_id, record.frame_id));
         self.last_record = Some((header.gop_id, record.frame_id));
         let keyframe = record.flags & FLAG_KEYFRAME != 0;
-        self.guard_record(header.codec);
         if fresh && !self.stream_start(&header, &record) {
             return;
         }
@@ -257,6 +259,9 @@ impl DecodeState {
             self.broken_frame = None;
             self.gop = None;
         }
+        // Fix of 2026-11-18: the guard's silence counts from the first record
+        // that goes to a decoder, not while records wait for a key frame.
+        self.guard_record(header.codec);
         if self.reopens_at(keyframe, first_of_frame) {
             self.gop = None;
         }
@@ -343,24 +348,19 @@ impl DecodeState {
                 self.chain.continuity.broken();
                 self.broken = Some(header.gop_id);
                 self.broken_frame = Some(record.frame_id);
-                let chosen = self.shared.codec_choice();
+                // A hybrid picture the decoder cannot place (its picture
+                // came late or without its identity): „Automatisch“ leaves
+                // the codec for this session (another codec first, the
+                // tiles last; fix of 2026-11-18: before, straight to the
+                // tiles), a named codec stays and shows the error, with the
+                // reason in the window and the viewer log.
                 if header.frame_contract.is_some_and(|c| c.hybrid_regions)
                     && DecoderFallback::from_error(&error).is_some()
-                    && !super::screen_session::tiles_allowed(chosen)
                 {
-                    // User rule 2026-11-18: a named codec stays; the error shows.
-                    let text = format!("Der Videodecoder liefert kein passend zugeordnetes Hybridbild ({error}). Gewählt ist „{}“; nur „Codec: Automatisch“ wechselt zur Kachelübertragung.", chosen.label());
-                    self.shared.update(|info| info.notice = Some(text));
-                } else if header.frame_contract.is_some_and(|c| c.hybrid_regions)
-                    && DecoderFallback::from_error(&error).is_some()
-                {
-                    if let Some(mode) = self.shared.request_lossless() {
-                        self.shared.update(|info| info.notice = Some("Der Videodecoder liefert kein passend zugeordnetes Hybridbild. Die Sitzung wechselt zur verlustfreien Kachelübertragung.".into()));
-                        if (self.send)(&ViewerFrame::SetMode(mode)).is_err() {
-                            self.connection_lost();
-                        }
+                    let reason = format!("kein passend zugeordnetes Hybridbild: {error}");
+                    if self.leave_codec(header.codec, &reason) {
+                        return;
                     }
-                    return;
                 }
                 self.request_keyframe(KeyframeReason::DecodeError, header.gop_id);
             }

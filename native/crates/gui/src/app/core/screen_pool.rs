@@ -13,7 +13,8 @@ use crate::daemon::StreamRequest;
 use super::screen_prefs::ViewerPrefs;
 use super::screen_session::{Backend, ViewerSession};
 use super::screen_target::ScreenTarget;
-use crate::screen::core::negotiate::CodecOffer;
+use crate::screen::core::decoder_health::GivenUp;
+use crate::screen::core::negotiate::{CodecOffer, CodecSetting};
 use crate::screen::core::pixel_convert::FrameSize;
 use crate::screen::core::set_decoders::SetDecoders;
 use crate::screen::core::window_list::SourceId;
@@ -63,7 +64,12 @@ pub fn preview_gap_ms(interval_ms: u64) -> u64 {
 }
 
 pub fn preview_request(offers: &[CodecOffer], edge: u32, interval_ms: u64) -> StreamRequest {
-    announced(StreamRequest {
+    announced(preview_base(offers, edge, interval_ms), GivenUp::default())
+}
+
+/// A preview's request before `announced`.
+fn preview_base(offers: &[CodecOffer], edge: u32, interval_ms: u64) -> StreamRequest {
+    StreamRequest {
         expected_node: None,
         mode: SessionMode::Preview,
         source: None,
@@ -78,29 +84,73 @@ pub fn preview_request(offers: &[CodecOffer], edge: u32, interval_ms: u64) -> St
         gop_continue_decoders: Vec::new(),
         // A preview never changes the host's display (plan 2026-11-17 P5).
         virtual_display: None,
-    })
+    }
 }
 
-/// B-36: `gop_continue` only when every decoder that may open for the
-/// request's offers keeps its references, and per codec the offers whose
-/// decoders do (`screen_decode_local`); a preview raised to the full view
-/// keeps its session, so both ask.
-fn announced(mut request: StreamRequest) -> StreamRequest {
-    // Codecs that gave no picture in this process stay out (fix of
-    // 2026-11-17, `decoder_health`).
-    // P9: the register's offers now („Dekodierer-Bibliothek“ at run time).
+/// The register's offers now (P9: „Dekodierer-Bibliothek“ at run time)
+/// without the codecs `given_up` of one session (fix of 2026-11-18: a give-up
+/// lasts for its session only; before, it took the codec out of every later
+/// request of the process), and B-36: `gop_continue` only when every
+/// decoder that may open for the request's offers keeps its references, and
+/// per codec the offers whose decoders do (`screen_decode_local`); a preview
+/// raised to the full view keeps its session, so both ask.
+fn announced(mut request: StreamRequest, given_up: GivenUp) -> StreamRequest {
     let offers = super::screen_decode_local::current_offers(&request.decoders);
-    request.decoders = crate::screen::core::decoder_health::usable_offers(&offers);
+    request.decoders = given_up.filter(&offers);
     request.gop_continue = super::screen_decode_local::announces(&request);
     request.gop_continue_decoders = super::screen_decode_local::continuing(&request);
+    // Task tests with fake decoders write no log file.
+    if let Some(line) = tiles_only_line(&request, given_up).filter(|_| !cfg!(test)) {
+        crate::screen::os::host_worker_client::host_log::viewer_note(&line);
+    }
     request
+}
+
+/// The viewer-log line of a request that offers the host no video codec
+/// (fix of 2026-11-18): only the tiles under „Automatisch“, nothing under a
+/// named codec; `None` when a video codec is offered or „Verlustfrei“ chose
+/// the tiles.
+pub fn tiles_only_line(request: &StreamRequest, given_up: GivenUp) -> Option<String> {
+    let codec = request.codec.unwrap_or_default();
+    let chosen = request.chosen_decoders();
+    if codec == CodecSetting::Lossless || chosen.iter().any(|offer| offer.codec.is_video()) {
+        return None;
+    }
+    let mut register: Vec<String> = Vec::new();
+    for offer in &request.decoders {
+        let stage = if offer.hardware { "hw" } else { "sw" };
+        let text = format!("{}/{stage}", offer.codec.key());
+        if !register.contains(&text) {
+            register.push(text);
+        }
+    }
+    let library = crate::screen::core::decoder_library::decoder_library();
+    let missing = crate::screen::core::decoder_library::chosen_missing()
+        .map(|library| format!("; Bibliothek „{}“ fehlt", library.label()))
+        .unwrap_or_default();
+    Some(format!(
+        "nur Kacheln angeboten: kein Video-Codec unter Codec „{}“, Dekodierer „{}“, \
+         Dekodier-Bibliothek „{}“{missing}; Angebote des Registers: [{}]; in dieser Sitzung \
+         aufgegeben: [{}]",
+        codec.label(),
+        request.decoder.unwrap_or_default().label(),
+        library.label(),
+        register.join(", "),
+        given_up.keys().join(", ")
+    ))
 }
 
 /// `SET_DECODERS` with the viewer's current „Codec“ and „Dekodierer“ for
 /// `offers` (P1): the decoders and the announcement a new session's hello
 /// would carry.
 pub fn decoders_frame(offers: &[CodecOffer]) -> SetDecoders {
-    preview_request(offers, PREVIEW_MIN_EDGE, DEFAULT_PREVIEW_INTERVAL_MS).decoders_frame()
+    decoders_frame_without(offers, GivenUp::default())
+}
+
+/// `decoders_frame` without the codecs one session gave up.
+pub fn decoders_frame_without(offers: &[CodecOffer], given_up: GivenUp) -> SetDecoders {
+    let base = preview_base(offers, PREVIEW_MIN_EDGE, DEFAULT_PREVIEW_INTERVAL_MS);
+    announced(base, given_up).decoders_frame()
 }
 
 pub fn full_request(
@@ -109,7 +159,7 @@ pub fn full_request(
     display: FrameSize,
     control: bool,
 ) -> StreamRequest {
-    announced(StreamRequest {
+    let request = StreamRequest {
         expected_node: None,
         mode: if control {
             SessionMode::Control
@@ -129,7 +179,8 @@ pub fn full_request(
         gop_continue_decoders: Vec::new(),
         // „Monitor“ and „Auflösung“ (plan 2026-11-17 P5).
         virtual_display: Some(super::screen_prefs::virtual_display_choice()),
-    })
+    };
+    announced(request, GivenUp::default())
 }
 
 // The production opener binds capabilities to its concrete renderer and lease.

@@ -299,6 +299,9 @@ pub enum Answer {
 
 /// A fake video decoder around the tile decoder.
 pub struct FakeDecoder {
+    /// The factory's name; it carries the stage like a real decoder's name
+    /// (`FFmpeg h264 [DXVA2]`, read by `codec_verify::hardware_stage`).
+    name: String,
     inner: TilesScreenDecoder,
     codec: CodecKind,
     answer: Answer,
@@ -308,7 +311,7 @@ pub struct FakeDecoder {
 
 impl ScreenDecoder for FakeDecoder {
     fn name(&self) -> String {
-        "fake-decoder".into()
+        self.name.clone()
     }
 
     fn decode(&mut self, record: &FrameRecord) -> io::Result<bool> {
@@ -387,6 +390,7 @@ impl DecoderFactory for FakeDecoderFactory {
 
     fn open(&self, header: &GopHeader) -> io::Result<Box<dyn ScreenDecoder>> {
         Ok(Box::new(FakeDecoder {
+            name: self.name.clone(),
             inner: TilesScreenDecoder::new(header.size)?,
             codec: self.codec,
             answer: self.answer,

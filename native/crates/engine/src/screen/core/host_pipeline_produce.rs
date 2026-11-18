@@ -144,8 +144,8 @@ impl Pipeline {
         }
         self.rate.set_timing(rtt_us, self.clock.interval_us());
         let mut target = self.rate.target_bps();
-        // Plan 2026-11-18 „Netzrate“ M1: the tiles keep the target E (link,
-        // user ceiling, codec ceiling) by their byte budget; dirty tiles
+        // Plan 2026-11-18 „Netzrate“ M1: the tiles keep the ceilings (and E
+        // while the path is congested) by their byte budget; dirty tiles
         // wait for the next picture, none is lost (`tiles_rate.rs`).
         if !video && !self.rate.tiles_admit(now) {
             return Ok(Produced::Idle);
@@ -171,6 +171,16 @@ impl Pipeline {
                     return Ok(Produced::Dropped);
                 }
                 PaceDecision::ResetStream => {
+                    // A slow tile stream waits for its reliable stream (fix
+                    // „Diashow“ 2026-11-18, `host_pipeline_tiles.rs`).
+                    let waited = if video {
+                        None
+                    } else {
+                        self.tiles_stale(now, target)
+                    };
+                    if let Some(produced) = waited {
+                        return Ok(produced);
+                    }
                     // The stale stream lowered the target: the frame that
                     // follows is sized for the lowered one.
                     self.reset_stale_stream();
@@ -325,15 +335,25 @@ impl Pipeline {
                     && !frame.keyframe
                     && self.continue_from.is_none()
                 {
+                    // An encoder kept over a reset (`reset_stream`) gives
+                    // way to a new one, whose first picture is a key frame.
+                    if std::mem::take(&mut self.kept_encoder) {
+                        self.drop_encoder();
+                        return Ok(Produced::Idle);
+                    }
                     self.pacer.request_keyframe();
                     return self.on_silent_answer(&request, StageAnswer::NoKeyFrame);
                 }
+                self.kept_encoder = false;
                 // The host process drew the picture with the id it expected
                 // for it; the ids stay increasing either way.
                 let frame_id = report
                     .and_then(|report| report.frame_id)
                     .map_or(request.frame_id, |id| id.max(request.frame_id));
                 self.next_frame_id = frame_id;
+                // The tiles' budget books the picture when its send starts:
+                // the time the send takes is not charged twice.
+                let send_started_us = now_us();
                 let sent = self
                     .send(
                         connection,
@@ -348,7 +368,7 @@ impl Pipeline {
                 if matches!(sent, Ok(Produced::Sent)) {
                     self.quality_policy.first_picture.restart();
                     if !request.choice.codec.is_video() {
-                        self.rate.on_tiles_sent(now_us(), encoded_bytes);
+                        self.rate.on_tiles_sent(send_started_us, encoded_bytes);
                     }
                 }
                 sent
