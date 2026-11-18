@@ -140,7 +140,15 @@ impl Session<'_> {
             // The host's sound on or off (P9); without an attached capture
             // link (no `audio` in `HELLO_OK`) nothing happens.
             ViewerFrame::Audio(on) => {
-                crate::screen::os::audio::set_wanted(self.connection, on);
+                if let Some(link) = self.context.backend.audio() {
+                    link.set_wanted(self.connection, on);
+                }
+                Ok(())
+            }
+            // What the viewer's jitter buffer saw (P9): into the session's
+            // view for `se screen sessions` and the host's tab.
+            ViewerFrame::AudioReport(report) => {
+                self.handle.update(|view| view.audio = Some(report));
                 Ok(())
             }
         }

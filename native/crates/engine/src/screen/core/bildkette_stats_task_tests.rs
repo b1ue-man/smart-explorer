@@ -39,6 +39,7 @@ fn view(source: &str) -> SessionView {
         state: SessionState::Streaming,
         chain: None,
         stations: None,
+        audio: None,
     }
 }
 

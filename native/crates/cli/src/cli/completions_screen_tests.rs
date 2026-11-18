@@ -107,6 +107,7 @@ fn screen_task_completions_screen() {
         state: SessionState::Streaming,
         chain: None,
         stations: None,
+        audio: None,
     };
     let ids = session_candidates_from(&[session]);
     assert_eq!(values(&ids), ["3"]);

@@ -289,6 +289,11 @@ pub trait ScreenHostBackend: Send + Sync {
     ) -> io::Result<Option<super::app_icon::IconReply>> {
         Ok(None)
     }
+    /// The sound link of this host (plan 2026-11-17 P9); `None` when the
+    /// platform cannot capture its output.
+    fn audio(&self) -> Option<std::sync::Arc<dyn super::audio_port::AudioHost>> {
+        None
+    }
     /// A graphical session exists in which the screen can be shown.
     fn graphical_session(&self) -> bool;
     fn monitors(&self) -> Vec<MonitorInfo>;

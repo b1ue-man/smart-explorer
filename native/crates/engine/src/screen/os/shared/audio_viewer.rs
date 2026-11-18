@@ -14,7 +14,7 @@
 //! process: a viewer window shows one full session (the group view shows
 //! tiles, which never switch the sound on).
 use std::io;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -23,7 +23,7 @@ use tokio::sync::mpsc;
 
 use crate::screen::core::audio_codec::{AudioDecoder, FRAME_VALUES};
 use crate::screen::core::audio_jitter::{JitterBuffer, Playout};
-use crate::screen::core::audio_wire::{AudioCodec, AudioPacket};
+use crate::screen::core::audio_wire::{AudioCodec, AudioPacket, AudioReport, SAMPLE_RATE};
 
 /// The output closes after this long without a packet.
 const IDLE_CLOSE: Duration = Duration::from_secs(2);
@@ -38,6 +38,9 @@ struct Player {
     running: AtomicBool,
     last_packet: Mutex<Option<Instant>>,
     epoch: Instant,
+    /// What the output holds ahead of the speaker (device queue and the
+    /// decoded rest of a frame), in µs.
+    output_us: AtomicU32,
 }
 
 fn player() -> &'static Player {
@@ -48,6 +51,7 @@ fn player() -> &'static Player {
         running: AtomicBool::new(false),
         last_packet: Mutex::new(None),
         epoch: Instant::now(),
+        output_us: AtomicU32::new(0),
     })
 }
 
@@ -62,6 +66,18 @@ impl Player {
             .unwrap_or_else(PoisonError::into_inner)
             .is_none_or(|last| last.elapsed() > IDLE_CLOSE)
     }
+}
+
+/// The player's statistics (`AUDIO_REPORT`, the viewer's statistics);
+/// `None` while „Ton“ is off or the output does not run.
+pub fn report() -> Option<AudioReport> {
+    let player = player();
+    let playing = player.playing.load(Ordering::Acquire) && player.running.load(Ordering::Acquire);
+    playing.then(|| {
+        player
+            .jitter()
+            .report(player.output_us.load(Ordering::Relaxed))
+    })
 }
 
 /// The viewer's „Ton“: off forgets every buffered frame and closes the
@@ -145,7 +161,13 @@ fn play(player: &Player) -> io::Result<()> {
             output.write(&pcm[..wanted])?;
             pcm.drain(..wanted);
         }
+        let rest_us = (pcm.len() / 2) as u64 * 1_000_000 / u64::from(SAMPLE_RATE);
+        let ahead = u64::from(output.queued_us()).saturating_add(rest_us);
+        player
+            .output_us
+            .store(u32::try_from(ahead).unwrap_or(u32::MAX), Ordering::Relaxed);
     }
+    player.output_us.store(0, Ordering::Relaxed);
     Ok(())
 }
 

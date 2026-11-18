@@ -62,6 +62,10 @@ pub struct SessionView {
     /// p50/p95 per station in µs on this host (BK0).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stations: Option<super::frame_timing::HostStations>,
+    /// The viewer's sound statistics (plan 2026-11-17 P9, `AUDIO_REPORT`);
+    /// absent while the session plays no sound.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio: Option<super::audio_wire::AudioReport>,
 }
 
 /// What a new session registers with.
@@ -197,6 +201,7 @@ impl ScreenRegistry {
             state: new.state,
             chain: None,
             stations: None,
+            audio: None,
         };
         let (stop, receiver) = watch::channel(None);
         let entry = Entry {

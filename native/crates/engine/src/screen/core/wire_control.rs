@@ -336,6 +336,8 @@ pub enum ViewerFrame {
     /// `AUDIO` (plan 2026-11-17 P9): the host's sound on or off; only after
     /// the host answered `audio` in `HELLO_OK` (`audio_wire.rs`).
     Audio(bool),
+    /// `AUDIO_REPORT` (P9): the viewer's jitter buffer statistics.
+    AudioReport(super::audio_wire::AudioReport),
 }
 
 /// Viewer to host: `u64` big-endian, the ceiling in bit/s, 0 automatic.

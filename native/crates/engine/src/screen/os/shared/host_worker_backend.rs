@@ -175,6 +175,10 @@ impl WorkerBackend {
 }
 
 impl ScreenHostBackend for WorkerBackend {
+    // The capture process of the host's sound starts like the host process.
+    fn audio(&self) -> Option<Arc<dyn crate::screen::core::audio_port::AudioHost>> {
+        crate::screen::os::audio::host()
+    }
     fn prepare_session_source(
         &self,
         owner: &str,

@@ -67,9 +67,16 @@ fn audio_task_jitter_target_follows_measured_jitter_within_its_bounds() {
         buffer.push(sequence, host, host + delay, sequence);
         let _ = buffer.pop();
     }
-    // J converges to 10 ms: 1 + ceil(2 · 10 / 5) = 5 frames.
+    // J converges to 10 ms: ceil(2 · 10 / 5) = 4 frames.
     assert!((buffer.jitter_us() - 10_000.0).abs() < 100.0);
-    assert_eq!(buffer.target(), 5);
+    assert_eq!(buffer.target(), 4);
+    // The report names depth and target in µs and the counters.
+    let report = buffer.report(5_300);
+    assert_eq!(report.target_us, 20_000);
+    assert_eq!(report.depth_us, buffer.buffered() as u32 * FRAME_US);
+    assert_eq!(report.output_us, 5_300);
+    assert_eq!(report.received, 400);
+    assert!((9_900..=10_000).contains(&report.jitter_us), "{report:?}");
     // Huge jitter stays at the largest target.
     let mut wild = JitterBuffer::default();
     for sequence in 0..200u32 {

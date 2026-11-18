@@ -57,16 +57,17 @@ impl Start<'_> {
     /// ends with the connection.
     pub(super) async fn accepted_with_audio(&mut self, mut ok: ScreenHelloOk) -> io::Result<()> {
         let hello = self.hello;
+        let link = self.context.backend.audio();
         ok.audio = super::super::audio_wire::answer(
             hello.audio,
             self.mode,
             hello.metadata_only,
-            crate::screen::os::audio::capture_available(),
+            link.is_some(),
         );
-        let audio = ok.audio.is_some();
+        let answered = ok.audio.is_some();
         self.accepted(ok).await?;
-        if audio {
-            crate::screen::os::audio::attach(self.connection);
+        if let Some(link) = link.filter(|_| answered) {
+            link.attach(self.connection);
         }
         Ok(())
     }

@@ -11,6 +11,7 @@
 //! capture) never gets `AUDIO`, and „Ton“ is greyed out with the reason.
 use std::io;
 use std::sync::{Mutex, PoisonError};
+use std::time::{Duration, Instant};
 
 use eframe::egui;
 
@@ -24,6 +25,10 @@ static AUDIO: Mutex<Option<Option<bool>>> = Mutex::new(None);
 /// The session (its place in the window) and acceptance `follow` last
 /// answered; `forget` clears it when the window ends its session.
 static FOLLOWED: Mutex<Option<(usize, u32)>> = Mutex::new(None);
+/// When the last `AUDIO_REPORT` left.
+static REPORTED: Mutex<Option<Instant>> = Mutex::new(None);
+/// Interval of `AUDIO_REPORT`.
+const REPORT_INTERVAL: Duration = Duration::from_secs(1);
 
 /// The stored „Ton“ as the file holds it (`None`: never chosen).
 pub fn stored() -> Option<bool> {
@@ -91,7 +96,9 @@ pub fn forget() {
 }
 
 /// Once per frame of the window: after each acceptance of a host that
-/// sends sound, asks for it with the setting.
+/// sends sound, asks for it with the setting; while the sound plays, sends
+/// the player's statistics to the host once a second (`AUDIO_REPORT`, for
+/// `se screen sessions --json`).
 pub fn follow(session: Option<&ViewerSession>) {
     let Some(session) = session else {
         return;
@@ -101,16 +108,66 @@ pub fn follow(session: Option<&ViewerSession>) {
         (info.accepted, negotiated(&info))
     };
     let key = (std::ptr::from_ref(session) as usize, accepted);
-    {
+    let known = {
         let mut followed = FOLLOWED.lock().unwrap_or_else(PoisonError::into_inner);
-        if accepted == 0 || *followed == Some(key) {
+        let known = accepted == 0 || *followed == Some(key);
+        if !known {
+            *followed = Some(key);
+        }
+        known
+    };
+    if !known {
+        let on = audio_on() && takes;
+        crate::screen::os::audio::set_playing(on);
+        if takes {
+            session.send(ViewerFrame::Audio(on));
+        }
+    }
+    if takes {
+        report_now(session);
+    }
+}
+
+/// Sends the player's statistics when a second has passed since the last.
+fn report_now(session: &ViewerSession) {
+    let Some(report) = crate::screen::os::audio::report() else {
+        return;
+    };
+    {
+        let mut last = REPORTED.lock().unwrap_or_else(PoisonError::into_inner);
+        if last.is_some_and(|at| at.elapsed() < REPORT_INTERVAL) {
             return;
         }
-        *followed = Some(key);
+        *last = Some(Instant::now());
     }
-    let on = audio_on() && takes;
-    crate::screen::os::audio::set_playing(on);
-    if takes {
-        session.send(ViewerFrame::Audio(on));
+    session.send(ViewerFrame::AudioReport(report));
+}
+
+fn ms(us: u32) -> String {
+    format!("{:.1}", f64::from(us) / 1_000.0).replace('.', ",")
+}
+
+/// The line of the viewer's statistics for a host that sends sound.
+pub fn overlay_line(info: &SessionInfo) -> Option<String> {
+    if !negotiated(info) {
+        return None;
     }
+    if !audio_on() {
+        return Some("Ton: aus".into());
+    }
+    let Some(report) = crate::screen::os::audio::report() else {
+        return Some("Ton: wartet auf den Host".into());
+    };
+    Some(format!(
+        "Ton: Puffer {} ms (Ziel {} ms), Jitter {} ms, Ausgabe {} ms; verloren {}, \
+         Aussetzer {}, gekürzt {}, verspätet {}",
+        ms(report.depth_us),
+        ms(report.target_us),
+        ms(report.jitter_us),
+        ms(report.output_us),
+        report.lost,
+        report.underruns,
+        report.trimmed,
+        report.late,
+    ))
 }

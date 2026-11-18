@@ -35,6 +35,7 @@ pub mod app_icon;
 pub mod audio_codec;
 pub mod audio_convert;
 pub mod audio_jitter;
+pub mod audio_port;
 pub mod audio_wire;
 pub mod authorize;
 #[cfg(test)]

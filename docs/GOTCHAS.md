@@ -906,11 +906,23 @@ Plan 2026-11-17 P9 „Audio“. Paths below `native/crates/engine/src/screen/` u
   works since Windows 10; where the event never comes, the capture polls every 20 ms. Loopback
   delivers nothing while no program plays: the host then sends no packets and the viewer plays
   silence.
+- **Small engine periods need `IAudioClient3`** (`os/windows/audio_wasapi_streams.rs`). The shared
+  engine runs at 10 ms until one stream asks `InitializeSharedAudioStream` for less; then every
+  stream of the endpoint, loopback included, runs at that period (Microsoft, „Low Latency Audio“).
+  The capture therefore keeps a silent `IAudioClient3` render stream at the minimum period open and
+  topped up beside its loopback stream; the viewer plays through an `IAudioClient3` stream in the
+  mix format (32-bit float only; 48 kHz stereo is spread and resampled by `FromStereo48`). Where
+  `IAudioClient3` fails (older driver, a non-float mix format, a locked engine period) both fall back
+  to the plain shared stream and say so on standard error. `IAudioClient3` derefs to `IAudioClient`
+  in `windows` 0.58, so `SetEventHandle`, `GetService` and `Start` are called on it directly.
 - **Linux uses `libpulse-simple.so.0` through `libloading`** (`os/linux_os/audio_pulse.rs`): no link
   dependency, no `libpulse-dev` on the build hosts. PipeWire answers the same API through
-  `pipewire-pulse`. A root daemon starts the capture process as the followed session's account with
-  its variables (the same path as the screen host process); without a sound server in that session
-  the capture process ends and is started again after 1 s, doubled up to 30 s.
+  `pipewire-pulse`. `pa_simple_new` sets `PA_STREAM_ADJUST_LATENCY`, so `fragsize` (2.5 ms) and
+  `tlength` (7.5 ms) are the whole server latency; PipeWire honours requests down to its
+  `default.clock.min-quantum` (32 samples) and runs at 1024 samples (21 ms) only without one. A root
+  daemon starts the capture process as the followed session's account with its variables (the same
+  path as the screen host process); without a sound server in that session the capture process ends
+  and is started again after 1 s, doubled up to 30 s.
 - **Sound travels as QUIC datagrams** of the screen connection; no other screen code reads
   datagrams. A datagram the path cannot take is dropped, never queued behind pictures. The relayed
   viewer gets them as `RELAY_AUDIO` (8) and plays them in the viewer window's process, never in the
