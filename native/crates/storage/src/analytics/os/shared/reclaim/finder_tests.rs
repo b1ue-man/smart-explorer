@@ -8,7 +8,8 @@ use super::finder::{
 };
 use super::stage::ReclaimPhase;
 use super::types::{
-    DuplicateEvidence, HashAlgorithm, ReclaimProgress, ReclaimReport, ReclaimResultCounts,
+    DuplicateEvidence, DuplicateGroup, HashAlgorithm, ReclaimProgress, ReclaimReport,
+    ReclaimResultCounts,
 };
 use super::util::hex_lower;
 use crate::apptrash::ProtectedAreas;
@@ -104,7 +105,13 @@ fn android_background_task_duplicates_compare_every_candidate_in_parallel() {
                 let trio = &parallel.groups[1];
                 assert_eq!(trio.items.len(), 3);
                 assert_eq!(trio.hash.hex, sha256_hex(&small));
-                assert_eq!(trio.reclaimable, 2 * small.len() as u64);
+                // Freed space is occupied space (every copy but the largest),
+                // the logical size of the copies beyond one stays apart.
+                assert_eq!(
+                    trio.reclaimable,
+                    DuplicateGroup::reclaimable_of(&trio.items)
+                );
+                assert_eq!(trio.duplicate_size(), 2 * small.len() as u64);
                 assert!(trio
                     .items
                     .iter()

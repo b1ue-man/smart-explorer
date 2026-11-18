@@ -32,18 +32,21 @@ pub(super) fn display_rows(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Ve
     let current = super::super::screen_prefs::virtual_display_choice();
     let mut chosen = current;
     let _ = super::wrap::item(ui, "monitor", |ui| {
-        egui::ComboBox::from_id_salt("screen_virtual_display")
-            .selected_text(format!("Monitor: {}", wish_text(current.wish)))
-            .show_ui(ui, |ui| {
-                for wish in VirtualDisplayWish::ALL {
-                    ui.selectable_value(&mut chosen.wish, wish, wish.label());
-                }
-            })
-            .response
-            .on_hover_text(
-                "Eigener Bildschirm am Gerät in der Größe dieses Fensters oder der gewählten \
+        super::wrap::fitted(
+            ui,
+            egui::ComboBox::from_id_salt("screen_virtual_display"),
+            format!("Monitor: {}", wish_text(current.wish)),
+        )
+        .show_ui(ui, |ui| {
+            for wish in VirtualDisplayWish::ALL {
+                ui.selectable_value(&mut chosen.wish, wish, wish.label());
+            }
+        })
+        .response
+        .on_hover_text(
+            "Eigener Bildschirm am Gerät in der Größe dieses Fensters oder der gewählten \
              Auflösung. Automatisch: nur, wenn am Gerät kein Monitor hängt.",
-            )
+        )
     });
     let custom_id = ui.make_persistent_id("screen_display_size_custom");
     let mut custom: Option<String> = ui
@@ -51,22 +54,25 @@ pub(super) fn display_rows(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Ve
         .flatten();
     let shown = current.size.map_or("Fenstergröße".to_string(), size_text);
     let _ = super::wrap::item(ui, "size", |ui| {
-        egui::ComboBox::from_id_salt("screen_display_size")
-            .selected_text(format!("Auflösung: {shown}"))
-            .show_ui(ui, |ui| {
-                ui.selectable_value(&mut chosen.size, None, "Fenstergröße folgen");
-                for size in SIZE_CHOICES {
-                    ui.selectable_value(&mut chosen.size, Some(size), size_text(size));
-                }
-                if ui.selectable_label(false, "Eigene Größe …").clicked() {
-                    let start = current
-                        .size
-                        .map(|size| format!("{}x{}", size.width, size.height));
-                    custom = Some(start.unwrap_or_default());
-                }
-            })
-            .response
-            .on_hover_text("Wirkt, wenn das Gerät einen eigenen Bildschirm zeigt.")
+        super::wrap::fitted(
+            ui,
+            egui::ComboBox::from_id_salt("screen_display_size"),
+            format!("Auflösung: {shown}"),
+        )
+        .show_ui(ui, |ui| {
+            ui.selectable_value(&mut chosen.size, None, "Fenstergröße folgen");
+            for size in SIZE_CHOICES {
+                ui.selectable_value(&mut chosen.size, Some(size), size_text(size));
+            }
+            if ui.selectable_label(false, "Eigene Größe …").clicked() {
+                let start = current
+                    .size
+                    .map(|size| format!("{}x{}", size.width, size.height));
+                custom = Some(start.unwrap_or_default());
+            }
+        })
+        .response
+        .on_hover_text("Wirkt, wenn das Gerät einen eigenen Bildschirm zeigt.")
     });
     if let Some(text) = custom.as_mut() {
         let field = egui::TextEdit::singleline(text)
