@@ -486,7 +486,7 @@ pub fn host_indicator(registry: &Arc<ScreenRegistry>) -> Arc<dyn SessionIndicato
 #[cfg_attr(target_os = "linux", path = "linux_os/chain_facts.rs")]
 #[cfg_attr(not(any(windows, target_os = "linux")), path = "android/chain_info.rs")]
 mod chain_facts;
-pub use chain_facts::capture_facts;
+pub use chain_facts::{capture_facts, capture_fallback_bits};
 
 #[path = "codec_facade.rs"]
 mod codec_facade;

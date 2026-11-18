@@ -47,6 +47,8 @@ mod capture_broker;
 mod capture_lifetime;
 #[path = "family_backend.rs"]
 pub mod family_backend;
+#[path = "host_worker_log.rs"]
+pub mod host_log;
 #[path = "host_worker_session_queries.rs"]
 pub mod session_queries;
 #[path = "host_worker_stream.rs"]
@@ -253,7 +255,8 @@ impl WorkerLink {
             .env(PARENT_ENV, std::process::id().to_string())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit());
+            // P9: the diagnostics go to the screen host log (`host_log`).
+            .stderr(Stdio::piped());
         super::worker_lifetime::prepare(&mut command);
         let mut link = Self::with_command_admitted(command, broker)?;
         link.session = followed.map(|session| session.generation().to_string());
@@ -269,7 +272,13 @@ impl WorkerLink {
         command: Command,
         broker: Arc<capture_broker::CaptureBroker>,
     ) -> io::Result<Self> {
-        let mut child = spawn(command)?;
+        let mut child = spawn(command).inspect_err(|error| {
+            host_log::note(None, &format!("host process did not start: {error}"));
+        })?;
+        if let Some(stderr) = child.stderr.take() {
+            host_log::forward(stderr, child.id());
+        }
+        host_log::note(None, &format!("host process {} started", child.id()));
         if let Err(error) = super::worker_lifetime::bind(&child) {
             let _ = child.kill();
             let _ = child.wait();
@@ -355,7 +364,9 @@ impl WorkerLink {
         if let Err(error) = sent {
             return Err(self.lost(error));
         }
-        match self.reader.receive(limit) {
+        // P9: only input keeps a limit on the answer itself; every other
+        // request waits while the process shows signs of work.
+        match self.reader.receive(limit, limit <= INPUT_TIMEOUT) {
             Ok(Ok(Some(reply))) => self.accept(reply),
             Ok(Ok(None)) | Err(RecvTimeoutError::Disconnected) => {
                 Err(self.lost(io::Error::from(io::ErrorKind::UnexpectedEof)))
@@ -364,9 +375,11 @@ impl WorkerLink {
             Err(RecvTimeoutError::Timeout) => {
                 self.kill();
                 let text = format!(
-                    "the screen host process did not answer within {} s",
+                    "the screen host process did not answer {} within {} s",
+                    host_log::request_name(request),
                     limit.as_secs()
                 );
+                host_log::note(None, &format!("{text}; ended"));
                 Err(StageError::new(
                     ScreenErrorCode::CaptureFailed,
                     io::Error::new(io::ErrorKind::TimedOut, text),
@@ -395,6 +408,7 @@ impl WorkerLink {
             code => {
                 let exit =
                     code.map_or_else(|| "no exit code".to_string(), |code| format!("exit {code}"));
+                host_log::note(None, &format!("host process ended ({exit}; {error})"));
                 StageError::new(
                     ScreenErrorCode::CaptureFailed,
                     io::Error::other(format!(

@@ -8,25 +8,24 @@ use super::{monitors, secure_desktop};
 use crate::screen::core::capture_admission::{
     CaptureGeneration, CaptureGrant, SessionAdmission, SourceKey,
 };
-use crate::screen::core::capture_picture::SourcePicture;
 use crate::screen::core::capture_plan::CapturePlan;
 use crate::screen::core::capture_source_contract::{
     HostOutputPlan, PreparedSource, PreparedSourceInfo,
 };
 use crate::screen::core::frame_budget::FrameLimits;
-use crate::screen::core::host_backend::SourceFrame;
 use crate::screen::core::host_backend::{ScreenSource, SourceRefusal};
-use crate::screen::core::pixel_convert::FrameSize;
 use crate::screen::core::session_state::SessionState;
 use crate::screen::core::window_list::SourceId;
 use std::io;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::WindowsAndMessaging::{IsIconic, IsWindow};
 
+#[path = "capture_monitor.rs"]
+mod monitor;
 #[path = "capture_recovery.rs"]
 pub(super) mod recovery;
+pub(super) use monitor::{MonitorGrabber, OpenFallback};
 
 enum PreparedCapture {
     Wgc(PreparedWgc),
@@ -255,28 +254,46 @@ impl PreparedSource for PreparedWindows {
         )
         .map_err(refused)?;
         let fallback = monitor_fallback(&source, admission.clone(), key.clone(), &selected.1);
+        let first = monitor_first(&monitor, admission.clone(), key.clone(), &selected.1);
         let grabber: Box<dyn capture_source::Grabber> = match capture {
-            PreparedCapture::Dxgi(prepared) => match DxgiCapture::open(prepared, budget) {
+            PreparedCapture::Dxgi(prepared) => match DxgiCapture::open_stepped(prepared, budget) {
                 Ok(capture) => Box::new(MonitorGrabber {
-                    current: Box::new(capture.with_pointer()),
+                    current: Box::new(capture.with_pointer().following_input_desktop()),
                     fallback,
+                    first,
+                    retry: None,
                 }),
-                Err(error) => {
+                Err(failure) => {
                     // B-12: a duplication refused at activation (for example
                     // `DXGI_ERROR_UNSUPPORTED`) gives way to Graphics Capture
                     // with its own plan; the secure desktop is refused above.
+                    // P9: the fallback is temporary (`capture_monitor.rs`).
                     let cause = capture_source::fallback_cause(
-                        capture_source::result_code(&error),
+                        capture_source::result_code(&failure.error),
                         false,
                         capture_source::FALLBACK_AFTER,
                     );
                     match (cause, fallback) {
-                        (Some(cause), Some(open)) => {
-                            let grabber = open(1).map_err(refused)?;
-                            capture_source::update_report(|report| report.fallback = Some(cause));
-                            grabber
+                        (Some(cause), Some(mut open)) => {
+                            let detail = capture_source::detail_of(failure.step, &failure.error);
+                            capture_source::update_report(|report| {
+                                report.fallback = Some(cause);
+                                report.detail = Some(detail);
+                            });
+                            let current = open(1).map_err(refused)?;
+                            let retry = first.is_some().then(|| {
+                                crate::screen::core::capture_fallback::RetryPlan::new(
+                                    std::time::Instant::now(),
+                                )
+                            });
+                            Box::new(MonitorGrabber {
+                                current,
+                                fallback: Some(open),
+                                first,
+                                retry,
+                            }) as Box<dyn Grabber>
                         }
-                        _ => return Err(refused(error)),
+                        _ => return Err(refused(failure)),
                     }
                 }
             },
@@ -285,6 +302,7 @@ impl PreparedSource for PreparedWindows {
                 Err(error) => {
                     // WGC can fail at StartCapture. A monitor retains its DXGI
                     // fallback, but obtains that backend's exact new plan first.
+                    eprintln!("screen capture: Graphics Capture did not start: {error}");
                     let Some((device, handle)) = monitor else {
                         return Err(refused(error));
                     };
@@ -303,7 +321,8 @@ impl PreparedSource for PreparedWindows {
                     Box::new(
                         DxgiCapture::open(prepared, budget)
                             .map_err(refused)?
-                            .with_pointer(),
+                            .with_pointer()
+                            .following_input_desktop(),
                     )
                 }
             },
@@ -315,9 +334,6 @@ impl PreparedSource for PreparedWindows {
         Ok(Box::new(WindowsSource::activated(grabber, window)))
     }
 }
-
-/// Opens Graphics Capture for a monitor with the generation after `previous`.
-pub(super) type OpenFallback = Box<dyn FnOnce(u64) -> io::Result<Box<dyn Grabber>> + Send>;
 
 /// The Graphics Capture fallback of a monitor source (B-12), where Windows
 /// has Graphics Capture; it asks for its own exact plan and grant.
@@ -345,135 +361,43 @@ fn monitor_fallback(
             .ok_or_else(|| io::Error::other("WGC native metadata pending"))?;
         let plan = geometry.plan(key.clone(), CaptureGeneration::new(generation), &output)?;
         let grant = admission.authority().approve(plan)?;
-        let budget = CaptureBudget::activate(admission, key, geometry, output, grant)?;
+        let budget = CaptureBudget::activate(
+            admission.clone(),
+            key.clone(),
+            geometry,
+            output.clone(),
+            grant,
+        )?;
         Ok(Box::new(WgcCapture::open(prepared, budget)?) as Box<dyn Grabber>)
     }))
 }
 
-/// A monitor on Desktop Duplication that gives way to Graphics Capture once
-/// the duplication asks for it (`Grabber::fallback_cause`): unsupported for
-/// longer than `FALLBACK_AFTER`, lost and not rebuilt, or its output left
-/// the adapter. The session continues with a new generation, so the host
-/// process starts its encoder anew.
-pub(super) struct MonitorGrabber {
-    pub(super) current: Box<dyn Grabber>,
-    pub(super) fallback: Option<OpenFallback>,
-}
-
-impl MonitorGrabber {
-    /// Switches when the duplication asks for it; true after a switch.
-    fn fall_back(&mut self) -> io::Result<bool> {
-        let Some(cause) = self.current.fallback_cause() else {
-            return Ok(false);
-        };
-        let Some(open) = self.fallback.take() else {
-            return Ok(false);
-        };
-        let previous = self.current.reference_generation();
-        // The duplication and its grant end before Graphics Capture asks for
-        // its own grant.
-        self.current = Box::new(Retired {
-            size: self.current.size(),
-        });
-        self.current = open(previous)?;
-        capture_source::update_report(|report| report.fallback = Some(cause));
-        Ok(true)
-    }
-}
-
-impl Grabber for MonitorGrabber {
-    fn size(&self) -> FrameSize {
-        self.current.size()
-    }
-    fn capture_grant(&self) -> Option<CaptureGrant> {
-        self.current.capture_grant()
-    }
-    fn frame_limits(&self) -> FrameLimits {
-        self.current.frame_limits()
-    }
-    fn reference_generation(&self) -> u64 {
-        self.current.reference_generation()
-    }
-    fn source_available(&self) -> bool {
-        self.current.source_available()
-    }
-    fn path(&self) -> Option<CapturePath> {
-        self.current.path()
-    }
-    fn set_frame_interval(&mut self, interval: Duration) -> bool {
-        self.current.set_frame_interval(interval)
-    }
-    fn set_capture_active(&mut self, active: bool) -> io::Result<()> {
-        self.current.set_capture_active(active)
-    }
-    fn capture(&mut self, keyframe: bool) -> io::Result<SourceFrame> {
-        self.capture_picture(keyframe)?.into_source_frame()
-    }
-    fn capture_waiting(
-        &mut self,
-        keyframe: bool,
-        wait: Duration,
-        release: &mut dyn FnMut() -> bool,
-    ) -> io::Result<SourceFrame> {
-        self.capture_waiting_picture(keyframe, wait, release)?
-            .into_source_frame()
-    }
-    /// The current grabber's picture, on the GPU where it stays there (BK3b).
-    fn capture_picture(&mut self, keyframe: bool) -> io::Result<SourcePicture> {
-        let result = self.current.capture_picture(keyframe);
-        if self.fall_back()? {
-            return Ok(SourcePicture::Unchanged);
-        }
-        result
-    }
-    fn capture_waiting_picture(
-        &mut self,
-        keyframe: bool,
-        wait: Duration,
-        release: &mut dyn FnMut() -> bool,
-    ) -> io::Result<SourcePicture> {
-        let result = self
-            .current
-            .capture_waiting_picture(keyframe, wait, release);
-        if self.fall_back()? {
-            return Ok(SourcePicture::Unchanged);
-        }
-        result
-    }
-    /// After the secure desktop the duplication may be refused for a while
-    /// with a documented passing result: the source then stays without a
-    /// duplication and the next capture rebuilds or pauses, as during a
-    /// capture; any other refusal falls back or ends the session.
-    fn reopen(&mut self) -> io::Result<()> {
-        let Err(error) = self.current.reopen() else {
-            return Ok(());
-        };
-        if self.fall_back()? {
-            return Ok(());
-        }
-        recovery::CaptureRecovery::paused_by_duplication(error).map(|_| ())
-    }
-}
-
-/// The place of a duplication whose fallback could not open.
-struct Retired {
-    size: FrameSize,
-}
-
-impl Grabber for Retired {
-    fn size(&self) -> FrameSize {
-        self.size
-    }
-    fn capture(&mut self, _keyframe: bool) -> io::Result<SourceFrame> {
-        Err(io::Error::new(
-            io::ErrorKind::NotFound,
-            "capture fallback unavailable",
-        ))
-    }
-    fn reopen(&mut self) -> io::Result<()> {
-        self.capture(false).map(|_| ())
-    }
-    fn source_available(&self) -> bool {
-        false
-    }
+/// P9: Desktop Duplication of a monitor again, after a fallback, with its own
+/// exact plan and grant and the generation after `previous`.
+fn monitor_first(
+    monitor: &Option<(String, usize)>,
+    admission: Arc<SessionAdmission>,
+    key: SourceKey,
+    output: &HostOutputPlan,
+) -> Option<OpenFallback> {
+    let (device, _) = monitor.clone()?;
+    let output = output.clone();
+    Some(Box::new(move |previous: u64| {
+        let generation = previous
+            .checked_add(1)
+            .ok_or_else(|| io::Error::other("capture generation exhausted"))?;
+        let prepared = PreparedDxgi::prepare(&device)?;
+        let geometry = prepared.geometry()?;
+        let plan = geometry.plan(key.clone(), CaptureGeneration::new(generation), &output)?;
+        let grant = admission.authority().approve(plan)?;
+        let budget = CaptureBudget::activate(
+            admission.clone(),
+            key.clone(),
+            geometry,
+            output.clone(),
+            grant,
+        )?;
+        let capture = DxgiCapture::open_stepped(prepared, budget)?;
+        Ok(Box::new(capture.with_pointer().following_input_desktop()) as Box<dyn Grabber>)
+    }))
 }

@@ -47,6 +47,8 @@ pub mod batches_quality_acceptance_task_tests;
 pub mod bench;
 pub mod capture_admission;
 pub mod capture_bytes;
+// Plan 2026-11-17 P9: why a capture left its first path, and its retry.
+pub mod capture_fallback;
 pub mod capture_grant;
 pub mod capture_image;
 pub mod capture_import;
@@ -121,6 +123,8 @@ pub mod pixel_convert;
 pub mod rate_control;
 pub mod ref_recovery;
 pub mod registry;
+// Plan 2026-11-17 P9: the screen host log, bounded by rotation.
+pub mod rotating_log;
 pub mod sender_budget;
 // Not yet used by SCR-M2: `SessionTracker`, `SessionState::can_move_to`,
 // `SessionState::is_terminal` and `KeyframeRequester::is_open`.

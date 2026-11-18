@@ -359,6 +359,8 @@ fn bildkette_task_win_capture_monitor_falls_back_to_graphics_capture() {
             count.fetch_add(1, Ordering::SeqCst);
             Ok(Box::new(Opened(previous + 1)) as Box<dyn Grabber>)
         })),
+        first: None,
+        retry: None,
     };
     assert!(matches!(
         monitor.capture(false).unwrap(),
@@ -382,6 +384,8 @@ fn bildkette_task_win_capture_monitor_falls_back_to_graphics_capture() {
             reopen_error: Some(E_ACCESSDENIED),
         }),
         fallback: None,
+        first: None,
+        retry: None,
     };
     assert!(paused.reopen().is_ok());
     let mut failed = MonitorGrabber {
@@ -390,6 +394,85 @@ fn bildkette_task_win_capture_monitor_falls_back_to_graphics_capture() {
             reopen_error: Some(E_INVALIDARG),
         }),
         fallback: None,
+        first: None,
+        retry: None,
     };
     assert!(failed.reopen().is_err());
+}
+
+/// A first path whose opening the test decides.
+struct Reopened(u64);
+
+impl Grabber for Reopened {
+    fn size(&self) -> FrameSize {
+        SIZE
+    }
+    fn reference_generation(&self) -> u64 {
+        self.0
+    }
+    fn capture(&mut self, _keyframe: bool) -> io::Result<SourceFrame> {
+        Ok(SourceFrame::Unchanged)
+    }
+    fn reopen(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+    fn path(&self) -> Option<CapturePath> {
+        Some(CapturePath::DesktopDuplication)
+    }
+}
+
+#[test]
+fn p9_task_win_capture_monitor_fallback_is_temporary() {
+    use crate::screen::core::capture_fallback::{RetryPlan, RETRY_FIRST};
+    let cause = Arc::new(Mutex::new(Some(FallbackCause::Failed)));
+    let refuse = Arc::new(AtomicBool::new(true));
+    let tries = Arc::new(AtomicUsize::new(0));
+    let (refusing, counted) = (refuse.clone(), tries.clone());
+    let mut monitor = MonitorGrabber {
+        current: Box::new(Duplication {
+            cause,
+            reopen_error: None,
+        }),
+        fallback: Some(Box::new(|previous| {
+            Ok(Box::new(Opened(previous + 1)) as Box<dyn Grabber>)
+        })),
+        first: Some(Box::new(move |previous| {
+            counted.fetch_add(1, Ordering::SeqCst);
+            if refusing.load(Ordering::SeqCst) {
+                Err(io::Error::other(windows::core::Error::from_hresult(
+                    windows::Win32::Graphics::Dxgi::DXGI_ERROR_UNSUPPORTED,
+                )))
+            } else {
+                Ok(Box::new(Reopened(previous + 1)) as Box<dyn Grabber>)
+            }
+        })),
+        retry: None,
+    };
+    // The duplication asks for the fallback: Graphics Capture, a retry plan.
+    let _ = monitor.capture(false).unwrap();
+    assert_eq!(monitor.path(), Some(CapturePath::GraphicsCapture));
+    assert_eq!(monitor.reference_generation(), 5);
+    assert!(monitor.retry.is_some());
+    // Not yet due: no try.
+    let _ = monitor.capture(false).unwrap();
+    assert_eq!(tries.load(Ordering::SeqCst), 0);
+    let past = Instant::now()
+        .checked_sub(RETRY_FIRST)
+        .expect("uptime of the test machine");
+    // A due try that is refused: Graphics Capture again, after the try's
+    // generation, and a longer wait.
+    monitor.retry = Some(RetryPlan::new(past));
+    let _ = monitor.capture(false).unwrap();
+    assert_eq!(tries.load(Ordering::SeqCst), 1);
+    assert_eq!(monitor.path(), Some(CapturePath::GraphicsCapture));
+    assert_eq!(monitor.reference_generation(), 7);
+    assert_eq!(monitor.retry.map(|plan| plan.wait()), Some(RETRY_FIRST * 2));
+    // A due try that opens: Desktop Duplication, no plan left.
+    refuse.store(false, Ordering::SeqCst);
+    monitor.retry = Some(RetryPlan::new(past));
+    let _ = monitor.capture(false).unwrap();
+    assert_eq!(tries.load(Ordering::SeqCst), 2);
+    assert_eq!(monitor.path(), Some(CapturePath::DesktopDuplication));
+    assert_eq!(monitor.reference_generation(), 8);
+    assert!(monitor.retry.is_none());
 }
