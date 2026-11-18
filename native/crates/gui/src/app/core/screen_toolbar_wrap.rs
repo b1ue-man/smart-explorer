@@ -15,9 +15,11 @@ const ROW_START_SLACK: f32 = 0.5;
 
 /// Whether an item of `width` goes to a new row: it is wider than the rest
 /// of the row and does not already start one (an item wider than the whole
-/// bar keeps a row of its own).
+/// bar keeps a row of its own). An item not measured yet (its first frame)
+/// starts a row too, so it never runs past the edge before its width is
+/// known; the next frame places it by that width.
 pub(super) fn breaks_before(width: Option<f32>, available: f32, at_row_start: bool) -> bool {
-    !at_row_start && width.is_some_and(|width| width > available)
+    !at_row_start && width.is_none_or(|width| width > available)
 }
 
 /// One setting of the toolbar (a label with its list, a switch with its
@@ -51,7 +53,9 @@ mod tests {
         assert!(!breaks_before(Some(100.0), 120.0, false));
         // Already at the start of a row: no empty row, even when wider.
         assert!(!breaks_before(Some(900.0), 600.0, true));
-        // First frame, width not yet measured: placed, measured, then broken.
-        assert!(!breaks_before(None, 10.0, false));
+        // First frame, width not yet measured: a row of its own, never past
+        // the edge; at the start of a row it stays there.
+        assert!(breaks_before(None, 500.0, false));
+        assert!(!breaks_before(None, 500.0, true));
     }
 }

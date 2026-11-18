@@ -73,7 +73,7 @@
       "transfer_engine_task_folder_refusals_are_not_kept",
       "vault_task_open_fallback_requires_consent",
       "mount_recovery_cache_task_startup_shows_details_and_later_failures_still_alert",
-      "screen_task_grid_switch_reuses_connection",
+      "screen_task_grid_switch_tile_reuses_connection",
       "screen_task_negotiate_matrix",
       "screen_task_wire_roundtrip_all_tags",
       "screen_task_wire_picture_stream_roundtrip",

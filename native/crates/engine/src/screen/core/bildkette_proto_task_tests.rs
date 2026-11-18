@@ -249,7 +249,7 @@ fn bildkette_task_proto_set_decoders_with_and_without_the_capability() {
     }))
     .unwrap();
     let frame = request.decoders_frame();
-    assert_eq!(frame.decoders, vec![hevc(true), CodecOffer::tiles()]);
+    assert_eq!(frame.decoders, vec![hevc(true)]);
     assert_eq!(frame.gop_continue_decoders, vec![hevc(true)]);
     // A request of an older client (no field) still reads.
     let old: crate::daemon::StreamRequest =

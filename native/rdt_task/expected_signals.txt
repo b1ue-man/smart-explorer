@@ -427,7 +427,7 @@ screen_task_viewer_prefs_roundtrip                            linux-core:unit  p
 screen_task_viewer_target_parse                               linux-core:unit  pfad=app::screen_modules::screen_viewer_misc_tests::screen_task_viewer_target_parse  quelle=B378,SCR-M7
 screen_task_viewer_toolbar_labels                             linux-core:unit  pfad=app::screen_modules::screen_viewer_misc_tests::screen_task_viewer_toolbar_labels  quelle=B378,SCR-M7
 screen_task_viewer_wgpu_config                                linux-core:unit  pfad=app::screen_modules::screen_viewer_misc_tests::screen_task_viewer_wgpu_config  quelle=B378,SCR-M7
-screen_task_grid_switch_reuses_connection                     linux-core:unit  pfad=app::screen_modules::screen_viewer_tests::screen_task_grid_switch_reuses_connection  quelle=B378,SCR-M7
+screen_task_grid_switch_tile_reuses_connection                linux-core:unit  pfad=app::screen_modules::screen_viewer_tests::screen_task_grid_switch_tile_reuses_connection  quelle=B378,SCR-M7
 screen_task_viewer_ask_tile_has_no_preview                    linux-core:unit  pfad=app::screen_modules::screen_viewer_tests::screen_task_viewer_ask_tile_has_no_preview  quelle=B378,SCR-M7
 screen_task_viewer_decode_gop_switch                          linux-core:unit  pfad=app::screen_modules::screen_viewer_tests::screen_task_viewer_decode_gop_switch  quelle=B378,SCR-M7
 screen_task_viewer_releases_all_on_disable                    linux-core:unit  pfad=app::screen_modules::screen_viewer_tests::screen_task_viewer_releases_all_on_disable  quelle=B378,SCR-M7

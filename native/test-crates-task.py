@@ -1082,7 +1082,7 @@ BILDKETTE_TESTS = {
         "bildkette_task_ffmpeg_layouts_follow_the_pinned_headers",
         "bildkette_task_ffmpeg_fresh_frame_and_packet_fingerprints",
         "bildkette_task_ffmpeg_stage_order_names_and_options",
-        "bildkette_task_ffmpeg_library_choice_and_fallback",
+        "wahlgilt_task_library_choice_never_takes_the_other",
         "bildkette_task_ffmpeg_output_choices_are_stored",
         "bildkette_task_ffmpeg_cli_library_and_display_options",
         "bildkette_task_d3d11_child_and_picture_follow_the_area",
