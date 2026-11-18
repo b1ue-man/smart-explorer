@@ -1816,3 +1816,38 @@ wait for the remote suite).
   `<app data>\screen\virtual-display-layout.json`; the next host process gives it back at its first
   probe when a former one ended during a session. A headless host keeps the virtual monitor
   attached (it is the only display).
+
+## RDP sign-in with the device's account (source state 2026-11-18, not built, not released)
+
+- mstsc shows the April 2026 security warning with redirection checkboxes for every opened `.rdp`
+  file. The desktop therefore starts as `mstsc /v:<address>:<port>`; the per-user hidden
+  `Default.rdp` then applies to the desktop. RemoteApp still needs its profile and still shows the
+  warning.
+- mstsc proposes the last user of a server name
+  (`HKCU\Software\Microsoft\Terminal Server Client\Servers\<name>\UsernameHint`). se writes it for
+  `<address>` and `<address>:<port>` before each start.
+- A standard Windows account needs membership in Remote Desktop Users for an RDP logon on a
+  workstation; the account service adds `se-remote` when it sets its RDP password. A workstation
+  hosts one session: signing in as `se-remote` disconnects the console user.
+- `pam_exec ... expose_authtok` writes the password without a trailing NUL (Linux-PAM 1.5.3 uses
+  `strlen`); `se --rdp-xrdp-login` reads to EOF and stops at the first NUL or line break.
+  `pam_exec` returns `PAM_IGNORE` in `setcred`.
+- The PAM line must stand before `@include common-auth` (Debian) or `auth include password-auth`
+  (Red Hat), never before the `pam_env` lines. The helper `se` must be root-owned with root-owned,
+  non-group/world-writable parents: `pam_exec` runs it as root.
+- xrdp also reads `/usr/lib/pam.d/xrdp-sesman` (vendor directory, xrdp 0.10.3 `verify_user_pam.c`);
+  a file of the same name in `/etc/pam.d` replaces it completely. se then writes an `/etc` copy with
+  its line and a marker comment, and deletes it again only while nothing else in it changed.
+- xrdp-sesman refuses root unless `[Security] AllowRootLogin` is a non-zero number, `true`, `on`
+  or `yes` (the compiled default is off, the shipped `sesman.ini` sets `true`). A root worker's own
+  account is therefore the user of the active local graphical session.
+- KRdp reads `krdpserverrc` `[General] Users` and each user's password (QtKeychain service `KRDP`,
+  KWallet folder and application `KRDP`) once at start; a new user needs a restart of
+  `app-org.kde.krdpserver.service`. The users are KRdp's own names, not system accounts; KRdp always
+  shows the Plasma session of the account it runs as. `open` on a locked wallet shows an unlock
+  dialog, so se asks `isOpen` first and never opens a locked one.
+- `/args-from:stdin` of FreeRDP cannot be combined with any other argument; every argument, the
+  password last, goes on stdin, one per line.
+- The login service installer refuses an installation ancestor that another account can write
+  (group or ACL write on `/usr/libexec`, shown by `stat -c %a` through the ACL mask): a root service
+  binary below it could be replaced. The self-setup status now shows that line.
