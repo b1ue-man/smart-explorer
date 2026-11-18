@@ -193,6 +193,8 @@ impl RateController {
             self.gradient.reset();
             self.received = RateWindow::default();
             self.sent = RateWindow::default();
+            // P9: delivery rate and round trip belong to the old path.
+            self.queue = super::queue::QueueState::default();
             self.loss_counters = None;
             self.congestion_events = None;
             self.overuse_streak = 0;

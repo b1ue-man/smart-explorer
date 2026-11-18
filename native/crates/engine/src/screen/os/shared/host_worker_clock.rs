@@ -19,6 +19,7 @@ use super::*;
 use crate::screen::core::capture_admission::CaptureGrant;
 use crate::screen::core::capture_picture::Picture;
 use crate::screen::core::frame_budget::FrameContract;
+use crate::screen::core::host_codec_adapters::note_dropped_picture;
 use crate::screen::core::pixel_convert::FrameSize;
 use crate::screen::core::worker_wire::StreamOrder;
 use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
@@ -200,7 +201,11 @@ impl State {
     fn store(&mut self, tick: Tick, serial: u64) -> Gone {
         if self.serial != serial || self.quiet > 0 || self.stopping {
             return match tick {
-                Tick::Picture(captured) => (Some(captured), None),
+                Tick::Picture(captured) => {
+                    // P9: its dirty rectangles are lost (lossless tiles).
+                    note_dropped_picture();
+                    (Some(captured), None)
+                }
                 _ => (None, None),
             };
         }
@@ -214,6 +219,7 @@ impl State {
                 let gone = self.slot.replace(captured);
                 if gone.is_some() {
                     self.dropped += 1;
+                    note_dropped_picture();
                 }
                 (gone, None)
             }
@@ -398,6 +404,10 @@ impl Stream {
             state.reset_encoder |= reset_encoder;
             let held = state.held.take();
             state.key_wanted |= held.is_some();
+            if state.slot.is_some() {
+                // P9: the waiting picture's dirty rectangles go with it.
+                note_dropped_picture();
+            }
             (state.slot.take(), held)
         };
         drop(gone);

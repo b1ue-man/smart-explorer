@@ -225,4 +225,4 @@ impl HostOutputPlan {
 mod phases;
 #[path = "admitted_tiles_encoder.rs"]
 mod tiles;
-pub use tiles::AdmittedTilesEncoder;
+pub use tiles::{note_dropped_picture, AdmittedTilesEncoder};

@@ -15,8 +15,6 @@ mod codec_fallback_tests;
 
 use super::{CodecChoice, CodecKind, FrameSize, Pipeline, StreamKind};
 
-const SHARPNESS_FPS: u32 = 15;
-
 /// Complete coalesced state: omitting fps must not discard a pending rate
 /// request, including a full -> preview -> full sequence during capture.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -139,12 +137,9 @@ impl QualityPolicy {
         } else {
             self.mode.full_fps
         };
-        let limit = if self.mode.sharpness {
-            self.viewer_fps.min(SHARPNESS_FPS)
-        } else {
-            self.viewer_fps
-        };
-        requested.clamp(1, limit)
+        // P9: sharpness (lossless) no longer caps the rate at 15 frames/s;
+        // the hardware is the limit (encoding capacity, line, viewer).
+        requested.clamp(1, self.viewer_fps)
     }
     pub(super) fn note_failed_codec(&mut self, codec: CodecKind) {
         if codec.is_video() && !self.failed_codecs.contains(&codec) {

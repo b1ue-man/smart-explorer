@@ -42,6 +42,50 @@ pub const MIN_CORRECTION: f64 = 0.25;
 /// gets `RELAX_STEP` more again.
 pub const RELAX_BELOW: f64 = 0.8;
 pub const RELAX_STEP: f64 = 1.25;
+/// Weight of a new gap in the smoothed frame interval (`FrameInterval`).
+pub const INTERVAL_WEIGHT: f64 = 0.125;
+
+/// The smoothed interval between the frames an encoder delivers (P9). An
+/// encoder opened for `fps` gets fewer frames when the cadence sinks or the
+/// queue guard drops some (B-03 keeps it open); a frame then carries the
+/// target over the longer interval, and judged by the budget of the open
+/// rate it looked like an encoder that ignores its rate: at 60 frames/s
+/// opened and 15 delivered a ratio of 4, a correction to the floor (0.25 ×
+/// the target, 800 kbit/s of an H.264 target of 3.2 Mbit/s) and a demotion.
+/// The budget therefore counts the measured interval when it is the longer
+/// one (`budget_fps`).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct FrameInterval {
+    last_us: Option<u64>,
+    smoothed_us: Option<f64>,
+}
+
+impl FrameInterval {
+    /// A frame delivered at `now_us`; a gap counts up to one second.
+    pub fn on_frame(&mut self, now_us: u64) {
+        if let Some(last) = self.last_us {
+            let gap = now_us.saturating_sub(last).min(1_000_000) as f64;
+            self.smoothed_us = Some(match self.smoothed_us {
+                Some(smoothed) => smoothed + INTERVAL_WEIGHT * (gap - smoothed),
+                None => gap,
+            });
+        }
+        self.last_us = Some(now_us);
+    }
+
+    /// The frame rate of the budget: `fps`, at most the measured one.
+    pub fn budget_fps(&self, fps: u32) -> u32 {
+        let fps = fps.max(1);
+        match self.smoothed_us {
+            Some(smoothed) if smoothed >= 1.0 => {
+                let measured = (1_000_000.0 / smoothed).floor().max(1.0);
+                // `as` saturates a float above `u32::MAX`.
+                fps.min(measured as u32)
+            }
+            _ => fps,
+        }
+    }
+}
 
 /// The judgement of the last window.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -205,6 +249,8 @@ impl HonourMeter {
 pub struct SessionHonour {
     meter: HonourMeter,
     encoder: Option<String>,
+    /// The interval of the stream's encoded frames (P9).
+    interval: FrameInterval,
 }
 
 impl Default for SessionHonour {
@@ -212,7 +258,15 @@ impl Default for SessionHonour {
         Self {
             meter: HonourMeter::correcting(),
             encoder: None,
+            interval: FrameInterval::default(),
         }
+    }
+}
+
+impl SessionHonour {
+    /// A frame of the stream was encoded at `now_us` (`on_encode_at`).
+    pub fn on_encoded_at(&mut self, now_us: u64) {
+        self.interval.on_frame(now_us);
     }
 }
 
@@ -224,7 +278,9 @@ impl RateController {
     }
 
     /// One frame the stage encoded with `encoder` for se's `target_bps`,
-    /// given `commanded_bps` at `fps`. Another encoder starts a new meter.
+    /// given `commanded_bps` at `fps`; the budget counts the measured frame
+    /// interval when it is longer (`FrameInterval`, P9). Another encoder
+    /// starts a new meter.
     pub fn on_encoded(
         &mut self,
         bytes: u64,
@@ -238,8 +294,10 @@ impl RateController {
             self.honour = SessionHonour {
                 meter: HonourMeter::correcting(),
                 encoder: Some(encoder.to_owned()),
+                interval: self.honour.interval,
             };
         }
+        let fps = self.honour.interval.budget_fps(fps);
         self.honour
             .meter
             .on_frame(bytes, keyframe, target_bps, commanded_bps, fps)

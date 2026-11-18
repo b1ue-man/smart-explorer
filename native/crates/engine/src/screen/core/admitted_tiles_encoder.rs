@@ -1,6 +1,31 @@
-//! Productive fixed-buffer tile encoding.
+//! Productive fixed-buffer tile encoding. Since P9 (plan 2026-11-17) the
+//! encoder hashes and compares only the tiles the capture's dirty and move
+//! rectangles touched (`tiles_dirty::DirtyTiles`): a tile no rectangle of
+//! any picture since it was last looked at touched did not change. A
+//! picture the host process captured but dropped before encoding took its
+//! rectangles with it (`note_dropped_picture`), and a picture without
+//! rectangles, a key frame and a failed frame mark every tile.
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use super::phases::{add, mul};
 use super::*;
+use crate::screen::core::tiles_dirty::DirtyTiles;
+
+/// Pictures captured and dropped before encoding in this process so far.
+static DROPPED_PICTURES: AtomicU64 = AtomicU64::new(0);
+
+/// A captured picture was dropped before encoding (the host process's
+/// capture stage replaced or discarded it): its dirty rectangles are lost,
+/// so the next tile frame looks at every tile. The count is per process; a
+/// host process serves one session, and a drop of another session only
+/// costs one full look.
+pub fn note_dropped_picture() {
+    DROPPED_PICTURES.fetch_add(1, Ordering::AcqRel);
+}
+
+fn dropped_pictures() -> u64 {
+    DROPPED_PICTURES.load(Ordering::Acquire)
+}
 /// The productive tile encoder owns admitted fixed scratch and previous pixels.
 pub struct AdmittedTilesEncoder {
     size: FrameSize,
@@ -10,6 +35,10 @@ pub struct AdmittedTilesEncoder {
     tile: super::super::capture_bytes::AdmittedBytes,
     compressed: super::super::capture_bytes::AdmittedBytes,
     primed: bool,
+    /// The tiles that may have changed since they were last looked at.
+    dirty: DirtyTiles,
+    /// `dropped_pictures()` at the last frame.
+    drops_seen: u64,
 }
 impl AdmittedTilesEncoder {
     pub fn new(
@@ -43,6 +72,8 @@ impl AdmittedTilesEncoder {
             tile,
             compressed,
             primed: false,
+            dirty: DirtyTiles::new(size),
+            drops_seen: dropped_pictures(),
         })
     }
     fn captured(
@@ -71,6 +102,13 @@ impl AdmittedTilesEncoder {
             .record_bytes
             .min(super::super::tiles_codec::MAX_TILES_RECORD_BYTES);
         let full = request.keyframe || !self.primed;
+        let drops = dropped_pictures();
+        if full || drops != self.drops_seen {
+            self.dirty.mark_all();
+        } else {
+            self.dirty.note(image.size(), image.image().regions());
+        }
+        self.drops_seen = drops;
         let mut records: Option<CaptureRecordBuilder> = None;
         let mut count = 0u16;
         let view = image.view();
@@ -83,6 +121,11 @@ impl AdmittedTilesEncoder {
                 {
                     continue;
                 }
+                // Untouched since it was last looked at: unchanged (P9).
+                if !full && !self.dirty.marked(column, row) {
+                    continue;
+                }
+                self.dirty.clear(column, row);
                 let hash = tile_hash(&view, rect);
                 let slot = (u64::from(row) * u64::from(columns) + u64::from(column)) as usize * 8;
                 let old = u64::from_le_bytes(
@@ -194,6 +237,7 @@ impl super::super::host_backend::ScreenEncoder for AdmittedTilesEncoder {
         let result = self.captured(image, request);
         if result.is_err() {
             self.primed = false;
+            self.dirty.mark_all();
         }
         result
     }
