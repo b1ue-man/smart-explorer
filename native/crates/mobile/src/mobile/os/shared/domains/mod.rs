@@ -83,6 +83,8 @@ mod share_power;
 mod share_requests;
 #[path = "share_rights.rs"]
 mod share_rights;
+#[path = "share_server_upgrade.rs"]
+mod share_server_upgrade;
 #[path = "share_settings.rs"]
 mod share_settings;
 #[path = "share_state.rs"]
@@ -166,9 +168,11 @@ pub(crate) fn dispatch(
     }
 }
 
-/// Starts the Share poller (it idles until the embedded worker runs).
+/// Starts the Share poller (it idles until the embedded worker runs) and the
+/// one switch of a plaintext server address to TLS (`share_server_upgrade`).
 pub(crate) fn on_init(rt: &'static Runtime) {
     share_state::start_poller(rt);
+    share_server_upgrade::start(rt);
     vaults::install_events(rt);
 }
 

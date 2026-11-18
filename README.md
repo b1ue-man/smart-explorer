@@ -498,7 +498,16 @@ der mitgelieferte **`se-share-server`** (Linux + Windows, in
 [`release-native/share-server/`](release-native/share-server)) verschlüsselte
 Transportpakete weiterleiten; er erhält keine Relation-Secrets oder
 Dateisystemdaten im Klartext. Er vermittelt Anwesenheit und Adressen (QUIC-Adressermittlung
-auf UDP 7842, siehe [`docs/SHARE_SERVER.md`](docs/SHARE_SERVER.md)), verwaltet keine Zugänge
+auf UDP 7842, siehe [`docs/SHARE_SERVER.md`](docs/SHARE_SERVER.md)). Der Server braucht in jeder
+Firewall vor ihm, für IPv4 und IPv6, TCP 51820 (Signalisierung), TCP 51821 (Relay) und
+UDP 7842 (Adressermittlung); die Befehle für iptables/ip6tables, nftables, ufw, firewalld und
+Windows stehen in [`docs/SHARE_SERVER.md`](docs/SHARE_SERVER.md), Abschnitt „Ports and
+firewall“. Ohne UDP 7842 erfahren Geräte hinter NAT ihre öffentliche Adresse nicht und
+verbinden sich über das Internet nur über das Relay; der Server prüft das selbst und
+`se share status` zeigt es in der Zeile `server_qad` („Server: QAD von außen erreichbar“ oder
+„… nicht erreichbar“). Eine gespeicherte unverschlüsselte Server-Adresse (`tcp://…`) stellt
+die App selbst auf `wss://` desselben Servers um, sobald TLS mit gültigem Zertifikat dort
+gelingt. Er verwaltet keine Zugänge
 und führt keine Geräteliste. **Share-Server** in der Werkzeugleiste (bei schmalen Fenstern unter **»**) öffnet das Fenster **Geräte & Freigaben** (Seiten siehe „Share-Einstellungen auf jeder Oberfläche“); Server unter **Einstellungen → Verbindungen**. Der frühere Noise/TCP-Entwurf steht historisch in
 [`docs/SHARE_PLAN.md`](docs/SHARE_PLAN.md).
 

@@ -92,6 +92,15 @@ internal fun ThisDeviceCard(
                     modifier = inset,
                 )
             }
+            status.serverQad?.takeIf { it.line.isNotBlank() }?.let { qad ->
+                val blocked = qad.ipv4 == "unreachable" || qad.ipv6 == "unreachable"
+                Text(
+                    qad.line,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (blocked) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = inset,
+                )
+            }
             if (status.lanPresence.isNotBlank()) {
                 Text(if (status.lanPresenceEnabled) "Erkennung im lokalen Netz eingeschaltet" else "Erkennung im lokalen Netz ausgeschaltet", style = MaterialTheme.typography.bodySmall, modifier = inset)
                 Column(inset) { IdentityDiagnostic("LAN: ${status.lanPresence}\nGerät: ${status.identity.deviceId}") }

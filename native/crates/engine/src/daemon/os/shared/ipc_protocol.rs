@@ -91,6 +91,11 @@ pub struct ShareWorkerSnapshot {
     /// Absent without one and when reading a worker predating it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub code_renewal: Option<CodeRenewalView>,
+    /// The Share server's QAD self-check while connected to it
+    /// (`qad_status_v1`); absent before its answer, from a server without
+    /// the check and when reading a worker predating it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server_qad: Option<crate::share::ServerQadStatus>,
 }
 
 /// Result data of a Share command that the caller needs, returned over IPC

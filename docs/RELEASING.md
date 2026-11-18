@@ -1465,6 +1465,13 @@ parent; and the GitHub Release is visible with the Windows/Linux app, updater,
 context-menu DLL, both share-server payloads, `version.txt`, and (since 2026-11-07) the signed
 `release-manifest` and `release-manifest.sig`.
 
+Deploying the share-server payloads: the server needs TCP 51820 (signaling), TCP 51821
+(relay) and UDP 7842 (QUIC address discovery) open for IPv4 and IPv6 in every firewall in
+front of it. The commands for iptables/ip6tables, nftables, ufw, firewalld and Windows are in
+[`SHARE_SERVER.md`](SHARE_SERVER.md), section "Ports and firewall". Without UDP 7842 devices
+behind NAT get no public address and connect over the relay; the server logs and reports that
+(section "QAD self-check").
+
 ### Troubleshooting: socket access denied
 
 If the update check fails with `os error 10013` / "Zugriff auf einen Socket war
