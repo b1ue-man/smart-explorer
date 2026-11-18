@@ -309,15 +309,14 @@ pub fn followed_offers(program: &Path) -> Option<Vec<CodecOffer>> {
 
 /// D6 (P3) of a worker that follows a session: the account's process
 /// offers HEVC and AV1 only once checked, so the newer codecs in its offer
-/// are trusted (a structural check counts there too); `None` without a
-/// followed session.
+/// are trusted (a structural check counts there too), AV1 never
+/// (`codec_registry::first_rank_trust`, plan P9); `None` without a followed
+/// session.
 pub fn followed_trust(program: &Path) -> Option<CodecTrust> {
     let offers = followed_offers(program)?;
-    Some(
-        offers
-            .iter()
-            .fold(CodecTrust::NONE, |trust, offer| trust.with(offer.codec)),
-    )
+    Some(crate::screen::core::codec_registry::first_rank_trust(
+        offers.iter().map(|offer| offer.codec),
+    ))
 }
 
 /// Starts the warm-up of the codec checks (P3) once per process: a query
