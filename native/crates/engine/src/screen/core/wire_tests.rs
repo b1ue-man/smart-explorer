@@ -32,6 +32,7 @@ fn replies() -> Vec<HelloReply> {
         icon_version: None,
         encoders_v2: None,
         virtual_display: None,
+        audio: None,
         frame_contract: None,
         authorization: ScreenAuthorization {
             view: CapabilityDecision::Allow,

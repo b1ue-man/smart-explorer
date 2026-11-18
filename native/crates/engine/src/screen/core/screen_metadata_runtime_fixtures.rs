@@ -30,7 +30,6 @@ use std::sync::{
 };
 use std::{cell::Cell, future::Future, io, time::Duration};
 use tokio::sync::Notify;
-
 pub const DEADLINE: Duration = Duration::from_secs(5);
 
 thread_local! {
@@ -420,6 +419,7 @@ pub fn hello(mode: SessionMode, metadata: bool) -> ScreenClientHello {
         gop_continue_decoders: None,
         virtual_display: None,
         virtual_display_size: None,
+        audio: None,
     }
 }
 

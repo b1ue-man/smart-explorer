@@ -124,6 +124,8 @@ impl Report {
             "share_profiles": self.profiles.json(),
             "share_identity": self.identity.json(),
             "share_server": self.server.json(),
+            // Plan 2026-11-17 P9: the diagnostics of the screen host processes.
+            "screen_host_log": crate::screen::os::host_worker_client::host_log::log_path(),
             "daemon": {
                 "running": self.daemon_running,
                 "heartbeat_age_seconds": self.heartbeat_age,
@@ -186,6 +188,10 @@ pub(super) fn run(args: DoctorArgs) -> Result<i32, String> {
     print_health("share_profiles", &report.profiles);
     print_health("share_identity", &report.identity);
     print_health("share_server", &report.server);
+    println!(
+        "screen_host_log\t{}",
+        crate::screen::os::host_worker_client::host_log::log_path().display()
+    );
     println!("daemon_running\t{}", report.daemon_running);
     println!(
         "daemon_heartbeat_age_seconds\t{}",

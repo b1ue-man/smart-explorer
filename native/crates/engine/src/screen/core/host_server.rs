@@ -125,6 +125,7 @@ impl Start<'_> {
             icon_version: self.icon_version,
             family_version: self.family_version,
             virtual_display: None,
+            audio: None,
         };
         ok.offer_encoders(&metadata.encoders, self.hello);
         ok.set_virtual_display(metadata.virtual_display.clone());
@@ -422,7 +423,7 @@ pub async fn serve(context: HostContext, viewer: ProvenViewer) -> io::Result<()>
     }
     let mut ok = start.hello_ok(&metadata, authorization, approval, contract);
     ok.set_virtual_display(display.report);
-    start.accepted(ok).await?;
+    start.accepted_with_audio(ok).await?;
     // P5: the claim on the display's size ends with the session.
     let _display = display.claim;
     let result = Some(approval_result(approval));

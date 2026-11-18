@@ -118,6 +118,9 @@ pub struct ViewerPrefs {
     /// the window.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub virtual_display: Option<VirtualDisplayChoice>,
+    /// „Ton“ (plan 2026-11-17 P9, `screen_audio.rs`); absent is on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio: Option<bool>,
 }
 
 fn schema() -> u32 {
@@ -138,6 +141,7 @@ impl Default for ViewerPrefs {
             decoder_library: None,
             display: None,
             virtual_display: None,
+            audio: None,
         }
     }
 }
@@ -329,6 +333,8 @@ impl ViewerPrefs {
         {
             stored.virtual_display = known;
         }
+        // And „Ton“ (P9).
+        stored.audio = super::screen_audio::stored();
         stored.save_to(&prefs_path())
     }
 

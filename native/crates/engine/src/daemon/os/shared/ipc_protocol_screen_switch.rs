@@ -16,6 +16,10 @@ use crate::screen::core::set_decoders::SetDecoders;
 
 /// Worker to client: what became of a `RATE_CEILING` during the session.
 pub const RELAY_RATE_CEILING: u8 = 7;
+/// Worker to client: one sound packet of the host (plan 2026-11-17 P9,
+/// `audio_wire.rs`); it arrives only after the client switched the sound
+/// on, so a client without sound never sees it.
+pub const RELAY_AUDIO: u8 = 8;
 
 /// What became of „Höchste Datenrate“ in a relayed session (B-09, BK6):
 /// the viewer says when the host cannot take it instead of doing nothing.
