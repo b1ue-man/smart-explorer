@@ -83,9 +83,7 @@ pub(super) fn codec_rows(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Vec<
             }
         })
         .response
-        .on_hover_text(
-            "Automatisch wählt nach Hardware beider Geräte; Verlustfrei überträgt Kacheln.",
-        );
+        .on_hover_text(codec_hint());
     if chosen != codec {
         out.push(ToolbarAction::Codec(chosen));
         changed(ui, Setting::Codec, &facts, now);
@@ -107,6 +105,21 @@ pub(super) fn codec_rows(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Vec<
         changed(ui, Setting::Decoder, &facts, now);
     }
     output_rows(ui, &facts, now, out);
+}
+
+/// The hover text of „Codec“: the mode „Scharf (GPU)“ (plan 2026-11-17 P9)
+/// is named once the list offers it (`CodecSetting` with key `sharp`).
+fn codec_hint() -> String {
+    use crate::screen::core::sharp_mode::{SHARP_HINT, SHARP_KEY};
+    let mut hint = String::from(
+        "Automatisch wählt nach Hardware beider Geräte, AV1 nie zuerst; \
+         Verlustfrei überträgt Kacheln.",
+    );
+    if CodecSetting::parse(SHARP_KEY).is_some() {
+        hint.push('\n');
+        hint.push_str(SHARP_HINT);
+    }
+    hint
 }
 
 /// „Dekodierer-Bibliothek: Automatisch / FFmpeg / Media Foundation“ and

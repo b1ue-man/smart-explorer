@@ -24,6 +24,7 @@ use std::sync::atomic::{AtomicU8, Ordering};
 
 use serde::{Deserialize, Serialize};
 
+use super::super::sharp_mode;
 use super::{CodecKind, CodecOffer};
 
 /// `--codec` of `se screen bench` and the filter of the negotiation.
@@ -34,6 +35,9 @@ pub enum CodecPreference {
     H264,
     Hevc,
     Av1,
+    /// „Scharf (GPU)“ (P9 Zwischenmodus, `sharp_mode.rs`): H.264 and HEVC
+    /// on the GPU encoder, never AV1; the tiles stay the last fallback.
+    Sharp,
     Tiles,
 }
 
@@ -44,6 +48,7 @@ impl CodecPreference {
             "h264" => Some(Self::H264),
             "hevc" => Some(Self::Hevc),
             "av1" => Some(Self::Av1),
+            sharp_mode::SHARP_KEY => Some(Self::Sharp),
             "tiles" => Some(Self::Tiles),
             _ => None,
         }
@@ -55,6 +60,7 @@ impl CodecPreference {
             Self::H264 => "h264",
             Self::Hevc => "hevc",
             Self::Av1 => "av1",
+            Self::Sharp => sharp_mode::SHARP_KEY,
             Self::Tiles => "tiles",
         }
     }
@@ -65,7 +71,7 @@ impl CodecPreference {
             Self::H264 => Some(CodecKind::H264),
             Self::Hevc => Some(CodecKind::Hevc),
             Self::Av1 => Some(CodecKind::Av1),
-            Self::Auto | Self::Tiles => None,
+            Self::Auto | Self::Sharp | Self::Tiles => None,
         }
     }
 
@@ -74,6 +80,7 @@ impl CodecPreference {
     pub fn admits(self, codec: CodecKind) -> bool {
         match (self, codec) {
             (Self::Auto, _) => true,
+            (Self::Sharp, kind) => sharp_mode::sharp_codec(kind) || kind == CodecKind::Tiles,
             (Self::Tiles, kind) => kind == CodecKind::Tiles,
             (named, kind) => named.codec() == Some(kind),
         }
@@ -82,6 +89,9 @@ impl CodecPreference {
     /// The viewer's decoder offers for this choice: the named codec and the
     /// tiles (every peer's last fallback stays), only the tiles, or all.
     pub fn filter_decoders(self, offers: &[CodecOffer]) -> Vec<CodecOffer> {
+        if self == Self::Sharp {
+            return sharp_mode::sharp_decoders(offers);
+        }
         offers
             .iter()
             .filter(|offer| offer.codec == CodecKind::Tiles || self.admits(offer.codec))
@@ -99,16 +109,19 @@ pub enum CodecSetting {
     H264,
     Hevc,
     Av1,
+    /// „Scharf (GPU)“: `sharp_mode.rs`, sent as `SET_MODE` `sharpness`.
+    Sharp,
     /// „Verlustfrei“: the tile codec through `SET_MODE` `lossless`.
     Lossless,
 }
 
 impl CodecSetting {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Auto,
         Self::H264,
         Self::Hevc,
         Self::Av1,
+        Self::Sharp,
         Self::Lossless,
     ];
 
@@ -122,6 +135,7 @@ impl CodecSetting {
             Self::H264 => "h264",
             Self::Hevc => "hevc",
             Self::Av1 => "av1",
+            Self::Sharp => sharp_mode::SHARP_KEY,
             Self::Lossless => "lossless",
         }
     }
@@ -132,6 +146,7 @@ impl CodecSetting {
             Self::H264 => "H.264",
             Self::Hevc => "HEVC",
             Self::Av1 => "AV1",
+            Self::Sharp => sharp_mode::SHARP_LABEL,
             Self::Lossless => "Verlustfrei",
         }
     }
@@ -150,6 +165,12 @@ impl CodecSetting {
         self == Self::Lossless
     }
 
+    /// `SET_MODE` `sharpness`: „Scharf (GPU)“ (it replaces the switch
+    /// „Schärfe vor Flüssigkeit“, which set the same bit).
+    pub fn sharpness(self) -> bool {
+        self == Self::Sharp
+    }
+
     /// The negotiation filter: „Verlustfrei“ negotiates like „Automatisch“
     /// and switches to the tiles at run time, as the old switch did.
     pub fn preference(self) -> CodecPreference {
@@ -158,6 +179,7 @@ impl CodecSetting {
             Self::H264 => CodecPreference::H264,
             Self::Hevc => CodecPreference::Hevc,
             Self::Av1 => CodecPreference::Av1,
+            Self::Sharp => CodecPreference::Sharp,
         }
     }
 }

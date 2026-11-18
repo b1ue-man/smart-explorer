@@ -315,7 +315,6 @@ impl ScreenViewerApp {
                 ToolbarAction::AllDevices => out.push(Transition::Grid),
                 ToolbarAction::Fullscreen => out.push(Transition::Fullscreen),
                 ToolbarAction::Fit(fit) => self.change_prefs(|prefs| prefs.fit = *fit),
-                ToolbarAction::Sharpness(on) => self.change_prefs(|prefs| prefs.sharpness = *on),
                 ToolbarAction::Codec(_)
                 | ToolbarAction::Decoder(_)
                 | ToolbarAction::DecoderLibrary(_)

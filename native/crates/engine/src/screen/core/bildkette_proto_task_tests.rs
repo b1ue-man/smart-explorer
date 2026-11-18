@@ -60,7 +60,8 @@ fn bildkette_task_proto_continue_per_codec_in_the_negotiation() {
     }));
     assert_eq!(hello.gop_continue, None);
     let offers = ContinueOffers::from_hello(&hello);
-    let av1_host = [av1(true), h264(true), CodecOffer::tiles()];
+    // P9: AV1 never ranks first in automatic, so a host with AV1 alone.
+    let av1_host = [av1(true), CodecOffer::tiles()];
     let chosen = pairing(&av1_host, &viewer);
     assert_eq!(chosen.codec, CodecKind::Av1);
     assert!(offers.continues(&chosen));

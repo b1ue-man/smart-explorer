@@ -168,6 +168,7 @@ pub fn codec_state(chosen: CodecSetting, facts: &SessionFacts, pending: bool) ->
         CodecSetting::H264 => running == CodecKind::H264,
         CodecSetting::Hevc => running == CodecKind::Hevc,
         CodecSetting::Av1 => running == CodecKind::Av1,
+        CodecSetting::Sharp => matches!(running, CodecKind::H264 | CodecKind::Hevc),
         CodecSetting::Lossless => running == CodecKind::Tiles,
     };
     let auto = chosen == CodecSetting::Auto;

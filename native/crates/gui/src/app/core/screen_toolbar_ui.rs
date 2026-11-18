@@ -1,5 +1,6 @@
 //! The toolbar of the desktop viewer (SCR-M7, U25-7): device and source
-//! choice, „Steuern“, fit and full screen, sharpness and lowest latency,
+//! choice, „Steuern“, fit and full screen, lowest latency (P9: the switch
+//! „Schärfe vor Flüssigkeit“ is the codec choice „Scharf (GPU)“ now),
 //! the keys egui cannot deliver (only those the host offers), the system
 //! actions of an Android host, the statistics switch, and „Codec“,
 //! „Dekodierer“ and „Höchste Datenrate“ (`screen_toolbar_codec.rs`, plan
@@ -80,7 +81,6 @@ pub enum ToolbarAction {
     Control(bool),
     Fit(Fit),
     Fullscreen,
-    Sharpness(bool),
     /// „Codec“ (BK6, 4.10); `Lossless` keeps the old switch's meaning.
     Codec(super::screen_prefs::CodecSetting),
     /// „Dekodierer“ (BK6, 4.10).
@@ -438,12 +438,6 @@ fn view_row(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Vec<ToolbarAction
                 out.push(make(changed));
             }
         };
-    toggle(
-        ui,
-        input.prefs.sharpness,
-        "Schärfe vor Flüssigkeit",
-        ToolbarAction::Sharpness,
-    );
     toggle(
         ui,
         input.prefs.low_latency,

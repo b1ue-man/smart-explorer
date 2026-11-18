@@ -42,7 +42,7 @@ pub(super) struct ViewArgs {
     #[arg(long, value_name = "RATE", value_parser = parse_max_rate)]
     max_rate: Option<MaxRate>,
     /// „Codec“ of the desktop viewer, stored before it opens: auto, h264,
-    /// hevc, av1 or lossless (plan 2026-11-14 „Bildkette“ 4.10)
+    /// hevc, av1, sharp (GPU, P9) or lossless (plan 2026-11-14 „Bildkette“ 4.10)
     #[arg(long, value_name = "CODEC", value_parser = parse_codec)]
     codec: Option<CodecSetting>,
     /// „Dekodierer“ of the desktop viewer, stored before it opens: auto,
@@ -106,10 +106,10 @@ pub(super) fn parse_display_size(text: &str) -> Result<DisplaySize, String> {
         .ok_or_else(|| format!("invalid display size: {text} (WxH such as 2560x1440, or window)"))
 }
 
-/// `--codec auto|h264|hevc|av1|lossless` (BK6).
+/// `--codec auto|h264|hevc|av1|sharp|lossless` (BK6; `sharp` P9).
 pub(super) fn parse_codec(text: &str) -> Result<CodecSetting, String> {
     CodecSetting::parse(text.trim())
-        .ok_or_else(|| format!("invalid codec: {text} (auto, h264, hevc, av1 or lossless)"))
+        .ok_or_else(|| format!("invalid codec: {text} (auto, h264, hevc, av1, sharp or lossless)"))
 }
 
 /// `--decoder auto|hardware|software` (BK6).

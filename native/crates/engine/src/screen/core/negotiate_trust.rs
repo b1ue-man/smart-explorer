@@ -5,7 +5,10 @@
 //! H.264 (HEVC before AV1, as in the other tiers). The host negotiates, so
 //! only the host's trust counts; nothing travels on the wire. A host that
 //! checks nothing (an older register, the task tests) trusts every codec and
-//! ranks as before (`CodecTrust::ALL`).
+//! ranks as before (`CodecTrust::ALL`), except AV1: plan 2026-11-17 P9
+//! (AV1 under steady motion piled up and stalled, user measurement) ranks
+//! AV1 last among the video codecs (4) in every case, so „Automatisch“
+//! never starts with AV1; a viewer that names AV1 still gets it.
 use super::CodecKind;
 
 /// The codecs whose host encoder may keep its B-30 rank.
@@ -60,7 +63,7 @@ impl CodecTrust {
             };
         }
         match codec {
-            CodecKind::Av1 if self.trusts(codec) => 0,
+            // P9: AV1 never first, trusted or not.
             CodecKind::Hevc if self.trusts(codec) => 1,
             CodecKind::H264 => 2,
             CodecKind::Hevc => 3,

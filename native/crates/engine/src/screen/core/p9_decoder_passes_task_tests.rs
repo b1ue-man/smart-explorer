@@ -183,3 +183,37 @@ fn p9_task_automatic_falls_back_to_software_only_after_all_hardware() {
     assert!(error.contains("none (hardware)"), "{error}");
     assert!(error.contains("none (software)"), "{error}");
 }
+
+/// P9 Zwischenmodus: „Scharf (GPU)“ is a codec choice between AV1 and
+/// „Verlustfrei“; it negotiates H.264 and HEVC (never AV1) with the tiles
+/// as the last fallback and sends `SET_MODE` `sharpness`.
+#[test]
+fn p9_task_sharp_codec_setting() {
+    use crate::screen::core::negotiate::{CodecPreference, CodecSetting};
+    let sharp = CodecSetting::Sharp;
+    assert_eq!(CodecSetting::parse("sharp"), Some(sharp));
+    assert_eq!(sharp.key(), "sharp");
+    assert_eq!(sharp.label(), "Scharf (GPU)");
+    assert_eq!(CodecSetting::ALL[4], sharp);
+    assert_eq!(CodecSetting::ALL[5], CodecSetting::Lossless);
+    assert!(sharp.sharpness() && !sharp.lossless());
+    assert!(!CodecSetting::Auto.sharpness() && !CodecSetting::Lossless.sharpness());
+    let preference = sharp.preference();
+    assert_eq!(preference, CodecPreference::Sharp);
+    assert_eq!(CodecPreference::parse("sharp"), Some(preference));
+    assert_eq!(preference.key(), "sharp");
+    assert_eq!(preference.codec(), None);
+    assert!(preference.admits(CodecKind::H264) && preference.admits(CodecKind::Hevc));
+    assert!(preference.admits(CodecKind::Tiles) && !preference.admits(CodecKind::Av1));
+    let offers = [
+        CodecOffer::video(CodecKind::Av1, false, true),
+        CodecOffer::video(CodecKind::Hevc, false, true),
+        CodecOffer::tiles(),
+    ];
+    let kept: Vec<CodecKind> = preference
+        .filter_decoders(&offers)
+        .iter()
+        .map(|offer| offer.codec)
+        .collect();
+    assert_eq!(kept, [CodecKind::Hevc, CodecKind::Tiles]);
+}

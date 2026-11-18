@@ -138,7 +138,8 @@ pub fn full_set_mode(source: Option<SourceId>, display: FrameSize, prefs: &Viewe
         source,
         size: Some(display),
         fps: Some(full_fps()),
-        sharpness: prefs.sharpness,
+        // „Scharf (GPU)“ sets the bit the switch „Schärfe vor Flüssigkeit“ set (P9).
+        sharpness: prefs.codec_setting().sharpness(),
         // „Codec: Verlustfrei“ keeps the meaning of the old switch (4.10).
         lossless: prefs.codec_setting().lossless(),
     }
