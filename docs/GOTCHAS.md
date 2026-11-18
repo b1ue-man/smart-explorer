@@ -1745,3 +1745,41 @@ wait for the remote suite).
   (`file_recovery_doubt.rs::quarantined_source_unchanged`); the raw file
   index is not compared after the rename, because FAT derives it from the
   directory entry.
+
+## Windows virtual display driver (source state 2026-11-18, not compiled, not run on hardware)
+
+- **Pinned binary and its source.** Release `25.7.23` of VirtualDrivers/Virtual-Display-Driver ships
+  the x64 driver as `VirtualDisplayDriver-x86.Driver.Only.zip`; the INF says `NTamd64`, the DLL is
+  AMD64, DriverVer 12/24/2024 (source tag `24.12.24`). Strings of the pinned DLL confirm the
+  configuration interface read from that tag's `Driver.cpp`: registry
+  `HKLM\SOFTWARE\MikeTheTech\VirtualDisplayDriver` value `VDDPATH` (default
+  `C:\VirtualDisplayDriver`), `vdd_settings.xml` there, named pipe `\\.\pipe\MTTVirtualDisplayPipe`
+  with the SDDL `D:(A;;GA;;;WD)` (every local account may send `RELOAD_DRIVER`,
+  `SETDISPLAYCOUNT`, `SETGPU`, `PING`, …).
+- **se does not use the pipe.** `RELOAD_DRIVER`/`SETDISPLAYCOUNT` of tag 24.12.24 call
+  `WdfObjectGet_IndirectDeviceContextWrapper(hPipe)` with the pipe handle instead of a WDF object
+  (`Driver.cpp`, `ReloadDriver`), so a reload is not reliable. The mode list is read only when the
+  device starts and a `<count>` of 0 means 1. Therefore se writes a fixed list of 44 sizes at
+  60/120/144/165/240 Hz in the elevated step (`windows_driver::MODE_SIZES`), picks the listed mode
+  that fits the viewer (`best_mode`) and makes the monitor appear and disappear with the display
+  settings of the user (`ChangeDisplaySettingsExW`: attach as primary at 0,0, detach with width and
+  height 0), which needs no administrator rights.
+- **Signature.** The driver is UMDF 2 (IddCx 1.2); its only kernel binary is Microsoft's inbox
+  `WUDFRd.sys`. Microsoft's driver signing policy (Dev Portal signature since 1607 with Secure Boot)
+  is about kernel-mode binaries; PnP installation needs a catalog signature chaining to a trusted
+  root, and a publisher in `TrustedPublisher` installs without a prompt
+  (learn.microsoft.com "Driver Signing Policy" and "PnP Device Installation Signing Requirements",
+  read 2026-11-18). Windows 10 in S mode and editions for architectures other than x86/amd64 require
+  WHQL catalogs: there the driver does not install. The catalog of 25.7.23 itself is signed by
+  "SignPath Foundation" (GlobalSign GCC R45 CodeSigning CA 2020, valid to 2027-09-07); se replaces
+  that signature with the per-device one (user decision 2026-11-17).
+- **Unverified until a device run:** that `Set-AuthenticodeSignature` replaces the signature of an
+  already signed `.cat` (the step checks it afterwards with `Get-AuthenticodeSignature`: status
+  `Valid` and se's thumbprint, else it fails before installing); that Windows accepts the locally
+  signed catalog with Secure Boot on; that `EnumDisplayDevicesW` reports the adapter's `DeviceID` as
+  `Root\MttVDD` (the description `Virtual Display Driver` is the fallback); that a detached IDD
+  monitor still lists its modes; that DXGI duplication captures the IDD monitor.
+- **Layout recovery.** Before the first change se keeps the desktop layout in
+  `<app data>\screen\virtual-display-layout.json`; the next host process gives it back at its first
+  probe when a former one ended during a session. A headless host keeps the virtual monitor
+  attached (it is the only display).

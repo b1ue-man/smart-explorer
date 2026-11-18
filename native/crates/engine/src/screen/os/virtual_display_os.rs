@@ -1,11 +1,11 @@
 //! Platform side of the virtual display in the viewer's resolution (plan
 //! 2026-11-17 P5, `core/virtual_display.rs`): Linux X11 (RandR modes, the
 //! Xorg driver `dummy` with one elevation) and the Wayland portal's virtual
-//! source; a Windows host names its pending display driver
-//! (`virtual_display_unsupported:windows_driver_pending`, decision E6: an
-//! indirect display driver needs a decision on the code-signing
-//! certificate; the hello fields carry it later without a format change);
-//! other platforms have none. The share host's backend hands the driver to
+//! source; Windows the indirect display driver of VirtualDrivers, signed on
+//! the device and installed by the elevated step of the installation or an
+//! update (`windows/virtual_display_*.rs`, user decision 2026-11-17: never a
+//! setup step during use), whose monitor joins the desktop as the primary
+//! one; other platforms have none. The share host's backend hands the driver to
 //! the sessions (`WorkerBackend::virtual_display`). The host process of a
 //! Wayland session learns the size its portal offers with its preparation
 //! (`set_portal_request`); a worker that follows a session asks the
@@ -35,54 +35,46 @@ pub fn driver() -> Option<Arc<dyn VirtualDisplayDriver>> {
     Some(Arc::new(linux::LinuxVirtualDisplay))
 }
 
-/// A Windows host answers that its driver is pending.
+#[cfg(windows)]
+#[path = "windows/virtual_display_device.rs"]
+pub mod device;
+#[cfg(windows)]
+#[path = "windows/virtual_display_elevate.rs"]
+pub mod elevate;
+#[cfg(windows)]
+#[path = "windows/virtual_display_install.rs"]
+pub mod install;
+#[cfg(windows)]
+#[path = "windows/virtual_display_pins.rs"]
+pub mod pins;
+#[cfg(windows)]
+#[path = "windows/virtual_display_sign.rs"]
+pub mod sign;
+#[cfg(windows)]
+#[path = "windows/virtual_display_driver.rs"]
+pub mod win_display;
+
+/// The virtual display of a Windows host (driver of VirtualDrivers).
 #[cfg(windows)]
 pub fn driver() -> Option<Arc<dyn VirtualDisplayDriver>> {
-    Some(Arc::new(windows_pending::WindowsPending))
+    Some(Arc::new(win_display::WindowsVirtualDisplay))
+}
+
+/// The driver step of the updater program (`--display-driver …`); `None`
+/// for other arguments and on other platforms.
+#[cfg(windows)]
+pub fn driver_step_command(args: &[String]) -> Option<i32> {
+    elevate::command(args)
+}
+
+#[cfg(not(windows))]
+pub fn driver_step_command(_args: &[String]) -> Option<i32> {
+    None
 }
 
 #[cfg(not(any(windows, target_os = "linux")))]
 pub fn driver() -> Option<Arc<dyn VirtualDisplayDriver>> {
     None
-}
-
-#[cfg(windows)]
-mod windows_pending {
-    use std::io;
-
-    use crate::screen::core::pixel_convert::FrameSize;
-    use crate::screen::core::virtual_display::{DriverLimit, WINDOWS_DRIVER_PENDING};
-    use crate::screen::core::virtual_display_host::{
-        DisplayProbe, SetupProgress, VirtualDisplayDriver,
-    };
-
-    pub struct WindowsPending;
-
-    impl VirtualDisplayDriver for WindowsPending {
-        fn probe(&self) -> io::Result<DisplayProbe> {
-            Ok(DisplayProbe {
-                physical_monitor: false,
-                modes: false,
-                limit: DriverLimit::NONE,
-                driver: "windows".into(),
-                current: None,
-                unsupported: Some(WINDOWS_DRIVER_PENDING.into()),
-                setup_possible: false,
-                portal: false,
-            })
-        }
-
-        fn apply(&self, _size: FrameSize) -> io::Result<FrameSize> {
-            Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                WINDOWS_DRIVER_PENDING,
-            ))
-        }
-
-        fn request_setup(&self) -> SetupProgress {
-            SetupProgress::Failed(WINDOWS_DRIVER_PENDING.into())
-        }
-    }
 }
 
 /// The size the portal of this host process offers for its virtual source

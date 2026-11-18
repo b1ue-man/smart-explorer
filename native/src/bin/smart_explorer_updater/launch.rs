@@ -23,6 +23,20 @@ pub(crate) fn spawn_verified_detached(
     spawn_child(exe, expected_sha256, args, None).map(|_| ())
 }
 
+/// Plan 2026-11-17 P5: after a completed update the installed helper runs
+/// the virtual display driver step of the new version in its own process
+/// (one UAC confirmation only when the driver's files or its device
+/// changed), so the update never waits for that confirmation. Windows only.
+pub(crate) fn spawn_display_driver_step(helper: &Path, helper_sha256: &str) -> Option<String> {
+    if !cfg!(windows) {
+        return None;
+    }
+    let args = ["--display-driver", "after-update"];
+    spawn_verified_detached(helper, helper_sha256, &args)
+        .err()
+        .map(|error| format!("virtual display driver step not started: {error}"))
+}
+
 /// Start a replacement app and retain the child handle until its first GUI
 /// frame writes the one-shot acknowledgement. Every error is returned only
 /// after the exact child has exited, so callers may safely roll back its EXE.

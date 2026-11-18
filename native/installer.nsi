@@ -60,6 +60,9 @@
 !ifndef FFMPEG_DIR
   !define FFMPEG_DIR "${__FILEDIR__}\target\installer-dependencies\ffmpeg-${FFMPEG_RELEASE}\files"
 !endif
+; Plan 2026-11-17 P5: the pinned virtual display driver; the elevated step of
+; the updater program downloads, checks, signs and installs it (never embedded).
+!include "${__FILEDIR__}\vdd-driver.nsh"
 
 !include "FileFunc.nsh"
 !include "Sections.nsh"
@@ -154,6 +157,8 @@ Section "Smart Explorer (erforderlich)" SEC_MAIN
   File "/oname=NOTICE.txt" "${__FILEDIR__}\..\third-party\ffmpeg\NOTICE.txt"
   File "/oname=LICENSE-LGPL-3.0.txt" "${FFMPEG_DIR}\LICENSE.txt"
   File "/oname=LICENSE-GPL-3.0.txt" "${__FILEDIR__}\..\third-party\dokany\LICENSE-GPL-3.0.txt"
+  SetOutPath "$INSTDIR\licenses\Virtual-Display-Driver"
+  File "/oname=LICENSE-MIT.txt" "${__FILEDIR__}\..\third-party\virtual-display-driver\LICENSE-MIT.txt"
   SetOutPath "$INSTDIR"
 
   ; Best-effort Windows Defender Firewall rule for direct Share peer listeners.
@@ -277,6 +282,23 @@ Section "Dokany ${DOKANY_VERSION} / DLL-API ${DOKANY_API_VERSION} / Treiberproto
   dokany_done:
 SectionEnd
 
+; Plan 2026-11-17 P5: virtual display for remote use without a monitor. The
+; updater program asks for UAC only when the pinned driver is not installed,
+; its files changed or its device does not work; an unchanged driver is
+; neither signed nor installed again. Silent installs select it with /INSTALLVDD=1.
+Section "Virtueller Bildschirm ${VDD_RELEASE} für Fernzugriff (UAC erforderlich)" SEC_VDD
+  ExecWait '"$INSTDIR\${UPDATER_EXE_NAME}" --display-driver install' $0
+  StrCmp $0 "0" vdd_done
+  StrCmp $0 "1223" 0 vdd_failed
+    DetailPrint "Virtueller Bildschirm: UAC-Abfrage abgebrochen"
+    Goto vdd_done
+  vdd_failed:
+    DetailPrint "Virtueller Bildschirm: Treiber nicht installiert (Exitcode $0, Grund in %ProgramData%\SmartExplorer-VirtualDisplay\last-run.txt)"
+    IfSilent vdd_done 0
+    MessageBox MB_OK|MB_ICONEXCLAMATION "Der virtuelle Bildschirm konnte nicht eingerichtet werden (Exitcode $0).$\r$\nSmart Explorer wurde installiert; der Grund steht in %ProgramData%\SmartExplorer-VirtualDisplay\last-run.txt."
+  vdd_done:
+SectionEnd
+
 Function CheckDokanyRuntime
   StrCpy $DokanyRuntimeReady "0"
   IfFileExists "$INSTDIR\${CLI_EXE_NAME}" 0 check_dokany_done
@@ -297,6 +319,13 @@ Function .onInit
   StrCmp $1 "1" 0 desktop_option_done
     !insertmacro SelectSection ${SEC_DESKTOP}
   desktop_option_done:
+  ; A silent install raises no UAC prompt for the display driver without /INSTALLVDD=1.
+  IfSilent 0 vdd_option_done
+    StrCpy $1 ""
+    ${GetOptions} $0 "/INSTALLVDD=" $1
+    StrCmp $1 "1" vdd_option_done
+    !insertmacro UnselectSection ${SEC_VDD}
+  vdd_option_done:
   Call CheckDokanyRuntime
   StrCmp $DokanyRuntimeReady "1" dokany_already_ready
 
@@ -428,6 +457,8 @@ Section "Uninstall"
   Delete "$INSTDIR\licenses\FFmpeg\LICENSE-LGPL-3.0.txt"
   Delete "$INSTDIR\licenses\FFmpeg\LICENSE-GPL-3.0.txt"
   RMDir "$INSTDIR\licenses\FFmpeg"
+  Delete "$INSTDIR\licenses\Virtual-Display-Driver\LICENSE-MIT.txt"
+  RMDir "$INSTDIR\licenses\Virtual-Display-Driver"
   RMDir "$INSTDIR\licenses"
   Delete "$INSTDIR\Smart Explorer_old.exe"
   Delete "$INSTDIR\Smart Explorer_update_pending.exe"
