@@ -218,7 +218,7 @@ object CoreScreenBackend : ScreenBackend {
 
     override suspend fun openWith(target: ScreenTarget, mode: String, source: String?, displayWidth: Int, displayHeight: Int, maxFps: Int, decoders: List<DecoderOffer>, choice: ViewerCodecChoice) =
         ScreenApi.viewOpen(target.relation, target.relationId, target.deviceId, mode, source, decoders, displayWidth, displayHeight, maxFps, ScreenScaling.awaitRendererLimit(), target.expectedNodeId,
-            maxRate = choice.maxRateBps, codec = choice.codec, decoder = choice.decoder)
+            maxRate = choice.maxRateBps, codec = choice.codec, decoder = choice.decoder, display = ScreenDisplayPrefs.current)
 
     override suspend fun setRateCeiling(session: Long, mode: String, sharpness: Boolean, lossless: Boolean, maxRate: Long) =
         ScreenApi.viewSetMode(session, mode, sharpness = sharpness, lossless = lossless, maxRate = maxRate)

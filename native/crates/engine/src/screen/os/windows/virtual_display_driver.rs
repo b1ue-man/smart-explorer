@@ -9,8 +9,11 @@
 //! it is the only display (a headless host keeps it). The layout before the
 //! first change is kept in `<app data>\screen\virtual-display-layout.json`,
 //! so a host process that ended during a session gives it back at its next
-//! start. Everything runs in the user's session without administrator
-//! rights (display settings are the user's own); nothing here installs or
+//! start. A viewer's fixed size where the physical monitor shows (P9,
+//! `set_display.rs`) sets the mode that monitor lists nearest to it
+//! (`physical_mode`); the saved layout gives it its size and rate back.
+//! Everything runs in the user's session without administrator rights
+//! (display settings are the user's own); nothing here installs or
 //! configures the driver.
 use std::io;
 use std::path::PathBuf;
@@ -150,6 +153,7 @@ fn placements(outputs: &[Output]) -> Vec<Placement> {
                 width: mode.dmPelsWidth,
                 height: mode.dmPelsHeight,
                 primary: output.primary,
+                refresh_hz: mode.dmDisplayFrequency,
             })
         })
         .collect()
@@ -248,33 +252,33 @@ fn not_found(reason: &str) -> io::Error {
     io::Error::new(io::ErrorKind::NotFound, reason.to_string())
 }
 
-/// Gives the desktop the layout before se's first change back.
+/// Gives the desktop the layout before se's first change back: every
+/// other display its place, size and rate, the virtual monitor off it.
 fn restore_layout() -> io::Result<()> {
     let Some(original) = saved_layout() else {
         return Ok(());
     };
     let found = outputs();
-    if let Some(virtual_output) = ours(&found) {
-        let others: Vec<&Placement> = original
-            .iter()
-            .filter(|p| p.device != virtual_output.name)
-            .collect();
-        if !others.is_empty() {
-            for placement in &others {
-                stage(
-                    &placement.device,
-                    &positioned(placement.x, placement.y, None),
-                    placement.primary,
-                )?;
-            }
-            // Width and height 0 take a display off the desktop.
+    let virtual_name = ours(&found).map(|output| output.name.clone());
+    let others: Vec<&Placement> = original
+        .iter()
+        .filter(|p| Some(&p.device) != virtual_name.as_ref())
+        .collect();
+    if !others.is_empty() {
+        for placement in &others {
+            let size = Some((placement.width, placement.height, placement.refresh_hz))
+                .filter(|(width, height, _)| *width > 0 && *height > 0);
             stage(
-                &virtual_output.name,
-                &positioned(0, 0, Some((0, 0, 0))),
-                false,
+                &placement.device,
+                &positioned(placement.x, placement.y, size),
+                placement.primary,
             )?;
-            commit()?;
         }
+        if let Some(name) = &virtual_name {
+            // Width and height 0 take a display off the desktop.
+            stage(name, &positioned(0, 0, Some((0, 0, 0))), false)?;
+        }
+        commit()?;
     }
     std::fs::remove_file(layout_file()).or_else(|error| match error.kind() {
         io::ErrorKind::NotFound => Ok(()),
@@ -377,6 +381,41 @@ impl VirtualDisplayDriver for WindowsVirtualDisplay {
 
     fn request_setup(&self) -> SetupProgress {
         SetupProgress::Failed(REASON_DRIVER_MISSING.into())
+    }
+
+    /// The physical display that shows the desktop (the primary one that is
+    /// not se's, else the first attached one) in the mode it lists nearest
+    /// to `size`; se's virtual monitor leaves the desktop first.
+    fn physical_mode(&self, size: FrameSize) -> io::Result<FrameSize> {
+        restore_layout()?;
+        let found = outputs();
+        let physical = found
+            .iter()
+            .filter(|output| {
+                output.fact.attached
+                    && !adapter_is_ours(&output.fact.device_id, &output.fact.description)
+            })
+            .max_by_key(|output| output.primary)
+            .ok_or_else(|| not_found("no physical display on the desktop"))?;
+        let mode = best_mode(size, &listed_modes(&physical.name))
+            .ok_or_else(|| not_found("the physical display lists no mode"))?;
+        let now = current(&physical.name)
+            .ok_or_else(|| io::Error::other("the physical display has no current mode"))?;
+        if saved_layout().is_none() {
+            save_layout(&placements(&found))?;
+        }
+        // SAFETY: a display's current settings carry the position.
+        let position = unsafe { now.Anonymous1.Anonymous2.dmPosition };
+        let wanted = (mode.size.width, mode.size.height, mode.refresh_hz);
+        stage(
+            &physical.name,
+            &positioned(position.x, position.y, Some(wanted)),
+            physical.primary,
+        )?;
+        commit()?;
+        let shown = current(&physical.name)
+            .ok_or_else(|| io::Error::other("the physical display left the desktop"))?;
+        Ok(FrameSize::new(shown.dmPelsWidth, shown.dmPelsHeight))
     }
 
     /// After the last session: the desktop's own layout; the virtual monitor

@@ -6,7 +6,9 @@
 //! screen size to it while the server is grabbed (as Chrome Remote Desktop's
 //! `desktop_resizer_x11.cc` does) and removes its older modes. Other active
 //! monitors keep their place: the screen covers them. A physical monitor
-//! gets its preferred mode back after the last session (`restore`). The
+//! gets its preferred mode back after the last session (`restore`); a
+//! viewer's fixed size there sets the mode the monitor lists nearest to it
+//! (`apply_listed`, plan 2026-11-17 P9). The
 //! capture
 //! (`x11_capture_target.rs`) reads the monitor area before every picture,
 //! so the next picture has the new size (new reference generation, new
@@ -21,6 +23,7 @@ use x11rb::protocol::randr::{
 use x11rb::protocol::xproto::{ConnectionExt as _, Window};
 
 use crate::screen::core::pixel_convert::FrameSize;
+use crate::screen::core::virtual_display::windows_driver::{best_mode, ListedMode};
 use crate::screen::core::virtual_display::{cvt_rb, is_own_mode, mode_name, REFRESH_HZ};
 use crate::screen::core::virtual_display_host::DisplayFacts;
 
@@ -291,10 +294,73 @@ pub fn apply<C: Connection>(conn: &C, root: Window, size: FrameSize) -> io::Resu
     ))
 }
 
+/// The refresh rate of a mode in whole hertz (dot clock over the pixels of
+/// a frame); 0 for a mode without timings.
+fn refresh_hz(info: &ModeInfo) -> u32 {
+    let total = u64::from(info.htotal) * u64::from(info.vtotal);
+    if total == 0 {
+        return 0;
+    }
+    u32::try_from((u64::from(info.dot_clock) + total / 2) / total).unwrap_or(u32::MAX)
+}
+
+/// Sets the output that shows the desktop to the mode it lists nearest to
+/// `size` (`best_mode`: the largest within it, else the smallest; the
+/// highest rate), never one of se's modes, and removes se's modes (a
+/// viewer's fixed size at a physical monitor, P9). The size it shows.
+pub fn apply_listed<C: Connection>(
+    conn: &C,
+    root: Window,
+    size: FrameSize,
+) -> io::Result<FrameSize> {
+    let resources = conn
+        .randr_get_screen_resources_current(root)
+        .map_err(failed)?
+        .reply()
+        .map_err(failed)?;
+    let timestamp = resources.config_timestamp;
+    let target = target_output(conn, root, &resources.outputs, timestamp)?;
+    let known = named_modes(&resources.modes, &resources.names);
+    let listed: Vec<(Mode, ListedMode)> = resources
+        .modes
+        .iter()
+        .filter(|info| target.modes.contains(&info.id))
+        .filter(|info| {
+            !known
+                .iter()
+                .any(|(id, name)| *id == info.id && is_own_mode(name))
+        })
+        .map(|info| {
+            let size = FrameSize::new(u32::from(info.width), u32::from(info.height));
+            let refresh_hz = refresh_hz(info);
+            (info.id, ListedMode { size, refresh_hz })
+        })
+        .collect();
+    let modes: Vec<ListedMode> = listed.iter().map(|(_, mode)| *mode).collect();
+    let best = best_mode(size, &modes).ok_or_else(|| failed("the output lists no mode"))?;
+    let mode = listed
+        .iter()
+        .find(|(_, mode)| *mode == best)
+        .map(|(id, _)| *id)
+        .ok_or_else(|| failed("the chosen mode is not listed"))?;
+    switch_grabbed(
+        conn,
+        root,
+        &target,
+        mode,
+        best.size,
+        &resources.crtcs,
+        timestamp,
+    )?;
+    remove_own_modes(conn, &target, &known, mode);
+    Ok(best.size)
+}
+
 /// Gives the output that shows the desktop its preferred mode back when it
-/// shows one of se's modes (a physical monitor after a viewer's „Eigener
-/// (virtuell)“) and removes se's modes; `None` when it shows another mode.
-/// The size it shows afterwards.
+/// shows another one (one of se's modes after a viewer's „Eigener
+/// (virtuell)“, or a listed mode after a fixed size, P9; only called after
+/// se changed it) and removes se's modes; `None` when it shows its
+/// preferred mode. The size it shows afterwards.
 pub fn restore<C: Connection>(conn: &C, root: Window) -> io::Result<Option<FrameSize>> {
     let resources = conn
         .randr_get_screen_resources_current(root)
@@ -309,10 +375,10 @@ pub fn restore<C: Connection>(conn: &C, root: Window) -> io::Result<Option<Frame
         .map_err(failed)?
         .reply()
         .map_err(failed)?;
-    let own = known
-        .iter()
-        .any(|(id, name)| *id == shown.mode && is_own_mode(name));
-    let Some(preferred) = target.preferred.filter(|_| own) else {
+    let Some(preferred) = target
+        .preferred
+        .filter(|preferred| shown.mode != *preferred)
+    else {
         return Ok(None);
     };
     let info = resources

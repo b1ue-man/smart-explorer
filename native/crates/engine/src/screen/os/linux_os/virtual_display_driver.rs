@@ -51,10 +51,12 @@ fn desktop() -> String {
 }
 
 /// This process's X server (its own `DISPLAY` and `XAUTHORITY`): the display
-/// set to `size`, or its monitor's own mode given back with `restore`.
+/// set to `size` (with `listed` a mode its monitor lists, P9), or its
+/// monitor's own mode given back with `restore`.
 fn local_answer(
     size: Option<FrameSize>,
     restore: bool,
+    listed: bool,
 ) -> io::Result<(DisplayFacts, Option<FrameSize>)> {
     let (conn, screen) = session_detect::active_session::x11::connect()?;
     let root = conn
@@ -64,6 +66,7 @@ fn local_answer(
         .map(|screen| screen.root)
         .ok_or_else(|| io::Error::other("x11: the screen of DISPLAY does not exist"))?;
     let applied = match (size, restore) {
+        (Some(size), _) if listed => Some(x11_randr_modes::apply_listed(&conn, root, size)?),
         (Some(size), _) => Some(x11_randr_modes::apply(&conn, root, size)?),
         (None, true) => x11_randr_modes::restore(&conn, root)?,
         (None, false) => None,
@@ -75,6 +78,7 @@ fn local_answer(
 pub fn answer_query(
     size: Option<FrameSize>,
     restore: bool,
+    listed: bool,
 ) -> io::Result<(DisplayFacts, Option<FrameSize>)> {
     if !own_session() {
         return Err(io::Error::new(
@@ -82,16 +86,25 @@ pub fn answer_query(
             "the session query has no session variables",
         ));
     }
-    local_answer(size, restore)
+    local_answer(size, restore, listed)
 }
 
 /// The X server of the session: here, or through a host process in the
 /// followed session's account.
-fn x11(size: Option<FrameSize>, restore: bool) -> io::Result<(DisplayFacts, Option<FrameSize>)> {
+fn x11(
+    size: Option<FrameSize>,
+    restore: bool,
+    listed: bool,
+) -> io::Result<(DisplayFacts, Option<FrameSize>)> {
     if own_session() {
-        return local_answer(size, restore);
+        return local_answer(size, restore, listed);
     }
-    match session_queries::ask(&SessionQuery::Display { size, restore })? {
+    let query = SessionQuery::Display {
+        size,
+        restore,
+        listed,
+    };
+    match session_queries::ask(&query)? {
         SessionAnswer::Display { facts, size } => Ok((facts, size)),
         SessionAnswer::Failed(message) => Err(io::Error::other(message)),
         _ => Err(io::Error::other("unexpected screen session answer")),
@@ -99,7 +112,7 @@ fn x11(size: Option<FrameSize>, restore: bool) -> io::Result<(DisplayFacts, Opti
 }
 
 fn probe_x11(mut physical: PhysicalFacts) -> io::Result<DisplayProbe> {
-    let (facts, _) = x11(None, false)?;
+    let (facts, _) = x11(None, false, false)?;
     physical.display_outputs = facts.outputs.clone();
     let physical_monitor = physical.physical_monitor();
     let dummy = facts
@@ -182,7 +195,20 @@ impl VirtualDisplayDriver for LinuxVirtualDisplay {
     }
 
     fn apply(&self, size: FrameSize) -> io::Result<FrameSize> {
-        let (_, applied) = x11(Some(size), false)?;
+        let (_, applied) = x11(Some(size), false, false)?;
+        applied.ok_or_else(|| io::Error::other("the display answered without a size"))
+    }
+
+    /// X11: the mode the output lists nearest to `size` (P9); Wayland's
+    /// compositor keeps its monitors' modes.
+    fn physical_mode(&self, size: FrameSize) -> io::Result<FrameSize> {
+        if session_detect::detect_process() != SessionKind::X11 {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "physical_mode_needs_x11",
+            ));
+        }
+        let (_, applied) = x11(Some(size), false, true)?;
         applied.ok_or_else(|| io::Error::other("the display answered without a size"))
     }
 
@@ -194,7 +220,7 @@ impl VirtualDisplayDriver for LinuxVirtualDisplay {
     /// virtual monitor with the portal session.
     fn restore(&self) -> io::Result<()> {
         if session_detect::detect_process() == SessionKind::X11 {
-            x11(None, true)?;
+            x11(None, true, false)?;
         }
         Ok(())
     }

@@ -77,6 +77,19 @@ pub trait VirtualDisplayDriver: Send + Sync {
     fn restore(&self) -> io::Result<()> {
         Ok(())
     }
+    /// Sets the physical monitor that shows the desktop to the mode it lists
+    /// nearest to `size` (`windows_driver::best_mode`; no mode of se's); the
+    /// size it shows afterwards (plan 2026-11-17 P9, `set_display.rs`).
+    /// `restore` gives its own mode back. A platform without it refuses.
+    fn physical_mode(&self, size: FrameSize) -> io::Result<FrameSize> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            format!(
+                "no listed modes of the physical monitor ({}x{})",
+                size.width, size.height
+            ),
+        ))
+    }
 }
 
 pub(super) fn unsupported(probe: &DisplayProbe, reason: &str) -> VirtualDisplayReport {
@@ -90,8 +103,15 @@ pub(super) fn unsupported(probe: &DisplayProbe, reason: &str) -> VirtualDisplayR
 
 /// What a viewer that asks would get, without changing anything: the
 /// answer of a probe session (`se screen probe`, the MCP tool `screen`).
+/// `live`: a viewer session may change its wish with `SET_DISPLAY` (P9).
 pub fn capability(driver: Option<Arc<dyn VirtualDisplayDriver>>) -> Option<VirtualDisplayReport> {
-    let probe = match driver?.probe() {
+    let mut report = probe_answer(driver?)?;
+    report.live = true;
+    Some(report)
+}
+
+fn probe_answer(driver: Arc<dyn VirtualDisplayDriver>) -> Option<VirtualDisplayReport> {
+    let probe = match driver.probe() {
         Ok(probe) => probe,
         Err(error) => {
             return Some(

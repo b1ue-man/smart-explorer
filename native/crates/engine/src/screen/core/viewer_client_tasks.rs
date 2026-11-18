@@ -78,6 +78,8 @@ pub(super) fn spawn(start: Start, accepted: &ScreenHelloOk) -> Running {
     let reported_hidden = hidden.clone();
     let frame_timing = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let frame_timing_supported = frame_timing.clone();
+    // P9: `SET_DISPLAY` only to a host that answered `live` (`set_display.rs`).
+    let set_display = super::super::set_display::negotiated(Some(accepted));
     let writer = tokio::spawn(async move {
         while let Some(frame) = outgoing.recv().await {
             if let ViewerFrame::Visibility(report) = &frame {
@@ -98,6 +100,9 @@ pub(super) fn spawn(start: Start, accepted: &ScreenHelloOk) -> Running {
                 continue;
             }
             if matches!(frame, ViewerFrame::SetDecoders(_)) && !set_decoders {
+                continue;
+            }
+            if matches!(frame, ViewerFrame::SetDisplay(_)) && !set_display {
                 continue;
             }
             if matches!(frame, ViewerFrame::FrameTiming(_))

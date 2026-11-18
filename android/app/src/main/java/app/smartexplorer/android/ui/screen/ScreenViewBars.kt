@@ -37,7 +37,13 @@ import app.smartexplorer.android.screen.ScreenIconTarget
  * What the viewer asks the host for besides the picture: the shown source, the switch „Schärfe vor Flüssigkeit“ and
  * the [choice] of codec, decoder and highest data rate. The old switch „Verlustfrei“ is the codec choice `lossless`.
  */
-data class ViewSettings(val source: String? = null, val sharpness: Boolean = false, val choice: ViewerCodecChoice = ViewerCodecChoice()) {
+data class ViewSettings(
+    val source: String? = null,
+    val sharpness: Boolean = false,
+    val choice: ViewerCodecChoice = ViewerCodecChoice(),
+    /** „Monitor“ and „Auflösung“ (P5/P9): live to a host that answers `setDisplay`, else with a new session. */
+    val display: ViewerDisplayChoice = ViewerDisplayChoice(),
+) {
     val lossless: Boolean get() = choice.lossless
 }
 
@@ -213,6 +219,11 @@ private fun ActionsMenu(
 private fun SettingsMenu(settings: ViewSettings, onSettings: (ViewSettings) -> Unit) {
     var open by remember { mutableStateOf(false) }
     var rateDialog by remember { mutableStateOf(false) }
+    var sizeDialog by remember { mutableStateOf(false) }
+    if (sizeDialog) DisplaySizeDialog(settings.display, onDismiss = { sizeDialog = false }) { width, height ->
+        sizeDialog = false
+        onSettings(settings.copy(display = settings.display.copy(width = width, height = height)))
+    }
     // The dialog lives beside the menu: closing the menu must not remove it.
     if (rateDialog) MaxRateDialog(settings.choice.maxRateBps, onDismiss = { rateDialog = false }) { bps ->
         rateDialog = false
@@ -228,6 +239,8 @@ private fun SettingsMenu(settings: ViewSettings, onSettings: (ViewSettings) -> U
             )
             // „Codec“ (with „Verlustfrei“ in its place), „Dekodierer“ and „Höchste Datenrate“ (BK7b).
             CodecMenuItems(settings, onSettings, onRate = { open = false; rateDialog = true })
+            // „Monitor“ and „Auflösung“ of the host's display (P5/P9).
+            DisplayMenuItems(settings, onSettings, onCustom = { open = false; sizeDialog = true })
         }
     }
 }

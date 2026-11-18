@@ -83,6 +83,9 @@ pub enum SessionQuery {
         size: Option<FrameSize>,
         #[serde(default)]
         restore: bool,
+        /// `size` is a mode the monitor lists, not one of se's (P9).
+        #[serde(default)]
+        listed: bool,
     },
     /// P3: check the HEVC and AV1 encoders without a verdict, then answer
     /// like `Encoders`.
@@ -389,12 +392,14 @@ pub fn answer(
             .icon(AuthorizedIconEntry::App(&app))
             .map_or_else(failed, SessionAnswer::Icon),
         SessionQuery::Icon { .. } => SessionAnswer::Icon(None),
-        SessionQuery::Display { size, restore } => {
-            crate::screen::os::virtual_display::answer_query(size, restore).map_or_else(
-                failed,
-                |(facts, size)| SessionAnswer::Display { facts, size },
-            )
-        }
+        SessionQuery::Display {
+            size,
+            restore,
+            listed,
+        } => crate::screen::os::virtual_display::answer_query(size, restore, listed).map_or_else(
+            failed,
+            |(facts, size)| SessionAnswer::Display { facts, size },
+        ),
     }
 }
 

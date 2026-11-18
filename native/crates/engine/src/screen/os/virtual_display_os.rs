@@ -101,20 +101,22 @@ pub fn portal_request() -> Option<FrameSize> {
 
 /// The session query of a worker that follows a session (E47), answered
 /// in the session's account: the facts of its X server, after the display
-/// was set to `size` or its monitor got its own mode back (`restore`), and
-/// the size it shows then.
+/// was set to `size` (`listed`: a mode its monitor lists, P9) or its
+/// monitor got its own mode back (`restore`), and the size it shows then.
 #[cfg(target_os = "linux")]
 pub fn answer_query(
     size: Option<FrameSize>,
     restore: bool,
+    listed: bool,
 ) -> io::Result<(DisplayFacts, Option<FrameSize>)> {
-    linux::answer_query(size, restore)
+    linux::answer_query(size, restore, listed)
 }
 
 #[cfg(not(target_os = "linux"))]
 pub fn answer_query(
     _size: Option<FrameSize>,
     _restore: bool,
+    _listed: bool,
 ) -> io::Result<(DisplayFacts, Option<FrameSize>)> {
     Err(io::Error::new(
         io::ErrorKind::Unsupported,
@@ -128,10 +130,30 @@ pub fn run_system_step(step: &str) -> (String, i32) {
     setup::run_system_step(step)
 }
 
-#[cfg(not(target_os = "linux"))]
+/// Windows: the driver step of an update in se's elevated call (P9,
+/// `elevate::SYSTEM_STEP`).
+#[cfg(windows)]
+pub fn run_system_step(step: &str) -> (String, i32) {
+    if step == elevate::SYSTEM_STEP {
+        return elevate::system_step();
+    }
+    ("display_state=failed:unknown_step".into(), 55)
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
 pub fn run_system_step(_step: &str) -> (String, i32) {
     ("display_state=failed:unsupported_platform".into(), 55)
 }
+
+/// Service start (`rdp::host_setup::on_service_start`): a Windows driver
+/// step an update left joins this start's one elevated call (P9).
+#[cfg(windows)]
+pub fn after_update_start() {
+    elevate::after_update_start();
+}
+
+#[cfg(not(windows))]
+pub fn after_update_start() {}
 
 /// A „Bildschirm steuern“ right ended; after the last one se's driver files
 /// go (`rdp::host_setup::coverage_ended`, as the login self-setup).

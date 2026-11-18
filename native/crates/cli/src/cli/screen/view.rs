@@ -8,6 +8,9 @@
 //! The window asks the device and its user itself. Output: `launched\t<pid>`
 //! or, with `--json`, `{"launched":true,"pid":<n>}`. Without the desktop app
 //! next to this `se` the command fails with „Desktop-App nicht installiert“.
+//! „Monitor“ and „Auflösung“ changed later in the window's toolbar apply
+//! within the running session at a host that answers `live` (P9,
+//! `SET_DISPLAY`); an older host's session opens again with them.
 use clap::Args;
 use clap_complete::ArgValueCandidates;
 use serde_json::{json, Value};
@@ -62,8 +65,9 @@ pub(super) struct ViewArgs {
     /// monitor as it is) or request (se's own display also at a monitor)
     #[arg(long, value_name = "WAHL", value_parser = parse_virtual_display)]
     virtual_display: Option<VirtualDisplayWish>,
-    /// „Auflösung“ of se's own display, stored before the viewer opens:
-    /// WxH (e.g. 2560x1440) or window (follow the viewer's window)
+    /// „Auflösung“ of se's own display (with off or at a monitor: the mode
+    /// the physical monitor lists nearest to it), stored before the viewer
+    /// opens: WxH (e.g. 2560x1440) or window (follow the viewer's window)
     #[arg(long, value_name = "GRÖSSE", value_parser = parse_display_size)]
     display_size: Option<DisplaySize>,
     #[arg(long, help = "Print machine-readable JSON")]

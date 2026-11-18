@@ -15,7 +15,7 @@
 //! (`viewer_sink.rs`), so the frame announces no continuation.
 use serde_json::{json, Value};
 
-use super::codecs::{codec_args, decoders_arg};
+use super::codecs::{codec_args, decoders_arg, virtual_display_arg};
 use super::session_arg;
 use crate::daemon::StreamRequest;
 use crate::mobile::ApiError;
@@ -46,5 +46,28 @@ pub(super) fn set_decoders(args: &Value) -> Result<Value, ApiError> {
         virtual_display: None,
     };
     session.send(&ViewerFrame::SetDecoders(request.decoders_frame()))?;
+    Ok(json!({ "switched": true }))
+}
+
+/// `screen.viewSetDisplay {session, virtualDisplay, virtualWidth?,
+/// virtualHeight?}` → `{"switched": bool}` (plan 2026-11-17 P9): „Monitor“
+/// (`auto`, `off`, `request`) and „Auflösung“ (a fixed size; without one the
+/// display follows the viewer) of a running session. With a host that
+/// answered `live` (the event `accepted` names it as `setDisplay`) the core
+/// sends `SET_DISPLAY`: the host switches its display and opens only capture
+/// and encoder again, the session and an Android host's consent stay; the
+/// statistics name the new state. `switched: false`: the app opens the
+/// session again with the choice in `screen.viewOpen`.
+pub(super) fn set_display(args: &Value) -> Result<Value, ApiError> {
+    let session = session_arg(args)?;
+    let choice = virtual_display_arg(args)?
+        .ok_or_else(|| super::invalid("„virtualDisplay“ ist auto, off oder request."))?;
+    if !session
+        .set_display
+        .load(std::sync::atomic::Ordering::SeqCst)
+    {
+        return Ok(json!({ "switched": false }));
+    }
+    session.send(&ViewerFrame::SetDisplay(choice))?;
     Ok(json!({ "switched": true }))
 }

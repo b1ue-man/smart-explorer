@@ -164,6 +164,10 @@ pub struct Placement {
     pub width: u32,
     pub height: u32,
     pub primary: bool,
+    /// The display's refresh rate when it was saved (0: Windows' choice);
+    /// a physical monitor gets its own rate back with its size (P9).
+    #[serde(default)]
+    pub refresh_hz: u32,
 }
 
 /// The desktop with the virtual monitor `device` in `size`: it is the
@@ -186,6 +190,7 @@ pub fn layout_with_virtual(
         width: size.width,
         height: size.height,
         primary: true,
+        refresh_hz: 0,
     }];
     layout.extend(others.into_iter().map(|p| Placement {
         x: shift.saturating_add(p.x.saturating_sub(min_x)),

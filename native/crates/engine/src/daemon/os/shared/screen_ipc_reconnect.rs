@@ -417,6 +417,11 @@ pub(super) async fn relay_session(
                 if let Some(set) = modes.decoders() {
                     let _ = next.control.send(ViewerFrame::SetDecoders(set)).await;
                 }
+                // „Monitor“/„Auflösung“ chosen in the session (P9); the
+                // viewer task drops it for a host without `live`.
+                if let Some(choice) = modes.display() {
+                    let _ = next.control.send(ViewerFrame::SetDisplay(choice)).await;
+                }
                 if session
                     .cursor_wish
                     .load(std::sync::atomic::Ordering::Acquire)

@@ -3,7 +3,9 @@
 //! the name `Bildschirm n`, position and size in physical pixels of the
 //! virtual screen, sorted by `y`, then `x`. The process counts its pixels as
 //! physical ones (`ensure_dpi_aware`), so a monitor at 150 % reports its
-//! real resolution.
+//! real resolution. The monitor of se's virtual display driver (hardware id
+//! `Root\MttVDD`, description „Virtual Display Driver“) is `virtual`, as
+//! the Linux host reports its virtual outputs (plan 2026-11-17 P9).
 use std::sync::OnceLock;
 
 use windows::Win32::Foundation::{BOOL, LPARAM, RECT};
@@ -15,6 +17,7 @@ use windows::Win32::UI::HiDpi::{
 };
 use windows::Win32::UI::WindowsAndMessaging::MONITORINFOF_PRIMARY;
 
+use crate::screen::core::virtual_display::windows_driver::adapter_is_ours;
 use crate::screen::core::window_list::MonitorInfo;
 
 /// The prefix of a GDI device name (`\\.\DISPLAY1`).
@@ -112,6 +115,25 @@ fn entry_of(handle: HMONITOR) -> Option<MonitorEntry> {
     })
 }
 
+/// The GDI device names (`\\.\DISPLAYn`) of se's virtual display adapter.
+fn virtual_devices() -> Vec<String> {
+    use windows_sys::Win32::Graphics::Gdi::{EnumDisplayDevicesW, DISPLAY_DEVICEW};
+    let mut names = Vec::new();
+    for index in 0u32.. {
+        // SAFETY: a plain C structure; all zero is a valid value.
+        let mut adapter: DISPLAY_DEVICEW = unsafe { std::mem::zeroed() };
+        adapter.cb = std::mem::size_of::<DISPLAY_DEVICEW>() as u32;
+        // SAFETY: the structure has its size set; a null device lists the adapters.
+        if unsafe { EnumDisplayDevicesW(std::ptr::null(), index, &mut adapter, 0) } == 0 {
+            break;
+        }
+        if adapter_is_ours(&text(&adapter.DeviceID), &text(&adapter.DeviceString)) {
+            names.push(text(&adapter.DeviceName));
+        }
+    }
+    names
+}
+
 /// Every monitor, sorted by `y`, then `x`; none without a display.
 pub(super) fn enumerate() -> Vec<MonitorEntry> {
     ensure_dpi_aware();
@@ -126,6 +148,12 @@ pub(super) fn enumerate() -> Vec<MonitorEntry> {
         );
     }
     let mut monitors: Vec<MonitorEntry> = handles.into_iter().filter_map(entry_of).collect();
+    let virtual_devices = virtual_devices();
+    for entry in &mut monitors {
+        entry.info.is_virtual = virtual_devices
+            .iter()
+            .any(|device| device.eq_ignore_ascii_case(&entry.device));
+    }
     monitors.sort_by_key(|entry| (entry.info.y, entry.info.x));
     monitors
 }

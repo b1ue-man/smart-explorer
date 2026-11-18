@@ -88,6 +88,7 @@ fn place(device: &str, x: i32, y: i32, width: u32, height: u32, primary: bool) -
         width,
         height,
         primary,
+        refresh_hz: 0,
     }
 }
 

@@ -319,6 +319,8 @@ fn recorded_for_test(_: SetupTrigger) -> bool {
 /// Service start: probe once so the RDP port list is not empty after a
 /// restart; T2 when a relation steers this screen.
 pub fn on_service_start(steering: bool) {
+    // A Windows display driver step an update left (P9) joins the approval.
+    crate::screen::os::virtual_display::after_update_start();
     let deciding = steering.then(|| elevated::announce(elevated::Party::Rdp));
     // Always: also removes login grants of a right that ended meanwhile.
     crate::login::self_setup::request(crate::login::core::self_plan::LoginTrigger::VersionStart);

@@ -466,7 +466,7 @@ mod codec_rows;
 pub use codec_rows::apply_codec;
 #[path = "screen_toolbar_display.rs"]
 mod display_rows;
-pub use display_rows::apply_virtual_display;
+pub use display_rows::{apply_virtual_display, send_live};
 
 /// Draws the toolbar and returns what the user chose. P9 (plan 2026-11-17):
 /// every item keeps its whole width, so one that does not fit the rest of a

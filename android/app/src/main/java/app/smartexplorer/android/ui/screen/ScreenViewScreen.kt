@@ -118,7 +118,9 @@ fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, a
     var controlOn by remember { mutableStateOf(target.control) }
     var failure by remember { mutableStateOf<String?>(null) }
     // „Codec“, „Dekodierer“ and „Höchste Datenrate“ are kept between sessions (BK7b); the old switch „Verlustfrei“ is the codec `lossless`.
-    var settings by remember { mutableStateOf(ViewSettings(source = target.source, choice = ScreenViewPrefs.load(context))) }
+    var settings by remember {
+        mutableStateOf(ViewSettings(source = target.source, choice = ScreenViewPrefs.load(context), display = ScreenDisplayPrefs.load(context)))
+    }
     // The MediaCodec decoder that runs the picture group (hardware or software), reported by the decoder thread.
     var decoderStage by remember { mutableStateOf<DecoderStage?>(null) }
     var zoomMode by remember { mutableStateOf(false) }
@@ -363,6 +365,26 @@ fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, a
         val previous = settings
         settings = next
         if (previous.choice != next.choice) ScreenViewPrefs.save(context, next.choice)
+        if (previous.display != next.display) {
+            ScreenDisplayPrefs.save(context, next.display)
+            // P9: a host that answered `setDisplay` switches its display within the session (`screen.viewSetDisplay`);
+            // an older host or a failed call opens a new session with the choice.
+            val own = session
+            scope.launch {
+                val switched = own != null && own.id != 0L && try {
+                    val answer = Core.call("screen.viewSetDisplay", ScreenDisplayCalls.args(own.id, next.display))
+                    ((answer as? kotlinx.serialization.json.JsonObject)?.get("switched") as? kotlinx.serialization.json.JsonPrimitive)?.content == "true"
+                } catch (cancel: CancellationException) {
+                    throw cancel
+                } catch (_: Exception) {
+                    false
+                } catch (_: LinkageError) {
+                    false
+                }
+                if (!switched && settings.display == next.display) openOwn(mode)
+            }
+            if (previous.copy(display = next.display) == next) return
+        }
         // Another codec or decoder changes the negotiation: a new session (E6 of BK6). „Verlustfrei“ and the data rate go live.
         val opened = session?.choice
         if (opened != null && ViewerCodecChoice.needsReopen(opened, next.choice)) {

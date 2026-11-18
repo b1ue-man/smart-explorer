@@ -66,6 +66,8 @@ pub(super) struct ViewSession {
     cursor: cursor_events::CursorEvents,
     /// The host takes `SET_DECODERS` (P1, `screen.viewSetDecoders`).
     pub set_decoders: AtomicBool,
+    /// The host takes `SET_DISPLAY` (P9, `screen.viewSetDisplay`).
+    pub set_display: AtomicBool,
 }
 
 impl ViewSession {
@@ -170,6 +172,7 @@ fn new_session(mode: SessionMode) -> Arc<ViewSession> {
         local_limits: Mutex::new(None),
         cursor: Default::default(),
         set_decoders: AtomicBool::new(false),
+        set_display: AtomicBool::new(false),
     });
     lock(&SESSIONS).insert(id, session.clone());
     session
@@ -286,6 +289,8 @@ fn on_event(
             set_decoders,
         } => {
             session.set_decoders.store(set_decoders, Ordering::SeqCst);
+            let set_display = crate::screen::core::set_display::negotiated(Some(&hello));
+            session.set_display.store(set_display, Ordering::SeqCst);
             if lock(&session.family).is_some()
                 && (hello.family_version != Some(1)
                     || hello.frame_contract.is_none_or(|contract| {
@@ -335,6 +340,8 @@ fn on_event(
             fields["rateCeiling"] = json!(rate_ceiling.key());
             // P1: `screen.viewSetDecoders` changes codec and decoder in place.
             fields["setDecoders"] = json!(set_decoders);
+            // P9: `screen.viewSetDisplay` changes „Monitor“/„Auflösung“ in place.
+            fields["setDisplay"] = json!(set_display);
             emit(id, "accepted", fields);
         }
         StreamEvent::Host(frame) => on_host_frame(session, encoder, own, frame),
