@@ -122,21 +122,6 @@ fn codec_hint() -> String {
     hint
 }
 
-/// The hover text of „Codec“: the mode „Scharf (GPU)“ (plan 2026-11-17 P9)
-/// is named once the list offers it (`CodecSetting` with key `sharp`).
-fn codec_hint() -> String {
-    use crate::screen::core::sharp_mode::{SHARP_HINT, SHARP_KEY};
-    let mut hint = String::from(
-        "Automatisch wählt nach Hardware beider Geräte, AV1 nie zuerst; \
-         Verlustfrei überträgt Kacheln.",
-    );
-    if CodecSetting::parse(SHARP_KEY).is_some() {
-        hint.push('\n');
-        hint.push_str(SHARP_HINT);
-    }
-    hint
-}
-
 /// „Dekodierer-Bibliothek: Automatisch / FFmpeg / Media Foundation“ and
 /// „Anzeige: Automatisch / Direct3D 11 / wgpu“ (plan 2026-11-17 P8), on
 /// Windows, where both libraries and both displays exist.
