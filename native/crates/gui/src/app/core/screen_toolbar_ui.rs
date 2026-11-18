@@ -240,7 +240,7 @@ fn source_row(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Vec<ToolbarActi
         .any(|limit| limit == "android_system_selected_source");
     ui.label("Quelle:");
     let opened = egui::ComboBox::from_id_salt("screen_viewer_source")
-        .selected_text(source_text(input))
+        .selected_text(applied::short_text(&source_text(input)))
         .show_ui(ui, |ui| {
             if ui
                 .selectable_label(
@@ -451,16 +451,22 @@ fn view_row(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Vec<ToolbarAction
         ToolbarAction::LowLatency,
     );
     if input.low_latency_changed {
-        ui.label(RichText::new("Wirkt beim nächsten Start des Betrachters.").small());
+        ui.add(
+            egui::Label::new(RichText::new("Wirkt beim nächsten Start des Betrachters.").small())
+                .wrap(),
+        );
     }
     toggle(ui, input.stats_on, "Statistik", ToolbarAction::Stats);
     // „Codec“ (replaces „Verlustfrei“), „Dekodierer“, „Höchste Datenrate“.
-    codec_rows::codec_rows(ui, out);
+    codec_rows::codec_rows(ui, input, out);
     codec_rows::max_rate_row(ui, input, out);
     // „Monitor“ and „Auflösung“ of the host (plan 2026-11-17 P5).
     display_rows::display_rows(ui, input, out);
 }
 
+#[cfg_attr(not(windows), allow(dead_code))] // library and display: Windows
+#[path = "screen_toolbar_state.rs"]
+mod applied;
 #[path = "screen_toolbar_codec.rs"]
 mod codec_rows;
 pub use codec_rows::apply_codec;
@@ -468,10 +474,15 @@ pub use codec_rows::apply_codec;
 mod display_rows;
 pub use display_rows::apply_virtual_display;
 
-/// Draws the toolbar and returns what the user chose.
+/// Draws the toolbar and returns what the user chose. P9 (plan 2026-11-17):
+/// every item keeps its whole width, so one that does not fit the rest of a
+/// row moves to the next row as a whole; under egui's default a list or
+/// label at the end of a row was squeezed into the space left (its text
+/// wrapped inside the closed list) and items looked cut off.
 pub fn show(ui: &mut egui::Ui, input: &ToolbarInput) -> Vec<ToolbarAction> {
     let mut out = Vec::new();
     ui.horizontal_wrapped(|ui| {
+        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
         device_row(ui, input, &mut out);
         source_row(ui, input, &mut out);
         control_row(ui, input, &mut out);
