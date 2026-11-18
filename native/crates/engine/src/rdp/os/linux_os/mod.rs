@@ -6,6 +6,10 @@ pub mod host_login;
 pub mod host_setup;
 mod inventory;
 mod krdp;
+/// KRdp sign-in with se's own KRdp user (RDP-ZIELKONTO, second step).
+mod krdp_login;
+/// The account at the desktop for a root worker (RDP-ZIELKONTO, point 7).
+mod session_account;
 mod xrdp;
 /// Token list, PAM line and PAM helper of the xrdp sign-in (P4).
 pub mod xrdp_token;

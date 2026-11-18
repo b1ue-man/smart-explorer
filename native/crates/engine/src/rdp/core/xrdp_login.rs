@@ -17,6 +17,16 @@ use sha2::{Digest, Sha256};
 
 /// The PAM service of xrdp (xrdp `sesman/verify_user_pam.c`, package file).
 pub const PAM_FILE: &str = "/etc/pam.d/xrdp-sesman";
+/// The vendor copy of the same service: xrdp v0.10.3 `verify_user_pam.c`
+/// also looks there ("/usr/lib/pam.d is hardcoded into Linux-PAM"); a file
+/// in `/etc/pam.d` of the same name takes its place. Without an `/etc` file
+/// se writes one derived from it (`pam_override`).
+pub const VENDOR_PAM_FILE: &str = "/usr/lib/pam.d/xrdp-sesman";
+/// The first line of an `/etc` file se derived from the vendor file; the
+/// removal deletes such a file again when nothing else in it changed.
+pub const OVERRIDE_COMMENT: &str = "# Smart Explorer: Kopie von /usr/lib/pam.d/xrdp-sesman mit der se-Zeile (entfernt mit dem letzten Bildschirm steuern)";
+/// The sesman configuration xrdp-sesman reads without `-c`/`--config`.
+pub const SESMAN_INI: &str = "/etc/xrdp/sesman.ini";
 /// The only argument of the se helper the PAM line starts.
 pub const PAM_SWITCH: &str = "--rdp-xrdp-login";
 /// The comment above the line, so a person reading the file knows it.
@@ -90,6 +100,108 @@ pub fn pam_with_line(text: &str, line: &str) -> Result<(String, bool), String> {
     lines.insert(at, PAM_COMMENT);
     let changed = lines != text.lines().collect::<Vec<_>>();
     Ok((lines.join("\n") + "\n", changed))
+}
+
+/// The `/etc` file se writes when only the vendor file exists: the
+/// override comment first, then the vendor text with the se line.
+pub fn pam_override(vendor: &str, line: &str) -> Result<String, String> {
+    let (with_line, _) = pam_with_line(vendor, line)?;
+    Ok(format!("{OVERRIDE_COMMENT}\n{with_line}"))
+}
+
+/// What the removal does with the `/etc` file `text`: `None` deletes it (se
+/// derived it from `vendor` and nothing else changed since), otherwise the
+/// text without se's lines and whether it changed.
+pub fn pam_removal(text: &str, vendor: Option<&str>) -> Option<(String, bool)> {
+    let override_line = |line: &&str| line.trim() == OVERRIDE_COMMENT;
+    let derived = text.lines().any(|line| override_line(&line));
+    let (kept, changed) = pam_without_line(text);
+    let same_as_vendor = |vendor: &str| {
+        let rest: Vec<&str> = kept
+            .lines()
+            .filter(|line| !override_line(line))
+            .map(str::trim_end)
+            .collect();
+        rest == vendor.lines().map(str::trim_end).collect::<Vec<_>>()
+    };
+    if derived && vendor.is_some_and(same_as_vendor) {
+        return None;
+    }
+    Some((kept, changed))
+}
+
+/// `AllowRootLogin` of sesman's `[Security]` section as xrdp v0.10.3 reads
+/// it (`sesman_config.c`: default 0; `g_text2bool`: a non-zero number,
+/// `true`, `on` or `yes`, without regard to case). Without the key xrdp
+/// refuses root.
+pub fn root_login_allowed(sesman_ini: &str) -> bool {
+    let mut section = String::new();
+    let mut allowed = false;
+    for line in sesman_ini.lines().map(str::trim) {
+        if line.starts_with('#') || line.starts_with(';') {
+            continue;
+        }
+        if let Some(name) = line.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+            section = name.trim().to_ascii_lowercase();
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        if section == "security" && key.trim().eq_ignore_ascii_case("AllowRootLogin") {
+            allowed = text_to_bool(value.trim());
+        }
+    }
+    allowed
+}
+
+/// One logind session as `desktop_user` weighs it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DesktopSession {
+    pub uid: u32,
+    pub user: String,
+    pub seat: String,
+    pub active: bool,
+    pub remote: bool,
+    /// logind `Class`: `user`, `greeter`, `lock-screen`, `background` …
+    pub class: String,
+    /// logind `Type`: `x11`, `wayland`, `mir`, `tty`, `unspecified`.
+    pub kind: String,
+}
+
+/// The account at the desktop of a root worker (its „own“ account for an
+/// RDP sign-in, since xrdp refuses root by default): the user of an active,
+/// local, graphical session of class `user` other than root; a session on
+/// `seat0` comes first.
+pub fn desktop_user(sessions: &[DesktopSession]) -> Option<String> {
+    let graphical = |session: &&DesktopSession| {
+        session.uid != 0
+            && session.active
+            && !session.remote
+            && session.class == "user"
+            && matches!(session.kind.as_str(), "x11" | "wayland" | "mir")
+    };
+    let candidates: Vec<&DesktopSession> = sessions.iter().filter(graphical).collect();
+    candidates
+        .iter()
+        .find(|session| session.seat == "seat0")
+        .or_else(|| candidates.first())
+        .map(|session| session.user.clone())
+}
+
+/// xrdp `g_text2bool`: `atoi` non-zero, or `true`/`on`/`yes`.
+fn text_to_bool(value: &str) -> bool {
+    let digits = value
+        .strip_prefix(|c: char| c == '+' || c == '-')
+        .unwrap_or(value);
+    let number = digits
+        .bytes()
+        .take_while(u8::is_ascii_digit)
+        .any(|b| b != b'0');
+    number
+        || ["true", "on", "yes"]
+            .iter()
+            .any(|word| value.eq_ignore_ascii_case(word))
 }
 
 /// One issued token, without the token itself.

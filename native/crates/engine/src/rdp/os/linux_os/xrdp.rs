@@ -124,6 +124,15 @@ pub(super) fn config_path() -> PathBuf {
     }
 }
 
+/// The `--config`/`-c` file of the xrdp-sesman unit, when it names one
+/// (otherwise sesman reads `/etc/xrdp/sesman.ini`).
+pub(super) fn sesman_config() -> Option<PathBuf> {
+    let unit = unit("xrdp-sesman.service", false, "xrdp-sesman").ok()?;
+    argument(&unit.command, "--config")
+        .or_else(|| argument(&unit.command, "-c"))
+        .map(PathBuf::from)
+}
+
 /// The `[Globals]` port of the xrdp configuration at `path`.
 pub(super) fn configured_port(path: &Path) -> Result<u16, String> {
     ini(path)?

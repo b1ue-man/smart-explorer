@@ -134,3 +134,87 @@ fn rdp_konto_task_xrdp_token_bound_to_user_and_tunnel() {
     assert!(tunnel_row(&mapped, 3389, 0));
     assert!(!tunnel_row("garbage", 3389, 0));
 }
+
+/// Only `/usr/lib/pam.d/xrdp-sesman` exists: the `/etc` file se writes is
+/// the vendor text with the se line behind the override comment; removing
+/// the line deletes that file again unless someone changed it meanwhile.
+#[test]
+fn rdp_konto_task_xrdp_vendor_pam_file_gets_an_etc_override() {
+    let line = pam_line("/usr/local/bin/se").unwrap();
+    let derived = pam_override(DEBIAN, &line).unwrap();
+    assert_eq!(derived.lines().next(), Some(OVERRIDE_COMMENT));
+    assert_eq!(se_lines(&derived), 1);
+    // A second install on the derived file keeps the override comment.
+    let (again, changed) = pam_with_line(&derived, &line).unwrap();
+    assert!(!changed, "{again}");
+    // Removal: unchanged derived file goes, the vendor file applies again.
+    assert_eq!(pam_removal(&derived, Some(DEBIAN)), None);
+    // Edited meanwhile: only se's line goes, the file stays.
+    let edited = format!("{derived}auth optional pam_extra.so\n");
+    let (kept, changed) = pam_removal(&edited, Some(DEBIAN)).unwrap();
+    assert!(changed);
+    assert_eq!(se_lines(&kept), 0);
+    assert!(kept.contains("pam_extra.so"));
+    // An administrator's own /etc file is never deleted.
+    let (with, _) = pam_with_line(FEDORA, &line).unwrap();
+    let (kept, changed) = pam_removal(&with, Some(FEDORA)).unwrap();
+    assert!(changed);
+    assert_eq!(kept, FEDORA);
+    // No vendor file: the derived file stays without the line.
+    assert!(pam_removal(&derived, None).is_some());
+    // An unknown vendor layout writes nothing.
+    assert!(pam_override("auth required pam_unix.so\n", &line).is_err());
+}
+
+/// xrdp-sesman's `AllowRootLogin` as xrdp v0.10.3 reads it, and the
+/// account at the desktop a root worker uses instead of root.
+#[test]
+fn rdp_konto_task_root_worker_signs_in_as_desktop_user() {
+    let ini = |value: &str| format!("[Globals]\nAllowRootLogin=true\n[Security]\n{value}\n");
+    assert!(!root_login_allowed("[Security]\n"), "default refuses root");
+    assert!(!root_login_allowed("[Globals]\nAllowRootLogin=true\n"));
+    for yes in [
+        "AllowRootLogin=true",
+        "allowrootlogin = Yes",
+        "AllowRootLogin=ON",
+        "AllowRootLogin=1",
+        "AllowRootLogin=2x",
+    ] {
+        assert!(root_login_allowed(&ini(yes)), "{yes}");
+    }
+    for no in [
+        "AllowRootLogin=false",
+        "AllowRootLogin=0",
+        "AllowRootLogin=",
+        "#AllowRootLogin=true",
+        "AllowRootLogin=maybe",
+    ] {
+        assert!(!root_login_allowed(&ini(no)), "{no}");
+    }
+    let session = |uid: u32, user: &str, seat: &str, class: &str, kind: &str| DesktopSession {
+        uid,
+        user: user.into(),
+        seat: seat.into(),
+        active: true,
+        remote: false,
+        class: class.into(),
+        kind: kind.into(),
+    };
+    let greeter = session(110, "lightdm", "seat0", "greeter", "x11");
+    let console = session(1000, "anna", "", "user", "tty");
+    let root = session(0, "root", "seat0", "user", "x11");
+    let other_seat = session(1001, "ben", "seat1", "user", "wayland");
+    let desktop = session(1002, "carla", "seat0", "user", "x11");
+    assert_eq!(desktop_user(&[greeter, console, root]), None);
+    assert_eq!(
+        desktop_user(&[other_seat.clone(), desktop.clone()]).as_deref(),
+        Some("carla"),
+        "seat0 first"
+    );
+    assert_eq!(desktop_user(&[other_seat]).as_deref(), Some("ben"));
+    let mut inactive = desktop.clone();
+    inactive.active = false;
+    let mut remote = desktop;
+    remote.remote = true;
+    assert_eq!(desktop_user(&[inactive, remote]), None);
+}

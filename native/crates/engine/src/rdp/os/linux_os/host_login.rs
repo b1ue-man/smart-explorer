@@ -1,28 +1,29 @@
 //! Linux side of the sign-in with the grant's account (plan 2026-11-17 P4):
 //! xrdp signs the viewer in with a one-time se token (decision 6,
 //! `xrdp_token.rs`), for every account of the grant this worker may use (as
-//! Exec). The GNOME desktop sharing se set up keeps its own credentials
-//! (`RdpCredential`); KRdp and the other GNOME modes name their reason (KRdp
-//! follows in a later step). se checks no typed Linux password.
+//! Exec). KRdp signs in with se's own KRdp user when the grant names the
+//! account of the Plasma session KRdp shows (`krdp_login.rs`). The GNOME
+//! desktop sharing se set up keeps its own credentials (`RdpCredential`);
+//! the other GNOME modes name their reason. se checks no typed Linux
+//! password. A root worker's own account is the account at the desktop
+//! (`session_account.rs`), since xrdp refuses root by default.
 use super::host_setup::SystemStep;
-use super::xrdp_token;
-use crate::rdp::core::{xrdp_login::user_allowed, HostAccount, LoginInfo, SetupState};
+use super::{krdp_login, session_account, xrdp_token};
+use crate::rdp::core::xrdp_login::{root_login_allowed, user_allowed, SESMAN_INI};
+use crate::rdp::core::{HostAccount, LoginInfo, SetupState};
 use crate::rdp::os::shared::host_login::{Automatic, Viewer};
 use crate::share::access_grant::AccountProfile;
 use crate::share::apps_wire::ManagedSecret;
 use std::sync::{Mutex, PoisonError};
 
 const XRDP: &str = "xrdp";
+const KRDP: &str = "krdp";
 
 pub fn supports(service_id: &str) -> Result<(), String> {
     match service_id {
-        XRDP => Ok(()),
+        XRDP | KRDP => Ok(()),
         "gnome-console" => Err(
             "die von se eingerichtete GNOME-Desktopfreigabe meldet mit eigenen Zugangsdaten an"
-                .into(),
-        ),
-        "krdp" => Err(
-            "KRdp meldet mit dem Konto der Sitzung an; die automatische Anmeldung folgt in einem späteren Schritt"
                 .into(),
         ),
         other => Err(format!(
@@ -36,9 +37,36 @@ pub fn supports(service_id: &str) -> Result<(), String> {
 pub fn account(profile: &AccountProfile) -> Result<HostAccount, String> {
     let name = match profile.account_name() {
         Some(name) => name.to_string(),
-        None => xrdp_token::own_user().ok_or("Konto des Hintergrunddienstes nicht ermittelbar")?,
+        None => own_account()?,
     };
     HostAccount::new(&name, None)
+}
+
+/// The worker's own account. For a root worker that is the person at the
+/// desktop (active local graphical session); without one `root` only where
+/// xrdp-sesman admits root (`AllowRootLogin`).
+fn own_account() -> Result<String, String> {
+    if !xrdp_token::running_as_root() {
+        return xrdp_token::own_user()
+            .ok_or_else(|| "Konto des Hintergrunddienstes nicht ermittelbar".to_string());
+    }
+    if let Some(user) = session_account::desktop_account() {
+        return Ok(user);
+    }
+    let ini = sesman_ini();
+    if std::fs::read_to_string(&ini).is_ok_and(|text| root_login_allowed(&text)) {
+        return Ok("root".into());
+    }
+    Err(format!(
+        "Der Hintergrunddienst läuft als root und an diesem Gerät ist keine grafische Sitzung eines anderen Kontos aktiv; xrdp lässt root nicht zu (AllowRootLogin in {} fehlt oder ist aus). Eine Freigabe mit benanntem Konto oder eine Anmeldung am Gerät behebt das",
+        ini.display()
+    ))
+}
+
+/// The sesman configuration of the xrdp-sesman unit (`--config`/`-c`),
+/// else the packaged default.
+fn sesman_ini() -> std::path::PathBuf {
+    super::xrdp::sesman_config().unwrap_or_else(|| SESMAN_INI.into())
 }
 
 /// The result of this process's root step `xrdp-login` (one approval per
@@ -54,6 +82,11 @@ pub fn automatic(
     viewer: &Viewer,
     status_only: bool,
 ) -> Automatic {
+    if service_id == KRDP {
+        // KRdp shows the session of the account this worker runs as.
+        let own = xrdp_token::own_user().unwrap_or_default();
+        return krdp_login::automatic(&own, account, viewer, status_only);
+    }
     if service_id != XRDP {
         return Automatic::No;
     }
@@ -106,11 +139,13 @@ pub fn verify(_account: &HostAccount, _password: &str) -> Result<bool, String> {
     Err("Unter Linux meldet xrdp mit einem Einmal-Token von se an; se prüft und speichert hier kein Kennwort".into())
 }
 
-/// A right that ended during the request: the viewer's tokens go.
+/// A right that ended during the request: the viewer's tokens go, and a
+/// KRdp password it was just given is replaced.
 pub fn withdraw(viewer: &Viewer, _issued: &LoginInfo) {
     xrdp_token::revoke(|record| {
         record.device_id == viewer.device_id && record.public_key == viewer.public_key
     });
+    krdp_login::coverage_ended(&|known: &Viewer| known != viewer, true);
 }
 
 /// „Bildschirm steuern“ ended for a viewer: its tokens go; after the last
@@ -123,6 +158,7 @@ pub fn coverage_ended(steers: &dyn Fn(&Viewer) -> bool, steering_remains: bool) 
     xrdp_token::revoke(|record| {
         !steering_remains || !steers(&Viewer::new(&record.device_id, &record.public_key))
     });
+    krdp_login::coverage_ended(steers, steering_remains);
     if steering_remains || !xrdp_token::pam_installed() || !xrdp_token::running_as_root() {
         return;
     }

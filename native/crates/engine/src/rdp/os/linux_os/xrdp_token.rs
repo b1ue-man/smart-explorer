@@ -8,9 +8,9 @@
 //! xrdp-sesman, accepts a login only for a listed token of an allowed
 //! account while a se tunnel of that worker connects to xrdp.
 use crate::rdp::core::xrdp_login::{
-    is_se_line, new_token, pam_line, pam_with_line, pam_without_line, token_accepted, token_digest,
-    tunnel_row, user_allowed, TokenRecord, MAX_TOKENS, PAM_FILE, TOKEN_DIR, TOKEN_FILE,
-    TOKEN_LIFETIME_SECS, TOKEN_PREFIX,
+    is_se_line, new_token, pam_line, pam_override, pam_removal, pam_with_line, token_accepted,
+    token_digest, tunnel_row, user_allowed, TokenRecord, MAX_TOKENS, PAM_FILE, TOKEN_DIR,
+    TOKEN_FILE, TOKEN_LIFETIME_SECS, TOKEN_PREFIX, VENDOR_PAM_FILE,
 };
 use crate::rdp::core::SetupState;
 use crate::rdp::os::shared::host_login::Viewer;
@@ -238,38 +238,53 @@ fn install(owner: u32) -> Result<(), String> {
     let helper = crate::updater::installed_cli_path().map_err(|e| format!("se_path: {e}"))?;
     root_owned(&helper)?;
     let helper = helper.to_str().ok_or("se_path_not_utf8")?;
-    let (text, mode) = pam_text()?;
-    let (changed_text, changed) = pam_with_line(&text, &pam_line(helper)?)?;
-    if changed {
-        replace_root_file(Path::new(PAM_FILE), changed_text.as_bytes(), mode)?;
+    let line = pam_line(helper)?;
+    match root_text(PAM_FILE) {
+        Ok((text, mode)) => {
+            let (changed_text, changed) = pam_with_line(&text, &line)?;
+            if changed {
+                replace_root_file(Path::new(PAM_FILE), changed_text.as_bytes(), mode)?;
+            }
+        }
+        // Only the vendor file (`/usr/lib/pam.d`): an `/etc` file of the
+        // same name takes its place, derived from it with the se line.
+        Err(_) if !Path::new(PAM_FILE).exists() => {
+            let (vendor, mode) = root_text(VENDOR_PAM_FILE)?;
+            let text = pam_override(&vendor, &line)?;
+            replace_root_file(Path::new(PAM_FILE), text.as_bytes(), mode & 0o644)?;
+        }
+        Err(error) => return Err(error),
     }
     Ok(())
 }
 
-/// Root: the PAM line out again (the worker deletes its own records).
+/// Root: the PAM line out again (the worker deletes its own records); an
+/// `/etc` file se derived from the vendor file goes when nothing else in it
+/// changed, so the vendor file applies again.
 fn remove() -> Result<(), String> {
     if euid() != 0 {
         return Err("xrdp_login_needs_root".into());
     }
-    let (text, mode) = match pam_text() {
+    let (text, mode) = match root_text(PAM_FILE) {
         Ok(found) => found,
         Err(_) if !Path::new(PAM_FILE).exists() => return Ok(()),
         Err(error) => return Err(error),
     };
-    let (kept, changed) = pam_without_line(&text);
-    if changed {
-        replace_root_file(Path::new(PAM_FILE), kept.as_bytes(), mode)?;
+    let vendor = root_text(VENDOR_PAM_FILE).ok().map(|(vendor, _)| vendor);
+    match pam_removal(&text, vendor.as_deref()) {
+        None => std::fs::remove_file(PAM_FILE).map_err(|e| format!("xrdp_pam_write: {e}")),
+        Some((kept, true)) => replace_root_file(Path::new(PAM_FILE), kept.as_bytes(), mode),
+        Some((_, false)) => Ok(()),
     }
-    Ok(())
 }
 
-/// The PAM file of xrdp and its mode: a plain file of root, no link.
-fn pam_text() -> Result<(String, u32), String> {
-    let meta = std::fs::symlink_metadata(PAM_FILE).map_err(|e| format!("xrdp_pam: {e}"))?;
+/// A PAM file of xrdp and its mode: a plain file of root, no link.
+fn root_text(path: &str) -> Result<(String, u32), String> {
+    let meta = std::fs::symlink_metadata(path).map_err(|e| format!("xrdp_pam: {path}: {e}"))?;
     if !meta.file_type().is_file() || meta.uid() != 0 {
-        return Err(format!("xrdp_pam_not_root_file: {PAM_FILE}"));
+        return Err(format!("xrdp_pam_not_root_file: {path}"));
     }
-    let text = std::fs::read_to_string(PAM_FILE).map_err(|e| format!("xrdp_pam: {e}"))?;
+    let text = std::fs::read_to_string(path).map_err(|e| format!("xrdp_pam: {path}: {e}"))?;
     Ok((text, meta.mode() & 0o7777))
 }
 
