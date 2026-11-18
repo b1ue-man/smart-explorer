@@ -41,14 +41,84 @@
 //! Present mode (B-40). eframe keeps the surface configuration private
 //! (`egui-wgpu-0.29.1/src/winit.rs:82` field `configuration`, `:148`
 //! `configure_surface`; the app sees only `Frame::wgpu_render_state`,
-//! `eframe-0.29.1/src/epi.rs:693`): „Niedrigste Latenz“ takes effect when
-//! the window opens. It chooses `AutoNoVsync` (Immediate, else Mailbox,
-//! else Fifo, `wgpu-types-22.0.0/src/lib.rs:5257-5260`): in full screen the
-//! picture may tear (variable-refresh screens synchronise themselves), in a
-//! composited window the compositor synchronises. Otherwise `AutoVsync`
-//! with one frame queued (decision C4). `Mailbox` is never set: eframe does
-//! not ask the surface first, and a surface without it ends the program.
+//! `eframe-0.29.1/src/epi.rs:693`): „Niedrigste Latenz“ takes effect in the
+//! wgpu window when the window opens. It chooses `AutoNoVsync` (Immediate,
+//! else Mailbox, else Fifo, `wgpu-types-22.0.0/src/lib.rs:5257-5260`): in
+//! full screen the picture may tear (variable-refresh screens synchronise
+//! themselves), in a composited window the compositor synchronises.
+//! Otherwise `AutoVsync` with one frame queued (decision C4). `Mailbox` is
+//! never set: eframe does not ask the surface first, and a surface without
+//! it ends the program. No other way reaches the wgpu surface (checked in
+//! P9, 2026-11-18): `RenderState` (`egui-wgpu-0.29.1/src/lib.rs:58-80`)
+//! carries no `wgpu::Instance`, so the app cannot make a surface of its own
+//! on eframe's device; a second swap chain on the same window is refused by
+//! Vulkan (`VK_ERROR_NATIVE_WINDOW_IN_USE_KHR`); every further eframe
+//! viewport is configured from the same private configuration
+//! (`winit.rs:265`), and `on_surface_error` only reconfigures with it
+//! (`winit.rs:591-593`).
+//!
+//! The Direct3D 11 display (P8, `screen_direct.rs`) owns its swap chain and
+//! applies „Niedrigste Latenz“ live (P9) from its next picture on:
+//! `Present(0, DXGI_PRESENT_ALLOW_TEARING)` where DXGI reports tearing
+//! support, else `Present(0, 0)`, which on a flip-model swap chain never
+//! tears and shows the newest picture at the next refresh without blocking
+//! the decode thread (`direct_allows_tearing`). The switch stores its value
+//! for the process (`set_low_latency`); the presenter reads it per picture.
+use std::sync::atomic::{AtomicU8, Ordering};
+
 use eframe::egui_wgpu::{self, wgpu};
+
+/// „Niedrigste Latenz“ of this process: not read yet, off, on.
+static LOW_LATENCY: AtomicU8 = AtomicU8::new(LATENCY_UNREAD);
+const LATENCY_UNREAD: u8 = 0;
+const LATENCY_OFF: u8 = 1;
+const LATENCY_ON: u8 = 2;
+
+fn latency_state(on: bool) -> u8 {
+    if on {
+        LATENCY_ON
+    } else {
+        LATENCY_OFF
+    }
+}
+
+/// „Niedrigste Latenz“ as the user set it last (`viewer.json` until the
+/// switch changes it in this process).
+/// Read by the Direct3D 11 presenter, which exists on Windows only.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn low_latency() -> bool {
+    if LOW_LATENCY.load(Ordering::Acquire) == LATENCY_UNREAD {
+        let path = super::screen_prefs::prefs_path();
+        let stored = super::screen_prefs::ViewerPrefs::load_from(&path).low_latency;
+        let _ = LOW_LATENCY.compare_exchange(
+            LATENCY_UNREAD,
+            latency_state(stored),
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
+    }
+    LOW_LATENCY.load(Ordering::Acquire) == LATENCY_ON
+}
+
+/// The switch „Niedrigste Latenz“ changed: what presents live follows.
+pub fn set_low_latency(on: bool) {
+    LOW_LATENCY.store(latency_state(on), Ordering::Release);
+}
+
+/// Whether the Direct3D 11 presenter presents with
+/// `DXGI_PRESENT_ALLOW_TEARING` (sync interval 0 either way): only with
+/// „Niedrigste Latenz“ and where DXGI reports tearing support.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn direct_allows_tearing(low_latency: bool, tearing_supported: bool) -> bool {
+    low_latency && tearing_supported
+}
+
+/// The hint under „Niedrigste Latenz“ (`changed`: switched since the
+/// window opened); none while the Direct3D 11 display shows the picture,
+/// where the switch applies at once.
+pub fn latency_note(changed: bool, direct_showing: bool) -> Option<&'static str> {
+    (changed && !direct_showing).then_some("Wirkt beim nächsten Start des Betrachters.")
+}
 
 /// The present mode of the viewer window.
 pub fn present_mode(low_latency: bool) -> wgpu::PresentMode {

@@ -5,8 +5,9 @@
 //! actions of an Android host, the statistics switch, and „Codec“,
 //! „Dekodierer“ and „Höchste Datenrate“ (`screen_toolbar_codec.rs`, plan
 //! 2026-11-14 „Bildkette“ 4.10). Apart from „Höchste Datenrate“, which it
-//! stores itself, it changes nothing: `show` returns the user's choices, and
-//! the viewer app carries them out.
+//! stores itself, and „Niedrigste Latenz“, which it hands to the Direct3D 11
+//! display at once (P9), it changes nothing: `show` returns the user's
+//! choices, and the viewer app carries them out.
 use eframe::egui::{self, RichText};
 
 use super::screen_devices::DeviceEntry;
@@ -431,6 +432,19 @@ fn view_row(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Vec<ToolbarAction
     {
         out.push(ToolbarAction::Fullscreen);
     }
+    let mut low_latency = input.prefs.low_latency;
+    if ui
+        .checkbox(&mut low_latency, "Niedrigste Latenz (Bildrisse möglich)")
+        .changed()
+    {
+        // P9: the Direct3D 11 display presents with it from its next picture.
+        super::screen_present::set_low_latency(low_latency);
+        out.push(ToolbarAction::LowLatency(low_latency));
+    }
+    let direct = super::screen_direct::showing(ui.ctx());
+    if let Some(note) = super::screen_present::latency_note(input.low_latency_changed, direct) {
+        ui.add(egui::Label::new(RichText::new(note).small()).wrap());
+    }
     let mut toggle =
         |ui: &mut egui::Ui, value: bool, text: &str, make: fn(bool) -> ToolbarAction| {
             let mut changed = value;
@@ -438,18 +452,6 @@ fn view_row(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Vec<ToolbarAction
                 out.push(make(changed));
             }
         };
-    toggle(
-        ui,
-        input.prefs.low_latency,
-        "Niedrigste Latenz (Bildrisse möglich)",
-        ToolbarAction::LowLatency,
-    );
-    if input.low_latency_changed {
-        ui.add(
-            egui::Label::new(RichText::new("Wirkt beim nächsten Start des Betrachters.").small())
-                .wrap(),
-        );
-    }
     toggle(ui, input.stats_on, "Statistik", ToolbarAction::Stats);
     // „Codec“ (replaces „Verlustfrei“), „Dekodierer“, „Höchste Datenrate“.
     codec_rows::codec_rows(ui, input, out);

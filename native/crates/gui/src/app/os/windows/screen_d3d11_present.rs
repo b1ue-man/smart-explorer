@@ -7,9 +7,13 @@
 //! Swap chain as Moonlight-qt (`app/streaming/video/ffmpeg-renderers/
 //! d3d11va.cpp:551-647` at 28629dc1): `DXGI_SWAP_EFFECT_FLIP_DISCARD`, five
 //! buffers (three queued, one back buffer, one DWM holds for DirectFlip;
-//! three starve AMD drivers there), `DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING` and
-//! `Present(0, DXGI_PRESENT_ALLOW_TEARING)` where `CheckFeatureSupport`
-//! reports tearing, else `Present(0, 0)` and DWM keeps the newest picture.
+//! three starve AMD drivers there), `DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING`
+//! where `CheckFeatureSupport` reports tearing, and `Present(0,
+//! DXGI_PRESENT_ALLOW_TEARING)` while „Niedrigste Latenz“ is on there, else
+//! `Present(0, 0)` and DWM keeps the newest picture without tearing. The
+//! switch applies live, from the next picture on (P9,
+//! `screen_present::direct_allows_tearing`); the swap chain keeps the
+//! tearing flag either way, so switching never recreates it.
 //! No waitable object and no `SetMaximumFrameLatency(1)`: with sync interval
 //! 0 that makes `Present` block on DWM like sync interval 1 (Moonlight's
 //! finding, same lines), which is the delay this path removes. Window
@@ -48,6 +52,7 @@ use windows::Win32::Graphics::Dxgi::{
     DXGI_USAGE_RENDER_TARGET_OUTPUT,
 };
 
+use super::super::screen_present::{direct_allows_tearing, low_latency};
 use super::layout::{blit_rects, colour_space_bits, PixelRect};
 use super::DirectPresenter;
 use crate::screen::core::gpu_picture::GpuPicture;
@@ -374,7 +379,8 @@ impl Presenter {
             let blit = video.VideoProcessorBlt(vp, &output, 0, std::slice::from_ref(&stream));
             ManuallyDrop::drop(&mut stream.pInputSurface);
             blit?;
-            let flags = if self.tearing {
+            // P9: „Niedrigste Latenz“ applies from this picture on.
+            let flags = if direct_allows_tearing(low_latency(), self.tearing) {
                 DXGI_PRESENT_ALLOW_TEARING
             } else {
                 DXGI_PRESENT(0)

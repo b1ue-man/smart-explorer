@@ -1023,6 +1023,11 @@ BILDKETTE_TESTS = {
         "p9_rate_task_refused_frames_lower_a_target_above_the_line",
         "p9_rate_task_honour_budget_counts_the_delivered_interval",
         "p9_rate_task_dropped_pictures_mark_every_tile",
+        # Plan 2026-11-17 P9 (lossless tiles on every core, lowest latency live on Direct3D 11).
+        "tiles_parallel_task_records_equal_the_sequential_encoder",
+        "tiles_parallel_task_refuses_wrong_buffers",
+        "tiles_parallel_task_plan_admits_a_wave_of_slots",
+        "p9_present_task_lowest_latency_applies_live_on_direct3d11",
         "bildkette_task_recover_stale_time_from_rtt_and_frame_interval",
         "bildkette_task_recover_hello_with_old_peers",
         "bildkette_task_recover_continues_only_from_a_confirmed_decodable_frame",
