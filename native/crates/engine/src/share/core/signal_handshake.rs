@@ -7,6 +7,7 @@ use sha2::{Digest, Sha256};
 use super::core::{eio, hex, hex_decode};
 use super::discovery_signal_types::DISCOVERY_EXCHANGE_CAPABILITY;
 use super::identity::ShareIdentity;
+use super::server_qad::ServerQadStatus;
 use super::signal_connection::{send_line, SignalConnection};
 use super::wire::{SrvMsg, IDLE_KEEPALIVE_CAPABILITY, TRACKED_DIRECT_CAPABILITY};
 
@@ -27,6 +28,9 @@ pub(super) struct SignalCapabilities {
     /// The server verified this device's key; it binds device id, own
     /// lookup and room entries to the key and accepts access proofs.
     pub(super) key_login: bool,
+    /// The server's QAD self-check (`qad_status_v1`); `None` from a server
+    /// without it.
+    pub(super) server_qad: Option<ServerQadStatus>,
 }
 
 #[derive(Deserialize)]
@@ -127,13 +131,14 @@ pub(super) fn parse_hello_ok(line: &str) -> io::Result<SignalCapabilities> {
     let message: SrvMsg = serde_json::from_str(line)
         .map_err(|error| eio(format!("ungueltige Share-Server-Hello-Antwort: {error}")))?;
     match message {
-        SrvMsg::HelloOk { capabilities } => {
+        SrvMsg::HelloOk { capabilities, qad } => {
             let has = |wanted: &str| capabilities.iter().any(|capability| capability == wanted);
             Ok(SignalCapabilities {
                 tracked_direct: has(TRACKED_DIRECT_CAPABILITY),
                 discovery_exchange: has(DISCOVERY_EXCHANGE_CAPABILITY),
                 idle_keepalive: has(IDLE_KEEPALIVE_CAPABILITY),
                 key_login: has(KEY_LOGIN_CAPABILITY),
+                server_qad: qad.as_ref().map(ServerQadStatus::from),
             })
         }
         SrvMsg::Error { scope, msg } => Err(eio(format!("{scope}: {msg}"))),
@@ -191,6 +196,23 @@ mod tests {
             !parse_hello_ok(r#"{"t":"hello_ok","capabilities":["idle_keepalive_v2"]}"#)
                 .unwrap()
                 .idle_keepalive
+        );
+    }
+
+    #[test]
+    fn direkt_internet_task_hello_ok_carries_the_server_qad_check() {
+        use crate::share::{QadReach, ServerQadStatus};
+        let line = r#"{"t":"hello_ok","capabilities":["qad_status_v1"],"qad":{"ipv4":"unreachable","ipv6":"off"}}"#;
+        assert_eq!(
+            parse_hello_ok(line).unwrap().server_qad,
+            Some(ServerQadStatus {
+                ipv4: QadReach::Unreachable,
+                ipv6: QadReach::Off,
+            })
+        );
+        assert_eq!(
+            parse_hello_ok(r#"{"t":"hello_ok"}"#).unwrap().server_qad,
+            None
         );
     }
 

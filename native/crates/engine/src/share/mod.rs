@@ -424,6 +424,8 @@ mod server;
 pub mod server_address;
 #[path = "core/server_capabilities.rs"]
 mod server_capabilities;
+#[path = "core/server_qad.rs"]
+mod server_qad;
 #[path = "core/server_transfer.rs"]
 mod server_transfer;
 #[path = "core/service.rs"]

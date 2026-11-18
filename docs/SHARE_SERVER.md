@@ -75,6 +75,89 @@ plaintext permission and is shown as **⚠ unverschlüsselt**. To encrypt it:
 3. A TLS failure never falls back to plaintext. Once every client uses `wss://`,
    `SE_SHARE_ALLOW_PLAINTEXT` can be removed from the server.
 
+The app also switches on its own (TODO `DIREKT-INTERNET`, after v0.5.197): a
+plaintext address means an `http://` relay, and QUIC address discovery runs only
+over TLS, so such a device never learns its public address and every connection
+across the internet runs over the relay. Once per process the app connects the
+encrypted address of the same server (`encrypted_alternative`, for example
+`wss://host:51820` for `tcp://host:51820`) with the normal certificate check;
+only a completed TLS and WebSocket handshake replaces the stored address. A server
+without a valid certificate for its name keeps the plaintext address.
+
+- Desktop and `se`: the worker tries it when it reads the server file
+  (`share/os/shared/transport_options.rs`, `refresh_server_file`, called from
+  `load_share_server` in `daemon/os/shared/ipc_host.rs`).
+- Android: the attempt runs on its own thread at bridge start, outside every lock
+  (`mobile/os/shared/domains/share_server_upgrade.rs`); the embedded worker only
+  rewrites the canonical form under its lock. The file is replaced only while it
+  still holds the tested address (a user entry saved meanwhile is kept), then the
+  worker reloads and the Share page names the switch as a notice.
+
+## Ports and firewall
+
+`se-share-server` with the default bind `0.0.0.0:51820` uses three ports. Every
+firewall between the internet and the server has to admit all three, for IPv4 and
+for IPv6 when the server has an IPv6 address:
+
+| Port | Protocol | Purpose |
+| ---: | --- | --- |
+| 51820 | TCP | Signaling (TLS WebSocket `wss://host:51820`, or explicit plaintext) |
+| 51821 | TCP | Iroh relay (signaling port + 1, `SE_IROH_RELAY_BIND`) |
+| 7842 | UDP | QUIC address discovery (QAD, `SE_IROH_QAD_BIND`), only with TLS |
+
+Without UDP 7842 the server still works, but devices behind NAT learn no public
+address: connections across the internet then run over the relay instead of
+directly (seen on 2026-11-17: the firewall dropped IPv4 QAD, two devices in
+different networks used only the relay; after opening the port they connected
+directly). The server reports this itself (section "QAD self-check" below).
+
+With other ports (another bind, `SE_IROH_RELAY_BIND`, `SE_IROH_QAD_BIND`) use those
+ports in the rules below. Behind a reverse proxy only UDP 7842 and the proxy's own
+ports must be open to the internet.
+
+iptables (IPv4 with `iptables`, IPv6 with the same rules through `ip6tables`; save
+them with the distribution's tool, for example `netfilter-persistent save`):
+
+```sh
+iptables  -A INPUT -p tcp -m multiport --dports 51820,51821 -j ACCEPT
+iptables  -A INPUT -p udp --dport 7842 -j ACCEPT
+ip6tables -A INPUT -p tcp -m multiport --dports 51820,51821 -j ACCEPT
+ip6tables -A INPUT -p udp --dport 7842 -j ACCEPT
+```
+
+nftables (the `inet` family covers IPv4 and IPv6; table and chain names of the
+host's own ruleset may differ, add the rule to the chain that filters input):
+
+```sh
+nft add rule inet filter input tcp dport { 51820, 51821 } accept
+nft add rule inet filter input udp dport 7842 accept
+```
+
+ufw (applies to IPv4 and IPv6 while `IPV6=yes` in `/etc/default/ufw`):
+
+```sh
+ufw allow 51820/tcp
+ufw allow 51821/tcp
+ufw allow 7842/udp
+```
+
+firewalld (IPv4 and IPv6; the zone of the public interface, here `public`):
+
+```sh
+firewall-cmd --permanent --zone=public --add-port=51820/tcp --add-port=51821/tcp --add-port=7842/udp
+firewall-cmd --reload
+```
+
+Windows (PowerShell as administrator; the rules apply to IPv4 and IPv6):
+
+```powershell
+New-NetFirewallRule -DisplayName "se-share-server TCP" -Direction Inbound -Protocol TCP -LocalPort 51820,51821 -Action Allow
+New-NetFirewallRule -DisplayName "se-share-server QAD" -Direction Inbound -Protocol UDP -LocalPort 7842 -Action Allow
+```
+
+A cloud security group or provider firewall in front of the server needs the same
+three entries (TCP 51820, TCP 51821, UDP 7842) for IPv4 and IPv6.
+
 ## Native TLS and Key Login
 
 The server can terminate TLS for both signaling and the adjacent Iroh relay:
@@ -185,7 +268,8 @@ configuration. `se-share-server` answers it on the relay's IP at that port:
 - Behind a reverse proxy the proxy forwards TCP only, so QAD on UDP 7842 is not
   served through it. The operator then
   - opens UDP 7842 in the firewall and in any cloud security group to the server
-    (IPv4 and IPv6 when QAD is dual-stack), and
+    (IPv4 and IPv6 when QAD is dual-stack; commands per firewall in "Ports and
+    firewall" above), and
   - gives `se-share-server` its own certificate for the relay's host name. The client
     checks the QAD certificate against the host of the relay URL and against the
     pins, as on the relay path.
@@ -199,6 +283,41 @@ configuration. `se-share-server` answers it on the relay's IP at that port:
   35 seconds; a client keeps its connection with a 25-second keepalive. QAD opens no
   streams and sends each sender only the address it observed for that sender.
   Connections above a limit are refused.
+
+### QAD self-check (since the candidate after v0.5.197)
+
+The server checks whether QAD is reachable from outside, per address family, and
+uses no third-party service for it (`share-server/src/qad_reach.rs`):
+
+- **Reachable**: a QAD connection from a public source address of that family
+  completed its handshake within the last 30 minutes or is still held. The QAD
+  server reports every connection after the address-validating Retry, so the source
+  really receives (`vendor/SMART_EXPLORER_QAD_LIMITS.md`, point 7).
+- **Not reachable**: a device that announces `qad_status_v1` has been connected over
+  TLS from a public source of that family for at least 120 seconds and no such QAD
+  connection exists. Such a device uses this server's TLS relay and probes QAD within
+  seconds; apps without `qad_status_v1` never count against QAD. Assumption: the
+  device's own network lets outgoing UDP 7842 through; a device in a network that
+  blocks it yields a false "not reachable" until any other device's QAD connection
+  arrives.
+- **Unknown**: no device of that family yet. **Off**: QAD does not listen for that
+  family (no TLS, `SE_IROH_QAD_DISABLE`, a bind of `0.0.0.0` answers IPv4 only).
+
+Private, loopback, link-local, shared (100.64.0.0/10) and unique-local sources and a
+trusted proxy prove nothing about the internet and are not counted. The verdict is
+evaluated every 30 seconds; at start the server logs that it judges from connecting
+devices, and every change is logged, for example
+`se-share-server QAD (UDP 7842) from outside: IPv4 NOT reachable (…), IPv6 reachable`.
+Devices with `qad_status_v1` receive the verdict in `hello_ok` (field `qad`) and as
+`qad_status` message on every change. `se share status` shows it in the line
+`server_qad` as `Server: QAD von außen erreichbar (UDP 7842; IPv4: …, IPv6: …)` or
+`… nicht erreichbar …` (JSON `server_qad`), the desktop under Share diagnostics and
+Android on the device card (`share.status.serverQad`).
+
+Rejected method: a probe of the server to its own public address. The server does
+not know that address without an outside service, and a packet to an own address
+is delivered locally, past a cloud firewall and usually past the host firewall's
+loopback rule, so it would report "reachable" in exactly the case it has to find.
 
 ## Temporary Discoverability and Background Pairing
 

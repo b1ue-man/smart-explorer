@@ -133,6 +133,13 @@ pub enum SrvMsg {
     HelloOk {
         #[serde(default)]
         capabilities: Vec<String>,
+        /// `qad_status_v1`: the server's QAD self-check (`server_qad.rs`).
+        #[serde(default)]
+        qad: Option<super::server_qad::ServerQadWire>,
+    },
+    /// `qad_status_v1`: the server's QAD verdict changed.
+    QadStatus {
+        qad: super::server_qad::ServerQadWire,
     },
     DirectAvailable {
         lookup_id: String,

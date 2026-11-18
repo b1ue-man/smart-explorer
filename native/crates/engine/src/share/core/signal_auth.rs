@@ -50,6 +50,9 @@ pub(super) fn handle_server_msg(
     outcome.pong = matches!(message, SrvMsg::Pong);
     match message {
         SrvMsg::HelloOk { .. } | SrvMsg::Pong => {}
+        SrvMsg::QadStatus { qad } => {
+            super::server_qad::record(Some(super::server_qad::ServerQadStatus::from(&qad)));
+        }
         SrvMsg::DirectAvailable {
             lookup_id,
             presence,

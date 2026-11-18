@@ -79,6 +79,8 @@ pub(super) fn set_server(rt: &Runtime, args: &Value) -> Result<Value, ApiError> 
     let raw = str_arg(args, "server")?;
     let allow_plaintext = opt_bool(args, "allowPlaintext", false);
     let path = server_path();
+    // The background switch to TLS writes the same file (`share_server_upgrade`).
+    let file_lock = super::share_server_upgrade::server_file_lock();
     let config = if raw.trim().is_empty() {
         match std::fs::remove_file(&path) {
             Ok(()) => {}
@@ -94,6 +96,7 @@ pub(super) fn set_server(rt: &Runtime, args: &Value) -> Result<Value, ApiError> 
         config
     };
     set_cached_server(config.canonical());
+    drop(file_lock);
     reconfigure(rt);
     Ok(server_json(&config, false))
 }

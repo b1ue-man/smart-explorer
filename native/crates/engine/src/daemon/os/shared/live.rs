@@ -111,6 +111,19 @@ pub(super) fn is_embedded() -> bool {
     lock().embedded
 }
 
+/// The worker's refresh of the Share server file, which it runs under its
+/// state lock. The desktop worker also tries the switch to TLS there
+/// (`refresh_server_file`); the embedded worker (Android) writes only the
+/// canonical form, because its host runs that network attempt off every lock
+/// (`share_server_upgrade.rs` of the mobile crate).
+pub(super) fn refresh_share_server_file(path: &std::path::Path) -> std::io::Result<Option<String>> {
+    if is_embedded() {
+        crate::share::migrate_server_file(path)
+    } else {
+        crate::share::refresh_server_file(path)
+    }
+}
+
 pub(super) fn serving_generation() -> Option<String> {
     lock().generation.clone()
 }

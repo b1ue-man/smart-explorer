@@ -241,6 +241,18 @@ data class ShareStatus(
     val codeRights: Rights? = null,
     /** A running Direct-code renewal; `null` without one (E17). */
     val codeRenewal: CodeRenewalInfo? = null,
+    /** The Share server's QAD self-check while connected; `null` otherwise or from older bridges. */
+    val serverQad: ShareServerQad? = null,
+)
+
+/** `share.status.serverQad`: is the server's address discovery (UDP 7842) reachable from outside? */
+@Serializable
+data class ShareServerQad(
+    /** `reachable`, `unreachable`, `unknown` or `off`. */
+    val ipv4: String = "unknown",
+    val ipv6: String = "unknown",
+    /** The line of `se share status`, e.g. „Server: QAD von außen erreichbar (UDP 7842; …)“. */
+    val line: String = "",
 )
 
 /** `share.createRoom` */

@@ -30,6 +30,12 @@ impl SignalStream {
         }
     }
 
+    /// Whether the connection is TLS (`wss`); such a device uses the TLS
+    /// relay and probes QAD (`qad_reach.rs`).
+    pub(super) fn is_tls(&self) -> bool {
+        matches!(self, Self::Tls(_))
+    }
+
     pub(super) fn plain(stream: TcpStream) -> io::Result<Self> {
         Ok(Self::Plain(SocketIo::new(stream)?))
     }

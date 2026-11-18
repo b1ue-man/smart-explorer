@@ -45,7 +45,7 @@ impl SourceKey {
         Self::from_ip(address.ip())
     }
 
-    fn from_ip(address: IpAddr) -> Self {
+    pub(super) fn from_ip(address: IpAddr) -> Self {
         match address {
             IpAddr::V4(address) => Self::Ipv4(address.octets()),
             IpAddr::V6(address) => {

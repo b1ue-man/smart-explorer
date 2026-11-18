@@ -57,6 +57,19 @@ memory and availability risk.
    retry an Initial without a source connection id), the Initial is ignored
    without an answer.
 
+7. Connection observer (added 2026-11-18, TODO `DIREKT-INTERNET`): new module
+   `observer` with the public type `iroh_relay::quic::QadConnectionEvent`
+   (`Established`, `Closed`) and the public function
+   `iroh_relay::quic::set_connection_observer(fn(IpAddr, QadConnectionEvent))`
+   (first call wins, `OnceLock`). `handle_connection` reads the source address
+   of the incoming connection and calls the observer after the handshake
+   completed (`Established`, after the counter `qad_connections`) and when the
+   established connection ended (`Closed`, after `qad_connections_closed`).
+   Without an observer nothing changes. The observer runs on the connection
+   task; `se-share-server` only updates a small table under a mutex
+   (`share-server/src/qad_reach.rs`, the QAD self-check: is UDP 7842 reachable
+   from outside). No answer, limit or admission decision depends on it.
+
 Why not a field on `QuicConfig`: `QuicConfig` and the call of
 `QuicServer::spawn` live in `src/server.rs`; the patch was confined to
 `src/quic.rs`. The limits apply to every QAD server spawned afterwards in the
@@ -109,4 +122,6 @@ upstream API in the same change.
 Drop this patch when
 upstream iroh-relay bounds QAD connections and accept rate itself and no
 longer panics on a failed QAD connection task; then configure the upstream
-limits in `share-server/src/relay_qad.rs` instead.
+limits in `share-server/src/relay_qad.rs` instead. Point 7 needs an upstream
+way to learn the source of each established QAD connection, or the self-check
+in `share-server/src/qad_reach.rs` moves to the server metrics.
