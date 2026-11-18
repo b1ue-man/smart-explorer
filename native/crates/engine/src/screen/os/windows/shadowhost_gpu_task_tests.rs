@@ -58,7 +58,10 @@ fn shadowhost_task_retired_grant_is_turnover_not_gpu_failure() {
     assert!(!encode_turnover(&grant, &failure));
     // The claim on the grant after the capture changed its path.
     grant.retire().unwrap();
-    let refused = grant.claim(CaptureOwner::SourcePixels, 8).unwrap_err();
+    let refused = grant
+        .claim(CaptureOwner::SourcePixels, 8)
+        .err()
+        .expect("the retired grant refuses the claim");
     assert!(CaptureGrant::is_retired_claim(&refused));
     assert!(encode_turnover(&grant, &refused));
     // Any error under a retired grant is turnover.

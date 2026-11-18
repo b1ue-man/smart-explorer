@@ -14,7 +14,8 @@ fn shadowhost_task_retired_grant_claim_is_recognisable_turnover() {
     drop(slice);
     let too_large = grant
         .claim(CaptureOwner::SourcePixels, u64::MAX)
-        .unwrap_err();
+        .err()
+        .expect("the retired grant refuses the claim");
     assert!(!CaptureGrant::is_retired_claim(&too_large));
     assert!(!CaptureGrant::is_retired_claim(&io::Error::other(
         "retired capture grant cannot authorize new claims"
@@ -22,7 +23,10 @@ fn shadowhost_task_retired_grant_claim_is_recognisable_turnover() {
     // A retired grant refuses with the typed turnover error; kind and text
     // stay as before.
     grant.retire().unwrap();
-    let refused = grant.claim(CaptureOwner::SourcePixels, 8).unwrap_err();
+    let refused = grant
+        .claim(CaptureOwner::SourcePixels, 8)
+        .err()
+        .expect("the retired grant refuses the claim");
     assert!(CaptureGrant::is_retired_claim(&refused));
     assert_eq!(refused.kind(), io::ErrorKind::InvalidData);
     assert_eq!(
