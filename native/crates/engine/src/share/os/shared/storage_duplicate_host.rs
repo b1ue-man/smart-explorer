@@ -253,7 +253,8 @@ pub(in crate::share) fn send(
             };
             let mut bytes = 128usize;
             while let Some(file) = files.peek() {
-                let cost = file.path.len().saturating_mul(6) + 64;
+                // Path (escaped), mtime and occupied bytes.
+                let cost = file.path.len().saturating_mul(6) + 96;
                 if !portion.files.is_empty()
                     && bytes + cost > crate::share::fs_response::GROUP_PORTION_BYTES
                 {

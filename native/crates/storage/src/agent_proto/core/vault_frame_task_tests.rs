@@ -53,10 +53,12 @@ fn mount_vault_task_all_frame_variants_keep_exact_protocol_bytes() {
                 let tree = WireNode {
                     name: path.into(),
                     size: number,
+                    allocated: None,
                     is_dir: true,
                     children: vec![WireNode {
                         name: path.into(),
                         size: 0,
+                        allocated: None,
                         is_dir: false,
                         children: Vec::new(),
                     }],

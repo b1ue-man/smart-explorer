@@ -4,6 +4,7 @@
 //! links, the app trash, pseudo file systems, the sync engine's own entries
 //! (`.se-versions`, `.se-sync-replica`), the app's stages and the folders a
 //! host never shows (its own data), and bounds the kept path text.
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
@@ -25,6 +26,8 @@ pub(super) struct Candidate {
     pub(super) root_index: usize,
     pub(super) path: Box<Path>,
     pub(super) size: u64,
+    /// Occupied bytes; 0 for a further link of a hard-linked file met before.
+    pub(super) allocated: u64,
     pub(super) mtime_ms: i64,
 }
 
@@ -34,6 +37,8 @@ pub(super) struct Walked {
     pub(super) eligible: u64,
     /// Eligible files left out because the candidate text budget was spent.
     pub(super) dropped: u64,
+    /// A candidate whose occupied bytes the platform could not say.
+    pub(super) allocation_unknown: bool,
     pub(super) limit: Option<LimitExceeded>,
 }
 
@@ -46,6 +51,9 @@ pub(super) struct Harvest {
     eligible: AtomicU64,
     dropped: AtomicU64,
     found: Mutex<Vec<Candidate>>,
+    /// Hard-linked files met so far: removing a further link frees nothing.
+    hardlinks: Mutex<HashSet<(u64, u64)>>,
+    allocation_unknown: std::sync::atomic::AtomicBool,
 }
 
 impl Default for Harvest {
@@ -56,6 +64,8 @@ impl Default for Harvest {
             eligible: AtomicU64::new(0),
             dropped: AtomicU64::new(0),
             found: Mutex::new(Vec::new()),
+            hardlinks: Mutex::new(HashSet::new()),
+            allocation_unknown: std::sync::atomic::AtomicBool::new(false),
         }
     }
 }
@@ -66,6 +76,7 @@ impl Harvest {
             candidates: self.found.into_inner().unwrap_or_else(|p| p.into_inner()),
             eligible: self.eligible.into_inner(),
             dropped: self.dropped.into_inner(),
+            allocation_unknown: self.allocation_unknown.into_inner(),
             limit: self.budget.limit(),
         }
     }
@@ -199,8 +210,11 @@ impl Walk<'_> {
             let size = entry.size;
             bytes = bytes.saturating_add(size);
             if !skip_detail && size >= self.limits.min_bytes {
-                let mtime_ms = entry.mtime_ms;
-                self.offer(&mut batch, path, size, mtime_ms);
+                // A further hard link is never a duplicate: removing it
+                // frees nothing.
+                if let Some(allocated) = self.occupied(&entry) {
+                    self.offer(&mut batch, path, (size, allocated), entry.mtime_ms);
+                }
             }
             if files - reported.0 >= FLUSH_FILES {
                 self.report(&mut reported, files, bytes);
@@ -256,7 +270,37 @@ impl Walk<'_> {
         }
     }
 
-    fn offer(&self, batch: &mut Vec<Candidate>, path: PathBuf, size: u64, mtime_ms: i64) {
+    /// The occupied bytes of a file (its size where the platform could not
+    /// say); `None` for a further link of a hard-linked file met before.
+    fn occupied(&self, entry: &crate::local_access::LocalEntry) -> Option<u64> {
+        let Some(allocated) = entry.allocated else {
+            self.harvest
+                .allocation_unknown
+                .store(true, Ordering::Relaxed);
+            return Some(entry.size);
+        };
+        match entry.hardlink {
+            Some(identity)
+                if !self
+                    .harvest
+                    .hardlinks
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .insert(identity) =>
+            {
+                None
+            }
+            _ => Some(allocated),
+        }
+    }
+
+    fn offer(
+        &self,
+        batch: &mut Vec<Candidate>,
+        path: PathBuf,
+        (size, allocated): (u64, u64),
+        mtime_ms: i64,
+    ) {
         let harvest = self.harvest;
         harvest.eligible.fetch_add(1, Ordering::Relaxed);
         let text = path.as_os_str().len() as u64 + 4 * std::mem::size_of::<Candidate>() as u64;
@@ -272,6 +316,7 @@ impl Walk<'_> {
                 root_index: self.root_index,
                 path: path.into_boxed_path(),
                 size,
+                allocated,
                 mtime_ms,
             });
         } else {

@@ -424,7 +424,8 @@ Siehe §5.
   = Daten inkl. eigenem `Android/data`, `cacheBytes` = Cache-Anteil der Daten; Einträge ohne `package` werden
   übergangen, fehlende/negative Zahlen = 0, `cacheBytes` höchstens `dataBytes`, leeres `label` = Paketname,
   doppelte Pakete zählen einmal, Apps ohne Bytes erscheinen nicht; der Kern prüft „ganzes primäres
-  Volume“ selbst und ignoriert `apps` sonst); `result = {files, dirs, bytes, issues, protected, notes}`.
+  Volume“ selbst und ignoriert `apps` sonst); `result = {files, dirs, bytes, allocated:Long?, allocatedKnown,
+  issues, protected, notes}` (`allocated` = belegter Platz der Wurzel, null ohne Baum; 2026-11-18).
   `<Volume>/Android/data|obb` und alles darunter sind geschützt: keine Issues, Status vollständig, eine
   geschützte Wurzel ergibt ein leeres, vollständiges Ergebnis
 - `analyze.node {taskId, path:[String]}` → `{name, size, measured, isDir, kind, children:[{name, size, isDir,
@@ -443,7 +444,22 @@ Siehe §5.
   isDir:true, kind:"apps", children, location:null}`; Kinder `kind:"app"`, `name` = App-Name, `isDir:false`,
   `size` = `appBytes` + `dataBytes`, dazu `package`, `appBytes`, `dataBytes`, `cacheBytes` (über 500 Apps:
   die kleinsten in einer `aggregate`-Zeile); tiefere Pfade → `not_found`. Ein echter Ordner gleichen Namens an
-  der Wurzel wird dann von der App-Liste verdeckt
+  der Wurzel wird dann von der App-Liste verdeckt.
+  **Größe und Belegt (2026-11-18):** Anfrage optional `sort:"allocated"|"size"`; Antwort zusätzlich
+  `allocated:Long` (belegter Platz inkl. Schätzzeilen darunter), `allocatedKnown:Boolean` und `sort`
+  (geltende Sortierung; ohne `sort` „allocated“, wenn bekannt, sonst immer „size“); jedes Kind trägt
+  `allocated`. Die höchstens 500 Kinder werden nach `sort` ausgewählt und geordnet, Schätzzeilen bleiben
+  immer und belegen ihre `size`. `allocatedKnown:false` (ältere Gegenstelle, Backend ohne den Wert):
+  `allocated` = `size`, die App zeigt „Belegt: unbekannt“. Ältere Kerne senden die Felder nicht
+  (Kotlin: `allocated` = `size`, `allocatedKnown` false, `sort` „size“).
+- `analyze.overview {taskId, path:[String], sort?, top:Int?}` → `{sort, allocatedKnown, largest:[{path, size,
+  allocated, location}], types:[{extension, files, size, allocated}], aggregatedFiles, aggregatedSize,
+  aggregatedAllocated, aggregatedNote:String?}` (2026-11-18): „Größte Dateien“ (Default 100, `top` 0–10000)
+  und „Nach Dateityp“ (Endung klein ohne Punkt, „(ohne Endung)“, ab 200 Endungen „(weitere Endungen)“) des
+  Ordners `path` mit Unterordnern; `path` der Dateien relativ zu diesem Ordner, `location` = Ordner der
+  Datei. In „… N weitere Eintraege“ zusammengefasste Dateien zählen nur in `aggregated*`. Der Knoten
+  „NTFS-Systemdateien“ (schneller NTFS-Weg) trägt in `analyze.node` `systemFiles:true` und in
+  `analyze.overview` `location:null`: vom Dateisystem belegt, nicht zu öffnen oder zu löschen
 - `analyze.issues {taskId}` → `{count:Int, text, notes:[String], protectedCount:Long, protectedText}`
   (`notes` Default leer; `text` enthält nur Leseprobleme, Hinweise stehen getrennt in `notes` und
   erscheinen an der Wurzel auch ohne Leseprobleme; `count` ohne geschützte;
@@ -455,7 +471,11 @@ Siehe §5.
   die ältesten fertigen Ergebnisse zuerst; keine feste Vier-Plätze-Kappung.
 - `reclaim.start {location, minSize:Long}` → `{taskId, remote:Boolean}` (lokal: jede Datei ≥ `minSize` ist Kandidat, Vergleich
   parallel mit SHA-256; Fortschritt `message` = Phase); `result = {groups, reclaimable, errors, candidates, protected}`
-- `reclaim.groups {taskId}` → `[{size, items:[{location, mtimeMs}], contentVerified:Boolean}]`
+- `reclaim.groups {taskId}` → `[{size, reclaimable:Long, items:[{location, mtimeMs}], contentVerified:Boolean}]`
+  (`reclaimable` = belegter Platz, der beim Entfernen aller Kopien bis auf eine frei wird, 2026-11-18; ohne
+  das Feld: `size` je weiterer Kopie); `reclaim.summary` und das Task-Ergebnis tragen
+  `allocatedKnown` (`DuplicateReport.allocated_known`), ohne es zeigt die App „Belegt unbekannt“
+  (ältere Kerne: nur lokale Suche gilt als bekannt)
   (`contentVerified` Default false, vollständiger SHA-256 als Inhaltsevidenz; MD5-/Providergruppen
   bleiben sichtbar, berechtigen jedoch nicht zum inhaltsgebundenen Fern-Papierkorb)
 - `reclaim.summary {taskId}` → `{files, bytes, candidates, compared, groups, protectedCount, protectedText,

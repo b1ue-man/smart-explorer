@@ -10,6 +10,19 @@ use std::sync::{Mutex, PoisonError};
 use crate::analytics::{Approximations, DuplicateGroup, DuplicateSummary, ScanOutcome, SizeNode};
 use crate::mobile::ApiError;
 
+/// Registers a finished analysis under `task` (drill-down tests).
+#[cfg(test)]
+pub(super) fn insert_analysis_for_test(task: &str, outcome: ScanOutcome, base: &str, root: &str) {
+    let pending = Pending::open();
+    bind_task(pending.token(), task);
+    pending.store(Stored::Analysis {
+        outcome,
+        approx: Approximations::default(),
+        base: base.to_string(),
+        root: root.to_string(),
+    });
+}
+
 /// Heap cost of one size node besides its name: the node and the
 /// allocator's share of the name allocation.
 const NODE_BYTES: u64 = std::mem::size_of::<SizeNode>() as u64 + 16;
@@ -28,6 +41,8 @@ pub(super) enum Stored {
         summary: DuplicateSummary,
         base: String,
         recycling: bool,
+        /// The search measured every copy's occupied bytes (`reclaimable`).
+        allocated_known: bool,
     },
     Recycled {
         moved: Vec<String>,
@@ -275,6 +290,7 @@ mod tests {
         SizeNode {
             name: name.into(),
             size: 1,
+            allocated: 1,
             is_dir: false,
             children: Vec::new(),
         }
@@ -317,11 +333,13 @@ mod tests {
         let tree = SizeNode {
             name: "root".into(),
             size: 3,
+            allocated: 3,
             is_dir: true,
             children: vec![
                 SizeNode {
                     name: "dir".into(),
                     size: 2,
+                    allocated: 2,
                     is_dir: true,
                     children: vec![file("a"), file("bb")],
                 },

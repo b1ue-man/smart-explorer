@@ -326,3 +326,52 @@ settings do. The apps include their `Android/data` share, so „Weitere App-Date
 the remainder becomes „≈ System und Sonstiges“ (used − measured − apps, with what the walk measured
 under `Android/data|obb` counted once). Like the other estimates, these rows exist only in the
 `analyze.node` view; the file view still cannot open other apps' folders.
+
+## Größe und Belegt (source state 2026-11-18, not yet released)
+
+Every analysed entry carries two values: `size` („Größe“, the sum of the file lengths) and
+`allocated` („Belegt“, the space the files occupy on the volume). They differ for cloud placeholders
+(„nur online“), compressed and sparse files, and hard links (a file with several links counts at its
+first occurrence only). `ScanOutcome::allocated_known` is false where a platform, backend or older
+peer did not report the occupied space; the tree then carries `allocated = size`, and every surface
+shows „Belegt: unbekannt“ and orders by „Größe“. A partial rescan merged into a result keeps the
+flag only when both results know the occupied space.
+
+Surfaces:
+
+- Desktop „Speicher-Analyse“: „Sortieren/Kacheln nach: Belegt | Größe“ (default „Belegt“, stored in
+  `<app data>/analytics_measure.txt`), totals and the accessible list with both columns, tooltips
+  with both values, live counters with „Belegt“ (an older host that counts no occupied bytes shows
+  „unbekannt“). The tree is sorted once by the measure in the scan thread (again after a measure
+  change or a merged rescan), and the treemap fills are one cached mesh, rebuilt only on layout,
+  measure or theme change. Tabs „Kacheln“, „Größte Dateien“ (100 largest files of the shown folder
+  with its subfolders) and „Nach Dateityp“ (files, size and occupied space per extension).
+- Android: `analyze.node {taskId, path, sort?}` answers `size`, `allocated`, `allocatedKnown` and
+  `sort` (`allocated|size`; without `sort` „Belegt“ where known); the 500 largest children are chosen
+  by that measure, the estimate rows (which occupy what Android reports) always stay.
+  `analyze.overview {taskId, path, sort?, top?}` answers `largest`, `types`, `aggregatedFiles`,
+  `aggregatedSize`, `aggregatedAllocated` and `aggregatedNote`. The page has the same switch (stored
+  in SharedPreferences `analysis_view`) and the same tabs.
+- Terminal and MCP: `se analyze ZIEL [--sort allocated|size] [--top N] [--depth N] [--files N]
+  [--types] [--json]`; the MCP server reaches it through its `se` tool.
+
+„Größte Dateien“ and „Nach Dateityp“ share one implementation (`native/crates/gui/src/analytics_overview.rs`;
+the Android bridge compiles the same file). Files a directory had beyond the retention budget exist only
+as „… N weitere Eintraege“ nodes without names: they count in no type and no list, only in
+`aggregated`, and the views say „X Dateien zusammengefasst“.
+
+Duplicates and cleanup („wird frei“) count occupied bytes (`ReclaimItem.allocated`,
+`DuplicateGroup::reclaimable_of`). Android reads `DuplicateReport.allocated_known` (`reclaim.summary`
+`allocatedKnown`) and says „Belegt unbekannt“ without it; the desktop „Aufräumen“ report
+(`ReclaimReport`) has no such flag yet, so it shows „Belegt“ only for a local source.
+
+The node „NTFS-Systemdateien“ (`analytics::SYSTEM_FILES_NAME`, fast NTFS way) is space the file
+system holds: no surface opens, reveals or deletes it; the desktop tooltip, the Android row and
+`se analyze` (`system_files: true`) say „vom Dateisystem belegt, nicht löschbar“. The notes
+„Analyseweg: …“ and „anderes Dateisystem, nicht gezählt: …“ stand in the result view itself (desktop
+in full-size text before the other remarks, Android always inline before „Alle Hinweise“,
+`se analyze` in its text output). A running Android analysis shows „Belegt“ from the task snapshot's
+`allocatedBytes` („unbekannt“ while an older host counts none).
+
+Open: no surface shows a tree of the running scan before it ends, because the core reports
+counters, not a partial tree.

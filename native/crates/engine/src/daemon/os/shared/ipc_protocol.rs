@@ -180,6 +180,11 @@ pub(super) enum IpcRequest {
         root: String,
         #[serde(default)]
         node_budget: Option<u64>,
+        /// The client decodes the occupied bytes of every tree node
+        /// (`analysis_allocated_v1` records); clients before it send none and
+        /// get the records without them.
+        #[serde(default)]
+        allocated: bool,
     },
     OpenShare {
         token: String,

@@ -3,6 +3,9 @@ use std::{ffi::OsString, fs::File, io, path::Path};
 
 #[path = "core/entry_error.rs"]
 mod entry_error;
+/// NTFS MFT parsing (pure); the Windows volume reader is `platform::mft`.
+#[path = "core/mft/mod.rs"]
+pub mod mft;
 #[cfg(windows)]
 #[doc(hidden)]
 #[path = "os/windows/mod.rs"]
@@ -42,7 +45,24 @@ pub struct LocalEntry {
     pub kind: EntryKind,
     pub is_dir: bool,
     pub is_link_like: bool,
+    /// Logical size (end of file).
     pub size: u64,
+    /// Bytes the file occupies on its volume (Windows `AllocationSize`,
+    /// Unix `st_blocks * 512`); `None` when the platform path cannot say.
+    /// Cloud placeholders, compressed, sparse and deduplicated files occupy
+    /// less than `size`.
+    pub allocated: Option<u64>,
+    /// `(device, file id)` of a file that may have further hard links, so a
+    /// walk counts its occupied bytes once: Unix only with a link count
+    /// above one; Windows (link count unknown) for every file of the
+    /// extended directory records that occupies space. `None` for a single
+    /// link or when the platform path cannot say.
+    pub hardlink: Option<(u64, u64)>,
+    /// File system of the entry (Unix `st_dev`), for walks that stay on one
+    /// file system; `None` where the listing did not stat the entry
+    /// (Windows, folders of a size listing) — `DirectoryHandle::device_id`
+    /// tells it for an opened folder.
+    pub device: Option<u64>,
     pub mtime_ms: i64,
     pub btime_ms: i64,
     pub hidden: bool,
@@ -60,8 +80,9 @@ pub struct MetadataClass {
 }
 
 pub use platform::{
-    can_request_access, display_path, metadata_class, metadata_is_link_like, normalize_scan_root,
-    parallel_scan_allowed, read_directory, request_access, run_helper_if_requested,
+    begin_scan, can_request_access, device_of, display_path, metadata_class, metadata_is_link_like,
+    normalize_scan_root, parallel_scan_allowed, read_directory, request_access,
+    run_helper_if_requested,
 };
 
 pub fn open_read(path: &Path) -> io::Result<File> {

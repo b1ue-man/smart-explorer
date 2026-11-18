@@ -13,6 +13,13 @@ pub fn metadata_is_link_like(_path: &Path, metadata: &std::fs::Metadata) -> bool
     metadata.file_type().is_symlink()
 }
 
+/// Occupied bytes of a file (`st_blocks` counts 512-byte units) and, with
+/// more than one hard link, its `(st_dev, st_ino)` identity.
+pub fn occupancy(metadata: &std::fs::Metadata) -> (Option<u64>, Option<(u64, u64)>) {
+    let link = (metadata.nlink() > 1).then(|| (metadata.dev(), metadata.ino()));
+    (Some(metadata.blocks().saturating_mul(512)), link)
+}
+
 /// FIFO, socket or device: no data stream to read.
 pub fn metadata_is_special(metadata: &std::fs::Metadata) -> bool {
     use std::os::unix::fs::FileTypeExt;

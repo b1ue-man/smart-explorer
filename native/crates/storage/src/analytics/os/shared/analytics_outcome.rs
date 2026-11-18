@@ -24,6 +24,7 @@ mod access_tests {
         SizeNode {
             name: "root".into(),
             size: 7,
+            allocated: 7,
             is_dir: true,
             children: Vec::new(),
         }
@@ -92,6 +93,10 @@ pub struct ScanOutcome {
     pub volume: Option<VolumeUsage>,
     /// Android's figures of an Android host for the analysed volume (RV1).
     pub platform: Option<PlatformFigures>,
+    /// Every counted file reported its occupied bytes: `tree.allocated` is
+    /// the real occupancy. False where a platform, backend or older peer
+    /// could not say; those files occupy their size in the tree.
+    pub allocated_known: bool,
 }
 
 impl ScanOutcome {
@@ -108,6 +113,8 @@ impl ScanOutcome {
             protected: Vec::new(),
             volume: None,
             platform: None,
+            // A tree from elsewhere (legacy walk, peer) proves nothing.
+            allocated_known: false,
         }
     }
 
@@ -127,6 +134,7 @@ impl ScanOutcome {
             protected: Vec::new(),
             volume: None,
             platform: None,
+            allocated_known: false,
         }
     }
 
@@ -143,7 +151,14 @@ impl ScanOutcome {
             protected: Vec::new(),
             volume: None,
             platform: None,
+            allocated_known: false,
         }
+    }
+
+    /// Total occupied bytes of the result (the tree root's); real occupancy
+    /// only while `allocated_known`.
+    pub fn allocated_bytes(&self) -> Option<u64> {
+        self.tree.as_ref().map(|tree| tree.allocated)
     }
 
     /// A root inside a protected area that could not be listed: a complete,
@@ -152,9 +167,12 @@ impl ScanOutcome {
         let mut outcome = Self::complete(SizeNode {
             name: name.into(),
             size: 0,
+            allocated: 0,
             is_dir: true,
             children: Vec::new(),
         });
+        // Nothing was counted, so nothing is unknown.
+        outcome.allocated_known = true;
         outcome.protected.push(ProtectedOmission {
             area: area.into(),
             entries: 1,
@@ -177,6 +195,11 @@ pub(super) struct Diagnostics {
     protected: ProtectedTally,
     /// Other apps' private areas this walk may meet (empty on the desktop).
     areas: ProtectedAreas,
+    /// A counted file without its occupied bytes.
+    allocation_unknown: AtomicBool,
+    /// A denied path was recorded: only then can a finished folder be the
+    /// ancestor whose measured size a retry needs.
+    denied_any: AtomicBool,
 }
 
 impl Diagnostics {
@@ -239,6 +262,11 @@ impl Diagnostics {
         self.record_io(display_path(dir), error, false);
     }
 
+    /// A file whose occupied bytes the platform or backend could not say.
+    pub(super) fn allocation_unknown(&self) {
+        self.allocation_unknown.store(true, Ordering::Relaxed);
+    }
+
     pub(super) fn count_aggregated_files(&self, count: u64) {
         self.aggregated_files.fetch_add(count, Ordering::Relaxed);
     }
@@ -246,6 +274,7 @@ impl Diagnostics {
     pub(super) fn record_io(&self, path: impl Into<String>, error: &io::Error, is_root: bool) {
         let path = path.into();
         if error.kind() == io::ErrorKind::PermissionDenied {
+            self.denied_any.store(true, Ordering::Relaxed);
             self.denied_roots.record(path.clone());
             self.permission_denied.fetch_add(1, Ordering::Relaxed);
         }
@@ -253,6 +282,10 @@ impl Diagnostics {
     }
 
     pub(super) fn finish_directory(&self, path: &Path, size: u64) {
+        // Descendants finish first, so their denials are already known.
+        if !self.denied_any.load(Ordering::Relaxed) {
+            return;
+        }
         self.denied_roots.record_size(display_path(path), size);
     }
 
@@ -301,6 +334,7 @@ impl Diagnostics {
             protected: self.protected.finish(),
             volume: None,
             platform: None,
+            allocated_known: !self.allocation_unknown.load(Ordering::Relaxed),
         }
     }
 }

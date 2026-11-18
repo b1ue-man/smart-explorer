@@ -11,6 +11,8 @@ mod directory_rename;
 pub mod directory_watch;
 mod elevation;
 mod image_lock;
+/// MFT direct reader for local, elevated size analyses (`LocalElevatedScan`).
+pub mod mft;
 mod paths;
 mod pipe;
 mod privilege;
@@ -23,7 +25,12 @@ pub use directory_handle::{secure_private_handle, DirectoryHandle, QuarantinedCh
 pub use directory::{metadata_class, metadata_is_link_like, read_directory};
 pub use elevation::{can_request_access, request_access, run_helper_if_requested};
 pub use paths::{display_path, normalize_scan_root};
-pub use privilege::parallel_scan_allowed;
+pub use privilege::{begin_scan, parallel_scan_allowed};
+
+/// Windows walks stay on one volume through their link boundaries.
+pub fn device_of(_path: &std::path::Path) -> Option<u64> {
+    None
+}
 pub use read::{open_read, open_regular, symlink_metadata};
 
 // The access tests moved to analytics; their shared fixtures stay here, because

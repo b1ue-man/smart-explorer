@@ -22,12 +22,6 @@ pub fn stale_cutoff_ms(now: i64, stale_days: u64) -> i64 {
     now.saturating_sub(i64::try_from(age_ms).unwrap_or(i64::MAX))
 }
 
-pub fn systemtime_ms(t: std::time::SystemTime) -> i64 {
-    t.duration_since(std::time::UNIX_EPOCH)
-        .map(systemtime_ms_from_duration)
-        .unwrap_or(0)
-}
-
 fn systemtime_ms_from_duration(d: std::time::Duration) -> i64 {
     i64::try_from(d.as_millis()).unwrap_or(i64::MAX)
 }

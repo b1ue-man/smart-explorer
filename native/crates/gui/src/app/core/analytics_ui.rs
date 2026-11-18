@@ -2,6 +2,9 @@ use super::analytics_controls_ui::AnalyticsControls;
 use super::prelude::*;
 use super::*;
 use crate::app::analytics_accessibility::treemap_accessible_list;
+use crate::app::analytics_measure::MeasureView;
+use crate::app::analytics_overview_ui;
+use crate::app::analytics_view::{is_system_files, AnalyticsTab, TreemapCache, SYSTEM_FILES_HINT};
 use crate::app::theme;
 
 fn host_figures_ui(
@@ -66,6 +69,7 @@ impl App {
     /// the current folder; click a box to drill in, use the breadcrumb to go up.
     pub(in crate::app) fn ui_analytics(&mut self, ctx: &egui::Context) {
         self.poll_analytics_scan();
+        self.ensure_analytics_overview();
         if self.analytics_panel == AnalyticsPanel::Reclaim {
             self.ui_reclaim(ctx);
             return;
@@ -88,17 +92,20 @@ impl App {
             .unwrap_or_else(|| "—".to_string());
         let focus_segs = self.analytics_focus.clone();
         let focus_path = self.analytics_focus_path();
-        let focus_size = self.analytics_focus_node().map(|n| n.size).unwrap_or(0);
+        let measure = self.analytics_view.measure;
+        let focus_weight = self.analytics_focus_node().map_or(0, |n| measure.weight(n));
         let focus_node = self.analytics_focus_node();
-        let cached_cells = &self.analytics_cells;
-        let cached_rect = self.analytics_cells_rect;
+        let cached = &self.analytics_view.treemap;
+        let tab = self.analytics_view.tab;
+        let overview = self.analytics_view.overview.as_ref();
+        let mut tab_choice = None;
         let mut controls = AnalyticsControls::new(self.analytics_panel);
 
         let mut open = true;
         let mut reveal: Option<String> = None; // reveal file in main explorer
         let mut drill_path: Option<String> = None; // treemap click → drill into folder
         let mut request_access = false;
-        let mut recomputed: Option<(Vec<TmCell>, egui::Rect)> = None;
+        let mut recomputed: Option<TreemapCache> = None;
 
         {
             super::dialog_geometry::window(ctx, "analytics_ui.0", "Speicher-Analyse")
@@ -138,11 +145,20 @@ impl App {
                     }
                     request_access = analytics_access::access_ui(ui, &self.analytics_access);
                     ui.separator();
+                    tab_choice = analytics_overview_ui::tabs_ui(ui, tab);
+                    if tab != AnalyticsTab::Treemap {
+                        let (base, reveal) = (&focus_path, &mut reveal);
+                        analytics_overview_ui::overview_ui(
+                            ui, tab, overview, measure, base, reveal,
+                        );
+                        return;
+                    }
 
                     treemap_accessible_list(
                         ui,
                         focus_node,
                         &focus_path,
+                        measure,
                         &mut drill_path,
                         &mut reveal,
                     );
@@ -153,40 +169,46 @@ impl App {
                     let (tm_rect, tm_resp) =
                         ui.allocate_exact_size(egui::vec2(tm_w, tm_h), egui::Sense::click());
 
-                    // (Re)lay out only on resize or drill — painting reuses cells.
+                    // (Re)lay out only on resize, drill or measure change;
+                    // painting reuses the cells and their mesh.
                     let need = treemap_needs_layout(
                         focus_node.is_some(),
-                        cached_cells.is_empty(),
-                        cached_rect,
+                        cached.cells.is_empty(),
+                        cached.rect,
                         tm_rect,
                     );
-                    let cells: &[TmCell] = if need {
-                        let mut v = Vec::new();
+                    let cache: &TreemapCache = if need {
+                        let mut cells = Vec::new();
                         if let Some(node) = focus_node {
-                            nested_treemap(tm_rect, node, &focus_path, 0, None, &mut v);
+                            let base = &focus_path;
+                            nested_treemap(tm_rect, node, base, 0, None, measure, &mut cells);
                         }
-                        &recomputed.insert((v, tm_rect)).0
+                        recomputed.insert(TreemapCache {
+                            cells,
+                            rect: tm_rect,
+                            ..TreemapCache::default()
+                        })
                     } else {
-                        cached_cells
+                        cached
                     };
+                    let cells = cache.cells.as_slice();
                     tm_resp.widget_info(|| {
                         treemap_widget_info(
                             &root_label,
                             &focus_path,
-                            focus_size,
+                            focus_node.map(|node| (node, measure)),
                             cells.len(),
-                            focus_node.is_some(),
                         )
                     });
 
-                    analytics_paint::paint(ui, tm_rect, cells);
+                    analytics_paint::paint(ui, tm_rect, cache);
 
                     // Hover tooltip + click-to-drill: deepest cell under pointer.
                     let tm_resp = tm_resp.on_hover_ui(|ui| {
                         if let Some(pos) = ui.ctx().pointer_hover_pos() {
                             if let Some(cell) = cells.iter().rev().find(|c| c.rect.contains(pos)) {
-                                let pct = if focus_size > 0 {
-                                    cell.size as f64 / focus_size as f64 * 100.0
+                                let pct = if focus_weight > 0 {
+                                    cell.weight as f64 / focus_weight as f64 * 100.0
                                 } else {
                                     0.0
                                 };
@@ -200,7 +222,15 @@ impl App {
                                     ))
                                     .strong(),
                                 );
-                                ui.label(format!("{} · {:.1}%", format_bytes(cell.size), pct));
+                                ui.label(format!(
+                                    "{} · {:.1}% ({})",
+                                    measure.both_text(cell.size, cell.allocated),
+                                    pct,
+                                    measure.effective().label()
+                                ));
+                                if is_system_files(&cell.name, cell.is_dir) {
+                                    ui.label(SYSTEM_FILES_HINT);
+                                }
                             }
                         }
                     });
@@ -209,7 +239,7 @@ impl App {
                             if let Some(cell) = cells.iter().rev().find(|c| c.rect.contains(pos)) {
                                 if cell.is_dir {
                                     drill_path = Some(cell.path.clone());
-                                } else {
+                                } else if !is_system_files(&cell.name, false) {
                                     reveal = Some(cell.path.clone());
                                 }
                             }
@@ -222,12 +252,17 @@ impl App {
         if request_access {
             self.request_analytics_access();
         }
-        if let Some((cells, rect)) = recomputed {
-            self.analytics_cells = cells;
-            self.analytics_cells_rect = rect;
+        if let Some(cache) = recomputed {
+            self.analytics_view.treemap = cache;
+        }
+        if let Some(tab) = tab_choice {
+            self.analytics_view.tab = tab;
         }
         if controls.cancel {
             self.cancel_analytics_scan();
+        }
+        if let Some(chosen) = controls.measure {
+            self.set_analytics_measure(chosen);
         }
         if let Some(scan_source) = controls.rescan_source {
             if controls.accept_drive_identity && !scan_source.is_remote() {
@@ -275,49 +310,62 @@ impl App {
     }
 }
 
+/// `focus`: the shown node and the measure its cells follow.
 fn treemap_widget_info(
     root_label: &str,
     focus_path: &str,
-    focus_size: u64,
+    focus: Option<(&crate::analytics::SizeNode, MeasureView)>,
     cell_count: usize,
-    has_data: bool,
 ) -> egui::WidgetInfo {
     let location = if focus_path.is_empty() {
         root_label
     } else {
         focus_path
     };
-    let label = if has_data {
-        format!(
-            "Treemap für {location}. {cell_count} sichtbare Elemente, insgesamt {}. Ordner oder Datei anklicken, um sie zu öffnen",
-            format_bytes(focus_size)
-        )
-    } else {
-        "Treemap. Noch keine Scan-Daten vorhanden".to_string()
+    let label = match focus {
+        Some((node, measure)) => format!(
+            "Treemap für {location}. {cell_count} sichtbare Elemente, insgesamt {}. Kacheln nach {}. Ordner oder Datei anklicken, um sie zu öffnen",
+            measure.both_text(node.size, node.allocated),
+            measure.effective().label()
+        ),
+        None => "Treemap. Noch keine Scan-Daten vorhanden".to_string(),
     };
-    let mut info = egui::WidgetInfo::labeled(egui::WidgetType::Button, has_data, label);
-    info.value = has_data.then_some(focus_size as f64);
+    let mut info = egui::WidgetInfo::labeled(egui::WidgetType::Button, focus.is_some(), label);
+    info.value = focus.map(|(node, measure)| measure.weight(node) as f64);
     info
 }
 
 #[cfg(test)]
 mod accessibility_tests {
     use super::*;
+    use crate::app::analytics_measure::SizeMeasure;
 
     #[test]
     fn treemap_semantics_include_location_count_and_size_state() {
-        let info = treemap_widget_info("C:/", "C:/Users", 1024, 7, true);
+        let node = crate::analytics::SizeNode {
+            name: "Users".into(),
+            size: 1024,
+            allocated: 512,
+            is_dir: true,
+            children: Vec::new(),
+        };
+        let measure = MeasureView {
+            chosen: SizeMeasure::Allocated,
+            allocated_known: true,
+        };
+        let info = treemap_widget_info("C:/", "C:/Users", Some((&node, measure)), 7);
         let label = info.label.as_deref().unwrap_or_default();
         assert!(label.contains("C:/Users"));
         assert!(label.contains("7 sichtbare Elemente"));
+        assert!(label.contains("Kacheln nach Belegt"));
         assert_eq!(info.typ, egui::WidgetType::Button);
-        assert_eq!(info.value, Some(1024.0));
+        assert_eq!(info.value, Some(512.0));
         assert!(info.enabled);
     }
 
     #[test]
     fn empty_treemap_is_disabled_and_named() {
-        let info = treemap_widget_info("—", "", 0, 0, false);
+        let info = treemap_widget_info("—", "", None, 0);
         assert!(!info.enabled);
         assert!(info.label.is_some_and(|label| !label.is_empty()));
     }

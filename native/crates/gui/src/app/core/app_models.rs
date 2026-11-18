@@ -151,6 +151,11 @@ pub(in crate::app) struct TmCell {
     pub(in crate::app) name: String,
     pub(in crate::app) path: String,
     pub(in crate::app) size: u64,
+    pub(in crate::app) allocated: u64,
+    /// What the cell's area shows: `allocated` or `size` (`MeasureView`).
+    pub(in crate::app) weight: u64,
+    /// Text drawn in the cell (made at layout), `None` without room.
+    pub(in crate::app) label: Option<String>,
     pub(in crate::app) is_dir: bool,
     pub(in crate::app) container: bool,
     pub(in crate::app) color: Color32,

@@ -244,6 +244,7 @@ fn group(run: Vec<(Candidate, Digest)>, progress: &ReclaimProgress) -> Option<Du
                 candidate.mtime_ms,
                 false,
             )
+            .with_allocated(candidate.allocated)
             .with_reason("Duplikat", ReclaimConfidence::HashMatch)
         })
         .collect();
@@ -263,7 +264,7 @@ fn group(run: Vec<(Candidate, Digest)>, progress: &ReclaimProgress) -> Option<Du
         },
         evidence: DuplicateEvidence::LocalSha256,
         size,
-        reclaimable: size.saturating_mul(items.len() as u64 - 1),
+        reclaimable: DuplicateGroup::reclaimable_of(&items),
         items,
     })
 }

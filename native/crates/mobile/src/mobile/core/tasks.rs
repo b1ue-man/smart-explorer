@@ -64,6 +64,8 @@ pub(crate) struct TaskRecord {
     limiter: String,
     /// The German text of that verdict (E13), never a file or folder name.
     limiter_text: Option<String>,
+    /// Occupied bytes counted so far (storage analysis); absent otherwise.
+    allocated_bytes: Option<u64>,
     errors: Vec<(String, String)>,
     errors_total: u64,
     result: Option<Value>,
@@ -138,6 +140,13 @@ impl TaskRecord {
         }
     }
 
+    pub(crate) fn set_allocated(&mut self, bytes: u64) {
+        if self.allocated_bytes != Some(bytes) {
+            self.allocated_bytes = Some(bytes);
+            self.dirty = true;
+        }
+    }
+
     pub(crate) fn set_message(&mut self, text: &str) {
         if self.private {
             return;
@@ -195,7 +204,7 @@ impl TaskRecord {
         if hidden > 0 {
             errors.push(json!({ "path": "", "message": format!("… und {hidden} weitere Fehler") }));
         }
-        json!({
+        let mut snapshot = json!({
             "id": self.id,
             "kind": self.kind,
             "title": self.title,
@@ -212,7 +221,11 @@ impl TaskRecord {
             "result": self.result,
             "startedMs": self.started_ms,
             "finishedMs": self.finished_ms,
-        })
+        });
+        if let (Some(bytes), Some(map)) = (self.allocated_bytes, snapshot.as_object_mut()) {
+            map.insert("allocatedBytes".into(), json!(bytes));
+        }
+        snapshot
     }
 }
 
@@ -255,6 +268,7 @@ impl TaskTable {
             message: None,
             limiter: "none".to_string(),
             limiter_text: None,
+            allocated_bytes: None,
             errors: Vec::new(),
             errors_total: 0,
             result: None,
@@ -395,5 +409,17 @@ mod private_tests {
         let record = table.get_mut(&other).unwrap();
         record.set_message("Urlaub.jpg");
         assert_eq!(record.snapshot()["message"], "Urlaub.jpg");
+    }
+
+    /// The storage analysis task carries its occupied bytes; other tasks
+    /// keep their snapshot without the key.
+    #[test]
+    fn belegt_task_analysis_task_reports_allocated_bytes() {
+        let mut table = TaskTable::new(1);
+        let id = table.create("analyze", "Analyse".into(), Arc::default(), 0);
+        let record = table.get_mut(&id).expect("task");
+        assert!(record.snapshot().get("allocatedBytes").is_none());
+        record.set_allocated(4096);
+        assert_eq!(record.snapshot()["allocatedBytes"], 4096);
     }
 }

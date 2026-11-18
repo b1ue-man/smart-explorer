@@ -155,8 +155,9 @@ pub(super) fn handle_client(
             target,
             root,
             node_budget,
+            allocated,
             ..
-        } => super::ipc_analysis::serve(stream, root, node_budget, || {
+        } => super::ipc_analysis::serve_with(stream, root, node_budget, allocated, || {
             // The storage analysis walks a whole tree: never presence.
             host.open_share(target, crate::share::OperationOrigin::Job)
                 .map(|(_, backend, _)| backend)

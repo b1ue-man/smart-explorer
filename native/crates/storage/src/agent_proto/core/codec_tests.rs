@@ -33,10 +33,12 @@ fn frame_roundtrip() {
     let tree = WireNode {
         name: "r".into(),
         size: 500,
+        allocated: None,
         is_dir: true,
         children: vec![WireNode {
             name: "a".into(),
             size: 100,
+            allocated: None,
             is_dir: false,
             children: vec![],
         }],

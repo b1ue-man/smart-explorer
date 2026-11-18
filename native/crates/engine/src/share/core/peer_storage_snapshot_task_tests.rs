@@ -5,11 +5,14 @@ use crate::agent_proto::{Frame, WireNode};
 fn share_remote_task_storage_snapshot_finished_tree_and_legacy_fallback() {
     let tree = fixture_tree();
     let totals = validate_tree(&tree).unwrap();
-    assert_eq!(totals, WalkTotals {
-        files: 1,
-        dirs: 2,
-        bytes: 7,
-    });
+    assert_eq!(
+        totals,
+        WalkTotals {
+            files: 1,
+            dirs: 2,
+            bytes: 7,
+        }
+    );
     assert_eq!(reported_totals(1, 2, 7, 3).unwrap(), totals);
     require_monotonic(WalkTotals::default(), totals).unwrap();
 
@@ -83,14 +86,17 @@ fn share_remote_task_storage_snapshot_corruption_is_rejected() {
     let file_with_child = WireNode {
         name: "/".into(),
         size: 7,
+        allocated: None,
         is_dir: true,
         children: vec![WireNode {
             name: "bad".into(),
             size: 7,
+            allocated: None,
             is_dir: false,
             children: vec![WireNode {
                 name: "child".into(),
                 size: 1,
+                allocated: None,
                 is_dir: false,
                 children: Vec::new(),
             }],
@@ -103,17 +109,20 @@ fn fixture_tree() -> WireNode {
     WireNode {
         name: "/".into(),
         size: 7,
+        allocated: None,
         is_dir: true,
         children: vec![
             WireNode {
                 name: "folder".into(),
                 size: 0,
+                allocated: None,
                 is_dir: true,
                 children: Vec::new(),
             },
             WireNode {
                 name: "file.txt".into(),
                 size: 7,
+                allocated: None,
                 is_dir: false,
                 children: Vec::new(),
             },

@@ -52,6 +52,10 @@ pub struct FsStorageAnalysis {
     /// `analysis_deflate_v1`: send the tree data as one deflate stream.
     #[serde(default, skip_serializing_if = "is_false")]
     pub compress: bool,
+    /// `analysis_allocated_v1`: every tree record carries the node's occupied
+    /// bytes. Hosts before it ignore the field and send records without them.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub allocated: bool,
 }
 
 /// `duplicate_search_v1`: the host's own duplicate finder below `path`.

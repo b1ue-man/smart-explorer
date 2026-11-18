@@ -53,6 +53,7 @@ fn analytics_access_task_first_entry_error_preserves_readable_sibling() {
                     budget: &budget,
                     parallel: false,
                     guard: None,
+                    device: None,
                 };
                 let entries = vec![
                     Err(io::Error::new(
@@ -102,6 +103,7 @@ fn analytics_access_task_first_entry_error_preserves_readable_sibling() {
                     budget: &budget,
                     parallel: false,
                     guard: None,
+                    device: None,
                 };
                 let entries = vec![
                     Ok(LocalEntry {
@@ -179,6 +181,7 @@ fn analytics_access_task_first_entry_error_preserves_readable_sibling() {
                     budget: &budget,
                     parallel: false,
                     guard: None,
+                    device: None,
                 };
                 let entries = (0..1024).map(|index| {
                     if index == 512 {

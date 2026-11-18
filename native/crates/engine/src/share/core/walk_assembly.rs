@@ -123,6 +123,7 @@ impl TreeAssembler {
         let wire = crate::agent_proto::WireNode {
             name: node.name,
             size,
+            allocated: None,
             is_dir: node.is_dir,
             children,
         };

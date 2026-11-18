@@ -141,6 +141,8 @@ pub fn scan_reclaim_backend(
         files: progress.files.load(Ordering::Relaxed),
         dirs: progress.dirs.load(Ordering::Relaxed),
         bytes: acc.bytes,
+        // Listings carry no occupied space: the files occupy their size.
+        allocated: acc.bytes,
         large_min_bytes: opts.large_min_bytes,
         stale_days: opts.stale_days,
         result_counts: acc.result_counts,
@@ -215,6 +217,7 @@ pub fn find_backend_duplicates(
         },
         groups: found.groups,
         root_error: acc.root_error,
+        allocated_known: false,
     }
 }
 

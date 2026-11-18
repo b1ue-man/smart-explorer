@@ -213,13 +213,13 @@ private fun GroupList(
     modifier: Modifier = Modifier,
 ) {
     val copies = remember(groups) { groups.sumOf { it.items.size - 1 } }
-    val wasted = remember(groups) { groups.sumOf { it.size * (it.items.size - 1) } }
+    val freed = remember(groups) { groups.sumOf { it.freedBytes } }
     val lines = remember(groups) { linesOf(groups) }
     LazyColumn(modifier.fillMaxWidth()) {
         item(key = "summary") {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
-                    "${groups.size} Gruppen · $copies Kopien · ${Format.size(wasted)} durch Kopien belegt",
+                    "${groups.size} Gruppen · $copies Kopien · ${freedText(freed, vm.summary?.occupiedKnown == true)}",
                     style = MaterialTheme.typography.titleSmall,
                 )
                 searchFacts(vm.summary, vm.searchedMinSize)?.let {
@@ -239,7 +239,7 @@ private fun GroupList(
         // Positional keys: equal Google Drive names share one location (B2), so locations may repeat.
         items(lines, contentType = { if (it is GroupLine.Header) "header" else "copy" }) { line ->
             when (line) {
-                is GroupLine.Header -> GroupHeader(line.group, line.first)
+                is GroupLine.Header -> GroupHeader(line.group, line.first, vm.summary?.occupiedKnown == true)
                 is GroupLine.Copy -> {
                     val location = line.item.location
                     val shared = location in vm.ambiguous
@@ -265,11 +265,11 @@ private fun linesOf(groups: List<DuplicateGroup>): List<GroupLine> = buildList {
 }
 
 @Composable
-private fun GroupHeader(group: DuplicateGroup, first: Boolean) {
+private fun GroupHeader(group: DuplicateGroup, first: Boolean, known: Boolean) {
     Column(Modifier.fillMaxWidth()) {
         if (!first) HorizontalDivider(Modifier.padding(horizontal = 16.dp))
         Text(
-            "${Format.size(group.size)} · ${group.items.size} Kopien",
+            "${Format.size(group.size)} · ${group.items.size} Kopien · ${freedText(group.freedBytes, known)}",
             style = MaterialTheme.typography.titleSmall,
             modifier = Modifier.padding(start = 16.dp, top = 12.dp, end = 16.dp, bottom = 4.dp),
         )

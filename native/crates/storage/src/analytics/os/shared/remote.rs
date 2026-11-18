@@ -65,7 +65,16 @@ pub fn finish_legacy_tree(
     progress
         .bytes
         .store(before_bytes.saturating_add(tree.size), Ordering::Relaxed);
-    ScanOutcome::complete(super::from_wire(tree))
+    // An agent with `tree-allocated-v1` sends every node's occupied bytes;
+    // otherwise the tree occupies its size and stays unknown.
+    let known = super::wire_allocated_known(&tree);
+    let tree = super::from_wire(tree);
+    progress
+        .allocated
+        .fetch_add(tree.allocated, Ordering::Relaxed);
+    let mut outcome = ScanOutcome::complete(tree);
+    outcome.allocated_known = known;
+    outcome
 }
 
 /// Files of a walked tree; one iterator per level, never recursion.
@@ -116,18 +125,21 @@ mod tests {
             let file = |name: &str, size| WireNode {
                 name: name.into(),
                 size,
+                allocated: None,
                 is_dir: false,
                 children: Vec::new(),
             };
             Ok(Some(WireNode {
                 name: "root".into(),
                 size: 30,
+                allocated: None,
                 is_dir: true,
                 children: vec![
                     file("a", 10),
                     WireNode {
                         name: "sub".into(),
                         size: 20,
+                        allocated: None,
                         is_dir: true,
                         children: vec![file("b", 15), file("c", 5)],
                     },

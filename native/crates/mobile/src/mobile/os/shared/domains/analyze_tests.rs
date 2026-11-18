@@ -12,6 +12,7 @@ fn review_task_issues_keep_notes_apart_from_read_problems() {
     let mut outcome = ScanOutcome::complete(SizeNode {
         name: "root".into(),
         size: 0,
+        allocated: 0,
         is_dir: true,
         children: Vec::new(),
     });
@@ -55,6 +56,7 @@ impl Backend for HostWorker {
         let mut outcome = ScanOutcome::complete(SizeNode {
             name: root.trim_start_matches('/').into(),
             size: 42,
+            allocated: 42,
             is_dir: true,
             children: Vec::new(),
         });

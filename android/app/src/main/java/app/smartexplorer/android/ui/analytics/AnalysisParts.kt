@@ -9,6 +9,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
@@ -140,19 +142,19 @@ internal fun UsageAccessCard(appDataIncluded: Boolean, onReanalyze: () -> Unit, 
 }
 
 /**
- * One row of the folder list: size, share of [total] and a bar; real folders (also protected
- * ones) and the app list open on tap, an app shows its breakdown; estimates ("laut Android") and
- * aggregated rows do nothing.
+ * One row of the folder list: "Größe" and "Belegt", share of [total] by [measure] and a bar; real
+ * folders (also protected ones) and the app list open on tap, an app shows its breakdown;
+ * estimates ("laut Android") and aggregated rows do nothing.
  */
 @Composable
-internal fun ChildRow(child: AnalyzeChild, total: Long, onOpen: () -> Unit) {
-    val share = shareOf(child.size, total)
+internal fun ChildRow(child: AnalyzeChild, total: Long, measure: SizeMeasure, allocatedKnown: Boolean, onOpen: () -> Unit) {
+    val share = shareOf(measure.of(child), total)
     val opens = child.tappable
     ListItem(
         headlineContent = { Text(child.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
         supportingContent = {
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(childDetails(child, share))
+                Text(childDetails(child, share, allocatedKnown))
                 LinearProgressIndicator(progress = { share }, modifier = Modifier.fillMaxWidth())
             }
         },
@@ -166,10 +168,10 @@ internal fun ChildRow(child: AnalyzeChild, total: Long, onOpen: () -> Unit) {
     )
 }
 
-private fun childDetails(child: AnalyzeChild, share: Float): String = buildString {
+private fun childDetails(child: AnalyzeChild, share: Float, allocatedKnown: Boolean): String = buildString {
     val kind = child.rowKind
     if (kind == AnalyzeKind.Rest || kind == AnalyzeKind.Apps || kind == AnalyzeKind.App) append("≈ ")
-    append(Format.size(child.size)).append(" · ").append((share * 100).toInt()).append(" %")
+    append(rowSizes(child, allocatedKnown)).append(" · ").append((share * 100).toInt()).append(" %")
     when (kind) {
         AnalyzeKind.Dir -> append(" · ").append(child.childCount).append(" Einträge")
         AnalyzeKind.Protected -> {
@@ -181,6 +183,7 @@ private fun childDetails(child: AnalyzeChild, share: Float): String = buildStrin
         AnalyzeKind.App -> append(" · App ").append(Format.size(child.appBytes)).append(" · Daten ").append(Format.size(child.dataBytes))
         AnalyzeKind.File, AnalyzeKind.Aggregate -> Unit
     }
+    if (child.systemFiles) append(" · ").append(SYSTEM_FILES_HINT)
 }
 
 @DrawableRes
@@ -203,4 +206,31 @@ private fun entryKind(kind: TileKind): String = when (kind) {
     TileKind.Document -> "document"
     TileKind.Apps -> "apk"
     TileKind.Other, TileKind.Protected, TileKind.Estimated -> "other"
+}
+
+/**
+ * "Sortieren/Kacheln nach: [Belegt] [Größe]" with the explanation behind (i). "Belegt" cannot be
+ * chosen while the result does not know it ("Belegt: unbekannt").
+ */
+@Composable
+internal fun MeasureSwitch(chosen: SizeMeasure, allocatedKnown: Boolean, onChoose: (SizeMeasure) -> Unit, onExplain: () -> Unit) {
+    val effective = SizeMeasure.effective(chosen, allocatedKnown)
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("Sortieren/Kacheln nach:", style = MaterialTheme.typography.bodySmall)
+        SizeMeasure.entries.forEach { option ->
+            FilterChip(
+                selected = effective == option,
+                onClick = { onChoose(option) },
+                label = { Text(option.label) },
+                enabled = option == SizeMeasure.Size || allocatedKnown,
+            )
+        }
+        IconButton(onClick = onExplain) {
+            SeIcon(R.drawable.ic_info, contentDescription = "Größe und Belegt erklärt")
+        }
+    }
+    if (!allocatedKnown) {
+        Text("Belegt: unbekannt – die Quelle meldet keinen belegten Platz.", style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
 }

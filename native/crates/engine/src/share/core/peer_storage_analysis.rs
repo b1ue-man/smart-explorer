@@ -38,6 +38,7 @@ pub(super) fn scan(
         path: root.into(),
         node_budget: Some(progress.node_budget()),
         compress: features.analysis_deflate_v1,
+        allocated: features.analysis_allocated_v1,
         request_id: if features.analysis_reattach_v1 {
             Some(super::analysis_request_id::new().map_err(io::Error::other)?)
         } else {

@@ -221,8 +221,9 @@ impl App {
             analytics_access: analytics_access::AnalyticsAccess::default(),
             analytics_focus: Vec::new(),
             analytics_scan: None,
-            analytics_cells: Vec::new(),
-            analytics_cells_rect: egui::Rect::ZERO,
+            analytics_view: super::analytics_view::AnalyticsView::new(
+                super::analytics_measure_store::load(),
+            ),
             analytics_counts: None,
             analytics_totals: None,
             analytics_panel: AnalyticsPanel::Treemap,

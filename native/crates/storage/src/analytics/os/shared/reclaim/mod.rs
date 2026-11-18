@@ -2,6 +2,8 @@
 //! files, empty entries, and duplicate groups. Scans are read-only; UI actions
 //! decide what to move to the recycle bin.
 
+#[cfg(test)]
+mod allocated_tests;
 mod backend;
 mod backend_agent;
 mod backend_compare;

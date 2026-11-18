@@ -7,10 +7,11 @@
 //! skipped, an entry whose name cannot be a path is still counted, a reparse
 //! tag that cannot be read leaves the entry an ordinary file or folder, and
 //! names already handed out are never yielded twice after a fallback.
-use super::super::{EntryKind, LocalEntry};
+#[cfg(test)]
+use super::super::EntryKind;
+use super::super::LocalEntry;
 use super::directory_records::{self, Layout};
 use std::{
-    collections::HashSet,
     ffi::OsString,
     fs::File,
     io,
@@ -24,14 +25,21 @@ use windows_sys::Win32::{
 };
 
 // A directory batch, not a limit on entries or traversal. Eight-byte alignment
-// is part of the Windows information-class contract.
+// is part of the Windows information-class contract. Every directory starts
+// with 64 KiB (all a network share gets); a local directory that needs a
+// second batch reads the rest in 1 MiB batches.
 const BUFFER_WORDS: usize = 8192;
 const MAX_BUFFER_WORDS: usize = 8192 * 16;
-const NAME_SURROGATE: u32 = 0x2000_0000;
-// Special-file reparse tags (no name-surrogate bit, no data stream to read):
-// AF_UNIX sockets and the FIFO/character/block nodes WSL stores on NTFS.
-// Values as in windows-sys 0.59 `IO_REPARSE_TAG_AF_UNIX` / `IO_REPARSE_TAG_LX_*`.
-const SPECIAL_TAGS: [u32; 4] = [0x8000_0023, 0x8000_0024, 0x8000_0025, 0x8000_0026];
+
+#[path = "directory_buffers.rs"]
+mod buffers;
+
+#[path = "directory_class.rs"]
+mod class;
+#[cfg(test)]
+use class::reparse_tag;
+pub use class::{classify_open_file, metadata_class, metadata_is_link_like};
+use class::{kind, link_like, reparse_tag_with_access};
 
 #[cfg(test)]
 #[path = "sync_link_task_tests.rs"]
@@ -52,12 +60,23 @@ pub struct Directory<'a> {
     started: bool,
     ended: bool,
     fallback: Option<std::fs::ReadDir>,
-    /// Names already yielded; only consulted after a mid-way fallback so the
-    /// ordinary listing does not repeat them.
-    yielded: HashSet<OsString>,
+    /// Hashes of the names already yielded (8 bytes each); sorted and
+    /// consulted only after a mid-way fallback so the ordinary listing does
+    /// not repeat them.
+    yielded: Vec<u64>,
     dedupe: bool,
     consented: bool,
     query: Query<'a>,
+    /// A network share: 64 KiB batches, no per-file size corrections.
+    remote: bool,
+    /// Volume serial of this directory (asked once, when a file needs it).
+    volume: Option<Option<u64>>,
+}
+
+impl Drop for Directory<'_> {
+    fn drop(&mut self) {
+        buffers::give_back(std::mem::take(&mut self.buffer));
+    }
 }
 
 fn open(path: &Path, access: u32) -> io::Result<File> {
@@ -149,16 +168,18 @@ fn read_directory_from_file<'a>(
     let mut directory = Directory {
         path: path.to_path_buf(),
         file,
-        buffer: vec![0; BUFFER_WORDS],
+        buffer: buffers::take(BUFFER_WORDS),
         cursor: None,
         layout,
         started: false,
         ended: false,
         fallback: None,
-        yielded: HashSet::new(),
+        yielded: Vec::new(),
         dedupe: false,
         consented,
         query: Box::new(query),
+        remote: buffers::is_remote(path),
+        volume: None,
     };
     // Establish the listing here so callers can distinguish a failed root
     // from an individual entry that fails after enumeration has begun.
@@ -189,8 +210,16 @@ fn query_directory(
 
 impl Directory<'_> {
     fn refill(&mut self) -> io::Result<bool> {
+        if self.started && !self.remote && self.buffer.len() < MAX_BUFFER_WORDS {
+            // A second batch: this local directory is large.
+            buffers::give_back(std::mem::replace(
+                &mut self.buffer,
+                buffers::take(MAX_BUFFER_WORDS),
+            ));
+        }
         loop {
-            self.buffer.fill(0);
+            // No clearing between batches: the decoder only follows offsets
+            // the call wrote and checks every bound.
             let class = match (self.layout, self.started) {
                 (Layout::Extended, false) => FileIdExtdDirectoryRestartInfo,
                 (Layout::Extended, true) => FileIdExtdDirectoryInfo,
@@ -213,7 +242,7 @@ impl Directory<'_> {
             {
                 // One record did not fit: grow the batch and ask again.
                 let grown = (self.buffer.len() * 4).min(MAX_BUFFER_WORDS);
-                self.buffer = vec![0; grown];
+                buffers::give_back(std::mem::replace(&mut self.buffer, buffers::take(grown)));
                 continue;
             }
             if !self.started && unsupported(&error) {
@@ -231,9 +260,7 @@ impl Directory<'_> {
                 // rest of the directory: continue through the ordinary
                 // listing, skipping what was already yielded.
                 if let Ok(listing) = std::fs::read_dir(&self.path) {
-                    self.fallback = Some(listing);
-                    self.dedupe = true;
-                    self.cursor = None;
+                    self.start_fallback(listing);
                     return Ok(true);
                 }
             }
@@ -244,8 +271,29 @@ impl Directory<'_> {
     fn remember(&mut self, name: &OsString) {
         // Retained only while a mid-way fallback could still repeat names.
         if self.fallback.is_none() {
-            self.yielded.insert(name.clone());
+            self.yielded.push(buffers::name_hash(name));
         }
+    }
+
+    /// Continue with the ordinary listing, skipping what was yielded.
+    fn start_fallback(&mut self, listing: std::fs::ReadDir) {
+        self.yielded.sort_unstable();
+        self.fallback = Some(listing);
+        self.dedupe = true;
+        self.cursor = None;
+    }
+
+    fn yielded_before(&self, name: &OsString) -> bool {
+        self.yielded
+            .binary_search(&buffers::name_hash(name))
+            .is_ok()
+    }
+
+    /// The volume serial of this directory, asked at most once.
+    fn volume(&mut self) -> Option<u64> {
+        *self
+            .volume
+            .get_or_insert_with(|| buffers::volume_serial(&self.file))
     }
 
     fn next_entry(&mut self) -> io::Result<Option<LocalEntry>> {
@@ -256,7 +304,7 @@ impl Directory<'_> {
                 };
                 let entry = entry?;
                 let name = entry.file_name();
-                if self.dedupe && self.yielded.contains(&name) {
+                if self.dedupe && self.yielded_before(&name) {
                     continue;
                 }
                 let metadata = entry.metadata().map_err(|error| {
@@ -275,6 +323,10 @@ impl Directory<'_> {
                     is_dir: attrs & FILE_ATTRIBUTE_DIRECTORY != 0,
                     is_link_like: link_like(attrs, tag),
                     size: metadata.len(),
+                    // The ordinary listing exposes no allocation size.
+                    allocated: None,
+                    hardlink: None,
+                    device: None,
                     unreachable: false,
                     mtime_ms: metadata
                         .modified()
@@ -328,9 +380,7 @@ impl Directory<'_> {
                     // listing finishes the directory without repeats.
                     match std::fs::read_dir(&self.path) {
                         Ok(listing) => {
-                            self.fallback = Some(listing);
-                            self.dedupe = true;
-                            self.cursor = None;
+                            self.start_fallback(listing);
                             return Err(error);
                         }
                         Err(_) => {
@@ -354,9 +404,27 @@ impl Directory<'_> {
                 0
             };
             self.remember(&record.name);
+            let file = record.attributes & FILE_ATTRIBUTE_DIRECTORY == 0;
+            let allocated = if file && buffers::needs_compressed_size(&record, tag, self.remote) {
+                buffers::compressed_size(&self.path.join(&record.name)).unwrap_or(record.allocated)
+            } else {
+                record.allocated
+            };
+            // The records carry no link count: every file that occupies
+            // space carries its identity, so a walk counts each MFT record
+            // once (hard links share it).
+            let hardlink = match record.file_id {
+                Some(id) if file && allocated > 0 => self
+                    .volume()
+                    .map(|volume| (volume, (id as u64) ^ ((id >> 64) as u64))),
+                _ => None,
+            };
             return Ok(Some(LocalEntry {
                 name: record.name,
                 size: record.size,
+                allocated: Some(allocated),
+                hardlink,
+                device: None,
                 kind: kind(record.attributes, tag),
                 is_dir: record.attributes & FILE_ATTRIBUTE_DIRECTORY != 0,
                 is_link_like: link_like(record.attributes, tag),
@@ -367,91 +435,6 @@ impl Directory<'_> {
                 system: record.attributes & FILE_ATTRIBUTE_SYSTEM != 0,
             }));
         }
-    }
-}
-
-/// The reparse tag of `path`, or 0 when it cannot be read: an unreadable tag
-/// classifies the entry as an ordinary file or folder instead of dropping it.
-fn reparse_tag(path: &Path) -> u32 {
-    reparse_tag_with_access(path, true)
-}
-
-fn reparse_tag_with_access(path: &Path, consented: bool) -> u32 {
-    let file = if consented {
-        open(path, FILE_READ_ATTRIBUTES)
-    } else {
-        super::read::open_direct(
-            path,
-            crate::local_access::protocol::ReadKind::Metadata,
-            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-        )
-    };
-    file.and_then(|file| attributes(&file))
-        .map(|info| info.ReparseTag)
-        .unwrap_or(0)
-}
-
-fn link_like(attributes: u32, tag: u32) -> bool {
-    attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 && (tag == 0 || tag & NAME_SURROGATE != 0)
-}
-
-/// Data reparse points (for example cloud placeholders) are ordinary entries.
-/// A missing tag remains a boundary for VFS operations, even when the Explorer
-/// can still display the entry using its ordinary file/directory attributes.
-pub fn metadata_is_link_like(path: &Path, metadata: &std::fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt;
-    let attrs = metadata.file_attributes();
-    metadata.is_symlink()
-        || (attrs & FILE_ATTRIBUTE_REPARSE_POINT != 0 && link_like(attrs, reparse_tag(path)))
-}
-
-/// Link boundary and special class with at most one reparse-tag read.
-pub fn metadata_class(
-    path: &Path,
-    metadata: &std::fs::Metadata,
-) -> crate::local_access::MetadataClass {
-    use std::os::windows::fs::MetadataExt;
-    let attrs = metadata.file_attributes();
-    let tag = if attrs & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-        reparse_tag(path)
-    } else {
-        0
-    };
-    let boundary = metadata.is_symlink()
-        || (attrs & FILE_ATTRIBUTE_REPARSE_POINT != 0 && link_like(attrs, tag));
-    crate::local_access::MetadataClass {
-        link_like: boundary,
-        special: !boundary && kind(attrs, tag) == EntryKind::Other,
-    }
-}
-
-/// The classification of this handle, even if its former path was replaced.
-pub fn classify_open_file(file: &File) -> io::Result<crate::local_access::MetadataClass> {
-    use std::os::windows::fs::MetadataExt;
-    let metadata = file.metadata()?;
-    let attrs = metadata.file_attributes();
-    let tag = if attrs & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-        attributes(file)?.ReparseTag
-    } else {
-        0
-    };
-    let boundary = metadata.is_symlink() || link_like(attrs, tag);
-    Ok(crate::local_access::MetadataClass {
-        link_like: boundary,
-        special: !boundary && kind(attrs, tag) == EntryKind::Other,
-    })
-}
-
-fn kind(attributes: u32, tag: u32) -> EntryKind {
-    let reparse = attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0;
-    if reparse && tag & NAME_SURROGATE != 0 {
-        EntryKind::Link
-    } else if attributes & FILE_ATTRIBUTE_DIRECTORY != 0 {
-        EntryKind::Directory
-    } else if attributes & FILE_ATTRIBUTE_DEVICE != 0 || (reparse && SPECIAL_TAGS.contains(&tag)) {
-        EntryKind::Other
-    } else {
-        EntryKind::File
     }
 }
 

@@ -1,6 +1,8 @@
 use std::io;
 
-use super::node_codec::{decode_node_with_budget, TreeDecodeBudget, TREE_BUDGET_ERROR};
+use super::node_codec::{
+    decode_node_allocated_with_budget, decode_node_with_budget, TreeDecodeBudget, TREE_BUDGET_ERROR,
+};
 use super::relative_path::ValidatedRelativePath;
 use super::types::{Frame, SearchSpec, WireMeta, CHUNK};
 
@@ -186,6 +188,8 @@ impl Frame {
             6 => Frame::Meta(get_meta(&mut r)?),
             7 => Frame::WalkTree(r.string()?),
             8 => Frame::Tree(decode_node_with_budget(&mut r, budget)?),
+            91 => Frame::WalkTreeAllocated(r.string()?),
+            92 => Frame::TreeAllocated(decode_node_allocated_with_budget(&mut r, budget)?),
             9 => Frame::Read {
                 path: r.string()?,
                 offset: r.u64()?,

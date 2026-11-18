@@ -40,6 +40,8 @@ pub(super) fn scan(
             target,
             root: root.into(),
             node_budget: Some(progress.node_budget()),
+            // The receiver below decodes both record formats.
+            allocated: true,
         },
     )?;
     receive(stream, progress)
@@ -129,10 +131,13 @@ pub(super) fn receive(stream: TcpStream, progress: &Progress) -> io::Result<Scan
     result
 }
 
-pub(super) fn serve(
+/// Serves one analysis; `allocated` (the client asked for it) adds every
+/// node's occupied bytes to the tree records.
+pub(super) fn serve_with(
     stream: TcpStream,
     root: String,
     node_budget: Option<u64>,
+    allocated: bool,
     open: impl FnOnce() -> io::Result<BackendHandle>,
 ) -> io::Result<()> {
     stream.set_write_timeout(Some(Duration::from_secs(60)))?;
@@ -192,13 +197,14 @@ pub(super) fn serve(
         emitter_result?;
         progress.check_cancel()?;
         progress.set_phase(ScanPhase::Assembling, &root);
-        analysis_transfer::send_outcome_with(
+        analysis_transfer::send_outcome_allocated(
             &mut outcome,
             &progress,
             analysis_transfer::SendOptions {
                 deflate: true,
                 host_scan_ms: None,
             },
+            allocated,
             |message| send_control(&sink, message),
             |bytes| send_frame(&sink, DATA, &bytes),
         )

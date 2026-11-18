@@ -46,6 +46,7 @@ fn scan_inner(root: &str, access: &FsAccess, p: &Progress) -> io::Result<ScanOut
         // Container and aggregate nodes consume the receiver's budget too.
         crate::analytics::fit_tree(tree, p.node_budget(), p)?;
         p.bytes.store(tree.size, Ordering::Relaxed);
+        p.allocated.store(tree.allocated, Ordering::Relaxed);
     }
     protected_as_note(&mut result);
     if let Some(note) = crate::analytics::host_permission_note(result.permission_denied) {
@@ -75,6 +76,8 @@ fn visit(
         }
         Plan::Branch(visible, children) => {
             let mut result = ScanOutcome::complete(empty(visible));
+            // Known until one export's files could not say.
+            result.allocated_known = true;
             for child in children {
                 p.dirs.fetch_add(1, Ordering::Relaxed);
                 let mut outcome = visit(child, roots, p, budget, excluded)?;
@@ -93,6 +96,10 @@ fn visit(
                 result.aggregated_files = result
                     .aggregated_files
                     .saturating_add(outcome.aggregated_files);
+                // A failed export adds no files, so it leaves this as it is.
+                if outcome.tree.is_some() {
+                    result.allocated_known &= outcome.allocated_known;
+                }
                 for issue in outcome.issues {
                     if result.issues.len() < 64 {
                         result.issues.push(issue);
@@ -113,6 +120,10 @@ fn visit(
                             .size
                             .checked_add(node.size)
                             .ok_or_else(|| io::Error::other("Größenüberlauf"))?;
+                        tree.allocated = tree
+                            .allocated
+                            .checked_add(node.allocated)
+                            .ok_or_else(|| io::Error::other("Größenüberlauf"))?;
                         tree.children.push(node);
                     }
                 }
@@ -124,6 +135,8 @@ fn visit(
             let root = &roots.roots[*index];
             if !root.retained {
                 let mut result = ScanOutcome::complete(empty(&root.visible));
+                // Counted under the other root; this one adds no files.
+                result.allocated_known = true;
                 result.notes.push(format!(
                     "{}: bereits durch eine andere Freigabewurzel erfasst",
                     root.visible
@@ -199,6 +212,7 @@ fn empty(path: &str) -> SizeNode {
     SizeNode {
         name: segment(path).into(),
         size: 0,
+        allocated: 0,
         is_dir: true,
         children: Vec::new(),
     }

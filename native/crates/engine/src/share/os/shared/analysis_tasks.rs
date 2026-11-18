@@ -227,13 +227,14 @@ fn build(task: &Task, access: &FsAccess) -> io::Result<Spool> {
             let host_scan_ms = Some(started.elapsed().as_millis().min(u64::MAX as u128) as u64);
             task.progress
                 .set_phase(ScanPhase::Assembling, &request.path);
-            analysis_transfer::send_outcome_with(
+            analysis_transfer::send_outcome_allocated(
                 &mut outcome,
                 &task.progress,
                 SendOptions {
                     host_scan_ms,
                     deflate: request.compress,
                 },
+                request.allocated,
                 |message| {
                     writer
                         .borrow_mut()

@@ -1,7 +1,8 @@
 use super::prelude::*;
 use super::*;
 use crate::app::reclaim_results_ui::{
-    result_count_label, select_items, selected_bytes, ui_empty, ui_item, ui_items, ui_section,
+    reclaim_allocated_text, result_count_label, select_items, selected_bytes, ui_empty, ui_item,
+    ui_items, ui_section,
 };
 use crate::app::theme;
 
@@ -189,15 +190,19 @@ impl App {
                     ui.horizontal_wrapped(|ui| {
                         ui.label(RichText::new(&r.root).strong());
                         ui.label(format!(
-                            "- {} Dateien - {} Ordner - {} gescannt",
+                            "- {} Dateien - {} Ordner - Größe {} · Belegt {} gescannt",
                             r.files,
                             r.dirs,
-                            format_bytes(r.bytes)
+                            format_bytes(r.bytes),
+                            reclaim_allocated_text(r.allocated, r.is_remote)
                         ));
-                        ui.label(format!(
-                            "- {} möglich",
-                            format_bytes(r.reclaimable_bytes())
-                        ));
+                        let freed = format_bytes(r.reclaimable_bytes());
+                        ui.label(if r.is_remote {
+                            format!("- {freed} wird frei (Größe; Belegt unbekannt)")
+                        } else {
+                            format!("- {freed} wird frei (belegt)")
+                        })
+                        .on_hover_text(super::analytics_measure::MEASURE_HINT);
                     });
                     if r.has_truncated_results() {
                         ui.colored_label(
@@ -277,9 +282,10 @@ impl App {
                                     ui.horizontal_wrapped(|ui| {
                                         ui.label(RichText::new(format_bytes(group.size)).strong());
                                         ui.label(format!(
-                                            "- {} Kopien - {} frei",
+                                            "- {} Kopien - Größe {} · Belegt {} wird frei",
                                             group.items.len(),
-                                            format_bytes(group.reclaimable)
+                                            format_bytes(group.duplicate_size()),
+                                            reclaim_allocated_text(group.reclaimable, r.is_remote)
                                         ));
                                         let hash_short =
                                             &group.hash.hex[..group.hash.hex.len().min(8)];

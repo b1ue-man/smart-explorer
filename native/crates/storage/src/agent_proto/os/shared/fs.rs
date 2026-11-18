@@ -1,7 +1,9 @@
 use rayon::prelude::*;
+use std::collections::HashSet;
 use std::io;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Mutex;
 
 use super::types::{WireMeta, WireNode};
 
@@ -170,6 +172,8 @@ fn walk_dir(dir: &Path, name: String, budget: &WalkBudget, depth: usize) -> io::
             files.push(WireNode {
                 name: nm,
                 size: sz,
+                // This walk keeps no hard-link set: occupancy stays unknown.
+                allocated: None,
                 is_dir: false,
                 children: Vec::new(),
             });
@@ -198,6 +202,7 @@ fn walk_dir(dir: &Path, name: String, budget: &WalkBudget, depth: usize) -> io::
     Ok(WireNode {
         name,
         size,
+        allocated: None,
         is_dir: true,
         children,
     })
@@ -208,6 +213,8 @@ pub struct WalkCounter {
     pub files: AtomicU64,
     pub bytes: AtomicU64,
     budget: WalkBudget,
+    /// Hard-linked files met so far: their occupied bytes count once.
+    hardlinks: Mutex<HashSet<(u64, u64)>>,
 }
 
 impl WalkCounter {
@@ -216,8 +223,29 @@ impl WalkCounter {
             files: AtomicU64::new(0),
             bytes: AtomicU64::new(0),
             budget: WalkBudget::default(),
+            hardlinks: Mutex::new(HashSet::new()),
         }
     }
+
+    /// The occupied bytes this walk counts for a file: 0 for a further link
+    /// of a file already counted, `None` where the platform cannot say.
+    fn occupied(&self, metadata: &std::fs::Metadata) -> Option<u64> {
+        let (allocated, link) = super::local_platform::occupancy(metadata);
+        let first = link.is_none_or(|identity| {
+            self.hardlinks
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .insert(identity)
+        });
+        allocated.map(|bytes| if first { bytes } else { 0 })
+    }
+}
+
+/// The sum of `allocated` below a folder; unknown once one child is.
+fn occupied_sum(children: &[WireNode]) -> Option<u64> {
+    children.iter().try_fold(0u64, |sum, child| {
+        child.allocated.map(|bytes| sum.saturating_add(bytes))
+    })
 }
 
 pub fn walk_dir_counted(
@@ -282,6 +310,7 @@ fn walk_dir_counted_inner(
             files.push(WireNode {
                 name: nm,
                 size: sz,
+                allocated: cnt.occupied(&metadata),
                 is_dir: false,
                 children: Vec::new(),
             });
@@ -310,6 +339,7 @@ fn walk_dir_counted_inner(
     Ok(WireNode {
         name,
         size,
+        allocated: occupied_sum(&children),
         is_dir: true,
         children,
     })

@@ -84,6 +84,10 @@ pub struct FsDuplicateFile {
     pub path: String,
     #[serde(default)]
     pub mtime_ms: i64,
+    /// Occupied bytes of this copy; hosts before it send none, and the copy
+    /// then counts as occupying the group's size.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allocated: Option<u64>,
 }
 
 /// `DuplicateSummary` plus the root failure.
@@ -176,6 +180,7 @@ impl FsDuplicateGroup {
                 .map(|item| FsDuplicateFile {
                     path: visible(&item.path),
                     mtime_ms: item.mtime_ms,
+                    allocated: Some(item.allocated),
                 })
                 .collect(),
         }
@@ -185,7 +190,7 @@ impl FsDuplicateGroup {
     pub fn wire_bytes(&self) -> usize {
         self.files
             .iter()
-            .map(|file| file.path.len() + 48)
+            .map(|file| file.path.len() + 80)
             .sum::<usize>()
             + 128
     }
@@ -200,6 +205,7 @@ impl FsDuplicateGroup {
             .map(|file| {
                 let name = file.path.rsplit('/').next().unwrap_or_default().to_string();
                 ReclaimItem::new(file.path, name, size, file.mtime_ms, false)
+                    .with_allocated(file.allocated.unwrap_or(size))
                     .with_reason("Duplikat", ReclaimConfidence::HashMatch)
             })
             .collect();
@@ -217,7 +223,7 @@ impl FsDuplicateGroup {
             // The host's own SHA-256 over its local copies.
             evidence: DuplicateEvidence::LocalSha256,
             size,
-            reclaimable: size.saturating_mul(items.len().saturating_sub(1) as u64),
+            reclaimable: DuplicateGroup::reclaimable_of(&items),
             items,
         }
     }
@@ -297,3 +303,7 @@ impl FsDuplicateSummary {
         )
     }
 }
+
+#[cfg(test)]
+#[path = "belegt_wire_task_tests.rs"]
+mod belegt_wire_task_tests;

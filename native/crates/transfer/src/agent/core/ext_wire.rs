@@ -341,6 +341,7 @@ pub fn report_from_wire(
             limits: summary.limits,
         },
         root_error: summary.root_error,
+        allocated_known: false,
     }
 }
 

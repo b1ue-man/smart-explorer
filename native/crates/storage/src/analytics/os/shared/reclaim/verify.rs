@@ -102,7 +102,8 @@ fn push_delete(plan: &mut ReclaimTrashPlan, item: &ReclaimItem) {
     if item.confidence.needs_warning() || matches!(item.confidence, ReclaimConfidence::HashMatch) {
         plan.risky_paths.push(item.path.clone());
     }
-    plan.estimated_bytes = plan.estimated_bytes.saturating_add(item.size);
+    // What the trash frees: the occupied bytes, not the logical size.
+    plan.estimated_bytes = plan.estimated_bytes.saturating_add(item.allocated);
     plan.delete_paths.push(item.path.clone());
 }
 

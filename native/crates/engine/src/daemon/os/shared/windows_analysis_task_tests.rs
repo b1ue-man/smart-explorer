@@ -110,6 +110,7 @@ fn bridge(peer: BackendHandle) -> io::Result<Bridge> {
             target,
             root,
             node_budget,
+            allocated,
             ..
         } = request
         else {
@@ -118,7 +119,7 @@ fn bridge(peer: BackendHandle) -> io::Result<Bridge> {
         assert!(
             matches!(target, PeerOpenTarget::Direct { contact_id } if contact_id == "task-direct-identity")
         );
-        ipc_analysis::serve(stream, root, node_budget, || Ok(analysis_peer))
+        ipc_analysis::serve_with(stream, root, node_budget, allocated, || Ok(analysis_peer))
     });
     let ordinary = TcpListener::bind("127.0.0.1:0")?;
     let client = TcpStream::connect(ordinary.local_addr()?)?;
@@ -315,6 +316,7 @@ fn windows_remote_task_analysis_ipc_cancellation_reaches_active_worker() -> io::
         },
         root: "/literal root".into(),
         node_budget: Some(progress.node_budget()),
+        allocated: true,
     };
     assert_eq!(request.daemon_token(), Some("correct"));
     assert_eq!(

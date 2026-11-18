@@ -142,6 +142,7 @@ fn legacy_depth(node: &mut SizeNode, depth: usize) {
         node.children = vec![SizeNode {
             name: crate::analytics::aggregate_name(1).into(),
             size: node.size,
+            allocated: node.allocated,
             is_dir: false,
             children: Vec::new(),
         }];
@@ -156,6 +157,7 @@ fn wire_tree(tree: &SizeNode, p: &Progress) -> io::Result<crate::agent_proto::Wi
     Ok(crate::agent_proto::WireNode {
         name: tree.name.to_string(),
         size: tree.size,
+        allocated: None,
         is_dir: tree.is_dir,
         children: tree
             .children

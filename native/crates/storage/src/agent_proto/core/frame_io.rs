@@ -44,7 +44,12 @@ pub fn read_frame_with_tree_budget(
             .try_into()
             .map_err(|_| bad("invalid request id"))?,
     );
-    let budget = if head[8] == 8 { budget_for(id) } else { None };
+    // `Tree` and `TreeAllocated` decode under the receiver's tree budget.
+    let budget = if matches!(head[8], 8 | 92) {
+        budget_for(id)
+    } else {
+        None
+    };
     if budget.is_some_and(|limit| len > limit.frame_bytes()) {
         let remaining = len - head.len();
         let copied = io::copy(&mut r.take(remaining as u64), &mut io::sink())?;

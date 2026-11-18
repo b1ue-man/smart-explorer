@@ -35,6 +35,16 @@ pub struct AnalysisReport {
     /// the raw encoding).
     #[serde(default, skip_serializing_if = "is_false")]
     pub deflate: bool,
+    /// Additive (`analysis_allocated_v1`): every tree record carries the
+    /// node's occupied bytes after its size. Without it (older hosts, or a
+    /// receiver that did not ask) every node occupies its size.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub allocated_records: bool,
+    /// Additive: every counted file reported its occupied bytes, so the
+    /// tree's `allocated` is the real occupancy (`ScanOutcome`). Older hosts
+    /// omit it: unknown.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub allocated_known: bool,
 }
 
 fn is_false(value: &bool) -> bool {
@@ -42,11 +52,7 @@ fn is_false(value: &bool) -> bool {
 }
 
 impl AnalysisReport {
-    pub fn take(
-        outcome: &mut ScanOutcome,
-        progress: ScanSnapshot,
-        shape: TreeShape,
-    ) -> Self {
+    pub fn take(outcome: &mut ScanOutcome, progress: ScanSnapshot, shape: TreeShape) -> Self {
         Self {
             status: outcome.status,
             issues: std::mem::take(&mut outcome.issues),
@@ -60,6 +66,8 @@ impl AnalysisReport {
             platform: outcome.platform.take(),
             protected: std::mem::take(&mut outcome.protected),
             deflate: false,
+            allocated_records: false,
+            allocated_known: outcome.allocated_known,
         }
     }
 
@@ -163,6 +171,8 @@ impl AnalysisReport {
             protected: self.protected,
             volume: self.volume,
             platform: self.platform,
+            // Records without occupied bytes made every node occupy its size.
+            allocated_known: self.allocated_known && self.allocated_records,
         })
     }
 }

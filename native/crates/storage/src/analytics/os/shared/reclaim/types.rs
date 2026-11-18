@@ -114,7 +114,12 @@ impl DuplicateEvidence {
 pub struct ReclaimItem {
     pub path: String,
     pub name: String,
+    /// Logical size (shown as an addition to what is freed).
     pub size: u64,
+    /// Occupied bytes: what removing the item frees. A folder sums its files;
+    /// a further link of a hard-linked file counted earlier in the same scan
+    /// adds 0. Equals `size` where the platform or backend could not say.
+    pub allocated: u64,
     pub mtime_ms: i64,
     pub is_dir: bool,
     pub reason: String,
@@ -128,6 +133,7 @@ impl ReclaimItem {
             path,
             name,
             size,
+            allocated: size,
             mtime_ms,
             is_dir,
             reason: String::new(),
@@ -136,11 +142,13 @@ impl ReclaimItem {
         }
     }
 
-    pub fn with_reason(
-        mut self,
-        reason: impl Into<String>,
-        confidence: ReclaimConfidence,
-    ) -> Self {
+    /// The occupied bytes the platform reported (see `allocated`).
+    pub fn with_allocated(mut self, allocated: u64) -> Self {
+        self.allocated = allocated;
+        self
+    }
+
+    pub fn with_reason(mut self, reason: impl Into<String>, confidence: ReclaimConfidence) -> Self {
         self.reason = reason.into();
         self.confidence = confidence;
         self
@@ -151,9 +159,30 @@ impl ReclaimItem {
 pub struct DuplicateGroup {
     pub hash: ContentHash,
     pub evidence: DuplicateEvidence,
+    /// Logical size of one copy.
     pub size: u64,
+    /// Occupied bytes freed by keeping one copy (`reclaimable_of`).
     pub reclaimable: u64,
     pub items: Vec<ReclaimItem>,
+}
+
+impl DuplicateGroup {
+    /// What removing all but one copy frees: the occupied bytes of every
+    /// copy except the one occupying most (kept, so the figure never
+    /// overstates). A copy without occupancy figures occupies its size.
+    pub fn reclaimable_of(items: &[ReclaimItem]) -> u64 {
+        let total = items
+            .iter()
+            .fold(0u64, |sum, item| sum.saturating_add(item.allocated));
+        let kept = items.iter().map(|item| item.allocated).max().unwrap_or(0);
+        total.saturating_sub(kept)
+    }
+
+    /// Logical bytes of the copies beyond one (shown with `reclaimable`).
+    pub fn duplicate_size(&self) -> u64 {
+        self.size
+            .saturating_mul(self.items.len().saturating_sub(1) as u64)
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -175,6 +204,9 @@ pub struct ReclaimReport {
     pub files: u64,
     pub dirs: u64,
     pub bytes: u64,
+    /// Occupied bytes of the walked files (`bytes` is their logical size);
+    /// a backend without occupancy figures reports `bytes`.
+    pub allocated: u64,
     pub large_min_bytes: u64,
     pub stale_days: u64,
     pub result_counts: ReclaimResultCounts,
@@ -206,6 +238,8 @@ impl ReclaimReport {
         self.duplicate_candidates > self.duplicate_candidates_retained
     }
 
+    /// Occupied bytes the quick selection frees (duplicates beyond one copy,
+    /// empty files, safe cleanup entries).
     pub fn reclaimable_bytes(&self) -> u64 {
         let dup = self
             .duplicate_groups
@@ -215,13 +249,13 @@ impl ReclaimReport {
         let empty = self
             .empty_files
             .iter()
-            .map(|i| i.size)
+            .map(|i| i.allocated)
             .fold(0u64, u64::saturating_add);
         let cleanup = self
             .cleanup
             .iter()
             .filter(|i| i.confidence.quick_selectable())
-            .map(|i| i.size)
+            .map(|i| i.allocated)
             .fold(0u64, u64::saturating_add);
         dup.saturating_add(empty).saturating_add(cleanup)
     }
@@ -242,9 +276,7 @@ impl ReclaimReport {
         self.cleanup.retain(keep);
         for g in &mut self.duplicate_groups {
             g.items.retain(keep);
-            g.reclaimable = g
-                .size
-                .saturating_mul(g.items.len().saturating_sub(1) as u64);
+            g.reclaimable = DuplicateGroup::reclaimable_of(&g.items);
         }
         self.duplicate_groups.retain(|g| g.items.len() > 1);
         subtract_removed(

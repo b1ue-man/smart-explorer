@@ -22,6 +22,9 @@ use crate::analytics::{
 use crate::mobile::location::Loc;
 use crate::mobile::{ApiError, Runtime, TaskCtx};
 
+#[path = "analyze_allocated.rs"]
+mod allocated;
+pub(super) use allocated::overview;
 #[path = "analyze_progress.rs"]
 mod phases;
 #[path = "analyze_platform.rs"]
@@ -165,6 +168,7 @@ fn analysis_task(
             let snapshot = progress.snapshot();
             let (done, total) = phases::task_bytes(&snapshot);
             ctx.progress(done, total, snapshot.files, 0);
+            ctx.allocated(snapshot.allocated);
             let quiet = is_remote.then(|| progress.remote_report_age()).flatten();
             show(ctx, &mut shown, phases::status(is_remote, &snapshot, quiet));
         },
@@ -178,6 +182,8 @@ fn analysis_task(
         "files": snapshot.files,
         "dirs": snapshot.dirs,
         "bytes": snapshot.bytes,
+        "allocated": outcome.allocated_bytes(),
+        "allocatedKnown": outcome.allocated_known,
         "issues": issue_count,
         "protected": protected,
         "notes": outcome.notes.len(),
@@ -231,12 +237,14 @@ fn show(ctx: &TaskCtx, shown: &mut String, line: String) {
     }
 }
 
-/// `analyze.node {taskId, path}` → `{name, size, measured, isDir, kind,
-/// children:[{name, size, isDir, childCount, kind}], location}`; `size`
-/// includes the approximate rows below, `kind` is `dir|file|aggregate`, or
-/// `protected|rest|apps` for the approximate rows. The apps row's name leads
-/// to the app list (`location` null), whose rows (`kind: "app"`) add
-/// `package, appBytes, dataBytes, cacheBytes`.
+/// `analyze.node {taskId, path, sort?}` → `{name, size, allocated,
+/// allocatedKnown, sort, measured, isDir, kind, children:[{name, size,
+/// allocated, isDir, childCount, kind}], location}`; `size` includes the
+/// approximate rows below, `allocated` is the occupied space
+/// (`analyze_allocated.rs`; `sort: allocated|size`), `kind` is
+/// `dir|file|aggregate`, or `protected|rest|apps` for the approximate rows.
+/// The apps row's name leads to the app list (`location` null), whose rows
+/// (`kind: "app"`) add `package, appBytes, dataBytes, cacheBytes`.
 pub(super) fn node(args: &Value) -> Result<Value, ApiError> {
     let task = str_arg(args, "taskId")?;
     let segments = string_list(args, "path")?;
@@ -254,11 +262,16 @@ pub(super) fn node(args: &Value) -> Result<Value, ApiError> {
             .tree
             .as_ref()
             .ok_or_else(|| ApiError::new("not_found", "Kein Analyseergebnis."))?;
-        let view = crate::analytics::node_view(tree, &segments, approx, MAX_NODE_CHILDREN)
+        let measure = allocated::Measure::requested(args, outcome.allocated_known)?;
+        // Every child, so the largest by the chosen measure are kept.
+        let at = allocated::tree_node(tree, &segments);
+        let limit = at.map_or(MAX_NODE_CHILDREN, |_| usize::MAX);
+        let view = crate::analytics::node_view(tree, &segments, approx, limit)
             .ok_or_else(|| ApiError::new("not_found", "Eintrag nicht gefunden."))?;
         // The app list is Android's figures, no place in "Dateien".
         let listed = view.kind == NodeKind::Apps;
-        let mut value = to_json(view)?;
+        let known = outcome.allocated_known;
+        let mut value = allocated::node_json(view, known, measure, MAX_NODE_CHILDREN)?;
         value["remote"] = json!(!is_local(base));
         if segments.is_empty() {
             if let Some(volume) = outcome.volume {
@@ -392,6 +405,7 @@ fn reclaim_task(
         "errors": report.summary.error_count(),
         "candidates": report.summary.candidates,
         "protected": protected_count(&report.summary.protected),
+        "allocatedKnown": report.allocated_known,
     });
     ctx.message("");
     pending.store(Stored::Duplicates {
@@ -399,16 +413,27 @@ fn reclaim_task(
         summary: report.summary,
         base: location,
         recycling: false,
+        allocated_known: report.allocated_known,
     });
     Ok(result)
 }
 
 /// `reclaim.summary {taskId}` → `{files, bytes, candidates, compared, groups,
-/// protectedCount, protectedText, errorCount, errorText, limit}`.
+/// protectedCount, protectedText, errorCount, errorText, limit, allocatedKnown}`.
 pub(super) fn summary(args: &Value) -> Result<Value, ApiError> {
     let task = str_arg(args, "taskId")?;
     let (mut value, base) = with_stored(task, |stored| match stored {
-        Stored::Duplicates { summary, base, .. } => Ok((to_json(summary.view())?, base.clone())),
+        Stored::Duplicates {
+            summary,
+            base,
+            allocated_known,
+            ..
+        } => {
+            let mut value = to_json(summary.view())?;
+            // Whether `reclaimable` is occupied space (2026-11-18).
+            value["allocatedKnown"] = json!(allocated_known);
+            Ok((value, base.clone()))
+        }
         _ => Err(invalid("Dieser Task ist keine Duplikatsuche.")),
     })?;
     let remote = !is_local(&base);
@@ -449,7 +474,7 @@ pub(super) fn groups(args: &Value) -> Result<Value, ApiError> {
                         })
                     })
                     .collect();
-                json!({ "size": group.size, "items": items,
+                json!({ "size": group.size, "reclaimable": group.reclaimable, "items": items,
                     "contentVerified": group.hash.algorithm == crate::analytics::HashAlgorithm::Sha256 })
             })
             .collect();
@@ -465,18 +490,8 @@ pub(super) fn recycle_result(args: &Value) -> Result<Value, ApiError> {
     recycle::result(args)
 }
 
-/// Registers a finished analysis under `task` (drill-down tests).
 #[cfg(test)]
-pub(super) fn insert_analysis_for_test(task: &str, outcome: ScanOutcome, base: &str, root: &str) {
-    let pending = Pending::open();
-    bind_task(pending.token(), task);
-    pending.store(Stored::Analysis {
-        outcome,
-        approx: Approximations::default(),
-        base: base.to_string(),
-        root: root.to_string(),
-    });
-}
+pub(super) use results::insert_analysis_for_test;
 
 #[cfg(test)]
 #[path = "analyze_tests.rs"]

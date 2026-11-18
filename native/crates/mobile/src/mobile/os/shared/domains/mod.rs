@@ -328,6 +328,7 @@ fn analysis_method(rt: &Runtime, method: &str, args: &Value) -> Option<Result<Va
     Some(match method {
         "analyze.start" => analyze::start_analysis(rt, args),
         "analyze.node" => analyze::node(args),
+        "analyze.overview" => analyze::overview(args),
         "analyze.issues" => analyze::issues(args),
         "reclaim.start" => analyze::start_reclaim(rt, args),
         "reclaim.groups" => analyze::groups(args),

@@ -26,7 +26,12 @@ pub(in super::super) fn issues_ui(
     denied: u64,
     notes: &[String],
 ) {
-    for note in notes {
+    // How the result was made and what it left out stand first and in
+    // full-size text; the other remarks stay small.
+    for note in notes.iter().filter(|note| prominent_note(note)) {
+        ui.label(egui::RichText::new(note).strong());
+    }
+    for note in notes.iter().filter(|note| !prominent_note(note)) {
         ui.label(egui::RichText::new(note).small().color(theme::muted(ui)));
     }
     if issues.is_empty() && suppressed == 0 {
@@ -55,4 +60,26 @@ pub(in super::super) fn issues_ui(
                     }
                 });
         });
+}
+
+/// The analysis way („Analyseweg: …“, MFT or directory walk) and folders on
+/// another file system that were not counted.
+pub(in super::super) fn prominent_note(note: &str) -> bool {
+    note.starts_with("Analyseweg:") || note.starts_with("anderes Dateisystem")
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn analyse_task_analysis_way_and_foreign_file_systems_are_prominent() {
+        for note in [
+            "Analyseweg: schneller NTFS-Weg (MFT)",
+            "Analyseweg: Verzeichnislauf (MFT nicht lesbar: x)",
+            "anderes Dateisystem, nicht gezählt: /proc",
+        ] {
+            assert!(super::prominent_note(note), "{note}");
+        }
+        let other = "3 Datei(en) sind nur in den Ordnergroessen enthalten";
+        assert!(!super::prominent_note(other));
+    }
 }

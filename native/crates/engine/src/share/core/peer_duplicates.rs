@@ -60,6 +60,8 @@ pub(super) fn receive(
     );
     let prefix = format!("{}/", root.trim_end_matches('/'));
     let mut groups = Vec::new();
+    // Hosts before `FsDuplicateFile::allocated` send no occupancy.
+    let mut allocated_known = true;
     let mut pending: Option<FsDuplicateGroup> = None;
     let mut names = HashSet::new();
     let mut memory = 0u64;
@@ -137,6 +139,8 @@ pub(super) fn receive(
                             ));
                         }
                         combined.more = false;
+                        allocated_known &=
+                            combined.files.iter().all(|file| file.allocated.is_some());
                         groups.push(combined.into_group());
                     }
                 }
@@ -192,6 +196,7 @@ pub(super) fn receive(
                     groups: std::mem::take(&mut groups),
                     summary,
                     root_error,
+                    allocated_known,
                 }))
             }
             _ => Err(peer_stream::invalid("Unerwartete Duplikat-Meldung")),

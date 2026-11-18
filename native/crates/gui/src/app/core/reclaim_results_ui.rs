@@ -1,5 +1,5 @@
-use crate::app::theme;
 use super::prelude::*;
+use crate::app::theme;
 
 pub(in crate::app) fn ui_section(ui: &mut egui::Ui, title: &str, add: impl FnOnce(&mut egui::Ui)) {
     egui::CollapsingHeader::new(title)
@@ -62,11 +62,7 @@ pub(in crate::app) fn ui_item(
         }
         ui.label(RichText::new(format_bytes(item.size)).monospace());
         if first_duplicate {
-            ui.label(
-                RichText::new("behalten")
-                    .small()
-                    .color(theme::muted(ui)),
-            );
+            ui.label(RichText::new("behalten").small().color(theme::muted(ui)));
         }
         let date = if item.mtime_ms > 0 {
             format_date(item.mtime_ms)
@@ -153,5 +149,26 @@ mod tests {
             "Dateien (Top 200 von 325)"
         );
         assert_eq!(result_count_label("Dateien", 12, 12), "Dateien (12)");
+    }
+}
+
+/// „Belegt“ of a duplicate/cleanup result. The result carries no flag that
+/// its occupied bytes are known: only a local walk measures them, a remote
+/// source (older peers, backends without the figure) reports its size.
+pub(in crate::app) fn reclaim_allocated_text(allocated: u64, remote: bool) -> String {
+    if remote {
+        super::analytics_measure::ALLOCATED_UNKNOWN.to_string()
+    } else {
+        format_bytes(allocated)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn belegt_task_reclaim_occupied_space_is_unknown_for_remote_sources() {
+        assert_eq!(super::reclaim_allocated_text(4096, true), "unbekannt");
+        let local = super::reclaim_allocated_text(4096, false);
+        assert_eq!(local, crate::format::format_bytes(4096));
     }
 }

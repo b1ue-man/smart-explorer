@@ -39,6 +39,8 @@ enum class AnalyzeKind {
 data class AnalyzeChild(
     val name: String,
     val size: Long = 0,
+    /** Occupied space ("Belegt"); `null` from an older core = [size]. */
+    val allocated: Long? = null,
     val isDir: Boolean = false,
     val childCount: Int = 0,
     /** `dir|file|protected|rest|aggregate|apps|app`; empty or unknown = derived from [isDir]. */
@@ -51,6 +53,8 @@ data class AnalyzeChild(
     val dataBytes: Long = 0,
     /** Cache part of [dataBytes] (app rows). */
     val cacheBytes: Long = 0,
+    /** "NTFS-Systemdateien" of the fast NTFS way: occupied by the file system, nothing to open or delete. */
+    val systemFiles: Boolean = false,
 ) {
     val rowKind: AnalyzeKind
         get() = when (kind) {
@@ -73,22 +77,32 @@ data class AnalyzeChild(
 
     /** The row reacts to a tap: it opens a folder/the app list, or an app's breakdown. */
     val tappable: Boolean
-        get() = opensFolder || rowKind == AnalyzeKind.App
+        get() = !systemFiles && (opensFolder || rowKind == AnalyzeKind.App)
 
     /** A row from Android's figures that is no entry of the folder (rest, other apps' data, the apps row). */
     val isEstimate: Boolean
         get() = rowKind == AnalyzeKind.Rest || rowKind == AnalyzeKind.Apps || (rowKind == AnalyzeKind.Protected && !isDir)
+
+    /** "Belegt" of the row: [allocated], or [size] where the core sent none. */
+    val allocatedBytes: Long
+        get() = allocated ?: size
 }
 
 /**
- * One analysed folder or the app list; [children] by size descending, at most 500 (plus
- * display-only rows). [size] includes the estimates below (bytes in both a measured app folder and
- * the apps row counted once), [measured] is what the walk found.
+ * One analysed folder or the app list; [children] by [sort] descending (`allocated` = "Belegt",
+ * `size` = "Größe"), at most 500 (plus display-only rows). [size] includes the estimates below
+ * (bytes in both a measured app folder and the apps row counted once), [measured] is what the walk
+ * found. [allocated] is the occupied space; [allocatedKnown] false (older peer, backend without the
+ * figure) = "Belegt: unbekannt", [allocated] then equals [size].
  */
 @Serializable
 data class AnalyzeNode(
     val name: String = "",
     val size: Long = 0,
+    val allocated: Long? = null,
+    val allocatedKnown: Boolean = false,
+    /** `allocated|size`: what [children] are sorted and chosen by. */
+    val sort: String = "size",
     val measured: Long = 0,
     val isDir: Boolean = true,
     /** `dir|file|apps`; `apps` = the list behind "≈ Apps (laut Android)". */
@@ -104,6 +118,31 @@ data class AnalyzeNode(
     val isAppList: Boolean
         get() = kind == "apps"
 }
+
+/** One file of "Größte Dateien" ([path] below the shown folder, [location] = the folder holding it). */
+@Serializable
+data class AnalyzeLargestFile(val path: String = "", val size: Long = 0, val allocated: Long = 0, val location: String? = null)
+
+/** One extension of "Nach Dateityp". */
+@Serializable
+data class AnalyzeTypeTotal(val extension: String = "", val files: Long = 0, val size: Long = 0, val allocated: Long = 0)
+
+/**
+ * `analyze.overview`: "Größte Dateien" and "Nach Dateityp" of a folder with its subfolders, by
+ * [sort]. Files the core folded into "… N weitere Eintraege" count only in [aggregatedFiles] etc.;
+ * [aggregatedNote] says so (`null` = none).
+ */
+@Serializable
+data class AnalyzeOverview(
+    val sort: String = "size",
+    val allocatedKnown: Boolean = false,
+    val largest: List<AnalyzeLargestFile> = emptyList(),
+    val types: List<AnalyzeTypeTotal> = emptyList(),
+    val aggregatedFiles: Long = 0,
+    val aggregatedSize: Long = 0,
+    val aggregatedAllocated: Long = 0,
+    val aggregatedNote: String? = null,
+)
 
 /**
  * Read problems of an analysis; [count] excludes the areas Android locks for every app, which are
@@ -140,14 +179,22 @@ data class AnalyzeApp(
 @Serializable
 data class DuplicateItem(val location: String, val mtimeMs: Long = 0)
 
-/** Files with equal content; [size] is the size of one copy. */
+/**
+ * Files with equal content; [size] is the size of one copy, [reclaimable] the occupied space that
+ * removing all but one copy frees (`null` from an older core: [size] per further copy).
+ */
 @Serializable
 data class DuplicateGroup(
     val size: Long = 0,
+    val reclaimable: Long? = null,
     val items: List<DuplicateItem> = emptyList(),
     /** The core retained a whole-content SHA-256 for a safe remote trash request. */
     val contentVerified: Boolean = false,
-)
+) {
+    /** What removing the further copies frees ("Belegt"). */
+    val freedBytes: Long
+        get() = reclaimable ?: (size * (items.size - 1).coerceAtLeast(0))
+}
 
 /**
  * Totals of a finished duplicate search: [files]/[bytes] walked, [candidates] files at or above
@@ -171,7 +218,13 @@ data class ReclaimSummary(
     val remote: Boolean = false,
     val canRecycle: Boolean = false,
     val recycleNote: String = "",
-)
+    /** The search measured the copies' occupied bytes; `null` from an older core (2026-11-18). */
+    val allocatedKnown: Boolean? = null,
+) {
+    /** "Belegt" of the result is known: the core says so; an older core only for a local search. */
+    val occupiedKnown: Boolean
+        get() = allocatedKnown ?: !remote
+}
 
 @Serializable
 data class RecycleResult(val moved: List<String> = emptyList())
@@ -219,14 +272,30 @@ object AnalyzeApi {
         }
     }
 
-    /** Folder at [path] (names below the analysed root; empty = the root). */
-    suspend fun node(taskId: String, path: List<String>): AnalyzeNode = Core.request<AnalyzeNode>(
-        "analyze.node",
-        buildJsonObject {
-            put("taskId", taskId)
-            put("path", JsonArray(path.map { JsonPrimitive(it) }))
-        },
-    )
+    /**
+     * Folder at [path] (names below the analysed root; empty = the root), its children sorted and
+     * chosen by [sort] (`allocated` | `size`; the core uses `size` where "Belegt" is unknown).
+     */
+    suspend fun node(taskId: String, path: List<String>, sort: String = "allocated"): AnalyzeNode =
+        Core.request<AnalyzeNode>(
+            "analyze.node",
+            buildJsonObject {
+                put("taskId", taskId)
+                put("path", JsonArray(path.map { JsonPrimitive(it) }))
+                put("sort", sort)
+            },
+        )
+
+    /** "Größte Dateien" and "Nach Dateityp" of the folder at [path] (with its subfolders). */
+    suspend fun overview(taskId: String, path: List<String>, sort: String = "allocated"): AnalyzeOverview =
+        Core.request<AnalyzeOverview>(
+            "analyze.overview",
+            buildJsonObject {
+                put("taskId", taskId)
+                put("path", JsonArray(path.map { JsonPrimitive(it) }))
+                put("sort", sort)
+            },
+        )
 
     suspend fun issues(taskId: String): AnalyzeIssues =
         Core.request<AnalyzeIssues>("analyze.issues", buildJsonObject { put("taskId", taskId) })

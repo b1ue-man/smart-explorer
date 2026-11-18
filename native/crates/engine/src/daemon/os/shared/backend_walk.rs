@@ -164,6 +164,7 @@ impl TreeWalker<'_> {
             return Ok(WireNode {
                 name,
                 size: meta.size,
+                allocated: None,
                 is_dir: false,
                 children: Vec::new(),
             });
@@ -195,6 +196,7 @@ impl TreeWalker<'_> {
         Ok(WireNode {
             name,
             size: total,
+            allocated: None,
             is_dir: true,
             children,
         })

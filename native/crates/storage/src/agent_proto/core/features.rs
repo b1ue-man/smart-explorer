@@ -46,6 +46,10 @@ pub const LABEL_RANGE: &str = "range-v1";
 /// LZ4 content blocks (`DataLz4`, `ReadLz4`): a client sends these frames
 /// only to a server that announced the label.
 pub const LABEL_LZ4: &str = "lz4-v1";
+/// `WalkTreeAllocated`/`TreeAllocated`: the size tree with every node's
+/// occupied bytes. The SSH agent only; the service walks a VFS backend,
+/// which knows no occupancy.
+pub const LABEL_TREE_ALLOCATED: &str = "tree-allocated-v1";
 /// Prefix of the label announcing the admitted concurrent requests.
 const LABEL_SLOTS: &str = "slots-";
 
@@ -82,6 +86,8 @@ pub fn server_version(batch: bool) -> String {
     version.push_str(LABEL_WALK_KEYS);
     version.push('.');
     version.push_str(LABEL_META_LIST);
+    version.push('.');
+    version.push_str(LABEL_TREE_ALLOCATED);
     if batch {
         version.push('.');
         version.push_str(LABEL_BATCH_MTIME);
@@ -151,6 +157,8 @@ pub struct ServerFeatures {
     pub lz4: bool,
     /// The background mark of a request (`origin-v1`, `request_origin.rs`).
     pub origin: bool,
+    /// `WalkTreeAllocated` (`tree-allocated-v1`).
+    pub tree_allocated: bool,
     /// Requests the server admits at once, when it announced them.
     pub slots: Option<usize>,
     /// The background service (announces itself with a trailing `worker`).
@@ -187,6 +195,7 @@ impl ServerFeatures {
                 LABEL_CAPACITY => features.capacity = true,
                 LABEL_RANGE => features.ranges = true,
                 LABEL_LZ4 => features.lz4 = true,
+                LABEL_TREE_ALLOCATED => features.tree_allocated = true,
                 super::request_origin::LABEL_ORIGIN => features.origin = true,
                 other => {
                     if let Some(slots) = other.strip_prefix(LABEL_SLOTS) {

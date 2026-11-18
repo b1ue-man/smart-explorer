@@ -1,6 +1,35 @@
 //! Directory assembly of the size scanner; handles confine peer scans.
+use super::assembly::Assembly;
 use super::*;
-use std::{cmp::Reverse, collections::BinaryHeap};
+use std::ffi::OsStr;
+
+/// The occupied bytes this walk counts for a file: its allocation, 0 for a
+/// further link of a hard-link group already counted in this analysis, and
+/// its size (noted as unknown) where the platform could not say.
+fn occupied(traversal: &Traversal<'_>, dir: &Path, entry: &LocalEntry) -> u64 {
+    let Some(allocated) = entry.allocated else {
+        traversal.diagnostics.allocation_unknown();
+        return entry.size;
+    };
+    match entry.hardlink {
+        Some(identity) if !traversal.first_link(identity, dir) => 0,
+        _ => allocated,
+    }
+}
+
+/// A folder on another file system than the scan root is left out (like
+/// `du -x`, and like a Windows mount point, which is a link): noted, not
+/// counted. Unknown devices never exclude.
+pub(super) fn foreign_device(traversal: &Traversal<'_>, path: &Path, device: Option<u64>) -> bool {
+    let foreign = matches!((traversal.device, device), (Some(root), Some(child)) if root != child);
+    if foreign {
+        traversal.diagnostics.note(format!(
+            "anderes Dateisystem, nicht gezählt: {}",
+            crate::analytics::os::display_path(path)
+        ));
+    }
+    foreign
+}
 
 pub(super) fn scan_entries(
     traversal: &Traversal<'_>,
@@ -27,17 +56,13 @@ pub(super) fn scan_entries_with(
     let diagnostics = traversal.diagnostics;
     let budget = traversal.budget;
     let mut subdirs: Vec<(PathBuf, Box<str>, Retention)> = Vec::new();
-    // The weakest retained file is on top: lower size, then later name.
-    // Enumeration never keeps all names of a million-file directory.
-    let mut files: BinaryHeap<(Reverse<u64>, Box<str>, u64)> = BinaryHeap::new();
-    let mut own_files = 0u64;
-    let mut own_bytes = 0u64;
-    let mut aggregated_bytes = 0u64;
-    let mut aggregated_entries = 0u64;
-    let mut subtree_bytes = 0u64;
-    let mut dir_nodes = Vec::new();
-    let mut reported_files = 0u64;
-    let mut reported_bytes = 0u64;
+    let mut assembly = Assembly::default();
+    // The excluded children of this folder, compared by name only.
+    let hidden: Vec<&OsStr> = excluded
+        .iter()
+        .filter(|path| path.parent() == Some(dir))
+        .filter_map(|path| path.file_name())
+        .collect();
 
     match entries {
         Ok(rd) => {
@@ -55,12 +80,13 @@ pub(super) fn scan_entries_with(
                 if ent.is_link_like || matches!(ent.kind, EntryKind::Link | EntryKind::Other) {
                     continue;
                 }
-                let nm: Box<str> = ent.name.to_string_lossy().into_owned().into_boxed_str();
+                // Borrowed for valid UTF-8; copied only where it is kept.
+                let nm = ent.name.to_string_lossy();
                 // The app trash (Android) is left out like in every other walk.
                 if crate::apptrash::excluded_name(&nm)
                     || crate::vfs::is_engine_name(&nm)
                     || crate::vfs::is_staging_name(&nm)
-                    || excluded.iter().any(|hidden| hidden == &dir.join(&ent.name))
+                    || hidden.iter().any(|hidden| *hidden == ent.name.as_os_str())
                 {
                     continue;
                 }
@@ -82,127 +108,43 @@ pub(super) fn scan_entries_with(
                     if crate::agent_proto::is_pseudo_dir(&path.to_string_lossy()) {
                         continue; // /proc, /sys, … report bogus huge sizes
                     }
+                    if foreign_device(traversal, &path, ent.device) {
+                        continue;
+                    }
                     let retention =
                         budget.claim(&path, depth.saturating_add(1), nm.len() as u64, diagnostics);
-                    subdirs.push((path, nm, retention));
+                    subdirs.push((path, nm.into_owned().into_boxed_str(), retention));
                     if subdirs.len() == 256 {
                         p.dirs.fetch_add(subdirs.len() as u64, Ordering::Relaxed);
-                        fold_children(
-                            scan_children(
-                                traversal,
-                                std::mem::take(&mut subdirs),
-                                depth,
-                                handle,
-                                excluded,
-                            ),
-                            &mut dir_nodes,
-                            &mut subtree_bytes,
-                            &mut aggregated_bytes,
-                            &mut aggregated_entries,
-                        );
-                        p.enter_directory(&crate::analytics::os::display_path(dir));
+                        for (node, retention) in scan_children(
+                            traversal,
+                            std::mem::take(&mut subdirs),
+                            depth,
+                            handle,
+                            excluded,
+                        ) {
+                            assembly.child(node, retention);
+                        }
+                        if crate::analytics::Progress::directory_due() {
+                            p.enter_directory(&crate::analytics::os::display_path(dir));
+                        }
                     }
                 } else if ent.kind == EntryKind::File {
-                    own_files += 1;
-                    own_bytes = own_bytes.saturating_add(ent.size);
-                    let keep = files.len() < MAX_RETAINED_FILES_PER_DIRECTORY
-                        || files.peek().is_some_and(|(size, name, _)| {
-                            ent.size > size.0 || (ent.size == size.0 && nm.as_ref() < name.as_ref())
-                        });
-                    if keep {
-                        if files.len() == MAX_RETAINED_FILES_PER_DIRECTORY {
-                            if let Some((size, _, _)) = files.pop() {
-                                aggregated_bytes = aggregated_bytes.saturating_add(size.0);
-                                aggregated_entries += 1;
-                            }
-                        }
-                        files.push((Reverse(ent.size), nm, own_files));
-                    } else {
-                        aggregated_bytes = aggregated_bytes.saturating_add(ent.size);
-                        aggregated_entries += 1;
-                    }
-                    if own_files - reported_files >= 128 {
-                        p.files
-                            .fetch_add(own_files - reported_files, Ordering::Relaxed);
-                        p.bytes
-                            .fetch_add(own_bytes - reported_bytes, Ordering::Relaxed);
-                        reported_files = own_files;
-                        reported_bytes = own_bytes;
-                    }
+                    let allocated = occupied(traversal, dir, &ent);
+                    assembly.file(&nm, ent.size, allocated);
+                    assembly.report(p, false);
                 }
             }
         }
         Err(error) => diagnostics.dir_failed(dir, &error, is_root),
     }
 
-    p.files
-        .fetch_add(own_files - reported_files, Ordering::Relaxed);
-    p.bytes
-        .fetch_add(own_bytes - reported_bytes, Ordering::Relaxed);
+    assembly.report(p, true);
     p.dirs.fetch_add(subdirs.len() as u64, Ordering::Relaxed);
-
-    // Retain the largest files individually; fold the rest of a huge
-    // directory into one aggregate node so totals stay exact.
-    let mut files = files.into_vec();
-    if own_files > MAX_RETAINED_FILES_PER_DIRECTORY as u64 {
-        files.sort_by(|left, right| {
-            right
-                .0
-                 .0
-                .cmp(&left.0 .0)
-                .then_with(|| left.1.cmp(&right.1))
-        });
-    } else {
-        files.sort_by_key(|file| file.2);
+    for (node, retention) in scan_children(traversal, subdirs, depth, handle, excluded) {
+        assembly.child(node, retention);
     }
-    let mut file_nodes: Vec<SizeNode> =
-        Vec::with_capacity(files.len().min(MAX_RETAINED_FILES_PER_DIRECTORY));
-    for (Reverse(size), file_name, _) in files {
-        let retained = budget.claim(
-            &dir.join(&*file_name),
-            depth.saturating_add(1),
-            file_name.len() as u64,
-            diagnostics,
-        ) == Retention::Keep;
-        if retained {
-            file_nodes.push(SizeNode {
-                name: file_name,
-                size,
-                is_dir: false,
-                children: Vec::new(),
-            });
-        } else {
-            aggregated_bytes = aggregated_bytes.saturating_add(size);
-            aggregated_entries += 1;
-        }
-    }
-    diagnostics.count_aggregated_files(own_files.saturating_sub(file_nodes.len() as u64));
-
-    fold_children(
-        scan_children(traversal, subdirs, depth, handle, excluded),
-        &mut dir_nodes,
-        &mut subtree_bytes,
-        &mut aggregated_bytes,
-        &mut aggregated_entries,
-    );
-    let size = own_bytes.saturating_add(subtree_bytes);
-    let mut children = Vec::with_capacity(dir_nodes.len() + file_nodes.len() + 1);
-    children.append(&mut dir_nodes);
-    children.append(&mut file_nodes);
-    if aggregated_entries > 0 {
-        children.push(SizeNode {
-            name: crate::analytics::aggregate_name(aggregated_entries).into_boxed_str(),
-            size: aggregated_bytes,
-            is_dir: false,
-            children: Vec::new(),
-        });
-    }
-    SizeNode {
-        name,
-        size,
-        is_dir: true,
-        children,
-    }
+    assembly.finish(name, dir, depth, budget, diagnostics)
 }
 
 fn scan_children(
@@ -215,15 +157,18 @@ fn scan_children(
     let visit = |(path, name, retention): (PathBuf, Box<str>, Retention)| {
         let child = match handle {
             Some(handle) => match handle.open_child(path.file_name().unwrap_or_default()) {
+                // A size listing names folders without a stat: the opened
+                // folder tells its file system.
+                Ok(child) if foreign_device(traversal, &path, child.device_id()) => return None,
                 Ok(child) => Some(child),
                 Err(error) => {
                     traversal.diagnostics.dir_failed(&path, &error, false);
-                    return (empty_dir(name), retention);
+                    return Some((empty_dir(name), retention));
                 }
             },
             None => None,
         };
-        (
+        Some((
             scan_dir_with(
                 traversal,
                 &path,
@@ -234,32 +179,13 @@ fn scan_children(
                 excluded,
             ),
             retention,
-        )
+        ))
     };
     if traversal.progress.cancel.load(Ordering::Relaxed) {
         Vec::new()
     } else if traversal.parallel && subdirs.len() > 1 {
-        subdirs.into_par_iter().map(visit).collect()
+        subdirs.into_par_iter().filter_map(visit).collect()
     } else {
-        subdirs.into_iter().map(visit).collect()
-    }
-}
-
-fn fold_children(
-    visited: Vec<(SizeNode, Retention)>,
-    dir_nodes: &mut Vec<SizeNode>,
-    size: &mut u64,
-    aggregated_bytes: &mut u64,
-    aggregated_entries: &mut u64,
-) {
-    for (node, retention) in visited {
-        *size = size.saturating_add(node.size);
-        match retention {
-            Retention::Keep => dir_nodes.push(node),
-            Retention::Aggregate => {
-                *aggregated_bytes = aggregated_bytes.saturating_add(node.size);
-                *aggregated_entries += 1;
-            }
-        }
+        subdirs.into_iter().filter_map(visit).collect()
     }
 }

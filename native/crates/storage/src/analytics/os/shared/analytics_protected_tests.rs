@@ -130,6 +130,7 @@ fn android_background_task_protected_entry_errors_of_android_are_omissions() {
         budget: &budget,
         parallel: false,
         guard: None,
+        device: None,
     };
     let entry_error = |name: &str| -> io::Result<LocalEntry> {
         let path = crate::analytics::os::display_path(&android.join(name));

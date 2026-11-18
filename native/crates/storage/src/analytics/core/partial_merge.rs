@@ -1,5 +1,9 @@
 //! Replace a retried subtree using the measured original ancestor subtotals.
 //! Missing named parents were folded into aggregates by the retention budget.
+//! Occupied bytes follow the sizes: exact where the old subtree is a named
+//! node; where it lies inside aggregates, which kept only its measured
+//! sizes, its occupied bytes are the aggregates' share of their sizes, so
+//! every parent still equals the sum of its children.
 use super::{aggregate_name, is_aggregate_name, SizeNode};
 
 pub fn merge_retry_tree(
@@ -24,6 +28,7 @@ pub fn merge_retry_tree(
         .position(|child| child.name.as_ref() == *first)
     {
         let old = tree.children[index].size;
+        let old_allocated = tree.children[index].allocated;
         if !merge_retry_tree(
             &mut tree.children[index],
             rest,
@@ -36,6 +41,10 @@ pub fn merge_retry_tree(
             .size
             .saturating_sub(old)
             .saturating_add(tree.children[index].size);
+        tree.allocated = tree
+            .allocated
+            .saturating_sub(old_allocated)
+            .saturating_add(tree.children[index].allocated);
     } else {
         if previous_sizes.windows(2).any(|pair| pair[0] < pair[1]) {
             return false;
@@ -49,17 +58,32 @@ pub fn merge_retry_tree(
         if aggregate_total < previous_branch {
             return false;
         }
+        let aggregate_allocated = tree
+            .children
+            .iter()
+            .filter(|child| is_aggregate_name(&child.name))
+            .fold(0u64, |sum, child| sum.saturating_add(child.allocated));
+        let occupied_part = |bytes: u64| share(aggregate_allocated, bytes, aggregate_total);
+        // The old branch's occupied bytes inside the aggregates.
+        let previous_allocated = occupied_part(previous_branch);
+        let mut remainders_allocated = 0u64;
         let mut branch = replacement;
         // Restore the old, still valid remainder of every collapsed parent
         // beneath its own path; only the retried child's contribution changes.
         for index in (0..segments.len() - 1).rev() {
             let remainder = previous_sizes[index] - previous_sizes[index + 1];
+            // Never more than the old branch's share left for its parents.
+            let left = previous_allocated.saturating_sub(remainders_allocated);
+            let remainder_allocated = occupied_part(remainder).min(left);
+            remainders_allocated += remainder_allocated;
             let size = remainder.saturating_add(branch.size);
+            let allocated = remainder_allocated.saturating_add(branch.allocated);
             let mut children = vec![branch];
             if remainder > 0 {
                 children.push(SizeNode {
                     name: aggregate_name(1).into_boxed_str(),
                     size: remainder,
+                    allocated: remainder_allocated,
                     is_dir: false,
                     children: Vec::new(),
                 });
@@ -67,11 +91,13 @@ pub fn merge_retry_tree(
             branch = SizeNode {
                 name: segments[index].into(),
                 size,
+                allocated,
                 is_dir: true,
                 children,
             };
         }
         let mut remove = previous_branch;
+        let mut remove_allocated = previous_allocated;
         for child in tree
             .children
             .iter_mut()
@@ -80,16 +106,33 @@ pub fn merge_retry_tree(
             let amount = child.size.min(remove);
             child.size -= amount;
             remove -= amount;
+            let amount = child.allocated.min(remove_allocated);
+            child.allocated -= amount;
+            remove_allocated -= amount;
         }
         tree.size = tree
             .size
             .saturating_sub(previous_branch)
             .saturating_add(branch.size);
+        tree.allocated = tree
+            .allocated
+            .saturating_sub(previous_allocated)
+            .saturating_add(branch.allocated);
         tree.children.push(branch);
     }
     tree.children
         .sort_by_key(|child| std::cmp::Reverse(child.size));
     true
+}
+
+/// `allocated * bytes / total`, the occupied part of `bytes` of `total`
+/// logical bytes; never more than `allocated`.
+fn share(allocated: u64, bytes: u64, total: u64) -> u64 {
+    if total == 0 {
+        return 0;
+    }
+    let part = u128::from(allocated) * u128::from(bytes.min(total)) / u128::from(total);
+    u64::try_from(part).unwrap_or(allocated).min(allocated)
 }
 
 pub struct RetryOmission {
@@ -150,6 +193,7 @@ fn clone_node(node: &SizeNode) -> SizeNode {
     SizeNode {
         name: node.name.clone(),
         size: node.size,
+        allocated: node.allocated,
         is_dir: node.is_dir,
         children: node.children.iter().map(clone_node).collect(),
     }

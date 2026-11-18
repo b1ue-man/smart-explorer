@@ -48,6 +48,11 @@ pub struct ScanSnapshot {
     /// known or not waiting. Older hosts omit it.
     #[serde(default)]
     pub queue_position: u32,
+    /// Occupied bytes of the files counted so far (`bytes` is their logical
+    /// size); a host whose files did not say counts their size. Older hosts
+    /// omit it (0).
+    #[serde(default)]
+    pub allocated: u64,
 }
 
 /// Longest `current` a snapshot carries over the wire; a deeper path keeps
@@ -89,11 +94,14 @@ pub struct Progress {
     pub files: Arc<AtomicU64>,
     pub dirs: Arc<AtomicU64>,
     pub bytes: Arc<AtomicU64>,
+    /// Occupied bytes of the counted files (see `ScanSnapshot::allocated`).
+    pub allocated: Arc<AtomicU64>,
     pub cancel: Arc<AtomicBool>,
     node_limit: Arc<AtomicU64>,
     state: Arc<Mutex<State>>,
     scope: Option<Arc<(String, String)>>,
-    offset: (u64, u64, u64),
+    /// Files, folders, bytes and occupied bytes of earlier segments.
+    offset: (u64, u64, u64, u64),
     #[cfg(any(test, feature = "test-support"))]
     reports: Arc<AtomicU64>,
 }
@@ -128,7 +136,12 @@ impl Progress {
     pub fn remote_segment(&self) -> Self {
         let current = self.snapshot();
         Self {
-            offset: (current.files, current.dirs, current.bytes),
+            offset: (
+                current.files,
+                current.dirs,
+                current.bytes,
+                current.allocated,
+            ),
             ..self.clone()
         }
     }
@@ -176,6 +189,25 @@ impl Progress {
         }
     }
 
+    /// Whether this thread may name its current folder again: at most every
+    /// 50 ms, so a walk through many small folders does not spend its time
+    /// formatting and publishing paths nobody can read that fast.
+    pub fn directory_due() -> bool {
+        thread_local! {
+            static LAST: std::cell::Cell<Option<Instant>> = const { std::cell::Cell::new(None) };
+        }
+        LAST.with(|last| {
+            let now = Instant::now();
+            let due = last
+                .get()
+                .is_none_or(|at| now.duration_since(at) >= Duration::from_millis(50));
+            if due {
+                last.set(Some(now));
+            }
+            due
+        })
+    }
+
     pub fn enter_directory(&self, path: &str) {
         self.set_phase(ScanPhase::Scanning, self.visible_path(path));
     }
@@ -186,18 +218,21 @@ impl Progress {
             self.files.load(Ordering::Relaxed),
             self.dirs.load(Ordering::Relaxed),
             self.bytes.load(Ordering::Relaxed),
+            self.allocated.load(Ordering::Relaxed),
         );
         if counts
             != (
                 state.snapshot.files,
                 state.snapshot.dirs,
                 state.snapshot.bytes,
+                state.snapshot.allocated,
             )
         {
             (
                 state.snapshot.files,
                 state.snapshot.dirs,
                 state.snapshot.bytes,
+                state.snapshot.allocated,
             ) = counts;
             state.changed = Instant::now();
             state.snapshot.unchanged_ms = 0;
@@ -240,13 +275,18 @@ impl Progress {
             .bytes
             .checked_add(self.offset.2)
             .ok_or_else(counter_overflow)?;
+        snapshot.allocated = snapshot
+            .allocated
+            .checked_add(self.offset.3)
+            .ok_or_else(counter_overflow)?;
         // A host may walk deeper than one frame should carry: keep the end.
         snapshot.current = shorten_tail(&self.visible_path(&snapshot.current), MAX_CURRENT_BYTES);
         let previous = self.snapshot();
         if (!final_result
             && (snapshot.files < previous.files
                 || snapshot.dirs < previous.dirs
-                || snapshot.bytes < previous.bytes))
+                || snapshot.bytes < previous.bytes
+                || snapshot.allocated < previous.allocated))
             || snapshot.transferred > snapshot.transfer_total
         {
             return Err(io::Error::new(
@@ -257,6 +297,7 @@ impl Progress {
         self.files.store(snapshot.files, Ordering::Relaxed);
         self.dirs.store(snapshot.dirs, Ordering::Relaxed);
         self.bytes.store(snapshot.bytes, Ordering::Relaxed);
+        self.allocated.store(snapshot.allocated, Ordering::Relaxed);
         let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
         state.snapshot = snapshot;
         state.changed = Instant::now();
@@ -270,11 +311,13 @@ impl Progress {
         self.files.store(self.offset.0, Ordering::Relaxed);
         self.dirs.store(self.offset.1, Ordering::Relaxed);
         self.bytes.store(self.offset.2, Ordering::Relaxed);
+        self.allocated.store(self.offset.3, Ordering::Relaxed);
         let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
         (
             state.snapshot.files,
             state.snapshot.dirs,
             state.snapshot.bytes,
+            state.snapshot.allocated,
         ) = self.offset;
         state.snapshot.transferred = 0;
         state.snapshot.transfer_total = 0;

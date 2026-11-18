@@ -164,7 +164,7 @@ pub(super) fn duplicate_groups(
             },
             evidence,
             size,
-            reclaimable: size.saturating_mul(items.len().saturating_sub(1) as u64),
+            reclaimable: DuplicateGroup::reclaimable_of(&items),
             items,
         });
     }
@@ -225,5 +225,6 @@ fn failed_report(error: String) -> DuplicateReport {
         groups: Vec::new(),
         summary: DuplicateSummary::default(),
         root_error: Some(error),
+        allocated_known: false,
     }
 }

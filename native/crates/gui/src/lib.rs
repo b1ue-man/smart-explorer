@@ -8,6 +8,9 @@ pub use smart_explorer_engine::*;
 // The programs name the result type of `run_gui` through it.
 pub use eframe;
 
+/// „Größte Dateien“ / „Nach Dateityp“, shared with `se analyze` and the
+/// Android bridge from the storage core.
+pub use smart_explorer_engine::analytics::overview as analytics_overview;
 pub mod app;
 pub mod desktop;
 pub mod dragout;

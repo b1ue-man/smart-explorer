@@ -1,3 +1,4 @@
+use rayon::prelude::*;
 use sha2::Digest;
 use std::collections::BTreeMap;
 use std::io::{Read, Seek, SeekFrom};
@@ -10,6 +11,39 @@ use super::types::{
     ReclaimConfidence, ReclaimItem, ReclaimOptions, ReclaimProgress,
 };
 use super::util::{hex_lower, push_bounded_error, to_fwd};
+
+/// Hashing workers: one on a spinning disk (parallel reads would seek),
+/// up to eight on flash, four where the drive cannot be told.
+fn hash_workers(path: Option<&Path>) -> usize {
+    let cores = std::thread::available_parallelism().map_or(2, |cores| cores.get());
+    match path.and_then(crate::host::platform::volume_is_rotational) {
+        Some(true) => 1,
+        Some(false) => cores.clamp(1, 8),
+        None => cores.clamp(1, 4),
+    }
+}
+
+type Hashed = (FileCandidate, std::io::Result<Option<String>>);
+
+/// `hash` of every candidate, on the pool when there is one.
+fn hash_each(
+    pool: Option<&rayon::ThreadPool>,
+    files: Vec<FileCandidate>,
+    p: &ReclaimProgress,
+    hash: impl Fn(&FileCandidate) -> std::io::Result<Option<String>> + Sync,
+) -> Vec<Hashed> {
+    let one = |file: FileCandidate| -> Hashed {
+        if p.cancel.load(Ordering::Relaxed) {
+            return (file, Ok(None));
+        }
+        let result = hash(&file);
+        (file, result)
+    };
+    match pool {
+        Some(pool) if files.len() > 1 => pool.install(|| files.into_par_iter().map(one).collect()),
+        _ => files.into_iter().map(one).collect(),
+    }
+}
 
 pub struct DuplicateAnalysis {
     pub groups: Vec<DuplicateGroup>,
@@ -43,6 +77,15 @@ pub fn duplicate_groups(
             .cmp(&left.item.size)
             .then_with(|| left.item.path.cmp(&right.item.path))
     });
+    let workers = hash_workers(retained.first().map(|file| file.path.as_path()));
+    let pool = (workers > 1)
+        .then(|| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .ok()
+        })
+        .flatten();
     let mut by_size: BTreeMap<u64, Vec<FileCandidate>> = BTreeMap::new();
     for f in retained {
         by_size.entry(f.item.size).or_default().push(f);
@@ -55,11 +98,11 @@ pub fn duplicate_groups(
             break;
         }
         let mut by_fp: BTreeMap<String, Vec<FileCandidate>> = BTreeMap::new();
-        for f in same_size {
-            if p.cancel.load(Ordering::Relaxed) {
-                break;
-            }
-            match partial_fingerprint(&f.path, f.item.size, opts.partial_fingerprint_bytes, p) {
+        let printed = hash_each(pool.as_ref(), same_size, p, |f| {
+            partial_fingerprint(&f.path, f.item.size, opts.partial_fingerprint_bytes, p)
+        });
+        for (f, result) in printed {
+            match result {
                 Ok(Some(fp)) => {
                     p.fingerprinted.fetch_add(1, Ordering::Relaxed);
                     by_fp.entry(fp).or_default().push(f);
@@ -78,11 +121,9 @@ pub fn duplicate_groups(
                 break;
             }
             let mut by_hash: BTreeMap<String, Vec<ReclaimItem>> = BTreeMap::new();
-            for f in same_fp {
-                if p.cancel.load(Ordering::Relaxed) {
-                    break;
-                }
-                match sha256_file(&f.path, p) {
+            let hashed = hash_each(pool.as_ref(), same_fp, p, |f| sha256_file(&f.path, p));
+            for (f, result) in hashed {
+                match result {
                     Ok(Some(h)) => {
                         p.hashed.fetch_add(1, Ordering::Relaxed);
                         by_hash.entry(h).or_default().push(f.item);
@@ -106,7 +147,7 @@ pub fn duplicate_groups(
                     item.confidence = ReclaimConfidence::HashMatch;
                     item.reason = "Duplikat".to_string();
                 }
-                let reclaimable = size.saturating_mul(items.len().saturating_sub(1) as u64);
+                let reclaimable = DuplicateGroup::reclaimable_of(&items);
                 p.candidates
                     .fetch_add(items.len() as u64, Ordering::Relaxed);
                 total_groups = total_groups.saturating_add(1);
@@ -181,11 +222,7 @@ fn sha256_file(path: &Path, p: &ReclaimProgress) -> std::io::Result<Option<Strin
     Ok(Some(hex_lower(&hasher.finalize())))
 }
 
-pub fn bytes_equal(
-    a: &Path,
-    b: &Path,
-    p: &ReclaimProgress,
-) -> std::io::Result<Option<bool>> {
+pub fn bytes_equal(a: &Path, b: &Path, p: &ReclaimProgress) -> std::io::Result<Option<bool>> {
     let ma = std::fs::metadata(a)?;
     let mb = std::fs::metadata(b)?;
     if ma.len() != mb.len() {

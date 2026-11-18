@@ -1,3 +1,4 @@
+mod analyze;
 mod background;
 mod completions;
 mod completions_access;
@@ -49,6 +50,7 @@ mod sync_jobs;
 mod target;
 mod tcp;
 mod transfer;
+mod transfer_recovery_panel;
 mod tree_apply;
 mod tree_destination;
 mod tree_engine;
@@ -63,7 +65,6 @@ mod tree_spool;
 mod update;
 mod update_copy;
 mod vault;
-mod transfer_recovery_panel;
 
 /// Registers the CLI's panels in the explorer window (crate `smart_explorer_gui`
 /// cannot name this crate): the saved terminal/MCP commands of the recovery
@@ -97,6 +98,7 @@ Examples:
   se ls @prod:/srv
   se get @prod:/srv/report.txt .\\report.txt
   se cp -r @prod:/exports share://direct/peer-id/Drop
+  se analyze @prod:/srv --sort allocated --files 20 --types --json
   se doctor --json
   se share status --json
   se share discoverable --minutes 5 --pin-stdin
@@ -203,6 +205,11 @@ enum Command {
         long_about = "Search names below a target. Prints `kind<TAB>size<TAB>relative path` per hit; kind is - (file), d (directory), l (link) or s (FIFO, socket, device). Links are found by name but never entered."
     )]
     Search(SearchArgs),
+    #[command(
+        about = "Storage analysis: size and occupied space (allocated) of a folder's entries",
+        long_about = "Storage analysis of a folder, as in the explorer: every entry with its size (sum of file lengths) and the space it occupies on the volume (allocated: less for cloud placeholders, compressed and sparse files, a hard-linked file counted once). A remote folder is analysed by the device that holds it. `--sort allocated` (default where the source reports occupied space) or `--sort size`; where the source does not report it, the order is by size and allocated is shown as unknown. `--files N` adds the N largest files of the whole tree, `--types` the totals per file extension; files the analysis folded into one entry of a large folder count in neither and are named as aggregated."
+    )]
+    Analyze(analyze::AnalyzeArgs),
     #[command(
         about = "Run a command on another device within the access it granted (commands/terminal: off, ask or allow)."
     )]
@@ -462,6 +469,7 @@ fn run_inner(cli: Cli) -> Result<i32, String> {
             search::search(&t, &args.query, args.glob, args.max_results, args.dirs)?;
             Ok(0)
         }
+        Command::Analyze(args) => analyze::run(args),
         Command::Exec(args) => exec::run(args),
         Command::Shell(args) => shell::run(args),
     }

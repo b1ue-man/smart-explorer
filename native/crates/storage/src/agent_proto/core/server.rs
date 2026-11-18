@@ -78,7 +78,15 @@ fn join_workers(workers: &mut Vec<std::thread::JoinHandle<()>>) -> io::Result<()
     Ok(())
 }
 
-fn handle_walk_tree(sink: &Sink, id: u64, root: &str, cancel: &AtomicBool) -> io::Result<()> {
+/// `allocated` (`WalkTreeAllocated`) answers with `TreeAllocated`, which
+/// carries every node's occupied bytes; `WalkTree` keeps its `Tree` reply.
+fn handle_walk_tree(
+    sink: &Sink,
+    id: u64,
+    root: &str,
+    cancel: &AtomicBool,
+    allocated: bool,
+) -> io::Result<()> {
     let p = Path::new(root);
     let name = p
         .file_name()
@@ -112,7 +120,16 @@ fn handle_walk_tree(sink: &Sink, id: u64, root: &str, cancel: &AtomicBool) -> io
             )),
         };
     }
-    emit(sink, id, &Frame::Tree(tree?))
+    let tree = tree?;
+    emit(
+        sink,
+        id,
+        &if allocated {
+            Frame::TreeAllocated(tree)
+        } else {
+            Frame::Tree(tree)
+        },
+    )
 }
 
 /// Drive the agent request loop.
@@ -232,7 +249,8 @@ fn dispatch(context: &RequestContext, id: u64, req: Frame) -> io::Result<()> {
         Frame::ListDir(p) => reply(sink, id, list_local(&p).map(Frame::Dir)),
         Frame::Stat(p) => reply(sink, id, stat_local(&p).map(Frame::Meta)),
         Frame::TryExists(p) => reply(sink, id, try_exists_local(&p).map(Frame::Exists)),
-        Frame::WalkTree(p) => handle_walk_tree(sink, id, &p, cancel),
+        Frame::WalkTree(p) => handle_walk_tree(sink, id, &p, cancel, false),
+        Frame::WalkTreeAllocated(p) => handle_walk_tree(sink, id, &p, cancel, true),
         Frame::Read { path, offset, len } => handle_read(sink, id, &path, offset, len, cancel),
         Frame::Write(p) => match inbound {
             Some(rx) => handle_write(

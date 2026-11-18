@@ -11,12 +11,20 @@ mod analytics_accessibility;
 mod analytics_controls_ui;
 #[path = "core/analytics_core.rs"]
 mod analytics_core;
+#[path = "core/analytics_measure.rs"]
+mod analytics_measure;
+#[path = "os/shared/analytics_measure_store.rs"]
+mod analytics_measure_store;
 #[path = "core/analytics_mounts.rs"]
 mod analytics_mounts;
+#[path = "core/analytics_overview_ui.rs"]
+mod analytics_overview_ui;
 #[path = "core/analytics_paint.rs"]
 mod analytics_paint;
 #[path = "core/analytics_ui.rs"]
 mod analytics_ui;
+#[path = "core/analytics_view.rs"]
+mod analytics_view;
 #[path = "core/app_models.rs"]
 mod app_models;
 #[path = "core/bisync_conflict_ui.rs"]

@@ -38,12 +38,16 @@ pub(in crate::app) const TM_PALETTE: [Color32; 10] = [
 /// folders that are big enough (WizTree-style nested view). Collects paintable
 /// `TmCell`s; the parent is responsible for painting them. `group` is the hue
 /// inherited from the focus-level ancestor (None at the focus level itself).
+/// Areas and ranks follow `measure` („Belegt“ or „Größe“); the children are
+/// already sorted by it (`MeasureView::sort_tree`), so a child's index is its
+/// rank. Labels are made here once, not on every painted frame.
 pub(in crate::app) fn nested_treemap(
     rect: egui::Rect,
     node: &crate::analytics::SizeNode,
     base: &str,
     depth: usize,
     group: Option<Color32>,
+    measure: super::analytics_measure::MeasureView,
     cells: &mut Vec<TmCell>,
 ) {
     if cells.len() >= TM_MAXCELLS
@@ -53,24 +57,20 @@ pub(in crate::app) fn nested_treemap(
     {
         return;
     }
-    let weights: Vec<f64> = node.children.iter().map(|c| c.size.max(1) as f64).collect();
+    let weights: Vec<f64> = node
+        .children
+        .iter()
+        .map(|c| measure.weight(c).max(1) as f64)
+        .collect();
     let rects = treemap_layout(&weights, rect);
-    // Palette by size-rank: squarify places cells in size order, so consecutive
-    // ranks land side-by-side → adjacent groups get different hues.
-    let mut rank = vec![0usize; node.children.len()];
-    {
-        let mut order: Vec<usize> = (0..node.children.len()).collect();
-        order.sort_by(|&a, &b| node.children[b].size.cmp(&node.children[a].size));
-        for (r, &idx) in order.iter().enumerate() {
-            rank[idx] = r;
-        }
-    }
-    for (i, (c, r)) in node.children.iter().zip(&rects).enumerate() {
+    // Palette by rank (the sorted index): squarify places cells in that
+    // order, so consecutive ranks land side-by-side → adjacent groups differ.
+    for (rank, (c, r)) in node.children.iter().zip(&rects).enumerate() {
         if r.width() < TM_MIN || r.height() < TM_MIN {
             continue;
         }
         // Focus-level children seed a hue by rank; deeper cells inherit it.
-        let gcol = group.unwrap_or(TM_PALETTE[rank[i] % TM_PALETTE.len()]);
+        let gcol = group.unwrap_or(TM_PALETTE[rank % TM_PALETTE.len()]);
         let path = format!("{}/{}", base, c.name);
         let recurse = c.is_dir
             && !c.children.is_empty()
@@ -83,6 +83,9 @@ pub(in crate::app) fn nested_treemap(
                 name: c.name.to_string(),
                 path: path.clone(),
                 size: c.size,
+                allocated: c.allocated,
+                weight: measure.weight(c),
+                label: cell_label(*r, true, &c.name, measure.weight(c)),
                 is_dir: true,
                 container: true,
                 color: gcol,
@@ -91,19 +94,46 @@ pub(in crate::app) fn nested_treemap(
                 egui::pos2(r.min.x + 1.5, r.min.y + TM_HEADER),
                 egui::pos2(r.max.x - 1.5, r.max.y - 1.5),
             );
-            nested_treemap(inner, c, &path, depth + 1, Some(gcol), cells);
+            nested_treemap(inner, c, &path, depth + 1, Some(gcol), measure, cells);
         } else {
             cells.push(TmCell {
                 rect: *r,
                 name: c.name.to_string(),
                 path,
                 size: c.size,
+                allocated: c.allocated,
+                weight: measure.weight(c),
+                label: cell_label(*r, false, &c.name, measure.weight(c)),
                 is_dir: c.is_dir,
                 container: false,
                 color: gcol,
             });
         }
     }
+}
+
+/// Where a cell's label goes: a container's header, else the whole cell.
+pub(in crate::app) fn label_rect(rect: egui::Rect, container: bool) -> egui::Rect {
+    if container {
+        egui::Rect::from_min_max(
+            rect.min,
+            egui::pos2(rect.max.x, (rect.min.y + TM_HEADER).min(rect.max.y)),
+        )
+    } else {
+        rect
+    }
+}
+
+/// The label text of a cell that has room for one.
+fn cell_label(rect: egui::Rect, container: bool, name: &str, weight: u64) -> Option<String> {
+    let room = label_rect(rect, container);
+    (room.width() > 40.0 && room.height() >= 17.0).then(|| {
+        if container {
+            format!("{name}  {}", format_bytes(weight))
+        } else {
+            format!("{name}\n{}", format_bytes(weight))
+        }
+    })
 }
 
 #[cfg(test)]

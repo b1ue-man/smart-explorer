@@ -190,10 +190,12 @@ mod tests {
         let tree = |size| SizeNode {
             name: "/".into(),
             size,
+            allocated: size,
             is_dir: true,
             children: vec![SizeNode {
                 name: "a".into(),
                 size,
+                allocated: size,
                 is_dir: false,
                 children: Vec::new(),
             }],

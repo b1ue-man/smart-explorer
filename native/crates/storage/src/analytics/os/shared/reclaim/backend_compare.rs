@@ -252,7 +252,7 @@ fn group(run: Vec<(ReclaimItem, Digest)>, progress: &ReclaimProgress) -> Option<
         },
         evidence: DuplicateEvidence::LocalSha256,
         size,
-        reclaimable: size.saturating_mul(items.len() as u64 - 1),
+        reclaimable: DuplicateGroup::reclaimable_of(&items),
         items,
     })
 }

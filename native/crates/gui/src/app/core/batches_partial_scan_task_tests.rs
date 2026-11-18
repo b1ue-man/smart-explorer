@@ -77,6 +77,7 @@ fn node(name: &str, size: u64, children: Vec<SizeNode>) -> SizeNode {
     SizeNode {
         name: name.into(),
         size,
+        allocated: size,
         is_dir: true,
         children,
     }

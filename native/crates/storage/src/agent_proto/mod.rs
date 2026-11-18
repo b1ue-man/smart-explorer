@@ -14,6 +14,9 @@ mod batch_get;
 mod batch_limits;
 #[path = "os/shared/batch_put.rs"]
 mod batch_put;
+#[cfg(test)]
+#[path = "core/belegt_tree_task_tests.rs"]
+mod belegt_tree_task_tests;
 #[path = "core/codec.rs"]
 mod codec;
 #[cfg(test)]
@@ -196,9 +199,7 @@ pub use types::{
     WireChange, WireDuplicateGroup, WireDuplicateItem, WireDuplicateSummary, WireHashEntry,
     WireHashMeta, WireOmission, WireReclaimProgress, WireTargetLimits,
 };
-pub use vault_error::{
-    parse_vault_error, vault_error_message, VaultWireError, VAULT_LOCKED_WIRE,
-};
+pub use vault_error::{parse_vault_error, vault_error_message, VaultWireError, VAULT_LOCKED_WIRE};
 pub use walk_filter::{
     host_patterns, HostFilter, WalkFilterSpec, WalkScope, MAX_FILTER_PATTERNS, MAX_FILTER_TEXT,
 };

@@ -135,10 +135,9 @@ impl App {
         }
     }
 
-    /// Invalidate the cached treemap cells + counts (after a drill / new tree).
+    /// Invalidate the cached treemap, overviews and counts (drill, new tree).
     pub(in crate::app) fn analytics_invalidate(&mut self) {
-        self.analytics_cells.clear();
-        self.analytics_cells_rect = egui::Rect::ZERO;
+        self.analytics_view.invalidate();
         self.analytics_counts = None;
     }
 
@@ -183,6 +182,7 @@ impl App {
         // A bare drive letter ("C:") must become a root ("C:\") or read_dir
         // would target the drive's *current directory* instead of its root.
         let worker_source = source.clone();
+        let chosen = self.analytics_view.measure.chosen;
         // A drive that mounts a remote place is analysed by that place.
         let route = match &source {
             StorageScanSource::Local { root } => {
@@ -196,10 +196,12 @@ impl App {
             .name("storage-analytics".into())
             .stack_size(crate::analytics::SCAN_THREAD_STACK_BYTES)
             .spawn(move || {
-                let outcome = match route {
+                let mut outcome = match route {
                     Some(route) => route.scan(worker_source.root(), &p2),
                     None => scan_storage_source(worker_source, &p2),
                 };
+                // Sorted once here, not per frame on the UI thread.
+                super::analytics_measure::sort_outcome(&mut outcome, chosen);
                 let _ = tx.send(outcome);
             });
         self.analytics_source = Some(source.clone());
@@ -284,6 +286,7 @@ impl App {
                 if outcome.tree.is_some()
                     || outcome.status == crate::analytics::ScanStatus::Complete
                 {
+                    self.analytics_view.measure.allocated_known = outcome.allocated_known;
                     self.analytics_tree = outcome.tree;
                 }
                 self.analytics_issues = outcome.issues;

@@ -1,5 +1,10 @@
 //! Bounded, iterative transfer of the local worker's retained tree.
 //! Counts of retained nodes are deliberately separate from scanned file counts.
+//!
+//! One record: name length (u32), name, kind (u8), size (u64), with the
+//! `allocated` format the occupied bytes (u64), child count (u32). Records
+//! without the occupied bytes are the format of hosts before it; their nodes
+//! occupy their size.
 use super::{Progress, SizeNode};
 use serde::{Deserialize, Serialize};
 use std::io;
@@ -9,6 +14,8 @@ pub const MAX_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const MAX_DEPTH: usize = 2052;
 const MAX_NAME: usize = 32 * 1024;
 const RECORD_FIXED: usize = 17;
+/// A record of the `allocated` format: the occupied bytes follow the size.
+pub const RECORD_FIXED_ALLOCATED: usize = RECORD_FIXED + 8;
 const CHUNK: usize = 256 * 1024;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -29,7 +36,7 @@ impl TreeShape {
         Ok(())
     }
 
-    fn record(&mut self, name: &str, depth: usize) -> io::Result<()> {
+    fn record(&mut self, name: &str, depth: usize, fixed: usize) -> io::Result<()> {
         if depth > MAX_DEPTH || name.is_empty() || name.len() > MAX_NAME || name.contains('\0') {
             return Err(invalid("Ungültiger Analyse-Baumeintrag"));
         }
@@ -39,13 +46,32 @@ impl TreeShape {
             .ok_or_else(|| invalid("Zu viele Einträge"))?;
         self.bytes = self
             .bytes
-            .checked_add((RECORD_FIXED + name.len()) as u64)
+            .checked_add((fixed + name.len()) as u64)
             .ok_or_else(|| invalid("Analyse-Ergebnis zu groß"))?;
         self.validate()
     }
 }
 
+/// Bytes of one record without its name.
+fn fixed(allocated: bool) -> usize {
+    if allocated {
+        RECORD_FIXED_ALLOCATED
+    } else {
+        RECORD_FIXED
+    }
+}
+
 pub fn shape(tree: Option<&SizeNode>, progress: &Progress) -> io::Result<TreeShape> {
+    shape_with(tree, progress, false)
+}
+
+/// The shape of the encoding, with or without the occupied bytes.
+pub fn shape_with(
+    tree: Option<&SizeNode>,
+    progress: &Progress,
+    allocated: bool,
+) -> io::Result<TreeShape> {
+    let fixed = fixed(allocated);
     let mut result = TreeShape::default();
     let mut stack = Vec::new();
     if let Some(tree) = tree {
@@ -58,7 +84,7 @@ pub fn shape(tree: Option<&SizeNode>, progress: &Progress) -> io::Result<TreeSha
             continue;
         };
         let depth = *depth;
-        result.record(&node.name, depth)?;
+        result.record(&node.name, depth, fixed)?;
         stack.push((node.children.iter(), depth + 1));
     }
     Ok(result)
@@ -67,8 +93,19 @@ pub fn shape(tree: Option<&SizeNode>, progress: &Progress) -> io::Result<TreeSha
 pub fn encode(
     tree: Option<SizeNode>,
     progress: &Progress,
+    emit: impl FnMut(Vec<u8>) -> io::Result<()>,
+) -> io::Result<()> {
+    encode_with(tree, progress, false, emit)
+}
+
+/// `encode` in the format with (`allocated`) or without the occupied bytes.
+pub fn encode_with(
+    tree: Option<SizeNode>,
+    progress: &Progress,
+    allocated: bool,
     mut emit: impl FnMut(Vec<u8>) -> io::Result<()>,
 ) -> io::Result<()> {
+    let fixed = fixed(allocated);
     let mut stack = vec![tree.into_iter().collect::<Vec<_>>().into_iter()];
     let mut batch = Vec::with_capacity(CHUNK);
     while let Some(children) = stack.last_mut() {
@@ -77,13 +114,16 @@ pub fn encode(
             stack.pop();
             continue;
         };
-        if batch.len() + RECORD_FIXED + node.name.len() > CHUNK {
+        if batch.len() + fixed + node.name.len() > CHUNK {
             emit(std::mem::replace(&mut batch, Vec::with_capacity(CHUNK)))?;
         }
         batch.extend_from_slice(&(node.name.len() as u32).to_le_bytes());
         batch.extend_from_slice(node.name.as_bytes());
         batch.push(u8::from(node.is_dir));
         batch.extend_from_slice(&node.size.to_le_bytes());
+        if allocated {
+            batch.extend_from_slice(&node.allocated.to_le_bytes());
+        }
         let count = u32::try_from(node.children.len()).map_err(|_| invalid("Zu viele Kinder"))?;
         batch.extend_from_slice(&count.to_le_bytes());
         stack.push(std::mem::take(&mut node.children).into_iter());
@@ -106,9 +146,17 @@ pub struct TreeDecoder {
     observed: TreeShape,
     buffered: Vec<u8>,
     limit: Option<TreeShape>,
+    /// Records carry the occupied bytes (`allocated` format).
+    allocated: bool,
 }
 
 impl TreeDecoder {
+    /// Records of the `allocated` format; without it every node occupies its
+    /// size (a host before that format).
+    pub fn set_allocated(&mut self, allocated: bool) {
+        self.allocated = allocated;
+    }
+
     pub fn set_shape(&mut self, shape: TreeShape) {
         self.limit = Some(shape);
     }
@@ -131,7 +179,7 @@ impl TreeDecoder {
             if length > MAX_NAME {
                 return Err(invalid("Ungültiger Name"));
             }
-            let record = RECORD_FIXED + length;
+            let record = fixed(self.allocated) + length;
             if bytes.len() < record {
                 break;
             }
@@ -143,7 +191,8 @@ impl TreeDecoder {
             }
             let name =
                 std::str::from_utf8(&bytes[..length]).map_err(|_| invalid("Ungültiges UTF-8"))?;
-            self.observed.record(name, self.pending.len())?;
+            self.observed
+                .record(name, self.pending.len(), fixed(self.allocated))?;
             if self.limit.is_some_and(|limit| {
                 self.observed.nodes > limit.nodes || self.observed.bytes > limit.bytes
             }) {
@@ -157,6 +206,11 @@ impl TreeDecoder {
                 _ => return Err(invalid("Ungültiger Eintragstyp")),
             };
             let size = u64::from_le_bytes(take::<8>(&mut bytes)?);
+            let allocated = if self.allocated {
+                u64::from_le_bytes(take::<8>(&mut bytes)?)
+            } else {
+                size
+            };
             let remaining = u32::from_le_bytes(take::<4>(&mut bytes)?);
             if (!is_dir && remaining != 0)
                 || u64::from(remaining) > MAX_NODES
@@ -170,6 +224,7 @@ impl TreeDecoder {
             let node = SizeNode {
                 name,
                 size,
+                allocated,
                 is_dir,
                 children: Vec::new(),
             };
@@ -195,6 +250,13 @@ impl TreeDecoder {
                     .try_fold(0u64, |sum, node| sum.checked_add(node.size));
                 if total != Some(completed.size) {
                     return Err(invalid("Widersprüchliche Ordnergröße"));
+                }
+                let occupied = completed
+                    .children
+                    .iter()
+                    .try_fold(0u64, |sum, node| sum.checked_add(node.allocated));
+                if occupied != Some(completed.allocated) {
+                    return Err(invalid("Widersprüchlicher belegter Platz eines Ordners"));
                 }
             }
             if let Some(parent) = self.pending.last_mut() {

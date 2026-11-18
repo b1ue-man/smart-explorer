@@ -7,8 +7,11 @@ use crate::analytics::SizeNode;
 use serde::Serialize;
 use std::cmp::Ordering;
 
+#[path = "storage_view_node.rs"]
+mod node;
 #[path = "storage_retention.rs"]
 mod retention;
+pub use node::{node_view, ChildView, NodeView};
 
 pub const OTHER_APP_DATA_NAME: &str = "Weitere App-Daten (laut Android, ≈)";
 pub const UNCAPTURED_NAME: &str = "≈ Nicht einzeln erfasst";
@@ -297,6 +300,7 @@ impl Approximations {
         NodeView {
             name: APPS_NAME.to_string(),
             size: self.apps_total(),
+            allocated: self.apps_total(),
             measured: 0,
             is_dir: true,
             kind: NodeKind::Apps,
@@ -351,6 +355,8 @@ fn synthetic(name: &str, size: u64, kind: NodeKind) -> ChildView {
     ChildView {
         name: name.to_string(),
         size,
+        // Approximate rows know no occupancy of their own.
+        allocated: size,
         is_dir: false,
         child_count: 0,
         kind,
@@ -392,98 +398,6 @@ fn resolve<'t, S: AsRef<str>>(
         node = next;
     }
     Some((names, node))
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ChildView {
-    pub name: String,
-    pub size: u64,
-    pub is_dir: bool,
-    pub child_count: usize,
-    pub kind: NodeKind,
-    /// Android's figures of an app row (`kind: "app"`): `package`,
-    /// `appBytes`, `dataBytes`, `cacheBytes`.
-    #[serde(flatten)]
-    pub app: Option<AppUsage>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct NodeView {
-    pub name: String,
-    /// Shown size: measured plus the approximate rows below this node (bytes
-    /// in both the measured app folders and the apps row counted once).
-    pub size: u64,
-    /// What the walk measured, without approximations.
-    pub measured: u64,
-    pub is_dir: bool,
-    pub kind: NodeKind,
-    pub children: Vec<ChildView>,
-}
-
-/// The node at `segments` (exact tree names) with its largest children, at
-/// most `max_children`; approximate rows are always included. With an app
-/// list, the apps row's name at the root leads to the app list.
-pub fn node_view(
-    tree: &SizeNode,
-    segments: &[String],
-    approx: &Approximations,
-    max_children: usize,
-) -> Option<NodeView> {
-    if let [first, below @ ..] = segments {
-        if !approx.apps.is_empty() && first == APPS_NAME {
-            return below.is_empty().then(|| approx.apps_view(max_children));
-        }
-    }
-    let mut node = tree;
-    for segment in segments {
-        node = node
-            .children
-            .iter()
-            .find(|child| &*child.name == segment.as_str())?;
-    }
-    let synthetic = approx.rows_at(segments);
-    let mut sized: Vec<(&SizeNode, u64)> = node
-        .children
-        .iter()
-        .map(|child| {
-            let added = if child.is_dir {
-                approx.added_within_child(segments, &child.name)
-            } else {
-                0
-            };
-            (child, child.size.saturating_add(added))
-        })
-        .collect();
-    sized.sort_by(|left, right| {
-        right
-            .1
-            .cmp(&left.1)
-            .then_with(|| left.0.name.cmp(&right.0.name))
-    });
-    sized.truncate(max_children.saturating_sub(synthetic.len()));
-    let mut children: Vec<ChildView> = sized
-        .into_iter()
-        .map(|(child, size)| ChildView {
-            name: child.name.to_string(),
-            size,
-            is_dir: child.is_dir,
-            child_count: child.children.len(),
-            kind: NodeKind::of(child),
-            app: None,
-        })
-        .collect();
-    children.extend(synthetic);
-    children.sort_by(by_size_then_name);
-    Some(NodeView {
-        name: node.name.to_string(),
-        size: node.size.saturating_add(approx.added_within(segments)),
-        measured: node.size,
-        is_dir: node.is_dir,
-        kind: NodeKind::of(node),
-        children,
-    })
 }
 
 #[cfg(test)]

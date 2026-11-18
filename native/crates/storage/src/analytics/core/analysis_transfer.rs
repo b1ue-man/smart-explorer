@@ -44,11 +44,25 @@ pub fn send_outcome_with(
     outcome: &mut ScanOutcome,
     progress: &Progress,
     options: SendOptions,
+    control: impl FnMut(AnalysisMessage) -> io::Result<()>,
+    data: impl FnMut(Vec<u8>) -> io::Result<()>,
+) -> io::Result<()> {
+    send_outcome_allocated(outcome, progress, options, false, control, data)
+}
+
+/// `send_outcome_with`; `allocated_records` (only for a receiver that asked
+/// for `analysis_allocated_v1`) adds every node's occupied bytes to its
+/// record. Without it the receiver takes every node as occupying its size.
+pub fn send_outcome_allocated(
+    outcome: &mut ScanOutcome,
+    progress: &Progress,
+    options: SendOptions,
+    allocated_records: bool,
     mut control: impl FnMut(AnalysisMessage) -> io::Result<()>,
     mut data: impl FnMut(Vec<u8>) -> io::Result<()>,
 ) -> io::Result<()> {
     progress.check_cancel()?;
-    let shape = tree_transfer::shape(outcome.tree.as_ref(), progress)?;
+    let shape = tree_transfer::shape_with(outcome.tree.as_ref(), progress, allocated_records)?;
     let mut snapshot = progress.snapshot();
     // Only the exporting worker measures the complete host scan. Bridges pass
     // None and preserve that evidence, including an explicitly unknown value.
@@ -58,15 +72,17 @@ pub fn send_outcome_with(
     snapshot.current = shorten_tail(&snapshot.current, MAX_CURRENT_BYTES);
     if let Some(tree) = &outcome.tree {
         snapshot.bytes = tree.size;
+        snapshot.allocated = tree.allocated;
     }
     let mut report = AnalysisReport::take(outcome, snapshot, shape);
     report.deflate = options.deflate;
+    report.allocated_records = allocated_records;
     report.fit_wire()?;
     report.validate()?;
     control(AnalysisMessage::Ready { report })?;
     let mut digest = Sha256::new();
     let mut deflater = options.deflate.then(TreeDeflater::new);
-    tree_transfer::encode(outcome.tree.take(), progress, |bytes| {
+    tree_transfer::encode_with(outcome.tree.take(), progress, allocated_records, |bytes| {
         digest.update(&bytes);
         match &mut deflater {
             Some(deflater) => {
@@ -142,6 +158,7 @@ impl AnalysisReceiver {
                     ));
                 }
                 self.decoder.set_shape(report.shape);
+                self.decoder.set_allocated(report.allocated_records);
                 progress.receive_result(report.progress.clone())?;
                 progress.transfer(0, report.shape.bytes);
                 self.inflater = report
@@ -169,6 +186,7 @@ impl AnalysisReceiver {
                 let mut final_state = report.progress.clone();
                 if let Some(tree) = &tree {
                     final_state.bytes = tree.size;
+                    final_state.allocated = tree.allocated;
                 }
                 progress.receive_result(final_state)?;
                 progress.set_phase(ScanPhase::Verifying, &report.progress.current);
@@ -225,6 +243,9 @@ fn invalid(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)
 }
 
+#[cfg(test)]
+#[path = "allocated_transfer_tests.rs"]
+mod allocated_tests;
 #[cfg(test)]
 #[path = "windows_analysis_transfer_task_tests.rs"]
 mod task_tests;

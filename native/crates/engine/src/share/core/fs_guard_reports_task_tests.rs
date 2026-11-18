@@ -5,6 +5,7 @@ fn node(name: &str, size: u64, children: Vec<WireNode>) -> WireNode {
     WireNode {
         name: name.into(),
         size,
+        allocated: None,
         is_dir: !children.is_empty(),
         children,
     }

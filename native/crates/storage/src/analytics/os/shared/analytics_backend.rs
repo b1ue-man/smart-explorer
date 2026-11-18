@@ -5,6 +5,8 @@
 //! subfolders are done, and the retention budget honoured like in the local
 //! scan – detail beyond it folds into the parent's aggregate, sizes and
 //! counts stay exact. One unusable entry never costs its whole folder.
+//! VFS listings carry no occupied space: every node occupies its size and a
+//! counted file makes the outcome's `allocated_known` false.
 use super::MAX_RETAINED_FILES_PER_DIRECTORY;
 use super::{AnalyticsBudget, Diagnostics, Progress, Retention, ScanOutcome, SizeNode};
 use crate::analytics::ScanPhase;
@@ -79,6 +81,7 @@ fn empty_dir(name: Box<str>) -> SizeNode {
     SizeNode {
         name,
         size: 0,
+        allocated: 0,
         is_dir: true,
         children: Vec::new(),
     }
@@ -158,6 +161,7 @@ impl Walker<'_> {
             children.push(SizeNode {
                 name: crate::analytics::aggregate_name(listing.aggregated_entries).into_boxed_str(),
                 size: listing.aggregated_bytes,
+                allocated: listing.aggregated_bytes,
                 is_dir: false,
                 children: Vec::new(),
             });
@@ -165,6 +169,7 @@ impl Walker<'_> {
         SizeNode {
             name,
             size,
+            allocated: size,
             is_dir: true,
             children,
         }
@@ -244,6 +249,12 @@ impl Walker<'_> {
         self.progress
             .bytes
             .fetch_add(listing.own_bytes, Ordering::Relaxed);
+        self.progress
+            .allocated
+            .fetch_add(listing.own_bytes, Ordering::Relaxed);
+        if files > 0 {
+            self.diagnostics.allocation_unknown();
+        }
         Ok(listing)
     }
 
@@ -268,6 +279,7 @@ impl Walker<'_> {
                 nodes.push(SizeNode {
                     name,
                     size,
+                    allocated: size,
                     is_dir: false,
                     children: Vec::new(),
                 });

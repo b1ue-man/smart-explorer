@@ -767,6 +767,21 @@ Entscheidungen. In der App gilt dieselbe Regel für die Dateien eines Ordners, f
 Android-Namenskonflikt (dort für jede Seitenkombination); die Vorschau „Zielordner entscheiden“
 zählt neu, neuer, gleich, Ziel neuer und Konflikt, sobald der Auftrag die Regel anwendet, sonst neue und
 gleichnamige Dateien. Beschreibung und Grenzen: `docs/TRANSFER_ENGINE.md`, Abschnitt „Dateiregel“.
+**Speicheranalyse: „Größe“ und „Belegt“ (Quellstand 2026-11-18, noch nicht veröffentlicht):**
+Jeder Eintrag der Speicheranalyse trägt zwei Werte: „Größe“ (Summe der Dateilängen) und „Belegt“
+(Platz, den die Dateien auf dem Datenträger tatsächlich einnehmen). Sie weichen ab bei Platzhaltern
+„nur online“, Kompression, Sparse-Dateien und Hardlinks (eine mehrfach verlinkte Datei belegt ihren
+Platz einmal); was beim Löschen frei wird, ist der belegte Platz. Desktop und Android zeigen beide
+Spalten, sortieren und bemessen die Kacheln nach der Wahl „Sortieren/Kacheln nach: Belegt | Größe“
+(Standard „Belegt“, gespeichert) und bieten zusätzlich die Ansichten „Größte Dateien“ und „Nach
+Dateityp“ des angezeigten Ordners mit Unterordnern. Meldet die Quelle keinen belegten Platz (ältere
+Gegenstelle, Backend ohne den Wert), gilt „Größe“ und die Anzeige sagt „Belegt: unbekannt“. Im
+Terminal: `se analyze ZIEL [--sort allocated|size] [--top N] [--depth N] [--files N] [--types]
+[--json]` (JSON mit `size`, `allocated`, `allocated_known`, `entries`, `largest_files`, `types`,
+`aggregated`); der MCP-Server erreicht es über sein Werkzeug `se`. Dateien, die die Analyse in
+großen Ordnern zu einem Eintrag „… N weitere Eintraege“ zusammenfasst, zählen in keinen Dateityp und
+keine Liste; die Ansicht nennt ihre Zahl. Beschreibung: `docs/ANALYTICS_ACCESS.md`, Abschnitt
+„Größe und Belegt“.
 **Links (ab 0.5.177):** `se search` meldet Links (`l`) und FIFOs/Sockets/Geräte
 (`s`) über ihren Namen und betritt Links nie; `--dirs` nimmt Ordner zusätzlich
 auf. `se cp -r`/`se mv -r` überspringen Links und Sonderdateien innerhalb eines

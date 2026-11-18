@@ -79,6 +79,8 @@ data class TaskInfo(
     val state: String,
     val doneBytes: Long = 0,
     val totalBytes: Long = 0,
+    /** Occupied bytes counted by a storage analysis ("Belegt"); `null` for other tasks and older cores. */
+    val allocatedBytes: Long? = null,
     val doneItems: Long = 0,
     val totalItems: Long = 0,
     val rateBps: Long = 0,

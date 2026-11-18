@@ -140,7 +140,7 @@ internal fun ScanProgressPage(
  * "1.234 Dateien · 5,6 GB"; with byte totals (a remote analysis transferring its result) the bytes
  * are that transfer: "1.234 Dateien · Ergebnis 12 MB von 40 MB".
  */
-private fun progressLine(task: TaskInfo?): String = when {
+internal fun progressLine(task: TaskInfo?): String = when {
     task == null || task.state == "queued" -> "Wird gestartet …"
     else -> buildString {
         append(task.doneItems)
@@ -149,7 +149,12 @@ private fun progressLine(task: TaskInfo?): String = when {
         if (task.totalBytes > 0) {
             append("Ergebnis ").append(Format.size(task.doneBytes)).append(" von ").append(Format.size(task.totalBytes))
         } else {
-            append(Format.size(task.doneBytes))
+            val allocated = task.allocatedBytes
+            when {
+                allocated == null -> append(Format.size(task.doneBytes))
+                // An older host counts no occupied bytes: unknown, not nothing.
+                else -> append(sizesText(task.doneBytes, allocated, known = allocated > 0 || task.doneBytes == 0L))
+            }
         }
     }
 }

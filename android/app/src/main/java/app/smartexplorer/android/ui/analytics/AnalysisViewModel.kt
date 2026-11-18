@@ -12,6 +12,7 @@ import app.smartexplorer.android.api.AnalyzeChild
 import app.smartexplorer.android.api.AnalyzeIssues
 import app.smartexplorer.android.api.AnalyzeKind
 import app.smartexplorer.android.api.AnalyzeNode
+import app.smartexplorer.android.api.AnalyzeOverview
 import app.smartexplorer.android.api.FilesApi
 import app.smartexplorer.android.core.CoreException
 import app.smartexplorer.android.service.TaskKeeper
@@ -77,6 +78,20 @@ internal class AnalysisViewModel : ViewModel() {
     var usageHintDismissed by mutableStateOf(false)
         private set
 
+    /** "Sortieren/Kacheln nach" as chosen (stored, default "Belegt"); see [SizeMeasure.effective]. */
+    var measure by mutableStateOf(SizeMeasure.Allocated)
+        private set
+    private var measureLoaded = false
+
+    /** Shown view of the result: tiles and list, "Größte Dateien" or "Nach Dateityp". */
+    var tab by mutableStateOf(AnalysisTab.Treemap)
+        private set
+
+    /** Overview of the shown folder for [tab] ≠ Treemap; `null` until loaded. */
+    var overview by mutableStateOf<AnalyzeOverview?>(null)
+        private set
+    private var overviewJob: Job? = null
+
     /** Application context for the platform figures; set by [AnalysisScreen]. */
     private val appContext = MutableStateFlow<Context?>(null)
     private var scanJob: Job? = null
@@ -88,6 +103,37 @@ internal class AnalysisViewModel : ViewModel() {
 
     fun attach(context: Context) {
         appContext.value = context.applicationContext
+        if (!measureLoaded) {
+            measureLoaded = true
+            measure = AnalysisMeasurePrefs.load(context)
+        }
+    }
+
+    /** [chosen] for "Sortieren/Kacheln nach": stored, and the shown folder is sorted anew. */
+    fun chooseMeasure(chosen: SizeMeasure) {
+        if (chosen == measure) return
+        measure = chosen
+        appContext.value?.let { AnalysisMeasurePrefs.save(it, chosen) }
+        if (phase == ScanPhase.Result && node != null) loadNode(path, protectedFrom)
+    }
+
+    /** Shows [chosen]; a list view loads the overview of the shown folder. */
+    fun chooseTab(chosen: AnalysisTab) {
+        tab = chosen
+        if (chosen != AnalysisTab.Treemap && overview == null) loadOverview()
+    }
+
+    private fun loadOverview() {
+        val id = taskId ?: return
+        val folder = path
+        overviewJob?.cancel()
+        overviewJob = viewModelScope.launch {
+            try {
+                overview = AnalyzeApi.overview(id, folder, measure.key)
+            } catch (e: CoreException) {
+                Snackbars.show("Übersicht nicht geladen: ${e.message ?: e.kind}")
+            }
+        }
     }
 
     /** "Mehr → Speicheranalyse": suggest [current] (the place shown in "Dateien") on the setup page. */
@@ -255,11 +301,13 @@ internal class AnalysisViewModel : ViewModel() {
         val job = viewModelScope.launch {
             loadingNode = true
             try {
-                node = AnalyzeApi.node(id, target)
+                node = AnalyzeApi.node(id, target, measure.key)
+                overview = null
                 path = target
                 this@AnalysisViewModel.protectedFrom = protectedFrom
                 appDetail = null
                 error = null
+                if (tab != AnalysisTab.Treemap) loadOverview()
             } catch (e: CoreException) {
                 Snackbars.show("Ordner nicht geladen: ${e.message ?: e.kind}")
             }

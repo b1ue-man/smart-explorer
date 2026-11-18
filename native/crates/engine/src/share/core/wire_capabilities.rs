@@ -59,6 +59,10 @@ pub struct FsHostFeatures {
     /// `StorageAnalysis { compress }`: the tree as one deflate stream.
     #[serde(default, skip_serializing_if = "is_false")]
     pub analysis_deflate_v1: bool,
+    /// `StorageAnalysis { allocated }`: every tree node with its occupied
+    /// bytes (size and allocation kept apart).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub analysis_allocated_v1: bool,
     /// `request_id` of `StorageAnalysis`/`DuplicateSearch`: kept for 10
     /// minutes after a lost connection, attachable again.
     #[serde(default, skip_serializing_if = "is_false")]
@@ -111,6 +115,7 @@ impl FsHostFeatures {
             remote_trash_v1: crate::analytics::host_recycle_available(),
             stage_finish_v1: true,
             analysis_deflate_v1: true,
+            analysis_allocated_v1: true,
             analysis_reattach_v1: true,
             watch_v1: true,
             export_access_v1: true,
@@ -143,6 +148,7 @@ impl FsHostFeatures {
             (self.remote_trash_v1, "remote_trash_v1"),
             (self.stage_finish_v1, "stage_finish_v1"),
             (self.analysis_deflate_v1, "analysis_deflate_v1"),
+            (self.analysis_allocated_v1, "analysis_allocated_v1"),
             (self.analysis_reattach_v1, "analysis_reattach_v1"),
             (self.watch_v1, "watch_v1"),
             (self.export_access_v1, "export_access_v1"),

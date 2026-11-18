@@ -25,9 +25,7 @@ pub use scanner::{local_scan_threads, scan_with, scan_with_guard, ScanBudget};
 mod access_task;
 mod os;
 pub use os::host_recycle_available;
-pub use os::{
-    host_permission_note, recycle as recycle_local, volume_usage as host_volume_usage,
-};
+pub use os::{host_permission_note, recycle as recycle_local, volume_usage as host_volume_usage};
 
 #[path = "core/analysis_budget.rs"]
 mod analysis_budget;
@@ -45,6 +43,8 @@ pub use host_figures::{
     remember_platform_totals, remembered_platform_totals, PlatformApp, PlatformFigures, VolumeUsage,
 };
 
+#[path = "core/overview.rs"]
+pub mod overview;
 #[path = "core/protected.rs"]
 mod protected;
 pub use protected::ProtectedTally;
@@ -63,6 +63,4 @@ pub use storage_view::{
 
 #[path = "core/partial_merge.rs"]
 mod partial_merge;
-pub use partial_merge::{
-    merge_retry_tree, preserve_retry_omissions, retry_node, RetryOmission,
-};
+pub use partial_merge::{merge_retry_tree, preserve_retry_omissions, retry_node, RetryOmission};

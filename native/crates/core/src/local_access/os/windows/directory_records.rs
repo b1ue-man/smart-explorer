@@ -6,7 +6,9 @@
 //! open — carrying NUL or separator units — are kept with those units
 //! replaced, flagged `unrepresentable`, so the entry is still counted.
 use std::{ffi::OsString, io, mem::offset_of, os::windows::ffi::OsStringExt};
-use windows_sys::Win32::Storage::FileSystem::{FILE_FULL_DIR_INFO, FILE_ID_EXTD_DIR_INFO};
+use windows_sys::Win32::Storage::FileSystem::{
+    FILE_ATTRIBUTE_REPARSE_POINT, FILE_FULL_DIR_INFO, FILE_ID_EXTD_DIR_INFO,
+};
 
 #[derive(Clone, Copy)]
 pub(super) enum Layout {
@@ -17,10 +19,16 @@ pub(super) enum Layout {
 pub(super) struct Record {
     pub name: OsString,
     pub size: u64,
+    /// `AllocationSize`: bytes the file occupies on its volume.
+    pub allocated: u64,
     pub mtime_ms: i64,
     pub btime_ms: i64,
     pub attributes: u32,
+    /// The reparse tag of a reparse point: the extended layout's own field,
+    /// the full layout's `EaSize` (which holds the tag for reparse points).
     pub tag: Option<u32>,
+    /// `FileId` of the extended layout (128 bits; NTFS uses the low 64).
+    pub file_id: Option<u128>,
     pub next: Option<usize>,
     /// The stored name contained NUL or separator units and was sanitized;
     /// it cannot be joined into an openable path.
@@ -97,27 +105,39 @@ fn decode_inner(bytes: &[u8], offset: usize, layout: Layout) -> io::Result<Recor
             }
         })
         .collect();
-    let size_offset = offset_of!(FILE_FULL_DIR_INFO, EndOfFile);
-    let size = i64::from_le_bytes(
-        bytes
-            .get(size_offset..size_offset + 8)
-            .ok_or_else(invalid)?
-            .try_into()
-            .map_err(|_| invalid())?,
-    );
+    let size = i64_at(bytes, offset_of!(FILE_FULL_DIR_INFO, EndOfFile))?;
     // A negative EndOfFile is a provider bug, not a reason to lose the entry.
     let size = size.max(0) as u64;
+    // Both layouts share the FILE_FULL_DIR_INFO prefix up to FileNameLength.
+    let allocated = i64_at(bytes, offset_of!(FILE_FULL_DIR_INFO, AllocationSize))?.max(0) as u64;
+    let attributes = u32_at(bytes, offset_of!(FILE_FULL_DIR_INFO, FileAttributes))?;
+    let reparse = attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0;
     Ok(Record {
         name: OsString::from_wide(&units),
         size,
+        allocated,
         mtime_ms: filetime_ms(bytes, offset_of!(FILE_FULL_DIR_INFO, LastWriteTime))?,
         btime_ms: filetime_ms(bytes, offset_of!(FILE_FULL_DIR_INFO, CreationTime))?,
-        attributes: u32_at(bytes, offset_of!(FILE_FULL_DIR_INFO, FileAttributes))?,
+        attributes,
         tag: match layout {
             Layout::Extended => Some(u32_at(
                 bytes,
                 offset_of!(FILE_ID_EXTD_DIR_INFO, ReparsePointTag),
             )?),
+            Layout::Full if reparse => Some(u32_at(bytes, offset_of!(FILE_FULL_DIR_INFO, EaSize))?),
+            Layout::Full => None,
+        },
+        file_id: match layout {
+            Layout::Extended => {
+                let offset = offset_of!(FILE_ID_EXTD_DIR_INFO, FileId);
+                Some(u128::from_le_bytes(
+                    bytes
+                        .get(offset..offset + 16)
+                        .ok_or_else(invalid)?
+                        .try_into()
+                        .map_err(|_| invalid())?,
+                ))
+            }
             Layout::Full => None,
         },
         next: if next == 0 {
@@ -129,14 +149,18 @@ fn decode_inner(bytes: &[u8], offset: usize, layout: Layout) -> io::Result<Recor
     })
 }
 
-fn filetime_ms(bytes: &[u8], offset: usize) -> io::Result<i64> {
-    let value = i64::from_le_bytes(
+fn i64_at(bytes: &[u8], offset: usize) -> io::Result<i64> {
+    Ok(i64::from_le_bytes(
         bytes
             .get(offset..offset + 8)
             .ok_or_else(invalid)?
             .try_into()
             .map_err(|_| invalid())?,
-    );
+    ))
+}
+
+fn filetime_ms(bytes: &[u8], offset: usize) -> io::Result<i64> {
+    let value = i64_at(bytes, offset)?;
     Ok(if value == 0 {
         0
     } else {
@@ -221,6 +245,9 @@ mod tests {
             let mut negative = bytes.clone();
             negative[40..48].copy_from_slice(&(-1i64).to_le_bytes());
             assert_eq!(decode(&negative, 0, layout).ok().unwrap().size, 0);
+            let mut negative = bytes.clone();
+            negative[48..56].copy_from_slice(&(-1i64).to_le_bytes());
+            assert_eq!(decode(&negative, 0, layout).ok().unwrap().allocated, 0);
             // A malformed record inside a batch still tells the caller where
             // the next record starts, so only that entry is skipped.
             let mut batch = bytes.clone();
@@ -230,5 +257,42 @@ mod tests {
             let error = decode(&batch, 0, layout).err().unwrap();
             assert_eq!(error.next, Some(bytes.len()));
         }
+    }
+    /// A cloud placeholder or compressed file: AllocationSize is read from
+    /// the shared record prefix of both layouts, apart from EndOfFile.
+    #[test]
+    fn belegt_task_windows_records_carry_allocation_size() {
+        assert_eq!(offset_of!(FILE_FULL_DIR_INFO, AllocationSize), 48);
+        assert_eq!(offset_of!(FILE_ID_EXTD_DIR_INFO, AllocationSize), 48);
+        for layout in [Layout::Extended, Layout::Full] {
+            let mut bytes = record(layout, &[b'p' as u16]);
+            bytes[40..48].copy_from_slice(&(5_000_000_000i64).to_le_bytes());
+            bytes[48..56].copy_from_slice(&(4096i64).to_le_bytes());
+            let decoded = decode(&bytes, 0, layout).ok().expect("valid record");
+            assert_eq!(decoded.size, 5_000_000_000);
+            assert_eq!(decoded.allocated, 4096);
+        }
+    }
+
+    /// Hard links share the extended layout's FileId; the full layout reads
+    /// a reparse point's tag from `EaSize` instead of opening the entry.
+    #[test]
+    fn belegt_task_windows_records_carry_file_id_and_full_layout_tag() {
+        assert_eq!(offset_of!(FILE_ID_EXTD_DIR_INFO, FileId), 72);
+        assert_eq!(offset_of!(FILE_FULL_DIR_INFO, EaSize), 64);
+        let mut extended = record(Layout::Extended, &[b'x' as u16]);
+        extended[72..88].copy_from_slice(&0x0001_0000_0000_002au128.to_le_bytes());
+        let decoded = decode(&extended, 0, Layout::Extended).ok().expect("record");
+        assert_eq!(decoded.file_id, Some(0x0001_0000_0000_002a));
+        let mut full = record(Layout::Full, &[b'w' as u16]);
+        full[56..60].copy_from_slice(&FILE_ATTRIBUTE_REPARSE_POINT.to_le_bytes());
+        full[64..68].copy_from_slice(&0x8000_0017u32.to_le_bytes());
+        let decoded = decode(&full, 0, Layout::Full).ok().expect("record");
+        assert_eq!(decoded.tag, Some(0x8000_0017));
+        assert_eq!(decoded.file_id, None);
+        let plain = decode(&record(Layout::Full, &[b'p' as u16]), 0, Layout::Full)
+            .ok()
+            .expect("record");
+        assert_eq!(plain.tag, None);
     }
 }

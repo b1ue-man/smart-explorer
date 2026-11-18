@@ -54,10 +54,12 @@ fn partial() -> ScanOutcome {
     let mut outcome = ScanOutcome::complete(SizeNode {
         name: "A".into(),
         size: 7,
+        allocated: 7,
         is_dir: true,
         children: vec![SizeNode {
             name: "readable".into(),
             size: 7,
+            allocated: 7,
             is_dir: false,
             children: Vec::new(),
         }],
@@ -116,6 +118,7 @@ fn windows_remote_task_analysis_codec_streams_large_and_deep_local_results() {
     let mut tree = SizeNode {
         name: "root".into(),
         size: 8192,
+        allocated: 8192,
         is_dir: true,
         children: Vec::new(),
     };
@@ -123,6 +126,7 @@ fn windows_remote_task_analysis_codec_streams_large_and_deep_local_results() {
         tree.children.push(SizeNode {
             name: format!("{index}-{}", "n".repeat(64)).into(),
             size: 1,
+            allocated: 1,
             is_dir: false,
             children: Vec::new(),
         });
@@ -142,6 +146,7 @@ fn windows_remote_task_analysis_codec_streams_large_and_deep_local_results() {
     let mut deep = SizeNode {
         name: "leaf".into(),
         size: 0,
+        allocated: 0,
         is_dir: true,
         children: Vec::new(),
     };
@@ -149,6 +154,7 @@ fn windows_remote_task_analysis_codec_streams_large_and_deep_local_results() {
         deep = SizeNode {
             name: "d".into(),
             size: 0,
+            allocated: 0,
             is_dir: true,
             children: vec![deep],
         };
@@ -240,11 +246,13 @@ fn review_task_analysis_deflate_reframing_and_receiver_budget() -> io::Result<()
     let tree = SizeNode {
         name: "root".into(),
         size: 2048,
+        allocated: 2048,
         is_dir: true,
         children: (0..2048)
             .map(|i| SizeNode {
                 name: format!("{i}-{}", "n".repeat(64)).into(),
                 size: 1,
+                allocated: 1,
                 is_dir: false,
                 children: Vec::new(),
             })

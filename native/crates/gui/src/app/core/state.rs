@@ -91,10 +91,8 @@ pub struct App {
     pub(in crate::app) analytics_focus: Vec<String>,
     /// A running background analytics scan, if any.
     pub(in crate::app) analytics_scan: Option<AnalyticsScan>,
-    /// Cached nested-treemap cells for the current focus + the rect they were
-    /// laid out for (recomputed on drill or resize).
-    pub(in crate::app) analytics_cells: Vec<TmCell>,
-    pub(in crate::app) analytics_cells_rect: egui::Rect,
+    /// Measure, cached treemap (cells, mesh), tab and overviews.
+    pub(in crate::app) analytics_view: super::analytics_view::AnalyticsView,
     /// (files, dirs) under the current focus, cached.
     pub(in crate::app) analytics_counts: Option<(u64, u64)>,
     pub(in crate::app) analytics_totals: Option<(crate::analytics::ScanSnapshot, f32)>,

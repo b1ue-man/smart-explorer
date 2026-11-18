@@ -1,4 +1,5 @@
 //! Scan selection, navigation and measured status of the analytics overlay.
+use super::analytics_measure::{SizeMeasure, MEASURE_HINT};
 use super::prelude::*;
 use super::*;
 use crate::app::theme;
@@ -13,6 +14,8 @@ pub(in crate::app) struct AnalyticsControls {
     pub(in crate::app) pick_folder: bool,
     pub(in crate::app) accept_drive_identity: bool,
     pub(in crate::app) cancel: bool,
+    /// „Sortieren/Kacheln nach“ changed to this.
+    pub(in crate::app) measure: Option<SizeMeasure>,
 }
 
 impl AnalyticsControls {
@@ -26,6 +29,7 @@ impl AnalyticsControls {
             pick_folder: false,
             accept_drive_identity: false,
             cancel: false,
+            measure: None,
         }
     }
 }
@@ -55,7 +59,10 @@ impl App {
         });
         let focus_segs = &self.analytics_focus;
         let focus_path = self.analytics_focus_path();
-        let focus_size = self.analytics_focus_node().map(|n| n.size).unwrap_or(0);
+        let measure = self.analytics_view.measure;
+        let (focus_size, focus_allocated) = self
+            .analytics_focus_node()
+            .map_or((0, 0), |n| (n.size, n.allocated));
         let (n_files, n_dirs) = self.analytics_counts.unwrap_or((0, 0));
         let scan_info = self.analytics_scan.as_ref().map(|s| {
             (
@@ -148,6 +155,25 @@ impl App {
             });
         });
 
+        // ── Row 3: what sorts and sizes the tiles ──
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Sortieren/Kacheln nach:")
+                .on_hover_text(MEASURE_HINT);
+            for option in SizeMeasure::ALL {
+                let usable = option == SizeMeasure::Size || measure.allocated_known;
+                let selected = measure.effective() == option;
+                let response = ui
+                    .add_enabled(usable, egui::SelectableLabel::new(selected, option.label()))
+                    .on_hover_text(MEASURE_HINT)
+                    .on_disabled_hover_text(
+                        "Belegt: unbekannt – die Quelle meldet keinen belegten Platz",
+                    );
+                if response.clicked() && option != measure.chosen {
+                    controls.measure = Some(option);
+                }
+            }
+        });
+
         if let Some((used, tot)) = drive {
             let frac = used as f32 / tot as f32;
             ui.add(
@@ -171,11 +197,12 @@ impl App {
                     state.dirs.to_string()
                 };
                 ui.label(format!(
-                    "{} · {} Dateien · {} Ordner · {} · {:.1} s",
+                    "{} · {} Dateien · {} Ordner · Größe {} · Belegt {} · {:.1} s",
                     state.phase.label(),
                     state.files,
                     dirs,
                     format_bytes(state.bytes),
+                    live_allocated(state),
                     secs,
                 ));
                 if *cancel_pending {
@@ -219,7 +246,8 @@ impl App {
                 .request_repaint_after(std::time::Duration::from_millis(150));
         } else {
             ui.horizontal(|ui| {
-                ui.label(RichText::new(format_bytes(focus_size)).strong());
+                ui.label(RichText::new(measure.both_text(focus_size, focus_allocated)).strong())
+                    .on_hover_text(MEASURE_HINT);
                 if focus_segs.is_empty() {
                     if let Some((totals, seconds)) = &self.analytics_totals {
                         let dirs = if totals.directories_unreported {
@@ -279,5 +307,53 @@ impl App {
             }
             StorageRunState::Running | StorageRunState::Complete => {}
         }
+    }
+}
+
+impl App {
+    /// The person's choice of „Sortieren/Kacheln nach“: kept for later
+    /// sessions; the tiles are laid out anew.
+    pub(in crate::app) fn set_analytics_measure(&mut self, chosen: SizeMeasure) {
+        self.analytics_view.measure.chosen = chosen;
+        let measure = self.analytics_view.measure;
+        if let Some(tree) = self.analytics_tree.as_mut() {
+            measure.sort_tree(tree);
+        }
+        self.analytics_invalidate();
+        if let Err(error) = super::analytics_measure_store::save(chosen) {
+            self.push_app_error(
+                "Speicher-Analyse",
+                format!("Wahl „Sortieren/Kacheln nach“ nicht gespeichert: {error}"),
+            );
+        }
+    }
+}
+
+/// „Belegt“ of the live counters: an older host counts no occupied bytes
+/// (0 while bytes were counted), which is unknown rather than nothing.
+fn live_allocated(state: &crate::analytics::ScanSnapshot) -> String {
+    if state.allocated == 0 && state.bytes > 0 {
+        super::analytics_measure::ALLOCATED_UNKNOWN.to_string()
+    } else {
+        format_bytes(state.allocated)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::format::format_bytes;
+
+    #[test]
+    fn belegt_task_live_counter_without_occupied_bytes_is_unknown() {
+        let mut state = crate::analytics::ScanSnapshot {
+            bytes: 4096,
+            ..Default::default()
+        };
+        assert_eq!(super::live_allocated(&state), "unbekannt");
+        state.allocated = 8192;
+        assert_eq!(super::live_allocated(&state), format_bytes(8192));
+        state.bytes = 0;
+        state.allocated = 0;
+        assert_eq!(super::live_allocated(&state), format_bytes(0));
     }
 }

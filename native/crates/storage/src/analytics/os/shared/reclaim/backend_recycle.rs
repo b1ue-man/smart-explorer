@@ -54,7 +54,8 @@ pub fn recycle_plan(groups: &[DuplicateGroup], selected: &HashSet<String>) -> Re
                     sha256: Some(group.hash.hex.to_ascii_lowercase()),
                 },
             ));
-            plan.bytes = plan.bytes.saturating_add(group.size);
+            // What the trash frees: this copy's occupied bytes.
+            plan.bytes = plan.bytes.saturating_add(item.allocated);
         }
     }
     plan.skipped = selected

@@ -93,9 +93,29 @@ impl DirectoryHandle {
         })
     }
 
+    /// The file system of this opened directory (`st_dev`).
+    pub fn device_id(&self) -> Option<u64> {
+        self.file
+            .metadata()
+            .ok()
+            .map(|metadata| std::os::unix::fs::MetadataExt::dev(&metadata))
+    }
+
     /// A fresh stream has its own position, so repeated or concurrent scans
     /// of this handle cannot skip each other's directory entries.
     pub fn read_directory(&self) -> io::Result<DirectoryEntries> {
+        self.entries(false)
+    }
+
+    /// The entries a size analysis needs: one `fstatat` relative to this
+    /// directory per entry and none for a folder the listing already names
+    /// (`DT_DIR`; its `device` stays `None`, `device_id` of the opened child
+    /// tells it). Creation times are not read (0).
+    pub fn read_directory_for_sizes(&self) -> io::Result<DirectoryEntries> {
+        self.entries(true)
+    }
+
+    fn entries(&self, sizes_only: bool) -> io::Result<DirectoryEntries> {
         let stream_file = self.open_at(OsStr::new("."), libc::O_RDONLY | libc::O_DIRECTORY)?;
         // SAFETY: a live readable directory descriptor, owned by stream_file.
         let stream = unsafe { libc::fdopendir(stream_file.as_raw_fd()) };
@@ -106,6 +126,7 @@ impl DirectoryHandle {
             stream,
             directory: self.clone(),
             ended: false,
+            sizes_only,
         })
     }
 
@@ -128,6 +149,27 @@ impl DirectoryHandle {
     fn metadata_at(&self, name: &OsStr) -> io::Result<std::fs::Metadata> {
         self.open_at(name, libc::O_PATH | libc::O_NOFOLLOW)?
             .metadata()
+    }
+
+    /// `lstat` of a child relative to this directory, in one call.
+    fn stat_at(&self, name: &OsStr) -> io::Result<libc::stat> {
+        let name = CString::new(name.as_bytes())
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "entry name contains NUL"))?;
+        let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
+        // SAFETY: live descriptor, NUL-terminated name, writable stat buffer.
+        let result = unsafe {
+            libc::fstatat(
+                self.file.as_raw_fd(),
+                name.as_ptr(),
+                stat.as_mut_ptr(),
+                libc::AT_SYMLINK_NOFOLLOW,
+            )
+        };
+        if result != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: fstatat filled the buffer on success.
+        Ok(unsafe { stat.assume_init() })
     }
 
     fn open_at(&self, name: &OsStr, flags: i32) -> io::Result<File> {
@@ -169,6 +211,7 @@ pub struct DirectoryEntries {
     stream: NonNull<libc::DIR>,
     directory: DirectoryHandle,
     ended: bool,
+    sizes_only: bool,
 }
 
 // SAFETY: each stream has one owner and is accessed only via &mut self.
@@ -201,7 +244,21 @@ impl Iterator for DirectoryEntries {
             if bytes == b"." || bytes == b".." {
                 continue;
             }
+            // SAFETY: as above, the entry stays valid until the next call.
+            let listed_dir = unsafe { (*entry).d_type } == libc::DT_DIR;
             let name = OsString::from_vec(bytes.to_vec());
+            if self.sizes_only {
+                if listed_dir {
+                    return Some(Ok(directory_entry(name)));
+                }
+                let path = &self.directory.path;
+                return Some(
+                    self.directory
+                        .stat_at(&name)
+                        .map(|stat| stat_entry(name.clone(), &stat))
+                        .map_err(|error| EntryError::wrap(name.clone(), &path.join(&name), error)),
+                );
+            }
             return Some(
                 self.directory
                     .metadata_at(&name)
@@ -239,6 +296,56 @@ fn reset_errno() {
     }
 }
 
+/// A folder named by the listing, not yet stat'ed.
+fn directory_entry(name: OsString) -> LocalEntry {
+    let hidden = name.as_bytes().first() == Some(&b'.');
+    LocalEntry {
+        name,
+        kind: EntryKind::Directory,
+        is_dir: true,
+        allocated: Some(0),
+        hidden,
+        ..LocalEntry::default()
+    }
+}
+
+/// An entry from a raw `lstat`; the field widths differ between Linux and
+/// Android targets, hence the casts.
+#[allow(clippy::unnecessary_cast)]
+fn stat_entry(name: OsString, stat: &libc::stat) -> LocalEntry {
+    let kind = match stat.st_mode & libc::S_IFMT {
+        libc::S_IFLNK => EntryKind::Link,
+        libc::S_IFDIR => EntryKind::Directory,
+        libc::S_IFREG => EntryKind::File,
+        _ => EntryKind::Other,
+    };
+    let file = kind == EntryKind::File;
+    let device = stat.st_dev as u64;
+    let hardlink = (file && stat.st_nlink as u64 > 1).then(|| (device, stat.st_ino as u64));
+    let hidden = name.as_bytes().first() == Some(&b'.');
+    LocalEntry {
+        name,
+        kind,
+        is_dir: kind == EntryKind::Directory,
+        is_link_like: kind == EntryKind::Link,
+        size: if file { stat.st_size.max(0) as u64 } else { 0 },
+        allocated: Some(if file {
+            (stat.st_blocks as u64).saturating_mul(512)
+        } else {
+            0
+        }),
+        hardlink,
+        device: Some(device),
+        mtime_ms: (stat.st_mtime as i64)
+            .saturating_mul(1000)
+            .saturating_add(stat.st_mtime_nsec as i64 / 1_000_000),
+        btime_ms: 0,
+        hidden,
+        system: false,
+        unreachable: false,
+    }
+}
+
 fn local_entry(name: OsString, metadata: &std::fs::Metadata) -> LocalEntry {
     let kind = if metadata.is_symlink() {
         EntryKind::Link
@@ -250,6 +357,7 @@ fn local_entry(name: OsString, metadata: &std::fs::Metadata) -> LocalEntry {
         EntryKind::Other
     };
     let hidden = name.as_bytes().first() == Some(&b'.');
+    let (allocated, hardlink) = super::occupancy(kind, metadata);
     LocalEntry {
         name,
         kind,
@@ -260,6 +368,9 @@ fn local_entry(name: OsString, metadata: &std::fs::Metadata) -> LocalEntry {
         } else {
             0
         },
+        allocated,
+        hardlink,
+        device: Some(std::os::unix::fs::MetadataExt::dev(metadata)),
         mtime_ms: metadata
             .modified()
             .map(crate::local_access::system_time_ms)

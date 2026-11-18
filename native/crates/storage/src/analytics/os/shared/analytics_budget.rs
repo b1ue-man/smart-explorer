@@ -5,8 +5,10 @@
 //! into one aggregate node per directory and directories keep their exact
 //! recursive size without retained children.
 use super::outcome::Diagnostics;
+use std::collections::HashSet;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Mutex;
 
 // At most one aggregate may be added for each retained directory; reserve
 // the other half of the wire's node space for those and container roots.
@@ -33,6 +35,14 @@ pub(super) struct AnalyticsBudget {
     max_nodes: u64,
     max_text_bytes: u64,
     max_depth: u32,
+    /// `(device, file id)` of the possibly hard-linked files met so far:
+    /// every scan sharing this budget belongs to one analysis, which counts
+    /// the occupied bytes of such a file once. Unix enters only files with
+    /// several links; Windows every file that occupies space (its records
+    /// carry no link count), hence the limit.
+    hardlinks: Mutex<HashSet<(u64, u64)>>,
+    max_hardlinks: usize,
+    hardlinks_full: AtomicBool,
 }
 
 impl Default for AnalyticsBudget {
@@ -50,7 +60,45 @@ impl AnalyticsBudget {
             max_nodes,
             max_text_bytes,
             max_depth,
+            hardlinks: Mutex::new(HashSet::new()),
+            max_hardlinks: hardlink_entries(),
+            hardlinks_full: AtomicBool::new(false),
         }
+    }
+
+    #[cfg(test)]
+    pub(super) fn with_hardlink_limit(mut self, entries: usize) -> Self {
+        self.max_hardlinks = entries;
+        self
+    }
+
+    /// Whether `identity` is the first link of its file in this analysis.
+    /// Once the set is full, every further file counts (noted once): its
+    /// bytes may then be counted again for another link.
+    pub(super) fn first_link(
+        &self,
+        identity: (u64, u64),
+        dir: &Path,
+        diagnostics: &Diagnostics,
+    ) -> bool {
+        let mut seen = self
+            .hardlinks
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if seen.contains(&identity) {
+            return false;
+        }
+        if seen.len() >= self.max_hardlinks {
+            drop(seen);
+            if !self.hardlinks_full.swap(true, Ordering::Relaxed) {
+                diagnostics.note(format!(
+                    "Hardlinks ab {} möglicherweise mehrfach gezählt: die Hardlink-Erkennung hat ihre Speichergrenze erreicht",
+                    crate::analytics::os::display_path(dir)
+                ));
+            }
+            return true;
+        }
+        seen.insert(identity)
     }
 
     /// The default limits with at most `max_nodes` retained nodes (a receiver
@@ -120,13 +168,21 @@ fn retention_nodes() -> u64 {
     // is a memory bound; the final receiver limit includes every added node.
     // A retained directory may add one aggregate. Decoder Vec capacity may
     // double the node storage; reserve half the memory for those worst cases.
-    let reserve = 4 * (2 * std::mem::size_of::<super::SizeNode>() as u64 + 17);
+    let record = crate::analytics::tree_transfer::RECORD_FIXED_ALLOCATED as u64;
+    let reserve = 4 * (2 * std::mem::size_of::<super::SizeNode>() as u64 + record);
     (crate::host::memory_budget() as u64 / reserve).clamp(1, MAX_ANALYTICS_NODES)
 }
 
+/// Identities the hard-link set may hold: about a sixteenth of the memory
+/// budget at roughly 32 bytes per entry.
+fn hardlink_entries() -> usize {
+    usize::try_from(crate::host::memory_budget() / 512)
+        .unwrap_or(usize::MAX)
+        .max(1024)
+}
+
 fn retention_text() -> u64 {
-    (crate::host::memory_budget() as u64 / 4)
-        .min(crate::analytics::tree_transfer::MAX_BYTES / 2)
+    (crate::host::memory_budget() as u64 / 4).min(crate::analytics::tree_transfer::MAX_BYTES / 2)
 }
 
 fn claim_counter(counter: &AtomicU64, amount: u64, maximum: u64) -> bool {
@@ -164,6 +220,7 @@ mod tests {
             super::super::SizeNode {
                 name: "root".into(),
                 size: 1,
+                allocated: 1,
                 is_dir: true,
                 children: Vec::new(),
             },

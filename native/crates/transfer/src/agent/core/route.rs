@@ -61,6 +61,7 @@ fn ends_request(frame: &Frame) -> bool {
             | Frame::Meta(_)
             | Frame::Exists(_)
             | Frame::Tree(_)
+            | Frame::TreeAllocated(_)
             | Frame::HelloOk { .. }
             | Frame::Copied(_)
             | Frame::Answer(_)

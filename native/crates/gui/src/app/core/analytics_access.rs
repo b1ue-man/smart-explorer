@@ -193,6 +193,7 @@ impl App {
                     .as_ref()
                     .map_or(previous_size, |tree| tree.size);
 
+                let had_tree = self.analytics_tree.is_some();
                 let merged = if mergeable {
                     let depth = super::partial_scan::relative_depth(&base, &path);
                     let parts: Vec<_> = path.split(['/', '\\']).filter(|s| !s.is_empty()).collect();
@@ -232,6 +233,15 @@ impl App {
                 } else {
                     false
                 };
+                // A merged subtree without allocated figures makes them unknown.
+                if merged {
+                    let known = &mut self.analytics_view.measure.allocated_known;
+                    *known = outcome.allocated_known && (*known || !had_tree);
+                    let measure = self.analytics_view.measure;
+                    if let Some(tree) = self.analytics_tree.as_mut() {
+                        measure.sort_tree(tree);
+                    }
+                }
                 let next = crate::scanner::DeniedRoots::default();
                 for (root, size) in previous {
                     if root != path || !merged {

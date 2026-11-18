@@ -76,6 +76,7 @@ fn analysis_id_task_host_accepts_ids_of_released_clients_case() -> io::Result<()
         path: "/A".into(),
         node_budget: Some(progress.node_budget()),
         compress: false,
+        allocated: false,
         request_id: Some(request_id),
     };
     let outcome = crate::share::peer_storage_analysis::request_with(

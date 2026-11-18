@@ -1,5 +1,8 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
+
+use crate::local_access::{EntryKind, LocalEntry};
 
 use super::budget::{LimitExceeded, ReclaimBudget};
 use super::cleanup::{dir_cleanup_reason, file_cleanup_reason};
@@ -9,7 +12,7 @@ use super::types::{
     FileCandidate, ReclaimConfidence, ReclaimItem, ReclaimOptions, ReclaimProgress, ReclaimReport,
     ReclaimResultCounts,
 };
-use super::util::{now_ms, push_bounded_error, stale_cutoff_ms, systemtime_ms, to_fwd};
+use super::util::{now_ms, push_bounded_error, stale_cutoff_ms, to_fwd};
 
 #[derive(Default)]
 struct Acc {
@@ -25,12 +28,27 @@ struct Acc {
     root_error: Option<String>,
     scan_limit: Option<String>,
     suppressed_errors: u64,
+    /// Hard-linked files met so far: their occupied bytes count once.
+    hardlinks: HashSet<(u64, u64)>,
 }
 
 #[derive(Default)]
 struct DirScan {
     bytes: u64,
+    /// Occupied bytes of the files below (what removing the folder frees).
+    allocated: u64,
     complete: bool,
+}
+
+/// The occupied bytes a file adds and whether it is a further link of a
+/// hard-linked file already counted (0 bytes, never a duplicate: removing it
+/// frees nothing); its size where the platform could not say.
+fn occupied(entry: &LocalEntry, acc: &mut Acc) -> (u64, bool) {
+    match (entry.allocated, entry.hardlink) {
+        (None, _) => (entry.size, false),
+        (Some(_), Some(identity)) if !acc.hardlinks.insert(identity) => (0, true),
+        (Some(allocated), _) => (allocated, false),
+    }
 }
 
 pub fn scan_reclaim(
@@ -77,6 +95,7 @@ pub fn scan_reclaim(
         files: progress.files.load(Ordering::Relaxed),
         dirs: progress.dirs.load(Ordering::Relaxed),
         bytes: scanned.bytes,
+        allocated: scanned.allocated,
         large_min_bytes: opts.large_min_bytes,
         stale_days: opts.stale_days,
         result_counts: acc.result_counts,
@@ -110,19 +129,21 @@ fn scan_dir(
     }
     if crate::agent_proto::is_pseudo_dir(&dir.to_string_lossy()) {
         return DirScan {
-            bytes: 0,
             complete: true,
+            ..DirScan::default()
         };
     }
     progress.dirs.fetch_add(1, Ordering::Relaxed);
     let own_cleanup = !inside_cleanup && dir_cleanup_reason(dir, root).is_some();
     let skip_detail = inside_cleanup || own_cleanup;
     let mut result = DirScan {
-        bytes: 0,
         complete: true,
+        ..DirScan::default()
     };
     let mut child_count = 0usize;
-    let read_dir = match std::fs::read_dir(dir) {
+    // The platform listing reports the occupied bytes (Windows directory
+    // records, Unix st_blocks) without a further call per file.
+    let read_dir = match crate::local_access::read_directory(dir) {
         Ok(read_dir) => read_dir,
         Err(error) => {
             push_error(acc, format!("{}: {error}", to_fwd(dir)), dir == root);
@@ -147,32 +168,33 @@ fn scan_dir(
                 continue;
             }
         };
-        let path = entry.path();
-        let name = entry.file_name();
+        let name = entry.name.clone();
+        let path = dir.join(&name);
         let text_bytes = path.to_string_lossy().len().saturating_add(name.len());
         if let Err(limit) = budget.claim(text_bytes, depth.saturating_add(1)) {
             result.complete = false;
             record_limit(acc, root, limit);
             break;
         }
-        let file_type = match entry.file_type() {
-            Ok(file_type) => file_type,
-            Err(error) => {
-                result.complete = false;
-                push_error(acc, format!("{}: {error}", to_fwd(&path)), false);
-                continue;
-            }
-        };
         child_count = child_count.saturating_add(1);
+        let is_dir = entry.kind == EntryKind::Directory;
         // Links and the app trash (Android) are protected omissions: they keep
         // their parent non-empty but are never offered for cleanup.
-        if file_type.is_symlink()
+        if entry.is_link_like
+            || entry.kind == EntryKind::Link
             || crate::apptrash::excluded_name(&name.to_string_lossy())
-            || (file_type.is_dir() && crate::agent_proto::is_pseudo_dir(&path.to_string_lossy()))
+            || (is_dir && crate::agent_proto::is_pseudo_dir(&path.to_string_lossy()))
         {
             continue;
         }
-        if file_type.is_dir() {
+        if entry.unreachable && is_dir {
+            // A name no path can carry: its content stays unknown.
+            result.complete = false;
+            let error = format!("{}: Name nicht darstellbar", to_fwd(&path));
+            push_error(acc, error, false);
+            continue;
+        }
+        if is_dir {
             let child = scan_dir(
                 &path,
                 root,
@@ -185,36 +207,32 @@ fn scan_dir(
                 acc,
             );
             result.bytes = result.bytes.saturating_add(child.bytes);
+            result.allocated = result.allocated.saturating_add(child.allocated);
             result.complete &= child.complete;
-        } else if file_type.is_file() {
+        } else if entry.kind == EntryKind::File {
             progress.files.fetch_add(1, Ordering::Relaxed);
-            let metadata = match entry.metadata() {
-                Ok(metadata) => metadata,
-                Err(error) => {
-                    result.complete = false;
-                    push_error(acc, format!("{}: {error}", to_fwd(&path)), false);
-                    continue;
-                }
-            };
-            let size = metadata.len();
+            let size = entry.size;
+            let (allocated, further_link) = occupied(&entry, acc);
             let _ = progress
                 .bytes
                 .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
                     Some(current.saturating_add(size))
                 });
             result.bytes = result.bytes.saturating_add(size);
-            if skip_detail {
+            result.allocated = result.allocated.saturating_add(allocated);
+            if skip_detail || entry.unreachable {
                 continue;
             }
-            let mtime_ms = metadata.modified().ok().map(systemtime_ms).unwrap_or(0);
             let item = ReclaimItem::new(
                 to_fwd(&path),
                 name.to_string_lossy().into_owned(),
                 size,
-                mtime_ms,
+                entry.mtime_ms,
                 false,
-            );
-            record_file(item, path, opts, stale_cutoff_ms, acc);
+            )
+            .with_allocated(allocated);
+            let candidate = (!further_link).then_some(path);
+            record_file(item, candidate, opts, stale_cutoff_ms, acc);
         }
     }
 
@@ -222,14 +240,15 @@ fn scan_dir(
         result.complete = false;
     }
     if !inside_cleanup && result.complete {
-        record_dir(dir, root, result.bytes, child_count, opts.max_items, acc);
+        record_dir(dir, root, &result, child_count, opts.max_items, acc);
     }
     result
 }
 
+/// `path` is `None` for a further hard link, which is never a duplicate.
 fn record_file(
     mut item: ReclaimItem,
-    path: PathBuf,
+    path: Option<PathBuf>,
     opts: &ReclaimOptions,
     stale_cutoff_ms: i64,
     acc: &mut Acc,
@@ -273,6 +292,9 @@ fn record_file(
             compare_item_size,
         );
     }
+    let Some(path) = path else {
+        return;
+    };
     if item.size >= opts.duplicate_min_bytes {
         acc.duplicate_candidates = acc.duplicate_candidates.saturating_add(1);
         item.confidence = ReclaimConfidence::RiskyReview;
@@ -291,7 +313,14 @@ fn record_file(
     }
 }
 
-fn record_dir(dir: &Path, root: &Path, size: u64, child_count: usize, limit: usize, acc: &mut Acc) {
+fn record_dir(
+    dir: &Path,
+    root: &Path,
+    scanned: &DirScan,
+    child_count: usize,
+    limit: usize,
+    acc: &mut Acc,
+) {
     if dir == root {
         return;
     }
@@ -299,7 +328,8 @@ fn record_dir(dir: &Path, root: &Path, size: u64, child_count: usize, limit: usi
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let item = ReclaimItem::new(to_fwd(dir), name, size, 0, true);
+    let item = ReclaimItem::new(to_fwd(dir), name, scanned.bytes, 0, true)
+        .with_allocated(scanned.allocated);
     if child_count == 0 {
         acc.result_counts.empty_dirs = acc.result_counts.empty_dirs.saturating_add(1);
         retain_best(

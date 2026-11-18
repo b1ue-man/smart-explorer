@@ -84,13 +84,18 @@ internal fun tileKind(child: AnalyzeChild): TileKind = when (child.rowKind) {
 private class Tile(val child: AnalyzeChild?, val label: String, val size: Long, val color: Color)
 
 /**
- * Treemap of [children] (squarified, drawn on a Canvas). Tapping a folder, the app list or an app
- * calls [onOpen] (estimates and aggregated rows have nothing behind them). Labels are drawn only
- * where they fit.
+ * Treemap of [children] (squarified, drawn on a Canvas), tile areas by [measure] ("Belegt" or
+ * "Größe"). Tapping a folder, the app list or an app calls [onOpen] (estimates and aggregated rows
+ * have nothing behind them). Labels are drawn only where they fit.
  */
 @Composable
-internal fun TreemapView(children: List<AnalyzeChild>, onOpen: (AnalyzeChild) -> Unit, modifier: Modifier = Modifier) {
-    val tiles = remember(children) { tilesOf(children) }
+internal fun TreemapView(
+    children: List<AnalyzeChild>,
+    onOpen: (AnalyzeChild) -> Unit,
+    modifier: Modifier = Modifier,
+    measure: SizeMeasure = SizeMeasure.Size,
+) {
+    val tiles = remember(children, measure) { tilesOf(children, measure) }
     val currentOnOpen by rememberUpdatedState(onOpen)
     val measurer = rememberTextMeasurer()
     val border = MaterialTheme.colorScheme.surface
@@ -148,23 +153,28 @@ internal fun TreemapLegend(children: List<AnalyzeChild>, modifier: Modifier = Mo
     }
 }
 
-private fun tilesOf(children: List<AnalyzeChild>): List<Tile> {
-    val sorted = children.filter { it.size > 0 }.sortedByDescending { it.size }
-    val shown = sorted.take(MAX_TILES).map { Tile(it, it.name, it.size, tileKind(it).color) }
+private fun tilesOf(children: List<AnalyzeChild>, measure: SizeMeasure): List<Tile> {
+    val sorted = children.filter { measure.of(it) > 0 }.sortedByDescending { measure.of(it) }
+    val shown = sorted.take(MAX_TILES).map { Tile(it, it.name, measure.of(it), tileKind(it).color) }
     val rest = sorted.drop(MAX_TILES)
     if (rest.isEmpty()) return shown
     val label = "${rest.size} weitere"
-    return shown + Tile(null, label, rest.sumOf { it.size }, TileKind.Other.color.copy(alpha = 0.6f))
+    return shown + Tile(null, label, rest.sumOf { measure.of(it) }, TileKind.Other.color.copy(alpha = 0.6f))
 }
 
 /** Bar for one list row: share of [size] in [total]. */
 internal fun shareOf(size: Long, total: Long): Float = if (total <= 0) 0f else (size.toDouble() / total).coerceIn(0.0, 1.0).toFloat()
 
-/** Treemap with its color legend. */
+/** Treemap with its color legend; tile areas by [measure]. */
 @Composable
-internal fun TreemapBlock(children: List<AnalyzeChild>, onOpen: (AnalyzeChild) -> Unit, modifier: Modifier = Modifier) {
+internal fun TreemapBlock(
+    children: List<AnalyzeChild>,
+    onOpen: (AnalyzeChild) -> Unit,
+    modifier: Modifier = Modifier,
+    measure: SizeMeasure = SizeMeasure.Size,
+) {
     Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        TreemapView(children, onOpen)
+        TreemapView(children, onOpen, measure = measure)
         TreemapLegend(children)
     }
 }

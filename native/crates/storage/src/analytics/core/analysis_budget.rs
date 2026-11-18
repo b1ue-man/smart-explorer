@@ -4,11 +4,7 @@ use super::{aggregate_name, Progress, SizeNode};
 /// Keep exact subtree sizes while fitting the receiver's node budget. The
 /// scanner's shared budget bounds the initial tree; this pass accounts for
 /// aggregate nodes and container roots, which also consume receiver memory.
-pub fn fit_tree(
-    node: &mut SizeNode,
-    limit: u64,
-    progress: &Progress,
-) -> std::io::Result<u64> {
+pub fn fit_tree(node: &mut SizeNode, limit: u64, progress: &Progress) -> std::io::Result<u64> {
     progress.check_cancel()?;
     if limit == 0 || (limit == 1 && !node.children.is_empty()) {
         return Err(std::io::Error::new(
@@ -22,7 +18,8 @@ pub fn fit_tree(
     let children = std::mem::take(&mut node.children);
     let total = children.len();
     let mut used = 1u64;
-    let mut collapsed = (0u64, 0u64);
+    // Size, entries and occupied bytes folded into one aggregate.
+    let mut collapsed = (0u64, 0u64, 0u64);
     for (index, mut child) in children.into_iter().enumerate() {
         progress.check_cancel()?;
         let reserve = u64::from(index + 1 < total || collapsed.1 != 0);
@@ -31,6 +28,7 @@ pub fn fit_tree(
         if remaining < minimum {
             collapsed.0 = collapsed.0.saturating_add(child.size);
             collapsed.1 += 1;
+            collapsed.2 = collapsed.2.saturating_add(child.allocated);
             continue;
         }
         used += fit_tree(&mut child, remaining, progress)?;
@@ -40,6 +38,7 @@ pub fn fit_tree(
         node.children.push(SizeNode {
             name: aggregate_name(collapsed.1).into_boxed_str(),
             size: collapsed.0,
+            allocated: collapsed.2,
             is_dir: false,
             children: Vec::new(),
         });
@@ -57,11 +56,13 @@ mod tests {
         let mut root = SizeNode {
             name: "/".into(),
             size: 100,
+            allocated: 50,
             is_dir: true,
             children: (0..100)
                 .map(|index| SizeNode {
                     name: format!("file-{index}").into_boxed_str(),
                     size: 1,
+                    allocated: if index % 2 == 0 { 1 } else { 0 },
                     is_dir: false,
                     children: Vec::new(),
                 })
@@ -72,6 +73,13 @@ mod tests {
         assert_eq!(
             root.children.iter().map(|child| child.size).sum::<u64>(),
             100
+        );
+        assert_eq!(
+            root.children
+                .iter()
+                .map(|child| child.allocated)
+                .sum::<u64>(),
+            50
         );
         assert_eq!(
             super::super::tree_transfer::shape(Some(&root), &progress)?.nodes,

@@ -10,11 +10,13 @@ fn review_task_legacy_tree_budget_keeps_the_next_request_readable() {
     let frame = Frame::Tree(WireNode {
         name: "root".into(),
         size: 30,
+        allocated: None,
         is_dir: true,
         children: (0..30)
             .map(|index| WireNode {
                 name: index.to_string(),
                 size: 1,
+                allocated: None,
                 is_dir: false,
                 children: Vec::new(),
             })

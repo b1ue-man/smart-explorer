@@ -41,11 +41,15 @@ pub struct WireMeta {
     pub content_md5: Option<String>,
 }
 
-/// One node of the size tree.
+/// One node of the size tree. `allocated` is the occupied space (a folder:
+/// the sum below it, each hard-linked file counted once); `None` where the
+/// walking side could not say, and always after a `Tree` frame, which does
+/// not carry it (`TreeAllocated` does).
 #[derive(Clone, Debug, PartialEq)]
 pub struct WireNode {
     pub name: String,
     pub size: u64,
+    pub allocated: Option<u64>,
     pub is_dir: bool,
     pub children: Vec<WireNode>,
 }
@@ -123,6 +127,10 @@ pub enum Frame {
     Exists(bool),
     WalkTree(String),
     Tree(WireNode),
+    /// `WalkTree` answered by `TreeAllocated` (tag 91/92,
+    /// `tree-allocated-v1`): every node with its occupied bytes.
+    WalkTreeAllocated(String),
+    TreeAllocated(WireNode),
     /// Read `len` bytes from `offset` (len 0 = to EOF) -> `Data`* `End`.
     Read {
         path: String,

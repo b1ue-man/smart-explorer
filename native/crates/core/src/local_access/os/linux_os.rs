@@ -20,9 +20,7 @@ pub fn parallel_scan_allowed() -> bool {
 /// A failing entry is reported as `<entry path>: <error>` with the original
 /// kind. The storage analysis relies on that prefix to tell a hidden
 /// `Android/data` or `Android/obb` entry from a real read error.
-pub fn read_directory(
-    path: &Path,
-) -> io::Result<impl Iterator<Item = io::Result<LocalEntry>>> {
+pub fn read_directory(path: &Path) -> io::Result<impl Iterator<Item = io::Result<LocalEntry>>> {
     use std::os::unix::fs::DirEntryExt;
     // Entries in inode order before their one `lstat` each (coreutils `cp`,
     // gnulib savedir SAVEDIR_SORT_FASTREAD): a cold tree is then read close
@@ -51,12 +49,16 @@ pub fn read_directory(
         };
         let name = entry.file_name();
         let hidden = name.as_encoded_bytes().first() == Some(&b'.');
+        let (allocated, hardlink) = occupancy(kind, &metadata);
         Ok(LocalEntry {
             name,
             kind,
             is_dir: ty.is_dir(),
             is_link_like: ty.is_symlink(),
             size,
+            allocated,
+            hardlink,
+            device: Some(std::os::unix::fs::MetadataExt::dev(&metadata)),
             unreachable: false,
             mtime_ms: metadata.modified().map(system_time_ms).unwrap_or(0),
             btime_ms: metadata.created().map(system_time_ms).unwrap_or(0),
@@ -65,6 +67,32 @@ pub fn read_directory(
         })
     }))
 }
+
+/// Occupied bytes (`st_blocks` counts 512-byte units on Linux and Android,
+/// independent of the file system block size) and, for a file with more than
+/// one hard link, its `(st_dev, st_ino)` identity. Only regular files carry
+/// bytes, like `size`.
+pub(super) fn occupancy(
+    kind: EntryKind,
+    metadata: &std::fs::Metadata,
+) -> (Option<u64>, Option<(u64, u64)>) {
+    use std::os::unix::fs::MetadataExt;
+    if kind != EntryKind::File {
+        return (Some(0), None);
+    }
+    let hardlink = (metadata.nlink() > 1).then(|| (metadata.dev(), metadata.ino()));
+    (Some(metadata.blocks().saturating_mul(512)), hardlink)
+}
+
+/// The file system (`st_dev`) of `path`, following a link at the path.
+pub fn device_of(path: &Path) -> Option<u64> {
+    std::fs::metadata(path)
+        .ok()
+        .map(|metadata| std::os::unix::fs::MetadataExt::dev(&metadata))
+}
+
+/// Unix keeps no per-scan state.
+pub fn begin_scan() {}
 
 pub fn normalize_scan_root(root: &Path) -> std::path::PathBuf {
     root.to_path_buf()
@@ -195,4 +223,87 @@ pub fn secure_private_handle(file: &std::fs::File, is_directory: bool) -> io::Re
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod belegt_tests {
+    use super::*;
+
+    /// A sparse file occupies fewer bytes than its size; a second hard link
+    /// carries the shared `(st_dev, st_ino)` identity on both names.
+    #[test]
+    fn belegt_task_linux_blocks_and_hardlink_identity() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let sparse = dir.path().join("sparse");
+        let file = std::fs::File::create(&sparse).expect("create");
+        file.set_len(64 * 1024 * 1024).expect("extend");
+        drop(file);
+        let single = dir.path().join("single");
+        std::fs::write(&single, vec![1u8; 10_000]).expect("write");
+        std::fs::hard_link(&single, dir.path().join("twin")).expect("hard link");
+        let entries: Vec<_> = read_directory(dir.path())
+            .expect("list")
+            .collect::<io::Result<_>>()
+            .expect("entries");
+        let find = |name: &str| {
+            entries
+                .iter()
+                .find(|entry| entry.name == name)
+                .expect("entry")
+        };
+        let sparse = find("sparse");
+        assert_eq!(sparse.size, 64 * 1024 * 1024);
+        assert!(sparse.allocated.expect("known") < sparse.size);
+        assert_eq!(sparse.hardlink, None);
+        let (single, twin) = (find("single"), find("twin"));
+        assert!(single.allocated.expect("known") >= 10_000);
+        assert!(single.hardlink.is_some());
+        assert_eq!(single.hardlink, twin.hardlink);
+    }
+
+    /// The size listing of an opened folder: one `fstatat` per entry,
+    /// folders without one (their file system from the opened child), the
+    /// same sizes as the full listing.
+    #[test]
+    fn analyse_task_size_listing_stats_relative_and_skips_folders() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        std::fs::write(dir.path().join("f.bin"), vec![3u8; 5000]).expect("write");
+        std::fs::create_dir(dir.path().join("sub")).expect("dir");
+        let handle = DirectoryHandle::open_root(dir.path()).expect("root");
+        let quick: Vec<_> = handle
+            .read_directory_for_sizes()
+            .expect("list")
+            .collect::<io::Result<_>>()
+            .expect("entries");
+        let full: Vec<_> = handle
+            .read_directory()
+            .expect("list")
+            .collect::<io::Result<_>>()
+            .expect("entries");
+        let find = |entries: &[LocalEntry], name: &str| {
+            entries
+                .iter()
+                .find(|entry| entry.name == name)
+                .map(|entry| {
+                    (
+                        entry.kind,
+                        entry.size,
+                        entry.allocated,
+                        entry.device,
+                        entry.mtime_ms,
+                    )
+                })
+                .expect("entry")
+        };
+        assert_eq!(find(&quick, "f.bin"), find(&full, "f.bin"));
+        let (kind, _, _, device, _) = find(&quick, "sub");
+        assert_eq!(kind, EntryKind::Directory);
+        assert_eq!(device, None);
+        let root_device = device_of(dir.path());
+        assert!(root_device.is_some());
+        let child = handle
+            .open_child(std::ffi::OsStr::new("sub"))
+            .expect("child");
+        assert_eq!(child.device_id(), root_device);
+    }
 }

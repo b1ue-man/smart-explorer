@@ -22,7 +22,14 @@ impl AgentBackend {
         let mux = lease.mux()?;
         let (id, rx) = mux.register_with_tree_budget(budget);
         let result = (|| {
-            mux.send(id, Frame::WalkTree(root.to_string()))?;
+            // An agent with `tree-allocated-v1` sends every node's occupied
+            // bytes; others keep the plain tree (occupancy unknown).
+            let request = if self.features().tree_allocated {
+                Frame::WalkTreeAllocated(root.to_string())
+            } else {
+                Frame::WalkTree(root.to_string())
+            };
+            mux.send(id, request)?;
             let mut last = (0u64, 0u64);
             loop {
                 match rx.recv_timeout(Duration::from_millis(250)) {
@@ -36,7 +43,7 @@ impl AgentBackend {
                             ));
                         }
                     }
-                    Ok(Frame::Tree(node)) => return Ok(Some(node)),
+                    Ok(Frame::Tree(node) | Frame::TreeAllocated(node)) => return Ok(Some(node)),
                     Ok(Frame::Err(error)) if error == crate::agent_proto::TREE_BUDGET_ERROR => {
                         return Err(io::Error::new(io::ErrorKind::OutOfMemory, error))
                     }

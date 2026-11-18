@@ -7,6 +7,12 @@ pub type FileIdentity = (u32, u64);
 mod persistent_file_proof;
 pub use persistent_file_proof::{same_file_object, stable_handle_identity};
 
+/// The metadata of a path walk carries no allocation size on Windows (the
+/// storage analysis reads it from the directory records instead).
+pub fn occupancy(_metadata: &std::fs::Metadata) -> (Option<u64>, Option<(u64, u64)>) {
+    (None, None)
+}
+
 pub fn metadata_is_link_like(path: &Path, metadata: &std::fs::Metadata) -> bool {
     metadata_class(path, metadata).0
 }
@@ -161,11 +167,7 @@ pub fn path_matches_identity(path: &Path, expected: FileIdentity) -> io::Result<
 
 /// Writes all of `buf` at `offset` (`seek_write` in a loop; it moves the file
 /// pointer, which a stage that is only written at offsets never reads).
-pub fn write_all_at(
-    file: &std::fs::File,
-    mut buf: &[u8],
-    mut offset: u64,
-) -> io::Result<()> {
+pub fn write_all_at(file: &std::fs::File, mut buf: &[u8], mut offset: u64) -> io::Result<()> {
     use std::os::windows::fs::FileExt;
     while !buf.is_empty() {
         match file.seek_write(buf, offset) {

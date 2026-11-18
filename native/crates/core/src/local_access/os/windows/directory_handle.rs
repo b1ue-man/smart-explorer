@@ -183,6 +183,17 @@ impl DirectoryHandle {
         })))
     }
 
+    /// Windows walks stay on one volume through its link boundaries (mount
+    /// points are name surrogates); no device number is needed.
+    pub fn device_id(&self) -> Option<u64> {
+        None
+    }
+
+    /// The directory records already carry every size figure.
+    pub fn read_directory_for_sizes(&self) -> io::Result<DirectoryEntries> {
+        self.read_directory()
+    }
+
     /// The existing batch reader, including its ordinary-provider fallback,
     /// uses a fresh enumeration handle while pinned ancestors prevent any
     /// redirect of the path that fallback needs.

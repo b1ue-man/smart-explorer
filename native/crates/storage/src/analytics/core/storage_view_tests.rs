@@ -4,6 +4,7 @@ fn dir(name: &str, children: Vec<SizeNode>) -> SizeNode {
     SizeNode {
         name: name.into(),
         size: children.iter().map(|child| child.size).sum(),
+        allocated: children.iter().map(|child| child.allocated).sum(),
         is_dir: true,
         children,
     }
@@ -13,6 +14,7 @@ fn file(name: &str, size: u64) -> SizeNode {
     SizeNode {
         name: name.into(),
         size,
+        allocated: size,
         is_dir: false,
         children: Vec::new(),
     }
@@ -440,6 +442,7 @@ impl CloneTree for SizeNode {
         SizeNode {
             name: self.name.clone(),
             size: self.size,
+            allocated: self.allocated,
             is_dir: self.is_dir,
             children: self.children.iter().map(CloneTree::clone_tree).collect(),
         }

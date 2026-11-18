@@ -93,7 +93,7 @@ pub(in crate::share) fn sha256_groups(
                     },
                     evidence: DuplicateEvidence::LocalSha256,
                     size: group.size,
-                    reclaimable: group.size.saturating_mul(items.len() as u64 - 1),
+                    reclaimable: DuplicateGroup::reclaimable_of(&items),
                     items,
                 });
             }

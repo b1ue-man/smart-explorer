@@ -409,6 +409,11 @@ impl TaskCtx {
         });
     }
 
+    /// Occupied bytes of a storage analysis (`allocatedBytes`).
+    pub(crate) fn allocated(&self, bytes: u64) {
+        self.update(|record| record.set_allocated(bytes));
+    }
+
     pub(crate) fn message(&self, text: &str) {
         self.update(|record| record.set_message(text));
     }

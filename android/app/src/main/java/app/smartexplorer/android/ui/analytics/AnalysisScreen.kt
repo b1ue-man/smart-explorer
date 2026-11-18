@@ -36,7 +36,7 @@ import app.smartexplorer.android.ui.more.SubPageScaffold
 import app.smartexplorer.android.ui.more.TextReportDialog
 
 /** Which report dialog the result page shows. */
-private enum class Report { Issues, Protected, Notes }
+private enum class Report { Issues, Protected, Notes, Measure }
 
 /** Notes shown in the header before "Alle Hinweise" collects the rest. */
 private const val INLINE_NOTES = 2
@@ -135,6 +135,9 @@ private fun ResultPage(vm: AnalysisViewModel, onClose: () -> Unit) {
         )
         report == Report.Notes -> TextReportDialog("Hinweise", issues.notes.joinToString("\n\n"), onDismiss = { report = null })
     }
+    if (report == Report.Measure) {
+        TextReportDialog("Größe und Belegt", MEASURE_EXPLANATION, onDismiss = { report = null })
+    }
 }
 
 /**
@@ -143,14 +146,16 @@ private fun ResultPage(vm: AnalysisViewModel, onClose: () -> Unit) {
  */
 @Composable
 private fun NotesRows(vm: AnalysisViewModel, onReport: (Report) -> Unit) {
-    val notes = vm.issues?.notes.orEmpty()
+    val notes = orderedNotes(vm.issues?.notes.orEmpty())
     if (notes.isEmpty() || vm.path.isNotEmpty()) return
     val tint = MaterialTheme.colorScheme.onSurfaceVariant
-    notes.take(INLINE_NOTES).forEach { note -> NoticeRow(R.drawable.ic_info, note, tint = tint) }
-    if (notes.size > INLINE_NOTES) {
+    // The analysis way and uncounted file systems always stand here.
+    val inline = maxOf(INLINE_NOTES, notes.count { prominentNote(it) })
+    notes.take(inline).forEach { note -> NoticeRow(R.drawable.ic_info, note, tint = tint) }
+    if (notes.size > inline) {
         NoticeRow(
             R.drawable.ic_info,
-            "${notes.size - INLINE_NOTES} weitere Hinweise",
+            "${notes.size - inline} weitere Hinweise",
             tint = tint,
             actionLabel = "Alle Hinweise",
             onAction = { onReport(Report.Notes) },
@@ -169,7 +174,8 @@ private fun EmptyFolder(node: AnalyzeNode, vm: AnalysisViewModel, onReport: (Rep
     if (!vm.insideProtected && !lockedRoot) {
         Column(Modifier.fillMaxSize()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) { NotesRows(vm, onReport) }
-            EmptyState(R.drawable.ic_folder, "Dieser Ordner ist leer", modifier = Modifier.weight(1f), message = Format.size(node.size))
+            EmptyState(R.drawable.ic_folder, "Dieser Ordner ist leer", modifier = Modifier.weight(1f),
+                message = sizesText(node.size, nodeAllocated(node), node.allocatedKnown))
         }
         return
     }
@@ -194,6 +200,13 @@ private fun NodeList(node: AnalyzeNode, vm: AnalysisViewModel, onReport: (Report
     val issues = vm.issues
     // node.size holds the estimates below it, with app folders that are also inside "≈ Apps" once.
     val total = remember(node) { if (node.size > 0) node.size else node.children.sumOf { it.size } }
+    val known = node.allocatedKnown
+    val measure = SizeMeasure.effective(vm.measure, known)
+    val allocatedTotal = remember(node) {
+        if (nodeAllocated(node) > 0) nodeAllocated(node) else node.children.sumOf { it.allocatedBytes }
+    }
+    // Shares and bars follow "Sortieren/Kacheln nach".
+    val shareTotal = if (measure == SizeMeasure.Allocated) allocatedTotal else total
     val estimated = remember(node) { (node.size - node.measured).coerceAtLeast(0) }
     val counted = remember(node) { (node.children.sumOf { it.size } - total).coerceAtLeast(0) }
     val hasApps = remember(node) { node.children.any { it.rowKind == AnalyzeKind.Apps } }
@@ -203,7 +216,9 @@ private fun NodeList(node: AnalyzeNode, vm: AnalysisViewModel, onReport: (Report
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 val where = if (vm.path.isEmpty()) vm.location.orEmpty() else vm.path.joinToString(" › ")
                 Text(where, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                Text("${Format.size(total)} · $entries ${if (node.isAppList) "Apps" else "Einträge"}", style = MaterialTheme.typography.titleSmall)
+                Text("${sizesText(total, allocatedTotal, known)} · $entries ${if (node.isAppList) "Apps" else "Einträge"}",
+                    style = MaterialTheme.typography.titleSmall)
+                MeasureSwitch(vm.measure, known, onChoose = { vm.chooseMeasure(it) }, onExplain = { onReport(Report.Measure) })
                 val volumeTotal = node.volumeTotal
                 val volumeFree = node.volumeFree
                 if (volumeTotal != null && volumeFree != null && volumeTotal > 0) {
@@ -248,11 +263,26 @@ private fun NodeList(node: AnalyzeNode, vm: AnalysisViewModel, onReport: (Report
                         onDismiss = { vm.dismissUsageHint() },
                     )
                 }
-                TreemapBlock(node.children, onOpen = { vm.open(it) })
+                // The app list has no files of its own to list by size or type.
+                if (!node.isAppList) AnalysisTabs(vm.tab, onChoose = { vm.chooseTab(it) })
+                when {
+                    node.isAppList || vm.tab == AnalysisTab.Treemap ->
+                        TreemapBlock(node.children, onOpen = { vm.open(it) }, measure = measure)
+                    else -> OverviewHint(vm.overview)
+                }
             }
         }
-        // Positional keys: a child named "header" or equal names (Google Drive) must not collide.
-        items(node.children) { child -> ChildRow(child, total, onOpen = { vm.open(child) }) }
+        val overview = vm.overview
+        val openLocation = { location: String -> AppNav.send(NavRequest.OpenLocation(location)) }
+        when {
+            node.isAppList || vm.tab == AnalysisTab.Treemap ->
+                // Positional keys: a child named "header" or equal names (Google Drive) must not collide.
+                items(node.children) { child -> ChildRow(child, shareTotal, measure, known, onOpen = { vm.open(child) }) }
+            overview == null -> Unit
+            vm.tab == AnalysisTab.Largest ->
+                items(overview.largest) { file -> LargestRow(file, overview.allocatedKnown, onOpen = openLocation) }
+            else -> items(overview.types) { total -> TypeRow(total, overview.allocatedKnown) }
+        }
     }
 }
 

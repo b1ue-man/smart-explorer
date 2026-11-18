@@ -3,38 +3,70 @@ use super::super::fs_host_policy::TargetPolicy;
 use crate::analytics::{DuplicateReport, ScanOutcome, SizeNode};
 use std::{io, vec::IntoIter};
 
+/// Logical and occupied bytes a hidden subtree takes from its parents.
+#[derive(Clone, Copy, Default)]
+struct Removed {
+    size: u64,
+    allocated: u64,
+}
+impl Removed {
+    fn add(&mut self, other: Removed) {
+        self.size = self.size.saturating_add(other.size);
+        self.allocated = self.allocated.saturating_add(other.allocated);
+    }
+}
+
 trait Node: Sized {
     fn name(&self) -> &str;
-    fn size(&self) -> u64;
-    fn set_size(&mut self, value: u64);
+    fn bytes(&self) -> Removed;
+    fn subtract(&mut self, removed: Removed);
     fn children(&mut self) -> &mut Vec<Self>;
 }
-macro_rules! node {
-    ($ty:ty) => {
-        impl Node for $ty {
-            fn name(&self) -> &str {
-                &self.name
-            }
-            fn size(&self) -> u64 {
-                self.size
-            }
-            fn set_size(&mut self, value: u64) {
-                self.size = value;
-            }
-            fn children(&mut self) -> &mut Vec<Self> {
-                &mut self.children
-            }
+impl Node for SizeNode {
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn bytes(&self) -> Removed {
+        Removed {
+            size: self.size,
+            allocated: self.allocated,
         }
-    };
+    }
+    fn subtract(&mut self, removed: Removed) {
+        self.size = self.size.saturating_sub(removed.size);
+        self.allocated = self.allocated.saturating_sub(removed.allocated);
+    }
+    fn children(&mut self) -> &mut Vec<Self> {
+        &mut self.children
+    }
 }
-node!(SizeNode);
-node!(crate::agent_proto::WireNode);
+/// A wire node without occupied bytes occupies its size.
+impl Node for crate::agent_proto::WireNode {
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn bytes(&self) -> Removed {
+        Removed {
+            size: self.size,
+            allocated: self.allocated.unwrap_or(self.size),
+        }
+    }
+    fn subtract(&mut self, removed: Removed) {
+        self.size = self.size.saturating_sub(removed.size);
+        self.allocated = self
+            .allocated
+            .map(|bytes| bytes.saturating_sub(removed.allocated));
+    }
+    fn children(&mut self) -> &mut Vec<Self> {
+        &mut self.children
+    }
+}
 
 struct Frame<N> {
     node: N,
     path: String,
     children: IntoIter<N>,
-    removed: u64,
+    removed: Removed,
 }
 fn frame<N: Node>(mut node: N, path: String) -> Frame<N> {
     let children = std::mem::take(node.children()).into_iter();
@@ -42,7 +74,7 @@ fn frame<N: Node>(mut node: N, path: String) -> Frame<N> {
         node,
         path,
         children,
-        removed: 0,
+        removed: Removed::default(),
     }
 }
 fn tree<N: Node>(node: N, root: &str, policy: &TargetPolicy) -> io::Result<N> {
@@ -57,17 +89,16 @@ fn tree<N: Node>(node: N, root: &str, policy: &TargetPolicy) -> io::Result<N> {
             if policy.visible(&path, false) {
                 stack.push(frame(child, path));
             } else {
-                current.removed = current.removed.saturating_add(child.size());
+                current.removed.add(child.bytes());
             }
             continue;
         }
         let Some(mut done) = stack.pop() else {
             return Err(io::Error::other("Leerer Analyse-Filter"));
         };
-        done.node
-            .set_size(done.node.size().saturating_sub(done.removed));
+        done.node.subtract(done.removed);
         if let Some(parent) = stack.last_mut() {
-            parent.removed = parent.removed.saturating_add(done.removed);
+            parent.removed.add(done.removed);
             parent.node.children().push(done.node);
         } else {
             return Ok(done.node);
@@ -106,9 +137,7 @@ pub(super) fn duplicates(mut report: DuplicateReport, policy: &TargetPolicy) -> 
         group.items.retain(|item| {
             policy.visible(&item.path, false) && !super::super::fs_policy::private_name(&item.name)
         });
-        group.reclaimable = group
-            .size
-            .saturating_mul(group.items.len().saturating_sub(1) as u64);
+        group.reclaimable = crate::analytics::DuplicateGroup::reclaimable_of(&group.items);
     }
     report.groups.retain(|group| group.items.len() > 1);
     report.summary.groups = report.groups.len() as u64;

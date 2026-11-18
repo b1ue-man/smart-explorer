@@ -115,6 +115,10 @@ pub struct DuplicateReport {
     pub summary: DuplicateSummary,
     /// The root itself could not be read (outside protected areas).
     pub root_error: Option<String>,
+    /// Every copy carries its occupied bytes (`ReclaimItem::allocated`):
+    /// a local search, or a Share host with occupancy figures. Remote
+    /// listings, agent MD5 groups and older hosts count copies at their size.
+    pub allocated_known: bool,
 }
 
 impl DuplicateReport {
@@ -154,6 +158,7 @@ impl DuplicateReport {
             },
             groups: report.duplicate_groups,
             root_error: report.root_error,
+            allocated_known: false,
         }
     }
 }
@@ -311,6 +316,7 @@ pub fn find_duplicates_in_roots_with_open(
         },
         groups,
         root_error,
+        allocated_known: !walked.allocation_unknown,
     }
 }
 

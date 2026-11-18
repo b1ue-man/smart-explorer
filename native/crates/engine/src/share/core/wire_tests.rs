@@ -342,6 +342,7 @@ fn review_task_older_host_rejects_rv1_requests_instead_of_misreading_them() {
         request_id: Some("0123456789abcdef".into()),
         node_budget: Some(1000),
         compress: true,
+        allocated: true,
     }))
     .unwrap();
     assert!(serde_json::from_str::<OlderRequest>(&analysis).is_ok());

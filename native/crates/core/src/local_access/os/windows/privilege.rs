@@ -4,6 +4,7 @@ use std::{
     marker::PhantomData,
     ptr::{null, null_mut},
     rc::Rc,
+    sync::atomic::{AtomicBool, Ordering},
 };
 use windows_sys::Win32::{
     Foundation::{CloseHandle, GetLastError, SetLastError, ERROR_NO_TOKEN, HANDLE, LUID},
@@ -16,6 +17,17 @@ use windows_sys::Win32::{
         GetCurrentProcess, GetCurrentThread, OpenProcessToken, OpenThreadToken, SetThreadToken,
     },
 };
+
+/// The process token was found without `SeBackupPrivilege` (it cannot gain
+/// it later); until the next scan begins, no further attempt is made for a
+/// thread without its own token. A thread token is always tried.
+static PROCESS_LACKS_BACKUP: AtomicBool = AtomicBool::new(false);
+const ERROR_NOT_ALL_ASSIGNED: u32 = 1300;
+
+/// A scan begins: the backup privilege is tried once again.
+pub fn begin_scan() {
+    PROCESS_LACKS_BACKUP.store(false, Ordering::Relaxed);
+}
 
 struct Token(HANDLE);
 impl Drop for Token {
@@ -64,6 +76,9 @@ impl BackupRead {
             }
             None
         };
+        if previous.is_none() && PROCESS_LACKS_BACKUP.load(Ordering::Relaxed) {
+            return Err(io::Error::from_raw_os_error(ERROR_NOT_ALL_ASSIGNED as i32));
+        }
         let process;
         let source = if let Some(token) = &previous {
             token.0
@@ -118,6 +133,9 @@ impl BackupRead {
         let error = unsafe { GetLastError() };
         // A true return can still mean ERROR_NOT_ALL_ASSIGNED.
         if ok == 0 || error != 0 {
+            if previous.is_none() && error == ERROR_NOT_ALL_ASSIGNED {
+                PROCESS_LACKS_BACKUP.store(true, Ordering::Relaxed);
+            }
             return Err(io::Error::from_raw_os_error(error as i32));
         }
         if unsafe { SetThreadToken(null(), token.0) } == 0 {

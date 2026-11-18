@@ -159,6 +159,7 @@ impl BackendExtensions for MockBackend {
             groups: report.groups.clone(),
             summary: report.summary.clone(),
             root_error: report.root_error.clone(),
+            allocated_known: report.allocated_known,
         }))
     }
 
@@ -315,6 +316,7 @@ fn review_task_host_search_is_preferred_over_any_walk() {
                         ..DuplicateSummary::default()
                     },
                     root_error: None,
+                    allocated_known: false,
                 }),
                 ..MockBackend::default()
             });
