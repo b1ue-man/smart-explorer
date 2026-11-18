@@ -314,3 +314,44 @@ fn login_selbst_task_script_failure_carries_installer_line() {
         "se fehlt neben dem Programm (Meldung des Schritts: gone)"
     );
 }
+
+/// A worker without the app image beside it (terminal-only `se`) leaves
+/// `image_missing`; the desktop worker of the same version still sets up.
+#[test]
+fn login_selbst_task_missing_image_does_not_block_the_version() {
+    let failed = marker(
+        SelfState::Failed("image_missing".into()),
+        LoginTrigger::ListChanged,
+    );
+    for trigger in [LoginTrigger::VersionStart, LoginTrigger::ListChanged] {
+        assert_eq!(
+            decide(trigger, true, &Installed::Missing, Some(&failed), VERSION),
+            Plan::Install
+        );
+    }
+    assert_eq!(
+        decide(
+            LoginTrigger::Watch,
+            true,
+            &Installed::Missing,
+            Some(&failed),
+            VERSION
+        ),
+        Plan::Keep(SelfState::Failed("image_missing".into()))
+    );
+    // Any other failure of this version still waits for a grant.
+    let other = marker(
+        SelfState::Failed("script".into()),
+        LoginTrigger::ListChanged,
+    );
+    assert_eq!(
+        decide(
+            LoginTrigger::VersionStart,
+            true,
+            &Installed::Missing,
+            Some(&other),
+            VERSION
+        ),
+        Plan::Keep(SelfState::Failed("script".into()))
+    );
+}

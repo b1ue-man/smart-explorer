@@ -215,15 +215,23 @@ pub enum Plan {
 
 /// Only a grant asks again after a result of this version; without a
 /// result every trigger but `Watch` may set up (that first run writes the
-/// marker, so a version change leads to exactly one setup).
+/// marker, so a version change leads to exactly one setup). A missing app
+/// image is a fact of the process that tried (a terminal-only `se` worker
+/// before the desktop worker takes over), not of the version: it never
+/// blocks the next process, and it failed before any prompt.
 fn may_install(trigger: LoginTrigger, marker: Option<&Marker>) -> bool {
     match (trigger, marker) {
         (LoginTrigger::Watch, _) => false,
         (_, None) => true,
+        (_, Some(marker)) if image_was_missing(marker) => true,
         (LoginTrigger::Grant, Some(_)) => true,
         (LoginTrigger::PeerRequest, Some(marker)) => marker.state != SelfState::Declined,
         _ => false,
     }
+}
+
+fn image_was_missing(marker: &Marker) -> bool {
+    matches!(&marker.state, SelfState::Failed(reason) if reason == "image_missing")
 }
 
 pub fn decide(
