@@ -86,10 +86,13 @@ pub(in super::super) fn scan_local(
     report(diagnostics, root, &found);
     if scan.root().record == ROOT_RECORD {
         visitor.begin_system_files();
-        match walked(
-            &mut visitor,
-            MftSection::SystemFiles,
+        match walk_section(
+            &index,
+            scan.root(),
             super::SYSTEM_FILES_NAME,
+            MftSection::SystemFiles,
+            progress,
+            &mut visitor,
         ) {
             Ok((system, retention, found)) => {
                 report(diagnostics, root, &found);

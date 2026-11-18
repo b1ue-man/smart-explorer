@@ -164,7 +164,7 @@ pub(in crate::app) fn reclaim_allocated_text(allocated: u64, remote: bool) -> St
 }
 
 #[cfg(test)]
-mod tests {
+mod allocated_tests {
     #[test]
     fn belegt_task_reclaim_occupied_space_is_unknown_for_remote_sources() {
         assert_eq!(super::reclaim_allocated_text(4096, true), "unbekannt");
