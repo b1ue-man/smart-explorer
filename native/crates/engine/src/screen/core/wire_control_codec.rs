@@ -66,6 +66,10 @@ pub fn encode_viewer_frame(frame: &ViewerFrame) -> io::Result<(u8, Vec<u8>)> {
         ViewerFrame::FrameTiming(request) => {
             (super::super::frame_timing::FRAME_TIMING, to_json(request)?)
         }
+        ViewerFrame::SetDisplay(choice) => {
+            choice.validate()?;
+            (super::super::set_display::SET_DISPLAY, to_json(choice)?)
+        }
         ViewerFrame::Audio(on) => (super::super::audio_wire::AUDIO, vec![u8::from(*on)]),
         ViewerFrame::AudioReport(report) => {
             (super::super::audio_wire::AUDIO_REPORT, to_json(report)?)
@@ -145,6 +149,14 @@ pub fn decode_viewer_frame(tag: u8, payload: &[u8]) -> io::Result<ViewerFrame> {
             ViewerFrame::SetDecoders(set)
         }
         super::super::frame_timing::FRAME_TIMING => ViewerFrame::FrameTiming(from_json(payload)?),
+        super::super::set_display::SET_DISPLAY => {
+            if payload.len() > super::super::set_display::MAX_SET_DISPLAY_BYTES {
+                return Err(invalid("set display exceeds its budget"));
+            }
+            let choice: super::super::virtual_display::VirtualDisplayChoice = from_json(payload)?;
+            choice.validate()?;
+            ViewerFrame::SetDisplay(choice)
+        }
         super::super::audio_wire::AUDIO if payload == [0] || payload == [1] => {
             ViewerFrame::Audio(payload[0] != 0)
         }

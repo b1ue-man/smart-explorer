@@ -137,6 +137,7 @@ pub mod sender_budget;
 #[allow(dead_code)]
 pub mod session_state;
 pub mod set_decoders;
+pub mod set_display;
 pub mod sharp_mode;
 pub mod snapshot;
 pub mod synthetic;

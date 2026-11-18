@@ -49,6 +49,11 @@ pub struct VirtualDisplayReport {
     pub driver: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// `HELLO_OK` only: this host takes `SET_DISPLAY` in the session
+    /// (`set_display.rs`); absent from hosts before P9 and in the
+    /// statistics.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub live: bool,
 }
 
 impl VirtualDisplayReport {
@@ -59,6 +64,7 @@ impl VirtualDisplayReport {
             height: size.map_or(0, |size| size.height),
             driver: driver.into(),
             reason: None,
+            live: false,
         }
     }
 

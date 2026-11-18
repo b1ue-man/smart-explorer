@@ -258,10 +258,13 @@ impl ViewState {
                     session.send(ViewerFrame::SetMode(mode));
                 }
             }
-            // P5 (plan 2026-11-17): the host takes „Monitor“ and
-            // „Auflösung“ with the hello, so the session opens again.
+            // P5 (plan 2026-11-17): „Monitor“ and „Auflösung“ go live to a
+            // host that answered `live` (P9); an older one takes them with
+            // the hello, so the session opens again.
             ToolbarAction::VirtualDisplay(choice) => {
-                if super::screen_toolbar_ui::apply_virtual_display(*choice) {
+                if super::screen_toolbar_ui::apply_virtual_display(*choice)
+                    && !super::screen_toolbar_ui::send_live(self.session.as_ref(), *choice)
+                {
                     self.reconnect(common, display);
                 }
             }

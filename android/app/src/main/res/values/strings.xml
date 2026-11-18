@@ -124,6 +124,15 @@
     <string name="screen_view_max_rate_invalid">Bitte eine positive Zahl eingeben, zum Beispiel 20 oder 7,5.</string>
     <string name="screen_view_max_rate_set">Übernehmen</string>
     <string name="screen_view_max_rate_cancel">Abbrechen</string>
+    <string name="screen_view_monitor">Monitor</string>
+    <string name="screen_view_monitor_auto">Automatisch (eigener nur ohne Monitor am Gerät)</string>
+    <string name="screen_view_monitor_off">Physischer Monitor</string>
+    <string name="screen_view_monitor_request">Eigener (virtuell)</string>
+    <string name="screen_view_resolution">Auflösung</string>
+    <string name="screen_view_resolution_follow">Ansichtsgröße folgen</string>
+    <string name="screen_view_resolution_custom">Eigene Größe … %1$s</string>
+    <string name="screen_view_resolution_prompt">Breite x Höhe, zum Beispiel 2560x1440</string>
+    <string name="screen_view_resolution_invalid">Bitte Breite x Höhe eingeben, jede Seite 1 bis 16384.</string>
     <string name="screen_view_info_codec">Codec: %1$s</string>
     <string name="screen_view_info_decoder_hardware">Dekodierer: Hardware (%1$s)</string>
     <string name="screen_view_info_decoder_software">Dekodierer: Software (%1$s)</string>

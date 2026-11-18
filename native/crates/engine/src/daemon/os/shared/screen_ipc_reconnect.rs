@@ -352,6 +352,11 @@ pub(super) async fn relay_session(
                 if let Some(set) = modes.decoders() {
                     let _ = next.control.send(ViewerFrame::SetDecoders(set)).await;
                 }
+                // „Monitor“/„Auflösung“ chosen in the session (P9); the
+                // viewer task drops it for a host without `live`.
+                if let Some(choice) = modes.display() {
+                    let _ = next.control.send(ViewerFrame::SetDisplay(choice)).await;
+                }
                 // The host's sound (P9), only to a host that answered it.
                 if let Some(on) = modes.audio().filter(|_| next.hello.audio.is_some()) {
                     let _ = next.control.send(ViewerFrame::Audio(on)).await;

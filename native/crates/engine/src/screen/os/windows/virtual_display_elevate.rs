@@ -10,6 +10,19 @@
 //!   again on its own, downloads by itself and trusts nothing its caller
 //!   wrote.
 //!
+//! An unattended update must not wait for a confirmation only a person at
+//! the device can give (plan 2026-11-17 P9). So `after-update` runs the step
+//! in its own process when that is elevated already, and on a device where
+//! se has its privileged component (the login broker service, LocalSystem,
+//! whose own administrator approval per version a viewer gives through the
+//! login screen) it leaves the step to se's one elevated call of the next
+//! service start (`after_update_start`: party `Display` of
+//! `rdp::host_setup::elevated`, the step `SYSTEM_STEP` of `se rdp host-setup
+//! --system`), in-process when the worker is privileged itself. Only
+//! without such a component does the update ask with its own UAC prompt.
+//! The step itself is the same everywhere (`install::run`): it signs again
+//! only when the driver's files change.
+//!
 //! Exit codes: 0 done or nothing to do, 1223 the elevation was declined,
 //! 1 failed. The result line of the elevated step is in `last-run.txt` of
 //! se's driver directory.
@@ -25,6 +38,8 @@ use windows_sys::Win32::UI::Shell::{
 use windows_sys::Win32::UI::WindowsAndMessaging::SW_HIDE;
 
 use super::{install, pins, win_display};
+use crate::login::os::shared::self_install::Elevation;
+use crate::rdp::host_setup::elevated::{self as bundle, Launched, Party};
 use crate::screen::core::virtual_display::windows_driver::{update_offers_step, DriverStep};
 
 /// The argument of the unelevated entry.
@@ -32,6 +47,12 @@ pub const SWITCH: &str = "--display-driver";
 /// The argument of the elevated process.
 pub const ELEVATED_SWITCH: &str = "--display-driver-elevated";
 const DECLINED: u32 = 1223;
+/// The step of the driver in se's one elevated call (`se rdp host-setup
+/// --system virtual-display-windows-driver`).
+pub const SYSTEM_STEP: &str = "virtual-display-windows-driver";
+/// Exit code of a failed step in that call (the display band 50..=55 of
+/// `rdp::host_setup::elevated`).
+const STEP_FAILED: i32 = 55;
 
 fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(std::iter::once(0)).collect()
@@ -47,6 +68,133 @@ fn declined_marker() -> PathBuf {
 fn note(message: &str) {
     if let Ok(dir) = install::directory() {
         let _ = std::fs::write(dir.join("last-run.txt"), message);
+    }
+}
+
+/// An update left the step to se's elevated call of the next service start.
+fn pending_marker() -> PathBuf {
+    crate::support_dirs::app_data_dir()
+        .join("screen")
+        .join("virtual-display-pending")
+}
+
+fn write_marker(marker: &PathBuf, text: &[u8]) {
+    if let Some(parent) = marker.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(marker, text);
+}
+
+fn is_elevated() -> bool {
+    // SAFETY: plain query of this process's token.
+    unsafe { IsUserAnAdmin() != 0 }
+}
+
+/// se's privileged component on this device: the login broker service
+/// (LocalSystem), installed with an administrator approval per version.
+fn privileged_component() -> bool {
+    use windows_sys::Win32::System::Services::{
+        CloseServiceHandle, OpenSCManagerW, OpenServiceW, SC_MANAGER_CONNECT, SERVICE_QUERY_STATUS,
+    };
+    let name = wide(crate::login::os::platform::SERVICE);
+    // SAFETY: plain service manager calls; every handle is closed below.
+    unsafe {
+        let manager = OpenSCManagerW(null(), null(), SC_MANAGER_CONNECT);
+        if manager.is_null() {
+            return false;
+        }
+        let service = OpenServiceW(manager, name.as_ptr(), SERVICE_QUERY_STATUS);
+        let installed = !service.is_null();
+        if installed {
+            CloseServiceHandle(service);
+        }
+        CloseServiceHandle(manager);
+        installed
+    }
+}
+
+/// `se rdp host-setup --system virtual-display-windows-driver`: the step in
+/// se's elevated call (or in a privileged worker); its line and exit code.
+pub fn system_step() -> (String, i32) {
+    if !is_elevated() {
+        return ("display_state=failed:not_elevated".into(), STEP_FAILED);
+    }
+    let result = pins::pins()
+        .map_err(|error| error.to_string())
+        .and_then(install::run);
+    match result {
+        Ok(message) => {
+            note(&message);
+            ("display_state=done".into(), 0)
+        }
+        Err(error) => {
+            note(&format!("virtueller Bildschirm: {error}"));
+            let reason: String = error
+                .chars()
+                .map(|c| if c.is_control() { ' ' } else { c })
+                .collect();
+            (format!("display_state=failed:{reason}"), STEP_FAILED)
+        }
+    }
+}
+
+/// Service start of the worker: a driver step an update left
+/// (`pending_marker`) joins the one approval of this start's self-setups
+/// (announced before the login setup hands in its step), or runs here when
+/// this process is privileged. A step that ran (also a failed or declined
+/// one) is not asked again; a step that could not start waits for the next
+/// start.
+pub fn after_update_start() {
+    if cfg!(any(test, feature = "test-support")) || !pending_marker().exists() {
+        return;
+    }
+    let deciding = bundle::announce(Party::Display);
+    let spawned = std::thread::Builder::new()
+        .name("se-display-driver-step".into())
+        .spawn(move || {
+            run_pending();
+            drop(deciding);
+        });
+    if let Err(error) = spawned {
+        eprintln!("virtueller Bildschirm: Treiberschritt startet nicht: {error}");
+    }
+}
+
+fn run_pending() {
+    let code = match crate::login::os::platform::elevation() {
+        Ok(Elevation::InProcess) => system_step().1,
+        Ok(Elevation::External(se)) => {
+            let launcher: bundle::Launcher = Box::new(move |steps: &[String]| {
+                crate::rdp::host_setup::prompt_follows();
+                crate::login::os::platform::run_elevated(&se, steps).map(|code| Launched {
+                    code: Some(code),
+                    ..Launched::default()
+                })
+            });
+            let (call, result) = bundle::submit(Party::Display, SYSTEM_STEP.to_string(), launcher);
+            match result {
+                Ok(launched) => {
+                    bundle::step_code(&call, Party::Display, launched.code).unwrap_or(1)
+                }
+                Err(error) => {
+                    eprintln!("virtueller Bildschirm: {error}");
+                    return;
+                }
+            }
+        }
+        Err(error) => {
+            eprintln!("virtueller Bildschirm: keine Erhöhung: {error}");
+            return;
+        }
+    };
+    let _ = std::fs::remove_file(pending_marker());
+    match u32::try_from(code) {
+        Ok(0) => {
+            let _ = std::fs::remove_file(declined_marker());
+            win_display::release_idle();
+        }
+        Ok(DECLINED) => write_marker(&declined_marker(), b"declined\n"),
+        _ => eprintln!("virtueller Bildschirm: Treiberschritt endete mit {code}"),
     }
 }
 
@@ -141,13 +289,19 @@ fn unelevated(mode: &str) -> i32 {
     if !offered {
         return 0;
     }
+    if mode == "after-update" {
+        // P9: no prompt an absent user would have to answer.
+        if is_elevated() {
+            return elevated();
+        }
+        if privileged_component() {
+            write_marker(&pending_marker(), b"after-update\n");
+            return 0;
+        }
+    }
     match run_elevated() {
         Ok(DECLINED) => {
-            let marker = declined_marker();
-            if let Some(parent) = marker.parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-            let _ = std::fs::write(marker, b"declined\n");
+            write_marker(&declined_marker(), b"declined\n");
             DECLINED as i32
         }
         Ok(0) => {

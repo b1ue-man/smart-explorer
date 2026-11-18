@@ -5,8 +5,11 @@
 //! folgen / a size of the list / Eigene Größe …“ (B×H in a field beside the
 //! list, because a combo box of egui 0.29 closes on every click). Both are
 //! stored at once (`screen_prefs::set_virtual_display_choice`, as `se screen
-//! view --virtual-display --display-size`) and a change opens the session
-//! again: the host takes the wish with the hello. The state line names what
+//! view --virtual-display --display-size`). A host that answered `live`
+//! (P9, `set_display.rs`) takes a change within the session (`SET_DISPLAY`,
+//! `send_live`): it switches its display and opens only capture and encoder
+//! again; an older host takes the wish with the hello only, so the session
+//! opens again for it. The state line names what
 //! the host did (`ScreenHelloOk.virtual_display`) and, once the statistics
 //! name another one, what it does now (`HostStats.chain.virtual_display`).
 use eframe::egui::{self, RichText};
@@ -102,6 +105,25 @@ fn state_line(input: &ToolbarInput) -> Option<String> {
         Some(key) => format!("{} · jetzt {key}", report.text()),
         None => report.text(),
     })
+}
+
+/// P9: sends a new „Monitor“ or „Auflösung“ as `SET_DISPLAY` when the host
+/// answered `live` for this session; `false` when the session must open
+/// again with it.
+pub fn send_live(
+    session: Option<&super::super::screen_session::ViewerSession>,
+    choice: VirtualDisplayChoice,
+) -> bool {
+    let Some(session) = session else {
+        return false;
+    };
+    if !crate::screen::core::set_display::negotiated(session.info().hello.as_ref()) {
+        return false;
+    }
+    session.send(crate::screen::core::wire_control::ViewerFrame::SetDisplay(
+        choice,
+    ));
+    true
 }
 
 /// Stores a new „Monitor“ or „Auflösung“ (`ToolbarAction::VirtualDisplay`);

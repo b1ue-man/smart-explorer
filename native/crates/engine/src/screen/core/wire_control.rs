@@ -333,6 +333,10 @@ pub enum ViewerFrame {
     /// `FRAME_TIMING` (BK0): station times on/off or one input probe; only
     /// after the host announced `frame_timing_v1` in `STATS`.
     FrameTiming(super::frame_timing::FrameTimingRequest),
+    /// „Monitor“ and „Auflösung“ within the session (`SET_DISPLAY`,
+    /// `set_display.rs`); only after the host answered `live` in
+    /// `HELLO_OK.virtual_display`.
+    SetDisplay(super::virtual_display::VirtualDisplayChoice),
     /// `AUDIO` (plan 2026-11-17 P9): the host's sound on or off; only after
     /// the host answered `audio` in `HELLO_OK` (`audio_wire.rs`).
     Audio(bool),

@@ -254,6 +254,8 @@ object ScreenApi {
         codec: String? = null,
         /** „Dekodierer“: `hardware` or `software`; `null` or `auto` is automatic. */
         decoder: String? = null,
+        /** „Monitor“ and „Auflösung“ (P5/P9): `virtualDisplay`, `virtualWidth`, `virtualHeight`. */
+        display: app.smartexplorer.android.ui.screen.ViewerDisplayChoice? = null,
     ): Long {
         val args = buildJsonObject {
             put("relation", relation)
@@ -265,6 +267,13 @@ object ScreenApi {
             maxRate?.let { put("maxRate", it) }
             codec?.takeIf { it != "auto" }?.let { put("codec", it) }
             decoder?.takeIf { it != "auto" }?.let { put("decoder", it) }
+            display?.let { choice ->
+                put("virtualDisplay", choice.wish)
+                if (choice.width != null && choice.height != null) {
+                    put("virtualWidth", choice.width)
+                    put("virtualHeight", choice.height)
+                }
+            }
             if (source != null) put("source", source)
             putJsonArray("decoders") {
                 decoders.forEach { offer ->

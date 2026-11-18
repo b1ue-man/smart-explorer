@@ -88,6 +88,7 @@ pub(super) fn handle(method: &str, args: &Value) -> Option<Result<Value, ApiErro
         "screen.viewOpen" => view_open(args),
         "screen.viewSetMode" => set_mode(args),
         "screen.viewSetDecoders" => switch::set_decoders(args),
+        "screen.viewSetDisplay" => switch::set_display(args),
         "screen.viewInput" => input(args),
         "screen.viewVisibility" => visibility(args),
         "screen.viewPresented" => presented::confirm(args),

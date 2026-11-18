@@ -14,11 +14,16 @@
 //! elevation is started (stage 2), once per version and only for a viewer
 //! that may steer this screen. On Wayland the compositor makes the display:
 //! the size reaches the host process with its preparation (`portal_size`).
-use std::collections::HashMap;
+//! `SET_DISPLAY` (P9, `set_display.rs`) decides a session again with its new
+//! wish within the session (`virtual_display_switch.rs`); a fixed size at a
+//! physical monitor sets a mode the monitor lists (`physical_size`), given
+//! back like se's modes after the last session.
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
 use super::pixel_convert::FrameSize;
+use super::set_display::physical_size;
 use super::virtual_display::{
     fit_mode, needs_virtual, setup_allowed, DriverLimit, Due, Planner, VirtualDisplayReport,
     VirtualDisplayState, VirtualDisplayWish, REASON_OFF, REASON_PHYSICAL,
@@ -29,6 +34,11 @@ use super::wire_hello::SessionMode;
 mod platform;
 use platform::unsupported;
 pub use platform::{capability, DisplayFacts, DisplayProbe, SetupProgress, VirtualDisplayDriver};
+
+#[path = "virtual_display_switch.rs"]
+mod switch;
+use switch::physical;
+pub use switch::{rebind_capture, source_changed, switch, Switched, REASON_PHYSICAL_MODE_REFUSED};
 
 /// What a starting session brings.
 #[derive(Clone, Debug)]
@@ -46,6 +56,9 @@ pub struct SessionStart {
     pub display_size: Option<FrameSize>,
     /// The viewer may steer this screen (stage 2 is allowed for it).
     pub may_setup: bool,
+    /// The id of the session's monitor (`monitor:<id>`); `SET_DISPLAY`
+    /// keeps the session on its monitor where the display allows it.
+    pub monitor: Option<String>,
 }
 
 /// The answer for `HELLO_OK` and what the session holds until its end.
@@ -68,13 +81,28 @@ impl Drop for DisplayClaim {
         let mut state = lock(&shared.state);
         state.planner.release(&self.session);
         state.reports.remove(&self.session);
+        // The capture of a session that changed its display is the last
+        // one `rebind_capture` named.
+        let capture = state
+            .sessions
+            .remove(&self.session)
+            .map_or_else(|| self.capture.clone(), |known| known.start.capture);
+        state.portal.remove(&capture);
         state.portal.remove(&self.capture);
-        if state.physical && state.planner.applied().is_some() && !state.planner.has_claims() {
+        state.physical_holders.remove(&self.session);
+        if state.give_back_due() {
             state.restore = true;
         }
         drop(state);
         shared.changed.notify_all();
     }
+}
+
+/// What deciding a session again needs (`SET_DISPLAY`).
+#[derive(Clone)]
+struct SessionContext {
+    driver: Arc<dyn VirtualDisplayDriver>,
+    start: SessionStart,
 }
 
 /// The report of one session: its own, or the display's (a session whose
@@ -101,6 +129,22 @@ struct HostState {
     /// Give the physical monitor its own mode back.
     restore: bool,
     thread: bool,
+    /// The sessions with a wish, for `SET_DISPLAY`.
+    sessions: HashMap<String, SessionContext>,
+    /// se set a mode the physical monitor lists (`physical_size`).
+    physical_mode: bool,
+    /// The sessions that asked for such a mode.
+    physical_holders: HashSet<String>,
+}
+
+impl HostState {
+    /// se changed a physical monitor and no session asks for it any more.
+    fn give_back_due(&self) -> bool {
+        self.physical
+            && (self.planner.applied().is_some() || self.physical_mode)
+            && !self.planner.has_claims()
+            && self.physical_holders.is_empty()
+    }
 }
 
 struct Shared {
@@ -125,6 +169,9 @@ fn shared() -> &'static Shared {
             physical: false,
             restore: false,
             thread: false,
+            sessions: HashMap::new(),
+            physical_mode: false,
+            physical_holders: HashSet::new(),
         }),
         changed: Condvar::new(),
         turn: Mutex::new(()),
@@ -161,43 +208,73 @@ fn setup_report(
 
 /// Starts the virtual display for a session (blocking: the caller runs it
 /// beside the source preparation). Nothing without a wish, for a probe, a
-/// preview or a metadata session, and on hosts without a driver.
+/// preview or a metadata session, and on hosts without a driver. The answer
+/// names `live`: the session may change its wish with `SET_DISPLAY`.
 pub fn start(driver: Option<Arc<dyn VirtualDisplayDriver>>, start: &SessionStart) -> Started {
     let picture = matches!(start.mode, SessionMode::View | SessionMode::Control);
-    let (Some(driver), Some(wish), true, false) =
-        (driver, start.wish, picture, start.metadata_only)
+    let (Some(driver), Some(_), true, false) = (driver, start.wish, picture, start.metadata_only)
     else {
         return Started::default();
     };
+    lock(&shared().state).sessions.insert(
+        start.session.clone(),
+        SessionContext {
+            driver: driver.clone(),
+            start: start.clone(),
+        },
+    );
     let claim = DisplayClaim {
         session: start.session.clone(),
         capture: start.capture.clone(),
     };
-    let own = |report: VirtualDisplayReport| {
-        lock(&shared().state)
-            .reports
-            .insert(start.session.clone(), Entry::Own(report.clone()));
-        report
-    };
-    if wish == VirtualDisplayWish::Off {
+    let mut report = decide(&driver, start, false);
+    report.live = true;
+    Started {
+        report: Some(report),
+        claim: Some(claim),
+    }
+}
+
+/// Records `report` as the session's own.
+fn own(session: &str, report: VirtualDisplayReport) -> VirtualDisplayReport {
+    lock(&shared().state)
+        .reports
+        .insert(session.to_string(), Entry::Own(report.clone()));
+    report
+}
+
+/// The decision for one session with a wish: at its opening, and again
+/// after `SET_DISPLAY` (`immediate`: the viewer's explicit choice waits for
+/// no gap since the last change).
+fn decide(
+    driver: &Arc<dyn VirtualDisplayDriver>,
+    start: &SessionStart,
+    immediate: bool,
+) -> VirtualDisplayReport {
+    let wish = start.wish.unwrap_or_default();
+    if wish == VirtualDisplayWish::Off && start.fixed.is_none() {
         let report = VirtualDisplayReport::new(VirtualDisplayState::Inactive, None, "")
             .with_reason(REASON_OFF);
-        return started(own(report), claim);
+        return own(&start.session, report);
     }
     let probe = match driver.probe() {
         Ok(probe) => probe,
         Err(error) => {
             let report = VirtualDisplayReport::new(VirtualDisplayState::Unsupported, None, "")
                 .with_reason(&format!("probe_failed: {error}"));
-            return started(own(report), claim);
+            return own(&start.session, report);
         }
     };
+    lock(&shared().state).physical = probe.physical_monitor;
+    if let Some(size) = physical_size(wish, probe.physical_monitor, start.fixed) {
+        return own(&start.session, physical(driver, start, &probe, size));
+    }
     if let Some(reason) = probe
         .unsupported
         .as_deref()
         .filter(|_| !probe.setup_possible)
     {
-        return started(own(unsupported(&probe, reason)), claim);
+        return own(&start.session, unsupported(&probe, reason));
     }
     if !needs_virtual(
         start.mode,
@@ -205,10 +282,15 @@ pub fn start(driver: Option<Arc<dyn VirtualDisplayDriver>>, start: &SessionStart
         start.wish,
         probe.physical_monitor,
     ) {
+        let reason = if wish == VirtualDisplayWish::Off {
+            REASON_OFF
+        } else {
+            REASON_PHYSICAL
+        };
         let report =
             VirtualDisplayReport::new(VirtualDisplayState::Inactive, probe.current, &probe.driver)
-                .with_reason(REASON_PHYSICAL);
-        return started(own(report), claim);
+                .with_reason(reason);
+        return own(&start.session, report);
     }
     let fixed = start.fixed.is_some();
     let wanted = start.fixed.or(start.display_size).or(probe.current);
@@ -220,7 +302,7 @@ pub fn start(driver: Option<Arc<dyn VirtualDisplayDriver>>, start: &SessionStart
                 .insert(start.capture.clone(), size);
         }
         let report = VirtualDisplayReport::new(VirtualDisplayState::Offered, size, &probe.driver);
-        return started(own(report), claim);
+        return own(&start.session, report);
     }
     let beyond_limit = wanted
         .is_some_and(|wanted| fit_mode(wanted, probe.limit) != fit_mode(wanted, DriverLimit::NONE));
@@ -237,7 +319,7 @@ pub fn start(driver: Option<Arc<dyn VirtualDisplayDriver>>, start: &SessionStart
                 probe.unsupported.as_deref().unwrap_or("no_display_modes"),
             ),
         };
-        return started(own(report), claim);
+        return own(&start.session, report);
     }
     let shared = shared();
     let due = {
@@ -245,17 +327,17 @@ pub fn start(driver: Option<Arc<dyn VirtualDisplayDriver>>, start: &SessionStart
         state.driver = Some(driver.clone());
         state.driver_name = probe.driver.clone();
         state.limit = probe.limit;
-        state.physical = probe.physical_monitor;
         state.restore = false;
         if let Some(size) = wanted {
             let control = start.mode == SessionMode::Control;
             state.planner.claim(&start.session, control, size, fixed);
         }
         state.reports.insert(start.session.clone(), Entry::Display);
-        state.planner.due(probe.limit, now_ms())
+        let now = if immediate { u64::MAX } else { now_ms() };
+        state.planner.due(probe.limit, now)
     };
     let mut report = match due {
-        Due::Now(size) => apply(shared, &driver, size, &probe.driver),
+        Due::Now(size) => apply(shared, driver, size, &probe.driver),
         Due::Later(_) | Due::Idle => {
             let state = lock(&shared.state);
             state.display.clone().unwrap_or_else(|| {
@@ -275,14 +357,7 @@ pub fn start(driver: Option<Arc<dyn VirtualDisplayDriver>>, start: &SessionStart
     }
     ensure_thread(shared);
     shared.changed.notify_all();
-    started(report, claim)
-}
-
-fn started(report: VirtualDisplayReport, claim: DisplayClaim) -> Started {
-    Started {
-        report: Some(report),
-        claim: Some(claim),
-    }
+    report
 }
 
 /// Applies `size` now (the caller saw it due) and records the result as
@@ -363,7 +438,7 @@ fn ensure_thread(shared: &'static Shared) {
 fn follow(shared: &'static Shared) {
     let mut state = lock(&shared.state);
     loop {
-        if state.restore && !state.planner.has_claims() {
+        if state.restore && !state.planner.has_claims() && state.physical_holders.is_empty() {
             state.restore = false;
             let driver = state.driver.clone();
             drop(state);
@@ -376,6 +451,7 @@ fn follow(shared: &'static Shared) {
             state = lock(&shared.state);
             state.planner.forget();
             state.display = None;
+            state.physical_mode = false;
             continue;
         }
         let due = state.planner.due(state.limit, now_ms());

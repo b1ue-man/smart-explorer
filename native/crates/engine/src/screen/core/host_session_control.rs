@@ -128,6 +128,8 @@ impl Session<'_> {
                 self.pipeline.set_decoders(set);
                 Ok(())
             }
+            // „Monitor“/„Auflösung“ in the session (P9, `set_display.rs`).
+            ViewerFrame::SetDisplay(choice) => self.set_display(choice).await,
             // Station times on/off or one input probe (BK0, `frame_timing_v1`).
             ViewerFrame::FrameTiming(request) => {
                 let mut meter = crate::screen::core::chain_meter::lock(self.pipeline.chain_meter());

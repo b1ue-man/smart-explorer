@@ -147,7 +147,25 @@ pub(super) async fn prepare(
         let wanted = hello.display_size;
         let control = hello.mode == SessionMode::Control;
         let admission = admission.clone();
+        let shown = display_shown(&display);
+        let id = handle.id();
         tokio::task::spawn_blocking(move || {
+            // P9: a Windows host attaches its virtual monitor beside the
+            // physical one; the session shows the virtual one then.
+            let source = match (&source, shown) {
+                (SourceId::Monitor(current), Some(shown)) => {
+                    super::super::set_display::display_source(
+                        &context.backend.monitors(),
+                        Some(current.as_str()),
+                        shown,
+                    )
+                    .unwrap_or(source)
+                }
+                _ => source,
+            };
+            if let SourceId::Monitor(monitor) = &source {
+                virtual_display_host::source_changed(&id, Some(monitor.clone()));
+            }
             let result = super::super::family_listing::prepare(
                 &context,
                 &principal,
@@ -279,9 +297,24 @@ async fn virtual_display(
         fixed: hello.virtual_display_size,
         display_size: hello.display_size,
         may_setup: super::super::family_listing::admitted(context, principal, true),
+        monitor: match source {
+            SourceId::Monitor(id) => Some(id.clone()),
+            _ => None,
+        },
     };
     let driver = context.backend.virtual_display();
     tokio::task::spawn_blocking(move || virtual_display_host::start(driver, &start))
         .await
         .unwrap_or_default()
+}
+
+/// What the display shows the session after its opening decision: only
+/// se's active display moves a session to another monitor (`None`: keep the
+/// monitor the viewer chose).
+fn display_shown(display: &Started) -> Option<super::super::set_display::Shown> {
+    display
+        .report
+        .as_ref()
+        .filter(|report| report.state == super::super::virtual_display::VirtualDisplayState::Active)
+        .map(|_| super::super::set_display::Shown::Virtual)
 }
