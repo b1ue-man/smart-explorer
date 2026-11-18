@@ -15,7 +15,14 @@
 # must match the explicit administrative policy; no user profile key is imported.
 # Usage: sudo ./install-login-service.sh uninstall
 set -euo pipefail
+# The self-setup shows the last line this script writes to stderr as the
+# reason of a failure; a command that ends the script through `set -e` names
+# itself here, after its own error output.
+trap 'echo "Installer command failed with code $? (line $LINENO): $BASH_COMMAND" >&2' ERR
 [[ ${EUID} == 0 ]] || { echo 'Login service installation requires root.' >&2; exit 1; }
+for tool in flock install stat systemctl getent; do
+    command -v "$tool" >/dev/null || { echo "Required tool is missing: $tool" >&2; exit 1; }
+done
 operation=${1:-}
 config=/var/lib/smart-explorer-login
 state=/var/lib/smart-explorer-login-gateway
@@ -84,8 +91,9 @@ if [[ $operation == self-install ]]; then allow_empty=1; operation=install; [[ $
 [[ $operation == install && $# -ge 5 && $# -le 7 ]] || { echo 'Usage: install IMAGE EXPECTED_SHA256 VERSION POLICY_JSON [MACHINE_IDENTITY_JSON] [GATEWAY_NETWORK_JSON] | self-install … | uninstall' >&2; exit 2; }
 image=$2 expected=${3,,} version=$4 policy=$5 identity=${6:-$state/machine-key.json} network=${7:-$state/gateway-network.json}
 [[ $expected =~ ^[0-9a-f]{64}$ && $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'An explicit SHA256 and release version are required.' >&2; exit 2; }
-command -v python3 >/dev/null
-command -v systemctl >/dev/null
+for tool in python3 sha256sum mktemp useradd nologin; do
+    command -v "$tool" >/dev/null || { echo "Required tool is missing: $tool" >&2; exit 1; }
+done
 check_ancestry "$root/releases"
 generation="$version-${expected:0:16}"
 stage=$(mktemp -d "$root/releases/.stage-XXXXXXXX")
@@ -163,7 +171,8 @@ PYRESTORE
         for unit in "$broker" "$gateway"; do [[ ${was_active[$unit]} != active ]] || systemctl start "$unit" || return 1; done
     fi
     if (( new_generation )); then rm -rf -- "$root/releases/$generation"; fi
-    echo 'Administrative login installation failed; original records, ownership, ACLs and service startup/runtime state restored.' >&2
+    # stdout: the cause stays the last line on stderr.
+    echo 'Administrative login installation failed; original records, ownership, ACLs and service startup/runtime state restored.'
 }
 cleanup() {
     local status=$? retain=0

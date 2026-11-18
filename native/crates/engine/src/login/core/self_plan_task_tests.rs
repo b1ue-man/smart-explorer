@@ -256,3 +256,61 @@ fn login_selbst_task_install_keeps_identity_and_grants() {
         assert!(!state.text().is_empty());
     }
 }
+
+#[test]
+fn login_selbst_task_script_failure_carries_installer_line() {
+    // The installer's own last line reaches the status text.
+    let line = "Installation ancestor permits non-root writes: /usr/libexec";
+    let state = state_for_failure(exit::SCRIPT_FAILED, false, Some(line));
+    assert_eq!(state, SelfState::Failed(format!("script_failed: {line}")));
+    let text = state.text();
+    assert!(text.starts_with("fehlgeschlagen: der Einrichtungsschritt des Betriebssystems"));
+    assert!(
+        text.ends_with(&format!("(Meldung des Schritts: {line})")),
+        "{text}"
+    );
+    // Without a line the code's text stays alone; success never carries one.
+    assert_eq!(
+        state_for_failure(exit::SCRIPT_FAILED, false, None),
+        SelfState::Failed("script_failed".into())
+    );
+    assert_eq!(
+        state_for_failure(exit::DONE, false, Some(line)),
+        SelfState::Done
+    );
+    assert_eq!(
+        state_for_failure(exit::DONE, true, Some(line)),
+        SelfState::Removed
+    );
+    // A `set -e` end names the command after the command's own line.
+    let lines = vec![
+        "Policy requires explicit peer".to_string(),
+        format!("{COMMAND_FAILED} with code 1 (line 9): python3 -"),
+    ];
+    assert_eq!(
+        installer_detail(&lines).as_deref(),
+        Some(
+            "Policy requires explicit peer (Installer command failed with code 1 (line 9): python3 -)"
+        )
+    );
+    assert_eq!(
+        installer_detail(&lines[..1]).as_deref(),
+        Some("Policy requires explicit peer")
+    );
+    assert_eq!(installer_detail(&[]), None);
+    // Control characters go, long lines end at a character boundary.
+    assert_eq!(
+        script_detail("  a\tb\u{1b}[0m  ").as_deref(),
+        Some("a b [0m")
+    );
+    assert_eq!(script_detail(" \r "), None);
+    let long = "ä".repeat(400);
+    let cut = script_detail(&long).unwrap_or_default();
+    assert!(cut.len() <= MAX_DETAIL && cut.chars().all(|c| c == 'ä'));
+    // An unknown reason with a colon is shown as it is.
+    assert_eq!(reason_text("Code 9: x"), "Code 9: x");
+    assert_eq!(
+        reason_text("se_missing: gone"),
+        "se fehlt neben dem Programm (Meldung des Schritts: gone)"
+    );
+}

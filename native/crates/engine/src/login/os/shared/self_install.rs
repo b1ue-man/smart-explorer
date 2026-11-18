@@ -5,13 +5,14 @@
 //! approval names: image, version, policy, machine identity and network are
 //! read here, the checked-in installer runs with fixed arguments from a new
 //! protected directory, and every check fails before a record changes.
+pub use super::script_output::ScriptOutcome;
 use super::{denied, installation, nonce, self_channel::Record};
 use crate::login::{
     core::{
         gateway_types::{GatewayNetwork, MAX_NETWORK},
         machine::MachineIdentity,
         model::{Policy, MAX_POLICY, VERSION},
-        self_plan::{exit, image_binding, install_policy, state_for_exit, Step},
+        self_plan::{exit, image_binding, install_policy, state_for_failure, SelfState, Step},
     },
     os::platform,
 };
@@ -153,18 +154,37 @@ impl Drop for Stage {
     }
 }
 
-fn fail(code: i32) -> impl Fn(io::Error) -> i32 {
+/// A failed step: its exit code and its own last message, if any.
+type Failure = (i32, Option<String>);
+
+fn fail(code: i32) -> impl Fn(io::Error) -> Failure {
     move |error| {
         eprintln!("Maschinenanmeldung, Einrichtungsschritt: {error}");
-        code
+        (code, Some(error.to_string()))
     }
 }
 
-fn install(expected: &str) -> Result<(), i32> {
+/// The installer's result: success, or its exit code in the log and its
+/// last error line as the step's message.
+fn script_result(outcome: ScriptOutcome, what: &str) -> Result<(), Failure> {
+    if outcome.code == 0 {
+        return Ok(());
+    }
+    eprintln!(
+        "Maschinenanmeldung: {what} endete mit Code {}",
+        outcome.code
+    );
+    let detail = outcome
+        .detail
+        .unwrap_or_else(|| format!("{what} endete mit Code {} ohne Meldung", outcome.code));
+    Err((exit::SCRIPT_FAILED, Some(detail)))
+}
+
+fn install(expected: &str) -> Result<(), Failure> {
     let image = app_image(&std::env::current_exe().map_err(fail(exit::IMAGE_MISSING))?);
     let source = platform::open_image(&image).map_err(fail(exit::IMAGE_MISSING))?;
     let source_hash = installation::sha256_hex(&source).map_err(fail(exit::IMAGE_MISSING))?;
-    image_binding(expected, &source_hash, &source_hash).map_err(|_| exit::HASH_MISMATCH)?;
+    image_binding(expected, &source_hash, &source_hash).map_err(|_| (exit::HASH_MISMATCH, None))?;
     let (key, policy, network) = records().map_err(fail(exit::STAGE_FAILED))?;
     let mut stage = Stage::create(&[
         (platform::SCRIPT_NAME, platform::SCRIPT.as_bytes()),
@@ -178,7 +198,7 @@ fn install(expected: &str) -> Result<(), i32> {
         .map_err(fail(exit::STAGE_FAILED))?;
     // Re-checked on the protected copy before the installer replaces
     // anything; the installer checks it once more before the swap.
-    image_binding(expected, &source_hash, &staged).map_err(|_| exit::HASH_MISMATCH)?;
+    image_binding(expected, &source_hash, &staged).map_err(|_| (exit::HASH_MISMATCH, None))?;
     let (image, policy, key, network) = (
         stage.path(platform::STAGE_IMAGE),
         stage.path(POLICY),
@@ -193,47 +213,46 @@ fn install(expected: &str) -> Result<(), i32> {
         key: &key,
         network: &network,
     };
-    let code =
+    let outcome =
         platform::run_install_script(&stage.dir, &call).map_err(fail(exit::SCRIPT_FAILED))?;
-    if code != 0 {
-        eprintln!("Maschinenanmeldung: Installationsskript endete mit Code {code}");
-        return Err(exit::SCRIPT_FAILED);
-    }
-    Ok(())
+    script_result(outcome, "Installationsskript")
 }
 
 /// Only when no grant is left at all (step 2 (f)); the installer keeps the
 /// policy, the machine identity, the network and the release generations.
-fn remove() -> Result<(), i32> {
+fn remove() -> Result<(), Failure> {
     if existing_policy()
         .map_err(fail(exit::STAGE_FAILED))?
         .is_some_and(|policy| !policy.grants.is_empty())
     {
-        return Err(exit::GRANTS_REMAIN);
+        return Err((exit::GRANTS_REMAIN, None));
     }
     let stage = Stage::create(&[(platform::SCRIPT_NAME, platform::SCRIPT.as_bytes())])
         .map_err(fail(exit::STAGE_FAILED))?;
-    let code = platform::run_install_script(&stage.dir, &ScriptCall::Uninstall)
+    let outcome = platform::run_install_script(&stage.dir, &ScriptCall::Uninstall)
         .map_err(fail(exit::SCRIPT_FAILED))?;
-    if code != 0 {
-        eprintln!("Maschinenanmeldung: Entfernen endete mit Code {code}");
-        return Err(exit::SCRIPT_FAILED);
-    }
-    Ok(())
+    script_result(outcome, "Entfernen")
+}
+
+/// The step's state and exit code; a failure carries the step's own last
+/// message (`self_plan::failed_with`).
+pub fn run_system_step_state(step: &str) -> (SelfState, i32) {
+    let parsed = Step::parse(step);
+    let removing = parsed == Some(Step::Remove);
+    let (code, detail) = match parsed {
+        None => (exit::INVALID_STEP, None),
+        Some(_) if !platform::privileged() => (exit::NOT_PRIVILEGED, None),
+        Some(Step::Install { sha256 }) => install(&sha256).err().unwrap_or((exit::DONE, None)),
+        Some(Step::Remove) => remove().err().unwrap_or((exit::DONE, None)),
+    };
+    (state_for_failure(code, removing, detail.as_deref()), code)
 }
 
 /// `se rdp host-setup --system login-service…`: the line to print and the
-/// exit code (`self_plan::state_for_exit` reads it in the worker).
+/// exit code (`self_plan::state_for_exit` reads the code in the worker; the
+/// `login_state=` line carries the step's message to a pkexec caller).
 pub fn run_system_step(step: &str) -> (String, i32) {
-    let parsed = Step::parse(step);
-    let removing = parsed == Some(Step::Remove);
-    let code = match parsed {
-        None => exit::INVALID_STEP,
-        Some(_) if !platform::privileged() => exit::NOT_PRIVILEGED,
-        Some(Step::Install { sha256 }) => install(&sha256).err().unwrap_or(exit::DONE),
-        Some(Step::Remove) => remove().err().unwrap_or(exit::DONE),
-    };
-    let state = serde_json::to_string(&state_for_exit(code, removing))
-        .unwrap_or_else(|_| "\"unknown\"".into());
+    let (state, code) = run_system_step_state(step);
+    let state = serde_json::to_string(&state).unwrap_or_else(|_| "\"unknown\"".into());
     (format!("login_state={state}"), code)
 }

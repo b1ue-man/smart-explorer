@@ -9,10 +9,12 @@ use crate::login::{
     core::{gateway_types, self_grants::ConsoleAbilities},
     os::shared::{
         denied, installation, nonce,
+        script_output::{self, ScriptOutcome},
         self_channel::{self, Caller, Record},
         self_install::{Elevation, ScriptCall},
     },
 };
+use crate::rdp::host_setup::elevated::Launched;
 use std::{
     fs::{File, OpenOptions},
     io::{self, Read, Write},
@@ -156,7 +158,16 @@ pub fn create_stage_file(path: &Path) -> io::Result<File> {
         .open(path)
 }
 
-pub fn run_install_script(stage: &Path, call: &ScriptCall<'_>) -> io::Result<i32> {
+/// `run_elevated` as the elevation bundle takes it: UAC carries no output,
+/// only the exit code arrives.
+pub fn run_elevated_launched(se: &Path, steps: &[String]) -> Result<Launched, String> {
+    run_elevated(se, steps).map(|code| Launched {
+        code: Some(code),
+        ..Launched::default()
+    })
+}
+
+pub fn run_install_script(stage: &Path, call: &ScriptCall<'_>) -> io::Result<ScriptOutcome> {
     let mut command = Command::new(powershell().map_err(io::Error::other)?);
     command
         .args([
@@ -197,11 +208,10 @@ pub fn run_install_script(stage: &Path, call: &ScriptCall<'_>) -> io::Result<i32
             command.args(["-Action", "Uninstall"]);
         }
     }
-    let status = command
+    command
         .creation_flags(CREATE_NO_WINDOW)
-        .stdin(Stdio::null())
-        .status()?;
-    Ok(status.code().unwrap_or(-1))
+        .stdin(Stdio::null());
+    script_output::run(&mut command)
 }
 
 fn record_path(record: Record) -> io::Result<PathBuf> {

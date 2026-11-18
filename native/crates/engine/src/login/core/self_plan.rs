@@ -57,23 +57,94 @@ impl SelfState {
     }
 }
 
-/// German text of a failure reason; an unknown reason is shown as it is.
+/// German text of a failure reason; an unknown reason is shown as it is. A
+/// reason `<code>: <detail>` (`failed_with`) shows the code's text and the
+/// step's own words.
 pub fn reason_text(reason: &str) -> String {
-    match reason {
-        "hash_mismatch" => "die Programmdatei weicht vom geprüften Stand ab; der bisherige Stand bleibt".into(),
-        "image_missing" => "die Programmdatei für den Dienst fehlt neben se".into(),
-        "grants_remain" => "andere Freigaben bestehen noch; der Dienst bleibt".into(),
-        "not_privileged" => "der Einrichtungsschritt hat keine Administratorrechte".into(),
-        "script_failed" => "der Einrichtungsschritt des Betriebssystems ist fehlgeschlagen; der bisherige Stand bleibt".into(),
-        "stage_failed" => "der geschützte Arbeitsordner ist nicht anlegbar".into(),
-        "invalid_step" => "ungültiger Einrichtungsschritt".into(),
-        "unsupported" => "auf diesem System nicht verfügbar".into(),
-        "no_interactive_session" => "keine angemeldete Sitzung für die Administratorfreigabe".into(),
-        "no_prompt" => "keine Freigabeabfrage des Betriebssystems verfügbar (polkit oder Benutzerkontensteuerung)".into(),
-        "se_missing" => "se fehlt neben dem Programm".into(),
-        "service_unreachable" => "der Dienst ist nach der Einrichtung nicht erreichbar".into(),
-        "grant_refused" => "der Dienst hat die Freigaben abgelehnt".into(),
-        other => other.into(),
+    if let Some((code, detail)) = reason.split_once(": ") {
+        if let Some(text) = known_reason(code) {
+            return format!("{text} (Meldung des Schritts: {detail})");
+        }
+    }
+    known_reason(reason).map_or_else(|| reason.into(), str::to_string)
+}
+
+fn known_reason(reason: &str) -> Option<&'static str> {
+    Some(match reason {
+        "hash_mismatch" => "die Programmdatei weicht vom geprüften Stand ab; der bisherige Stand bleibt",
+        "image_missing" => "die Programmdatei für den Dienst fehlt neben se",
+        "grants_remain" => "andere Freigaben bestehen noch; der Dienst bleibt",
+        "not_privileged" => "der Einrichtungsschritt hat keine Administratorrechte",
+        "script_failed" => "der Einrichtungsschritt des Betriebssystems ist fehlgeschlagen; der bisherige Stand bleibt",
+        "stage_failed" => "der geschützte Arbeitsordner ist nicht anlegbar",
+        "invalid_step" => "ungültiger Einrichtungsschritt",
+        "unsupported" => "auf diesem System nicht verfügbar",
+        "no_interactive_session" => "keine angemeldete Sitzung für die Administratorfreigabe",
+        "no_prompt" => "keine Freigabeabfrage des Betriebssystems verfügbar (polkit oder Benutzerkontensteuerung)",
+        "se_missing" => "se fehlt neben dem Programm",
+        "service_unreachable" => "der Dienst ist nach der Einrichtung nicht erreichbar",
+        "grant_refused" => "der Dienst hat die Freigaben abgelehnt",
+        _ => return None,
+    })
+}
+
+/// Longest part of a step's own message a failure reason keeps (bytes).
+pub const MAX_DETAIL: usize = 300;
+
+/// One line of a step's error output as a status may show it: control
+/// characters become spaces, the ends are trimmed, at most `MAX_DETAIL`
+/// bytes; an empty line is no detail.
+pub fn script_detail(line: &str) -> Option<String> {
+    let cleaned: String = line
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    let cleaned = cleaned.trim();
+    if cleaned.is_empty() {
+        return None;
+    }
+    let mut end = cleaned.len().min(MAX_DETAIL);
+    while !cleaned.is_char_boundary(end) {
+        end -= 1;
+    }
+    Some(cleaned[..end].trim_end().to_string())
+}
+
+/// How the installer's `ERR` trap starts its line (`install-login-service.sh`).
+pub const COMMAND_FAILED: &str = "Installer command failed";
+
+/// The step's message from its last two non-empty error lines (oldest
+/// first): the last one, or — when the last one is only the installer's
+/// `ERR` trap naming the command — the failing command's own line before it
+/// with the trap line in brackets.
+pub fn installer_detail(lines: &[String]) -> Option<String> {
+    let (last, before) = match lines {
+        [] => return None,
+        [last] => (last, None),
+        [.., before, last] => (last, Some(before)),
+    };
+    match before {
+        Some(before) if last.starts_with(COMMAND_FAILED) => {
+            script_detail(&format!("{before} ({last})"))
+        }
+        _ => script_detail(last),
+    }
+}
+
+/// `Failed("<reason>: <detail>")`, or `Failed("<reason>")` without a usable
+/// detail.
+pub fn failed_with(reason: &str, detail: Option<&str>) -> SelfState {
+    match detail.and_then(script_detail) {
+        Some(detail) => SelfState::Failed(format!("{reason}: {detail}")),
+        None => SelfState::Failed(reason.into()),
+    }
+}
+
+/// `state_for_exit` with the step's own last message on a failure.
+pub fn state_for_failure(code: i32, removing: bool, detail: Option<&str>) -> SelfState {
+    match state_for_exit(code, removing) {
+        SelfState::Failed(reason) => failed_with(&reason, detail),
+        other => other,
     }
 }
 

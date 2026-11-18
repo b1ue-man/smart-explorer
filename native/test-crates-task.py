@@ -1255,6 +1255,8 @@ RDP_KONTO_TESTS = {
         "rdp_konto_task_freerdp_password_only_on_stdin",
         "rdp_konto_task_xrdp_pam_line_inserted_once_before_common_auth",
         "rdp_konto_task_xrdp_token_bound_to_user_and_tunnel",
+        # login-rest (2026-11-18): installer message, root worker account, vendor PAM file, KRdp.
+        "login_selbst_task_script_failure_carries_installer_line",
     ],
     "linux": [],
     "windows": [

@@ -246,16 +246,12 @@ fn elevated(step: impl FnOnce(&std::path::Path) -> Option<Step>, removing: bool)
     };
     PROMPTING.store(true, Ordering::Release);
     let state = match route {
-        Elevation::InProcess => {
-            state_for_exit(self_install::run_system_step(&step.name()).1, removing)
-        }
+        // The step's own last message reaches the status (`failed_with`).
+        Elevation::InProcess => self_install::run_system_step_state(&step.name()).0,
         Elevation::External(se) => {
             let launcher: bundle::Launcher = Box::new(move |steps: &[String]| {
                 crate::rdp::host_setup::prompt_follows();
-                platform::run_elevated(&se, steps).map(|code| Launched {
-                    code: Some(code),
-                    ..Launched::default()
-                })
+                platform::run_elevated_launched(&se, steps)
             });
             let handed_in = bundle::submit(Party::Login, step.name(), launcher);
             ANNOUNCED.withdraw(ROUND.load(Ordering::Acquire));
