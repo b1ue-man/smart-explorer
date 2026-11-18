@@ -1198,6 +1198,16 @@ Remote-Laufwerke kann eine Administratorbestätigung anfordern. Zwei Wege:
    `/S /DESKTOP=1` aus. Ausgewählt führt der Installer `se desktop enable --json` aus; schlägt
    das fehl, bleibt die Installation bestehen und der Installer nennt `se desktop enable`.
    Nach dem Hauptprogramm startet der Installer se Desktop neu (`se desktop restart`).
+   Die Komponente **Virtueller Bildschirm für Fernzugriff** (im normalen Setup ausgewählt, still
+   nur mit `/S /INSTALLVDD=1`; Quellstand 2026-11-18, nicht übersetzt, nicht auf Hardware
+   gelaufen) lädt den MIT-lizenzierten Treiber von VirtualDrivers (Release 25.7.23, Größe und
+   SHA-256 in `native/vdd-driver.nsh`), signiert seinen Katalog mit einem auf dem Gerät erzeugten
+   Zertifikat, dessen privater Schlüssel sofort gelöscht wird, und installiert ihn nach einer
+   UAC-Bestätigung. Ein Update fragt nur, wenn sich der Treiber oder sein Gerät geändert hat; ein
+   unveränderter Treiber wird nicht neu signiert. Beim Fernzugriff legt se damit ohne weitere
+   Einrichtung einen eigenen Monitor in der Auflösung des Betrachters an (Menü „Monitor“ und
+   „Auflösung“ im Betrachter) und gibt dem Desktop am Sitzungsende seine Anordnung zurück.
+   Einzelheiten: [`docs/RELEASING.md`](docs/RELEASING.md).
 2. **Portable:** [`Smart Explorer.exe`](release-native/Smart%20Explorer.exe)
    herunterladen und direkt starten (keine Installation). Für Auto-Update einmalig
    die Update-Quelle setzen (siehe unten). Das portable Terminal-Binary liegt als

@@ -155,12 +155,49 @@ Foundation decodes. `SE_FFMPEG_DIR` loads a user's own interface-compatible buil
 version means new layout facts in `crates/engine/src/screen/core/ffmpeg_layout.rs` from that
 version's headers (`docs/GOTCHAS.md`, picture chain).
 
+## Pinned virtual display driver of the Windows host (plan 2026-11-17 P5)
+
+The Windows screen host shows its desktop in the viewer's resolution through the MIT-licensed
+indirect display driver of [VirtualDrivers/Virtual-Display-Driver](https://github.com/VirtualDrivers/Virtual-Display-Driver).
+`native/vdd-driver.nsh` is the single manifest read by Rust
+(`crates/engine/src/screen/os/windows/virtual_display_pins.rs`) and NSIS. Pin (checked 2026-11-18
+by downloading and hashing; the GitHub release API reports the same archive digest):
+
+- release `25.7.23`, asset `VirtualDisplayDriver-x86.Driver.Only.zip` (despite the name an x64
+  package: its INF installs `[Standard.NTamd64]`, `MttVDD.dll` is a PE32+ AMD64 image, DriverVer
+  12/24/2024 11.30.4.434, source tag `24.12.24`), exactly `132,118` bytes, SHA-256
+  `e24210692b442b39af763536330ce78b423f19342b7a7792c26de3944e418b3a`;
+- used from it: `mttvdd.cat` (13,017 bytes), `MttVDD.dll` (251,640 bytes), `MttVDD.inf`
+  (4,132 bytes); full hashes in the manifest. The archive's `vdd_settings.xml` is not used: se
+  writes its own mode list.
+
+The binary is no release asset, no update-feed payload and not embedded in the installer (the 28
+assets stay). The installer section `Virtueller Bildschirm … (UAC erforderlich)` (`SEC_VDD`,
+selected in an interactive setup, `/INSTALLVDD=1` in a silent one) runs
+`"Smart Explorer Updater.exe" --display-driver install`; after every completed auto-update the
+updater starts `--display-driver after-update` in its own process (an offer the user declined once
+is not repeated unless se installed the driver before). Both ask for one UAC confirmation only when
+`windows_driver::driver_step` has something to do; the elevated process
+(`--display-driver-elevated`) decides again by itself, downloads the archive by itself, checks every
+pin, keeps the package in `%ProgramData%\SmartExplorer-VirtualDisplay` (owner Administrators;
+SYSTEM and Administrators full control, LOCAL SERVICE and Users read), signs `mttvdd.cat` with a
+certificate created on the device, trusts it in `LocalMachine\Root` and `TrustedPublisher`, deletes
+its private key, writes `vdd_settings.xml` and the registry value `VDDPATH`, creates the root device
+`Root\MttVDD` and installs the package. The same driver files are never signed again: a broken
+device or a new mode list only reinstalls the signed package. The result line is in
+`last-run.txt` of that directory. The uninstaller removes the licence text only; the driver, its
+certificate and its directory stay (removal needs the elevation the silent uninstall avoids).
+Moving the pin means new hashes in the manifest, a check of the driver's configuration interface
+(`VDDPATH`, `vdd_settings.xml`, hardware id) and of its INF architecture section.
+
 ## Windows installer and Linux script (0.5.183)
 
 - **Installer sections** (`native/installer.nsi`): `Smart Explorer (erforderlich)` (`SEC_MAIN`);
   `se Desktop (optional)` (`SEC_DESKTOP`, not selected by default, `/DESKTOP=1` selects it in a
   silent setup, runs `se desktop enable --json`, a failure keeps the installation); the Dokany
-  section (`SEC_DOKANY`, UAC). After the main files, `SEC_MAIN` runs `se desktop restart`.
+  section (`SEC_DOKANY`, UAC); the virtual display section (`SEC_VDD`, UAC only when the driver
+  changed, `/INSTALLVDD=1` in a silent setup). After the main files, `SEC_MAIN` runs
+  `se desktop restart`.
 - **License texts installed** under `$INSTDIR\licenses\`: `Dokany\` (NOTICE and the GPL, LGPL
   and MIT texts), `Rust-Crates\THIRD-PARTY-LICENSES.txt` and `OpenH264\BINARY_LICENSE.txt`
   (`native/installer.nsi:136-144`).

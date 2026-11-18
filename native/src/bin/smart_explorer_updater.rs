@@ -37,7 +37,7 @@ use archive::archive_current_app;
 use args::{ApplyArgs, ApplyRequest};
 use bookkeeping::PreparedBookkeeping;
 use hash::verify_sha256;
-use launch::{spawn_verified_acknowledged, spawn_verified_detached};
+use launch::{spawn_display_driver_step, spawn_verified_acknowledged, spawn_verified_detached};
 use logging::{append_log, default_error_file, record_failure};
 use process::{stop_target_processes_for_update, wait_for_pid_exit};
 use replace::{replace_transaction_with_retries, AppliedTransaction, Replacement};
@@ -45,6 +45,9 @@ use std::time::Duration;
 
 fn main() {
     let raw: Vec<String> = std::env::args().collect();
+    if let Some(code) = smart_explorer::screen::os::virtual_display::driver_step_command(&raw) {
+        std::process::exit(code);
+    }
     if raw.get(1).is_some_and(|arg| arg == "--install-bundle") {
         match installer::run(&raw) {
             Ok(()) => return,
@@ -330,6 +333,9 @@ fn apply_update(mut args: ApplyArgs) -> Result<(), ApplyFailure> {
     transaction.finalize();
     finish_bookkeeping(&args, &helper, &mut bookkeeping);
     append_log(&format!("apply v{}: ok", args.version));
+    if let Some(note) = spawn_display_driver_step(&args.helper_target, &args.helper_sha256) {
+        append_log(&note);
+    }
     Ok(())
 }
 
