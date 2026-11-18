@@ -12,7 +12,12 @@ use crate::mobile::ApiError;
 
 /// Registers a finished analysis under `task` (drill-down tests).
 #[cfg(test)]
-pub(super) fn insert_analysis_for_test(task: &str, outcome: ScanOutcome, base: &str, root: &str) {
+pub(in crate::mobile) fn insert_analysis_for_test(
+    task: &str,
+    outcome: ScanOutcome,
+    base: &str,
+    root: &str,
+) {
     let pending = Pending::open();
     bind_task(pending.token(), task);
     pending.store(Stored::Analysis {

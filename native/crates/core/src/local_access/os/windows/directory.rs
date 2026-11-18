@@ -36,10 +36,10 @@ mod buffers;
 
 #[path = "directory_class.rs"]
 mod class;
-#[cfg(test)]
-use class::reparse_tag;
 pub use class::{classify_open_file, metadata_class, metadata_is_link_like};
 use class::{kind, link_like, reparse_tag_with_access};
+#[cfg(test)]
+use class::{reparse_tag, SPECIAL_TAGS};
 
 #[cfg(test)]
 #[path = "sync_link_task_tests.rs"]

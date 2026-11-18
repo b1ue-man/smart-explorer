@@ -9,7 +9,7 @@ const NAME_SURROGATE: u32 = 0x2000_0000;
 // Special-file reparse tags (no name-surrogate bit, no data stream to read):
 // AF_UNIX sockets and the FIFO/character/block nodes WSL stores on NTFS.
 // Values as in windows-sys 0.59 `IO_REPARSE_TAG_AF_UNIX` / `IO_REPARSE_TAG_LX_*`.
-const SPECIAL_TAGS: [u32; 4] = [0x8000_0023, 0x8000_0024, 0x8000_0025, 0x8000_0026];
+pub(super) const SPECIAL_TAGS: [u32; 4] = [0x8000_0023, 0x8000_0024, 0x8000_0025, 0x8000_0026];
 
 /// The reparse tag of `path`, or 0 when it cannot be read: an unreadable tag
 /// classifies the entry as an ordinary file or folder instead of dropping it.
