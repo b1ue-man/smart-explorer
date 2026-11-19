@@ -48,10 +48,14 @@ data class ViewerCodecChoice(
         /**
          * Whether going to [next] must open a new session instead of `screen.viewSetDecoders`: a session whose first
          * picture group came as tiles ([firstCodec] `tiles`) cannot be switched to video by the host's `SET_DECODERS`,
-         * so a video codec chosen then opens the session again with that choice.
+         * so a video codec chosen then opens the session again with that choice. Codex 3/14: a session opened as
+         * „Verlustfrei“ ([openedCodec]) is such a session before its first group is reported, and „Automatisch“
+         * out of it is negotiated anew too (the host's plan of a tiles session offers only the tiles again).
          */
-        fun reopenForVideo(firstCodec: String?, next: ViewerCodecChoice): Boolean =
-            firstCodec == "tiles" && next.codec in VIDEO_CODECS
+        fun reopenForVideo(firstCodec: String?, next: ViewerCodecChoice, openedCodec: String? = null): Boolean {
+            val tilesSession = firstCodec == "tiles" || (firstCodec == null && openedCodec == CODEC_LOSSLESS)
+            return tilesSession && (next.codec in VIDEO_CODECS || next.codec == CODEC_AUTO)
+        }
 
         const val DECODER_AUTO = "auto"
         const val DECODER_HARDWARE = "hardware"

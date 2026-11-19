@@ -23,10 +23,17 @@ const MERGE_FROM: usize = 8;
 /// Batches the queue holds at most; a batch beyond is refused.
 const HARD_LIMIT: usize = 128;
 
-static INPUT: Mutex<VecDeque<Vec<InputEvent>>> = Mutex::new(VecDeque::new());
+/// A batch and the host session (bridge channel) it belongs to; 0: a batch
+/// of the backend without a session (`BridgeBackend::inject`).
+struct Batch {
+    session: u64,
+    events: Vec<InputEvent>,
+}
+
+static INPUT: Mutex<VecDeque<Batch>> = Mutex::new(VecDeque::new());
 static READY: Condvar = Condvar::new();
 
-fn queue() -> MutexGuard<'static, VecDeque<Vec<InputEvent>>> {
+fn queue() -> MutexGuard<'static, VecDeque<Batch>> {
     INPUT.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
@@ -73,13 +80,14 @@ fn merge(tail: &mut Vec<InputEvent>, batch: &[InputEvent]) -> bool {
     false
 }
 
-/// Queues the input of the controlling viewer without waiting; `false` when
-/// the queue holds `HARD_LIMIT` batches and `events` merges with none.
-pub fn send_input(events: &[InputEvent]) -> bool {
+/// Queues the input of the controlling viewer of host session `session`
+/// without waiting; `false` when the queue holds `HARD_LIMIT` batches and
+/// `events` merges with none.
+pub fn send_input(session: u64, events: &[InputEvent]) -> bool {
     let mut queue = queue();
     if queue.len() >= MERGE_FROM {
-        if let Some(tail) = queue.back_mut() {
-            if merge(tail, events) {
+        if let Some(tail) = queue.back_mut().filter(|tail| tail.session == session) {
+            if merge(&mut tail.events, events) {
                 READY.notify_all();
                 return true;
             }
@@ -88,21 +96,31 @@ pub fn send_input(events: &[InputEvent]) -> bool {
     if queue.len() >= HARD_LIMIT {
         return false;
     }
-    queue.push_back(events.to_vec());
+    queue.push_back(Batch {
+        session,
+        events: events.to_vec(),
+    });
     READY.notify_all();
     true
 }
 
-/// The next batch as the app reads it (`{"op":"input","events":[…]}`),
+/// The next batch as the app reads it (`{"op":"input","session":…,
+/// "events":[…]}`; the app performs it only while that session exists),
 /// waiting at most `timeout`.
 pub(super) fn take(timeout: Duration) -> Option<String> {
     let queue = queue();
     let (mut queue, _) = READY
         .wait_timeout_while(queue, timeout, |queue| queue.is_empty())
         .unwrap_or_else(PoisonError::into_inner);
-    queue
-        .pop_front()
-        .map(|events| json!({"op": "input", "events": events}).to_string())
+    queue.pop_front().map(|batch| {
+        json!({"op": "input", "session": batch.session, "events": batch.events}).to_string()
+    })
+}
+
+/// Drops the waiting batches of host session `session` (it ended): its input
+/// is never performed for another session (review 2026-11-19, Codex 3/3).
+pub(super) fn drop_session(session: u64) {
+    queue().retain(|batch| batch.session != session);
 }
 
 /// Drops every waiting batch (the last session ended).

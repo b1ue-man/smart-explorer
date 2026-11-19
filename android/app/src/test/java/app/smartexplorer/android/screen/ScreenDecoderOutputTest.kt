@@ -43,7 +43,8 @@ class ScreenDecoderOutputTest {
         assertTrue(surfaceFrameContinues(first, first.copy(frameId = 8), bitmapShown = false))
         assertFalse(surfaceFrameContinues(null, first, bitmapShown = false))
         assertFalse(surfaceFrameContinues(first, first.copy(frameId = 8), bitmapShown = true))
-        assertFalse(surfaceFrameContinues(first, first.copy(gopId = 41, frameId = 1), bitmapShown = false))
+        // A new group of the same reference keeps the display epoch and continues the picture (Codex 3/13).
+        assertTrue(surfaceFrameContinues(first, first.copy(gopId = 41, frameId = 9), bitmapShown = false))
         assertFalse(surfaceFrameContinues(first, first.copy(epoch = 3), bitmapShown = false))
         assertFalse(surfaceFrameContinues(first, first.copy(session = 4), bitmapShown = false))
     }

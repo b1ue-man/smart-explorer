@@ -202,6 +202,10 @@ class WahlgiltScreenChoiceTest {
         assertTrue(ViewerCodecChoice.reopenForVideo("tiles", ViewerCodecChoice(codec = "sharp")))
         assertFalse(ViewerCodecChoice.reopenForVideo("tiles", ViewerCodecChoice(codec = "lossless")))
         assertFalse(ViewerCodecChoice.reopenForVideo("h264", ViewerCodecChoice(codec = "hevc")))
+        // Codex 3/14: opened as „Verlustfrei“, before its first group; and „Automatisch“ out of a tiles session.
+        assertTrue(ViewerCodecChoice.reopenForVideo(null, ViewerCodecChoice(codec = "h264"), openedCodec = "lossless"))
+        assertFalse(ViewerCodecChoice.reopenForVideo(null, ViewerCodecChoice(codec = "h264"), openedCodec = "auto"))
+        assertTrue(ViewerCodecChoice.reopenForVideo("tiles", ViewerCodecChoice(codec = "auto")))
         val first = ScreenViewEvent.Stream(7, "tiles", null, 64, 64, 1, "fixture", false)
         val state = ScreenSessionState().apply(first).apply(first.copy(codec = "h264", gop = 2))
         assertEquals("tiles", state.firstCodec)

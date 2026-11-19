@@ -268,7 +268,9 @@ impl ScreenHostBackend for BridgeBackend {
         // Never waits (the session loop awaits this call): a backlog merges
         // moves and wheel steps; a queue the app stopped taking from is
         // reported as a block, never dropped in silence.
-        if channels::send_input(events) {
+        // Without a session (every Android source injects through its own
+        // sink, `bridge_source::BridgeInputSink`): 0, dropped with the last.
+        if channels::send_input(0, events) {
             Ok(())
         } else {
             Err(ControlBlock::ControlUnavailable)

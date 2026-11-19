@@ -301,14 +301,16 @@ fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, a
                 override fun onSize(width: Int, height: Int) = Unit
                 override fun onBitmap(picture: Bitmap) = Unit
                 override fun onBitmapFrame(picture: Bitmap, frame: ScreenPresentedFrame) {
-                    if (!activeDecoder.get() || !active.isDisplayable(frame)) return
+                    // A bitmap that came before the host's visibility answer is kept like a Surface frame
+                    // (`awaitsAck`): it is shown and counts once the answer names it (Codex 3/10).
+                    if (!activeDecoder.get() || !(active.isDisplayable(frame) || active.awaitsAck(frame))) return
                     if(!active.beginBitmapSnapshot()) return
                     val snapshot = try {ScreenScaling.snapshot(picture,active.state.value.bufferBudget)} catch(error:Throwable) {
                         active.endBitmapSnapshot();throw error
                     }
                     main.post {
                         try {
-                        if (!activeDecoder.get() || !active.isDisplayable(frame)) return@post
+                        if (!activeDecoder.get() || !(active.isDisplayable(frame) || active.awaitsAck(frame))) return@post
                         if (snapshot == null) {
                             failure = ScreenScaling.COPY_ERROR; bitmap = null; bitmapFrame = null; renderReady = false
                             active.invalidateDisplay(false)
@@ -410,7 +412,7 @@ fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, a
             switchJobs[0] = scope.launch {
                 val prior = own?.prepareDecoderSwitch(next.choice)
                 // A session that began with tiles cannot become video through `SET_DECODERS`: a new session with the choice.
-                val tilesStart = ViewerCodecChoice.reopenForVideo(own?.state?.value?.firstCodec, next.choice)
+                val tilesStart = ViewerCodecChoice.reopenForVideo(own?.state?.value?.firstCodec, next.choice, own?.openedCodec)
                 val switched = if (own != null && own.id != 0L && !tilesStart) {
                     try {
                         val offers = backend.offers(next.choice).map {
@@ -663,7 +665,9 @@ fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, a
  * renderer's readiness stay; the frame is still confirmed when drawn.
  */
 internal fun surfaceFrameContinues(shown: ScreenPresentedFrame?, next: ScreenPresentedFrame, bitmapShown: Boolean): Boolean =
-    !bitmapShown && shown != null && shown.session == next.session && shown.gopId == next.gopId && shown.epoch == next.epoch
+    // A new group within the same display epoch continues the picture (ScreenSession keeps the epoch for a key frame of
+    // the same reference, Codex 3/13); a new epoch, session or a bitmap in between does not.
+    !bitmapShown && shown != null && shown.session == next.session && shown.epoch == next.epoch
 
 /** The surface the decoder renders on; [onSurface] hears when it exists and when it is gone (`null`). */
 private fun surfaceView(context: android.content.Context, onSurface: (Surface?) -> Unit) = SurfaceView(context).apply {

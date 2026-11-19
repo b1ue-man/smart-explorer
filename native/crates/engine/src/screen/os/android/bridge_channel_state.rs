@@ -28,8 +28,10 @@ impl Channel {
                 .and_then(Value::as_u64)
                 .and_then(|epoch| u32::try_from(epoch).ok());
             state.1.encoder_failure = None;
-            // The new encoder names its own lowest rate.
+            // The new encoder names its own lowest rate and runs at the
+            // rate of this `configure`.
             state.1.rate_floor = None;
+            state.1.bitrate_refused = false;
         }
         if state.1.control.len() >= MAX_CONTROL {
             state.1.control.pop_front();
@@ -59,6 +61,16 @@ impl Channel {
             state.1.notices.pop_front();
         }
         state.1.notices.push_back(text);
+    }
+
+    /// The app's encoder refused the last bit rate sent.
+    pub fn note_bitrate_refused(&self) {
+        lock(&self.state).1.bitrate_refused = true;
+    }
+
+    /// Whether the encoder refused a bit rate since the last call.
+    pub fn take_bitrate_refused(&self) -> bool {
+        std::mem::take(&mut lock(&self.state).1.bitrate_refused)
     }
 
     /// The oldest notice not given yet.

@@ -370,7 +370,8 @@ fn notice(args: &Value) -> Result<Value, ApiError> {
     if !fits_wire(&text) {
         return Err(invalid("„detail“ ist zu lang."));
     }
-    channels::notice(id, text).map_err(not_found)?;
+    // `video-bitrate` is `MediaCodec.PARAMETER_KEY_VIDEO_BITRATE`.
+    channels::notice(id, text, name == "video-bitrate").map_err(not_found)?;
     Ok(json!({}))
 }
 

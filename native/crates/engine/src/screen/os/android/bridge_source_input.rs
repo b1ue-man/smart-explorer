@@ -1,5 +1,8 @@
 //! Actual still acquisition and admitted RGBA input conversion for Android.
 use super::*;
+use crate::screen::core::host_backend::ScreenInputSink;
+use crate::screen::core::input_model::InputEvent;
+use crate::screen::core::wire_control::ControlBlock;
 
 impl BridgeSource {
     /// The still that answers `frame_id`, as BGRA.
@@ -90,4 +93,50 @@ pub fn decode_still(
         pixel[3] = 0xFF;
     }
     Ok(CaptureImageBuilder::from_bytes(size, FrameLimits::RESOURCE, grant, bgra)?.freeze())
+}
+
+/// The input of one Android host session (review 2026-11-19, Codex 3/3):
+/// every batch carries the session's bridge channel, so the app performs it
+/// only while that session exists, and its batches still waiting are dropped
+/// when it ends (`bridge_channels::close`). The checks are the backend's
+/// (`BridgeBackend::inject`): the accessibility service is on and a capture
+/// streams.
+pub(super) struct BridgeInputSink {
+    pub(super) channel: Arc<Channel>,
+}
+
+impl BridgeInputSink {
+    fn queue(&self, events: &[InputEvent]) -> Result<(), ControlBlock> {
+        if !super::bridge_channels::prereqs().accessibility_on() {
+            return Err(ControlBlock::ControlUnavailable);
+        }
+        // Never waits (the session loop awaits this call); a full queue is a
+        // reported block, never a silent loss.
+        if super::bridge_channels::send_input(self.channel.id, events) {
+            Ok(())
+        } else {
+            Err(ControlBlock::ControlUnavailable)
+        }
+    }
+}
+
+impl ScreenInputSink for BridgeInputSink {
+    fn inject(
+        &self,
+        events: &[InputEvent],
+        _reference_generation: u64,
+        _presented: bool,
+    ) -> Result<(), ControlBlock> {
+        let streaming = super::bridge_channels::channels()
+            .iter()
+            .any(|channel| matches!(channel.phase(), Phase::Ready { .. }) && !channel.start.still);
+        if !streaming {
+            return Err(ControlBlock::ControlUnavailable);
+        }
+        self.queue(events)
+    }
+
+    fn release(&self, events: &[InputEvent]) -> Result<(), ControlBlock> {
+        self.queue(events)
+    }
 }

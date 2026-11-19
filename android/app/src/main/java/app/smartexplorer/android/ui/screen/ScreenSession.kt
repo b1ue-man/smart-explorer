@@ -344,6 +344,10 @@ class ScreenSession(private val target: ScreenTarget, private val backend: Scree
     @Volatile var openedSource: String? = null
         private set
 
+    /** The „Codec“ this session was opened with ([ViewerCodecChoice.reopenForVideo]). */
+    @Volatile var openedCodec: String = ViewerCodecChoice.CODEC_AUTO
+        private set
+
     /** The data-rate ceiling this session was opened with (`null` automatic); [switchedTo] never overwrites it. */
     @Volatile var openedMaxRateBps: Long? = null
         private set
@@ -400,6 +404,7 @@ class ScreenSession(private val target: ScreenTarget, private val backend: Scree
     suspend fun open(mode: String, source: String?, displayWidth: Int, displayHeight: Int, maxFps: Int, decoders: List<DecoderOffer>, choice: ViewerCodecChoice = ViewerCodecChoice()) {
         this.choice = choice
         this.openedSource = source
+        this.openedCodec = choice.codec
         this.openedMaxRateBps = choice.maxRateBps
         synchronized(lock) {
             wantedMode=ScreenModeRequest(if(mode=="preview") "preview" else "full")
@@ -465,7 +470,16 @@ class ScreenSession(private val target: ScreenTarget, private val backend: Scree
             ScreenCodecNotices.parse(event.reason, old.chosenCodec)?.let { it.running == "tiles" && !it.error } == true) forceLossless = true
         val familyLayoutChanged = event is ScreenViewEvent.Family &&
             screenJson.decodeFromJsonElement<FamilyState>(event.body).snapshot?.layout_revision != old.family?.snapshot?.layout_revision
-        if (event is ScreenViewEvent.Stream && old.stream?.gop != event.gop ||
+        // A new picture group of the same codec, size and family layout is a key frame of the same picture (the
+        // host keeps input across it, ae1da484): the presentation receipts of the old group go, the display epoch
+        // and the input readiness stay (Codex 3/13). Another codec, size or layout is a new reference.
+        val newGop = event is ScreenViewEvent.Stream && old.stream?.gop != event.gop
+        val sameReference = newGop && event is ScreenViewEvent.Stream && old.stream?.let {
+            it.codec == event.codec && it.width == event.width && it.height == event.height &&
+                it.familyLayoutRevision == event.familyLayoutRevision
+        } == true
+        if (sameReference) lastPresented = null
+        if (newGop && !sameReference ||
             event is ScreenViewEvent.State && event.state != old.state && event.state != "streaming" ||
             event is ScreenViewEvent.Ended || familyLayoutChanged) {
             displayEpoch++

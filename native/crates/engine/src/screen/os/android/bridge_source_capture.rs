@@ -147,14 +147,27 @@ impl BridgeSource {
             self.channel.send(configure_message(request, hybrid));
             self.epoch = Some(request.encoder_epoch);
             self.bitrate = request.target_bps;
+            self.refused_bps = None;
         } else {
             if request.keyframe {
                 self.channel.send(json!({"op": "keyframe"}));
             }
             // A lower target always goes out: it may be the viewer's „Höchste Datenrate“, a hard
             // ceiling the encoder must not stay above. Only a rise waits for a 10 % step.
+            // Codex 3/16: a rate the encoder refused does not count as running; any other
+            // target goes out again (the same one would only be refused again).
+            if self.channel.take_bitrate_refused() {
+                self.refused_bps = Some(self.bitrate);
+            }
+            let retry = self
+                .refused_bps
+                .is_some_and(|refused| refused != request.target_bps);
             let step = self.bitrate * BITRATE_STEP_PERCENT / 100;
-            if request.target_bps < self.bitrate || request.target_bps - self.bitrate > step {
+            if retry
+                || request.target_bps < self.bitrate
+                || request.target_bps - self.bitrate > step
+            {
+                self.refused_bps = None;
                 self.channel
                     .send(json!({"op": "bitrate", "bps": request.target_bps}));
                 self.bitrate = request.target_bps;

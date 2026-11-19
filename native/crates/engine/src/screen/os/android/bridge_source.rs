@@ -71,6 +71,9 @@ pub struct BridgeSource {
     /// The viewer heard that the encoder's lowest rate is above the rate
     /// asked of it; cleared once it no longer is (one notice per arising).
     floor_noticed: bool,
+    /// The bit rate the app's encoder refused (Codex 3/16); `None` while the
+    /// last one sent runs.
+    refused_bps: Option<u64>,
 }
 
 impl BridgeSource {
@@ -92,6 +95,7 @@ impl BridgeSource {
             activity_request: 0,
             limits,
             floor_noticed: false,
+            refused_bps: None,
         }
     }
 
@@ -129,6 +133,12 @@ fn ended_error(reason: String) -> StageError {
 }
 
 impl ScreenSource for BridgeSource {
+    /// Input bound to this session (`input::BridgeInputSink`).
+    fn input_sink(&self) -> Option<Arc<dyn crate::screen::core::host_backend::ScreenInputSink>> {
+        Some(Arc::new(input::BridgeInputSink {
+            channel: self.channel.clone(),
+        }))
+    }
     fn capture_grant(&self) -> Option<CaptureGrant> {
         self.channel.capture.current()
     }

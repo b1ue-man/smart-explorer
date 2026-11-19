@@ -683,9 +683,11 @@ internal object ScreenHostControl {
                     null
                 } ?: continue
                 val events = message["events"] as? JsonArray ?: continue
+                // The host session the batch belongs to (0: none named); its input is performed only while it exists
+                // (review 2026-11-19, Codex 2/1 and 3/3), checked again right before each action.
+                val owner = message.long("session")
                 for (action in mapper.map(events)) {
-                    // Input of a session that ended meanwhile is not performed (review 2026-11-19, Codex 2/1).
-                    if (sessions.isEmpty()) break
+                    if (sessions.isEmpty() || (owner != 0L && !sessions.containsKey(owner))) break
                     val done = CountDownLatch(1)
                     AccessLink.perform(action) { done.countDown() }
                     val wait = (action as? PhoneAction.Stroke)?.durationMs ?: 0

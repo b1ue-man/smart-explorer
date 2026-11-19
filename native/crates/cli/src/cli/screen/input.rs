@@ -16,7 +16,9 @@
 //! receipt. `blocked` is `elevated_window`, `secure_desktop`,
 //! `control_unavailable` or `unsupported_on_host`; `held` says the host held
 //! the input back without applying it (`viewer_hidden`,
-//! `waiting_for_picture`, `release_pending`, `other`). With either the exit
+//! `waiting_for_picture`, `release_pending`, `other`), or that no complete
+//! picture came within five seconds, so the input was not sent
+//! (`waiting_for_picture`). With either the exit
 //! code is 1. No input is ever logged.
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::{Duration, Instant};
@@ -340,8 +342,9 @@ pub(crate) fn deliver(
         // The host drops input silently until the viewer acknowledged a
         // picture of its current reference (`host_session_control.rs`,
         // `input`); the worker acknowledges every picture it receives, so
-        // the input waits for the first complete one (at most `ANSWER_WAIT`;
-        // without one it still goes out, as before).
+        // the input waits for the first complete one (at most `ANSWER_WAIT`).
+        // Without one it is not sent (review 2026-11-19, Codex 3/20): a host
+        // would drop it, so the answer says `held: waiting_for_picture`.
         let deadline = Instant::now() + ANSWER_WAIT;
         let mut picture = false;
         while (!picture || (size.is_none() && needs_size(action))) && Instant::now() < deadline {
@@ -353,6 +356,13 @@ pub(crate) fn deliver(
                 Some(StreamEvent::End(end)) => return Err(end.code),
                 _ => {}
             }
+        }
+        if !picture {
+            return Ok(InputOutcome {
+                sent: false,
+                blocked: None,
+                held: Some(InputHeld::WaitingForPicture),
+            });
         }
         let batch = events(action, size)?;
         control

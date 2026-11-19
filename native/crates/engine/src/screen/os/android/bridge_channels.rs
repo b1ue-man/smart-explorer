@@ -114,6 +114,9 @@ struct Queues {
     /// Notices of the app for the viewer (`HostStage::take_notice`), oldest
     /// first; each is given once.
     notices: VecDeque<String>,
+    /// The app's encoder refused the last bit rate sent (`video-bitrate`,
+    /// Codex 3/16): the stage no longer counts it as running.
+    bitrate_refused: bool,
 }
 
 /// One host session as the app sees it.
@@ -272,6 +275,7 @@ pub fn close(id: u64, reason: &str) {
             channel.set_phase(Phase::Ended(reason.into()));
             session_event(id, "ended", Some(reason));
         }
+        input_queue::drop_session(id);
         if last {
             drop_pending_input();
         }
@@ -379,9 +383,12 @@ pub fn rate_floor(id: u64, epoch: u32, bps: u64) -> Result<(), String> {
 }
 
 /// `screen.hostNotice` with a sentence for the viewer (an encoder that
-/// refused a parameter).
-pub fn notice(id: u64, text: String) -> Result<(), String> {
+/// refused a parameter); `bitrate`: the refused parameter was the bit rate.
+pub fn notice(id: u64, text: String, bitrate: bool) -> Result<(), String> {
     let channel = channel(id).ok_or_else(|| format!("Keine Bildschirmsitzung {id}"))?;
+    if bitrate {
+        channel.note_bitrate_refused();
+    }
     channel.push_notice(text);
     Ok(())
 }
