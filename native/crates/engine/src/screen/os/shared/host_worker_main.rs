@@ -107,6 +107,17 @@ fn keyed(
     Ok(frame)
 }
 
+/// Codex round 5, finding 8: whether `a` and `b` ask the same of the encoder.
+/// The viewer's decoder stage (`decoder_hardware`) alone changes nothing of
+/// it: no encoder reads it, its new decoder starts at the key frame it asks
+/// for (as `Pipeline::set_quality_mode`, `host_mode.rs`).
+fn same_encoder_choice(a: &CodecChoice, b: &CodecChoice) -> bool {
+    CodecChoice {
+        decoder_hardware: a.decoder_hardware,
+        ..*b
+    } == *a
+}
+
 /// What differs between the running encoder and `request` (measurement of
 /// 2026-11-19: a new encoder about once a second, without a line why).
 fn reopen_reason(running: &Running, request: &StageRequest, book: usize) -> &'static str {
@@ -114,7 +125,7 @@ fn reopen_reason(running: &Running, request: &StageRequest, book: usize) -> &'st
         "the capture has a new grant"
     } else if running.epoch != request.encoder_epoch {
         "the session started a new stream"
-    } else if running.choice != request.choice {
+    } else if !same_encoder_choice(&running.choice, &request.choice) {
         "the codec pairing changed"
     } else if running.frame_contract != request.frame_contract {
         "the frame contract changed"

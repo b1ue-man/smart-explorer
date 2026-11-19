@@ -88,7 +88,12 @@ impl Identity {
         let request = &order.request;
         Self {
             epoch: request.encoder_epoch,
-            choice: request.choice,
+            // Codex round 5, finding 8: the viewer's decoder stage is no
+            // change of the encoder (`same_encoder_choice`).
+            choice: CodecChoice {
+                decoder_hardware: false,
+                ..request.choice
+            },
             contract: request.frame_contract,
             size: request.size,
             quality: order.quality_target,
