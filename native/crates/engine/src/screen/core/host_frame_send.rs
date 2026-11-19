@@ -104,9 +104,26 @@ impl Pipeline {
             credit,
             Some(self.work.ceiling_cell()),
             self.rate.control_bps(),
+            self.rate.sustained_bps(),
         );
-        let active_budget =
-            stale.saturating_add(Duration::from_micros(serialization_us.max(paced_us)));
+        // Codex 6/9: a stalled stream ends the write piece by piece
+        // (`GopWriter::piece`); the whole write gets the time the picture
+        // takes at the pictures' floor of the ceiling as it is now, so a
+        // ceiling lowered during it slows it instead of breaking it off.
+        let ceiling = self
+            .work
+            .ceiling_cell()
+            .load(std::sync::atomic::Ordering::Acquire);
+        let floor_us = if ceiling == 0 {
+            0
+        } else {
+            let floor = crate::screen::core::rate_control::picture_floor_bps(ceiling);
+            (u128::from(planned) * 8 * 1_000_000 / u128::from(floor)).min(u128::from(u64::MAX))
+                as u64
+        };
+        let active_budget = stale.saturating_add(Duration::from_micros(
+            serialization_us.max(paced_us).max(floor_us),
+        ));
         let send_started = std::time::Instant::now();
         let writing = crate::screen::core::gop_stream::write_with_route(
             connection,
@@ -117,7 +134,11 @@ impl Pipeline {
             _=work.cancelled(work_epoch)=>Err(io::Error::from(io::ErrorKind::Interrupted)),
             result=writing=>result,
         };
-        let booked = written.as_ref().map_or(planned, |bytes| *bytes) + header_bytes;
+        // A write cut off books what it handed to the stream (Codex 6/9).
+        let booked = written
+            .as_ref()
+            .map_or_else(|_| gop.handed_bytes(), |bytes| *bytes)
+            + header_bytes;
         self.rate.on_stream_sent(send_started_us, booked, video);
         let bytes = match written {
             Ok(bytes) => {

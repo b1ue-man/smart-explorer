@@ -136,6 +136,7 @@ impl Pipeline {
             credit,
             Some(self.work.ceiling_cell()),
             self.rate.control_bps(),
+            self.rate.sustained_bps(),
         );
         let line_bps = pace.map_or(self.rate.sustained_bps(), |(rate, _)| {
             rate.min(self.rate.sustained_bps())
@@ -154,7 +155,10 @@ impl Pipeline {
         };
         // Its stream's header as the writer wrote it (`host_frame_send.rs`).
         let header_bytes = gop.header_bytes();
-        let booked = written.as_ref().map_or(planned, |bytes| *bytes) + header_bytes;
+        let booked = written
+            .as_ref()
+            .map_or_else(|_| gop.handed_bytes(), |bytes| *bytes)
+            + header_bytes;
         self.rate.on_stream_sent(started_us, booked, video);
         // The statistics' sent rate counts the snapshot (Gemini 3/6).
         self.second_bytes += booked;

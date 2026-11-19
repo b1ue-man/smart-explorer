@@ -91,13 +91,8 @@ impl Pipeline {
     /// without a pairing ends the session at the next tick with its reason.
     pub fn set_decoders(&mut self, set: &SetDecoders) -> bool {
         self.pairing.continuation = set.continuation();
-        let next = match renegotiate_set(
-            &self.pairing.encoders,
-            set,
-            self.negotiated_contract,
-            self.pairing.video_session,
-            self.pairing.trust,
-        ) {
+        let renegotiated = self.renegotiate_hybrid_or_plain(set);
+        let next = match renegotiated {
             Ok(next) => next,
             Err(refused) => {
                 self.quality_policy.pending_error = Some(refused.to_string());
@@ -204,6 +199,65 @@ impl Pipeline {
             self.reset_stream();
         }
         true
+    }
+}
+
+impl Pipeline {
+    /// `renegotiate_set` under the session's contract; Codex 6/11: with
+    /// hybrid regions and no video pairing (they need decoders with pixel
+    /// access), the same offers without them, as the opening tries
+    /// (`host_server_start.rs`). A video pairing found so drops the hybrid
+    /// regions of the session; the next picture group names it.
+    fn renegotiate_hybrid_or_plain(
+        &mut self,
+        set: &SetDecoders,
+    ) -> Result<
+        Option<crate::screen::core::set_decoders::Pairing>,
+        crate::screen::core::negotiate::ChosenUnavailable,
+    > {
+        let first = renegotiate_set(
+            &self.pairing.encoders,
+            set,
+            self.negotiated_contract,
+            self.pairing.video_session,
+            self.pairing.trust,
+        );
+        let video = |result: &Result<Option<crate::screen::core::set_decoders::Pairing>, _>| {
+            result
+                .as_ref()
+                .is_ok_and(|pairing| pairing.as_ref().is_some_and(|p| p.choice.codec.is_video()))
+        };
+        let hybrid = self.negotiated_contract.is_some_and(|c| c.hybrid_regions);
+        if video(&first)
+            || !hybrid
+            || !self.pairing.video_session
+            || !set.decoders.iter().any(|offer| offer.codec.is_video())
+        {
+            return first;
+        }
+        let plain = self.negotiated_contract.map(|mut contract| {
+            contract.hybrid_regions = false;
+            contract
+        });
+        let retry = renegotiate_set(
+            &self.pairing.encoders,
+            set,
+            plain,
+            self.pairing.video_session,
+            self.pairing.trust,
+        );
+        if !video(&retry) {
+            return first;
+        }
+        self.negotiated_contract = plain;
+        self.frame_contract = self.frame_contract.map(|mut contract| {
+            contract.hybrid_regions = false;
+            contract
+        });
+        // Another contract is another encoder (the hybrid one takes regions).
+        self.note_restart("SET_DECODERS without hybrid regions: new encoder");
+        self.invalidate_reference();
+        retry
     }
 }
 

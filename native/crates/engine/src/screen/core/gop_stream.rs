@@ -156,6 +156,9 @@ pub struct GopWriter {
     pace: Option<Pace>,
     /// The bytes its header took on the stream (`header_bytes`).
     header_bytes: u64,
+    /// The bytes of the frame being written handed to the stream so far
+    /// (`handed_bytes`, Codex 6/9: a cut-off write booked them all).
+    handed: u64,
 }
 
 /// Bytes of one paced piece of a record: the budget is kept to about the
@@ -183,6 +186,10 @@ struct Pace {
     limit: Option<std::sync::Arc<std::sync::atomic::AtomicU64>>,
     ceiling_at_start: u64,
     control_bps: u64,
+    /// The rate the line was measured to carry: a piece the stream does not
+    /// take within the stale time plus its time at it is a stall (Codex 6/9;
+    /// the pace's own waits never count).
+    line_bps: u64,
 }
 
 impl Pace {
@@ -214,6 +221,7 @@ impl GopWriter {
             continues: false,
             pace: None,
             header_bytes,
+            handed: 0,
         })
     }
 
@@ -227,6 +235,7 @@ impl GopWriter {
         credit: u64,
         limit: Option<std::sync::Arc<std::sync::atomic::AtomicU64>>,
         control_bps: u64,
+        line_bps: u64,
     ) {
         let ceiling_at_start = limit
             .as_ref()
@@ -239,6 +248,7 @@ impl GopWriter {
             limit,
             ceiling_at_start,
             control_bps,
+            line_bps: line_bps.max(1),
         });
     }
 
@@ -352,6 +362,7 @@ impl GopWriter {
         records: super::capture_records::CapturedRecords,
     ) -> io::Result<u64> {
         // The pace holds for this frame only (`pace_next_frame`).
+        self.handed = 0;
         let written = self
             .write_records_admitted(frame_id, capture_ts_us, keyframe, records)
             .await;
@@ -423,24 +434,44 @@ impl GopWriter {
         }
         let head = super::wire_binary::record_head(payload.len(), frame_id, capture_ts_us, flags);
         self.paced(head.len()).await;
-        self.send.write_all(&head).await.map_err(io::Error::from)?;
+        self.piece(bytes::Bytes::copy_from_slice(&head)).await?;
         let mut payload = bytes::Bytes::from(payload);
         if self.pace.is_none() {
-            return self
-                .send
-                .write_chunk(payload)
-                .await
-                .map_err(io::Error::from);
+            return self.piece(payload).await;
         }
         while !payload.is_empty() {
             let piece = payload.split_to(PACE_CHUNK.min(payload.len()));
             self.paced(piece.len()).await;
-            self.send
-                .write_chunk(piece)
-                .await
-                .map_err(io::Error::from)?;
+            self.piece(piece).await?;
         }
         Ok(())
+    }
+
+    /// Hands `piece` to the stream; under a pace, a piece it does not take
+    /// within the stale time plus its time on the measured line is a stall.
+    async fn piece(&mut self, piece: bytes::Bytes) -> io::Result<()> {
+        let bytes = piece.len() as u64;
+        let limit = self.pace.as_ref().map(|pace| {
+            let line_us = u128::from(bytes) * 8 * 1_000_000 / u128::from(pace.line_bps);
+            super::pacing::STALE_STREAM_US
+                .saturating_add(u64::try_from(line_us).unwrap_or(u64::MAX))
+        });
+        let write = self.send.write_chunk(piece);
+        match limit {
+            Some(us) => tokio::time::timeout(std::time::Duration::from_micros(us), write)
+                .await
+                .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "screen write stalled"))?
+                .map_err(io::Error::from)?,
+            None => write.await.map_err(io::Error::from)?,
+        }
+        self.handed = self.handed.saturating_add(bytes);
+        Ok(())
+    }
+
+    /// The bytes of the last frame handed to the stream, also of one whose
+    /// write was cut off.
+    pub fn handed_bytes(&self) -> u64 {
+        self.handed
     }
 
     /// Gives the stream up: the viewer drops what it has of it.

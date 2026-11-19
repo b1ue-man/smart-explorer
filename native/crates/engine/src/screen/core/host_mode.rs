@@ -51,13 +51,25 @@ impl Pipeline {
         self.quality.size = self.fitted_size();
         // A new rate alone keeps the encoder (B-03); a rate above the one it
         // was opened with restarts it at the next tick (`Pipeline::tick`).
-        // Codex 5/8: the viewer's decoder stage alone is no encoder change;
-        // its new decoder starts at the key frame it asks for.
-        let encoder_choice = super::super::negotiate::CodecChoice {
-            decoder_hardware: previous_choice.decoder_hardware,
-            ..self.choice
-        };
-        if !mode.same_but_rate(&previous) || encoder_choice != previous_choice {
+        // Codex 5/8, 6/10: what the encoder is (codec, profile, encoder
+        // stage) decides; the viewer's decoder stage and the negotiated
+        // limits do not. A size the new limits no longer allow restarts in
+        // `resize`, a higher allowed rate at the next tick.
+        let encoder =
+            |c: &super::super::negotiate::CodecChoice| (c.codec, c.profile, c.encoder_hardware);
+        // A running encoder opened for more than the new limits carry (its
+        // level could exceed the new decoder's) is replaced.
+        let beyond = self.running.is_some()
+            && crate::screen::core::pacing::codec_cap(
+                self.codec_fps,
+                self.target_size(),
+                self.choice.max_macroblocks_per_second,
+            )
+            .is_none_or(|fps| fps < self.codec_fps);
+        if !mode.same_but_rate(&previous)
+            || encoder(&self.choice) != encoder(&previous_choice)
+            || beyond
+        {
             self.note_restart("mode or codec pairing changed (SET_MODE/SET_DECODERS)");
             self.invalidate_reference();
         }
