@@ -548,6 +548,7 @@ sind `screenPush`/`screenControl` (Host) und `screenPull` (Betrachter) in `nativ
 - `screen.hostSessions {}` → `{sessions:[…]}`
 - `screen.hostStop {session:Long}` oder `{session:"all"}` bzw. `{all:true}` → `{stopped:Int}`; beendet Sitzungen wie der Host-Nutzer.
 - `screen.hostReady {session, width, height, encoder, hardware?, projection?}` → `{}` (nach dem Systemdialog oder für Standbilder)
+- `screen.hostNotice {session, epoch, rateFloor}` oder `{session, parameter, detail?}` → `{}` (seit 2026-11-19): die niedrigste Rate des Encoders dieser Epoche bzw. ein abgelehnter `setParameters`-Schlüssel; der Kern meldet sie dem Betrachter als Hinweis (`encoder_notice:`), der Encoder läuft weiter.
 - `screen.hostEnded {session, reason}` → `{}`
 
 **Betrachter** (dieses Telefon sieht einen anderen Bildschirm):

@@ -56,6 +56,18 @@ fn notice_sentence(text: &str) -> String {
              Datenrate ({ceiling} bit/s); weniger Bilder halten die Obergrenze ein"
         );
     }
+    // The Android bridge knows only the rate it asked for, not the ceiling.
+    if let Some((lowest, asked)) = text
+        .strip_prefix(NOTICE_LOWEST)
+        .and_then(|rest| rest.split_once(" bit/s is above the bit rate "))
+    {
+        let asked = asked.split_once(" bit/s").map_or(asked, |(n, _)| n);
+        return format!(
+            "Die niedrigste Bitrate des Kodierers ({lowest} bit/s) liegt über der verlangten \
+             Rate ({asked} bit/s); er sendet mit seiner niedrigsten Rate, die Höchste Datenrate \
+             hält das Datenbudget ein"
+        );
+    }
     if let Some(rest) = text.strip_prefix(NOTICE_PARAMETER) {
         let (name, detail) = rest.split_once(": ").unwrap_or((rest, ""));
         let base = format!("Der Kodierer lehnte den Parameter {name} ab");
@@ -219,6 +231,10 @@ pub fn chosen_text(label: Option<&str>, failed: bool, reason: &str) -> String {
         "the viewer has no decoder of this codec" => format!(
             "{label} gewählt, aber dieses Gerät hat keinen {}",
             decoders_of(label)
+        ),
+        super::set_decoders::TILES_SESSION => format!(
+            "{label} gewählt, aber diese Sitzung wurde für „Verlustfrei“ geöffnet; sie muss für \
+             diesen Codec neu geöffnet werden"
         ),
         "no encoder and decoder of this codec fit together" => format!(
             "{label} gewählt, aber die {} des Geräts und die {} dieses Geräts passen nicht zusammen",

@@ -53,6 +53,8 @@ object ScreenCodecNotices {
         "the host has no GPU encoder of H.264 or HEVC" -> "Das Gerät hat keinen GPU-Kodierer für H.264/HEVC"
         "the viewer has no decoder of this codec" -> "Dieses Handy bietet keinen Dekodierer dieses Codecs an"
         "no encoder and decoder of this codec fit together" -> "Kein Kodierer und Dekodierer dieses Codecs passen zusammen"
+        "the session was opened for the tiles; reopen it for this codec" ->
+            "Diese Sitzung wurde für „Verlustfrei“ geöffnet; sie muss für diesen Codec neu geöffnet werden"
         else -> knownError(reason.trim()) ?: reason.trim()
     }
 
@@ -111,11 +113,18 @@ object ScreenCodecNotices {
         val lowest = "the encoder's lowest bit rate "
         val above = " bit/s is above the highest data rate "
         val parameter = "the encoder refused the parameter "
+        val asked = " bit/s is above the bit rate "
         val german = when {
             sentence.startsWith(lowest) && sentence.contains(above) -> {
                 val rest = sentence.removePrefix(lowest)
                 "Die niedrigste Bitrate des Kodierers (${rest.substringBefore(above)} bit/s) liegt über der Höchsten " +
                     "Datenrate (${rest.substringAfter(above).substringBefore(" bit/s")} bit/s); weniger Bilder halten die Obergrenze ein"
+            }
+            sentence.startsWith(lowest) && sentence.contains(asked) -> {
+                val rest = sentence.removePrefix(lowest)
+                "Die niedrigste Bitrate des Kodierers (${rest.substringBefore(asked)} bit/s) liegt über der verlangten " +
+                    "Rate (${rest.substringAfter(asked).substringBefore(" bit/s")} bit/s); er sendet mit seiner niedrigsten Rate, " +
+                    "die Höchste Datenrate hält das Datenbudget ein"
             }
             sentence.startsWith(parameter) -> {
                 val rest = sentence.removePrefix(parameter)
