@@ -55,6 +55,7 @@ impl Pipeline {
                 return Ok(Produced::Idle);
             }
         }
+        self.apply_followed_bounds();
         self.sync_source_reference();
         if self.source_size.width == 0 || self.source_size.height == 0 {
             if !self.clock.take(now_us()) {
@@ -246,23 +247,23 @@ impl Pipeline {
                 host.set_stream_hint(hint);
             }
             let produced = produce(&mut stage, backend.as_ref(), &request, recover);
-            let report = stage
-                .source
-                .host_stage()
-                .and_then(|host| host.take_stream_report());
+            let (report, notice) = stage.source.host_stage().map_or((None, None), |host| {
+                (host.take_stream_report(), host.take_notice())
+            });
             StageOutput {
-                result: (produced, request, report),
+                result: (produced, request, report, notice),
                 stage,
             }
         })
         .await;
         let StageOutput {
             stage,
-            result: (produced, request, report),
+            result: (produced, request, report, notice),
         } = joined.map_err(|error| PipelineError::capture(io::Error::other(error)))?;
         self.stage = Some(stage);
         // The stage answered its credit: the next one may follow at once.
         self.chain_ready = true;
+        self.note_stage_notice(notice);
         // Pictures the host process captured and replaced before encoding
         // count with the frames the queue guard dropped (`HostStats`).
         for _ in 0..report.map_or(0, |report| {

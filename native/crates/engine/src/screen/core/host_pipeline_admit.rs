@@ -44,6 +44,16 @@ impl Pipeline {
         })
     }
 
+    /// A notice of the stage (`HostStage::take_notice`) for the viewer: the
+    /// next `STATE` reason as `encoder_notice: <text>` and the host log
+    /// (`note_encoder`); the encoder and the stream go on unchanged.
+    pub(super) fn note_stage_notice(&mut self, notice: Option<String>) {
+        if let Some(text) = notice.filter(|text| !text.trim().is_empty()) {
+            let prefix = crate::screen::core::codec_reason_text::ENCODER_NOTICE;
+            self.note_encoder(format!("{prefix}{}", text.trim()));
+        }
+    }
+
     /// A chosen video codec waits for a picture of at least 2 x 2 pixels
     /// (plan 2026-11-18; only „Automatisch“ takes the tiles meanwhile).
     /// Review 2026-11-19: it waited without a word; the viewer is told once

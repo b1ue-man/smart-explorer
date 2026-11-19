@@ -123,6 +123,17 @@ pub trait HostStage: Send {
     fn take_stream_report(&mut self) -> Option<StreamReport> {
         None
     }
+    /// A notice for the viewer that ends nothing (review 2026-11-19): what
+    /// the stage could not do as asked while its encoder keeps running, for
+    /// example a device minimum above the user's „Höchste Datenrate“ or a
+    /// parameter the encoder refused. A stage gives each notice once, when
+    /// it arises (every notice is a `STATE` frame). Taken after `produce`; the
+    /// pipeline sends it as `encoder_notice: <text>` in the next `STATE`
+    /// reason (`Pipeline::note_encoder`). One short English sentence; the
+    /// viewers show it after „Hinweis vom Gerät:“.
+    fn take_notice(&mut self) -> Option<String> {
+        None
+    }
     /// Hands the station times and capture facts measured in the host
     /// process since the last call to the session's meter (plan 2026-11-14
     /// „Bildkette“ BK0); a stage without a host process has none.

@@ -121,6 +121,10 @@ pub(super) struct QualityPolicy {
     /// The picture too small for the chosen video codec that the viewer was
     /// last told about (`Pipeline::wait_for_size`, review 2026-11-19).
     pub(super) small_picture: Option<FrameSize>,
+    /// The source takes the full view's size itself (a virtual display that
+    /// follows the window, P5): that size and until when the picture keeps
+    /// its bounds for it (`Pipeline::expect_source_size`).
+    pub(super) follow_source: Option<(FrameSize, u64)>,
 }
 
 /// Which pairings may stand in for a failed encoder (plan 2026-11-18).
@@ -252,6 +256,7 @@ impl QualityPolicy {
             first_picture: FirstPictureWatch::default(),
             pending_error: None,
             small_picture: None,
+            follow_source: None,
             mode: QualityMode {
                 kind: StreamKind::Video,
                 full_size: None,

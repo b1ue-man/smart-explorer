@@ -24,6 +24,49 @@ const SHARP_LEFT: &str = "Scharf (GPU): no GPU encoder of ";
 const REFUSED_LOWER_FROM: &str = " refused to lower its bit rate from ";
 const VENDOR_REFUSED_LOWER: &str = " refused to lower its bit rate to ";
 const SMALL_PICTURE: &str = "the picture of ";
+/// The prefix of a stage's notice that ends nothing (`HostStage::
+/// take_notice`, review 2026-11-19): `encoder_notice: <sentence>`.
+pub const ENCODER_NOTICE: &str = "encoder_notice: ";
+/// The sentences a stage's notice uses (`HostStage::take_notice`).
+const NOTICE_LOWEST: &str = "the encoder's lowest bit rate ";
+const NOTICE_ABOVE: &str = " bit/s is above the highest data rate ";
+const NOTICE_PARAMETER: &str = "the encoder refused the parameter ";
+
+/// The German text of a stage's notice anywhere in `reason`
+/// (`encoder_notice: <sentence>`); `None` when `reason` holds none. The
+/// encoder keeps running: the viewer shows a notice, no error.
+pub fn encoder_notice_text(reason: &str) -> Option<String> {
+    let at = reason.find(ENCODER_NOTICE)?;
+    let text = reason[at + ENCODER_NOTICE.len()..].trim();
+    Some(format!("Hinweis vom Gerät: {}", notice_sentence(text)))
+}
+
+/// `the encoder's lowest bit rate <n> bit/s is above the highest data rate
+/// <n> bit/s; fewer pictures keep the ceiling` and `the encoder refused the
+/// parameter <name>: <detail>` in German; another sentence as the host's
+/// reasons are (`encoder_error_text`).
+fn notice_sentence(text: &str) -> String {
+    if let Some((lowest, ceiling)) = text
+        .strip_prefix(NOTICE_LOWEST)
+        .and_then(|rest| rest.split_once(NOTICE_ABOVE))
+    {
+        let ceiling = ceiling.split_once(" bit/s").map_or(ceiling, |(n, _)| n);
+        return format!(
+            "Die niedrigste Bitrate des Kodierers ({lowest} bit/s) liegt über der Höchsten \
+             Datenrate ({ceiling} bit/s); weniger Bilder halten die Obergrenze ein"
+        );
+    }
+    if let Some(rest) = text.strip_prefix(NOTICE_PARAMETER) {
+        let (name, detail) = rest.split_once(": ").unwrap_or((rest, ""));
+        let base = format!("Der Kodierer lehnte den Parameter {name} ab");
+        return if detail.is_empty() {
+            base
+        } else {
+            format!("{base}; Meldung: {detail}")
+        };
+    }
+    encoder_error_text(text)
+}
 
 /// The label of a codec or choice key of the host (`av1`, `sharp`, …).
 pub fn codec_key_label(key: &str) -> Option<&'static str> {

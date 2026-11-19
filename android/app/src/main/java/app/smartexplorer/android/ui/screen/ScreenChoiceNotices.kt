@@ -23,6 +23,7 @@ object ScreenCodecNotices {
     private const val FALLBACK = "encoder_fallback_to_"
     private const val UNAVAILABLE = "chosen_codec_unavailable: "
     private const val FAILED = "chosen_codec_failed: "
+    private const val NOTICE = "encoder_notice: "
 
     /** The label of a codec key of the viewer or the host (`tiles` is „Verlustfrei“). */
     fun label(codec: String): String = when (codec) {
@@ -101,6 +102,32 @@ object ScreenCodecNotices {
         }
     }
 
+    /**
+     * A notice of the host's encoder (`encoder_notice: <sentence>`, `codec_reason_text.rs::encoder_notice_text`):
+     * a device minimum above „Höchste Datenrate“ or a refused parameter in German, another sentence as it came.
+     */
+    fun noticeText(text: String): String {
+        val sentence = text.trim()
+        val lowest = "the encoder's lowest bit rate "
+        val above = " bit/s is above the highest data rate "
+        val parameter = "the encoder refused the parameter "
+        val german = when {
+            sentence.startsWith(lowest) && sentence.contains(above) -> {
+                val rest = sentence.removePrefix(lowest)
+                "Die niedrigste Bitrate des Kodierers (${rest.substringBefore(above)} bit/s) liegt über der Höchsten " +
+                    "Datenrate (${rest.substringAfter(above).substringBefore(" bit/s")} bit/s); weniger Bilder halten die Obergrenze ein"
+            }
+            sentence.startsWith(parameter) -> {
+                val rest = sentence.removePrefix(parameter)
+                val name = rest.substringBefore(": ")
+                val detail = rest.substringAfter(": ", "")
+                "Der Kodierer lehnte den Parameter $name ab" + if (detail.isEmpty()) "" else "; Meldung: $detail"
+            }
+            else -> knownError(sentence) ?: "Meldung: $sentence"
+        }
+        return "Hinweis vom Gerät: $german"
+    }
+
     /** [detail] with a known host reason ([knownError]) at its start or after one of its „: “ in German. */
     private fun detailText(detail: String): String {
         var at = 0
@@ -153,6 +180,10 @@ object ScreenCodecNotices {
                 "Fehler: ${label(codec)} gewählt, aber alle Kodierer dieses Codecs am Gerät sind ausgefallen${failedReason(why)}. Es wird kein anderer Codec gesendet.",
                 error = true,
             )
+        }
+        reason.indexOf(NOTICE).takeIf { it >= 0 }?.let { at ->
+            // A notice of the host's encoder ends nothing (`HostStage::take_notice`): no error.
+            return CodecNotice(chosen, null, noticeText(reason.substring(at + NOTICE.length)), error = false)
         }
         if (!reason.startsWith(FALLBACK)) return null
         val (running, detail) = reason.removePrefix(FALLBACK).let { rest ->

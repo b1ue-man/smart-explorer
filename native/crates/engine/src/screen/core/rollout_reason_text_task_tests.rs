@@ -128,6 +128,25 @@ fn review1119_task_new_reasons_read_german() {
         .as_deref(),
         Some("Dieses Gerät bietet keinen Dekodierer des gewählten Codecs an")
     );
+    // A stage's notice ends nothing and reads German (`HostStage::take_notice`).
+    assert_eq!(
+        encoder_notice_text(
+            "encoder_notice: the encoder's lowest bit rate 250000 bit/s is above the highest data \
+             rate 150000 bit/s; fewer pictures keep the ceiling"
+        )
+        .as_deref(),
+        Some(
+            "Hinweis vom Gerät: Die niedrigste Bitrate des Kodierers (250000 bit/s) liegt über \
+             der Höchsten Datenrate (150000 bit/s); weniger Bilder halten die Obergrenze ein"
+        )
+    );
+    assert_eq!(
+        encoder_notice_text("encoder_notice: the encoder refused the parameter bitrate-mode: CBR")
+            .as_deref(),
+        Some("Hinweis vom Gerät: Der Kodierer lehnte den Parameter bitrate-mode ab; Meldung: CBR")
+    );
+    assert_eq!(encoder_notice_text("chosen_codec_failed: h264: x"), None);
+    assert!(include_str!("host_pipeline_admit.rs").contains("codec_reason_text::ENCODER_NOTICE"));
     // The host keeps writing these reasons word for word.
     let host = include_str!("../os/shared/host_worker_encoding.rs").replace("\r\n", "\n");
     assert!(host.contains("\"Scharf (GPU): no GPU encoder of {codec} is left \\\n"));

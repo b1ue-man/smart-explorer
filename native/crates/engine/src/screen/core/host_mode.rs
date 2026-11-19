@@ -33,11 +33,12 @@ impl Pipeline {
         self.quality_policy.mode = mode;
         self.kind = mode.kind;
         self.choice = self.quality_choice();
-        self.bounds = match (mode.kind, mode.size()) {
-            (_, Some(size)) => size,
-            (StreamKind::Preview, None) => FrameSize::new(PREVIEW_EDGE, PREVIEW_EDGE),
-            _ => self.display,
-        };
+        // Review 2026-11-19 (Gemini 13.1): a source that follows the window
+        // takes the new size itself; the picture keeps its bounds until then,
+        // so only the source's change opens a new encoder, not this one too.
+        if !self.awaits_source(&mode, now_us()) {
+            self.bounds = mode_bounds(&mode, self.display);
+        }
         self.max_fps = self.quality_policy.max_fps();
         self.preview_interval_us = 1_000_000 / u64::from(mode.preview_fps.max(1));
         // Temporary sharpness/preview caps never overwrite the requested full rate.
@@ -55,6 +56,45 @@ impl Pipeline {
             self.invalidate_reference();
         }
         self.resize();
+    }
+
+    /// The source takes `size`, the full view's next size, itself (a
+    /// virtual display of this session that follows the window, P5): until
+    /// it has that size, at most `FOLLOW_SOURCE_US`, the picture keeps its
+    /// bounds (`set_quality_mode`, `second`). Call it before the `SET_MODE`
+    /// with that size reaches `set_quality_mode`.
+    pub fn expect_source_size(&mut self, size: FrameSize) {
+        self.quality_policy.follow_source = Some((size, now_us().saturating_add(FOLLOW_SOURCE_US)));
+    }
+
+    /// Whether the bounds of `mode` wait for the source (`expect_source_size`).
+    fn awaits_source(&self, mode: &QualityMode, now: u64) -> bool {
+        self.quality_policy
+            .follow_source
+            .is_some_and(|(size, until)| {
+                mode.kind == StreamKind::Video
+                    && mode.size() == Some(size)
+                    && self.source_size != size
+                    && now < until
+            })
+    }
+
+    /// The bounds that waited for the source (`expect_source_size`) apply
+    /// once the source has the size, before `sync_source_reference` sees it
+    /// (one new encoder for both), or when the wait is over.
+    pub(super) fn apply_followed_bounds(&mut self) {
+        let Some((size, until)) = self.quality_policy.follow_source else {
+            return;
+        };
+        let source = self
+            .stage
+            .as_ref()
+            .map_or(self.source_size, |stage| stage.source.size());
+        if source != size && now_us() < until {
+            return;
+        }
+        self.quality_policy.follow_source = None;
+        self.bounds = mode_bounds(&self.quality_policy.mode, self.display);
     }
 
     /// „Höchste Datenrate“ of the viewer (B-09); `None` is automatic.
@@ -166,6 +206,10 @@ impl Pipeline {
 
         self.quality.fps = cadence_fps(self.max_fps, self.rate.encode_capacity_fps());
         self.clock.set_fps(self.quality.fps);
+        // A source that changed its size since the last tick opens its one
+        // new encoder here (`sync_source_reference`), not a resize first.
+        self.apply_followed_bounds();
+        self.sync_source_reference();
         self.quality.size = self.fitted_size();
         self.resize();
         // BK0: stages, limits and station times; the session decides
@@ -205,6 +249,21 @@ impl Pipeline {
         self.second_bytes = 0;
         self.second_frames = 0;
         stats
+    }
+}
+
+/// How long the picture keeps its bounds for a source that follows the
+/// window (`Pipeline::expect_source_size`): the virtual display changes its
+/// size at most once per `MIN_RESIZE_GAP_MS` (1 s), and the capture then
+/// reports it [assumption: within 2 s more; not measured].
+const FOLLOW_SOURCE_US: u64 = 3_000_000;
+
+/// The bounds of `mode`: its size, a preview's edge or the display.
+fn mode_bounds(mode: &QualityMode, display: FrameSize) -> FrameSize {
+    match (mode.kind, mode.size()) {
+        (_, Some(size)) => size,
+        (StreamKind::Preview, None) => FrameSize::new(PREVIEW_EDGE, PREVIEW_EDGE),
+        _ => display,
     }
 }
 

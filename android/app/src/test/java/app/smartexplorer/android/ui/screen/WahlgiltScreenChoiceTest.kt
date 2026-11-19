@@ -125,6 +125,20 @@ class WahlgiltScreenChoiceTest {
         assertTrue(small.error)
         assertTrue(small.text, small.text.contains("H.264 gewählt, das Bild mit 1x1 Pixeln ist kleiner als die 2×2 Pixel"))
         assertNull(ScreenCodecNotices.knownError("device lost"))
+        // A notice of the host's encoder is no error and reads German.
+        val notice = ScreenCodecNotices.parse(
+            "encoder_notice: the encoder's lowest bit rate 250000 bit/s is above the highest data rate 150000 bit/s; " +
+                "fewer pictures keep the ceiling", "h264")!!
+        assertFalse(notice.error)
+        assertEquals(
+            "Hinweis vom Gerät: Die niedrigste Bitrate des Kodierers (250000 bit/s) liegt über der Höchsten Datenrate " +
+                "(150000 bit/s); weniger Bilder halten die Obergrenze ein",
+            notice.text,
+        )
+        assertEquals(
+            "Hinweis vom Gerät: Der Kodierer lehnte den Parameter bitrate-mode ab; Meldung: CBR",
+            ScreenCodecNotices.noticeText("the encoder refused the parameter bitrate-mode: CBR"),
+        )
     }
 
     @Test
