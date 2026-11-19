@@ -73,15 +73,26 @@ impl Session<'_> {
             events: released,
             released: false,
         };
-        if let Some(sink) = self.pipeline.input_sink() {
-            if let Ok(runtime) = tokio::runtime::Handle::try_current() {
-                self.input_release = Some(runtime.spawn_blocking(move || {
-                    let result = sink.release(&retained.events);
-                    retained.released = result.is_ok();
-                    result
-                }));
-                return;
-            }
+        // Both ways run on the blocking pool (review 2026-11-19, M1): a source
+        // without a sink (Android) injects with the backend, whose queue may
+        // wait up to a second for room (`bridge_channels::send_input`). The
+        // session waits for the job as for every release: input is held
+        // while it exists (`input`), so later batches follow the releases.
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            let job: Box<dyn FnOnce(&[InputEvent]) -> Result<(), ControlBlock> + Send> =
+                match self.pipeline.input_sink() {
+                    Some(sink) => Box::new(move |events| sink.release(events)),
+                    None => {
+                        let backend = self.context.backend.clone();
+                        Box::new(move |events| backend.inject(events))
+                    }
+                };
+            self.input_release = Some(runtime.spawn_blocking(move || {
+                let result = job(&retained.events);
+                retained.released = result.is_ok();
+                result
+            }));
+            return;
         }
         self.release_blocked = self.context.backend.inject(&retained.events).err();
         retained.released = self.release_blocked.is_none();
