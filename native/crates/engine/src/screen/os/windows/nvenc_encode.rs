@@ -66,6 +66,8 @@ pub(super) use crate::screen::os::nvenc_shared::settings::{
 
 #[cfg(test)]
 pub(super) use super::nvenc_device::async_timeout_ms;
+#[path = "nvenc_late.rs"]
+mod late;
 use super::nvenc_device::create_completion_event;
 
 /// Device-independent asynchronous NVENC session over an `NvTable`.
@@ -358,6 +360,8 @@ pub(super) struct NvencSession {
     core: Core<Arc<NvApi>>,
     registered: Vec<Registered>,
     tick: u64,
+    /// The mapped input of a picture that timed out (`nvenc_late.rs`).
+    late: Option<Ptr>,
     // Dropped last: the session lives on this device.
     _device: ID3D11Device,
 }
@@ -389,6 +393,7 @@ impl NvencSession {
         Ok(Self {
             core,
             registered: Vec::new(),
+            late: None,
             tick: 0,
             _device: device.clone(),
         })
@@ -460,7 +465,10 @@ impl VendorSession for NvencSession {
         let coded = self
             .core
             .submit(&mapped, picture.frame_id, picture.idr, deliver);
-        if let Some(unmap) = self.core.api.functions.unmap_input_resource {
+        let timed_out = matches!(&coded, Err(e) if e.kind() == io::ErrorKind::TimedOut);
+        if timed_out {
+            self.keep_late(mapped.mapped_resource);
+        } else if let Some(unmap) = self.core.api.functions.unmap_input_resource {
             // SAFETY: the resource was mapped above; the picture is coded or timed out.
             unsafe { unmap(self.core.encoder, mapped.mapped_resource) };
         }
@@ -480,6 +488,7 @@ impl VendorSession for NvencSession {
 
 impl Drop for NvencSession {
     fn drop(&mut self) {
+        self.drain_late();
         self.core.release_outputs();
         for entry in std::mem::take(&mut self.registered) {
             unregister(&self.core.api, self.core.encoder, entry);

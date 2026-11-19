@@ -432,8 +432,13 @@ impl<S: VendorSession> ScreenEncoder for VendorEncoder<S> {
             marked |= append_unit(&mut bytes, maximum, codec, kept, unit)?;
             Ok(())
         });
-        // The session has read the texture once its output is there.
-        self.gpu.finish();
+        // The session has read the texture once its output is there. A
+        // picture that timed out keeps the ring slot until the session went
+        // (`nvenc_late.rs`; `gpu` drops after `session`).
+        let timed_out = matches!(&coded, Err(e) if e.kind() == io::ErrorKind::TimedOut);
+        if !timed_out {
+            self.gpu.finish();
+        }
         let keyframe = coded? || marked;
         let frame = finish(bytes, self.codec, self.size, keyframe, idr)?;
         self.frames = self.frames.saturating_add(1);
