@@ -4,10 +4,8 @@
 //! processor into a flip-model swap chain of a child window over the
 //! picture area, presented on the decode thread the moment it is decoded,
 //! with no read-back, no upload and no wait for egui's next frame. The
-//! wgpu/glow path stays: for every picture that comes as planes or BGRA
-//! (Media Foundation, DXVA2, software, tiles), on Linux, and when the user
-//! chooses „Anzeige: wgpu“ (`screen_prefs::DisplayChoice`); a presenter
-//! that fails hands the session back to it.
+//! wgpu/glow path stays for pictures as planes or BGRA, on Linux and under
+//! „wgpu“ or „Automatisch“; a chosen „Direct3D 11“ never falls back to it.
 //!
 //! Receipts: a picture is presented only while `Shared::can_present`
 //! allows it, and its `PRESENTED` receipt goes out after the swap chain
@@ -34,6 +32,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use eframe::egui::{self, Order, Rect};
 
 use super::screen_direct_layout as layout;
+use super::screen_present::window_renderer_label;
 use super::screen_presented::PresentedFrame;
 use super::screen_session::{Shared, ViewerSession};
 use crate::screen::core::gpu_picture::GpuPicture;
@@ -105,10 +104,14 @@ pub fn last_error() -> Option<String> {
 fn report(shared: &Shared, error: &str) {
     *lock(&LAST_ERROR) = Some(error.to_string());
     let chosen = super::screen_prefs::display_choice();
+    // A chosen „Direct3D 11“ shows no picture another way (Codex 3/12).
+    let shown = match chosen == super::screen_prefs::DisplayChoice::Direct3d11 {
+        true => "es wird kein Bild über das Fenster gezeigt".to_string(),
+        false => format!("das Bild zeigt das Fenster ({})", window_renderer_label()),
+    };
     let text = format!(
-        "Anzeige „{}“: Direct3D 11 nicht verfügbar ({error}); das Bild zeigt das Fenster ({}).",
-        chosen.label(),
-        super::screen_present::window_renderer_label()
+        "Anzeige „{}“: Direct3D 11 nicht verfügbar ({error}); {shown}.",
+        chosen.label()
     );
     shared.update(|info| info.notice = Some(text));
 }
@@ -401,14 +404,10 @@ impl DirectView {
         }
         let showing = self.showing();
         ctx.data_mut(|data| data.insert_temp(egui::Id::new("screen_direct_showing"), showing));
-        // The pointer: drawn by the host while this view only watches and
-        // the presenter is attached. Only stable facts count, never whether
-        // the last picture came through the presenter or the slot (fix
-        // 2026-11-19): every change switches the host's pointer capture,
-        // which on Desktop Duplication starts a new capture generation and
-        // so a new encoder, and the slot takes pictures before the presenter
-        // attaches, after a key frame request and on every fallback. The
-        // events of a new connection send this same value with the hello.
+        // The pointer: drawn by the host while the presenter is attached and
+        // this view only watches. Stable facts only, never the path of the
+        // last picture (fix 2026-11-19: each change cost the host a new
+        // capture and encoder); the hello sends this same value.
         let attached = self.presenter().is_some_and(|p| !p.failed());
         let in_picture = attached && !steering;
         let direct = &session.shared.direct;

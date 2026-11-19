@@ -287,6 +287,10 @@ impl ViewState {
     /// others (device, all devices, full screen) are the app's.
     pub fn apply(&mut self, action: &ToolbarAction, common: &mut Common, display: FrameSize) {
         match action {
+            // The source shown already, or none the host could name (an empty
+            // monitor list): the host keeps its source, so the view keeps its
+            // picture too (Codex 3/15: it dropped it one-sidedly).
+            ToolbarAction::Source(source) if self.same_source(source) => {}
             ToolbarAction::Source(source) => {
                 self.source = source.clone();
                 // A session opened again (a codec choice, Codex 6) starts from
@@ -344,6 +348,17 @@ impl ViewState {
             ToolbarAction::Audio(on) => super::screen_audio::switch(self.session.as_ref(), *on),
             _ => {}
         }
+    }
+
+    /// Whether `source` is the one shown now; „Ganzer Bildschirm“ is the
+    /// primary monitor (`whole_screen`), and no source at all changes nothing.
+    fn same_source(&self, source: &Option<SourceId>) -> bool {
+        let hello = self.session.as_ref().and_then(|s| s.info().hello.clone());
+        let whole = hello
+            .as_ref()
+            .and_then(super::screen_toolbar_ui::whole_screen);
+        let effective = |source: &Option<SourceId>| source.clone().or_else(|| whole.clone());
+        effective(source).is_none() || effective(source) == effective(&self.source)
     }
 
     fn send_system(&self, action: SystemAction) {

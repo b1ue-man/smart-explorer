@@ -110,9 +110,10 @@ pub struct PictureFlow {
     decoded: Rate,
     presented: Rate,
     dropped: [Rate; 9],
-    /// Records that were already waiting when the decode thread asked for
-    /// the next event (it came back within `QUEUED_WITHIN`): the backlog in
-    /// front of the decode thread.
+    /// Records the decode thread read within `QUEUED_WITHIN` of asking. No
+    /// queue depth (Codex 3/23: the queue lies in the daemon and the socket,
+    /// and a record arriving during the read counts as well); many such
+    /// reads only hint that records were waiting.
     queued: Rate,
     /// Key frame requests sent: decode error, join, reset.
     keyframes: [u64; 3],
@@ -180,7 +181,7 @@ impl PictureFlow {
             lines.push(format!("Verworfen: {}", dropped.join(", ")));
         }
         lines.push(format!(
-            "Rückstau vor dem Dekodieren {} Records ({} gesamt)",
+            "Records sofort gelesen (unter 0,2 ms) {} ({} gesamt)",
             rate(&self.queued),
             self.queued.total
         ));
@@ -209,7 +210,7 @@ impl PictureFlow {
         );
         format!(
             "Bildfluss der Sitzung: empfangen {}, dekodiert {}, angezeigt {}; verworfen: {}; \
-             Rückstau {} Records; {decode}; {}",
+             sofort gelesene Records {}; {decode}; {}",
             self.received.total,
             self.decoded.total,
             self.presented.total,
@@ -242,7 +243,7 @@ mod tests {
         assert_eq!(lines[1], "Verworfen: bis Schlüsselbild 2 (2/s)");
         assert_eq!(
             lines[2],
-            "Rückstau vor dem Dekodieren 0/s Records (0 gesamt)"
+            "Records sofort gelesen (unter 0,2 ms) 0/s (0 gesamt)"
         );
         assert!(lines[3].starts_with("Schlüsselbild-Anfragen 1 "));
         let summary = flow.summary(Some((1.0, 2.5)));

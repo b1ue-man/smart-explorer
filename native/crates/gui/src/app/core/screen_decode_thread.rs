@@ -250,14 +250,17 @@ impl DecodeState {
             self.left_out(&record, Dropped::NotDecoded);
             return;
         }
-        if let Some(family) = &self.shared.info().family {
-            if family.snapshot.as_ref().is_none_or(|snapshot| {
+        // Decided under the lock and released before counting: `left_out`
+        // takes the same lock (Codex 3/1: a deadlock of the decode thread).
+        let family_mismatch = self.shared.info().family.as_ref().is_some_and(|family| {
+            family.snapshot.as_ref().is_none_or(|snapshot| {
                 header.family_layout_revision != Some(snapshot.layout_revision)
-            }) {
-                self.chain.continuity.broken();
-                self.left_out(&record, Dropped::NotDecoded);
-                return;
-            }
+            })
+        });
+        if family_mismatch {
+            self.chain.continuity.broken();
+            self.left_out(&record, Dropped::NotDecoded);
+            return;
         }
         if header.gop_id < self.latest_gop {
             if self
@@ -453,7 +456,14 @@ impl DecodeState {
         }
         // The presenter waits but this picture came as planes or BGRA: a
         // chosen „Direct3D 11“ shows it no other way (Codex 16).
-        if gop.gpu && super::screen_direct::not_direct(&self.shared) {
+        // No working presenter at all under a chosen „Direct3D 11“ (it could
+        // not be made, or it failed): its error stands, the window shows
+        // nothing either (Codex 3/12).
+        let barred = !gop.gpu && cfg!(windows) && !self.shared.direct.wanted() && {
+            use super::screen_prefs::{display_choice, DisplayChoice};
+            display_choice() == DisplayChoice::Direct3d11
+        };
+        if barred || gop.gpu && super::screen_direct::not_direct(&self.shared) {
             let display = super::screen_chain_window::flow::Dropped::Display;
             self.flow(|flow| flow.dropped(display));
             return;

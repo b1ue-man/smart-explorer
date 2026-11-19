@@ -53,8 +53,11 @@ impl VisibilityTracker {
         // Nothing to say before the picture's size is known, unless the
         // window is hidden (Gemini 3, fix 2026-11-19): the first report was
         // an empty `Unknown`, followed at the first picture by `Visible`, and
-        // every report costs the host a new reference.
-        if geometry.is_none() && !window.hidden() {
+        // every report costs the host a new reference. Only before the first
+        // report: after `Hidden` the host makes no picture until it hears
+        // the window shown again, so that goes out as `Unknown` without a
+        // size (Codex 3/2: the view stayed black for good).
+        if geometry.is_none() && !window.hidden() && self.last.is_none() {
             return None;
         }
         let mut rects = Vec::new();

@@ -71,6 +71,8 @@ pub struct ViewWidget {
     /// The GPU path takes the planes; cleared when a picture did not fit it.
     gpu: bool,
     was_focused: bool,
+    /// The picture had the keyboard last frame (`keyboard_owned`).
+    keys_owned: bool,
     visibility: super::screen_visibility::VisibilityTracker,
     /// P8: Direct3D 11 display of GPU pictures (`screen_direct.rs`).
     direct: super::screen_direct::DirectView,
@@ -87,6 +89,7 @@ impl ViewWidget {
             mapper: None,
             gpu,
             was_focused: true,
+            keys_owned: false,
             visibility: super::screen_visibility::VisibilityTracker::default(),
             direct: Default::default(),
         }
@@ -463,8 +466,9 @@ impl ViewWidget {
             );
         });
         if let (true, Some(geometry)) = (focused, geometry) {
-            let modifiers = ui.input(|input| input.modifiers);
-            let owned = super::screen_view_widget_render::owned_events(ui, response, &events);
+            let render = super::screen_view_widget_render::keyboard;
+            let (keys, modifiers) = render(ui, response, mapper, &mut self.keys_owned);
+            let owned = super::screen_view_widget_render::owned_events(ui, response, &events, keys);
             mapper.process(&owned, modifiers, geometry);
             // The IME needs the area to place its candidate window.
             ui.ctx().output_mut(|output| {

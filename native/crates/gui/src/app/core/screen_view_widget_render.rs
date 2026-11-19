@@ -88,23 +88,44 @@ pub(super) fn hint(
     field
 }
 
+/// Whether the picture has the keyboard (its own focus, no popup open; not
+/// a text field of the toolbar, Gemini 10), and the modifiers that count.
+/// When the keyboard leaves it, the keys the host holds are let go once and
+/// the window's modifiers stay local (Codex 3/18). `owned`: last frame's.
+pub(super) fn keyboard(
+    ui: &egui::Ui,
+    response: &egui::Response,
+    mapper: &mut super::screen_input_map::InputMapper,
+    owned: &mut bool,
+) -> (bool, egui::Modifiers) {
+    let popup = ui.memory(|memory| memory.any_popup_open());
+    let keys = !popup && ui.memory(|memory| memory.has_focus(response.id));
+    if *owned && !keys {
+        mapper.release_all();
+    }
+    *owned = keys;
+    let modifiers = match keys {
+        true => ui.input(|input| input.modifiers),
+        false => egui::Modifiers::NONE,
+    };
+    (keys, modifiers)
+}
+
 /// The window's events that belong to the picture while it steers (fix
 /// 2026-11-19): a press, a move, the wheel or a touch only while the
 /// pointer is over the picture and nothing covers it (a toolbar list or a
 /// menu lying over the picture is the local user's), keys and text only
-/// while no popup is open. Releases always pass, so what the host holds
-/// down is let go in order.
+/// while the picture has the keyboard (`keyboard`); button releases always
+/// pass, so what the host holds down is let go in order.
 pub(super) fn owned_events(
     ui: &egui::Ui,
     response: &egui::Response,
     events: &[egui::Event],
+    keys: bool,
 ) -> Vec<egui::Event> {
     use egui::{Event, TouchPhase};
     let popup = ui.memory(|memory| memory.any_popup_open());
     let pointer = !popup && (response.contains_pointer() || response.dragged());
-    // Keys and text only while the picture has the keyboard focus (not a
-    // text field of the toolbar, Gemini 10).
-    let keys = !popup && ui.memory(|memory| memory.has_focus(response.id));
     // The wheel scrolls where the pointer is, also before it moved since the
     // mapper began (Gemini 12: the mapper dropped the wheel until a move).
     let wheel = events
@@ -127,13 +148,32 @@ pub(super) fn owned_events(
                     Event::Touch { phase, .. } => {
                         pointer || matches!(phase, TouchPhase::End | TouchPhase::Cancel)
                     }
-                    Event::Key { pressed, .. } => keys || !pressed,
+                    // Without the keyboard no key at all, not even a release
+                    // of one the host never got (`keyboard_owned`, Codex 3/18).
+                    Event::Key { .. } => keys,
                     Event::Text(_) | Event::Ime(_) | Event::Copy | Event::Cut | Event::Paste(_) => {
                         keys
                     }
                     _ => true,
                 })
-                .cloned(),
+                .cloned()
+                .map(|event| match keys {
+                    true => event,
+                    // The window's modifiers stay local without the keyboard.
+                    false => without_modifiers(event),
+                }),
         )
         .collect()
+}
+
+/// `event` without the modifiers egui gave it (they sync the host's keys).
+fn without_modifiers(mut event: egui::Event) -> egui::Event {
+    match &mut event {
+        egui::Event::PointerButton { modifiers, .. }
+        | egui::Event::MouseWheel { modifiers, .. } => {
+            *modifiers = egui::Modifiers::NONE;
+        }
+        _ => {}
+    }
+    event
 }

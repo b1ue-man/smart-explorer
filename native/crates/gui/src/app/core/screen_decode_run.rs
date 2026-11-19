@@ -60,8 +60,8 @@ pub(super) fn run(
         let next_event = next();
         match next_event {
             Ok(event) => {
-                // A record that was already waiting: backlog in front of the
-                // decode thread (statistics, `screen_flow.rs`).
+                // A record read within 0.2 ms of asking: a hint that records
+                // were waiting, no queue depth (statistics, `screen_flow.rs`).
                 let waited = asked.elapsed() < super::screen_chain_window::flow::QUEUED_WITHIN;
                 if waited && matches!(event, crate::daemon::StreamEvent::Record { .. }) {
                     state.count_queued();

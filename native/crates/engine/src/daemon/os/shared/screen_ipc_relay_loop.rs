@@ -137,8 +137,10 @@ pub(super) async fn relay_loop(
                     // What became of „Höchste Datenrate“ changed during the
                     // session (P1): applied, or dropped for an old host.
                     let state = reconnect::rate_state(&frame, session.rate_ceiling);
-                    let _ = session.control.send(frame).await;
-                    if let Some(json) = state {
+                    // A frame that never left says nothing became of it
+                    // (Codex 3/22: „applied“ after a failed send).
+                    let sent = session.control.send(frame).await.is_ok();
+                    if let Some(json) = state.filter(|_| sent) {
                         // Rare (a user's choice); it never blocks the input.
                         pending.control.push_back((RELAY_RATE_CEILING, json));
                     }
