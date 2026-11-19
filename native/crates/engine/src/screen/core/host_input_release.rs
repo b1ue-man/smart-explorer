@@ -167,7 +167,11 @@ impl Session<'_> {
     /// The release of the control: everything held now (newest first) and
     /// the releases that failed before, in one job.
     pub(super) fn release_all_and_failed(&mut self) {
+        // A job still running (one that outlasted `CLOSE_GRACE`, E4): what
+        // is held now waits behind it with the failed releases.
         if self.input_release.is_some() {
+            let held = self.pressed.release_all();
+            failed_list(&self.health.failed).extend(held);
             return;
         }
         let mut events = self.pressed.release_all();
@@ -175,22 +179,23 @@ impl Session<'_> {
         self.start_release(events);
     }
     /// Z3/Z4: waits for the running release job, at most `CLOSE_GRACE`; a
-    /// job that takes longer goes on alone (its failed releases come back
-    /// to `InputHealth::failed`), and the host log names it.
+    /// job that takes longer stays the session's (E4: input keeps waiting
+    /// behind it, `poll_input_release` takes its result later; no block is
+    /// made up for it), and the host log names it.
     pub(super) async fn finish_release(&mut self) {
-        let Some(job) = self.input_release.take() else {
+        let Some(mut job) = self.input_release.take() else {
             return;
         };
-        self.release_blocked = match tokio::time::timeout(CLOSE_GRACE, job).await {
-            Ok(Ok(result)) => result.err(),
-            Ok(Err(_)) => Some(ControlBlock::ControlUnavailable),
+        match tokio::time::timeout(CLOSE_GRACE, &mut job).await {
+            Ok(Ok(result)) => self.release_blocked = result.err(),
+            Ok(Err(_)) => self.release_blocked = Some(ControlBlock::ControlUnavailable),
             Err(_) => {
                 super::visibility::note_viewer(
                     "the release of held input outlasted the close grace; the control goes on",
                 );
-                Some(ControlBlock::ControlUnavailable)
+                self.input_release = Some(job);
             }
-        };
+        }
     }
     pub(super) fn poll_input_release(&mut self) {
         let Some(mut job) = self.input_release.take() else {

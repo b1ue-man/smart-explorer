@@ -275,13 +275,16 @@ impl Session<'_> {
             return self.error(ScreenErrorCode::RightNotGranted, detail).await;
         }
         if let Some(blocked) = self.release_blocked.take() {
-            // D7: the releases that failed go out again in this batch's turn.
+            // D7: the releases that failed go out again in this batch's turn;
+            // the batch's own releases of held keys too (E2).
+            self.release_held_ups(events);
             self.retry_releases();
             return self.report_block(blocked).await;
         }
         // D7: failed releases go out before the next batch (that batch waits
         // behind them like behind every release, and the viewer hears so, N2).
         if self.retry_releases() {
+            self.release_held_ups(events);
             return self.report_held(InputHeld::ReleasePending).await;
         }
         let owned = events.to_vec();
@@ -328,7 +331,9 @@ impl Session<'_> {
                 // the batch back and keeps what the user holds; the new
                 // reference lets go of it when it moves the floor.
                 if presented && self.stale_refusal(blocked, reference) {
-                    // Held back, not blocked (review O2a).
+                    // Held back, not blocked (review O2a); its releases of
+                    // held keys go in (E2: the viewer sends each once).
+                    self.release_held_ups(events);
                     return self.report_held(InputHeld::WaitingForPicture).await;
                 }
                 self.release_pressed();

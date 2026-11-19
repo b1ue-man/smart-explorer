@@ -384,8 +384,7 @@ impl crate::screen::core::host_backend::ScreenInputSink for PortalInputSink {
         if reference_generation != memory.generation().value() {
             return Err(crate::screen::core::wire_control::ControlBlock::ControlUnavailable);
         }
-        // Codex 4/17: an earlier batch's refusal is no answer to this one;
-        // it reaches the session by `take_refusal` (and `INPUT_REFUSED`).
+        // Codex 4/17: an earlier refusal goes by `take_refusal`, not here.
         crate::screen::os::portal_input::send_input(&self.lease, events)
     }
     /// The portal refused a queued batch (S2): reported without waiting for
@@ -441,6 +440,7 @@ pub(in crate::screen::os) async fn dispatch_portal_batch(
             // Owed releases first; refused again, this batch's go owed too (Codex 3/11).
             let owed = refusal::take_owed();
             if !refusal::release_owed_syms(remote, session).await {
+                refusal::refuse_unsupported(); // E3: the batch went nowhere
                 refusal::owe(owed);
                 refusal::owe(portal_releases(&events, 0));
                 return;

@@ -82,6 +82,11 @@ pub(super) fn refuse(block: crate::screen::core::wire_control::ControlBlock) {
         .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(block);
 }
 
+/// The next batch reports the portal's refusal (`UnsupportedOnHost`).
+pub(super) fn refuse_unsupported() {
+    refuse(crate::screen::core::wire_control::ControlBlock::UnsupportedOnHost);
+}
+
 /// `left` stays owed; the next batch reports the refusal (Codex 3/11).
 pub(super) fn owe(left: Vec<crate::screen::core::input_model::InputEvent>) {
     if left.is_empty() {
