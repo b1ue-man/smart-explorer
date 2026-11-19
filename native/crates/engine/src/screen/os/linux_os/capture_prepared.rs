@@ -147,21 +147,22 @@ pub(in crate::screen::os) async fn apply_portal_input(
     session_path: &str,
     batch: &[crate::screen::core::input_model::InputEvent],
     sas: &mut crate::screen::os::input_keys::SasGuard,
-) {
+) -> Result<(), (usize, crate::screen::core::wire_control::ControlBlock)> {
     use crate::screen::core::input_model::{InputEvent, TouchPhase};
+    use crate::screen::core::wire_control::ControlBlock;
     use crate::screen::os::input_keys::evdev_code;
     use crate::screen::os::portal_input::{button_code, key_state, stream_point};
     use crate::screen::os::x11_keymap::keysym_of;
     use ashpd::desktop::remote_desktop::Axis;
-    for event in batch {
+    for (index, event) in batch.iter().enumerate() {
         if !granted.belongs_to(session_path) {
-            return;
+            return Ok(());
         }
         let sent = match event {
             InputEvent::PointerAbs { x, y } | InputEvent::Touch { id: 0, x, y, .. } => {
                 // Missing logical size is not permission to use pixel/global-display coordinates.
                 let Some((width, height)) = granted.current_logical_size() else {
-                    return;
+                    return Err((index, ControlBlock::ControlUnavailable));
                 };
                 let (px, py) = stream_point((f64::from(width), f64::from(height)), *x, *y);
                 let moved = remote
@@ -273,10 +274,16 @@ pub(in crate::screen::os) async fn apply_portal_input(
         // that really ended stops its PipeWire stream, which expires the
         // source itself (`StreamIdentity::on_state`).
         if sent.is_err() {
-            return;
+            return Err((index, ControlBlock::UnsupportedOnHost));
         }
     }
+    Ok(())
 }
+
+#[path = "capture_prepared_refusal.rs"]
+mod refusal;
+pub(in crate::screen::os) use refusal::reset_portal_input;
+use refusal::{portal_releases, PORTAL_REFUSED};
 
 /// Release-only portal notification. The caller has matched the exact
 /// InputLease identity to its own session; capture expiry is not a new target.
@@ -369,6 +376,14 @@ impl crate::screen::core::host_backend::ScreenInputSink for PortalInputSink {
         if reference_generation != memory.generation().value() {
             return Err(crate::screen::core::wire_control::ControlBlock::ControlUnavailable);
         }
+        // The portal refused an earlier batch (S2): this one reports it.
+        if let Some(block) = PORTAL_REFUSED
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+        {
+            return Err(block);
+        }
         crate::screen::os::portal_input::send_input(&self.lease, events)
     }
     fn release(
@@ -412,7 +427,20 @@ pub(in crate::screen::os) async fn dispatch_portal_batch(
     use crate::screen::os::portal_input::Batch;
     match batch {
         Batch::Input(events) => {
-            apply_portal_input(remote, session, identity, path, &events, sas).await
+            if let Err((failed, block)) =
+                apply_portal_input(remote, session, identity, path, &events, sas).await
+            {
+                // Never the events themselves: input is not logged.
+                eprintln!(
+                    "screen host process: the portal refused input ({block:?}); \
+                     held keys of the batch are released"
+                );
+                let releases = portal_releases(&events, failed);
+                apply_portal_release(remote, session, &releases, sas).await;
+                *PORTAL_REFUSED
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(block);
+            }
         }
         Batch::Release {
             identity: bound,

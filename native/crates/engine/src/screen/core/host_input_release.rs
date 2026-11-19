@@ -79,8 +79,9 @@ impl Session<'_> {
             released: false,
         };
         // Both ways run on the blocking pool (review 2026-11-19, M1): a source
-        // without a sink (Android) injects with the backend, whose queue may
-        // wait up to a second for room (`bridge_channels::send_input`). The
+        // without a sink (Android) injects with the backend; its queue no
+        // longer waits for room (`bridge_input_queue`: merged, refused beyond
+        // `HARD_LIMIT`), but a platform injection may still block. The
         // session waits for the job as for every release: input is held
         // while it exists (`input`), so later batches follow the releases.
         if let Ok(runtime) = tokio::runtime::Handle::try_current() {

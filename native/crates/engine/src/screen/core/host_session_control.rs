@@ -32,6 +32,7 @@ impl Session<'_> {
         self.pipeline.poll();
         self.poll_input_release();
         self.refresh_input_reference();
+        self.end_hold().await?;
         match frame {
             ViewerFrame::ListFamilies => {
                 if !self.family.supported {
@@ -250,16 +251,7 @@ impl Session<'_> {
         let sink = self.pipeline.input_sink();
         let reference = self.pipeline.input_reference_generation();
         let presented = self.pipeline.presentation_supported();
-        let held = if !self.visible {
-            Some(InputHeld::ViewerHidden)
-        } else if self.input_release.is_some() {
-            Some(InputHeld::ReleasePending)
-        } else if self.input_floor.is_some() || !self.pipeline.input_reference_ready() {
-            Some(InputHeld::WaitingForPicture)
-        } else {
-            None
-        };
-        if let Some(held) = held {
+        if let Some(held) = self.hold_reason() {
             return self.report_held(held).await;
         }
         if !presented
@@ -271,6 +263,12 @@ impl Session<'_> {
             return self.error(ScreenErrorCode::ControlUnavailable,
                 "Der Bildausschnitt hat sich geändert. Aufnahme läuft weiter; zum Steuern ist eine neue Verbindung erforderlich.".into()).await;
         }
+        // W3: a session without the control injects nothing, old releases
+        // neither (`release_control` sent them once when it let go).
+        if !self.handle.holds_control() {
+            let detail = "input without control".to_string();
+            return self.error(ScreenErrorCode::RightNotGranted, detail).await;
+        }
         if let Some(blocked) = self.release_blocked.take() {
             // D7: the releases that failed go out again in this batch's turn.
             self.retry_releases();
@@ -280,10 +278,6 @@ impl Session<'_> {
         // behind them like behind every release, and the viewer hears so, N2).
         if self.retry_releases() {
             return self.report_held(InputHeld::ReleasePending).await;
-        }
-        if !self.handle.holds_control() {
-            let detail = "input without control".to_string();
-            return self.error(ScreenErrorCode::RightNotGranted, detail).await;
         }
         let owned = events.to_vec();
         let (backend, target) = (self.context.backend.clone(), sink.clone());
@@ -319,11 +313,14 @@ impl Session<'_> {
                 Ok(())
             }
             Err(blocked) => {
-                self.release_pressed();
+                // S3: a refusal for a reference the source just left holds
+                // the batch back and keeps what the user holds; the new
+                // reference lets go of it when it moves the floor.
                 if presented && self.stale_refusal(blocked, reference) {
                     // Held back, not blocked (review O2a).
                     return self.report_held(InputHeld::WaitingForPicture).await;
                 }
+                self.release_pressed();
                 self.report_block(blocked).await?;
                 if !presented
                     && sink
@@ -403,6 +400,34 @@ impl Session<'_> {
     /// the viewer hears it once per hold, while it holds the control. The
     /// state repeats the block it heard last, so a viewer without `held`
     /// (it skips the field) keeps showing that block.
+    /// Why input waits now, if it does (E2).
+    fn hold_reason(&self) -> Option<InputHeld> {
+        if !self.visible {
+            Some(InputHeld::ViewerHidden)
+        } else if self.input_release.is_some() {
+            Some(InputHeld::ReleasePending)
+        } else if self.input_floor.is_some() || !self.pipeline.input_reference_ready() {
+            Some(InputHeld::WaitingForPicture)
+        } else {
+            None
+        }
+    }
+
+    /// S4: the viewer heard of a hold whose reason ended: it hears that it
+    /// ended (the block it heard last stays named).
+    async fn end_hold(&mut self) -> io::Result<()> {
+        if !self.health.held_reported || self.hold_reason().is_some() {
+            return Ok(());
+        }
+        self.health.held_reported = false;
+        let state = ControlState {
+            holder: self.handle.controller(),
+            blocked: self.health.block_reported,
+            held: None,
+        };
+        self.frame(HostFrame::ControlState(state)).await
+    }
+
     async fn report_held(&mut self, held: InputHeld) -> io::Result<()> {
         if self.health.held_reported || !self.handle.holds_control() {
             return Ok(());

@@ -151,6 +151,7 @@ impl Session<'_> {
             ));
         }
         self.release_pressed();
+        let own = wanted.is_some();
         // A display change always ends at a monitor.
         let content = wanted.as_ref().is_none_or(SourceId::is_screen_content);
         let backend = self.context.backend.as_ref();
@@ -257,6 +258,8 @@ impl Session<'_> {
                     _ => None,
                 };
                 virtual_display::source_changed(&self.handle.id(), monitor);
+                // W1: a source the viewer chose does not follow the display.
+                virtual_display::source_chosen(&self.handle.id(), own);
                 self.cursor_source_changed().await?;
                 Ok(true)
             }

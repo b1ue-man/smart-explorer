@@ -266,6 +266,7 @@ async fn run(
                         .binding
                         .lock()
                         .unwrap_or_else(PoisonError::into_inner) = Some(identity.clone());
+                    crate::screen::os::host_backend::prepared::reset_portal_input();
                 }
                 owned
             };
