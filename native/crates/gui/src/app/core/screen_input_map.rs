@@ -175,10 +175,16 @@ impl InputMapper {
         // Modifiers held from before (Strg+Umschalt+K turned steering on)
         // stay local until they are let go (H5: they went down and up at the
         // host, which may switch the keyboard layout on Windows).
+        // A new press only: the repeat of a key still held from before (K of
+        // Strg+Umschalt+K) is none (round 6).
         let pressing = events.iter().any(|event| {
             matches!(
                 event,
-                Event::Key { pressed: true, .. } | Event::PointerButton { pressed: true, .. }
+                Event::Key {
+                    pressed: true,
+                    repeat: false,
+                    ..
+                } | Event::PointerButton { pressed: true, .. }
             )
         });
         if std::mem::take(&mut self.fresh) && !pressing {
