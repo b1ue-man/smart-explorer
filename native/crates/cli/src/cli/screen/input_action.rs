@@ -111,7 +111,14 @@ fn scaled(coord: Coord, length: Option<u32>) -> Result<u16, String> {
             if pixel >= length {
                 return Err(format!("{pixel} lies outside the source ({length} pixels)"));
             }
-            f64::from(pixel) / f64::from((length - 1).max(1))
+            // Rounded up, in whole numbers: the hosts map back with
+            // `pos * (length - 1) / 65535` rounded down (`input_send.rs`,
+            // `x11_input.rs`), which then gives exactly `pixel`; rounding to
+            // the nearest value landed one pixel too far left or up
+            // (Codex 6/18: 1 of 1920 pixels became 0).
+            let span = u64::from(length - 1).max(1);
+            let pos = (u64::from(pixel) * 65_535).div_ceil(span).min(65_535);
+            return Ok(u16::try_from(pos).unwrap_or(u16::MAX));
         }
     };
     Ok((share * 65_535.0).round().clamp(0.0, 65_535.0) as u16)

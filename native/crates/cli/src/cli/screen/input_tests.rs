@@ -15,6 +15,17 @@ fn screen_task_cli_input_events() {
         ref other => panic!("{other:?}"),
     }
     assert_eq!(events.len(), 3);
+    // Every pixel comes back as itself where the host rounds down (Codex 6/18).
+    for pixel in [0u32, 1, 2, 959, 1918, 1919] {
+        let text = format!("{pixel},0");
+        let click = action_of(None, None, Some(&text), None, None, None).unwrap();
+        match super::events(&click, size).unwrap()[0] {
+            InputEvent::PointerAbs { x, .. } => {
+                assert_eq!(u32::from(x) * 1919 / 65_535, pixel, "{pixel}")
+            }
+            ref other => panic!("{other:?}"),
+        }
+    }
     let middle = action_of(None, None, Some("50%,50%"), None, None, None).unwrap();
     assert_eq!(
         super::events(&middle, None).unwrap()[0],

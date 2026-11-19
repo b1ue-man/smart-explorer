@@ -243,6 +243,16 @@ pub(crate) fn deliver(
                 held: Some(InputHeld::WaitingForPicture),
             });
         }
+        // A pixel position needs the size of the running stream's source: the
+        // size from `HELLO_OK` may be out of date (Codex 6/17). Only a stream
+        // report without a source size (a host before it) leaves the hello's.
+        if needs_size(action) && !stream_reported {
+            return Err(
+                "the device has not reported its running picture stream in time, so the size \
+                 of the source is unknown; give the position in percent, e.g. 50%,50%"
+                    .into(),
+            );
+        }
         if size.is_none() && needs_size(action) {
             // A host before the source size in `STATE` names none for a window.
             return Err(

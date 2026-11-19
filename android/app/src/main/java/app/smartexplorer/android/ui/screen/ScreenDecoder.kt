@@ -201,10 +201,15 @@ class ScreenDecoder(
         }
         if(!pulls.acceptsPayload(len,flags and FLAG_TILES!=0)) {fail();return}
         if (flags and FLAG_HYBRID != 0) {
-            if(flags and FLAG_NEW_STREAM == 0 && hybridGop!=gop) return
+            // After a local decoder failure (`fail()`: no hybrid decoder) the host answers the key frame request
+            // inside the running group, without `NEW_STREAM`: its key frame that begins a picture opens the
+            // decoder again (Codex 6/6).
+            val restart = flags and FLAG_NEW_STREAM == 0 && hybrid == null && gop == latestGop &&
+                flags and FLAG_KEYFRAME != 0 && flags and FLAG_HYBRID_BEGIN != 0
+            if(flags and FLAG_NEW_STREAM == 0 && hybridGop!=gop && !restart) return
             try {
                 val payload=ByteArray(len); src.position(payloadOffset); src.get(payload)
-                if (flags and FLAG_NEW_STREAM != 0) {
+                if (flags and FLAG_NEW_STREAM != 0 || restart) {
                     require(flags and FLAG_KEYFRAME != 0)
                     val info = awaitStream(gop) ?: return
                     if(rejectedHybridGop==info.gop) return
@@ -520,6 +525,8 @@ class ScreenDecoder(
         const val FLAG_NEW_STREAM = 4
         const val FLAG_HYBRID = 0x10
         const val FLAG_MORE_PARTS = 0x20
+        /** The record begins a hybrid picture (`viewer_sink.rs`, `FLAG_HYBRID_BEGIN`). */
+        const val FLAG_HYBRID_BEGIN = 0x40
         const val FLAG_FRAME_ID = 0x80
         const val FLAG_GOP_ID = 0x100
         const val GOP_SHIFT = 16

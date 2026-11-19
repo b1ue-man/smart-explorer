@@ -107,7 +107,8 @@ pub(super) struct BridgeInputSink {
 
 impl BridgeInputSink {
     /// `controlling`: a batch of the input path, which the session sends only
-    /// while it holds control (it drops other sessions' leftovers).
+    /// while it holds control (it drops other sessions' leftovers); `false`:
+    /// the session's release job, which revokes its waiting batches.
     fn queue(&self, events: &[InputEvent], controlling: bool) -> Result<(), ControlBlock> {
         if !super::super::bridge_channels::prereqs().accessibility_on() {
             return Err(ControlBlock::ControlUnavailable);
@@ -118,7 +119,7 @@ impl BridgeInputSink {
         let queued = if controlling {
             super::super::bridge_channels::send_controlling_input(id, events)
         } else {
-            super::super::bridge_channels::send_input(id, events)
+            super::super::bridge_channels::send_release(id, events)
         };
         if queued {
             Ok(())

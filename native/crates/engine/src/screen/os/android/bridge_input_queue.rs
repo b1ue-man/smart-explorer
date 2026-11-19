@@ -135,6 +135,30 @@ pub fn send_controlling_input(session: u64, events: &[InputEvent]) -> bool {
     push(queue, session, events)
 }
 
+/// The release job of `session` (it gives control up, hides its view,
+/// changes its source or ends; `host_input_release.rs`): its batches still
+/// waiting and the release itself only end the strokes in the app's gesture
+/// state (`perform: false`). Nothing the session queued before is performed
+/// after it let go, and the release of a held button performs no stroke
+/// either (review 2026-11-19, Codex 6/4).
+pub fn send_release(session: u64, events: &[InputEvent]) -> bool {
+    let mut queue = queue();
+    for batch in queue.iter_mut().filter(|batch| batch.session == session) {
+        batch.perform = false;
+    }
+    if queue.len() >= HARD_LIMIT {
+        return false;
+    }
+    queue.push_back(Batch {
+        session,
+        events: events.to_vec(),
+        release: true,
+        perform: false,
+    });
+    READY.notify_all();
+    true
+}
+
 fn push(
     mut queue: MutexGuard<'static, VecDeque<Batch>>,
     session: u64,
