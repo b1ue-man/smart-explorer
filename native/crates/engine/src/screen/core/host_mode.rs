@@ -57,15 +57,18 @@ impl Pipeline {
         // `resize`, a higher allowed rate at the next tick.
         let encoder =
             |c: &super::super::negotiate::CodecChoice| (c.codec, c.profile, c.encoder_hardware);
-        // A running encoder opened for more than the new limits carry (its
-        // level could exceed the new decoder's) is replaced.
-        let beyond = self.running.is_some()
-            && crate::screen::core::pacing::codec_cap(
+        // A running encoder whose own size and opened rate exceed the new
+        // macroblock rate (its level could exceed the new decoder's) is
+        // replaced; a running size beyond the new size or pixel limits
+        // restarts in `resize` (the target size shrinks with them).
+        let beyond = self.running.as_ref().is_some_and(|(_, running)| {
+            crate::screen::core::pacing::codec_cap(
                 self.codec_fps,
-                self.target_size(),
+                *running,
                 self.choice.max_macroblocks_per_second,
             )
-            .is_none_or(|fps| fps < self.codec_fps);
+            .is_none_or(|fps| fps < self.codec_fps)
+        });
         if !mode.same_but_rate(&previous)
             || encoder(&self.choice) != encoder(&previous_choice)
             || beyond
