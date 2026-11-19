@@ -57,15 +57,15 @@ impl StreamIdentity {
     /// no PipeWire format tells the scale]; the portal answers it with a
     /// new source only.
     pub(super) fn on_format(&self, width: u32, height: u32) {
-        let mut scaled = self.scaled.lock().unwrap_or_else(PoisonError::into_inner);
-        // Gemini 3/11: a source the portal named no size for (a virtual
-        // monitor) takes its picture as compositor coordinates [assumption:
-        // scale 1; without any size its pointer input was refused].
+        // A source the portal named no size for keeps none: its picture size
+        // is no compositor size ("the size may not be equivalent to a size
+        // in a pixel coordinate space", ashpd 0.13 `Stream::size`, after the
+        // portal's ScreenCast docs), so its pointer input is refused with a
+        // reason (`portal_input::send_input`, Gemini 3/11).
         let Some((logical_width, logical_height)) = self.logical_size else {
-            let size = |side: u32| i32::try_from(side).ok().filter(|side| *side > 0);
-            scaled.1 = size(width).zip(size(height));
             return;
         };
+        let mut scaled = self.scaled.lock().unwrap_or_else(PoisonError::into_inner);
         let (first_width, first_height) = *scaled.0.get_or_insert((width, height));
         if first_width == 0 || first_height == 0 {
             return;

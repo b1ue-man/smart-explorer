@@ -167,7 +167,9 @@ pub(super) fn send_input(lease: &InputLease, events: &[InputEvent]) -> Result<()
             )
         })
     {
-        return Err(ControlBlock::ControlUnavailable);
+        // Gemini 3/11: without the compositor size of the stream (a virtual
+        // monitor) no position can be placed; the host says so.
+        return Err(ControlBlock::UnsupportedOnHost);
     }
     lease
         .sender
