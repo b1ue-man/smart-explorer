@@ -287,8 +287,8 @@ pub fn inject(events: &[InputEvent]) -> Result<(), ControlBlock> {
     if input_integrity::foreground_blocked() {
         return Err(ControlBlock::ElevatedWindow);
     }
-    let mut state = state();
-    let target = state
+    let mut guard = state();
+    let target = guard
         .target
         .clone()
         .ok_or(ControlBlock::ControlUnavailable)?;
@@ -296,9 +296,9 @@ pub fn inject(events: &[InputEvent]) -> Result<(), ControlBlock> {
     // Gemini 3/22: the guard follows only input that went in; a refused
     // batch leaves it as it was (a Ctrl+Alt Windows refused blocks no
     // later Delete).
-    let saved = state.sas;
-    let inputs = records(events, area, virtual_desktop(), &mut state.sas);
-    drop(state);
+    let saved = guard.sas;
+    let inputs = records(events, area, virtual_desktop(), &mut guard.sas);
+    drop(guard);
     submit(&inputs).inspect_err(|_| state().sas = saved)
 }
 
