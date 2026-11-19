@@ -29,6 +29,7 @@ use crate::mobile::{ApiError, Runtime};
 use crate::screen::core::registry::StopSelector;
 use crate::screen::core::session_state::EndReason;
 use crate::screen::core::wire::MAX_CONTROL_BYTES;
+use crate::screen::core::wire_control::ControlBlock;
 use crate::screen::os::bridge_channels::{self as channels, Phase, Prereqs};
 
 /// Longest wait of one `screenControl`.
@@ -367,6 +368,14 @@ fn notice(args: &Value) -> Result<Value, ApiError> {
             }
         };
         channels::notice(id, text.into(), false).map_err(not_found)?;
+        // The session reports it as a block too (CONTROL_STATE): a text or a
+        // system action the device cannot take is not supported there, a
+        // cancelled gesture or a late answer leaves the control unavailable.
+        let block = match kind {
+            "text" | "action" => ControlBlock::UnsupportedOnHost,
+            _ => ControlBlock::ControlUnavailable,
+        };
+        channels::input_refused(id, block).map_err(not_found)?;
         return Ok(json!({}));
     }
     let name = str_arg(args, "parameter")?;

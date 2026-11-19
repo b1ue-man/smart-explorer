@@ -117,6 +117,9 @@ struct Queues {
     /// The app's encoder refused the last bit rate sent (`video-bitrate`,
     /// Codex 3/16): the stage no longer counts it as running.
     bitrate_refused: bool,
+    /// The app did not perform an input batch (`inputRefused`); the session
+    /// reports it as a block (`ScreenInputSink::take_refusal`).
+    input_refused: Option<crate::screen::core::wire_control::ControlBlock>,
 }
 
 /// One host session as the app sees it.
@@ -390,6 +393,17 @@ pub fn notice(id: u64, text: String, bitrate: bool) -> Result<(), String> {
         channel.note_bitrate_refused();
     }
     channel.push_notice(text);
+    Ok(())
+}
+
+/// `screen.hostNotice` with `inputRefused`: Android did not perform an
+/// input of the session; its session reports `block` (review 2026-11-19).
+pub fn input_refused(
+    id: u64,
+    block: crate::screen::core::wire_control::ControlBlock,
+) -> Result<(), String> {
+    let channel = channel(id).ok_or_else(|| format!("Keine Bildschirmsitzung {id}"))?;
+    channel.note_input_refused(block);
     Ok(())
 }
 

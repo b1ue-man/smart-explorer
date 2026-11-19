@@ -48,6 +48,13 @@ pub trait ScreenInputSink: Send + Sync {
         Err(ControlBlock::ControlUnavailable)
     }
     fn release(&self, events: &[InputEvent]) -> Result<(), ControlBlock>;
+    /// A batch `inject` accepted that the platform refused afterwards (an
+    /// Android gesture, a Wayland portal call): the session reports it as a
+    /// block once (review 2026-11-19). `None` for sinks that answer in
+    /// `inject` itself.
+    fn take_refusal(&self) -> Option<ControlBlock> {
+        None
+    }
     /// Takes the pointer out of the picture (`true`) or back into it (P6,
     /// `cursor_overlay.rs`); `false` while this source does not separate it
     /// (it cannot, or its capture has not started: the wish is kept).

@@ -147,4 +147,9 @@ impl ScreenInputSink for BridgeInputSink {
     fn release(&self, events: &[InputEvent]) -> Result<(), ControlBlock> {
         self.queue(events, false)
     }
+
+    /// A batch the app queued but did not perform (`inputRefused`).
+    fn take_refusal(&self) -> Option<ControlBlock> {
+        self.channel.take_input_refused()
+    }
 }

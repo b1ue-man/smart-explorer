@@ -73,6 +73,16 @@ impl Channel {
         std::mem::take(&mut lock(&self.state).1.bitrate_refused)
     }
 
+    /// The app did not perform an input batch (`inputRefused`).
+    pub fn note_input_refused(&self, block: crate::screen::core::wire_control::ControlBlock) {
+        lock(&self.state).1.input_refused = Some(block);
+    }
+
+    /// The refusal of an input batch not reported yet.
+    pub fn take_input_refused(&self) -> Option<crate::screen::core::wire_control::ControlBlock> {
+        lock(&self.state).1.input_refused.take()
+    }
+
     /// The oldest notice not given yet.
     pub fn take_notice(&self) -> Option<String> {
         lock(&self.state).1.notices.pop_front()

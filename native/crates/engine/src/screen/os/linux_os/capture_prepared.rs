@@ -388,6 +388,15 @@ impl crate::screen::core::host_backend::ScreenInputSink for PortalInputSink {
         }
         crate::screen::os::portal_input::send_input(&self.lease, events)
     }
+    /// The portal refused a queued batch (S2): reported without waiting for
+    /// the next one (in-process; across the host process boundary the next
+    /// `INPUT` answers it).
+    fn take_refusal(&self) -> Option<crate::screen::core::wire_control::ControlBlock> {
+        PORTAL_REFUSED
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+    }
     fn release(
         &self,
         events: &[crate::screen::core::input_model::InputEvent],
