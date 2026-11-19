@@ -21,10 +21,13 @@ use std::io::{self, Read};
 use std::sync::{
     atomic::{AtomicU64, Ordering},
     mpsc::{self, Receiver, RecvTimeoutError},
-    Arc, Mutex,
+    Arc, Mutex, PoisonError,
 };
 use std::time::Duration;
 type Answer = io::Result<Option<WorkerReply>>;
+/// Input the process refused after its answer (review 2026-11-19): the
+/// reader keeps the latest until the daemon's input sink takes it.
+pub(super) type Refused = Arc<Mutex<Option<crate::screen::core::wire_control::ControlBlock>>>;
 /// An answer of the picture stream with its mark.
 pub(super) type StreamAnswer = io::Result<Option<(worker_wire::StreamMark, WorkerReply)>>;
 pub(super) struct WorkerReader {
@@ -53,7 +56,7 @@ impl WorkerReader {
         mut output: impl Read + Send + 'static,
         input: Arc<Mutex<std::process::ChildStdin>>,
         broker: Arc<CaptureBroker>,
-        cursor: Arc<CursorFeed>,
+        (cursor, refused): (Arc<CursorFeed>, Refused),
         stream: mpsc::Sender<StreamAnswer>,
     ) -> io::Result<Self> {
         let (sender, answers) = mpsc::sync_channel(1);
@@ -125,6 +128,13 @@ impl WorkerReader {
                             // The pointer of the overlay (P6) is no answer.
                             worker_wire::CURSOR => {
                                 cursor.publish(cursor_overlay::decode_update(&payload)?);
+                                Ok(Some(None))
+                            }
+                            // Neither is a refusal of earlier input.
+                            worker_wire::INPUT_REFUSED => {
+                                let block = worker_wire::decode_input_refused(&payload)?;
+                                *refused.lock().unwrap_or_else(PoisonError::into_inner) =
+                                    Some(block);
                                 Ok(Some(None))
                             }
                             worker_wire::STREAMED => {

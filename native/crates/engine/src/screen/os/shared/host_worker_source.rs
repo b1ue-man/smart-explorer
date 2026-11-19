@@ -45,6 +45,17 @@ impl crate::screen::core::host_backend::ScreenInputSink for WorkerInputSink {
     fn legacy_input_invalid(&self) -> bool {
         self.1.legacy_reconnect.load(Ordering::Acquire)
     }
+    /// Input the host process's sink refused after its answer (the Wayland
+    /// portal), which the process sent unasked (`INPUT_REFUSED`, review
+    /// 2026-11-19); whoever takes it first reports it, this or the answer
+    /// to the next `INPUT`.
+    fn take_refusal(&self) -> Option<crate::screen::core::wire_control::ControlBlock> {
+        self.1
+            .refused
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
+    }
     fn inject(
         &self,
         events: &[crate::screen::core::input_model::InputEvent],

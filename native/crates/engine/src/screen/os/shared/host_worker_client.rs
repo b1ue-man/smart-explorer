@@ -164,6 +164,9 @@ struct SourceFacts {
     legacy_reconnect: AtomicBool,
     /// The pointer of the overlay (P6), published by the reader thread.
     cursor: Arc<crate::screen::core::cursor_overlay::CursorFeed>,
+    /// Input the process refused after its answer (`INPUT_REFUSED`), until
+    /// the session takes it (`WorkerInputSink::take_refusal`).
+    refused: Arc<Mutex<Option<crate::screen::core::wire_control::ControlBlock>>>,
     /// The picture stream version the process announced (0: `PRODUCE`).
     stream_version: AtomicU32,
     /// The pipe ends of the picture stream.
@@ -179,6 +182,7 @@ impl Default for SourceFacts {
             family_layout_revision: AtomicU64::new(0),
             legacy_reconnect: AtomicBool::new(false),
             cursor: Arc::default(),
+            refused: Arc::default(),
             stream_version: AtomicU32::new(0),
             stream_port: Mutex::new(None),
             stream: Mutex::new(stream::StreamClient::default()),
@@ -303,7 +307,7 @@ impl WorkerLink {
             output,
             input.clone(),
             broker.clone(),
-            facts.cursor.clone(),
+            (facts.cursor.clone(), facts.refused.clone()),
             streamed,
         ) {
             Ok(reader) => reader,

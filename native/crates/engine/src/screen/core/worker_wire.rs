@@ -69,6 +69,11 @@ pub const INPUT_DONE: u8 = 23;
 pub const CURSOR: u8 = 27;
 /// Precedes every answer of the picture stream (`StreamMark`).
 pub const STREAMED: u8 = 28;
+/// Unsolicited (review 2026-11-19): input the host process's sink accepted
+/// and its platform refused afterwards (the Wayland portal), as the JSON of
+/// a `ControlBlock`; the daemon's sink of that process reports it
+/// (`ScreenInputSink::take_refusal`). No answer to a request.
+pub const INPUT_REFUSED: u8 = 29;
 /// Version of the picture stream this program serves; 0 is `PRODUCE` only.
 pub const STREAM_VERSION: u32 = 1;
 
@@ -95,9 +100,8 @@ pub fn tag_limit(tag: u8) -> Option<usize> {
             .max(packet_budget().ok()?.raw_bytes)
             .checked_add(58),
         OPEN | OPEN_FAMILY | FAMILY_COMMAND | RELEASE_INPUT | PRODUCE | CAPTURE | INPUT
-        | BOUND_INPUT | STREAM | OPENED | REFUSED | PAUSED | FAILED | INPUT_DONE | CURSOR => {
-            Some(MAX_CONTROL_BYTES)
-        }
+        | BOUND_INPUT | STREAM | OPENED | REFUSED | PAUSED | FAILED | INPUT_DONE | CURSOR
+        | INPUT_REFUSED => Some(MAX_CONTROL_BYTES),
         STREAMED => Some(StreamMark::BYTES),
         CLOSE => Some(0),
         SET_CAPTURE_ACTIVE | CAPTURE_ACTIVE => Some(1),
@@ -358,6 +362,16 @@ impl StreamMark {
 /// caller writes the answer under the same output lock.
 pub fn send_mark(writer: &mut impl Write, mark: &StreamMark) -> io::Result<()> {
     write_message(writer, STREAMED, &mark.encode())
+}
+
+/// Writes a refusal of earlier input, unasked (host process side).
+pub fn send_input_refused(writer: &mut impl Write, block: ControlBlock) -> io::Result<()> {
+    write_message(writer, INPUT_REFUSED, &to_json(&block)?)
+}
+
+/// Reads the payload of `INPUT_REFUSED` (daemon side).
+pub fn decode_input_refused(payload: &[u8]) -> io::Result<ControlBlock> {
+    from_json(payload)
 }
 
 /// Writes one request (daemon side).

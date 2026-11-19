@@ -58,12 +58,22 @@ impl InputLane {
             .spawn(move || {
                 // Input of the viewer is the most urgent work of the process.
                 crate::screen::os::worker_thread::raise_priority();
-                for job in queue {
-                    let reply = answer(&worker, &known, &remote, job);
-                    let written = output
-                        .lock()
-                        .map_err(|_| io::Error::other("worker output poisoned"))
-                        .and_then(|mut output| send_reply(&mut *output, &reply));
+                loop {
+                    let job = match queue.recv_timeout(REFUSAL_CHECK) {
+                        Ok(job) => Some(job),
+                        Err(mpsc::RecvTimeoutError::Timeout) => None,
+                        Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                    };
+                    let written = match job {
+                        Some(job) => {
+                            let reply = answer(&worker, &known, &remote, job);
+                            output
+                                .lock()
+                                .map_err(|_| io::Error::other("worker output poisoned"))
+                                .and_then(|mut output| send_reply(&mut *output, &reply))
+                        }
+                        None => report_refusal(&known, &output),
+                    };
                     if let Err(error) = written {
                         eprintln!("screen host process input: {error}");
                         break;
@@ -118,6 +128,32 @@ impl InputLane {
             let _ = thread.join();
         }
     }
+}
+
+/// How often the input thread looks for input its source's sink refused
+/// after the answer (review 2026-11-19).
+const REFUSAL_CHECK: std::time::Duration = std::time::Duration::from_millis(50);
+
+/// Input the source's sink refused after its answer (the Wayland portal,
+/// `ScreenInputSink::take_refusal`) goes to the daemon unasked
+/// (`INPUT_REFUSED`), so its session reports it without waiting for the
+/// next `INPUT`; the answer to that `INPUT` takes it when it comes first.
+fn report_refusal(facts: &Mutex<Facts>, output: &dispatch::Output) -> io::Result<()> {
+    let refused = {
+        let known = facts.lock().unwrap_or_else(PoisonError::into_inner);
+        known
+            .sink
+            .as_ref()
+            .or(known.release_sink.as_ref())
+            .and_then(|sink| sink.take_refusal())
+    };
+    let Some(block) = refused else {
+        return Ok(());
+    };
+    let mut output = output
+        .lock()
+        .map_err(|_| io::Error::other("worker output poisoned"))?;
+    crate::screen::core::worker_wire::send_input_refused(&mut *output, block)
 }
 
 /// The answer to one input job.
