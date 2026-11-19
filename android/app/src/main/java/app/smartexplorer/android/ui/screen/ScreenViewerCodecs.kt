@@ -232,7 +232,9 @@ object ScreenChainInfo {
     fun rateNote(rateCeiling: String?, openedBps: Long?, chosenBps: Long?, answered: Boolean = false, reportedKbps: Long? = null): RateNote = when {
         chosenBps == null -> RateNote.Automatic
         rateCeiling == "unsupported_by_host" -> RateNote.Unsupported(chosenBps)
-        reportedKbps != null && reportedKbps == chosenBps / 1000 -> RateNote.Applied(chosenBps)
+        // The report has kbit/s: it can only confirm a limit of whole kbit/s; another one stays „sent“ (Codex 5/23,
+        // 1 000 100 and 1 000 900 bit/s would both read 1000).
+        reportedKbps != null && chosenBps % 1000 == 0L && reportedKbps == chosenBps / 1000 -> RateNote.Applied(chosenBps)
         else -> RateNote.Sent(chosenBps)
     }
 }

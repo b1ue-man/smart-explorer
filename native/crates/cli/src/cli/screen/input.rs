@@ -359,7 +359,9 @@ pub(crate) fn deliver(
         let mut deadline = Some(Instant::now() + ANSWER_WAIT);
         let mut picture = false;
         let mut stream_reported = false;
-        while !picture || (needs_size(action) && size.is_none() && !stream_reported) {
+        // A pixel position waits for the stream's report too: the source may
+        // have changed its size since `HELLO_OK` (Codex 5/16).
+        while !picture || (needs_size(action) && !stream_reported) {
             let wait = match deadline {
                 Some(deadline) => match deadline.checked_duration_since(Instant::now()) {
                     Some(left) if !left.is_zero() => Some(left),
@@ -372,7 +374,8 @@ pub(crate) fn deliver(
                 Some(StreamEvent::Host(HostFrame::State(report))) => {
                     if let Some(stream) = &report.stream {
                         stream_reported = true;
-                        size = size.or(stream.source_size);
+                        // The source size of the running stream comes first.
+                        size = stream.source_size.or(size);
                     }
                     deadline = if report.state == SessionState::WaitingForPortal {
                         accept_within.map(|limit| Instant::now() + limit)

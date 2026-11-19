@@ -207,6 +207,8 @@ class BildketteCodecAndroidTest {
         assertEquals(RateNote.Sent(8_000_000L), ScreenChainInfo.rateNote("applied", 8_000_000L, 8_000_000L))
         assertEquals(RateNote.Applied(8_000_000L), ScreenChainInfo.rateNote("applied", 8_000_000L, 8_000_000L, reportedKbps = 8_000L))
         assertEquals(RateNote.Sent(8_000_000L), ScreenChainInfo.rateNote("applied", 8_000_000L, 8_000_000L, reportedKbps = 5_000L))
+        // A report in kbit/s cannot confirm a limit that is no whole kbit/s (Codex 5/23).
+        assertEquals(RateNote.Sent(1_000_900L), ScreenChainInfo.rateNote("applied", 1_000_100L, 1_000_900L, reportedKbps = 1_000L))
         // The host without `rate_ceiling_v1` ignores the limit; the view says so.
         assertEquals(RateNote.Unsupported(8_000_000L), ScreenChainInfo.rateNote("unsupported_by_host", 8_000_000L, 8_000_000L))
         // A limit changed during the session is sent; whether the host knows it stays open until the next connection.

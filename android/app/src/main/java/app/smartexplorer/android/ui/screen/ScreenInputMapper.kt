@@ -317,7 +317,11 @@ class ScreenInputMapper(
  */
 internal fun keyboardEdit(before: String, after: String): Pair<Int, String> {
     val prefix = before.commonPrefixWith(after).length
-    val suffix = before.substring(prefix).commonSuffixWith(after.substring(prefix)).length
+    var suffix = before.substring(prefix).commonSuffixWith(after.substring(prefix)).length
+    // The host's cursor stays at the end of the text: a correction inside the text (`abc` → `axc`) keeps typed
+    // characters behind it, so the whole end from the change on is deleted and written again (Codex 5/17). Only an
+    // end of padding (typing in front of it) stays as it is.
+    if (before.substring(before.length - suffix).any { it != '\u200B' }) suffix = 0
     // A deleted padding character is a backspace the user pressed on an
     // empty field: it deletes on the remote side as well.
     // One backspace per character as the host deletes it: a code point, not a UTF-16 unit (an emoji is two units

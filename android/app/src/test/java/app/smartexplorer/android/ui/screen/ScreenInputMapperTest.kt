@@ -234,6 +234,8 @@ class ScreenInputMapperTest {
         assertEquals(1 to "", keyboardEdit(pad + "ab", pad + "a"))
         assertEquals(1 to "", keyboardEdit(pad, pad.dropLast(1)))
         assertEquals(0 to "ä", keyboardEdit(pad, pad + "ä"))
+        // A correction inside the text rewrites its end: the host's cursor is at the end (Codex 5/17).
+        assertEquals(2 to "xc", keyboardEdit(pad + "abc", pad + "axc"))
         // An emoji is two UTF-16 units but one character the host deletes with one backspace.
         assertEquals(1 to "", keyboardEdit(pad + "a\uD83D\uDE00", pad + "a"))
     }

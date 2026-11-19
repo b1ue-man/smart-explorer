@@ -621,8 +621,11 @@ class ScreenSession(private val target: ScreenTarget, private val backend: Scree
         if(closed || id==0L || current.ended!=null || forceLossless ||
             !current.streams.containsKey(gopId) || codecFallbackGop==gopId) return@synchronized
         if(mode!="full" && mode!="preview") return@synchronized
-        if (!ViewerCodecChoice.tilesFallbackAllowed(current.chosenCodec)) {
-            // A named codec never gives way to the tiles on its own: the reason is shown, the choice stays.
+        // A named codec never gives way to the tiles on its own, and neither does „Dekodierer: Hardware“ under
+        // „Automatisch“: the tiles are drawn in software (Codex 5/13). The reason is shown, the choice stays.
+        val hardwareChosen = current.chosenCodec == ViewerCodecChoice.CODEC_AUTO &&
+            choice.decoder == ViewerCodecChoice.DECODER_HARDWARE
+        if (!ViewerCodecChoice.tilesFallbackAllowed(current.chosenCodec) || hardwareChosen) {
             codecFallbackGop = gopId
             mutable.value = current.copy(codecError = ScreenCodecNotices.decoderUnavailable(current.chosenCodec, choice.decoder, reason))
             return@synchronized
