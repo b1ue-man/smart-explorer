@@ -125,6 +125,16 @@ impl HonourVerdict {
     }
 }
 
+/// Review 2026-11-19 (J4): whether an encoder that runs `running` bit/s
+/// lies so far above `target` that it counts as above it: by 2 % of the
+/// rate it runs or more, the band of every encoder's rate change
+/// (`RateParams::differs` of the GPU encoders, OpenH264's `retune`). A
+/// refused lowering inside the band stays with the running rate; the
+/// stream's byte budget keeps the ceiling.
+pub fn above_band(running: u64, target: u64) -> bool {
+    running > target && u128::from(running - target) * 50 >= u128::from(running)
+}
+
 /// What an encoder made of the last rate it was given.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct EncoderRateState {

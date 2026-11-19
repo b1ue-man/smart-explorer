@@ -29,6 +29,7 @@ impl AmfSession {
         let rated = [Some(names.target), rate.quality.map(|_| names.peak)];
         let Some(name) = refused.iter().find(|name| rated.contains(&Some(**name))) else {
             self.rate_refusal = None;
+            self.rate_taken = true; // J2: from now on it runs a rate it took
             return Ok(());
         };
         // Codex round 5, finding 18: the properties set before the refused

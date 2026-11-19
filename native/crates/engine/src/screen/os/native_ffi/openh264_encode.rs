@@ -206,7 +206,10 @@ impl OpenH264Encoder {
         }
         if accepted {
             self.bitrate = target;
-        } else if lowered && (i64::from(current) - i64::from(target)) * 50 >= i64::from(current) {
+        } else if crate::screen::core::rate_control::honour::above_band(
+            current.max(0) as u64,
+            target.max(0) as u64,
+        ) {
             return Err(io::Error::other(format!(
                 "OpenH264 refused to lower its bit rate from {current} to {target} bit/s"
             )));

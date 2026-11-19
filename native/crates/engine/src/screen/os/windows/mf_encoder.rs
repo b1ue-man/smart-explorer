@@ -35,7 +35,7 @@ use super::mf_common::{ensure_com, EncoderSetup};
 use super::mf_encoder_sync::{force_keyframe, start, stop, UNITS_PER_SECOND};
 use super::mf_media::{
     bounded_bitrate, configure_hardware, floored, is_keyframe, mark_ltr, opened_limit,
-    refused_lowering, retune_bounded, running_rate, sharp_mode, Output,
+    refused_lowering, retune_bounded, running_rate, set_mean_bitrate, sharp_mode, Output,
 };
 use super::{mf_capture_media, mf_capture_output};
 use crate::screen::core::capture_admission::{CaptureGrant, CaptureOwner};
@@ -180,11 +180,17 @@ impl AsyncEncoder {
         let limit = opened_limit(&transform, api.as_ref(), &setup);
         let sequence_header = mf_capture_output::sequence_header(&transform);
         let refused = settings.refused();
-        let rate_refused = refused.contains(&super::mf_media::SETTINGS[3]);
-        // F1: a refused opening rate is not the one it runs (`running_rate`).
-        let bitrate = rate_refused
-            .then(|| running_rate(api.as_ref()))
-            .unwrap_or(bitrate);
+        // J3: a refused mean rate is asked again after the types (without
+        // `ICodecAPI`, `MF_MT_AVG_BITRATE` carries it); only then unknown (F1).
+        let rate_refused = refused.contains(&super::mf_media::SETTINGS[3])
+            && api
+                .as_ref()
+                .is_some_and(|api| set_mean_bitrate(api, bitrate));
+        let bitrate = if rate_refused {
+            running_rate(api.as_ref())
+        } else {
+            bitrate
+        };
         if !refused.is_empty() {
             eprintln!(
                 "screen encoder {}: settings at the encoder's default: {}",

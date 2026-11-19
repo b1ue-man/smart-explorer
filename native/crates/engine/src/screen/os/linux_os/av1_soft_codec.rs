@@ -153,6 +153,11 @@ struct SvtSession {
 /// of every picture. A lowering in between waits for it; the stream's byte
 /// budget keeps the ceiling meanwhile. Rises keep the band (`REOPEN_HIGH`).
 const RATE_KEY_GAP: Duration = Duration::from_secs(1);
+/// Review 2026-11-19 (J1): before 4.0 a lowered rate takes its key frame only
+/// from this share of the running rate down (at least 10 % lower); a line
+/// that wavers by less makes no key frame pulse. Above it the stream's byte
+/// budget keeps the ceiling: it admits no picture beyond the user's rate.
+const LOWER_STEP: (u64, u64) = (9, 10);
 
 /// Whether `wanted` lies outside the band around `running` (B-25 note).
 fn needs_reopen(running: u32, wanted: u32) -> bool {
@@ -181,15 +186,16 @@ impl HwH264Session for SvtSession {
         // (`native_ffi/av1_soft_rate.rs`). SVT-AV1 4.x takes a rate on any
         // picture: every lowering and every rise past 2 % goes, as on the
         // other encoders (C10). Before 4.0.0 a rate needs a key picture of the
-        // running encoder: every lowering goes, at most one a `RATE_KEY_GAP`
-        // (F2), a rise only outside the band of `needs_reopen`.
+        // running encoder: a lowering by `LOWER_STEP` or more goes, at most one
+        // a `RATE_KEY_GAP` (F2, J1), a rise only outside `needs_reopen`'s band.
         let wanted = rate.bits_per_second;
         if let Some(encoder) = self.encoder.as_mut() {
             let change = if encoder.rate_needs_keyframe() {
                 let due = self
                     .rate_keyed
                     .is_none_or(|at| at.elapsed() >= RATE_KEY_GAP);
-                let lower = wanted < self.running;
+                let lower =
+                    u64::from(wanted) * LOWER_STEP.1 <= u64::from(self.running) * LOWER_STEP.0;
                 if lower && due {
                     self.rate_keyed = Some(Instant::now());
                 }

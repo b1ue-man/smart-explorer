@@ -243,8 +243,9 @@ pub(super) struct AmfSession {
     ltr: Option<LtrSlots>,
     frames: u64,
     refused: Vec<&'static str>,
-    /// The last rate the component refused (`amf_rate.rs`, X1/X4).
+    /// The last rate refused (X1/X4); whether it took any rate yet (J2).
     rate_refusal: Option<RateParams>,
+    rate_taken: bool,
     /// Level and encoder report of the bit-rate ceiling (r1, `amf_caps.rs`).
     ceiling: Option<u64>,
     _device: ID3D11Device,
@@ -283,12 +284,14 @@ impl AmfSession {
             frames: 0,
             refused: Vec::new(),
             rate_refusal: None,
+            rate_taken: true,
             ceiling: None,
             _device: device.clone(),
         };
         let refused = session.apply(static_settings(names, size, &rate));
         sharp_taken(names, &rate, &refused)?;
         session.rate_refusal = refused.contains(&names.target).then_some(rate);
+        session.rate_taken = session.rate_refusal.is_none();
         let this = session.component.object;
         // SAFETY: a live component; the size was checked by the factory.
         let result = unsafe {
@@ -475,18 +478,15 @@ impl VendorSession for AmfSession {
         self.ceiling
     }
 
-    /// The component refused the last rate asked of it (X1, `amf_rate.rs`):
-    /// it runs at the one before, or at its default after a refused start.
+    /// It refused the last rate asked (X1): it runs the one before (`rate`).
     fn rate_refused(&self) -> bool {
         self.rate_refusal.is_some()
     }
 
-    /// F1: the rate it runs; unknown (its default) when it refused the rate
-    /// it opened with and took none since.
+    /// F1/J2: the rate it runs; its unknown default until it took one.
     fn running_bps(&self) -> Option<u64> {
-        let never = self.rate_refusal == Some(self.rate);
         let rate = u64::from(self.rate.bits_per_second);
-        Some(if never { u64::MAX } else { rate })
+        Some(if self.rate_taken { rate } else { u64::MAX })
     }
 }
 
