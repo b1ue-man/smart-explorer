@@ -273,7 +273,8 @@ pub fn display_state_in(
     match chosen {
         DisplayChoice::Automatic => Applied::Applied(Some(window.to_string())),
         DisplayChoice::Wgpu if window == "wgpu" => Applied::Applied(None),
-        DisplayChoice::Wgpu => Applied::Other(window.to_string()),
+        // The glow window shows no picture then (Codex 6/12, `window_barred`).
+        DisplayChoice::Wgpu => Applied::Other(format!("kein Bild – Fenster mit {window}")),
         DisplayChoice::Direct3d11 if pending => Applied::Pending,
         DisplayChoice::Direct3d11 => {
             let why = match (direct_error, d3d11_picture) {

@@ -93,12 +93,16 @@ impl Shared {
     }
 }
 
-/// A chosen „Dekodierer: Hardware“ takes no fallback to the tiles, whose
-/// decoding is software (Codex 5/13); „Verlustfrei“ chose the tiles itself.
+/// A chosen „Dekodierer: Hardware“ (the tiles decode in software, Codex
+/// 5/13) or a chosen „Dekodier-Bibliothek“ (the tiles' decoder is neither
+/// FFmpeg nor Media Foundation, Codex 6/13) takes no fallback to the tiles;
+/// „Verlustfrei“ chose the tiles itself.
 pub fn hardware_bars_tiles(codec: CodecSetting) -> bool {
     let decoder = super::screen_prefs::decoder_choice();
-    decoder == crate::screen::core::negotiate::DecoderPreference::Hardware
-        && codec != CodecSetting::Lossless
+    let library = super::screen_prefs::decoder_library_choice();
+    let hardware = decoder == crate::screen::core::negotiate::DecoderPreference::Hardware;
+    let named = library != crate::screen::core::decoder_library::DecoderLibrary::Automatic;
+    (hardware || named) && codec != CodecSetting::Lossless
 }
 
 /// Whether the viewer may switch the session to the tiles itself: under

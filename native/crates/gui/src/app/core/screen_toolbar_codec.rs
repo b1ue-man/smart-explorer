@@ -327,13 +327,6 @@ fn rate_field(ui: &mut egui::Ui, mbit: f64) -> Option<f64> {
         // A new try, or one given up (H6: the old error stood on).
         ui.data_mut(|data| data.remove::<String>(error_id));
     }
-    let error = ui.data(|data| data.get_temp::<String>(error_id));
-    if let Some(error) = error.as_deref() {
-        super::wrap::note(
-            ui,
-            RichText::new(error).color(crate::app::theme::warning(ui)),
-        );
-    }
     if edited.has_focus() {
         ui.data_mut(|data| data.insert_temp(id, text));
         return None;
@@ -412,6 +405,13 @@ pub(super) fn max_rate_row(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Ve
             mbit = typed;
         }
         ui.label(RATE_UNIT);
+        // After the unit, an entry of its own (Codex 6/21: between field
+        // and unit it tore the unit away from its number).
+        let error = ui.data(|data| data.get_temp::<String>(rate_error_id()));
+        if let Some(error) = error.as_deref() {
+            let warning = crate::app::theme::warning(ui);
+            super::wrap::note(ui, RichText::new(error).color(warning));
+        }
     }
     // P9: what the session does with the ceiling.
     if limited

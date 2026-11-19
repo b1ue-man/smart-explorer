@@ -444,10 +444,10 @@ impl ViewWidget {
             if self.mapper.is_some() {
                 self.release_input(session);
             }
+            // Made here: its first frame knows what was held before (Codex 6/16).
             let held = ui.input(|input| input.modifiers);
-            self.mapper
-                .iter_mut()
-                .for_each(|mapper| mapper.note_local(held));
+            let mapper = self.mapper.get_or_insert_with(|| InputMapper::new(hello));
+            mapper.note_local(held);
             return (locals, escape);
         }
         let mapper = self.mapper.get_or_insert_with(|| InputMapper::new(hello));

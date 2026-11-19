@@ -127,14 +127,18 @@ impl DecodeState {
     /// chose, under a named codec the error is shown and the codec stays.
     /// `true` when a `SET_DECODERS` or `SET_MODE` went out (the host starts
     /// a new stream; no key frame of the old one is asked for).
-    /// No other hardware decoder under a chosen „Dekodierer: Hardware“: the
-    /// software tiles are not taken, the error is shown (Codex 5/13).
+    /// No other decoder of the chosen „Dekodierer“/„Dekodier-Bibliothek“:
+    /// the tiles are not taken, the error is shown (Codex 5/13, 6/13).
     fn hardware_stays(&mut self, codec: CodecKind, reason: &str) {
+        let decoder = super::super::screen_prefs::decoder_choice();
+        let library = super::super::screen_prefs::decoder_library_choice();
         let text = format!(
-            "{} liefert auf diesem Gerät kein Bild ({reason}). „Dekodierer: Hardware“ ist \
-             gewählt und kein anderer Hardware-Dekodierer passt; die Kacheln (Software) \
-             werden nicht genommen.",
-            label(codec)
+            "{} liefert auf diesem Gerät kein Bild ({reason}). Gewählt sind „Dekodierer: {}“ \
+             und „Dekodier-Bibliothek: {}“, kein anderer passender Dekodierer bleibt; die \
+             Kacheln werden nicht genommen (nur „Automatisch“ weicht aus).",
+            label(codec),
+            decoder.label(),
+            library.label()
         );
         self.shared.update(|info| info.notice = Some(text));
     }

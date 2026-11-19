@@ -153,6 +153,32 @@ pub fn window_renderer_label() -> &'static str {
     }
 }
 
+/// Whether a picture of `shared` that came as planes or BGRA may not go to
+/// the window, as the chosen „Anzeige“ says (user rule 2026-11-18):
+/// - „Direct3D 11“ without a working presenter in a full view (Codex 3/12,
+///   B1: previews have none and draw through the slot as before);
+/// - „wgpu“ while this window draws with glow (Codex 6/12: it went on with
+///   OpenGL); the reason is named once, the choice „Automatisch“ shows it.
+pub(super) fn window_barred(shared: &super::screen_session::Shared) -> bool {
+    use super::screen_prefs::{display_choice, DisplayChoice};
+    match display_choice() {
+        DisplayChoice::Direct3d11 => cfg!(windows) && shared.full_view() && !shared.direct.wanted(),
+        DisplayChoice::Wgpu if WINDOW_GLOW.load(Ordering::Acquire) == WINDOW_IS_GLOW => {
+            let text = "Anzeige „wgpu“: dieses Fenster zeichnet mit OpenGL (glow), wgpu \
+                        bekam beim Öffnen keine Fensteroberfläche; es wird kein Bild gezeigt. \
+                        „Anzeige: Automatisch“ zeigt es mit OpenGL, ein neues Fenster \
+                        versucht wgpu erneut.";
+            shared.update(|info| {
+                if info.notice.as_deref() != Some(text) {
+                    info.notice = Some(text.to_string());
+                }
+            });
+            true
+        }
+        _ => false,
+    }
+}
+
 /// What decides how „Niedrigste Latenz“ reaches the screen now.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LatencyFacts {

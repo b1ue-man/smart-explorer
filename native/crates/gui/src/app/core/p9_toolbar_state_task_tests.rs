@@ -209,7 +209,7 @@ fn wahlgilt_task_toolbar_never_claims_an_unapplied_choice() {
     let shown = facts(CodecKind::Hevc, MF_HW, false, 5);
     assert_eq!(
         display_state_in(DisplayChoice::Wgpu, &shown, false, "OpenGL (glow)", None),
-        Applied::Other("OpenGL (glow)".into())
+        Applied::Other("kein Bild – Fenster mit OpenGL (glow)".into())
     );
     assert_eq!(
         display_state_in(DisplayChoice::Wgpu, &shown, false, "wgpu", None),
