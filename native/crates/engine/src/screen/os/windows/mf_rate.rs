@@ -129,7 +129,11 @@ pub(in crate::screen::os) fn retune_bounded(
     if target >= *current && (i64::from(target) - i64::from(*current)) * 50 < i64::from(*current) {
         return None;
     }
-    let api = api?;
+    // Codex 14 (review 2026-11-19): without `ICodecAPI` a lowering cannot
+    // be set; it is a refused one, not nothing to do.
+    let Some(api) = api else {
+        return (target < *current).then_some(true);
+    };
     let raising = target > *current;
     if peak && raising && !set_max_bitrate(api, target) {
         return Some(true);

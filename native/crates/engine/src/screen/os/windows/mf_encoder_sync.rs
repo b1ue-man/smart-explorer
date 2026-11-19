@@ -58,7 +58,12 @@ pub(super) fn retune(
     if target >= *current && (i64::from(target) - i64::from(*current)) * 50 < i64::from(*current) {
         return None;
     }
-    let refused = set_mean_bitrate(api?, target);
+    // Codex 14 (review 2026-11-19): without `ICodecAPI` a lowering cannot
+    // be set; it is a refused one, not nothing to do.
+    let Some(api) = api else {
+        return (target < *current).then_some(true);
+    };
+    let refused = set_mean_bitrate(api, target);
     if !refused {
         *current = target;
     }
@@ -346,6 +351,10 @@ impl ScreenEncoder for SyncEncoder {
         let api = self.api.as_ref();
         if let Some(refused) = retune(api, &mut self.bitrate, target_bps, self.limit) {
             self.rate_refused = refused;
+            if refused {
+                // Codex 14: the same contract as `encode_admitted` (B6).
+                refused_lowering(self.bitrate, target_bps, self.limit)?;
+            }
         }
         if keyframe && self.frames > 0 {
             force_keyframe(self.api.as_ref());
