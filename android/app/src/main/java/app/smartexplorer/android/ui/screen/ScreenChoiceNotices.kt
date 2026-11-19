@@ -52,7 +52,61 @@ object ScreenCodecNotices {
         "the host has no GPU encoder of H.264 or HEVC" -> "Das Gerät hat keinen GPU-Kodierer für H.264/HEVC"
         "the viewer has no decoder of this codec" -> "Dieses Handy bietet keinen Dekodierer dieses Codecs an"
         "no encoder and decoder of this codec fit together" -> "Kein Kodierer und Dekodierer dieses Codecs passen zusammen"
-        else -> reason.trim()
+        else -> knownError(reason.trim()) ?: reason.trim()
+    }
+
+    /**
+     * The host's reasons of the review of 2026-11-19 in German, as `codec_reason_text.rs` of the desktop: „Scharf
+     * (GPU)“ without a GPU encoder left (`host_worker_encoding.rs`), an encoder that refused to lower its bit rate
+     * (`mf_rate.rs`, `vendor_encode.rs`) and a picture too small for the chosen codec (`host_pipeline_admit.rs`);
+     * `null` for any other text.
+     */
+    fun knownError(text: String): String? {
+        val error = text.trim()
+        val sharp = "Scharf (GPU): no GPU encoder of "
+        val mfLower = "the encoder refused to lower its bit rate from "
+        val vendorLower = " refused to lower its bit rate to "
+        val small = "the picture of "
+        return when {
+            error.startsWith(sharp) -> {
+                val rest = error.removePrefix(sharp)
+                val codec = rest.substringBefore(" is left")
+                val inner = rest.substringAfter(" is left", "").trim().removePrefix("(").removeSuffix(")")
+                val failed = inner.substringBefore("; software passed over: ").removePrefix("failed: ").trim()
+                val passed = inner.substringAfter("; software passed over: ", "").trim()
+                buildString {
+                    append("Scharf (GPU): kein GPU-Kodierer für ${label(codec)} mehr übrig")
+                    if (failed.isNotEmpty() && failed != "[]") append(" (ausgefallen: $failed)")
+                    if (passed.isNotEmpty()) append("; Software-Kodierer übergangen, Meldung: $passed")
+                }
+            }
+            error.startsWith(mfLower) -> {
+                val rates = error.removePrefix(mfLower).removeSuffix(" bit/s")
+                "der Kodierer lehnte es ab, seine Bitrate von ${rates.substringBefore(" to ")} auf ${rates.substringAfter(" to ")} bit/s zu senken"
+            }
+            error.contains(vendorLower) -> {
+                val name = error.substringBefore(vendorLower)
+                val rest = error.substringAfter(vendorLower)
+                val message = rest.substringAfter(" bit/s", "").removePrefix(":").trim()
+                "$name lehnte es ab, seine Bitrate auf ${rest.substringBefore(" bit/s")} bit/s zu senken" +
+                    if (message.isEmpty()) "" else "; Meldung: $message"
+            }
+            error.startsWith(small) ->
+                "das Bild mit ${error.removePrefix(small).substringBefore(' ')} Pixeln ist kleiner als die 2×2 Pixel, " +
+                    "die der Codec braucht; die Übertragung wartet auf ein größeres"
+            else -> null
+        }
+    }
+
+    /** [detail] with a known host reason ([knownError]) at its start or after one of its „: “ in German. */
+    private fun detailText(detail: String): String {
+        var at = 0
+        while (at >= 0 && at < detail.length) {
+            knownError(detail.substring(at))?.let { return detail.substring(0, at) + it }
+            val next = detail.indexOf(": ", at)
+            at = if (next < 0) -1 else next + 2
+        }
+        return detail
     }
 
     /**
@@ -69,7 +123,7 @@ object ScreenCodecNotices {
                 ": der Kodierer lieferte ${rest.removePrefix(firstPicture).removeSuffix(" ms").trim()} ms lang kein erstes Bild"
             rest.startsWith(noPairing) ->
                 ": keine Kodierer-Paarung schafft ${rest.removePrefix(noPairing).substringBefore(' ')} mit einem Bild pro Sekunde"
-            else -> ": Meldung: $rest"
+            else -> knownError(rest)?.let { ": $it" } ?: ": Meldung: $rest"
         }
     }
 
@@ -79,6 +133,10 @@ object ScreenCodecNotices {
         reason.indexOf(UNAVAILABLE).takeIf { it >= 0 }?.let { at ->
             // `chosen_codec_unavailable: <codec>: <reason>` or, from the open, `chosen_codec_unavailable: <reason>`.
             val (codec, why) = codecAndReason(reason.substring(at + UNAVAILABLE.length), chosen)
+            if (why.startsWith("the picture of ")) {
+                // The chosen codec waits for a larger picture (review 2026-11-19).
+                return CodecNotice(chosen, null, "Fehler: ${label(codec)} gewählt, ${knownError(why)}.", error = true)
+            }
             return CodecNotice(
                 chosen, null,
                 "Fehler: Der gewählte Codec „${label(codec)}“ ist nicht verfügbar: ${reasonText(why)}. Es wird kein anderer Codec gesendet.",
@@ -99,7 +157,7 @@ object ScreenCodecNotices {
             if (colon < 0) rest.trim() to "" else rest.substring(0, colon).trim() to rest.substring(colon + 1).trim()
         }
         if (running.isEmpty()) return null
-        val suffix = if (detail.isEmpty()) "" else " ($detail)"
+        val suffix = if (detail.isEmpty()) "" else " (${detailText(detail)})"
         return if (belongs(chosen, running)) {
             CodecNotice(chosen, running, "Codec gewählt: ${label(chosen)} · läuft: ${label(running)}$suffix", error = false)
         } else {

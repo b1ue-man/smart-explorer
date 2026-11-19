@@ -6,7 +6,7 @@ use crate::screen::core::chain_meter::shown_fallback;
 use crate::screen::core::frame_timing::CaptureFallback;
 use crate::screen::core::pixel_convert::{FrameSize, Rect};
 use crate::screen::core::rate_control::model::{
-    mf_quality, session_quality, set_session_quality, SHARP_TARGET_QUALITY,
+    session_quality, set_session_quality, SHARP_TARGET_QUALITY,
 };
 
 fn rect(x: u32, y: u32, width: u32, height: u32) -> Rect {
@@ -97,11 +97,6 @@ fn gpu_encode_task_conversion_cause_shows_only_beside_cpu_pixels() {
 #[test]
 fn gpu_encode_task_sharp_quality_target_and_bench_rate() {
     assert_eq!(SHARP_TARGET_QUALITY, 18);
-    // Media Foundation's scale runs the other way, 0-100.
-    assert_eq!(mf_quality(SHARP_TARGET_QUALITY), 65);
-    assert_eq!(mf_quality(51), 0);
-    assert_eq!(mf_quality(0), 100);
-    assert_eq!(mf_quality(200), 0);
     set_session_quality(Some(SHARP_TARGET_QUALITY));
     assert_eq!(session_quality(), Some(SHARP_TARGET_QUALITY));
     set_session_quality(None);

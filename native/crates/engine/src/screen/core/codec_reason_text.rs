@@ -18,6 +18,10 @@ const UNAVAILABLE: &str = "chosen_codec_unavailable: ";
 const LEFT: &str = "no encoder of the chosen codec is left";
 const FIRST_PICTURE: &str = "no first picture from the encoder within ";
 const NO_PAIRING: &str = "no pairing carries ";
+const SHARP_LEFT: &str = "Scharf (GPU): no GPU encoder of ";
+const MF_REFUSED_LOWER: &str = "the encoder refused to lower its bit rate from ";
+const VENDOR_REFUSED_LOWER: &str = " refused to lower its bit rate to ";
+const SMALL_PICTURE: &str = "the picture of ";
 
 /// The label of a codec or choice key of the host (`av1`, `sharp`, …).
 pub fn codec_key_label(key: &str) -> Option<&'static str> {
@@ -61,10 +65,67 @@ pub fn encoder_error_text(error: &str) -> String {
         let size = rest.split_whitespace().next().unwrap_or(rest);
         return format!("keine Kodierer-Paarung schafft {size} mit einem Bild pro Sekunde");
     }
+    if let Some(text) = review_error_text(error) {
+        return text;
+    }
     if error.is_empty() {
         return String::new();
     }
     format!("Meldung: {error}")
+}
+
+/// The reasons the host names since the review of 2026-11-19 in German:
+/// „Scharf (GPU)“ without a GPU encoder left (`host_worker_encoding.rs`),
+/// an encoder that refused to lower its rate (`mf_rate.rs`,
+/// `vendor_encode.rs`), a picture too small for the chosen codec
+/// (`host_pipeline_admit.rs`) and a viewer without a decoder of its choice
+/// (`negotiate::EMPTY_OFFER`).
+fn review_error_text(error: &str) -> Option<String> {
+    if let Some(rest) = error.strip_prefix(SHARP_LEFT) {
+        let (codec, rest) = rest.split_once(" is left").unwrap_or((rest, ""));
+        let codec = codec_key_label(codec).unwrap_or(codec);
+        let inner = rest.trim();
+        let inner = inner.strip_prefix('(').unwrap_or(inner);
+        let inner = inner.strip_suffix(')').unwrap_or(inner);
+        let (failed, passed) = inner
+            .split_once("; software passed over: ")
+            .unwrap_or((inner, ""));
+        let failed = failed.trim_start_matches("failed: ").trim();
+        let mut text = format!("Scharf (GPU): kein GPU-Kodierer für {codec} mehr übrig");
+        if !failed.is_empty() && failed != "[]" {
+            text.push_str(&format!(" (ausgefallen: {failed})"));
+        }
+        if !passed.is_empty() {
+            text.push_str(&format!(
+                "; Software-Kodierer übergangen, Meldung: {passed}"
+            ));
+        }
+        return Some(text);
+    }
+    if let Some(rest) = error.strip_prefix(MF_REFUSED_LOWER) {
+        let (from, to) = rest.trim_end_matches(" bit/s").split_once(" to ")?;
+        return Some(format!(
+            "der Kodierer lehnte es ab, seine Bitrate von {from} auf {to} bit/s zu senken"
+        ));
+    }
+    if let Some((name, rest)) = error.split_once(VENDOR_REFUSED_LOWER) {
+        let (rate, message) = rest.split_once(" bit/s").unwrap_or((rest, ""));
+        let message = message.trim_start_matches(':').trim();
+        let mut text = format!("{name} lehnte es ab, seine Bitrate auf {rate} bit/s zu senken");
+        if !message.is_empty() {
+            text.push_str(&format!("; Meldung: {message}"));
+        }
+        return Some(text);
+    }
+    if let Some(rest) = error.strip_prefix(SMALL_PICTURE) {
+        let size = rest.split_whitespace().next().unwrap_or(rest);
+        return Some(format!(
+            "das Bild mit {size} Pixeln ist kleiner als die 2×2 Pixel, die der Codec braucht; \
+             die Übertragung wartet auf ein größeres"
+        ));
+    }
+    (error == super::negotiate::EMPTY_OFFER)
+        .then(|| "dieses Gerät bietet keinen Dekodierer des gewählten Codecs an".into())
 }
 
 /// The text of a chosen codec the host cannot keep: `label` is the choice
@@ -73,6 +134,11 @@ pub fn encoder_error_text(error: &str) -> String {
 pub fn chosen_text(label: Option<&str>, failed: bool, reason: &str) -> String {
     let reason = reason.trim();
     let Some(label) = label else {
+        // A viewer that named no decoder (`EMPTY_OFFER`) names its choice
+        // itself; without it the reason alone (review 2026-11-19).
+        if reason == super::negotiate::EMPTY_OFFER {
+            return "Dieses Gerät bietet keinen Dekodierer des gewählten Codecs an".into();
+        }
         let why = encoder_error_text(reason.trim_start_matches(LEFT));
         let base = if failed {
             "Alle Kodierer des gewählten Codecs sind am Gerät ausgefallen"
@@ -88,6 +154,10 @@ pub fn chosen_text(label: Option<&str>, failed: bool, reason: &str) -> String {
             encoders_of(label)
         );
         return with_reason(base, &why);
+    }
+    if reason.starts_with(SMALL_PICTURE) {
+        // The chosen codec waits for a larger picture (review 2026-11-19).
+        return format!("{label} gewählt, {}", encoder_error_text(reason));
     }
     match reason {
         "the host has no encoder of this codec" | "the host has no GPU encoder of H.264 or HEVC" => {

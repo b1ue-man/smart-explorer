@@ -37,7 +37,8 @@
 //!   rate as their ceiling instead of a constant bit rate; the host process
 //!   holds the target of its one session (`set_session_quality`) and the
 //!   encoder factories read it when they open (`session_quality`). Media
-//!   Foundation's quality scale is 0–100 (`mf_quality`).
+//!   Foundation takes no quality target: its sharp mode is peak-constrained
+//!   VBR at the session rate (`os/windows/mf_rate.rs`, review 2026-11-19).
 use std::sync::atomic::{AtomicU8, Ordering};
 
 use serde::{Deserialize, Serialize};
@@ -277,12 +278,4 @@ pub fn set_session_quality(target: Option<u8>) {
 /// The quality target an encoder of this process opens with.
 pub fn session_quality() -> Option<u8> {
     Some(SESSION_QUALITY.load(Ordering::Relaxed)).filter(|target| *target > 0)
-}
-
-/// `target` (1–51, lower is better) on Media Foundation's
-/// `CODECAPI_AVEncCommonQuality` scale (0–100, higher is better), linear
-/// [assumption: no vendor documents the mapping of its MFT].
-pub fn mf_quality(target: u8) -> u32 {
-    let target = u32::from(target.min(51));
-    ((51 - target) * 100 + 25) / 51
 }

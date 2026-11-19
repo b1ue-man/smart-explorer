@@ -74,3 +74,63 @@ fn rollout_task_codec_reasons_read_german() {
     assert_eq!(fallback_detail_text("mf failed"), "Meldung: mf failed");
     assert_eq!(codec_key_label("tiles"), Some("Verlustfrei"));
 }
+
+/// Review 2026-11-19 (T1): the host's reasons of that review read German
+/// on the desktop and in the CLI: „Scharf (GPU)“ without a GPU encoder
+/// left, a refused rate decrease (Media Foundation and the GPU vendors),
+/// a picture too small for the chosen codec and a viewer without a decoder
+/// of its choice.
+#[test]
+fn review1119_task_new_reasons_read_german() {
+    let sharp = chosen_codec_text(
+        "chosen_codec_failed: sharp: no encoder of the chosen codec is left: Scharf (GPU): no GPU \
+         encoder of hevc is left (failed: [nvenc-hevc]; software passed over: no encoder left)",
+    )
+    .unwrap_or_default();
+    assert!(
+        sharp.ends_with(
+            "ausgefallen: Scharf (GPU): kein GPU-Kodierer für HEVC mehr übrig (ausgefallen: \
+             [nvenc-hevc]); Software-Kodierer übergangen, Meldung: no encoder left"
+        ),
+        "{sharp}"
+    );
+    assert_eq!(
+        encoder_error_text(
+            "the encoder refused to lower its bit rate from 6000000 to 3000000 bit/s"
+        ),
+        "der Kodierer lehnte es ab, seine Bitrate von 6000000 auf 3000000 bit/s zu senken"
+    );
+    assert_eq!(
+        encoder_error_text("nvenc-h264 refused to lower its bit rate to 3000000 bit/s: status 8"),
+        "nvenc-h264 lehnte es ab, seine Bitrate auf 3000000 bit/s zu senken; Meldung: status 8"
+    );
+    assert_eq!(
+        chosen_codec_text(
+            "chosen_codec_unavailable: h264: the picture of 1x1 pixels is smaller than the 2x2 \
+             pixels the codec needs; the stream waits for a larger one"
+        )
+        .as_deref(),
+        Some(
+            "H.264 gewählt, das Bild mit 1x1 Pixeln ist kleiner als die 2×2 Pixel, die der \
+             Codec braucht; die Übertragung wartet auf ein größeres"
+        )
+    );
+    assert_eq!(
+        chosen_codec_text(
+            "encoder_failed: chosen_codec_unavailable: the viewer has no decoder of this codec"
+        )
+        .as_deref(),
+        Some("Dieses Gerät bietet keinen Dekodierer des gewählten Codecs an")
+    );
+    // The host keeps writing these reasons word for word.
+    let host = include_str!("../os/shared/host_worker_encoding.rs").replace("\r\n", "\n");
+    assert!(host.contains("\"Scharf (GPU): no GPU encoder of {codec} is left \\\n"));
+    assert!(include_str!("../os/windows/mf_rate.rs").contains(
+        "\"the encoder refused to lower its bit rate from {running} to {target} bit/s\""
+    ));
+    assert!(include_str!("../os/windows/vendor_encode.rs")
+        .contains("\"{name} refused to lower its bit rate to {} bit/s: {error}\""));
+    assert!(include_str!("host_pipeline_admit.rs").contains(
+        "\"chosen_codec_unavailable: {}: the picture of {}x{} pixels is smaller than \\\n"
+    ));
+}

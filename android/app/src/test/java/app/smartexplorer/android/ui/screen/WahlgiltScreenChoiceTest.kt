@@ -100,6 +100,29 @@ class WahlgiltScreenChoiceTest {
         assertNotNull(ended.codecError)
     }
 
+    /** Review 2026-11-19 (T1): the host's new reasons read German on the phone as on the desktop. */
+    @Test
+    fun review1119_task_new_host_reasons_read_german() {
+        val sharp = ScreenCodecNotices.parse(
+            "chosen_codec_failed: sharp: no encoder of the chosen codec is left: Scharf (GPU): no GPU encoder of hevc " +
+                "is left (failed: [nvenc-hevc]; software passed over: none)", "sharp")!!
+        assertTrue(sharp.text, sharp.text.contains("Scharf (GPU): kein GPU-Kodierer für HEVC mehr übrig (ausgefallen: [nvenc-hevc])"))
+        val lowered = ScreenCodecNotices.parse(
+            "encoder_fallback_to_h264: h264 hardware gave way to h264 software: the encoder refused to lower its bit rate " +
+                "from 6000000 to 3000000 bit/s", "h264")!!
+        assertTrue(lowered.text, lowered.text.contains("der Kodierer lehnte es ab, seine Bitrate von 6000000 auf 3000000 bit/s zu senken"))
+        assertEquals(
+            "nvenc-h264 lehnte es ab, seine Bitrate auf 3000000 bit/s zu senken; Meldung: status 8",
+            ScreenCodecNotices.knownError("nvenc-h264 refused to lower its bit rate to 3000000 bit/s: status 8"),
+        )
+        val small = ScreenCodecNotices.parse(
+            "chosen_codec_unavailable: h264: the picture of 1x1 pixels is smaller than the 2x2 pixels the codec needs; " +
+                "the stream waits for a larger one", "h264")!!
+        assertTrue(small.error)
+        assertTrue(small.text, small.text.contains("H.264 gewählt, das Bild mit 1x1 Pixeln ist kleiner als die 2×2 Pixel"))
+        assertNull(ScreenCodecNotices.knownError("device lost"))
+    }
+
     @Test
     fun wahlgilt_highest_data_rate_has_the_hosts_floor() {
         assertEquals(150_000L, ViewerCodecChoice.MIN_RATE_BPS)
