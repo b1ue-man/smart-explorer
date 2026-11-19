@@ -33,9 +33,12 @@ impl Session<'_> {
         self.visibility_generation = report.geometry_generation;
         // A visible view that stays visible changed only its visible area
         // (an edge pan, a moved or resized window): the encoder, the capture
-        // and the held keys stay (review 2026-11-19, V1/C3). The
+        // and the held keys stay (review 2026-11-19, V1/C3). With hybrid
+        // regions too (Codex 2/3): their encoders take the rectangles from
+        // every picture request and the key frame sends every region
+        // (`HybridEncoder::encode_impl`, `captured_hybrid`). The
         // acknowledgement follows as for every report (`produce_with`).
-        if self.visible && !report.hidden() && !self.pipeline.hybrid_regions() {
+        if self.visible && !report.hidden() {
             note_viewer(&format!(
                 "the viewer reported its visibility (generation {}, {} rectangles): \
                  same encoder, key frame",

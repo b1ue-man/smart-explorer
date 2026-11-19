@@ -84,14 +84,6 @@ impl PipelineActor {
         self.poll();
     }
 
-    /// The negotiated contract carries hybrid regions: their encoder keeps
-    /// per-region state bound to the visible area, so a change of it starts
-    /// a new reference (`Session::visibility`).
-    pub fn hybrid_regions(&self) -> bool {
-        self.accepted
-            .is_some_and(|contract| contract.hybrid_regions)
-    }
-
     /// A visible view whose visible area changed and stays visible: the
     /// rectangles go to the next picture, the encoder and the capture stay.
     /// The viewer drops its shown picture with every report and waits for a
