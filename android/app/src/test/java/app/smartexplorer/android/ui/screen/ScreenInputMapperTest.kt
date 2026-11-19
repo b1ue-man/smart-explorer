@@ -72,6 +72,12 @@ class ScreenInputMapperTest {
             listOf(pointer(1000, 1000), button("left", true), pointer(1500, 1100), button("left", false)),
             drag.events(),
         )
+        // The lift point counts, not the last move: the button goes up where the finger left (Codex 8/14).
+        val lift = mapper(InputHost.DESKTOP)
+        lift.onTouch(TouchKind.DOWN, 0, listOf(finger(0, 100f, 100f)))
+        lift.onTouch(TouchKind.MOVE, 40, listOf(finger(0, 150f, 110f)))
+        lift.onTouch(TouchKind.UP, 60, listOf(finger(0, 170f, 120f)))
+        assertEquals(listOf(pointer(1700, 1200), button("left", false)), lift.events().takeLast(2))
 
         // Two fingers moving together roll the wheel; swiping up scrolls down, swiping left scrolls right.
         val scroll = mapper(InputHost.DESKTOP)

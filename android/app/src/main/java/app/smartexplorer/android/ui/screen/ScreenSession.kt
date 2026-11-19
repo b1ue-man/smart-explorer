@@ -315,6 +315,8 @@ class ScreenSession(private val target: ScreenTarget, private val backend: Scree
     private var visibilityFacts: ScreenVisibilityFacts? = null
     private var visibilityReport: ScreenVisibilityReport? = null
     private var visibilitySentModern = false
+    /** The next visibility answer belongs to a report that kept the shown picture and input. */
+    private var keepOnAck = false
     private var minFrame: Long? = null
     private var latestComplete: Long? = null
     /** A frame drawn before the host's `VISIBILITY_ACK` named the first frame input may follow; the ack decides on it. */
@@ -485,6 +487,7 @@ class ScreenSession(private val target: ScreenTarget, private val backend: Scree
             earlyPresented = null
             lastPresented = null
             rejectedGop = null
+            keepOnAck = false
             visibilitySentModern = false
             mutable.value = old.copy(inputReady = false, ackedMinFrame = null, held = null, blocked = null)
         }
@@ -513,7 +516,11 @@ class ScreenSession(private val target: ScreenTarget, private val backend: Scree
             mutable.value = old.copy(inputReady = false)
         }
         mutable.update { it.apply(event) }
-        if (event is ScreenViewEvent.VisibilityAck && event.geometryGeneration == visibilityReport?.geometryGeneration) {
+        if (event is ScreenViewEvent.VisibilityAck && event.geometryGeneration == visibilityReport?.geometryGeneration &&
+            keepOnAck) {
+            // The answer to a report that kept the picture: floor and input stay (`publishVisibility`).
+            keepOnAck = false
+        } else if (event is ScreenViewEvent.VisibilityAck && event.geometryGeneration == visibilityReport?.geometryGeneration) {
             minFrame = event.minFrameId
             // A frame drawn before this ack arrived counts once the ack names it (a static screen sends no other one).
             val early = earlyPresented
@@ -536,11 +543,25 @@ class ScreenSession(private val target: ScreenTarget, private val backend: Scree
     /** Release events are queued before this report by the view on hiding. */
     internal fun publishVisibility(facts: ScreenVisibilityFacts) = synchronized(lock) {
         if (visibilityFacts == facts) return@synchronized
+        val before = visibilityFacts
         visibilityFacts = facts
         val rects = facts.rects()
         val state = if (!facts.visible) "hidden" else if (facts.sourceWidth <= 0 || facts.sourceHeight <= 0) "unknown" else if (rects.isEmpty()) "hidden" else "visible"
-        val report = ScreenVisibilityReport((visibilityReport?.geometryGeneration ?: 0L)+1L, state, false, rects)
+        val previous = visibilityReport
+        val report = ScreenVisibilityReport((previous?.geometryGeneration ?: 0L)+1L, state, false, rects)
         visibilityReport = report
+        // A view that stays visible on the same source changed only its visible area (a pan, a zoom): the host keeps
+        // encoder and held keys for it, so the shown picture, its receipts and the input stay here too, as on the
+        // desktop (`ResumeGate::renumber`); only the new rectangles go out (Codex 8/6). An acknowledged floor stays.
+        if (previous?.state == "visible" && state == "visible" && before?.sourceKey == facts.sourceKey) {
+            keepOnAck = minFrame != null
+            if (mutable.value.frameContract) {
+                visibilitySentModern = true
+                inputs.trySend(ScreenSessionCommand.Visibility(report))
+            }
+            return@synchronized
+        }
+        keepOnAck = false
         displayEpoch++
         minFrame = null
         latestComplete = null

@@ -60,23 +60,9 @@ pub(super) fn check_target(out: &Path, force: bool) -> Result<(), String> {
 /// process wrote since `check_target` (Codex 7/11: two snapshots to one file
 /// both reported success, one picture was lost).
 pub(super) fn write_png(out: &Path, png: &[u8], force: bool) -> Result<(), String> {
-    use std::io::Write as _;
     check_target(out, force)?;
     let failed = |error: std::io::Error| format!("{}: {error}", out.display());
-    let mut temporary = out.as_os_str().to_owned();
-    temporary.push(format!(".se-tmp-{}", std::process::id()));
-    let temporary = PathBuf::from(temporary);
-    let exclusive = |path: &Path| {
-        std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(path)
-            .and_then(|mut file| file.write_all(png).and_then(|()| file.sync_all()))
-    };
-    if let Err(error) = exclusive(&temporary) {
-        let _ = std::fs::remove_file(&temporary);
-        return Err(failed(error));
-    }
+    let temporary = create_temporary(out, png).map_err(failed)?;
     let published = if force {
         std::fs::rename(&temporary, out)
     } else {
@@ -85,9 +71,10 @@ pub(super) fn write_png(out: &Path, png: &[u8], force: bool) -> Result<(), Strin
         match std::fs::hard_link(&temporary, out) {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Err(error),
-            Err(_) => exclusive(out),
+            Err(_) => write_new(out, png),
         }
     };
+    // Only this call's own temporary file is removed (it created it).
     let _ = std::fs::remove_file(&temporary);
     published.map_err(|error| match error.kind() {
         std::io::ErrorKind::AlreadyExists => {
@@ -95,6 +82,41 @@ pub(super) fn write_png(out: &Path, png: &[u8], force: bool) -> Result<(), Strin
         }
         _ => failed(error),
     })
+}
+
+/// Writes `png` into a file at `path` that this call creates; a file it
+/// created but could not fill is removed again, a file that existed is
+/// never touched (Codex 8/1, 8/13: a failed write left a broken PNG under
+/// the final name, a name clash removed another file).
+fn write_new(path: &Path, png: &[u8]) -> std::io::Result<()> {
+    use std::io::Write as _;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)?;
+    let written = file.write_all(png).and_then(|()| file.sync_all());
+    if written.is_err() {
+        drop(file);
+        let _ = std::fs::remove_file(path);
+    }
+    written
+}
+
+/// A temporary file next to `out` with `png` in it, under a name no other
+/// file has: a clash takes the next name instead of reusing the file.
+fn create_temporary(out: &Path, png: &[u8]) -> std::io::Result<PathBuf> {
+    let mut last = None;
+    for attempt in 0..16u32 {
+        let mut name = out.as_os_str().to_owned();
+        name.push(format!(".se-tmp-{}-{attempt}", std::process::id()));
+        let name = PathBuf::from(name);
+        match write_new(&name, png) {
+            Ok(()) => return Ok(name),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => last = Some(error),
+            Err(error) => return Err(error),
+        }
+    }
+    Err(last.unwrap_or_else(|| std::io::Error::from(std::io::ErrorKind::AlreadyExists)))
 }
 
 /// The JSON of a saved still picture.

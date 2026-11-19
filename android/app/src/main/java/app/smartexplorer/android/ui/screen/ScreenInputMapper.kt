@@ -71,7 +71,12 @@ class ScreenInputMapper(
                 if (mode == Mode.PENDING && kind == TouchKind.UP) {
                     click(if (timeMs - downTime >= config.longPressMs) "right" else "left", start)
                 } else if (mode == Mode.DRAG) {
-                    if (kind == TouchKind.UP) add(pointer(cur))
+                    // The drag ends where the finger left the glass (the UP carries it, Codex 8/14), not at the
+                    // last MOVE: the button goes up over the object under the lift point.
+                    if (kind == TouchKind.UP) {
+                        first?.let { cur = it.x to it.y }
+                        add(pointer(cur))
+                    }
                     button("left", false)
                 }
                 mode = Mode.IDLE
