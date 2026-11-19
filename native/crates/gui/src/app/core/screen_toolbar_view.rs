@@ -9,6 +9,11 @@ use super::{codec_rows, display_rows, wrap, ToolbarAction, ToolbarInput};
 pub(super) fn view_row(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Vec<ToolbarAction>) {
     let fit = input.prefs.fit;
     wrap::item(ui, "fit", |ui| {
+        // Both choices stay in one row (K5).
+        let pair = wrap::button_width(ui, "Einpassen")
+            + ui.spacing().item_spacing.x
+            + wrap::button_width(ui, "1:1");
+        wrap::reserve(ui, pair);
         if ui.selectable_label(fit == Fit::Fit, "Einpassen").clicked() && fit != Fit::Fit {
             out.push(ToolbarAction::Fit(Fit::Fit));
         }
@@ -42,7 +47,7 @@ pub(super) fn view_row(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Vec<To
         super::super::screen_present::latency_note(input.low_latency_changed, direct)
     {
         wrap::item(ui, "latency_note", |ui| {
-            ui.label(RichText::new(note).small());
+            wrap::note(ui, RichText::new(note).small());
         });
     }
     let mut stats = input.stats_on;

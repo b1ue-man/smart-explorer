@@ -8,6 +8,14 @@
 //! therefore asks for the width of its text (`fitted`), and a label with its
 //! list reserves both widths before either is placed (`reserve_pair`): egui
 //! knows each size before it places it, in the same pass.
+//!
+//! Fix 2026-11-19 (K5): an item that reaches past the right edge widens the
+//! row's `max_rect` (egui 0.29.1 `layout.rs` 50-53, `Region::
+//! expand_to_include_rect`), after which `available_size_before_wrap` and
+//! egui's own row break count to the widened edge, so every later item ran
+//! past the window. The bar's edges are therefore noted before its first
+//! item (`begin`) and every check here counts to them; lists and long texts
+//! never reach past them (`fitted` shortens, `note` wraps).
 use std::hash::Hash;
 
 use eframe::egui::{self, TextStyle, WidgetText};
@@ -22,6 +30,53 @@ const TEXT_SLACK: f32 = 8.0;
 /// bar keeps a row of its own).
 pub(super) fn breaks_before(width: Option<f32>, available: f32, at_row_start: bool) -> bool {
     !at_row_start && width.is_some_and(|width| width > available)
+}
+
+fn bounds_id() -> egui::Id {
+    egui::Id::new("screen_toolbar_bounds")
+}
+
+/// Notes the bar's left and right edge before its first item.
+pub(super) fn begin(ui: &egui::Ui) {
+    let rect = ui.max_rect();
+    let bounds = (rect.left(), rect.right());
+    ui.ctx()
+        .data_mut(|data| data.insert_temp(bounds_id(), bounds));
+}
+
+/// The bar's edges as noted by `begin` (else the row's own).
+fn bounds(ui: &egui::Ui) -> (f32, f32) {
+    ui.ctx()
+        .data(|data| data.get_temp::<(f32, f32)>(bounds_id()))
+        .unwrap_or_else(|| (ui.max_rect().left(), ui.max_rect().right()))
+}
+
+/// The rest of the current row up to the bar's right edge.
+fn rest(ui: &egui::Ui) -> f32 {
+    (bounds(ui).1 - ui.cursor().left()).max(0.0)
+}
+
+fn editing_id() -> egui::Id {
+    egui::Id::new("screen_toolbar_editing")
+}
+
+/// A text field of the bar (`response`) that has the keyboard focus keeps
+/// it for this pass (Gemini 10, fix 2026-11-19): the steering picture took
+/// the focus back in every frame, so digits typed into „Höchste Datenrate“
+/// or „Eigene Größe“ went to the host as keys.
+pub(super) fn note_editing(ui: &egui::Ui, response: &egui::Response) {
+    if response.has_focus() {
+        let pass = ui.ctx().cumulative_pass_nr();
+        ui.ctx()
+            .data_mut(|data| data.insert_temp(editing_id(), pass));
+    }
+}
+
+/// Whether a text field of the bar has the keyboard focus in this pass
+/// (the bar is drawn before the picture).
+pub fn toolbar_editing(ctx: &egui::Context) -> bool {
+    ctx.data(|data| data.get_temp::<u64>(editing_id()))
+        .is_some_and(|pass| pass == ctx.cumulative_pass_nr())
 }
 
 /// The width of `text` in `style`, without wrapping.
@@ -58,18 +113,31 @@ pub(super) fn fitted(
     text: impl Into<WidgetText>,
 ) -> egui::ComboBox {
     let text = text.into();
-    let width = list_width(ui, text.text());
-    // A list wider than the whole bar keeps the bar's width and shortens
-    // its text (egui `ComboBox::wrap_mode`), so it never runs past the edge.
-    let full = ui.max_rect().width();
-    let list = if width > full {
+    // Measured as drawn (a `RichText` may be italic or of another size).
+    let galley = text.clone().into_galley(
+        ui,
+        Some(egui::TextWrapMode::Extend),
+        f32::INFINITY,
+        TextStyle::Button,
+    );
+    let spacing = ui.spacing();
+    let width = galley.size().x
+        + TEXT_SLACK
+        + spacing.icon_width
+        + spacing.icon_spacing
+        + 2.0 * spacing.button_padding.x;
+    let (left, right) = bounds(ui);
+    reserve(ui, width.min(right - left));
+    // What still does not fit (wider than the bar, or the rest right of its
+    // label) keeps that width and shortens its text (egui
+    // `ComboBox::wrap_mode`), so it never runs past the edge.
+    let room = rest(ui);
+    let list = if width > room {
         list.wrap_mode(egui::TextWrapMode::Truncate)
     } else {
         list
     };
-    let width = width.min(full);
-    reserve(ui, width);
-    list.width(width).selected_text(text)
+    list.width(width.min(room)).selected_text(text)
 }
 
 /// Starts a new row unless `width` fits the rest of the current one. The
@@ -77,11 +145,30 @@ pub(super) fn fitted(
 /// 996): in a wrapping layout `available_width` is the width of a whole row
 /// (`layout.rs` 439-445), so the check never broke a row (fix 2026-11-19).
 pub(super) fn reserve(ui: &mut egui::Ui, width: f32) {
-    let at_row_start = ui.cursor().left() <= ui.max_rect().left() + ROW_START_SLACK;
-    let rest = ui.available_size_before_wrap().x;
-    if breaks_before(Some(width), rest, at_row_start) {
+    let at_row_start = ui.cursor().left() <= bounds(ui).0 + ROW_START_SLACK;
+    if breaks_before(Some(width), rest(ui), at_row_start) {
         ui.end_row();
     }
+}
+
+/// A text of the bar (a state, a warning) that may be longer than a row: it
+/// starts a new row when it does not fit the rest of this one and wraps
+/// inside the bar instead of running past its edge (fix 2026-11-19).
+pub(super) fn note(ui: &mut egui::Ui, text: impl Into<WidgetText>) {
+    let text = text.into();
+    let width = text
+        .clone()
+        .into_galley(
+            ui,
+            Some(egui::TextWrapMode::Extend),
+            f32::INFINITY,
+            TextStyle::Body,
+        )
+        .size()
+        .x;
+    let (left, right) = bounds(ui);
+    reserve(ui, width.min(right - left));
+    ui.add(egui::Label::new(text).wrap());
 }
 
 /// The outer width of a button showing `text`. A button inside a child `Ui`

@@ -400,7 +400,7 @@ fn control_items(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Vec<ToolbarA
         out.push(ToolbarAction::Control(on));
     }
     if let Some(name) = input.controlled_by {
-        ui.label(RichText::new(format!("Gesteuert von {name}")).small());
+        wrap::note(ui, RichText::new(format!("Gesteuert von {name}")).small());
     }
     let blocked: Option<ControlBlock> = input.info.and_then(|info| info.blocked);
     // E2: input the host holds back is named while it waits; the block it
@@ -408,10 +408,12 @@ fn control_items(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Vec<ToolbarA
     let held = input.info.and_then(|info| info.held);
     match (held, blocked, input.control_on) {
         (Some(held), _, true) => {
-            ui.colored_label(theme::warning(ui), super::screen_texts::held_text(held));
+            let text = super::screen_texts::held_text(held);
+            wrap::note(ui, RichText::new(text).color(theme::warning(ui)));
         }
         (None, Some(block), true) => {
-            ui.colored_label(theme::warning(ui), blocked_text(block));
+            let text = blocked_text(block);
+            wrap::note(ui, RichText::new(text).color(theme::warning(ui)));
         }
         _ => {}
     }
@@ -468,6 +470,7 @@ mod view_rows;
 #[path = "screen_toolbar_wrap.rs"]
 mod wrap;
 pub use display_rows::{apply_virtual_display, send_live};
+pub use wrap::toolbar_editing;
 
 /// Draws the toolbar and returns what the user chose. P9 (plan 2026-11-17):
 /// every item keeps its whole width, so one that does not fit the rest of a
@@ -478,6 +481,7 @@ pub fn show(ui: &mut egui::Ui, input: &ToolbarInput) -> Vec<ToolbarAction> {
     let mut out = Vec::new();
     ui.horizontal_wrapped(|ui| {
         ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+        wrap::begin(ui);
         device_row(ui, input, &mut out);
         source_row(ui, input, &mut out);
         control_row(ui, input, &mut out);

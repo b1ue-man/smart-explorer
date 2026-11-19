@@ -77,7 +77,11 @@ pub(super) fn hint(
     let wrap = (right - area.left() - 28.0).max(80.0);
     let colour = Color32::from_gray(230);
     let galley = painter.layout(text.to_owned(), FontId::proportional(14.0), colour, wrap);
-    let top_left = area.left_top() + egui::vec2(8.0, 8.0);
+    // Below the full-screen toolbar while it lies over the picture.
+    let ctx = painter.ctx();
+    let top = super::screen_viewer_app::toolbar_overlay_bottom(ctx)
+        .map_or(area.top(), |b| b.max(area.top()));
+    let top_left = egui::pos2(area.left() + 8.0, top + 8.0);
     let field = egui::Rect::from_min_size(top_left, galley.size() + egui::vec2(12.0, 8.0));
     painter.rect_filled(field, 4.0, Color32::from_black_alpha(170));
     painter.galley(top_left + egui::vec2(6.0, 4.0), galley, colour);
@@ -98,18 +102,38 @@ pub(super) fn owned_events(
     use egui::{Event, TouchPhase};
     let popup = ui.memory(|memory| memory.any_popup_open());
     let pointer = !popup && (response.contains_pointer() || response.dragged());
-    events
+    // Keys and text only while the picture has the keyboard focus (not a
+    // text field of the toolbar, Gemini 10).
+    let keys = !popup && ui.memory(|memory| memory.has_focus(response.id));
+    // The wheel scrolls where the pointer is, also before it moved since the
+    // mapper began (Gemini 12: the mapper dropped the wheel until a move).
+    let wheel = events
         .iter()
-        .filter(|event| match event {
-            Event::PointerButton { pressed, .. } => pointer || !pressed,
-            Event::PointerMoved(_) | Event::MouseWheel { .. } => pointer,
-            Event::Touch { phase, .. } => {
-                pointer || matches!(phase, TouchPhase::End | TouchPhase::Cancel)
-            }
-            Event::Key { pressed, .. } => !popup || !pressed,
-            Event::Text(_) | Event::Ime(_) | Event::Copy | Event::Cut | Event::Paste(_) => !popup,
-            _ => true,
-        })
-        .cloned()
+        .any(|event| matches!(event, Event::MouseWheel { .. }));
+    let moved = events
+        .iter()
+        .any(|event| matches!(event, Event::PointerMoved(_)));
+    let hover = ui.input(|input| input.pointer.hover_pos());
+    let lead = hover
+        .filter(|_| pointer && wheel && !moved)
+        .map(Event::PointerMoved);
+    lead.into_iter()
+        .chain(
+            events
+                .iter()
+                .filter(|event| match event {
+                    Event::PointerButton { pressed, .. } => pointer || !pressed,
+                    Event::PointerMoved(_) | Event::MouseWheel { .. } => pointer,
+                    Event::Touch { phase, .. } => {
+                        pointer || matches!(phase, TouchPhase::End | TouchPhase::Cancel)
+                    }
+                    Event::Key { pressed, .. } => keys || !pressed,
+                    Event::Text(_) | Event::Ime(_) | Event::Copy | Event::Cut | Event::Paste(_) => {
+                        keys
+                    }
+                    _ => true,
+                })
+                .cloned(),
+        )
         .collect()
 }

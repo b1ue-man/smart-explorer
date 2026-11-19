@@ -85,6 +85,7 @@ pub(super) fn display_rows(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Ve
             .hint_text("2560x1440")
             .desired_width(90.0);
         let edited = ui.add(field);
+        super::wrap::note_editing(ui, &edited);
         let parsed = parse_size(text);
         let entered = edited.lost_focus() && ui.input(|state| state.key_pressed(egui::Key::Enter));
         let applied = ui
@@ -102,7 +103,7 @@ pub(super) fn display_rows(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Ve
         out.push(ToolbarAction::VirtualDisplay(chosen));
     }
     if let Some(line) = state_line(input) {
-        ui.label(RichText::new(line).small());
+        super::wrap::note(ui, RichText::new(line).small());
     }
 }
 

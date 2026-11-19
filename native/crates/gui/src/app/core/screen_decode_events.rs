@@ -4,12 +4,19 @@ use super::*;
 /// A „Höchste Datenrate“ the host cannot take is named in the status, not
 /// only beside the toolbar's field or in the statistics (fix 2026-11-19):
 /// the session runs without that ceiling.
-fn ceiling_notice(state: crate::daemon::RateCeilingState) -> Option<String> {
-    (state == crate::daemon::RateCeilingState::UnsupportedByHost).then(|| {
-        "Höchste Datenrate: vom Gerät nicht unterstützt (ältere Version); \
-         das Bild läuft ohne diese Grenze."
-            .into()
-    })
+const CEILING_UNSUPPORTED: &str =
+    "Höchste Datenrate: vom Gerät nicht unterstützt (ältere Version); das Bild läuft ohne diese Grenze.";
+
+/// Sets or clears that text as the state says; another notice stays.
+fn ceiling_notice(
+    info: &mut super::super::screen_session::SessionInfo,
+    state: crate::daemon::RateCeilingState,
+) {
+    if state == crate::daemon::RateCeilingState::UnsupportedByHost {
+        info.notice = Some(CEILING_UNSUPPORTED.into());
+    } else if info.notice.as_deref() == Some(CEILING_UNSUPPORTED) {
+        info.notice = None;
+    }
 }
 
 impl DecodeState {
@@ -84,9 +91,7 @@ impl DecodeState {
                     info.hello = Some(hello);
                     info.path = Some(path);
                     info.rate_ceiling = rate_ceiling;
-                    if let Some(text) = ceiling_notice(rate_ceiling) {
-                        info.notice = Some(text);
-                    }
+                    ceiling_notice(info, rate_ceiling);
                     info.accepted += 1;
                     if matches!(
                         info.state,
@@ -174,9 +179,7 @@ impl DecodeState {
             // statistics say whether the host took it.
             StreamEvent::RateCeiling(state) => self.shared.update(|info| {
                 info.rate_ceiling = state;
-                if let Some(text) = ceiling_notice(state) {
-                    info.notice = Some(text);
-                }
+                ceiling_notice(info, state);
             }),
             StreamEvent::End(end) => {
                 self.gop = None;

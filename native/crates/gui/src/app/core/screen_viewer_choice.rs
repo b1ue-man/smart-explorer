@@ -16,7 +16,7 @@ pub(super) fn toolbar(ctx: &egui::Context, fullscreen: bool, add: impl FnOnce(&m
         return;
     }
     let width = ctx.screen_rect().width();
-    egui::Area::new(egui::Id::new("screen_toolbar_overlay"))
+    let shown = egui::Area::new(egui::Id::new("screen_toolbar_overlay"))
         .order(egui::Order::Foreground)
         .fixed_pos(egui::Pos2::ZERO)
         .show(ctx, |ui| {
@@ -27,6 +27,18 @@ pub(super) fn toolbar(ctx: &egui::Context, fullscreen: bool, add: impl FnOnce(&m
                 add(ui);
             });
         });
+    // The hint over the picture goes below it (`toolbar_overlay_bottom`).
+    let bottom = (ctx.cumulative_pass_nr(), shown.response.rect.bottom());
+    ctx.data_mut(|data| data.insert_temp(egui::Id::new(OVERLAY_BOTTOM), bottom));
+}
+
+const OVERLAY_BOTTOM: &str = "screen_toolbar_overlay_bottom";
+
+/// Where the full-screen toolbar drawn in this pass ends (points), if any.
+pub fn toolbar_overlay_bottom(ctx: &egui::Context) -> Option<f32> {
+    ctx.data(|data| data.get_temp::<(u64, f32)>(egui::Id::new(OVERLAY_BOTTOM)))
+        .filter(|(pass, _)| *pass == ctx.cumulative_pass_nr())
+        .map(|(_, bottom)| bottom)
 }
 
 impl ScreenViewerApp {
@@ -39,8 +51,14 @@ impl ScreenViewerApp {
         // A codec given up under „Automatisch“ is out of its session only
         // (fix of 2026-11-18); the new choice takes the session's give-ups
         // back (`ViewerSession::codec_chosen`).
+        // A „Dekodierer“ or „Dekodier-Bibliothek“ asks the same of a session
+        // that began with the tiles (Gemini 8: `SET_DECODERS` cannot take it
+        // to a video codec, so the choice stayed without effect).
         let named = match action {
             ToolbarAction::Codec(codec) => Some(*codec),
+            ToolbarAction::Decoder(_) | ToolbarAction::DecoderLibrary(_) => {
+                Some(self.common.prefs.codec_setting())
+            }
             _ => None,
         };
         let again = screen_toolbar_ui::apply_codec(action, &mut self.common.prefs);

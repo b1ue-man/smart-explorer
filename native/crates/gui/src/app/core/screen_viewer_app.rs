@@ -48,6 +48,7 @@ pub use super::screen_present::wgpu_configuration;
 
 #[path = "screen_viewer_choice.rs"]
 mod choice;
+pub(super) use choice::toolbar_overlay_bottom;
 
 pub struct ScreenViewerApp {
     common: Common,
@@ -193,14 +194,13 @@ impl ScreenViewerApp {
                 .as_ref()
                 .is_some_and(|session| !session.input_ready()))
         .then_some("Warte auf ein vollständiges aktuelles Bild …");
-        // The status goes over the picture too (fix 2026-11-19): as a panel
-        // each change of it resized the picture area (a visibility report,
-        // maybe a new size). An ended or refused session keeps the panel.
+        // The status goes over the picture, in full screen too (fix
+        // 2026-11-19): as a panel each change resized the picture area. An
+        // ended or refused session keeps the panel.
         let over = view.is_over();
-        let status_bar = !self.fullscreen || self.toolbar_open;
         let hint = match status.is_empty() {
             true => waiting,
-            false => (status_bar && !over).then_some(status.as_str()),
+            false => (!over).then_some(status.as_str()),
         };
         let name = view.device_name(common);
         let denied = view

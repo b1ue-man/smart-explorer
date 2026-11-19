@@ -303,7 +303,9 @@ impl ViewWidget {
         if let Some(size) = size.filter(|size| size.width > 0 && size.height > 0) {
             if params.fit == Fit::Actual {
                 let dest = Vec2::new(size.width as f32 / ppp, size.height as f32 / ppp);
+                // Not under a toolbar or menu lying over the picture (Gemini 12).
                 let hover = ui.input(|input| input.pointer.hover_pos());
+                let hover = hover.filter(|_| response.contains_pointer() || response.dragged());
                 let dt = ui.input(|input| input.stable_dt);
                 let pan = edge_pan(self.pan, area, dest, hover, dt);
                 if pan != self.pan {
@@ -336,11 +338,17 @@ impl ViewWidget {
                 painter.rect_filled(dest, 0.0, Color32::from_black_alpha(128));
             }
             shown = rendered.then_some(Geometry { rect: dest, size });
-        } else if !params.status.is_empty() {
+        }
+        // Nothing drawn (no picture yet, or it was revoked after a decode
+        // error): the status, else the hint, names why (fix 2026-11-19).
+        let reason = Some(params.status)
+            .filter(|s| !s.is_empty())
+            .or(params.hint);
+        if let Some(text) = reason.filter(|_| shown.is_none()) {
             painter.text(
                 area.center(),
                 Align2::CENTER_CENTER,
-                params.status,
+                text,
                 FontId::proportional(18.0),
                 Color32::from_gray(210),
             );
@@ -436,8 +444,11 @@ impl ViewWidget {
         }
         let mapper = self.mapper.get_or_insert_with(|| InputMapper::new(hello));
         // While the control is on every key belongs to the host, so the
-        // picture keeps the keyboard focus (a menu that is open keeps it).
-        if !ui.memory(|memory| memory.any_popup_open()) {
+        // picture keeps the keyboard focus (a menu that is open keeps it, a
+        // text field of the toolbar that is being edited too).
+        let editing = super::screen_toolbar_ui::toolbar_editing(ui.ctx());
+        let clicked = response.clicked() || response.drag_started();
+        if clicked || (!editing && !ui.memory(|memory| memory.any_popup_open())) {
             response.request_focus();
         }
         ui.memory_mut(|memory| {

@@ -50,6 +50,13 @@ impl VisibilityTracker {
         geometry: Option<&Geometry>,
         ppp: f32,
     ) -> Option<ViewerVisibility> {
+        // Nothing to say before the picture's size is known, unless the
+        // window is hidden (Gemini 3, fix 2026-11-19): the first report was
+        // an empty `Unknown`, followed at the first picture by `Visible`, and
+        // every report costs the host a new reference.
+        if geometry.is_none() && !window.hidden() {
+            return None;
+        }
         let mut rects = Vec::new();
         let mut state = VisibilityState::Unknown;
         if window.hidden() {

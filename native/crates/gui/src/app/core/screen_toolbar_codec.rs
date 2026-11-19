@@ -43,10 +43,9 @@ pub(super) fn save_error_row(ui: &mut egui::Ui) {
         .unwrap_or_else(PoisonError::into_inner)
         .clone();
     if let Some(error) = error {
-        ui.colored_label(
-            crate::app::theme::warning(ui),
-            format!("Einstellung nur für diese Sitzung, nicht gespeichert: {error}"),
-        );
+        let text = format!("Einstellung nur für diese Sitzung, nicht gespeichert: {error}");
+        let warning = crate::app::theme::warning(ui);
+        super::wrap::note(ui, RichText::new(text).color(warning));
     }
 }
 
@@ -239,11 +238,14 @@ pub fn apply_codec(
     let set = super::super::screen_prefs::set_codec_choice;
     let again = match action {
         ToolbarAction::Codec(codec) => {
-            let before = prefs.codec_setting().preference();
+            // „Verlustfrei“ offers the tiles alone (`chosen_decoders`), so it
+            // and „Automatisch“ differ in the offers too (Gemini 8).
+            let offers = |setting: CodecSetting| (setting.preference(), setting.lossless());
+            let before = offers(prefs.codec_setting());
             note_save(set(Some(*codec), None));
             prefs.codec = Some(*codec);
             prefs.lossless = codec.lossless();
-            before != codec.preference()
+            before != offers(*codec)
         }
         ToolbarAction::Decoder(decoder) => {
             note_save(set(None, Some(*decoder)));
@@ -296,11 +298,18 @@ pub(super) fn max_rate_row(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Ve
     if limited {
         // One percent of the value per dragged pixel.
         let speed = mbit / 100.0;
+        // Typed values count once the field is left (Gemini 10: every key
+        // stroke went out as `RATE_CEILING`, a half-typed „0“ as the
+        // minimum); a German comma is read as the decimal point.
         let field = egui::DragValue::new(&mut mbit)
             .range(MIN_BITRATE_BPS as f64 / 1e6..=f64::MAX)
             .speed(speed)
-            .suffix(" Mbit/s");
-        changed |= ui.add(field).changed();
+            .suffix(" Mbit/s")
+            .update_while_editing(false)
+            .custom_parser(|text| text.trim().replace(',', ".").parse::<f64>().ok());
+        let edited = ui.add(field);
+        super::wrap::note_editing(ui, &edited);
+        changed |= edited.changed();
     }
     // P9: what the session does with the ceiling.
     if limited
