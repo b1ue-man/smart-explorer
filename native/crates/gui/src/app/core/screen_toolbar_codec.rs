@@ -16,6 +16,7 @@
 //! running session applies (`screen_toolbar_state.rs`): „Codec:
 //! Automatisch (AV1)“, „Dekodierer: Hardware (wird angewendet …)“ until the
 //! session answered, „Codec: H.264 → läuft: AV1“ when it runs otherwise.
+use std::sync::{Mutex, PoisonError};
 use std::time::Instant;
 
 use eframe::egui::{self, RichText, WidgetText};
@@ -23,6 +24,31 @@ use eframe::egui::{self, RichText, WidgetText};
 use super::super::screen_prefs::{CodecSetting, DecoderPreference};
 use super::applied::{self, Applied, PendingChoices, SessionFacts, Setting};
 use super::{ToolbarAction, ToolbarInput};
+
+/// The last failed save of a toolbar choice (review 2026-11-19: the errors
+/// were dropped, a choice looked stored and was gone after a restart).
+static SAVE_ERROR: Mutex<Option<String>> = Mutex::new(None);
+
+/// Keeps the outcome of storing a choice: an error stays shown in the
+/// toolbar until a later save succeeds.
+fn note_save(result: std::io::Result<()>) {
+    let mut slot = SAVE_ERROR.lock().unwrap_or_else(PoisonError::into_inner);
+    *slot = result.err().map(|error| error.to_string());
+}
+
+/// „Einstellung nicht gespeichert“ with the reason, while the last save failed.
+pub(super) fn save_error_row(ui: &mut egui::Ui) {
+    let error = SAVE_ERROR
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    if let Some(error) = error {
+        ui.colored_label(
+            crate::app::theme::warning(ui),
+            format!("Einstellung nur für diese Sitzung, nicht gespeichert: {error}"),
+        );
+    }
+}
 
 /// The facts of the running session the lists compare with.
 fn session_facts(ui: &egui::Ui, input: &ToolbarInput) -> SessionFacts {
@@ -214,13 +240,13 @@ pub fn apply_codec(
     let again = match action {
         ToolbarAction::Codec(codec) => {
             let before = prefs.codec_setting().preference();
-            let _ = set(Some(*codec), None);
+            note_save(set(Some(*codec), None));
             prefs.codec = Some(*codec);
             prefs.lossless = codec.lossless();
             before != codec.preference()
         }
         ToolbarAction::Decoder(decoder) => {
-            let _ = set(None, Some(*decoder));
+            note_save(set(None, Some(*decoder)));
             prefs.decoder = Some(*decoder);
             true
         }
@@ -230,18 +256,26 @@ pub fn apply_codec(
         // another display takes effect at the next picture
         // (`screen_direct.rs`), also after a presenter that failed.
         ToolbarAction::DecoderLibrary(library) => {
-            let _ = super::super::screen_prefs::set_output_choice(Some(*library), None);
+            note_save(super::super::screen_prefs::set_output_choice(
+                Some(*library),
+                None,
+            ));
             prefs.decoder_library = Some(*library);
             true
         }
         ToolbarAction::Display(display) => {
-            let _ = super::super::screen_prefs::set_output_choice(None, Some(*display));
+            note_save(super::super::screen_prefs::set_output_choice(
+                None,
+                Some(*display),
+            ));
             prefs.display = Some(*display);
             false
         }
         _ => return false,
     };
-    let _ = prefs.save();
+    if let Err(error) = prefs.save() {
+        note_save(Err(error));
+    }
     again
 }
 
@@ -281,7 +315,7 @@ pub(super) fn max_rate_row(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Ve
     }
     if changed {
         let rate = limited.then(|| (mbit * 1e6).round().max(MIN_BITRATE_BPS as f64) as u64);
-        let _ = super::super::screen_prefs::set_max_rate_bps(rate);
+        note_save(super::super::screen_prefs::set_max_rate_bps(rate));
         out.push(ToolbarAction::MaxRate(rate));
     }
 }

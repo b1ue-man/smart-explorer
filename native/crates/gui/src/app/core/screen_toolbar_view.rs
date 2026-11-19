@@ -61,4 +61,5 @@ pub(super) fn view_row(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Vec<To
     });
     // „Monitor“ and „Auflösung“ of the host (plan 2026-11-17 P5).
     display_rows::display_rows(ui, input, out);
+    codec_rows::save_error_row(ui);
 }
