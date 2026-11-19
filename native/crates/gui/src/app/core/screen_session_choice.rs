@@ -105,6 +105,27 @@ pub fn hardware_bars_tiles(codec: CodecSetting) -> bool {
     (hardware || named) && codec != CodecSetting::Lossless
 }
 
+/// The reason a session is not opened (Codex 6/13): a chosen
+/// „Dekodier-Bibliothek“ offers no video decoder while the codec is not
+/// „Verlustfrei“, so only the tiles (software, neither library) would be
+/// left and the host would take them in silence. „Automatisch“ opens as
+/// before; „Dekodierer: Hardware“ is refused by the daemon client
+/// (`StreamRequest::unavailable_choice`, no tiles offered there).
+pub(super) fn library_refusal(request: &crate::daemon::StreamRequest) -> Option<String> {
+    use crate::screen::core::decoder_library::DecoderLibrary;
+    let library = super::screen_prefs::decoder_library_choice();
+    let codec = request.codec.unwrap_or_default();
+    let video = request.decoders.iter().any(|offer| offer.codec.is_video());
+    if library == DecoderLibrary::Automatic || codec == CodecSetting::Lossless || video {
+        return None;
+    }
+    Some(format!(
+        "Dekodier-Bibliothek „{}“ bietet keinen Video-Dekodierer; es wird nicht auf \
+         Kacheln (Software) ausgewichen (nur „Automatisch“ weicht aus).",
+        library.label()
+    ))
+}
+
 /// Whether the viewer may switch the session to the tiles itself: under
 /// „Automatisch“, and under „Verlustfrei“, which chose them.
 pub fn tiles_allowed(codec: CodecSetting) -> bool {

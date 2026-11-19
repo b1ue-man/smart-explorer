@@ -328,7 +328,12 @@ impl ViewerSession {
                 .and_then(crate::screen::core::family_viewer::FamilyViewer::for_source)
         });
         let mode = request.mode;
-        match target.to_peer() {
+        // A chosen library without a video decoder opens nothing (Codex 6/13).
+        let refused = choice::library_refusal(&request);
+        match target.to_peer().and_then(|peer| match refused {
+            Some(text) => Err(text),
+            None => Ok(peer),
+        }) {
             Ok(peer) => {
                 let sender = outbox.clone();
                 {
