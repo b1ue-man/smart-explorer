@@ -233,8 +233,8 @@ impl Pipeline {
         self.rate.update_control(now_us());
         if let Some((control, ceiling)) = self.rate.control_over_ceiling() {
             self.note_encoder(format!(
-                "{}the control stream's {control} bit/s are above the highest data rate \
-                 {ceiling} bit/s",
+                "{}the control stream's {control} bit/s leave the pictures too little of the \
+                 highest data rate {ceiling} bit/s",
                 crate::screen::core::codec_reason_text::ENCODER_NOTICE
             ));
         }

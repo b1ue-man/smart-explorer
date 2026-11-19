@@ -43,8 +43,10 @@ impl PipelineActor {
             // starts anew on the new path with a key frame of the running
             // encoder (`reset_stream`), which keeps the reference input
             // binds to, as a key frame does (`request_keyframe`).
+            // Round 6 L5: as `request_keyframe`, without `interrupt()`,
+            // which blocked first and so never moved the reference along.
             let before = self.work.reference();
-            self.interrupt();
+            self.work.interrupt();
             if !self.blocked && self.work.reference() == before + 1 {
                 self.facts.reference = self.work.reference();
             }
@@ -115,6 +117,21 @@ impl PipelineActor {
         self.pending.confirm = true;
         self.poll();
         Ok(())
+    }
+
+    /// The floor of a visibility acknowledgement: the next picture's id.
+    /// The pictures received below it are no longer waited for (round 6
+    /// L4: the viewer never shows them, and the pacer held the next one).
+    pub fn visibility_floor(&mut self) -> u64 {
+        let floor = self.next_frame_id();
+        match self.pipeline.as_mut() {
+            Some(p) => p.pacer.forget_received_below(floor),
+            None => {
+                let known = self.pending.forget_below.unwrap_or(0);
+                self.pending.forget_below = Some(known.max(floor));
+            }
+        }
+        floor
     }
 
     /// Every `PRESENTED` of the viewer reaches the pacer (review 2026-11-19,

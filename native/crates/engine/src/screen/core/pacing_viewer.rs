@@ -47,6 +47,18 @@ impl Pacer {
         self.present_credit = true;
     }
 
+    /// A visibility acknowledgement named `floor`: the viewer shows no
+    /// picture below it (round 6 L4), so those are not waited for.
+    pub fn forget_received_below(&mut self, floor: u64) {
+        while self
+            .received
+            .front()
+            .is_some_and(|(frame, _)| *frame < floor)
+        {
+            self.received.pop_front();
+        }
+    }
+
     /// Whether the next picture waits for the viewer: it shows pictures
     /// (a `PRESENTED` within `PRESENTED_FRESH_US`), the oldest picture it
     /// received and did not show came more than `VIEWER_LAG_US` ago, and no

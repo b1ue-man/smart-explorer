@@ -10,6 +10,15 @@
 //! debt; without a user ceiling a video stream is not held.
 use super::RateController;
 
+/// The least of a user ceiling `ceiling` the pictures need (round 6 L2):
+/// below it no picture is made (`stream_admit`), so a picture is never
+/// paced at a few bits a second and its job never hangs for hours. Half the
+/// ceiling at most, so a low ceiling with steady status traffic still shows
+/// pictures; never above the floor of the target.
+pub fn picture_floor_bps(ceiling: u64) -> u64 {
+    super::MIN_BITRATE_BPS.min(ceiling / 2).max(1)
+}
+
 impl RateController {
     /// The control stream wrote `bytes` at `now_us` (`STATE`, `STATS`, the
     /// pointer, window lists; review 2026-11-19): they count against the
@@ -26,16 +35,22 @@ impl RateController {
     pub fn on_audio_total(&mut self, now_us: u64, total: u64) -> u64 {
         let fresh = total.saturating_sub(self.audio_seen);
         self.audio_seen = total;
-        if fresh != 0 {
-            self.on_control_bytes(now_us, fresh);
+        // Round 6 L3: a rate over the time between two readings, not a block
+        // of a second in the control window, which held two blocks at its edge.
+        if let Some(at) = self.audio_at {
+            let elapsed = now_us.saturating_sub(at).max(1);
+            let bits = u128::from(fresh) * 8 * 1_000_000 / u128::from(elapsed);
+            self.audio_bps = u64::try_from(bits).unwrap_or(u64::MAX);
         }
+        self.audio_at = Some(now_us);
+        self.update_control(now_us);
         fresh
     }
 
     /// The control stream's rate of the last window at `now_us`.
     pub fn update_control(&mut self, now_us: u64) {
         self.control.prune(now_us);
-        self.control_bps = self.control.window_bps();
+        self.control_bps = self.control.window_bps().saturating_add(self.audio_bps);
     }
 
     pub fn control_bps(&self) -> u64 {
@@ -48,15 +63,26 @@ impl RateController {
     /// ceiling). The target E keeps its floor (`ceiling_bps`); the byte
     /// budget holds the rest. `None` without a user ceiling.
     pub fn user_picture_bps(&self) -> Option<u64> {
-        self.user_ceiling_bps
-            .map(|ceiling| ceiling.saturating_sub(self.control_bps).max(1))
+        self.user_ceiling_bps.map(|ceiling| {
+            ceiling
+                .saturating_sub(self.control_bps)
+                .max(picture_floor_bps(ceiling))
+        })
+    }
+
+    /// Whether control and sound leave the pictures less than their floor
+    /// of the user's ceiling (`picture_floor_bps`): no picture is made.
+    pub fn picture_share_short(&self) -> bool {
+        self.user_ceiling_bps.is_some_and(|ceiling| {
+            ceiling.saturating_sub(self.control_bps) < picture_floor_bps(ceiling)
+        })
     }
 
     /// `(control rate, ceiling)` once when the control stream alone came
     /// above the user's ceiling (a notice for the viewer), else `None`.
     pub fn control_over_ceiling(&mut self) -> Option<(u64, u64)> {
         let ceiling = self.user_ceiling_bps?;
-        let over = self.control_bps > ceiling;
+        let over = self.picture_share_short();
         let fresh = over && !self.control_over;
         self.control_over = over;
         fresh.then_some((self.control_bps, ceiling))
@@ -98,6 +124,9 @@ impl RateController {
     /// Whether a picture of the stream may be captured and encoded at
     /// `now_us`.
     pub fn stream_admit(&self, now_us: u64, video: bool) -> bool {
+        if self.picture_share_short() {
+            return false;
+        }
         self.stream_budget_bps(now_us, video)
             .is_none_or(|rate| self.tiles.admits(now_us, rate))
     }

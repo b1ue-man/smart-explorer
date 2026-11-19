@@ -131,7 +131,12 @@ impl Pipeline {
         // takes no more ends the snapshot, not the session's pictures.
         let pace = self.rate.stream_pace(started_us, video);
         let (rate, credit) = pace.unwrap_or((u64::MAX, 0));
-        gop.pace_next_frame(rate, credit, Some(self.work.ceiling_cell()));
+        gop.pace_next_frame(
+            rate,
+            credit,
+            Some(self.work.ceiling_cell()),
+            self.rate.control_bps(),
+        );
         let line_bps = pace.map_or(self.rate.sustained_bps(), |(rate, _)| {
             rate.min(self.rate.sustained_bps())
         });

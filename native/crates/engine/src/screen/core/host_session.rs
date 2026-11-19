@@ -328,7 +328,7 @@ impl<'a> Session<'a> {
             }
             if self.visibility_ack_pending {
                 self.visibility_ack_pending = false;
-                let floor = self.pipeline.next_frame_id();
+                let floor = self.pipeline.visibility_floor();
                 self.input_floor = Some(floor);
                 let ack = crate::screen::core::visibility::VisibilityAck {
                     geometry_generation: self.visibility_generation,

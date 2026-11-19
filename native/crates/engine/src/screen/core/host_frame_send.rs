@@ -99,7 +99,12 @@ impl Pipeline {
         // Codex 5/12: also without a budget now, a ceiling set while the
         // picture is written holds its rest (`pace.rate()`).
         let (rate, credit) = pace.unwrap_or((u64::MAX, 0));
-        gop.pace_next_frame(rate, credit, Some(self.work.ceiling_cell()));
+        gop.pace_next_frame(
+            rate,
+            credit,
+            Some(self.work.ceiling_cell()),
+            self.rate.control_bps(),
+        );
         let active_budget =
             stale.saturating_add(Duration::from_micros(serialization_us.max(paced_us)));
         let send_started = std::time::Instant::now();

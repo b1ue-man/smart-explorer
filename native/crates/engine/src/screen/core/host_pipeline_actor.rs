@@ -40,6 +40,8 @@ struct Pending {
     presented: Option<(u64, u64)>,
     /// A new route: the stream starts anew, the encoder stays (Codex 5/9).
     route_reset: bool,
+    /// A visibility acknowledgement's floor (`visibility_floor`).
+    forget_below: Option<u64>,
     receipts: VecDeque<Receipt>,
 }
 struct Facts {
@@ -228,6 +230,9 @@ impl PipelineActor {
         }
         if let Some((frame, at)) = self.pending.presented.take() {
             p.pacer.on_presented(frame, at);
+        }
+        if let Some(floor) = self.pending.forget_below.take() {
+            p.pacer.forget_received_below(floor);
         }
         let control = std::mem::take(&mut self.pending.control_bytes);
         if control != 0 {

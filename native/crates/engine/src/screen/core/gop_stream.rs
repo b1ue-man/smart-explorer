@@ -164,6 +164,9 @@ const PACE_CHUNK: usize = 16 * 1024;
 /// A wait shorter than this is not taken (the timer's resolution); the
 /// line gets at most this much ahead of the rate.
 const PACE_MIN_WAIT_US: u64 = 1_000;
+/// The longest single wait (round 6 L2): a ceiling raised meanwhile, or
+/// control traffic that sank, speeds the rest of the picture up within it.
+const PACE_MAX_WAIT_US: u64 = 100_000;
 
 /// The byte budget of one frame's send (review 2026-11-19, Codex 4/5): its
 /// records reach the stream no faster than `rate_bps` after the saved
@@ -175,21 +178,28 @@ struct Pace {
     credit: u64,
     started: tokio::time::Instant,
     written: u64,
-    /// The ceiling as it is now (0: none, Codex 5/12): a lowered one holds
-    /// the rest of the picture already.
+    /// The ceiling as it is now (0: none, Codex 5/12), the ceiling when
+    /// the picture started, and the control and sound rate then.
     limit: Option<std::sync::Arc<std::sync::atomic::AtomicU64>>,
+    ceiling_at_start: u64,
+    control_bps: u64,
 }
 
 impl Pace {
+    /// The rate now: the picture's rate while the ceiling stays; after a
+    /// change of it, the new ceiling less control and sound, never below the
+    /// pictures' floor (round 6 L2: it could only sink, and down to a bit a
+    /// second); without a ceiling any more, the picture's rate.
     fn rate(&self) -> u64 {
         let live = self
             .limit
             .as_ref()
             .map_or(0, |cell| cell.load(std::sync::atomic::Ordering::Acquire));
-        if live == 0 {
+        if live == 0 || live == self.ceiling_at_start {
             self.rate_bps
         } else {
-            self.rate_bps.min(live)
+            live.saturating_sub(self.control_bps)
+                .max(super::rate_control::picture_floor_bps(live))
         }
     }
 }
@@ -210,18 +220,25 @@ impl GopWriter {
     /// Paces the records of the next `write_frame_admitted` at `rate_bps`
     /// after `credit` bytes at once.
     /// `limit`: the session's ceiling as it is now, read per piece.
+    /// `control_bps`: the control stream's and sound's rate now.
     pub fn pace_next_frame(
         &mut self,
         rate_bps: u64,
         credit: u64,
         limit: Option<std::sync::Arc<std::sync::atomic::AtomicU64>>,
+        control_bps: u64,
     ) {
+        let ceiling_at_start = limit
+            .as_ref()
+            .map_or(0, |cell| cell.load(std::sync::atomic::Ordering::Acquire));
         self.pace = Some(Pace {
             rate_bps: rate_bps.max(1),
             credit,
             started: tokio::time::Instant::now(),
             written: 0,
             limit,
+            ceiling_at_start,
+            control_bps,
         });
     }
 
@@ -231,15 +248,24 @@ impl GopWriter {
             return;
         };
         pace.written = pace.written.saturating_add(bytes as u64);
-        let elapsed =
-            u128::from(u64::try_from(pace.started.elapsed().as_micros()).unwrap_or(u64::MAX));
-        let rate = pace.rate().max(1);
-        let earned = u128::from(rate) * elapsed / 8 / 1_000_000;
-        let allowed = u128::from(pace.credit).saturating_add(earned);
-        let ahead = u128::from(pace.written).saturating_sub(allowed);
-        let wait_us = ahead * 8 * 1_000_000 / u128::from(rate);
-        if wait_us >= u128::from(PACE_MIN_WAIT_US) {
-            let wait = u64::try_from(wait_us).unwrap_or(u64::MAX);
+        // Waits of at most `PACE_MAX_WAIT_US`, each with the rate as it is
+        // then (round 6 L2: one wait of the whole remainder at the rate of
+        // its start slept for hours after a ceiling change).
+        loop {
+            let Some(pace) = self.pace.as_ref() else {
+                return;
+            };
+            let elapsed =
+                u128::from(u64::try_from(pace.started.elapsed().as_micros()).unwrap_or(u64::MAX));
+            let rate = pace.rate().max(1);
+            let earned = u128::from(rate) * elapsed / 8 / 1_000_000;
+            let allowed = u128::from(pace.credit).saturating_add(earned);
+            let ahead = u128::from(pace.written).saturating_sub(allowed);
+            let wait_us = ahead * 8 * 1_000_000 / u128::from(rate);
+            if wait_us < u128::from(PACE_MIN_WAIT_US) {
+                return;
+            }
+            let wait = u64::try_from(wait_us.min(u128::from(PACE_MAX_WAIT_US))).unwrap_or(0);
             tokio::time::sleep(std::time::Duration::from_micros(wait)).await;
         }
     }

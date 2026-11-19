@@ -404,20 +404,35 @@ fn review1119_task_video_keeps_the_user_ceiling() {
     assert!(pictures < 2_000_000 && pictures >= MIN_BITRATE_BPS);
     assert_eq!(rate.stream_budget_bps(0, true), Some(pictures));
     assert!(rate.ceiling_bps() <= pictures);
+    // Round 6 L2: below the pictures' floor no picture is made (it would be
+    // paced at a few bits a second), and the viewer hears why.
+    use crate::screen::core::rate_control::picture_floor_bps;
+    assert_eq!(picture_floor_bps(2_000_000), MIN_BITRATE_BPS);
+    assert_eq!(picture_floor_bps(100_000), 50_000);
+    assert!(!rate.picture_share_short() && rate.stream_admit(0, true));
+    rate.set_ceiling(Some(rate.control_bps() + MIN_BITRATE_BPS - 1));
+    assert!(rate.picture_share_short());
+    assert!(!rate.stream_admit(0, true) && !rate.stream_admit(0, false));
+    assert!(rate.user_picture_bps().unwrap() >= MIN_BITRATE_BPS);
+    assert!(rate.control_over_ceiling().is_some());
+    rate.set_ceiling(Some(2_000_000));
+    assert!(rate.control_over_ceiling().is_none());
     rate.set_ceiling(Some(rate.control_bps() / 2));
     assert!(rate.control_over_ceiling().is_some());
     assert_eq!(rate.control_over_ceiling(), None, "once");
     let session = include_str!("host_session.rs");
     assert!(session.contains("self.pipeline.book_control_bytes(sent);"));
-    // Codex 5/4: the session's sound counts with the control stream, once
-    // per byte (the link reports its running total).
+    // Codex 5/4, round 6 L3: the session's sound counts with the control
+    // stream as the rate between two readings of the link's running total.
     let mut sound = RateController::new(PathKind::Direct, 0);
     sound.set_ceiling(Some(2_000_000));
     assert_eq!(sound.on_audio_total(0, 0), 0);
-    assert_eq!(sound.on_audio_total(500_000, 40_000), 40_000);
-    assert_eq!(sound.on_audio_total(600_000, 40_000), 0);
+    assert_eq!(sound.on_audio_total(1_000_000, 40_000), 40_000);
     assert_eq!(sound.control_bps(), 320_000);
     assert_eq!(sound.user_picture_bps(), Some(1_680_000));
+    // The next second without sound: no rate is left over.
+    assert_eq!(sound.on_audio_total(2_000_000, 40_000), 0);
+    assert_eq!(sound.control_bps(), 0);
     let link = include_str!("../os/shared/audio_host.rs");
     assert!(link.contains("sent.fetch_add(bytes, Ordering::AcqRel);"));
 }

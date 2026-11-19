@@ -52,6 +52,7 @@ mod tiles_budget;
 pub use model::RateLimit;
 use model::{GrowthFacts, INTERVAL_GROWTH};
 use rate_windows::{DelayGradient, RateWindow, RATE_WINDOW_US};
+pub use tiles_budget::picture_floor_bps;
 
 /// Smallest target (C2 „Grenzen“, A1).
 pub const MIN_BITRATE_BPS: u64 = 150_000;
@@ -175,8 +176,11 @@ pub struct RateController {
     control: RateWindow,
     control_bps: u64,
     control_over: bool,
-    /// The sound bytes of the session counted so far (`on_audio_total`).
+    /// The sound bytes of the session counted so far, when, and the sound's
+    /// rate between the last two readings (`on_audio_total`).
     audio_seen: u64,
+    audio_at: Option<u64>,
+    audio_bps: u64,
 }
 
 impl RateController {
@@ -215,6 +219,8 @@ impl RateController {
             control_bps: 0,
             control_over: false,
             audio_seen: 0,
+            audio_at: None,
+            audio_bps: 0,
         }
     }
 
