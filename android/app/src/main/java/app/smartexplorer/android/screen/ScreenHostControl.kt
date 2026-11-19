@@ -36,6 +36,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.longOrNull
@@ -670,7 +671,8 @@ internal object ScreenHostControl {
     private fun ensureInput() {
         if (input?.isAlive == true) return
         input = thread(name = "screen-input", isDaemon = true) {
-            val mapper = GestureMapper({ displaySize().first }, { displaySize().second })
+            // One gesture state per host session (round 4, Y1): a stroke of one viewer never mixes with another's.
+            val mappers = HashMap<Long, GestureMapper>()
             while (sessions.isNotEmpty()) {
                 val raw = try {
                     NativeBridge.screenControl(0, CONTROL_POLL_MS)
@@ -686,10 +688,18 @@ internal object ScreenHostControl {
                 // The host session the batch belongs to (0: none named); its input is performed only while it exists
                 // (review 2026-11-19, Codex 2/1 and 3/3), checked again right before each action.
                 val owner = message.long("session")
+                // `perform: false`: a release of a session that lost control or ended, only to end its stroke in its
+                // gesture state; nothing of it is performed (round 4, Y1). Absent: an older core, performed as before.
+                val perform = (message["perform"] as? JsonPrimitive)?.booleanOrNull ?: true
+                val mapper = mappers.getOrPut(owner) { GestureMapper({ displaySize().first }, { displaySize().second }) }
+                val actions = mapper.map(events)
+                // The gesture states of ended sessions go once their last batch is read.
+                mappers.keys.retainAll { it == 0L || sessions.containsKey(it) }
+                if (!perform) continue
                 // The first action of the batch Android did not perform (Codex 2/19): its kind goes to the
                 // session's viewer as a notice, once per batch.
                 var refused: String? = null
-                for (action in mapper.map(events)) {
+                for (action in actions) {
                     if (sessions.isEmpty() || (owner != 0L && !sessions.containsKey(owner))) break
                     val done = CountDownLatch(1)
                     val performed = java.util.concurrent.atomic.AtomicBoolean(false)

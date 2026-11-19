@@ -33,6 +33,18 @@ struct Batch {
     /// (`GestureMapper`: a stroke ends with its release) never keeps a press
     /// of a session that lost control or ended.
     release: bool,
+    /// `false`: a release of a session that lost control or ended, kept only
+    /// so that the app ends that session's stroke in its gesture state; the
+    /// app performs nothing of it (no tap, text or action for another
+    /// session's viewer, review 2026-11-19 round 4, Y1).
+    perform: bool,
+}
+
+/// Keeps `batch` of a session that lost control or ended only when it
+/// releases something, and then only for clean-up (`perform: false`).
+fn keep_for_cleanup(batch: &mut Batch) -> bool {
+    batch.perform = false;
+    batch.release
 }
 
 /// Whether `events` let go of a key, a button or a touch.
@@ -113,10 +125,13 @@ pub fn send_input(session: u64, events: &[InputEvent]) -> bool {
 /// batch (`host_session_control.rs`, `holds_control`): any other session's
 /// batch still waiting belongs to a viewer that gave control up meanwhile,
 /// so it is dropped instead of performed for the new holder (review
-/// 2026-11-19, Codex 3/3); a batch that releases something stays.
+/// 2026-11-19, Codex 3/3); a batch that releases something stays for
+/// clean-up only (`perform: false`).
 pub fn send_controlling_input(session: u64, events: &[InputEvent]) -> bool {
     let mut queue = queue();
-    queue.retain(|batch| batch.session == session || batch.session == 0 || batch.release);
+    queue.retain_mut(|batch| {
+        batch.session == session || batch.session == 0 || keep_for_cleanup(batch)
+    });
     push(queue, session, events)
 }
 
@@ -126,7 +141,10 @@ fn push(
     events: &[InputEvent],
 ) -> bool {
     if queue.len() >= MERGE_FROM {
-        if let Some(tail) = queue.back_mut().filter(|tail| tail.session == session) {
+        if let Some(tail) = queue
+            .back_mut()
+            .filter(|tail| tail.session == session && tail.perform)
+        {
             if merge(&mut tail.events, events) {
                 READY.notify_all();
                 return true;
@@ -140,30 +158,39 @@ fn push(
         session,
         events: events.to_vec(),
         release: releases(events),
+        perform: true,
     });
     READY.notify_all();
     true
 }
 
 /// The next batch as the app reads it (`{"op":"input","session":…,
-/// "events":[…]}`; the app performs it only while that session exists),
-/// waiting at most `timeout`.
+/// "perform":…,"events":[…]}`; the app performs it only while that session
+/// exists and `perform` holds, and feeds every batch to that session's own
+/// gesture state), waiting at most `timeout`.
 pub(super) fn take(timeout: Duration) -> Option<String> {
     let queue = queue();
     let (mut queue, _) = READY
         .wait_timeout_while(queue, timeout, |queue| queue.is_empty())
         .unwrap_or_else(PoisonError::into_inner);
     queue.pop_front().map(|batch| {
-        json!({"op": "input", "session": batch.session, "events": batch.events}).to_string()
+        json!({
+            "op": "input",
+            "session": batch.session,
+            "perform": batch.perform,
+            "events": batch.events,
+        })
+        .to_string()
     })
 }
 
 /// Drops the waiting batches of host session `session` (it ended): its input
 /// is never performed for another session (review 2026-11-19, Codex 3/3).
-/// Its releases stay: the app reads them into its gesture state and performs
-/// nothing of a session that is gone (`ScreenHostControl.ensureInput`).
+/// Its releases stay for clean-up only (`perform: false`): the app ends the
+/// session's stroke in its gesture state and performs nothing of it
+/// (`ScreenHostControl.ensureInput`).
 pub(super) fn drop_session(session: u64) {
-    queue().retain(|batch| batch.session != session || batch.release);
+    queue().retain_mut(|batch| batch.session != session || keep_for_cleanup(batch));
 }
 
 /// Drops every waiting batch, releases too (the last session ended: the
