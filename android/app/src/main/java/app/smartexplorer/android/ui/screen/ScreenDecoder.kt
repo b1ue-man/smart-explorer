@@ -560,7 +560,7 @@ class ScreenDecoder(
         /**
          * The decoders for the viewer's own choice (BK7b, B-39, 4.10): H.264 in the stage „Dekodierer“ allows, then HEVC
          * and AV1 (4:2:0, `main`) as [ScreenDecoderPolicy] lets them run, `tiles` last. The offers of
-         * a family window or a preview stay [offers].
+         * a preview stay [offers].
          */
         fun offers(choice: ViewerCodecChoice): List<DecoderOffer> =
             ScreenDecoderPolicy.combine(offers(), ScreenDecoderPolicy.videoOffers(videoDecoderCaps(), choice), choice)

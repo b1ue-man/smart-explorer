@@ -142,7 +142,11 @@ private fun WindowsMenu(ui: ScreenSessionState, source: String?, onSource: (Stri
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             val pick = { id: String? -> open = false; onSource(id) }
             val systemSelected = "android_system_selected_source" in ui.limits
-            DropdownMenuItem(text = { Text(if (systemSelected) "Android-Systemauswahl" else stringResource(R.string.screen_view_whole_screen)) }, onClick = { pick(null) })
+            // „Ganzer Bildschirm“ names the host's main monitor (desktop: `whole_screen`): a missing source means
+            // „no change“ to the host, so it would keep showing the window chosen before. A session that shows the
+            // host's default (no source chosen yet) already shows it and keeps its picture.
+            val wholeScreen = if (source == null) null else (ui.monitors.firstOrNull { it.primary } ?: ui.monitors.firstOrNull())?.let { "monitor:${it.id}" }
+            DropdownMenuItem(text = { Text(if (systemSelected) "Android-Systemauswahl" else stringResource(R.string.screen_view_whole_screen)) }, onClick = { pick(wholeScreen) })
             ui.monitors.forEachIndexed { index, monitor ->
                 val label = if (monitor.width == 0) stringResource(R.string.screen_view_monitor_pick_on_host) else monitor.name
                 DropdownMenuItem(

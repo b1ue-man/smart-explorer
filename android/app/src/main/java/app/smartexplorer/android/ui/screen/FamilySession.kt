@@ -27,10 +27,11 @@ class FamilySession(
     private var takeSent = false
     val title: String get() = "${state.value.family?.snapshot?.members?.firstOrNull { it.identity == entry.identity }?.app?.ifBlank { null } ?: entry.window.app.ifBlank { "Fernfenster" }} – $deviceName"
 
-    suspend fun open(width: Int, height: Int, fps: Int, offers: List<DecoderOffer>) {
+    /** Opens the family window with the viewer's own „Codec“, „Dekodierer“ and „Höchste Datenrate“ ([choice]). */
+    suspend fun open(width: Int, height: Int, fps: Int, offers: List<DecoderOffer>, choice: ViewerCodecChoice = ViewerCodecChoice()) {
         if (opened) return
         opened = true
-        screen.open(if (target.control) "control" else "view", entry.source, width, height, fps, offers)
+        screen.open(if (target.control) "control" else "view", entry.source, width, height, fps, offers, choice)
         scope.launch {
             state.collect { current ->
                 if (target.control && current.accepted && current.control != "off" && !takeSent) {

@@ -176,7 +176,8 @@ fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, a
         repeat(2) { withFrameNanos { } }
         if (family != null) {
             try {
-                family.open(viewerExtent[0].takeIf { it > 0 } ?: metrics.widthPixels, viewerExtent[1].takeIf { it > 0 } ?: metrics.heightPixels, maxFps, backend.offers())
+                // A family window runs with the stored „Codec“, „Dekodierer“ and „Höchste Datenrate“ like every other view.
+                family.open(viewerExtent[0].takeIf { it > 0 } ?: metrics.widthPixels, viewerExtent[1].takeIf { it > 0 } ?: metrics.heightPixels, maxFps, backend.offers(settings.choice), settings.choice)
                 current = family.screen
             } catch (cancel: kotlinx.coroutines.CancellationException) { throw cancel
             } catch (error: Exception) { failure = error.message ?: "Fensterverbindung konnte nicht geöffnet werden." }
@@ -321,7 +322,8 @@ fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, a
                     }
                 }
                 override fun onSurfaceFrame(frame: ScreenPresentedFrame) {
-                    if (!activeDecoder.get() || !active.isDisplayable(frame)) return
+                    // A frame drawn before the host's visibility answer is kept: the answer may name it (ScreenSession.awaitsAck).
+                    if (!activeDecoder.get() || !(active.isDisplayable(frame) || active.awaitsAck(frame))) return
                     val continues = surfaceFrameContinues(surfaceFrame, frame, bitmap != null)
                     // A Bitmap overlay belongs to the previous decoder family and must leave first.
                     bitmap = null; bitmapGop = null; bitmapFrame = null
@@ -361,7 +363,10 @@ fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, a
         onDispose { activeDecoder.set(false); decoder.stop(); active.invalidateDisplay(false); drawing?.setStreamFrameRate(0) }
     }
 
-    fun applySettings(next: ViewSettings) {
+    fun applySettings(wanted: ViewSettings) {
+        // A source can only be changed to a named one (no source on the wire means „no change“); without a monitor list
+        // „Ganzer Bildschirm“ has no name, so the source stays and the picture is not dropped.
+        val next = if (wanted.source == null && settings.source != null) wanted.copy(source = settings.source) else wanted
         if (settings.source != next.source) { releaseInputs(); session?.invalidateDisplay(); sourceAfterGop = ui.stream?.gop; bitmap = null; bitmapFrame = null; surfaceFrame = null; renderReady = false }
         val previous = settings
         settings = next
@@ -474,7 +479,10 @@ fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, a
                     awaitPointerEventScope {
                         while (true) {
                             val event = awaitPointerEvent(PointerEventPass.Initial)
-                            if (family == null && event.changes.any { !it.previousPressed && it.pressed && it.position.y < 32.dp.toPx() }) {
+                            // The top strip brings a hidden bar back. A visible bar needs no strip, and while input goes to the
+                            // host the strip belongs to its picture (Back, the edge gesture and the keys still bring the bar).
+                            if (family == null && !barVisible && !sendingNow &&
+                                event.changes.any { !it.previousPressed && it.pressed && it.position.y < 32.dp.toPx() }) {
                                 barVisible = true
                                 event.changes.forEach { it.consume() }
                             }
@@ -548,6 +556,7 @@ fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, a
                         if (shown == null && sourceAfterGop == null && showFresh) {
                             surfaceFrame?.let { frame ->
                                 if (session?.isDisplayable(frame) == true) { session.confirmPresented(frame); renderReady = true }
+                                else if (session?.awaitsAck(frame) == true) session.confirmPresented(frame)
                             }
                         }
                     })

@@ -323,6 +323,11 @@ impl ViewerSink {
             let pushed = self.queue.push(record.capture_ts_us, flags, data, now_us);
             if pushed.queued {
                 self.new_stream = false;
+                // A key frame answers the open request (as for the tiles), so the
+                // next break may ask at once instead of after `KEYFRAME_RETRY_US`.
+                if keyframe && begins {
+                    lock(&self.keyframes).on_keyframe();
+                }
             }
             if pushed.stalled {
                 self.broken = Some(header.gop_id);
@@ -347,6 +352,10 @@ impl ViewerSink {
                 let pushed = self.queue.push(record.capture_ts_us, flags, data, now_us);
                 if pushed.queued {
                     self.new_stream = false;
+                    // A queued key frame answers the open request (as for the tiles).
+                    if keyframe {
+                        lock(&self.keyframes).on_keyframe();
+                    }
                 }
                 if pushed.stalled {
                     self.new_stream = true;

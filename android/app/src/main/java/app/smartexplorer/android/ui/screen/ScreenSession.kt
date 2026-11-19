@@ -306,6 +306,8 @@ class ScreenSession(private val target: ScreenTarget, private val backend: Scree
     private var visibilitySentModern = false
     private var minFrame: Long? = null
     private var latestComplete: Long? = null
+    /** A frame drawn before the host's `VISIBILITY_ACK` named the first frame input may follow; the ack decides on it. */
+    private var earlyPresented: ScreenPresentedFrame? = null
     private var displayEpoch = 0L
     private var rejectedGop: Long? = null
     private var codecFallbackGop:Long?=null
@@ -468,12 +470,17 @@ class ScreenSession(private val target: ScreenTarget, private val backend: Scree
             event is ScreenViewEvent.Ended || familyLayoutChanged) {
             displayEpoch++
             latestComplete = null
+            earlyPresented = null
             lastPresented = null
             mutable.value = old.copy(inputReady = false)
         }
         mutable.update { it.apply(event) }
         if (event is ScreenViewEvent.VisibilityAck && event.geometryGeneration == visibilityReport?.geometryGeneration) {
             minFrame = event.minFrameId
+            // A frame drawn before this ack arrived counts once the ack names it (a static screen sends no other one).
+            val early = earlyPresented
+            earlyPresented = null
+            if (early != null && displayable(early, beforeAck = false)) acceptPresented(early)
             mutable.value = mutable.value.copy(inputReady = visibilityReport?.state != "hidden" &&
                 latestComplete?.let { it >= event.minFrameId } == true)
         }
@@ -482,6 +489,7 @@ class ScreenSession(private val target: ScreenTarget, private val backend: Scree
             visibilitySentModern = true
             minFrame = null
             latestComplete = null
+            earlyPresented = null
             mutable.value = mutable.value.copy(inputReady = false)
             inputs.trySend(ScreenSessionCommand.Visibility(report))
         }
@@ -498,6 +506,7 @@ class ScreenSession(private val target: ScreenTarget, private val backend: Scree
         displayEpoch++
         minFrame = null
         latestComplete = null
+        earlyPresented = null
         lastPresented = null
         mutable.value = mutable.value.copy(inputReady = false)
         if (mutable.value.frameContract) {
@@ -511,6 +520,7 @@ class ScreenSession(private val target: ScreenTarget, private val backend: Scree
         if (requireNewGop) rejectedGop = mutable.value.stream?.gop
         visibilityFacts = null
         latestComplete = null
+        earlyPresented = null
         lastPresented = null
         mutable.value = mutable.value.copy(inputReady = false)
     }
@@ -522,13 +532,24 @@ class ScreenSession(private val target: ScreenTarget, private val backend: Scree
     }
     fun endBitmapSnapshot() = synchronized(lock) {bitmapPending=false}
 
-    fun isDisplayable(frame: ScreenPresentedFrame): Boolean = synchronized(lock) {
+    fun isDisplayable(frame: ScreenPresentedFrame): Boolean = synchronized(lock) { displayable(frame, beforeAck = false) }
+
+    /**
+     * [frame] belongs to the shown picture but was drawn before the host's `VISIBILITY_ACK` named the first frame input
+     * may follow: [confirmPresented] keeps it, and the ack counts it when it names it (a static screen sends no newer one).
+     */
+    fun awaitsAck(frame: ScreenPresentedFrame): Boolean = synchronized(lock) {
+        mutable.value.frameContract && displayable(frame, beforeAck = true)
+    }
+
+    /** [isDisplayable]; [beforeAck]: the same, while the host's `VISIBILITY_ACK` has not named its first frame yet. */
+    private fun displayable(frame: ScreenPresentedFrame, beforeAck: Boolean): Boolean {
         val current = mutable.value
-        !closed && frame.session == id && frame.epoch == displayEpoch && current.ended == null &&
+        return !closed && frame.session == id && frame.epoch == displayEpoch && current.ended == null &&
             current.accepted && current.state in listOf("streaming", "starting") &&
             frame.gopId == current.stream?.gop && frame.gopId != rejectedGop && visibilityReport?.state != "hidden" &&
             (!forceLossless || current.stream?.codec == "tiles") &&
-            (!current.frameContract || minFrame?.let { frame.frameId >= it } == true)
+            (!current.frameContract || (if (beforeAck) minFrame == null else minFrame?.let { frame.frameId >= it } == true))
             && (!familyRequired || current.family?.snapshot?.layout_revision?.let {
                 current.stream?.familyLayoutRevision == it
             } == true)
@@ -536,13 +557,22 @@ class ScreenSession(private val target: ScreenTarget, private val backend: Scree
 
     /** Only renderer callbacks invoke this; queued decoder and scaler output cannot open input. */
     fun confirmPresented(frame: ScreenPresentedFrame) = synchronized(lock) {
-        if (!isDisplayable(frame)) return@synchronized
+        if (!displayable(frame, beforeAck = false)) {
+            if (mutable.value.frameContract && displayable(frame, beforeAck = true) &&
+                earlyPresented?.let { it.frameId >= frame.frameId } != true) earlyPresented = frame
+            return@synchronized
+        }
+        acceptPresented(frame)
+    }
+
+    /** [frame] was drawn and may open input; the caller holds [lock]. */
+    private fun acceptPresented(frame: ScreenPresentedFrame) {
         latestComplete = maxOf(latestComplete ?: 0L, frame.frameId)
         if (mutable.value.frameContract && (lastPresented?.let {
             it.epoch == frame.epoch && it.gopId == frame.gopId && it.frameId >= frame.frameId
         } != true)) {
             lastPresented = frame
-            if (inputs.trySend(ScreenSessionCommand.Presented(frame)).isFailure) return@synchronized
+            if (inputs.trySend(ScreenSessionCommand.Presented(frame)).isFailure) return
         }
         mutable.value = mutable.value.copy(inputReady = true)
     }
@@ -560,7 +590,7 @@ class ScreenSession(private val target: ScreenTarget, private val backend: Scree
             return@synchronized
         }
         codecFallbackGop=gopId;forceLossless=true;rejectedGop=current.stream?.gop;displayEpoch++
-        latestComplete=null;lastPresented=null
+        latestComplete=null;earlyPresented=null;lastPresented=null
         mutable.value=mutable.value.copy(inputReady=false,
             codecFallback="Video-Einzelinputausgabe nicht bestätigt. Verlustfreie Übertragung angefordert. ${reason.take(768)}")
         inputs.trySend(ScreenSessionCommand.Call {session->
@@ -611,7 +641,7 @@ class ScreenSession(private val target: ScreenTarget, private val backend: Scree
 
     /** Closes the session in the core once the queued input has gone out; closing twice is fine. */
     fun close() {
-        synchronized(lock) { closed = true; displayEpoch++; latestComplete = null; mutable.value = mutable.value.copy(inputReady = false) }
+        synchronized(lock) { closed = true; displayEpoch++; latestComplete = null; earlyPresented = null; mutable.value = mutable.value.copy(inputReady = false) }
         scaleWorker.close()
         ScreenIconContent.forgetPeer(mutable.value.iconPeer)
         collector?.cancel()

@@ -33,6 +33,8 @@ internal sealed interface PhoneAction {
 internal class GestureMapper(private val width: () -> Int, private val height: () -> Int) {
     private var x = 0f
     private var y = 0f
+    /** A pointer position arrived: before it, the wheel scrolls from the middle of the display, not from (0, 0). */
+    private var positioned = false
     private var pressed: MutableList<Pair<Float, Float>>? = null
     private var pressedAt = 0L
     private val touches = HashMap<Int, Pair<MutableList<Pair<Float, Float>>, Long>>()
@@ -44,6 +46,7 @@ internal class GestureMapper(private val width: () -> Int, private val height: (
                 "pointer_abs" -> {
                     x = scale(event.int("x"), width())
                     y = scale(event.int("y"), height())
+                    positioned = true
                     pressed?.add(x to y)
                 }
                 "button" -> if (event.text("button") == "left") {
@@ -60,8 +63,11 @@ internal class GestureMapper(private val width: () -> Int, private val height: (
                     if (dy != 0) {
                         // One notch scrolls an eighth of the display; up moves the content down.
                         val distance = height() / 8f * dy / 120f
-                        val endY = (y + distance).coerceIn(0f, height() - 1f)
-                        add(PhoneAction.Stroke(listOf(x to y, x to endY), 150))
+                        // Without a position (`se screen input --scroll`) a stroke from the top edge would pull down the
+                        // notification shade: it starts in the middle of the display instead.
+                        val (fromX, fromY) = if (positioned) x to y else (width() - 1).coerceAtLeast(0) / 2f to (height() - 1).coerceAtLeast(0) / 2f
+                        val endY = (fromY + distance).coerceIn(0f, height() - 1f)
+                        add(PhoneAction.Stroke(listOf(fromX to fromY, fromX to endY), 150))
                     }
                 }
                 "touch" -> {
