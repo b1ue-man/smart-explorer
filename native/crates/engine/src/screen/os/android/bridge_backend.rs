@@ -16,8 +16,6 @@
 use std::io;
 use std::sync::Arc;
 
-use serde_json::json;
-
 use super::bridge_channels::{self as channels, HostStart};
 use crate::screen::core::host_backend::{
     ScreenEncoder, ScreenHostBackend, ScreenSource, SessionIndicator, SourceRefusal,
@@ -267,9 +265,10 @@ impl ScreenHostBackend for BridgeBackend {
         if !streaming {
             return Err(ControlBlock::ControlUnavailable);
         }
-        // A full queue (the app takes no input) is reported as a block,
-        // never dropped in silence.
-        if channels::send_input(json!({"op": "input", "events": events})) {
+        // Never waits (the session loop awaits this call): a backlog merges
+        // moves and wheel steps; a queue the app stopped taking from is
+        // reported as a block, never dropped in silence.
+        if channels::send_input(events) {
             Ok(())
         } else {
             Err(ControlBlock::ControlUnavailable)

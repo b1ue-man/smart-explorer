@@ -24,6 +24,9 @@ use crate::screen::core::wire_binary::MAX_RECORD_BYTES;
 
 #[path = "bridge_channel_state.rs"]
 mod channel_state;
+#[path = "bridge_input_queue.rs"]
+mod input_queue;
+pub use input_queue::send_input;
 
 pub const FLAG_KEYFRAME: u32 = 0x1;
 pub const FLAG_STILL: u32 = 0x2;
@@ -43,9 +46,6 @@ const MAX_CONTROL: usize = 64;
 /// Notices of the app waiting for the session (`Channel::push_notice`): the
 /// session takes one per frame, so this only bounds a burst.
 const MAX_NOTICES: usize = 8;
-/// How long a batch of input waits for room in a full input queue: one poll
-/// interval of the app.
-const INPUT_ROOM_WAIT: Duration = Duration::from_secs(1);
 
 /// A session start as the app needs it (`screenHostStart`).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -170,10 +170,6 @@ struct Register {
 }
 
 static REGISTER: Mutex<Option<Register>> = Mutex::new(None);
-static INPUT: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
-static INPUT_READY: Condvar = Condvar::new();
-/// Signalled when the app took a batch of input off [`INPUT`].
-static INPUT_ROOM: Condvar = Condvar::new();
 
 fn with<R>(apply: impl FnOnce(&mut Register) -> R) -> R {
     let mut register = lock(&REGISTER);
@@ -287,8 +283,7 @@ pub fn close(id: u64, reason: &str) {
 /// being performed when the next session starts the reader again (review
 /// 2026-11-19, Codex 2/1).
 fn drop_pending_input() {
-    lock(&INPUT).clear();
-    INPUT_ROOM.notify_all();
+    input_queue::clear();
 }
 
 pub fn channel(id: u64) -> Option<Arc<Channel>> {
@@ -367,37 +362,12 @@ pub fn push_admitted(id: u64, generation: u64, data: &[u8], flags: u32) -> i32 {
 /// waiting at most `timeout`; an unknown session answers `stop`.
 pub fn control(id: u64, timeout: Duration) -> Option<String> {
     if id == INPUT_CHANNEL {
-        let queue = lock(&INPUT);
-        let (mut queue, _) = INPUT_READY
-            .wait_timeout_while(queue, timeout, |queue| queue.is_empty())
-            .unwrap_or_else(PoisonError::into_inner);
-        let taken = queue.pop_front();
-        if taken.is_some() {
-            INPUT_ROOM.notify_all();
-        }
-        return taken;
+        return input_queue::take(timeout);
     }
     match channel(id) {
         Some(channel) => channel.take_control(timeout),
         None => Some(json!({"op": "stop", "reason": "unknown_session"}).to_string()),
     }
-}
-
-/// Queues the input of the controlling viewer for the accessibility service.
-/// A full queue never loses a queued batch (it may hold a key or button
-/// release): the batch waits up to `INPUT_ROOM_WAIT` for the app to take
-/// one, and is refused (`false`) when the app took none.
-pub fn send_input(message: Value) -> bool {
-    let queue = lock(&INPUT);
-    let (mut queue, _) = INPUT_ROOM
-        .wait_timeout_while(queue, INPUT_ROOM_WAIT, |queue| queue.len() >= MAX_CONTROL)
-        .unwrap_or_else(PoisonError::into_inner);
-    if queue.len() >= MAX_CONTROL {
-        return false;
-    }
-    queue.push_back(message.to_string());
-    INPUT_READY.notify_all();
-    true
 }
 
 /// `screen.hostNotice` with `rateFloor`: the lowest bit rate of the
@@ -447,5 +417,5 @@ pub static TEST_LOCK: Mutex<()> = Mutex::new(());
 #[cfg(any(test, feature = "test-support"))]
 pub fn reset_for_tests() {
     *lock(&REGISTER) = None;
-    lock(&INPUT).clear();
+    input_queue::clear();
 }

@@ -35,6 +35,9 @@ internal class GestureMapper(private val width: () -> Int, private val height: (
     private var y = 0f
     /** A pointer position arrived: before it, the wheel scrolls from the middle of the display, not from (0, 0). */
     private var positioned = false
+    /** The parts of a wheel notch (1/120) per axis not turned into a stroke yet: one stroke per whole notch. */
+    private var wheelRestX = 0
+    private var wheelRestY = 0
     private var pressed: MutableList<Pair<Float, Float>>? = null
     private var pressedAt = 0L
     private val touches = HashMap<Int, Pair<MutableList<Pair<Float, Float>>, Long>>()
@@ -59,8 +62,14 @@ internal class GestureMapper(private val width: () -> Int, private val height: (
                     }
                 }
                 "wheel" -> {
-                    val dx = event.int("dx")
-                    val dy = event.int("dy")
+                    // A touchpad sends parts of a notch; each would become a stroke of its own (150 ms, performed one
+                    // after another), so the parts add up and only whole notches make a stroke.
+                    wheelRestX += event.int("dx")
+                    wheelRestY += event.int("dy")
+                    val dx = wheelRestX / NOTCH * NOTCH
+                    val dy = wheelRestY / NOTCH * NOTCH
+                    wheelRestX -= dx
+                    wheelRestY -= dy
                     if (dx != 0) {
                         // Right is positive (C5): the content moves left, so the finger does; an eighth of the width per notch.
                         val distance = width() / 8f * dx / 120f
@@ -110,6 +119,8 @@ internal class GestureMapper(private val width: () -> Int, private val height: (
     private fun JsonObject.bool(key: String): Boolean = (this[key] as? JsonPrimitive)?.booleanOrNull ?: false
 
     companion object {
+        /** One wheel notch in the core's units (C5: 1/120). */
+        private const val NOTCH = 120
         const val MIN_STROKE_MS = 1L
         const val MAX_STROKE_MS = 10_000L
 
