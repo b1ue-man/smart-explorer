@@ -83,6 +83,7 @@ impl DecodeState {
         self.gop = None;
         self.shared.pause_receipts();
         self.broken = Some(gop_id);
+        self.broken_reason = KeyframeReason::Reset;
         self.broken_frame = Some(frame_id);
         self.request_keyframe(KeyframeReason::Reset, gop_id);
     }

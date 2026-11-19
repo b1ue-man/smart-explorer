@@ -411,7 +411,11 @@ fn bildkette_task_viewer_decoder_switch_without_reopening() {
     // `ViewerSession::switch_decoder` took the new choice over.
     rig.shared.local.switches.fetch_add(1, Ordering::AcqRel);
     rig.feed(1, record(2, 0));
-    assert_eq!(rig.keyframe_requests(), [(KeyframeReason::Reset, Some(1))]);
+    // A key frame in the running group, no new stream (Codex 4/9).
+    assert_eq!(
+        rig.keyframe_requests(),
+        [(KeyframeReason::DecodeError, Some(1))]
+    );
     // The old decoder decodes until the key frame arrives.
     assert_eq!(rig.shown().map(|(_, frame, _)| frame), Some(2));
     assert_eq!(rig.log.opened.load(Ordering::SeqCst), 1);

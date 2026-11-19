@@ -317,7 +317,11 @@ fn rate_field(ui: &mut egui::Ui, mbit: f64) -> Option<f64> {
     let mut text = ui
         .data(|data| data.get_temp::<String>(id))
         .unwrap_or_else(|| shown.clone());
+    // An id of its own (Codex 7/15): the automatic one counts the widgets
+    // before it, so a row that appeared mid-edit („Gesteuert von …“) took
+    // the focus away and the typed text with it.
     let field = egui::TextEdit::singleline(&mut text)
+        .id(egui::Id::new("screen_max_rate_field"))
         .desired_width(RATE_FIELD_WIDTH)
         .clip_text(true);
     let edited = ui.add(field);
@@ -338,6 +342,9 @@ fn rate_field(ui: &mut egui::Ui, mbit: f64) -> Option<f64> {
         return None;
     }
     let minimum = MIN_BITRATE_BPS as f64 / 1e6;
+    // The largest ceiling a `u64` of bit/s holds (Codex 7/17: 1e30 went out
+    // as `u64::MAX` without a word).
+    let maximum = u64::MAX / 1_000_000;
     let parsed = text.trim().replace(',', ".").parse::<f64>().ok();
     let error = match parsed.filter(|value| value.is_finite()) {
         None => Some(format!("„{}“ ist keine Zahl", text.trim())),
@@ -346,6 +353,7 @@ fn rate_field(ui: &mut egui::Ui, mbit: f64) -> Option<f64> {
             "mindestens {} Mbit/s",
             format!("{minimum}").replace('.', ",")
         )),
+        Some(value) if value > maximum as f64 => Some(format!("höchstens {maximum} Mbit/s")),
         Some(_) => None,
     };
     ui.data_mut(|data| match &error {

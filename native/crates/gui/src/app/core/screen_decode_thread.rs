@@ -66,8 +66,10 @@ pub struct DecodeState {
     gop: Option<Gop>,
     /// The newest group seen; records of older ones are stale.
     latest_gop: u64,
-    /// A group whose records are skipped until its next key frame.
+    /// A group whose records are skipped until its next key frame, and why:
+    /// a retry asks again with that reason (Codex 7/3).
     broken: Option<u64>,
+    broken_reason: KeyframeReason,
     /// A failed record cannot restart from a later fragment of that same frame.
     broken_frame: Option<u64>,
     last_record: Option<(u64, u64)>,
@@ -113,6 +115,7 @@ impl DecodeState {
             gop: None,
             latest_gop: 0,
             broken: None,
+            broken_reason: KeyframeReason::Reset,
             broken_frame: None,
             last_record: None,
             keyframes: KeyframeRequester::default(),
@@ -199,6 +202,7 @@ impl DecodeState {
                 let text = format!("Das Bild kann nicht dekodiert werden: {error}");
                 self.shared.update(|info| info.notice = Some(text));
                 self.broken = Some(header.gop_id);
+                self.broken_reason = KeyframeReason::DecodeError;
                 self.request_keyframe(KeyframeReason::DecodeError, header.gop_id);
                 None
             }
@@ -292,11 +296,12 @@ impl DecodeState {
                     .is_some_and(|frame| record.frame_id <= frame)
             {
                 self.chain.continuity.broken();
-                // The group goes on without its key frame: a request the
-                // host took for answered (it named an older group, the host
-                // had opened this one as a continuation) is asked again, at
-                // most once per `KEYFRAME_RETRY_US` (`KeyframeRequester`).
-                self.request_keyframe(KeyframeReason::Reset, header.gop_id);
+                // The group goes on without its key frame: the request is
+                // asked again, at most once per `KEYFRAME_RETRY_US`, with
+                // its first reason: a local decode error keeps the stream
+                // (a key frame inside the group), only a broken stream asks
+                // for a new one (Codex 7/3: `Reset` here restarted it).
+                self.request_keyframe(self.broken_reason, header.gop_id);
                 self.left_out(&record, Dropped::AwaitingKeyframe);
                 return;
             }
@@ -396,6 +401,7 @@ impl DecodeState {
                 self.shared.pause_receipts();
                 self.chain.continuity.broken();
                 self.broken = Some(header.gop_id);
+                self.broken_reason = KeyframeReason::DecodeError;
                 self.broken_frame = Some(record.frame_id);
                 // A hybrid picture the decoder cannot place (its picture
                 // came late or without its identity): „Automatisch“ leaves

@@ -157,6 +157,7 @@ impl DecodeState {
                     self.gop = None;
                 }
                 self.broken = Some(gop_id);
+                self.broken_reason = KeyframeReason::Reset;
                 self.broken_frame = self
                     .last_record
                     .filter(|(group, _)| *group == gop_id)

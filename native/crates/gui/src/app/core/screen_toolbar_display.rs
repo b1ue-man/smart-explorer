@@ -97,7 +97,9 @@ pub(super) fn display_rows(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Ve
             + gap
             + super::wrap::button_width(ui, "Abbrechen");
         super::wrap::reserve(ui, group);
+        // A stable id like the rate field's (Codex 7/15).
         let field = egui::TextEdit::singleline(text)
+            .id(egui::Id::new("screen_custom_size_field"))
             .hint_text("2560x1440")
             .desired_width(90.0);
         let edited = ui.add(field);
