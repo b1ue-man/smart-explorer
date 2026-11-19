@@ -91,6 +91,12 @@ impl ScreenClientHello {
         all.extend(self.decoders_v2.iter().flatten().copied());
         all
     }
+
+    /// The viewer's choice: `codec_choice` where it names one, else as its
+    /// decoders name it (`negotiate::preference_of`).
+    pub fn codec_preference(&self) -> super::super::negotiate::CodecPreference {
+        super::super::negotiate::preference_of(self.codec_choice, &self.all_decoders())
+    }
 }
 
 impl ScreenHelloOk {

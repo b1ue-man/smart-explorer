@@ -68,6 +68,7 @@ fn set(decoders: Vec<CodecOffer>, continuing: Vec<CodecOffer>) -> SetDecoders {
         decoders,
         gop_continue: false,
         gop_continue_decoders: continuing,
+        codec_choice: None,
     }
 }
 

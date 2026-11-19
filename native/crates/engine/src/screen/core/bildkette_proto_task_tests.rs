@@ -197,6 +197,7 @@ fn bildkette_task_proto_set_decoders_with_and_without_the_capability() {
         decoders: vec![hevc(true), h264(true), CodecOffer::tiles()],
         gop_continue: false,
         gop_continue_decoders: vec![hevc(true)],
+        codec_choice: None,
     };
     let (tag, payload) = encode_viewer_frame(&ViewerFrame::SetDecoders(set.clone())).unwrap();
     assert_eq!(tag, SET_DECODERS);
@@ -251,6 +252,32 @@ fn bildkette_task_proto_set_decoders_with_and_without_the_capability() {
     let frame = request.decoders_frame();
     assert_eq!(frame.decoders, vec![hevc(true)]);
     assert_eq!(frame.gop_continue_decoders, vec![hevc(true)]);
+    // Review 2026-11-19 (Codex 3/6): the frame names the „Codec“ as well; a
+    // „Scharf (GPU)“ viewer with H.264 alone reads as „Scharf (GPU)“ (GPU
+    // encoders only), without the field as H.264, as before.
+    assert_eq!(frame.codec_choice, Some(CodecSetting::Hevc));
+    assert_eq!(
+        preference_of(Some(CodecSetting::Sharp), &[h264(true)]),
+        CodecPreference::Sharp
+    );
+    assert_eq!(preference_of(None, &[h264(true)]), CodecPreference::H264);
+    assert_eq!(
+        preference_of(Some(CodecSetting::Lossless), &[CodecOffer::tiles()]),
+        CodecPreference::Auto
+    );
+    let soft = [h264(false), CodecOffer::tiles()];
+    let sharp = SetDecoders {
+        decoders: vec![h264(true)],
+        codec_choice: Some(CodecSetting::Sharp),
+        ..SetDecoders::default()
+    };
+    let refused =
+        renegotiate_set(&soft, &sharp, None, true, CodecTrust::ALL).expect_err("no GPU encoder");
+    assert_eq!(refused.preference, CodecPreference::Sharp);
+    let read = serde_json::to_value(&sharp).unwrap();
+    assert_eq!(read["codec_choice"], "sharp");
+    let plain = serde_json::to_value(SetDecoders::default()).unwrap();
+    assert!(plain.get("codec_choice").is_none());
     // A request of an older client (no field) still reads.
     let old: crate::daemon::StreamRequest =
         serde_json::from_value(serde_json::json!({"mode":"view","decoders":[],"max_fps":60}))

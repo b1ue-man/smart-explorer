@@ -190,6 +190,7 @@ impl ScreenLink {
                 .then(|| request.gop_continue_decoders.clone()),
             virtual_display: None,
             virtual_display_size: None,
+            codec_choice: request.codec_choice,
             // P9: the host's sound for a full session; the viewer switches
             // it on with `AUDIO` (an older host ignores the field).
             audio: crate::screen::core::audio_wire::offer(request.mode),

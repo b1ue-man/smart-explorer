@@ -29,7 +29,10 @@ pub enum RateCeilingState {
     /// No ceiling asked for.
     #[default]
     Automatic,
-    /// `RATE_CEILING` went to the host.
+    /// `RATE_CEILING` was sent to a host that announced it; this is no
+    /// confirmation (the wire value stays `applied`). That the host applies
+    /// the ceiling only its statistics say (`ChainReport::rate_ceiling_kbps`,
+    /// Codex 3/22).
     Applied,
     /// The host lacks `rate_ceiling_v1` (v0.5.196 or older): its own
     /// regulation alone sets the rate.
@@ -63,6 +66,8 @@ impl super::StreamRequest {
             decoders: self.chosen_decoders(),
             gop_continue: self.gop_continue,
             gop_continue_decoders: self.gop_continue_decoders.clone(),
+            // Codex 3/6: the „Codec“ as the hello names it.
+            codec_choice: self.codec,
         }
     }
 }

@@ -13,7 +13,7 @@ use super::quality::FallbackScope;
 use super::*;
 use crate::screen::core::gop_continue::ContinueOffers;
 use crate::screen::core::negotiate::{negotiate_chosen, CodecOffer, CodecTrust};
-use crate::screen::core::set_decoders::{renegotiate_for, SetDecoders};
+use crate::screen::core::set_decoders::{renegotiate_set, SetDecoders};
 
 /// What the session knows to negotiate again.
 pub(super) struct PairingState {
@@ -91,9 +91,9 @@ impl Pipeline {
     /// without a pairing ends the session at the next tick with its reason.
     pub fn set_decoders(&mut self, set: &SetDecoders) -> bool {
         self.pairing.continuation = set.continuation();
-        let next = match renegotiate_for(
+        let next = match renegotiate_set(
             &self.pairing.encoders,
-            &set.decoders,
+            set,
             self.negotiated_contract,
             self.pairing.video_session,
             self.pairing.trust,

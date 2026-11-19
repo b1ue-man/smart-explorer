@@ -341,6 +341,8 @@ impl ShareHost {
             // B-36 per codec: the decoders of the client that continue.
             gop_continue_decoders: request.gop_continue_decoders,
             virtual_display: request.virtual_display,
+            // Codex 3/6: „Scharf (GPU)“ with one video decoder reads as such.
+            codec_choice: request.codec,
         };
         let redial = reconnect::Redial {
             service: service.clone(),
@@ -396,6 +398,7 @@ fn viewer_request(
         gop_continue: false,
         gop_continue_decoders: Vec::new(),
         virtual_display: None,
+        codec_choice: None,
     }
 }
 

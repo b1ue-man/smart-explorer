@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncWrite};
 
 use super::input_model::InputCapabilities;
-use super::negotiate::{CodecOffer, MAX_CODEC_OFFERS};
+use super::negotiate::{CodecOffer, CodecSetting, MAX_CODEC_OFFERS};
 use super::pixel_convert::FrameSize;
 use super::virtual_display::{VirtualDisplayReport, VirtualDisplayWish};
 use super::window_list::{MonitorInfo, SourceId};
@@ -224,6 +224,12 @@ pub struct ScreenClientHello {
     /// follows `display_size` and every `SET_MODE` size.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub virtual_display_size: Option<FrameSize>,
+    /// The viewer's „Codec“ (review 2026-11-19, Codex 3/6): its decoders
+    /// name a chosen codec or „Scharf (GPU)“ only as long as they include
+    /// both of H.264 and HEVC; this names it (`negotiate::preference_of`).
+    /// Absent (an older viewer): the host reads the decoders as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codec_choice: Option<CodecSetting>,
     /// The host's sound (plan 2026-11-17 P9, `audio_wire.rs`): `Some(1)`
     /// when this viewer plays it; an older host ignores it.
     #[serde(default, skip_serializing_if = "Option::is_none")]

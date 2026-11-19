@@ -298,7 +298,7 @@ fn netzrate_task_viewer_choice_reaches_the_host() {
     // The opening negotiates under that choice and refuses without a
     // pairing; `SET_DECODERS` keeps the choice for the fallbacks.
     let start = include_str!("host_server_start.rs");
-    assert!(start.contains("negotiate::preference_named_by(&decoders)"));
+    assert!(start.contains("let preference = hello.codec_preference();"));
     assert!(start.contains("negotiate::negotiate_chosen("));
     let pairing = include_str!("host_pairing.rs");
     assert!(pairing.contains("self.quality_policy.mode.chosen = next.preference;"));

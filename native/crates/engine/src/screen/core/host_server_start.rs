@@ -240,12 +240,16 @@ pub(super) async fn prepare(
     // Plan 2026-11-18 „Netzrate“: the viewer's choice, read from its
     // decoders (`preference_named_by`: a chosen codec names no tiles); a
     // chosen codec without a pairing ends the start with its reason.
-    let preference = super::super::negotiate::preference_named_by(&decoders);
+    // Review 2026-11-19 (Codex 3/6): the hello's `codec_choice` names it
+    // where the decoders cannot (one video codec under „Scharf (GPU)“).
+    let preference = hello.codec_preference();
     // Review 2026-11-19: a viewer of codec negotiation v2 sends
     // `decoders_v2` (also empty); with no decoder at all it chose a codec
     // it cannot decode, read as „Automatisch" it got the tiles. A viewer
     // before v2 sends no list and keeps the tiles.
-    let empty_choice = decoders.is_empty() && hello.decoders_v2.is_some();
+    let empty_choice = decoders.is_empty()
+        && hello.decoders_v2.is_some()
+        && preference == super::super::negotiate::CodecPreference::Auto;
     let negotiate = |contract| {
         if empty_choice {
             return Err(super::super::negotiate::ChosenUnavailable {

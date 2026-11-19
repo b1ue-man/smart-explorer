@@ -63,6 +63,9 @@ pub struct ViewerRequest {
     /// The viewer's choice for the host's display (plan 2026-11-17 P5);
     /// `None` names none, as before.
     pub virtual_display: Option<super::virtual_display::VirtualDisplayChoice>,
+    /// The viewer's „Codec“ for the hello (`ScreenClientHello::
+    /// codec_choice`, review 2026-11-19 Codex 3/6); `None` names none.
+    pub codec_choice: Option<super::negotiate::CodecSetting>,
 }
 
 /// Why a session did not start or ended.

@@ -7,7 +7,10 @@
 //! else. „Scharf (GPU)“ stays on the GPU encoders of its codecs (H.264 and
 //! HEVC), „Verlustfrei“ on the tiles; only „Automatisch“ falls back across
 //! codecs (`negotiate_trusted`, unchanged).
-use super::{negotiate_trusted, CodecChoice, CodecKind, CodecOffer, CodecPreference, CodecTrust};
+use super::{
+    negotiate_trusted, CodecChoice, CodecKind, CodecOffer, CodecPreference, CodecSetting,
+    CodecTrust,
+};
 use crate::screen::core::frame_budget::FrameContract;
 use crate::screen::core::sharp_mode;
 
@@ -99,6 +102,24 @@ pub fn negotiate_chosen(
 /// codec is that codec, H.264 with HEVC is „Scharf (GPU)“ (a sharp viewer
 /// with one of them only reads as that codec; `SET_MODE` `sharpness` still
 /// keeps its fallbacks on the GPU, `FallbackScope`).
+/// The viewer's choice: its „Codec“ as it names it (`codec_choice` of the
+/// hello and of `SET_DECODERS`, review 2026-11-19 Codex 3/6) for a chosen
+/// codec or „Scharf (GPU)“, else as its decoders name it
+/// (`preference_named_by`). A „Scharf (GPU)“ viewer that decodes only one
+/// of H.264 and HEVC read as that codec, with its software encoders; a
+/// viewer before the field keeps the old reading.
+pub fn preference_of(choice: Option<CodecSetting>, decoders: &[CodecOffer]) -> CodecPreference {
+    match choice {
+        Some(
+            setting @ (CodecSetting::H264
+            | CodecSetting::Hevc
+            | CodecSetting::Av1
+            | CodecSetting::Sharp),
+        ) => setting.preference(),
+        _ => preference_named_by(decoders),
+    }
+}
+
 pub fn preference_named_by(decoders: &[CodecOffer]) -> CodecPreference {
     if decoders.is_empty() || decoders.iter().any(|offer| offer.codec == CodecKind::Tiles) {
         return CodecPreference::Auto;

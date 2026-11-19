@@ -35,8 +35,8 @@ use super::frame_budget::FrameContract;
 use super::gop_continue::ContinueOffers;
 use super::host_pipeline::codec_fallbacks;
 use super::negotiate::{
-    negotiate_chosen, negotiate_for_contract, preference_named_by, sharp_alternative,
-    ChosenUnavailable, CodecChoice, CodecKind, CodecOffer, CodecPreference, CodecTrust,
+    negotiate_chosen, negotiate_for_contract, preference_of, sharp_alternative, ChosenUnavailable,
+    CodecChoice, CodecKind, CodecOffer, CodecPreference, CodecSetting, CodecTrust,
     MAX_COMBINED_OFFERS,
 };
 use super::pixel_convert::FrameSize;
@@ -66,6 +66,10 @@ pub struct SetDecoders {
     /// The decoders that keep their references over a continuation.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub gop_continue_decoders: Vec<CodecOffer>,
+    /// The viewer's „Codec“ as in the hello (`ScreenClientHello::
+    /// codec_choice`); absent: the host reads the decoders as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codec_choice: Option<CodecSetting>,
 }
 
 impl SetDecoders {
@@ -147,6 +151,37 @@ pub fn renegotiate_for(
     video_session: bool,
     trust: CodecTrust,
 ) -> Result<Option<Pairing>, ChosenUnavailable> {
+    renegotiate_chosen(encoders, decoders, None, contract, video_session, trust)
+}
+
+/// `renegotiate_for` for a `SET_DECODERS` that names the viewer's „Codec“
+/// (`SetDecoders::codec_choice`, review 2026-11-19 Codex 3/6).
+pub fn renegotiate_set(
+    encoders: &[CodecOffer],
+    set: &SetDecoders,
+    contract: Option<FrameContract>,
+    video_session: bool,
+    trust: CodecTrust,
+) -> Result<Option<Pairing>, ChosenUnavailable> {
+    renegotiate_chosen(
+        encoders,
+        &set.decoders,
+        set.codec_choice,
+        contract,
+        video_session,
+        trust,
+    )
+}
+
+fn renegotiate_chosen(
+    encoders: &[CodecOffer],
+    decoders: &[CodecOffer],
+    codec_choice: Option<CodecSetting>,
+    contract: Option<FrameContract>,
+    video_session: bool,
+    trust: CodecTrust,
+) -> Result<Option<Pairing>, ChosenUnavailable> {
+    let preference = preference_of(codec_choice, decoders);
     // Review 2026-11-19: only a viewer that took `set_decoders_v1` sends
     // this frame, and such a viewer names the tiles under „Automatisch“ and
     // „Verlustfrei“; an empty offer is a chosen codec it has no decoder of
@@ -154,13 +189,13 @@ pub fn renegotiate_for(
     // tiles. A hello keeps the old reading: a viewer before codec
     // negotiation sends no decoders (`ScreenHello::decoders` defaults) and
     // gets the tiles as before.
-    if decoders.is_empty() {
+    // A named choice gets its own reason with its key (`negotiate_chosen`).
+    if decoders.is_empty() && preference == CodecPreference::Auto {
         return Err(ChosenUnavailable {
             preference: CodecPreference::Auto,
             reason: super::negotiate::EMPTY_OFFER.into(),
         });
     }
-    let preference = preference_named_by(decoders);
     let choices = negotiate_chosen(encoders, decoders, preference, contract, trust)?;
     let Some(choice) = choices
         .iter()

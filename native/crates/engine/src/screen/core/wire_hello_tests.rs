@@ -24,6 +24,7 @@ pub(crate) fn client_hello() -> ScreenClientHello {
         gop_continue_decoders: None,
         virtual_display: None,
         virtual_display_size: None,
+        codec_choice: None,
         audio: None,
         frame_capabilities: None,
         protocol_version: SCREEN_PROTOCOL_VERSION,

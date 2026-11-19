@@ -419,6 +419,7 @@ pub fn hello(mode: SessionMode, metadata: bool) -> ScreenClientHello {
         gop_continue_decoders: None,
         virtual_display: None,
         virtual_display_size: None,
+        codec_choice: None,
         audio: None,
     }
 }

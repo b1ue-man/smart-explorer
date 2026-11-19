@@ -65,6 +65,7 @@ fn request(mode: SessionMode, source: SourceId, size: FrameSize, fps: u16) -> Vi
         gop_continue: false,
         gop_continue_decoders: Vec::new(),
         virtual_display: None,
+        codec_choice: None,
     }
 }
 
