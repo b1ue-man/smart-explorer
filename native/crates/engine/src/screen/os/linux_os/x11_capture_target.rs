@@ -60,10 +60,13 @@ impl X11Source {
     }
     pub(super) fn note_geometry(&mut self, area: Area) -> io::Result<()> {
         if self.geometry != Some(area) {
-            self.reference_generation = self
-                .reference_generation
-                .checked_add(1)
-                .ok_or_else(|| io::Error::other("x11_capture_reference_exhausted"))?;
+            // A move alone keeps the encoder's references (Gemini 13.5).
+            if resized(self.geometry, area) {
+                self.reference_generation = self
+                    .reference_generation
+                    .checked_add(1)
+                    .ok_or_else(|| io::Error::other("x11_capture_reference_exhausted"))?;
+            }
             self.geometry_changed |= self.geometry.is_some();
             self.geometry = Some(area);
             self.last_hash = None;
@@ -84,4 +87,9 @@ impl X11Source {
             Target::Window(window) => self.pass_window(window),
         }
     }
+}
+
+/// Whether `area` has another size than `before` (or none was known).
+pub(super) fn resized(before: Option<Area>, area: Area) -> bool {
+    before.is_none_or(|known| (known.width, known.height) != (area.width, area.height))
 }

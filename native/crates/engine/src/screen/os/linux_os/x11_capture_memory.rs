@@ -112,9 +112,13 @@ impl super::X11Source {
             super::Target::Window(window) if self.compositor => self.pixmap_geometry(window)?.2,
             _ => 0,
         };
-        let changed = self.geometry != Some(area) || self.pixmap_bytes != pixmap;
+        // Review 2026-11-19 (Gemini 13.5): the plan and the encoder's
+        // references depend on the size, not the position; a moved window
+        // keeps its grant and encoder and only notes where it is now.
+        let changed =
+            super::capture_target::resized(self.geometry, area) || self.pixmap_bytes != pixmap;
         if !changed && self.grant.is_some() {
-            return Ok(());
+            return self.note_geometry(area);
         }
         let size = FrameSize::new(area.width as u32, area.height as u32);
         crate::screen::core::frame_budget::FrameLimits::RESOURCE.check(size)?;

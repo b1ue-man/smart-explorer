@@ -162,7 +162,7 @@ impl AsyncEncoder {
         let quality = grant
             .as_ref()
             .and_then(|_| crate::screen::core::rate_control::model::session_quality());
-        let peak = sharp_mode(api.as_ref(), quality.is_some(), bitrate, &setup.name);
+        let peak = sharp_mode(api.as_ref(), quality.is_some(), bitrate, &setup.name)?;
         if let Err(error) = start(&transform, &setup, bitrate) {
             if gpu.is_none() {
                 return Err(error);

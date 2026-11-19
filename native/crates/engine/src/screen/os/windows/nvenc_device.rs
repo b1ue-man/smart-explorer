@@ -15,8 +15,8 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use windows::core::Interface;
 use windows::Win32::Graphics::Direct3D11::{ID3D11Device, ID3D11Texture2D};
 use windows::Win32::Graphics::Dxgi::IDXGIDevice;
-use windows_sys::Win32::Foundation::HANDLE;
-use windows_sys::Win32::System::Threading::CreateEventW;
+use windows_sys::Win32::Foundation::{HANDLE, WAIT_OBJECT_0};
+use windows_sys::Win32::System::Threading::{CreateEventW, WaitForSingleObject};
 
 use super::nvenc_codecs::encode_guid;
 use super::nvenc_ffi::{
@@ -41,6 +41,37 @@ pub(super) fn async_timeout_ms(fps: u32) -> u32 {
     4_000u64
         .div_ceil(u64::from(fps.max(1)))
         .max(u64::from(MIN_ASYNC_TIMEOUT_MS)) as u32
+}
+
+/// Review 2026-11-19 (Gemini 12.5): how much longer a picture that missed
+/// its deadline (`async_timeout_ms`) may take before the session gives up.
+/// A key frame of a loaded GPU (a virtual machine's) can take more than
+/// 100 ms; giving up then made a new encoder and unmapped the input texture
+/// while the GPU still read it. A driver that never answers still ends in
+/// an error, after the deadline and this wait.
+pub(super) const LATE_COMPLETION_MS: u32 = 1_000;
+
+/// Waits for the completion `event` of a submitted picture at `fps`.
+pub(super) fn await_completion(event: HANDLE, fps: u32) -> io::Result<()> {
+    let timeout_ms = async_timeout_ms(fps);
+    // SAFETY: `event` is a live kernel event owned by the session.
+    if unsafe { WaitForSingleObject(event, timeout_ms) } == WAIT_OBJECT_0 {
+        return Ok(());
+    }
+    eprintln!(
+        "screen encoder nvenc: picture not complete after {timeout_ms} ms, \
+         waits up to {LATE_COMPLETION_MS} ms more"
+    );
+    // SAFETY: as above; the auto-reset event keeps a late signal.
+    let waited = unsafe { WaitForSingleObject(event, LATE_COMPLETION_MS) };
+    if waited == WAIT_OBJECT_0 {
+        return Ok(());
+    }
+    let total = timeout_ms + LATE_COMPLETION_MS;
+    Err(io::Error::new(
+        io::ErrorKind::TimedOut,
+        format!("NVENC completion event timed out after {total} ms (wait {waited})"),
+    ))
 }
 
 /// The completion event of an asynchronous session (moved here from

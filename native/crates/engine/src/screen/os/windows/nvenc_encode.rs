@@ -29,8 +29,7 @@ use std::sync::Arc;
 
 use windows::core::Interface;
 use windows::Win32::Graphics::Direct3D11::{ID3D11Device, ID3D11Texture2D};
-use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0};
-use windows_sys::Win32::System::Threading::WaitForSingleObject;
+use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
 
 use super::nvenc_codecs::{encode_guid, rfi_dpb};
 use super::nvenc_device::{
@@ -65,6 +64,7 @@ pub(super) use crate::screen::os::nvenc_shared::settings::{
     apply_reference_settings, apply_settings, RFI_DPB,
 };
 
+#[cfg(test)]
 pub(super) use super::nvenc_device::async_timeout_ms;
 use super::nvenc_device::create_completion_event;
 
@@ -268,15 +268,7 @@ impl<A: NvTable> Core<A> {
         let result = unsafe { encode(self.encoder, &mut *params) };
         status(&self.api, self.encoder, result, "nvEncEncodePicture")?;
         self.frames += 1;
-        let timeout_ms = async_timeout_ms(self.rate.fps);
-        // SAFETY: `self.event` is a live kernel event owned by this session.
-        let waited = unsafe { WaitForSingleObject(self.event, timeout_ms) };
-        if waited != WAIT_OBJECT_0 {
-            return Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                format!("NVENC completion event timed out after {timeout_ms} ms (wait {waited})"),
-            ));
-        }
+        super::nvenc_device::await_completion(self.event, self.rate.fps)?;
         let f = self.api.table();
         let mut lock = Box::new(NvEncLockBitstream::zeroed());
         lock.version = NV_ENC_LOCK_BITSTREAM_VER;

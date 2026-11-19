@@ -398,6 +398,18 @@ impl<S: VendorSession> ScreenEncoder for VendorEncoder<S> {
                 self.refresh = true;
                 return Err(error);
             }
+            // Review 2026-11-19 (Gemini 12.5): the capture changed its path
+            // and its grant retired; turnover, never a GPU failure (as the
+            // Media Foundation encoder, `mf_encoder.rs`). The pipeline opens
+            // the encoder of the new grant.
+            Err(error)
+                if CaptureGrant::is_retired_claim(&error)
+                    || grant.is_retired().unwrap_or(false) =>
+            {
+                self.refresh = true;
+                let turnover = format!("the capture changed its path: {error}");
+                return Err(io::Error::new(io::ErrorKind::WouldBlock, turnover));
+            }
             Err(error) => {
                 // A device of its own is not the capture's (P3).
                 if !self.gpu.is_own() {

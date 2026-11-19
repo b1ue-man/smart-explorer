@@ -61,6 +61,10 @@ pub fn windows_key(usage: u16) -> Option<WinKey> {
     let code = evdev_code(usage)?;
     let scan = |code: u16, extended: bool| Some(WinKey::Scan { code, extended });
     match code {
+        // Num Lock: set-1 make code 45, which Windows takes as Pause
+        // without the extended flag and as Num Lock with it (AutoHotkey key
+        // list: NumLock sc145, Pause sc045; review 2026-11-19, Gemini 12.2).
+        69 => scan(0x45, true),
         // Below 89 the Linux code is the set-1 scan code.
         1..=88 => scan(code, false),
         96 => scan(0x1C, true),                      // keypad Enter
@@ -103,32 +107,37 @@ pub fn toolbar_keys() -> Vec<u16> {
 }
 
 /// Ctrl+Alt+Delete is never sent (`no_ctrl_alt_del`): the Delete press
-/// while both a Ctrl and an Alt key are held is dropped.
+/// while both a Ctrl and an Alt key are held is dropped. Review 2026-11-19
+/// (Gemini 12.2): each of the four keys is held or not; before, every
+/// repeated press of a held Ctrl or Alt counted once more and one release
+/// took one off, so after a held Ctrl+Alt every Delete stayed dropped.
 #[derive(Debug, Default)]
 pub struct SasGuard {
-    ctrl: u8,
-    alt: u8,
+    /// Left Ctrl, right Ctrl, left Alt, right Alt (bits 0–3).
+    held: u8,
 }
 
 impl SasGuard {
     pub const fn new() -> Self {
-        Self { ctrl: 0, alt: 0 }
+        Self { held: 0 }
     }
 
     /// Follows `usage` going `down`; `false` for the press to drop.
     pub fn allows(&mut self, usage: u16, down: bool) -> bool {
-        let step = |count: &mut u8| {
-            *count = if down {
-                count.saturating_add(1)
-            } else {
-                count.saturating_sub(1)
+        let bit = match usage {
+            0xE0 => 1,
+            0xE4 => 2,
+            0xE2 => 4,
+            0xE6 => 8,
+            0x4C | 0x63 => {
+                return !(down && self.held & 3 != 0 && self.held & 12 != 0);
             }
+            _ => return true,
         };
-        match usage {
-            0xE0 | 0xE4 => step(&mut self.ctrl),
-            0xE2 | 0xE6 => step(&mut self.alt),
-            0x4C | 0x63 => return !(down && self.ctrl > 0 && self.alt > 0),
-            _ => {}
+        if down {
+            self.held |= bit;
+        } else {
+            self.held &= !bit;
         }
         true
     }
@@ -171,6 +180,13 @@ mod tests {
         assert!(guard.allows(0x4C, false));
         assert!(guard.allows(0xE2, false));
         assert!(guard.allows(0x4C, true), "Ctrl+Delete stays allowed");
+        // Review 2026-11-19: repeated presses of a held key count once.
+        for _ in 0..300 {
+            assert!(guard.allows(0xE0, true) && guard.allows(0xE2, true));
+        }
+        assert!(!guard.allows(0x4C, true));
+        assert!(guard.allows(0xE0, false) && guard.allows(0xE2, false));
+        assert!(guard.allows(0x4C, true), "Delete after Ctrl+Alt went up");
     }
 
     fn control_session(device: &str) -> crate::screen::core::registry::NewSession {

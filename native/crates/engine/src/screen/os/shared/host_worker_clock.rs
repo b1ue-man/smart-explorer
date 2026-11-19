@@ -69,6 +69,21 @@ struct Identity {
 }
 
 impl Identity {
+    /// What differs from `next`, for the host log.
+    fn change(&self, next: &Self) -> &'static str {
+        if self.epoch != next.epoch {
+            "the session started a new stream"
+        } else if self.choice != next.choice {
+            "the codec pairing changed"
+        } else if self.contract != next.contract {
+            "the frame contract changed"
+        } else if self.size != next.size {
+            "the picture size changed"
+        } else {
+            "sharp mode changed"
+        }
+    }
+
     fn of(order: &StreamOrder) -> Self {
         let request = &order.request;
         Self {
@@ -319,6 +334,11 @@ impl Stream {
             let mut gone: Gone = (None, None);
             let identity = Identity::of(&order);
             if state.identity != Some(identity) {
+                // Review 2026-11-19 (Gemini 1.5): the encoding stage drops its
+                // encoder for this before `reopen_reason` could name it.
+                if let Some(before) = state.identity {
+                    eprintln!("screen encoder: ends ({})", before.change(&identity));
+                }
                 state.identity = Some(identity);
                 // The next encoder of this process opens with it (P9).
                 crate::screen::core::rate_control::model::set_session_quality(order.quality_target);

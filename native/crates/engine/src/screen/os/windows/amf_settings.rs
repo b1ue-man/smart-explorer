@@ -13,6 +13,25 @@ use super::vendor_encode::{avc_level_for, RateParams};
 use crate::screen::core::negotiate::CodecKind;
 use crate::screen::core::pixel_convert::FrameSize;
 
+/// Review 2026-11-19 (Gemini 7): sharp mode on an AMF encoder that refuses
+/// quality VBR or its level fails the opening with the reason, as VA-API
+/// does (`SHARP_UNSUPPORTED`), instead of encoding CBR in silence; the stage
+/// then tries the next GPU encoder or names the failure.
+pub(super) fn sharp_taken(
+    names: &Names,
+    rate: &RateParams,
+    refused: &[&'static str],
+) -> std::io::Result<()> {
+    let sharp = [names.rate_control, names.qvbr_level];
+    if rate.quality.is_none() || !refused.iter().any(|name| sharp.contains(name)) {
+        return Ok(());
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "sharp_quality_unsupported: the AMF driver refuses quality VBR (QVBR)",
+    ))
+}
+
 /// `QueryTimeout` in ms: `QueryOutput` waits inside the driver.
 pub(super) const QUERY_TIMEOUT_MS: i64 = 50;
 /// Long-term references for B-36 (`MaxOfLTRFrames`).

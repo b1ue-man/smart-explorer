@@ -287,6 +287,9 @@ pub(super) fn encode_loop(shared: Arc<Shared>) {
                     .identity
                     .is_some_and(|identity| identity.quality.is_some());
                 if let Some(work) = state.next_work() {
+                    // Gemini 13.3 (review 2026-11-19): the slot is free, the
+                    // capture stage captures now, not after its recheck.
+                    shared.changed.notify_all();
                     break work;
                 }
                 state = shared.wait(state, RECHECK);

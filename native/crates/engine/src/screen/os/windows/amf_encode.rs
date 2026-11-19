@@ -31,7 +31,7 @@ use super::amf_abi::{
 };
 use super::amf_codecs::{names, Names};
 use super::amf_settings::{
-    dynamic_settings, key_settings, rate_settings, static_settings, Setting,
+    dynamic_settings, key_settings, rate_settings, sharp_taken, static_settings, Setting,
 };
 use super::vendor_encode::{LtrSlots, RateParams, Recovery, VendorPicture, VendorSession};
 use crate::screen::core::negotiate::CodecKind;
@@ -283,7 +283,8 @@ impl AmfSession {
             ceiling: None,
             _device: device.clone(),
         };
-        session.apply(static_settings(names, size, &rate));
+        let refused = session.apply(static_settings(names, size, &rate));
+        sharp_taken(names, &rate, &refused)?;
         let this = session.component.object;
         // SAFETY: a live component; the size was checked by the factory.
         let result = unsafe {
@@ -381,8 +382,7 @@ impl VendorSession for AmfSession {
                 ltr.set_fps(rate.fps);
             }
             // The peak counts in quality VBR (sharp mode) only; CBR may refuse it.
-            let peak = rate.quality.map(|_| names.peak);
-            let rated = [Some(names.target), peak];
+            let rated = [Some(names.target), rate.quality.map(|_| names.peak)];
             if let Some(name) = refused.iter().find(|name| rated.contains(&Some(**name))) {
                 let error = io::Error::other(format!("AMF refused {name}"));
                 rate.refused_lowering(lowered, AMF_NAME, &error)?;

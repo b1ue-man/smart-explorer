@@ -47,6 +47,25 @@ pub(super) fn refused(node: &Path) -> bool {
         .any(|entry| entry == node)
 }
 
+/// Review 2026-11-19 (Gemini 8.2): a decoder that showed pictures and then
+/// fails gets one new decoder of its node (the viewer opens one for the
+/// next picture group); a failure before the first picture, or the next
+/// failure after that one spare, refuses it for the process. Before, one
+/// passing bitstream error kept VA-API off until the viewer restarted.
+static SPARED: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+
+/// A decoder of `node` failed; `shown`: after a picture it showed.
+pub(super) fn refuse_failed(node: &Path, shown: bool) {
+    if shown {
+        let mut spared = SPARED.lock().unwrap_or_else(PoisonError::into_inner);
+        if !spared.iter().any(|entry| entry == node) {
+            spared.push(node.to_path_buf());
+            return;
+        }
+    }
+    refuse(node);
+}
+
 pub(super) fn refuse(node: &Path) {
     let mut list = REFUSED.lock().unwrap_or_else(PoisonError::into_inner);
     if !list.iter().any(|entry| entry == node) {
@@ -133,6 +152,7 @@ impl DecoderFactory for VaDecoderFactory {
             frames: 0,
             identities: FrameIdentities::default(),
             decoded: None,
+            shown: false,
             display,
         }))
     }
@@ -164,6 +184,8 @@ struct VaDecoder {
     frames: u64,
     identities: FrameIdentities,
     decoded: Option<DecodedFrame>,
+    /// It showed a picture (`refuse_failed`).
+    shown: bool,
     // Dropped last: config, context and surfaces belong to this display.
     display: VaDisplay,
 }
@@ -356,6 +378,7 @@ impl ScreenDecoder for VaDecoder {
             Ok(true) => {
                 let identity = self.identities.take(self.frames)?;
                 self.decoded = Some(identity);
+                self.shown = true;
                 Ok(true)
             }
             Ok(false) => {
@@ -363,7 +386,7 @@ impl ScreenDecoder for VaDecoder {
                 Ok(false)
             }
             Err(error) => {
-                refuse(&self.node);
+                refuse_failed(&self.node, self.shown);
                 Err(error)
             }
         }

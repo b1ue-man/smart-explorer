@@ -39,6 +39,25 @@ pub(super) fn refused(name: &str) -> bool {
         .any(|entry| entry == name)
 }
 
+/// Review 2026-11-19 (Gemini 8.2): a decoder that showed pictures and then
+/// fails gets one new decoder of its factory (the viewer opens one for the
+/// next picture group); a failure before the first picture, or the next
+/// failure after that one spare, refuses it for the process. Before, one
+/// passing bitstream error kept VA-API off until the viewer restarted.
+static SPARED: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// A decoder of `name` failed; `shown`: after a picture it showed.
+pub(super) fn refuse_failed(name: &str, shown: bool) {
+    if shown {
+        let mut spared = SPARED.lock().unwrap_or_else(PoisonError::into_inner);
+        if !spared.iter().any(|entry| entry == name) {
+            spared.push(name.to_owned());
+            return;
+        }
+    }
+    refuse(name);
+}
+
 pub(super) fn refuse(name: &str) {
     let mut list = REFUSED.lock().unwrap_or_else(PoisonError::into_inner);
     if !list.iter().any(|entry| entry == name) {
@@ -275,6 +294,8 @@ pub(super) struct VaVideoDecoder<U: UnitDecoder> {
     unit: U,
     output: DecodeOutput,
     decoded: Option<DecodedFrame>,
+    /// It showed a picture (`refuse_failed`).
+    shown: bool,
     session: VaDecodeSession,
 }
 
@@ -301,11 +322,12 @@ impl<U: UnitDecoder> ScreenDecoder for VaVideoDecoder<U> {
             Ok(shown) => {
                 if shown {
                     self.decoded = Some(DecodedFrame::from_record(record));
+                    self.shown = true;
                 }
                 Ok(shown)
             }
             Err(error) => {
-                refuse(&self.name);
+                refuse_failed(&self.name, self.shown);
                 Err(error)
             }
         }
@@ -420,6 +442,7 @@ impl DecoderFactory for VaVideoDecoderFactory {
                 unit: super::vaapi_hevc_decode::HevcUnits::new(size),
                 output,
                 decoded: None,
+                shown: false,
                 session,
             }),
             CodecKind::Av1 => Box::new(VaVideoDecoder {
@@ -430,6 +453,7 @@ impl DecoderFactory for VaVideoDecoderFactory {
                 unit: super::vaapi_av1_decode::Av1Units::new(size),
                 output,
                 decoded: None,
+                shown: false,
                 session,
             }),
             CodecKind::H264 | CodecKind::Tiles => {

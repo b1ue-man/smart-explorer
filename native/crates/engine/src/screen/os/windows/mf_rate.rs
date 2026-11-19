@@ -186,25 +186,32 @@ fn peak_mode(api: &ICodecAPI, bitrate: u32) -> bool {
 }
 
 /// Sharp mode of an opened MFT when the session asks for it (`sharp`):
-/// `peak_mode`, named in the host log either way. Whether it was taken.
+/// `peak_mode`, named in the host log; whether the MFT runs it. Review
+/// 2026-11-19 (Gemini 7): an MFT that refuses it fails its opening with the
+/// reason (as VA-API, `SHARP_UNSUPPORTED`) instead of encoding CBR in
+/// silence; the stage then tries the next GPU encoder or names the failure.
 pub(in crate::screen::os) fn sharp_mode(
     api: Option<&ICodecAPI>,
     sharp: bool,
     bitrate: u32,
     name: &str,
-) -> bool {
-    let Some(api) = api.filter(|_| sharp) else {
-        return false;
-    };
-    let taken = peak_mode(api, bitrate);
-    if taken {
-        eprintln!(
-            "screen encoder {name}: sharp mode as peak-constrained VBR (Media Foundation keeps no rate in its quality mode)"
-        );
-    } else {
-        eprintln!("screen encoder {name}: sharp mode refused (no peak-constrained VBR), CBR");
+) -> io::Result<bool> {
+    if !sharp {
+        return Ok(false);
     }
-    taken
+    if !api.is_some_and(|api| peak_mode(api, bitrate)) {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            format!(
+                "sharp_quality_unsupported: the Media Foundation encoder {name} refuses \
+                 peak-constrained VBR"
+            ),
+        ));
+    }
+    eprintln!(
+        "screen encoder {name}: sharp mode as peak-constrained VBR (Media Foundation keeps no rate in its quality mode)"
+    );
+    Ok(true)
 }
 
 /// Sets the peak bit rate; `true` when the encoder takes it and reads back
