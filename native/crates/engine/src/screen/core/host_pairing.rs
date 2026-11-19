@@ -185,6 +185,7 @@ impl Pipeline {
         policy.fallbacks = fallbacks;
         policy.failed_codecs = failed_codecs;
         policy.pending_error = refused;
+        policy.queued_notices = std::mem::take(&mut self.quality_policy.queued_notices);
         self.quality_policy = policy;
         // `set_sharp_choice` keeps an alternative of the running codec.
         let effective = self.choice;

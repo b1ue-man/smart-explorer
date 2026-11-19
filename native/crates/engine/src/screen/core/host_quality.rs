@@ -125,6 +125,9 @@ pub(super) struct QualityPolicy {
     /// follows the window, P5): that size and until when the picture keeps
     /// its bounds for it (`Pipeline::expect_source_size`).
     pub(super) follow_source: Option<(FrameSize, u64)>,
+    /// `STATE` reasons that wait for the next run because another one took
+    /// the slot of this run (`Pipeline::note_encoder`, review 2026-11-19 V2).
+    pub(super) queued_notices: Vec<String>,
 }
 
 /// Which pairings may stand in for a failed encoder (plan 2026-11-18).
@@ -257,6 +260,7 @@ impl QualityPolicy {
             pending_error: None,
             small_picture: None,
             follow_source: None,
+            queued_notices: Vec::new(),
             mode: QualityMode {
                 kind: StreamKind::Video,
                 full_size: None,

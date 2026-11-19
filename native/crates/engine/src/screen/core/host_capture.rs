@@ -190,12 +190,14 @@ fn capture_and_encode(
     // it gave way to a new encoder, for every encoder without reference
     // invalidation (the trait's default) at every continued reset.
     let mut request = std::borrow::Cow::Borrowed(request);
+    let mut refused_recovery = false;
     if let Some(last_good) = recover {
         let continued = stage.encoder.as_mut().is_some_and(|opened| {
             opened.encoder.recover_references(last_good)
                 == super::super::ref_recovery::Recovery::Continued
         });
         if !continued {
+            refused_recovery = true;
             request.to_mut().keyframe = true;
         }
     }
@@ -207,6 +209,21 @@ fn capture_and_encode(
             }
             Err(error) => return Err(PipelineError::encoder(error)),
         };
+    // Review 2026-11-19 (V4): an encoder that cannot continue and still
+    // answers without a key frame references its newest picture, not the
+    // confirmed one; sent as the continuation it would break the viewer's
+    // picture. It gives way to a new encoder, whose first picture is a key
+    // frame (as `forced_key` in the host process); this picture is skipped.
+    if refused_recovery
+        && !super::super::first_picture::starts_group(
+            request.choice.codec,
+            frame.keyframe,
+            frame.records.iter(),
+        )
+    {
+        stage.encoder = None;
+        return Ok(Captured::Unchanged);
+    }
     super::super::frame_size_caps::validate_encoded_budget(
         request.frame_contract,
         request.choice.codec,

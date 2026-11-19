@@ -4,8 +4,12 @@
 //! error when no encoder of the chosen codec is left (a chosen codec never
 //! gives way to another codec or the tiles, `FallbackScope`).
 use super::*;
+use crate::screen::core::codec_reason_text::ENCODER_NOTICE;
 use crate::screen::core::first_picture::{StageAnswer, FIRST_PICTURE_DEADLINE_US};
 use crate::screen::core::pacing::codec_cap;
+
+/// Reasons that wait for a `STATE` frame at most (`queue_notice`).
+const MAX_QUEUED_NOTICES: usize = 8;
 
 impl Pipeline {
     /// Why the session's picture stream (and with it often its encoder)
@@ -77,7 +81,39 @@ impl Pipeline {
         crate::screen::os::host_worker_client::host_log::note(None, &line);
         #[cfg(test)]
         eprintln!("{line}");
-        self.fallback_notice = Some(text);
+        // One reason per `STATE` frame (the viewers read it by its prefix).
+        // Review 2026-11-19 (V2): a later reason of the same run replaced a
+        // stage's notice, which the stage gives only once. A codec reason
+        // goes first, the notice follows with the next run
+        // (`promote_queued_notice`); of two codec reasons the later one
+        // counts, as before.
+        let notice = |reason: &str| reason.starts_with(ENCODER_NOTICE);
+        match self.fallback_notice.take() {
+            Some(earlier) if notice(&text) => {
+                self.fallback_notice = Some(earlier);
+                self.queue_notice(text);
+            }
+            Some(earlier) if notice(&earlier) => {
+                self.queue_notice(earlier);
+                self.fallback_notice = Some(text);
+            }
+            _ => self.fallback_notice = Some(text),
+        }
+    }
+
+    fn queue_notice(&mut self, text: String) {
+        let queue = &mut self.quality_policy.queued_notices;
+        if queue.len() >= MAX_QUEUED_NOTICES {
+            queue.remove(0);
+        }
+        queue.push(text);
+    }
+
+    /// A reason that waited (`note_encoder`) takes the free slot of this run.
+    pub(super) fn promote_queued_notice(&mut self) {
+        if self.fallback_notice.is_none() && !self.quality_policy.queued_notices.is_empty() {
+            self.fallback_notice = Some(self.quality_policy.queued_notices.remove(0));
+        }
     }
 
     /// The pairing's macroblock rate does not carry the picture even at one

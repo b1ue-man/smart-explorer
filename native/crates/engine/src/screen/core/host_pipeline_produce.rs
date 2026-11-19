@@ -32,6 +32,7 @@ impl Pipeline {
         // State changes may go on at once; only an answer of the stage or a
         // change of state makes the next tick ready (BK3b).
         self.chain_ready = false;
+        self.promote_queued_notice();
         if !self.work.current(work_epoch) {
             self.reset_stream();
             self.chain_ready = true;
