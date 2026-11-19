@@ -34,7 +34,16 @@ impl AmfSession {
         // Codex round 5, finding 18: the properties set before the refused
         // one stay on the component; the rate before goes back on all of
         // them, so the component runs what `rate` says it runs.
-        self.apply(rate_settings(names, &previous));
+        // A property the component took for the new rate and does not take
+        // back leaves its state unknown: the picture fails, the stage opens
+        // a fresh encoder (B1) instead of running on in silence.
+        let unrestored = self.apply(rate_settings(names, &previous));
+        if let Some(lost) = unrestored.iter().find(|name| !refused.contains(name)) {
+            return Err(io::Error::other(format!(
+                "AMF took {lost} for {} bit/s but not back for {} bit/s",
+                rate.bits_per_second, previous.bits_per_second
+            )));
+        }
         if let Some(ltr) = self.ltr.as_mut() {
             ltr.set_fps(previous.fps);
         }
