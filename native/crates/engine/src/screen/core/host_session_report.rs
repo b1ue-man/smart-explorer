@@ -68,7 +68,7 @@ impl Session<'_> {
     pub(super) fn hold_reason(&self) -> Option<InputHeld> {
         if !self.visible {
             Some(InputHeld::ViewerHidden)
-        } else if self.input_release.is_some() || super::super::input_release::gate::busy() {
+        } else if self.input_release.is_some() || self.target_busy() {
             // Codex 7/1: also a former holder's releases on their way.
             Some(InputHeld::ReleasePending)
         } else if self.input_floor.is_some() || !self.pipeline.input_reference_ready() {

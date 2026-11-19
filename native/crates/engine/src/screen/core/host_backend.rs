@@ -67,6 +67,15 @@ pub trait ScreenInputSink: Send + Sync {
     fn closed(&self) -> bool {
         false
     }
+    /// The input target this sink injects into: sessions with the same
+    /// target wait for each other's releases (round 8, I4). One desktop per
+    /// host by default: Windows' `SendInput` reaches the interactive desktop
+    /// whatever monitor or window the source shows, X11 one display, the
+    /// Wayland portal one seat of the login, Android one device; the host
+    /// processes all follow the one active session (`session_target`).
+    fn input_target(&self) -> String {
+        "desktop".into()
+    }
     /// Takes the pointer out of the picture (`true`) or back into it (P6,
     /// `cursor_overlay.rs`); `false` while this source does not separate it
     /// (it cannot, or its capture has not started: the wish is kept).

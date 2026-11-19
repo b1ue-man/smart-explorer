@@ -335,6 +335,17 @@ impl Session<'_> {
     /// Codex 7/1: what is still on its way (the running job, failed and
     /// queued releases) leaves the session for the release keeper, which
     /// delivers it while every session's input waits (`gate::busy`).
+    /// The input target of this session's source (`ScreenInputSink::input_target`;
+    /// the backend reaches the same desktop).
+    pub(super) fn input_target(&self) -> String {
+        self.pipeline
+            .input_sink()
+            .map_or_else(|| "desktop".into(), |sink| sink.input_target())
+    }
+    /// Releases of a former holder of this session's target are on their way.
+    pub(super) fn target_busy(&self) -> bool {
+        gate::busy(&self.input_target())
+    }
     pub(super) fn hand_releases_over(&mut self) {
         // An injection that outlasted its grace goes first (round 8, I8).
         let jobs: Vec<_> = (self.health.injecting.take().map(|job| job.handle))
@@ -345,6 +356,7 @@ impl Session<'_> {
         if jobs.is_empty() && queued.is_empty() && failed_list(&self.health.failed).is_empty() {
             return;
         }
+        let key = self.input_target();
         let target = match self.pipeline.input_sink() {
             Some(sink) => gate::Target::Sink(sink),
             None => gate::Target::Backend(self.context.backend.clone()),
@@ -352,7 +364,7 @@ impl Session<'_> {
         // Round 8 (I3): the keeper owns this list now; the session goes on
         // with a new one, so it never takes the keeper's releases.
         let failed = std::mem::take(&mut self.health.failed);
-        gate::take_over(jobs, failed, queued, target);
+        gate::take_over(jobs, failed, queued, target, key);
     }
 }
 

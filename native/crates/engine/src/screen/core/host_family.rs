@@ -229,7 +229,7 @@ impl Session<'_> {
             || !self.pipeline.presentation_supported()
             || !self.pipeline.input_reference_ready()
             || self.input_release.is_some()
-            || super::input_release::gate::busy()
+            || self.target_busy()
             // Round 8 (I7): a batch on its way or releases owed come first.
             || self.health.injecting.is_some()
             || self.releases_owed()

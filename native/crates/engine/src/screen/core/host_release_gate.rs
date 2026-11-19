@@ -9,23 +9,31 @@
 use crate::screen::core::host_backend::{ScreenHostBackend, ScreenInputSink};
 use crate::screen::core::input_model::{InputEvent, MAX_INPUT_EVENTS};
 use crate::screen::core::wire_control::ControlBlock;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-/// Hand-overs still delivering.
-static OUTSTANDING: AtomicUsize = AtomicUsize::new(0);
+/// Hand-overs still delivering, per input target (round 8, I4).
+static OUTSTANDING: Mutex<Option<HashMap<String, usize>>> = Mutex::new(None);
 
-/// How long the keeper tries: a host process's release ends within 12 s or
-/// its process is ended (`FRAME_TIMEOUT` + `INPUT_TIMEOUT`), so two jobs
-/// and the retries between them fit [assumption: 30 s; not measured].
-const GATE_LIMIT: Duration = Duration::from_secs(30);
+fn outstanding() -> std::sync::MutexGuard<'static, Option<HashMap<String, usize>>> {
+    OUTSTANDING.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// How long the keeper tries, from `FRAME_TIMEOUT` + 2 × `INPUT_TIMEOUT`
+/// (10 s + 2 × 2 s, `host_worker_client.rs`): a host process's release
+/// waits for the link a picture request holds, then for its answer; a
+/// second try after a refusal gets its own answer time.
+const GATE_LIMIT: Duration = Duration::from_secs(10 + 2 * 2);
 /// The pause between two tries of releases the sink refused.
 const RETRY: Duration = Duration::from_secs(1);
 
-/// Releases of a former holder are still on their way: input waits.
-pub(in super::super) fn busy() -> bool {
-    OUTSTANDING.load(Ordering::Acquire) > 0
+/// Releases of a former holder of `target` are still on their way: input
+/// into it waits; other targets go on.
+pub(in super::super) fn busy(target: &str) -> bool {
+    outstanding()
+        .as_ref()
+        .is_some_and(|map| map.get(target).is_some_and(|count| *count > 0))
 }
 
 /// Where the releases go: the source's sink, or the backend without one.
@@ -35,10 +43,17 @@ pub(super) enum Target {
     Backend(Arc<dyn ScreenHostBackend>),
 }
 
-struct Outstanding;
+struct Outstanding(String);
 impl Drop for Outstanding {
     fn drop(&mut self) {
-        OUTSTANDING.fetch_sub(1, Ordering::AcqRel);
+        if let Some(map) = outstanding().as_mut() {
+            if let Some(count) = map.get_mut(&self.0) {
+                *count = count.saturating_sub(1);
+                if *count == 0 {
+                    map.remove(&self.0);
+                }
+            }
+        }
     }
 }
 
@@ -50,13 +65,17 @@ pub(super) fn take_over(
     failed: Arc<Mutex<Vec<InputEvent>>>,
     mut queued: Vec<InputEvent>,
     target: Target,
+    key: String,
 ) {
     let Ok(runtime) = tokio::runtime::Handle::try_current() else {
         eprintln!("screen session: releases of a former holder could not be kept");
         return;
     };
-    OUTSTANDING.fetch_add(1, Ordering::AcqRel);
-    let outstanding = Outstanding;
+    *outstanding()
+        .get_or_insert_with(HashMap::new)
+        .entry(key.clone())
+        .or_insert(0) += 1;
+    let outstanding = Outstanding(key);
     runtime.spawn(async move {
         let _outstanding = outstanding;
         let started = Instant::now();
