@@ -232,7 +232,14 @@ pub(super) async fn prepare(
         FrameCapabilities::admitted(info.capture_limits.max_size, admission.working_bytes())
             .map_err(Failure::Capture)?;
     host.frames = host.frames.for_capture(info.capture_limits);
-    host.hybrid_regions = info.supports_regions;
+    // Hybrid regions stay off on the host too while every viewer of this
+    // build turns them off (`viewer_client.rs`, `caps.hybrid_regions =
+    // false`): on 2026-10-27 they left about 1 picture/s and flickering,
+    // mostly black pictures. An older or foreign viewer that still offers
+    // them would switch on that path, with a GPU-to-CPU readback of every
+    // picture (review 2026-11-19, Gemini 5/2). The source's own fact stays
+    // `info.supports_regions` for the day the path is fixed.
+    host.hybrid_regions = false;
     let mut contract =
         FrameContract::negotiate(Some(host), hello.frame_capabilities).map_err(Failure::Capture)?;
     // HEVC and AV1 only from a viewer that named them in `decoders_v2`
