@@ -67,6 +67,8 @@ pub struct SessionInfo {
     pub path: Option<String>,
     pub controller: Option<ControlHolder>,
     pub blocked: Option<ControlBlock>,
+    /// The host holds this viewer's input back for now (E2, `CONTROL_STATE`).
+    pub held: Option<crate::screen::core::wire_control::InputHeld>,
     pub stream: Option<StreamInfo>,
     pub stats: Option<HostStats>,
     /// Not delivered by the relay yet; shown as „–“.
@@ -103,6 +105,7 @@ impl SessionInfo {
             path: None,
             controller: None,
             blocked: None,
+            held: None,
             stream: None,
             stats: None,
             rtt_ms: None,

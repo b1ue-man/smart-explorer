@@ -3,6 +3,31 @@
 //! every choice is used exactly as chosen).
 use super::super::screen_toolbar_ui::{self, ToolbarAction};
 use super::{Mode, ScreenViewerApp, Transition};
+use eframe::egui;
+
+/// The toolbar: a panel above the picture in a window; in full screen it
+/// lies over the picture (fix 2026-11-19), in a layer of
+/// `Order::Foreground` the Direct3D 11 child cuts out like a popup. As a
+/// panel each time it showed or hid in full screen it resized the picture
+/// area: a visibility report (1:1) and maybe a new size, so a new encoder.
+pub(super) fn toolbar(ctx: &egui::Context, fullscreen: bool, add: impl FnOnce(&mut egui::Ui)) {
+    if !fullscreen {
+        egui::TopBottomPanel::top("screen_toolbar").show(ctx, add);
+        return;
+    }
+    let width = ctx.screen_rect().width();
+    egui::Area::new(egui::Id::new("screen_toolbar_overlay"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(egui::Pos2::ZERO)
+        .show(ctx, |ui| {
+            let frame = egui::Frame::side_top_panel(ui.style());
+            let inner = width - frame.total_margin().sum().x;
+            frame.show(ui, |ui| {
+                ui.set_width(inner.max(0.0));
+                add(ui);
+            });
+        });
+}
 
 impl ScreenViewerApp {
     /// Stores the choice and changes the session: a decoder that decodes

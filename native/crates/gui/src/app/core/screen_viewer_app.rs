@@ -213,7 +213,7 @@ impl ScreenViewerApp {
         let mut actions: Vec<ToolbarAction> = Vec::new();
         if !self.fullscreen || self.toolbar_open {
             let devices = device_list(&common.devices);
-            let _ = egui::TopBottomPanel::top("screen_toolbar").show(ctx, |ui| {
+            choice::toolbar(ctx, self.fullscreen, |ui| {
                 let info = view.session.as_ref().map(|session| session.info());
                 let holder = info.as_ref().and_then(|info| {
                     info.controller

@@ -14,21 +14,15 @@ use tokio::sync::mpsc;
 
 use crate::daemon::ipc_host::ShareHost;
 use crate::daemon::ipc_protocol::screen::{
-    self, encode_relay_record, read_relay, write_relay, BenchRequest, ProbeReport, ScreenIpcReply,
-    ScreenIpcRequest, StreamRequest, MAX_RELAY_VIEWER_BYTES, RELAY_BROKEN, RELAY_CLOCK, RELAY_HOST,
-    RELAY_RATE_CEILING, RELAY_RECORD, RELAY_VIEWER, WATCH_WAIT_SECS,
+    self, read_relay, write_relay, BenchRequest, ProbeReport, ScreenIpcReply, ScreenIpcRequest,
+    StreamRequest, MAX_RELAY_VIEWER_BYTES, RELAY_VIEWER, WATCH_WAIT_SECS,
 };
 use crate::daemon::ipc_protocol::{write_response, IpcResponse};
 use crate::screen::core::bench::{self, BenchOptions};
-use crate::screen::core::gop_stream::{now_us, PictureEvent};
-use crate::screen::core::metrics::ClockSync;
 use crate::screen::core::negotiate::{CodecOffer, CodecPreference};
 use crate::screen::core::registry::{SessionView, StopSelector};
-use crate::screen::core::session_state::EndReason;
-use crate::screen::core::viewer_client::{ViewerError, ViewerRequest, ViewerSession};
-use crate::screen::core::wire_control::{
-    decode_viewer_frame, encode_host_frame, HostFrame, ViewerFrame,
-};
+use crate::screen::core::viewer_client::{ViewerError, ViewerRequest};
+use crate::screen::core::wire_control::{decode_viewer_frame, ViewerFrame};
 use crate::screen::core::wire_hello::{ScreenErrorCode, SessionMode};
 use crate::screen::os::session_memory::handshake;
 use crate::share::access_grant::CapabilityDecision;
@@ -36,6 +30,9 @@ use crate::share::{PeerOpenTarget, ShareService};
 
 #[path = "screen_ipc_reconnect.rs"]
 mod reconnect;
+#[path = "screen_ipc_relay_loop.rs"]
+mod relay;
+use relay::relay_loop;
 
 /// How long the worker tries to reach a device that is not online yet.
 const CONNECT_WAIT: Duration = Duration::from_secs(20);
@@ -425,75 +422,4 @@ fn relay_input(input: &mut TcpStream, frames: &mpsc::Sender<Option<ViewerFrame>>
         }
     }
     let _ = frames.blocking_send(None);
-}
-
-/// Forwards host frames and pictures to the client and its control frames
-/// to the host; returns the end code and detail.
-async fn relay_loop(
-    session: &mut ViewerSession,
-    out: &mpsc::Sender<(u8, Vec<u8>)>,
-    input: &mut mpsc::Receiver<Option<ViewerFrame>>,
-    modes: &mut reconnect::ModeMemory,
-) -> (String, Option<String>) {
-    let mut clock = ClockSync::default();
-    let mut offset = None;
-    loop {
-        let forwarded = tokio::select! {
-            frame = session.host.recv() => match frame {
-                Some(Ok(frame)) => {
-                    if reconnect::changed_session(&frame) {
-                        return (EndReason::SessionChanged.key().into(), None);
-                    }
-                    if let HostFrame::Pong(pong) = &frame {
-                        clock.on_pong(pong, now_us());
-                        if clock.offset_us() != offset {
-                            offset = clock.offset_us();
-                            let value = offset.unwrap_or(0).to_be_bytes().to_vec();
-                            let _ = out.send((RELAY_CLOCK, value)).await;
-                        }
-                    }
-                    match encode_host_frame(&frame) {
-                        Ok((tag, payload)) => {
-                            let mut body = Vec::with_capacity(payload.len() + 1);
-                            body.push(tag);
-                            body.extend_from_slice(&payload);
-                            out.send((RELAY_HOST, body)).await
-                        }
-                        Err(_) => Ok(()),
-                    }
-                }
-                Some(Err(error)) => return ("connection_lost".into(), Some(error.to_string())),
-                None => return ("ended".into(), None),
-            },
-            event = session.pictures.recv() => match event {
-                Some(PictureEvent::Record { header, record, .. }) => {
-                    match encode_relay_record(&header, &record) {
-                        Ok(body) => out.send((RELAY_RECORD, body)).await,
-                        Err(_) => Ok(()),
-                    }
-                }
-                Some(PictureEvent::Broken { gop_id }) => {
-                    out.send((RELAY_BROKEN, gop_id.to_be_bytes().to_vec())).await
-                }
-                None => return ("ended".into(), None),
-            },
-            frame = input.recv() => match frame {
-                Some(Some(frame)) => {
-                    modes.note(&frame);
-                    // What became of „Höchste Datenrate“ changed during the
-                    // session (P1): applied, or dropped for an old host.
-                    let state = reconnect::rate_state(&frame, session.rate_ceiling);
-                    let _ = session.control.send(frame).await;
-                    match state {
-                        Some(json) => out.send((RELAY_RATE_CEILING, json)).await,
-                        None => Ok(()),
-                    }
-                }
-                Some(None) | None => return ("viewer_closed".into(), None),
-            },
-        };
-        if forwarded.is_err() {
-            return ("viewer_closed".into(), None);
-        }
-    }
 }

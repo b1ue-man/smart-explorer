@@ -262,6 +262,8 @@ impl DecodeState {
             HostFrame::ControlState(state) => self.shared.update(|info| {
                 info.controller = state.holder;
                 info.blocked = state.blocked;
+                // E2: shown while set; the next state without it clears it.
+                info.held = state.held;
             }),
             HostFrame::Stats(stats) => {
                 // BK0: a host announcing `frame_timing_v1` is asked for its

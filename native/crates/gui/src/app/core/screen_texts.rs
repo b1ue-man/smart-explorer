@@ -4,7 +4,7 @@
 //! every `EndReason` has its own text (`screen_texts_tests.rs`); a code of
 //! a newer host stays visible as „Fehler des Geräts: {Code}“.
 use crate::screen::core::session_state::SessionState;
-use crate::screen::core::wire_control::ControlBlock;
+use crate::screen::core::wire_control::{ControlBlock, InputHeld};
 use crate::screen::core::wire_hello::ScreenErrorCode;
 
 #[path = "screen_codec_notice.rs"]
@@ -151,6 +151,17 @@ pub fn blocked_text(block: ControlBlock) -> &'static str {
         ControlBlock::ControlUnavailable => "Dieses Gerät erlaubt hier keine Fernsteuerung",
         ControlBlock::UnsupportedOnHost => "Dieses Gerät kann noch keine Eingaben annehmen",
         ControlBlock::Other => "Eingaben sind blockiert",
+    }
+}
+
+/// Why the host holds the input back for now (E2): the session waits, the
+/// input is not blocked.
+pub fn held_text(held: InputHeld) -> &'static str {
+    match held {
+        InputHeld::ViewerHidden => "Eingabe wartet: das Bild ist verdeckt oder minimiert",
+        InputHeld::WaitingForPicture => "Eingabe wartet auf ein aktuelles Bild",
+        InputHeld::ReleasePending => "Eingabe wartet, bis gehaltene Tasten gelöst sind",
+        InputHeld::Other => "Eingabe wartet am Gerät",
     }
 }
 

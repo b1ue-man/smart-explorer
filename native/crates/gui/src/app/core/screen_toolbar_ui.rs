@@ -403,8 +403,17 @@ fn control_items(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Vec<ToolbarA
         ui.label(RichText::new(format!("Gesteuert von {name}")).small());
     }
     let blocked: Option<ControlBlock> = input.info.and_then(|info| info.blocked);
-    if let (Some(block), true) = (blocked, input.control_on) {
-        ui.colored_label(theme::warning(ui), blocked_text(block));
+    // E2: input the host holds back is named while it waits; the block it
+    // repeats in that state is the one shown before, not a new one.
+    let held = input.info.and_then(|info| info.held);
+    match (held, blocked, input.control_on) {
+        (Some(held), _, true) => {
+            ui.colored_label(theme::warning(ui), super::screen_texts::held_text(held));
+        }
+        (None, Some(block), true) => {
+            ui.colored_label(theme::warning(ui), blocked_text(block));
+        }
+        _ => {}
     }
 }
 
