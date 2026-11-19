@@ -96,6 +96,9 @@ private const val FIELD_PAD = 32
 /** Keys of the automatic login switch (`login.autoSwitch`), one per open full view. */
 private val autoLoginKeys = AtomicLong(0)
 
+/** „Ganzer Bildschirm“ chosen while the host named no monitor: a missing source means „no change“ to the host. */
+private const val WHOLE_SCREEN_UNNAMED = "„Ganzer Bildschirm“ nicht möglich: Der Gastgeber nennt keinen Bildschirm. Die bisherige Quelle bleibt."
+
 /**
  * The full view of one device (SCR-M9, U28-7): the picture in a full-screen dialog with zoom 1× to
  * 8× and panning, the bar of [ScreenTopBar], touch control while „Steuern“ is on and the screen
@@ -366,7 +369,10 @@ fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, a
     fun applySettings(wanted: ViewSettings) {
         // A source can only be changed to a named one (no source on the wire means „no change“); without a monitor list
         // „Ganzer Bildschirm“ has no name, so the source stays and the picture is not dropped.
-        val next = if (wanted.source == null && settings.source != null) wanted.copy(source = settings.source) else wanted
+        val unnamed = wanted.source == null && settings.source != null
+        val next = if (unnamed) wanted.copy(source = settings.source) else wanted
+        // Said in the status line until the next choice, never kept silently.
+        if (unnamed) failure = WHOLE_SCREEN_UNNAMED else if (failure == WHOLE_SCREEN_UNNAMED) failure = null
         if (settings.source != next.source) { releaseInputs(); session?.invalidateDisplay(); sourceAfterGop = ui.stream?.gop; bitmap = null; bitmapFrame = null; surfaceFrame = null; renderReady = false }
         val previous = settings
         settings = next
