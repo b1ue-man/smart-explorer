@@ -20,8 +20,34 @@ pub const OPUS_BITRATE: i32 = 128_000;
 /// millisecond at this setting on desktop processors (assumption, not
 /// measured on this build).
 pub const OPUS_COMPLEXITY: i32 = 7;
+/// The lowest Opus rate the sound is set to under a low „Höchste
+/// Datenrate“ (`opus_bitrate_for`): libopus' CELT still codes 5 ms frames
+/// there.
+pub const OPUS_MIN_BITRATE: i32 = 6_000;
 /// Samples of one interleaved frame.
 pub const FRAME_VALUES: usize = FRAME_SAMPLES * CHANNELS as usize;
+
+/// The Opus rate under the viewer's „Höchste Datenrate“ (review
+/// 2026-11-19, Codex 7/7): the sound, its packet heads included, takes at
+/// most half of what the ceiling leaves above the pictures' floor
+/// (`picture_floor_bps`), so sound and control do not stop the pictures; at
+/// most `OPUS_BITRATE`, at least `OPUS_MIN_BITRATE`. A ceiling too low even
+/// for that stops the pictures with the visible control notice
+/// (`RateController::control_over_ceiling`). Without a ceiling
+/// `OPUS_BITRATE`.
+pub fn opus_bitrate_for(ceiling_bps: Option<u64>) -> i32 {
+    let Some(ceiling) = ceiling_bps else {
+        return OPUS_BITRATE;
+    };
+    let floor = super::rate_control::picture_floor_bps(ceiling);
+    let share = ceiling.saturating_sub(floor) / 2;
+    let packets_per_second = 1_000_000 / u64::from(super::audio_wire::FRAME_US);
+    let head_bps = super::audio_wire::PACKET_HEAD as u64 * 8 * packets_per_second;
+    let opus = share.saturating_sub(head_bps);
+    i32::try_from(opus)
+        .unwrap_or(OPUS_BITRATE)
+        .clamp(OPUS_MIN_BITRATE, OPUS_BITRATE)
+}
 
 fn codec_error(message: &'static str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)
@@ -55,6 +81,14 @@ impl AudioEncoder {
         match self {
             Self::Opus(_) => AudioCodec::Opus,
             Self::Pcm16 => AudioCodec::Pcm16,
+        }
+    }
+
+    /// Sets the Opus rate of the next frames (`opus_bitrate_for`); PCM16
+    /// has none.
+    pub fn set_bitrate(&mut self, bps: i32) {
+        if let Self::Opus(encoder) = self {
+            encoder.bitrate_bps = bps.clamp(OPUS_MIN_BITRATE, OPUS_BITRATE);
         }
     }
 

@@ -20,4 +20,8 @@ pub trait AudioHost: Send + Sync {
     fn sent_bytes(&self, _connection: &Connection) -> u64 {
         0
     }
+    /// The viewer's „Höchste Datenrate“ (review 2026-11-19, Codex 7/7):
+    /// the sound's rate follows it (`audio_codec::opus_bitrate_for`). A link
+    /// that sends nothing ignores it.
+    fn set_ceiling(&self, _connection: &Connection, _ceiling_bps: Option<u64>) {}
 }

@@ -106,6 +106,21 @@ pub fn encode(stamp: FrameStamp, op: Operation) -> io::Result<Vec<u8>> {
     }
     Ok(out)
 }
+/// The bytes of the video access unit in a hybrid record (`encode`'s
+/// layout: 24 bytes stamp, tag 1, key flag, rectangle count, 16 bytes per
+/// rectangle, then the unit); `None` for any other record (Gemini 5/2: the
+/// session's honour measures the video encoder alone).
+pub fn video_bytes(record: &[u8]) -> Option<u64> {
+    if record.get(24) != Some(&1) {
+        return None;
+    }
+    let count: [u8; 4] = record.get(26..30)?.try_into().ok()?;
+    let rects = usize::try_from(u32::from_be_bytes(count))
+        .ok()?
+        .checked_mul(16)?;
+    let unit = record.len().checked_sub(30)?.checked_sub(rects)?;
+    u64::try_from(unit).ok()
+}
 pub fn decode(bytes: &[u8], size: FrameSize) -> io::Result<(FrameStamp, Operation)> {
     if bytes.len() > MAX_RECORD_BYTES {
         return Err(invalid("hybrid record exceeds 16 MiB"));

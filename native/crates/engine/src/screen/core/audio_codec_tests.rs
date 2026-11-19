@@ -71,3 +71,28 @@ fn audio_task_codec_pcm16_round_trips_and_conceals_with_silence() {
     assert!(AudioEncoder::new(AudioCodec::Other).is_err());
     assert!(AudioDecoder::new(AudioCodec::Other).is_err());
 }
+
+/// Codex 7/7: under a low „Höchste Datenrate“ the sound, heads included,
+/// leaves the pictures their floor; without a ceiling it keeps its rate.
+#[test]
+fn review1119_task_sound_follows_the_ceiling() {
+    assert_eq!(opus_bitrate_for(None), OPUS_BITRATE);
+    assert_eq!(opus_bitrate_for(Some(10_000_000)), OPUS_BITRATE);
+    let head_bps = (super::super::audio_wire::PACKET_HEAD * 8 * 200) as u64;
+    for ceiling in [150_000u64, 200_000, 300_000] {
+        let opus = opus_bitrate_for(Some(ceiling));
+        let sound = u64::try_from(opus).unwrap() + head_bps;
+        let floor = super::super::rate_control::picture_floor_bps(ceiling);
+        assert!(opus < OPUS_BITRATE, "{ceiling}: {opus}");
+        assert!(
+            ceiling - sound >= floor,
+            "{ceiling}: sound {sound}, floor {floor}"
+        );
+    }
+    assert_eq!(opus_bitrate_for(Some(1)), OPUS_MIN_BITRATE);
+    let mut encoder = AudioEncoder::new(AudioCodec::Opus).unwrap();
+    encoder.set_bitrate(opus_bitrate_for(Some(150_000)));
+    let mut payload = Vec::new();
+    encoder.encode(&tone(0), &mut payload).unwrap();
+    assert!(!payload.is_empty());
+}

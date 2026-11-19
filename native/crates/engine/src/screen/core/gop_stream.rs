@@ -183,25 +183,28 @@ impl GopWriter {
     /// Paces the records of the next `write_frame_admitted` at `rate_bps`
     /// after `credit` bytes at once.
     /// `limit`: the session's ceiling as it is now, read per piece.
+    /// `rate_ceiling`: the user ceiling `rate_bps` was taken under (Codex
+    /// 7/4: a ceiling set in the cell before the rate controller heard of it
+    /// differs from it and holds the picture from its first piece on).
     /// `control_bps`: the control stream's and sound's rate now.
     pub fn pace_next_frame(
         &mut self,
         rate_bps: u64,
         credit: u64,
         limit: Option<std::sync::Arc<std::sync::atomic::AtomicU64>>,
+        rate_ceiling: Option<u64>,
         control_bps: u64,
         line_bps: u64,
     ) {
-        let ceiling_at_start = limit
-            .as_ref()
-            .map_or(0, |cell| cell.load(std::sync::atomic::Ordering::Acquire));
+        let rate_bps = rate_bps.max(1);
         self.pace = Some(Pace {
-            rate_bps: rate_bps.max(1),
-            credit,
-            started: tokio::time::Instant::now(),
+            rate_bps,
+            banked: u128::from(credit),
+            anchor: tokio::time::Instant::now(),
+            anchor_rate: None,
             written: 0,
             limit,
-            ceiling_at_start,
+            ceiling_at_start: rate_ceiling.unwrap_or(0),
             control_bps,
             line_bps: line_bps.max(1),
         });
@@ -217,14 +220,11 @@ impl GopWriter {
         // then (round 6 L2: one wait of the whole remainder at the rate of
         // its start slept for hours after a ceiling change).
         loop {
-            let Some(pace) = self.pace.as_ref() else {
+            let Some(pace) = self.pace.as_mut() else {
                 return;
             };
-            let elapsed =
-                u128::from(u64::try_from(pace.started.elapsed().as_micros()).unwrap_or(u64::MAX));
-            let rate = pace.rate().max(1);
-            let earned = u128::from(rate) * elapsed / 8 / 1_000_000;
-            let allowed = u128::from(pace.credit).saturating_add(earned);
+            // Codex 7/5: each stretch of time earns at the rate valid in it.
+            let (rate, allowed) = pace.allowed();
             let ahead = u128::from(pace.written).saturating_sub(allowed);
             let wait_us = ahead * 8 * 1_000_000 / u128::from(rate);
             if wait_us < u128::from(PACE_MIN_WAIT_US) {

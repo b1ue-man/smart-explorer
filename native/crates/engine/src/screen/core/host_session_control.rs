@@ -133,6 +133,10 @@ impl Session<'_> {
                 // Held control frames follow the new ceiling at once, also
                 // while a picture operation holds the pipeline (round 7 P7).
                 self.outbox.follow_ceiling(ceiling);
+                // The sound's rate follows it (Codex 7/7).
+                if let Some(link) = self.context.backend.audio() {
+                    link.set_ceiling(self.connection, ceiling);
+                }
                 Ok(())
             }
             // New decoders after „Codec“/„Dekodierer“ (`set_decoders_v1`):

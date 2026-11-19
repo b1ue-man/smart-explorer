@@ -10,14 +10,19 @@
 //! keep the ceiling over time. The session loop never waits for them; they
 //! leave in their order (a pointer shape first), a position of a shape still held waits
 //! with it (the newest one), and a session that ends drops them. Without a
-//! user ceiling everything goes at once, as before.
+//! user ceiling everything goes at once, as before, a large frame only after
+//! the ones still held.
 use std::collections::VecDeque;
 
 use super::*;
+use crate::screen::core::cursor_overlay::CursorPosition;
 use crate::screen::core::tiles_rate::SharedBudget;
 
-/// Frames held back at most; one more goes at once (a viewer that asks
-/// faster than the ceiling carries is not answered never).
+/// Frames held back at most. A newer window list, family list, pointer
+/// shape or reply for the same icon replaces its held one in place; any
+/// other frame beyond this first sends the oldest held one, so the order
+/// stays and its bytes are the budget's debt (Codex 7/6: before, the next
+/// frame went at once and overtook older ones).
 const HELD_FRAMES: usize = 32;
 /// Replaced shapes remembered (their ids only rise; a few cover a burst).
 const REPLACED_SHAPES: usize = 8;
@@ -93,10 +98,51 @@ impl Outbox {
                 | HostFrame::Families(_)
                 | HostFrame::CursorShape(_)
         );
-        let Some(rate) = self.budget.rate().filter(|_| large) else {
+        if !large {
             return false;
-        };
-        self.held.len() < HELD_FRAMES && (self.waiting() || !self.budget.admits(now_us(), rate))
+        }
+        // Behind held ones also when the ceiling was just lifted: they leave
+        // first, in their order (Codex 7/6).
+        if self.waiting() {
+            return true;
+        }
+        self.budget
+            .rate()
+            .is_some_and(|rate| !self.budget.admits(now_us(), rate))
+    }
+
+    /// Whether holding `frame` needs room first: the queue is full and
+    /// `frame` replaces none of the held frames.
+    fn full_for(&self, frame: &HostFrame) -> bool {
+        self.held.len() >= HELD_FRAMES && self.replaced_in_place(frame).is_none()
+    }
+
+    /// The held frame a newer `frame` takes the place of: the window list
+    /// and the family list are complete states without a request id, a
+    /// pointer shape is the newest one (`hold`), an icon reply answers the
+    /// same icon.
+    fn replaced_in_place(&self, frame: &HostFrame) -> Option<usize> {
+        self.held
+            .iter()
+            .position(|held| match (held.frame(), frame) {
+                (HostFrame::Windows(_), HostFrame::Windows(_))
+                | (HostFrame::Families(_), HostFrame::Families(_))
+                | (HostFrame::CursorShape(_), HostFrame::CursorShape(_)) => true,
+                (HostFrame::IconReply(old), HostFrame::IconReply(new)) => old.icon == new.icon,
+                _ => false,
+            })
+    }
+
+    /// The viewer's pointer was hidden (source change, overlay off; Codex
+    /// 7/14): a held shape and its position belong to the state before and
+    /// never go; the feed of the new state sends shape and position again
+    /// (`CursorFeed::reset`), with ids that may repeat the old ones.
+    fn forget_pointer(&mut self) {
+        self.held
+            .retain(|held| !matches!(held.frame(), HostFrame::CursorShape(_)));
+        self.shape = None;
+        self.position = None;
+        self.replaced.clear();
     }
 
     fn hold(&mut self, held: Held) {
@@ -116,6 +162,10 @@ impl Outbox {
             self.held.push_front(held);
             return;
         }
+        if let Some(index) = self.replaced_in_place(held.frame()) {
+            self.held[index] = held;
+            return;
+        }
         self.held.push_back(held);
     }
 }
@@ -123,19 +173,33 @@ impl Outbox {
 impl Session<'_> {
     pub(super) async fn frame(&mut self, frame: HostFrame) -> io::Result<()> {
         if let HostFrame::CursorPosition(position) = &frame {
-            if self.outbox.replaced.contains(&position.shape_id) {
-                return Ok(());
-            }
-            if self.outbox.shape == Some(position.shape_id) {
-                self.outbox.position = Some(frame);
-                return Ok(());
+            if *position == CursorPosition::hidden() {
+                self.outbox.forget_pointer();
+            } else {
+                if self.outbox.replaced.contains(&position.shape_id) {
+                    return Ok(());
+                }
+                if self.outbox.shape == Some(position.shape_id) {
+                    self.outbox.position = Some(frame);
+                    return Ok(());
+                }
+                // A position of another shape is newer than a held one.
+                self.outbox.position = None;
             }
         }
-        if self.outbox.holds(&frame) {
-            self.outbox.hold(Held::Frame(frame));
-            return Ok(());
+        self.hold_or_write(Held::Frame(frame)).await
+    }
+
+    /// Holds `held` while the budget has no credit for it, else writes it.
+    async fn hold_or_write(&mut self, held: Held) -> io::Result<()> {
+        if !self.outbox.holds(held.frame()) {
+            return self.write(held).await;
         }
-        self.write(Held::Frame(frame)).await
+        if self.outbox.full_for(held.frame()) {
+            self.flush_outbox().await?;
+        }
+        self.outbox.hold(held);
+        Ok(())
     }
 
     /// The answer of a finished metadata job, as the synchronous path gave
@@ -155,11 +219,7 @@ impl Session<'_> {
             }
             (fallback, result) => fallback.settle(result)?,
         };
-        if self.outbox.holds(&response) {
-            self.outbox.hold(Held::Metadata(response));
-            return Ok(());
-        }
-        self.write(Held::Metadata(response)).await
+        self.hold_or_write(Held::Metadata(response)).await
     }
 
     /// The next held frame, now that the budget has credit; a position that

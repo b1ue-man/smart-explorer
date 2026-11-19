@@ -104,6 +104,8 @@ impl Start<'_> {
         self.accepted(ok).await?;
         if let Some(link) = link.filter(|_| answered) {
             link.attach(self.connection);
+            // The sound's rate under „Höchste Datenrate“ (Codex 7/7).
+            link.set_ceiling(self.connection, hello.max_rate_bps.filter(|bps| *bps > 0));
         }
         Ok(())
     }

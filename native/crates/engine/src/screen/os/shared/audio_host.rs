@@ -9,7 +9,7 @@
 //! sound server in the session). A datagram the connection cannot take
 //! (path without datagrams, full send buffer) is dropped: sound is never
 //! queued behind the picture.
-use std::io::{self, BufReader};
+use std::io::{self, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -20,6 +20,7 @@ use bytes::Bytes;
 use iroh::endpoint::Connection;
 use tokio::sync::{mpsc, watch};
 
+use crate::screen::core::audio_codec::opus_bitrate_for;
 use crate::screen::core::audio_wire::read_piped;
 
 /// Environment variable that makes `--screen-host-worker` the capture
@@ -33,8 +34,14 @@ const MAX_PAUSE: Duration = Duration::from_secs(30);
 const PACKET_QUEUE: usize = 64;
 
 /// One attached connection: its `Connection::stable_id`, the viewer's
-/// wish and the bytes of sound sent on it (`AudioHost::sent_bytes`).
-type Link = (usize, watch::Sender<bool>, Arc<AtomicU64>);
+/// wish, the bytes of sound sent on it (`AudioHost::sent_bytes`) and the
+/// viewer's „Höchste Datenrate“ (`AudioHost::set_ceiling`).
+struct Link {
+    id: usize,
+    wanted: watch::Sender<bool>,
+    sent: Arc<AtomicU64>,
+    ceiling: watch::Sender<Option<u64>>,
+}
 
 /// The attached connections.
 static LINKS: Mutex<Vec<Link>> = Mutex::new(Vec::new());
@@ -52,15 +59,25 @@ impl crate::screen::core::audio_port::AudioHost for CaptureLink {
     }
 
     fn set_wanted(&self, connection: &Connection, on: bool) {
-        set_wanted(connection, on);
+        let id = connection.stable_id();
+        if let Some(link) = links().iter().find(|link| link.id == id) {
+            link.wanted.send_replace(on);
+        }
     }
 
     fn sent_bytes(&self, connection: &Connection) -> u64 {
         let id = connection.stable_id();
         links()
             .iter()
-            .find(|(link, _, _)| *link == id)
-            .map_or(0, |(_, _, sent)| sent.load(Ordering::Acquire))
+            .find(|link| link.id == id)
+            .map_or(0, |link| link.sent.load(Ordering::Acquire))
+    }
+
+    fn set_ceiling(&self, connection: &Connection, ceiling_bps: Option<u64>) {
+        let id = connection.stable_id();
+        if let Some(link) = links().iter().find(|link| link.id == id) {
+            link.ceiling.send_replace(ceiling_bps);
+        }
     }
 }
 
@@ -68,25 +85,28 @@ impl crate::screen::core::audio_port::AudioHost for CaptureLink {
 /// with `audio`); it ends with the connection.
 fn attach(connection: &Connection) {
     let (wanted, watched) = watch::channel(false);
+    let (ceiling, ceiling_watched) = watch::channel(None);
     let id = connection.stable_id();
     let sent = Arc::new(AtomicU64::new(0));
-    links().push((id, wanted, sent.clone()));
+    links().push(Link {
+        id,
+        wanted,
+        sent: sent.clone(),
+        ceiling,
+    });
     let connection = connection.clone();
     tokio::spawn(async move {
-        run(&connection, watched, &sent).await;
-        links().retain(|(link, _, _)| *link != id);
+        run(&connection, watched, ceiling_watched, &sent).await;
+        links().retain(|link| link.id != id);
     });
 }
 
-/// The viewer's `AUDIO`: the sound on or off.
-fn set_wanted(connection: &Connection, on: bool) {
-    let id = connection.stable_id();
-    if let Some((_, wanted, _)) = links().iter().find(|(link, _, _)| *link == id) {
-        wanted.send_replace(on);
-    }
-}
-
-async fn run(connection: &Connection, mut wanted: watch::Receiver<bool>, sent: &AtomicU64) {
+async fn run(
+    connection: &Connection,
+    mut wanted: watch::Receiver<bool>,
+    mut ceiling: watch::Receiver<Option<u64>>,
+    sent: &AtomicU64,
+) {
     let mut failures = 0u32;
     loop {
         // Until the viewer wants the sound.
@@ -109,6 +129,8 @@ async fn run(connection: &Connection, mut wanted: watch::Receiver<bool>, sent: &
             }
             Err(_) => return,
         };
+        // The capture process codes at the rate the ceiling leaves the sound.
+        capture.set_rate(*ceiling.borrow_and_update());
         loop {
             tokio::select! {
                 packet = capture.packets.recv() => match packet {
@@ -133,6 +155,12 @@ async fn run(connection: &Connection, mut wanted: watch::Receiver<bool>, sent: &
                     if !*wanted.borrow_and_update() {
                         break;
                     }
+                }
+                changed = ceiling.changed() => {
+                    if changed.is_err() {
+                        return;
+                    }
+                    capture.set_rate(*ceiling.borrow_and_update());
                 }
                 _ = connection.closed() => return,
             }
@@ -208,6 +236,18 @@ impl Capture {
             input: Some(input),
             packets,
         })
+    }
+}
+
+impl Capture {
+    /// Hands the capture process the Opus rate under `ceiling_bps`
+    /// (`audio_helper`'s input: 4 bytes big-endian). A process that does
+    /// not take it has ended; its packets end and it starts again.
+    fn set_rate(&mut self, ceiling_bps: Option<u64>) {
+        let rate = opus_bitrate_for(ceiling_bps).to_be_bytes();
+        if let Some(input) = self.input.as_mut() {
+            let _ = input.write_all(&rate).and_then(|()| input.flush());
+        }
     }
 }
 

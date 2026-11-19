@@ -326,11 +326,19 @@ impl Pipeline {
                     .on_encode_at(encoded_bytes, production_us(report, waited), now_us());
                 // Whether the video encoder keeps the rate it was given (plan
                 // 2026-11-17); lossless regions of a hybrid stream are no part
-                // of its rate.
+                // of its rate, its video unit is (Gemini 5/2).
                 let hybrid = request.frame_contract.is_some_and(|c| c.hybrid_regions);
-                if request.choice.codec.is_video() && !hybrid {
+                let video_bytes = if hybrid {
+                    frame
+                        .records
+                        .iter()
+                        .find_map(|record| crate::screen::core::frame_protocol::video_bytes(record))
+                } else {
+                    Some(encoded_bytes)
+                };
+                if let Some(video_bytes) = video_bytes.filter(|_| request.choice.codec.is_video()) {
                     self.rate.on_encoded(
-                        encoded_bytes,
+                        video_bytes,
                         frame.keyframe,
                         target,
                         request.target_bps,

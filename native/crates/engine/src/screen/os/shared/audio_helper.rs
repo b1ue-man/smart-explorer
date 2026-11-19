@@ -5,13 +5,20 @@
 //! output (`audio_wire::write_piped`). It ends when its standard input
 //! ends (the daemon stopped the sound or ended), when the output pipe
 //! breaks, or when the capture fails; the daemon starts it again while the
-//! viewer wants the sound. Diagnostics go to standard error only.
+//! viewer wants the sound. Its standard input carries the Opus rate as
+//! 4-byte big-endian values (review 2026-11-19, Codex 7/7:
+//! `audio_codec::opus_bitrate_for` of the viewer's „Höchste Datenrate“).
+//! Diagnostics go to standard error only.
 use std::io::{self, Read, Write};
+use std::sync::atomic::{AtomicI32, Ordering};
 use std::time::Instant;
 
-use crate::screen::core::audio_codec::AudioEncoder;
+use crate::screen::core::audio_codec::{AudioEncoder, OPUS_BITRATE};
 use crate::screen::core::audio_convert::{FrameAssembler, ToStereo48};
 use crate::screen::core::audio_wire::{write_piped, AudioCodec, AudioPacket};
+
+/// The Opus rate the daemon set last (`run`'s input).
+static RATE: AtomicI32 = AtomicI32::new(OPUS_BITRATE);
 
 /// Whether this process is the capture process.
 pub fn requested() -> bool {
@@ -20,13 +27,15 @@ pub fn requested() -> bool {
 
 /// Runs the capture process; its exit code.
 pub fn run() -> i32 {
-    // The end of the input is the daemon's stop.
+    // The end of the input is the daemon's stop; before it, Opus rates.
     let watcher = std::thread::Builder::new()
         .name("screen-audio-input".into())
         .spawn(|| {
-            let mut sink = [0u8; 64];
+            let mut rate = [0u8; 4];
             let mut input = io::stdin();
-            while matches!(input.read(&mut sink), Ok(read) if read > 0) {}
+            while input.read_exact(&mut rate).is_ok() {
+                RATE.store(i32::from_be_bytes(rate), Ordering::Release);
+            }
             std::process::exit(0);
         });
     if let Err(error) = watcher {
@@ -64,6 +73,7 @@ fn capture() -> io::Result<()> {
         convert.push(&raw, &mut stereo);
         assembler.push(&stereo, now_us);
         while let Some((frame, host_us)) = assembler.pop() {
+            encoder.set_bitrate(RATE.load(Ordering::Acquire));
             encoder.encode(&frame, &mut payload)?;
             let packet = AudioPacket {
                 codec: encoder.codec(),

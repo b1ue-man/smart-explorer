@@ -283,11 +283,17 @@ impl CapturedHybrid {
                 }
             }
         }
+        let mut repair_left = super::repair_budget(request);
         for (index, rect) in rects.into_iter().enumerate() {
-            if key
-                || (visible(rect, self.visible.as_deref())
-                    && ((self.tiles && changed[index]) || (!changed[index] && self.pending[index])))
-            {
+            // Gemini 5/2: a video key frame's tiles are repaired after it.
+            if super::lossless_due(
+                self.tiles,
+                key,
+                visible(rect, self.visible.as_deref()),
+                changed[index],
+                self.pending[index],
+                repair_left,
+            ) {
                 let scratch_bytes =
                     64 * 64 * 4 + lz4_flex::block::get_maximum_output_size(64 * 64 * 4) + 4;
                 let _scratch = self.grant.claim(O::FilterScratch, scratch_bytes as u64)?;
@@ -300,6 +306,7 @@ impl CapturedHybrid {
                     return Err(invalid("hybrid lossless record exceeds contract"));
                 }
                 records.push(self.record(stamp, operation, capacity as u64)?)?;
+                repair_left = repair_left.saturating_sub(capacity);
                 self.pending[index] = false;
             } else if changed[index] {
                 self.pending[index] = true;
@@ -348,6 +355,11 @@ impl ScreenEncoder for CapturedHybrid {
                     self.visible.as_deref(),
                 )
         })
+    }
+    /// The video encoder's state of the rate (Gemini 5/2: the encoder's
+    /// floor and honour see the video, the lossless tiles have no rate).
+    fn rate_state(&self) -> Option<super::super::rate_control::honour::EncoderRateState> {
+        self.video.rate_state()
     }
     fn encode_captured(
         &mut self,

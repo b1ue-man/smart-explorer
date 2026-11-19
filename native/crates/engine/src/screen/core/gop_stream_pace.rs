@@ -22,11 +22,16 @@ pub(super) const PACE_MAX_WAIT_US: u64 = 100_000;
 #[derive(Clone, Debug)]
 pub(super) struct Pace {
     pub(super) rate_bps: u64,
-    pub(super) credit: u64,
-    pub(super) started: tokio::time::Instant,
+    /// The bytes earned up to `anchor` (the saved credit at the start),
+    /// and the rate earning since then (Codex 7/5: a rate change never
+    /// re-rates the time before it, neither into a pause nor into a burst).
+    pub(super) banked: u128,
+    pub(super) anchor: tokio::time::Instant,
+    pub(super) anchor_rate: Option<u64>,
     pub(super) written: u64,
-    /// The ceiling as it is now (0: none, Codex 5/12), the ceiling when
-    /// the picture started, and the control and sound rate then.
+    /// The ceiling as it is now (0: none, Codex 5/12), the user ceiling the
+    /// picture's rate was taken under (Codex 7/4), and the control and sound
+    /// rate then.
     pub(super) limit: Option<std::sync::Arc<std::sync::atomic::AtomicU64>>,
     pub(super) ceiling_at_start: u64,
     pub(super) control_bps: u64,
@@ -55,4 +60,32 @@ impl Pace {
                 .min(live.saturating_sub(self.control_bps).max(1))
         }
     }
+
+    /// The rate now and the bytes allowed on the line by now: what earlier
+    /// stretches earned at their own rates plus the current stretch at the
+    /// rate now.
+    pub(super) fn allowed(&mut self) -> (u64, u128) {
+        let rate = self.rate().max(1);
+        if self.anchor_rate != Some(rate) {
+            // The first stretch runs from the pace's start. What a stretch
+            // earned and the line did not use ends with it (a stretch without
+            // a ceiling earned without bound); the saved credit stays.
+            if let Some(before) = self.anchor_rate {
+                let cap = u128::from(self.written).max(self.banked);
+                self.banked = self
+                    .banked
+                    .saturating_add(earned(before, self.anchor))
+                    .min(cap);
+                self.anchor = tokio::time::Instant::now();
+            }
+            self.anchor_rate = Some(rate);
+        }
+        (rate, self.banked.saturating_add(earned(rate, self.anchor)))
+    }
+}
+
+/// The bytes `rate_bps` earns from `since` to now.
+fn earned(rate_bps: u64, since: tokio::time::Instant) -> u128 {
+    let micros = u128::from(u64::try_from(since.elapsed().as_micros()).unwrap_or(u64::MAX));
+    u128::from(rate_bps) * micros / 8 / 1_000_000
 }

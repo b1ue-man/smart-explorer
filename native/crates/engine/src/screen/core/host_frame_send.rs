@@ -89,6 +89,7 @@ impl Pipeline {
             rate,
             credit,
             Some(self.work.ceiling_cell()),
+            self.rate.user_ceiling_bps(),
             self.rate.control_bps(),
             self.rate.sustained_bps(),
         );

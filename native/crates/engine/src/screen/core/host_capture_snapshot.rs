@@ -43,8 +43,9 @@ impl Pipeline {
     /// 2026-11-19, Codex 3/8): a snapshot is a picture of the stream like
     /// every other (`stream_admit`); the actor keeps it queued until then.
     pub fn snapshot_admitted(&self) -> bool {
-        self.rate
-            .stream_admit(now_us(), self.choice.codec.is_video())
+        // Codex 7/12: a snapshot is always tiles (`Snapshot::header`), so
+        // the tiles' budget rule holds for it also in a video session.
+        self.rate.stream_admit(now_us(), false)
     }
 
     /// `SNAPSHOT`: one lossless key frame of the current source, at most
@@ -122,7 +123,9 @@ impl Pipeline {
         // against the stream's byte budget as every picture's
         // (`rate_tiles.rs`), of a write cut off what it handed on.
         let started_us = now_us();
-        let video = self.choice.codec.is_video();
+        // Codex 7/12: the snapshot's records are tiles whatever the live
+        // stream's codec is; their pace and booking follow the tiles' rule.
+        let video = false;
         // Codex 4/5, 4/14: paced within the stream's byte budget like a live
         // picture (`host_frame_send.rs`), and bounded in time: a viewer that
         // takes no more ends the snapshot, not the session's pictures.
@@ -132,6 +135,7 @@ impl Pipeline {
             rate,
             credit,
             Some(self.work.ceiling_cell()),
+            self.rate.user_ceiling_bps(),
             self.rate.control_bps(),
             self.rate.sustained_bps(),
         );

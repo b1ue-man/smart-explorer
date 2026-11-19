@@ -10,6 +10,34 @@ use std::io;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static GENERATION: AtomicU64 = AtomicU64::new(1);
+/// Whether tile `index` goes losslessly in this frame, and the repair bytes
+/// left (Gemini 5/2). The tiles codec sends every tile of a key frame and
+/// every visible changed or pending one. Under a video codec a key frame
+/// carries every tile as video and marks it pending; afterwards a visible
+/// pending tile that stopped changing is repaired, at most one frame's share
+/// of the target per frame (at least one tile), so a key frame is no
+/// multi-megabyte burst of all tiles and the exact pixels follow it.
+fn lossless_due(
+    tiles: bool,
+    key: bool,
+    shown: bool,
+    changed: bool,
+    pending: bool,
+    repair_left: usize,
+) -> bool {
+    if tiles {
+        key || (shown && (changed || pending))
+    } else {
+        !key && shown && !changed && pending && repair_left > 0
+    }
+}
+
+/// The lossless repair bytes of one video frame: its share of the target.
+fn repair_budget(request: &StageRequest) -> usize {
+    let bytes = request.target_bps / 8 / u64::from(request.fps.max(1));
+    usize::try_from(bytes).unwrap_or(usize::MAX).max(1)
+}
+
 fn generation(epoch: u64) -> io::Result<u64> {
     GENERATION
         .fetch_update(Ordering::AcqRel, Ordering::Acquire, |previous| {
@@ -61,6 +89,11 @@ impl ScreenEncoder for HybridEncoder {
             .iter()
             .zip(&self.pending)
             .any(|(r, p)| *p && visible(*r, self.visible_rects.as_deref()))
+    }
+    /// The video encoder's state of the rate (Gemini 5/2: the encoder's
+    /// floor and honour see the video, the lossless tiles have no rate).
+    fn rate_state(&self) -> Option<super::rate_control::honour::EncoderRateState> {
+        self.video.rate_state()
     }
     fn encode(&mut self, _frame: &BgraImage, _key: bool, _bps: u64) -> io::Result<EncodedFrame> {
         Err(invalid("hybrid encoder requires a stamped StageRequest"))
@@ -234,17 +267,22 @@ impl HybridEncoder {
                 }
             }
         }
+        let mut repair_left = repair_budget(request);
         for (index, rect) in rects.into_iter().enumerate() {
-            // Keyframes establish exact pixels. Afterwards only newly stable tiles are repaired.
+            // Tile key frames establish exact pixels; a video key frame's
+            // tiles are repaired after it (`lossless_due`).
             let send = visible(rect, self.visible_rects.as_deref());
-            if key
-                || (send
-                    && ((self.tiles && changed[index]) || (!changed[index] && self.pending[index])))
-            {
-                records.push(frame_protocol::encode(
-                    stamp,
-                    frame_protocol::lossless(image, rect)?,
-                )?);
+            if lossless_due(
+                self.tiles,
+                key,
+                send,
+                changed[index],
+                self.pending[index],
+                repair_left,
+            ) {
+                let record = frame_protocol::encode(stamp, frame_protocol::lossless(image, rect)?)?;
+                repair_left = repair_left.saturating_sub(record.len());
+                records.push(record);
                 self.pending[index] = false;
             } else if changed[index] {
                 self.pending[index] = true;
