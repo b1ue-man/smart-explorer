@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use serde_json::json;
 
-use crate::screen::core::input_model::InputEvent;
+use crate::screen::core::input_model::{InputEvent, TouchPhase};
 
 /// From this many waiting batches on, a batch of pointer moves (or of wheel
 /// steps) is merged into a waiting one of the same kind at the end of the
@@ -28,6 +28,26 @@ const HARD_LIMIT: usize = 128;
 struct Batch {
     session: u64,
     events: Vec<InputEvent>,
+    /// The batch lets go of something (a key or button up, a touch that ends):
+    /// it is never dropped while a reader runs, so the app's gesture state
+    /// (`GestureMapper`: a stroke ends with its release) never keeps a press
+    /// of a session that lost control or ended.
+    release: bool,
+}
+
+/// Whether `events` let go of a key, a button or a touch.
+fn releases(events: &[InputEvent]) -> bool {
+    events.iter().any(|event| {
+        matches!(
+            event,
+            InputEvent::Key { down: false, .. }
+                | InputEvent::Button { down: false, .. }
+                | InputEvent::Touch {
+                    phase: TouchPhase::End | TouchPhase::Cancel,
+                    ..
+                }
+        )
+    })
 }
 
 static INPUT: Mutex<VecDeque<Batch>> = Mutex::new(VecDeque::new());
@@ -93,10 +113,10 @@ pub fn send_input(session: u64, events: &[InputEvent]) -> bool {
 /// batch (`host_session_control.rs`, `holds_control`): any other session's
 /// batch still waiting belongs to a viewer that gave control up meanwhile,
 /// so it is dropped instead of performed for the new holder (review
-/// 2026-11-19, Codex 3/3).
+/// 2026-11-19, Codex 3/3); a batch that releases something stays.
 pub fn send_controlling_input(session: u64, events: &[InputEvent]) -> bool {
     let mut queue = queue();
-    queue.retain(|batch| batch.session == session || batch.session == 0);
+    queue.retain(|batch| batch.session == session || batch.session == 0 || batch.release);
     push(queue, session, events)
 }
 
@@ -119,6 +139,7 @@ fn push(
     queue.push_back(Batch {
         session,
         events: events.to_vec(),
+        release: releases(events),
     });
     READY.notify_all();
     true
@@ -139,11 +160,14 @@ pub(super) fn take(timeout: Duration) -> Option<String> {
 
 /// Drops the waiting batches of host session `session` (it ended): its input
 /// is never performed for another session (review 2026-11-19, Codex 3/3).
+/// Its releases stay: the app reads them into its gesture state and performs
+/// nothing of a session that is gone (`ScreenHostControl.ensureInput`).
 pub(super) fn drop_session(session: u64) {
-    queue().retain(|batch| batch.session != session);
+    queue().retain(|batch| batch.session != session || batch.release);
 }
 
-/// Drops every waiting batch (the last session ended).
+/// Drops every waiting batch, releases too (the last session ended: the
+/// app's reader stops and its gesture state goes with it).
 pub(super) fn clear() {
     queue().clear();
 }

@@ -145,6 +145,17 @@ fn review1119_task_new_reasons_read_german() {
             .as_deref(),
         Some("Hinweis vom Gerät: Der Kodierer lehnte den Parameter bitrate-mode ab; Meldung: CBR")
     );
+    // An input the Android host did not perform (`screen.hostNotice {inputRefused}`).
+    assert_eq!(
+        encoder_notice_text("encoder_notice: the device cancelled a gesture of the input")
+            .as_deref(),
+        Some("Hinweis vom Gerät: Das Gerät hat eine Geste der Eingabe abgebrochen")
+    );
+    assert_eq!(
+        encoder_notice_text("encoder_notice: the device did not answer an input in time")
+            .as_deref(),
+        Some("Hinweis vom Gerät: Das Gerät hat auf eine Eingabe nicht rechtzeitig geantwortet")
+    );
     assert_eq!(encoder_notice_text("chosen_codec_failed: h264: x"), None);
     assert!(include_str!("host_pipeline_admit.rs").contains("codec_reason_text::ENCODER_NOTICE"));
     // The host keeps writing these reasons word for word.

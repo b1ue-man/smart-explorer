@@ -31,6 +31,27 @@ pub const ENCODER_NOTICE: &str = "encoder_notice: ";
 const NOTICE_LOWEST: &str = "the encoder's lowest bit rate ";
 const NOTICE_ABOVE: &str = " bit/s is above the highest data rate ";
 const NOTICE_PARAMETER: &str = "the encoder refused the parameter ";
+/// An input the Android host's accessibility service did not perform
+/// (`screen.hostNotice {inputRefused}`, `mobile/…/screen_host.rs`) and its
+/// German text.
+const NOTICE_INPUT: [(&str, &str); 4] = [
+    (
+        "the device cancelled a gesture of the input",
+        "Das Gerät hat eine Geste der Eingabe abgebrochen",
+    ),
+    (
+        "the device refused a text of the input (no focused field)",
+        "Das Gerät hat einen Text der Eingabe abgelehnt (kein Eingabefeld im Fokus)",
+    ),
+    (
+        "the device refused a system action of the input",
+        "Das Gerät hat eine Systemaktion der Eingabe abgelehnt",
+    ),
+    (
+        "the device did not answer an input in time",
+        "Das Gerät hat auf eine Eingabe nicht rechtzeitig geantwortet",
+    ),
+];
 
 /// The German text of a stage's notice anywhere in `reason`
 /// (`encoder_notice: <sentence>`); `None` when `reason` holds none. The
@@ -67,6 +88,9 @@ fn notice_sentence(text: &str) -> String {
              Rate ({asked} bit/s); er sendet mit seiner niedrigsten Rate, die Höchste Datenrate \
              hält das Datenbudget ein"
         );
+    }
+    if let Some((_, german)) = NOTICE_INPUT.iter().find(|(english, _)| text == *english) {
+        return (*german).to_string();
     }
     if let Some(rest) = text.strip_prefix(NOTICE_PARAMETER) {
         let (name, detail) = rest.split_once(": ").unwrap_or((rest, ""));

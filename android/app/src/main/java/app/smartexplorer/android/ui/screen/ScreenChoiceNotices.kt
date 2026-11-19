@@ -25,6 +25,15 @@ object ScreenCodecNotices {
     private const val FAILED = "chosen_codec_failed: "
     private const val NOTICE = "encoder_notice: "
 
+    /** An input Android did not perform (`screen.hostNotice {inputRefused}`), as `codec_reason_text.rs` says it. */
+    private val INPUT_REFUSED = mapOf(
+        "the device cancelled a gesture of the input" to "Das Gerät hat eine Geste der Eingabe abgebrochen",
+        "the device refused a text of the input (no focused field)" to
+            "Das Gerät hat einen Text der Eingabe abgelehnt (kein Eingabefeld im Fokus)",
+        "the device refused a system action of the input" to "Das Gerät hat eine Systemaktion der Eingabe abgelehnt",
+        "the device did not answer an input in time" to "Das Gerät hat auf eine Eingabe nicht rechtzeitig geantwortet",
+    )
+
     /** The label of a codec key of the viewer or the host (`tiles` is „Verlustfrei“). */
     fun label(codec: String): String = when (codec) {
         ViewerCodecChoice.CODEC_AUTO -> "Automatisch"
@@ -126,6 +135,7 @@ object ScreenCodecNotices {
                     "Rate (${rest.substringAfter(asked).substringBefore(" bit/s")} bit/s); er sendet mit seiner niedrigsten Rate, " +
                     "die Höchste Datenrate hält das Datenbudget ein"
             }
+            sentence in INPUT_REFUSED -> INPUT_REFUSED.getValue(sentence)
             sentence.startsWith(parameter) -> {
                 val rest = sentence.removePrefix(parameter)
                 val name = rest.substringBefore(": ")

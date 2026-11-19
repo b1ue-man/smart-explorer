@@ -139,7 +139,7 @@
     <string name="screen_view_info_decoder_software">Dekodierer: Software (%1$s)</string>
     <string name="screen_view_info_rate_applied">Höchste Datenrate: %1$s Mbit/s</string>
     <string name="screen_view_info_rate_unsupported">Höchste Datenrate %1$s Mbit/s: Das Gerät kennt sie nicht, sie gilt dort nicht.</string>
-    <string name="screen_view_info_rate_sent">Höchste Datenrate %1$s Mbit/s gesendet; die Antwort des Geräts steht noch aus.</string>
+    <string name="screen_view_info_rate_sent">Höchste Datenrate %1$s Mbit/s gesendet; das Gerät hat sie nicht bestätigt.</string>
     <string name="screen_view_whole_screen">Ganzer Bildschirm</string>
     <string name="screen_view_monitor">Bildschirm %1$s: %2$s</string>
     <string name="screen_view_monitor_pick_on_host">Auswahl am Gerät</string>

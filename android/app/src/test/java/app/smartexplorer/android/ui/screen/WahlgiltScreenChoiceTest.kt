@@ -139,6 +139,11 @@ class WahlgiltScreenChoiceTest {
             "Hinweis vom Gerät: Der Kodierer lehnte den Parameter bitrate-mode ab; Meldung: CBR",
             ScreenCodecNotices.noticeText("the encoder refused the parameter bitrate-mode: CBR"),
         )
+        // An input the Android host did not perform (`screen.hostNotice {inputRefused}`).
+        assertEquals(
+            "Hinweis vom Gerät: Das Gerät hat einen Text der Eingabe abgelehnt (kein Eingabefeld im Fokus)",
+            ScreenCodecNotices.noticeText("the device refused a text of the input (no focused field)"),
+        )
     }
 
     @Test
