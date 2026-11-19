@@ -14,4 +14,10 @@ pub trait AudioHost: Send + Sync {
     fn attach(&self, connection: &Connection);
     /// The viewer's `AUDIO`: the sound on or off.
     fn set_wanted(&self, connection: &Connection, on: bool);
+    /// The bytes of sound sent on `connection` so far (review 2026-11-19,
+    /// Codex 5/4): they count against „Höchste Datenrate“ like the control
+    /// stream (`Pipeline::second`). A link that sends nothing has none.
+    fn sent_bytes(&self, _connection: &Connection) -> u64 {
+        0
+    }
 }

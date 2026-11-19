@@ -100,9 +100,9 @@ fn notice_sentence(text: &str) -> String {
     {
         let ceiling = ceiling.trim_end_matches(" bit/s");
         return format!(
-            "Der Steuerkanal (Zeiger, Status, Fensterlisten) braucht allein {control} bit/s, \
+            "Steuerkanal und Ton (Zeiger, Status, Fensterlisten, Bildschirmton) brauchen allein {control} bit/s, \
              mehr als die Höchste Datenrate ({ceiling} bit/s); neue Bilder werden zurückgehalten, \
-             bis der Steuerkanal weniger braucht"
+             bis sie weniger brauchen"
         );
     }
     if let Some(rest) = text.strip_prefix(NOTICE_PARAMETER) {

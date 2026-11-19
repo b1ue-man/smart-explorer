@@ -141,9 +141,10 @@ object ScreenCodecNotices {
             sentence in INPUT_REFUSED -> INPUT_REFUSED.getValue(sentence)
             sentence.startsWith(control) && sentence.contains(controlAbove) -> {
                 val rest = sentence.removePrefix(control)
-                "Der Steuerkanal (Zeiger, Status, Fensterlisten) braucht allein ${rest.substringBefore(controlAbove)} bit/s, " +
-                    "mehr als die Höchste Datenrate (${rest.substringAfter(controlAbove).substringBefore(" bit/s")} bit/s); " +
-                    "die Bilder erhalten nur noch die Mindestrate"
+                "Steuerkanal und Ton (Zeiger, Status, Fensterlisten, Bildschirmton) brauchen allein " +
+                    "${rest.substringBefore(controlAbove)} bit/s, mehr als die Höchste Datenrate " +
+                    "(${rest.substringAfter(controlAbove).substringBefore(" bit/s")} bit/s); neue Bilder werden " +
+                    "zurückgehalten, bis sie weniger brauchen"
             }
             sentence.startsWith(parameter) -> {
                 val rest = sentence.removePrefix(parameter)

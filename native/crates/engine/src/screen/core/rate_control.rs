@@ -175,6 +175,8 @@ pub struct RateController {
     control: RateWindow,
     control_bps: u64,
     control_over: bool,
+    /// The sound bytes of the session counted so far (`on_audio_total`).
+    audio_seen: u64,
 }
 
 impl RateController {
@@ -212,6 +214,7 @@ impl RateController {
             control: RateWindow::default(),
             control_bps: 0,
             control_over: false,
+            audio_seen: 0,
         }
     }
 

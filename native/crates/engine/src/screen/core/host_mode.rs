@@ -220,6 +220,14 @@ impl Pipeline {
             self.rate.on_congestion_events(events, now_us());
         }
         self.rate.remember();
+        // The sound of the session counts with the control stream (Codex
+        // 5/4): the pictures get the ceiling less both.
+        if let Some(link) = self.backend.audio() {
+            let fresh = self
+                .rate
+                .on_audio_total(now_us(), link.sent_bytes(connection));
+            self.second_bytes = self.second_bytes.saturating_add(fresh);
+        }
         // The control stream's share of the ceiling; above the whole ceiling
         // the viewer is told once (the pictures keep the floor).
         self.rate.update_control(now_us());

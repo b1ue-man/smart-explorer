@@ -409,4 +409,15 @@ fn review1119_task_video_keeps_the_user_ceiling() {
     assert_eq!(rate.control_over_ceiling(), None, "once");
     let session = include_str!("host_session.rs");
     assert!(session.contains("self.pipeline.book_control_bytes(sent);"));
+    // Codex 5/4: the session's sound counts with the control stream, once
+    // per byte (the link reports its running total).
+    let mut sound = RateController::new(PathKind::Direct, 0);
+    sound.set_ceiling(Some(2_000_000));
+    assert_eq!(sound.on_audio_total(0, 0), 0);
+    assert_eq!(sound.on_audio_total(500_000, 40_000), 40_000);
+    assert_eq!(sound.on_audio_total(600_000, 40_000), 0);
+    assert_eq!(sound.control_bps(), 320_000);
+    assert_eq!(sound.user_picture_bps(), Some(1_680_000));
+    let link = include_str!("../os/shared/audio_host.rs");
+    assert!(link.contains("sent.fetch_add(bytes, Ordering::AcqRel);"));
 }

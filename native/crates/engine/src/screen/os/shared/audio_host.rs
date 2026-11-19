@@ -12,7 +12,8 @@
 use std::io::{self, BufReader};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::{Mutex, PoisonError};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -31,10 +32,14 @@ const MAX_PAUSE: Duration = Duration::from_secs(30);
 /// Packets between the capture process's reader and the sender (320 ms).
 const PACKET_QUEUE: usize = 64;
 
-/// The wish of each attached connection, by `Connection::stable_id`.
-static LINKS: Mutex<Vec<(usize, watch::Sender<bool>)>> = Mutex::new(Vec::new());
+/// One attached connection: its `Connection::stable_id`, the viewer's
+/// wish and the bytes of sound sent on it (`AudioHost::sent_bytes`).
+type Link = (usize, watch::Sender<bool>, Arc<AtomicU64>);
 
-fn links() -> std::sync::MutexGuard<'static, Vec<(usize, watch::Sender<bool>)>> {
+/// The attached connections.
+static LINKS: Mutex<Vec<Link>> = Mutex::new(Vec::new());
+
+fn links() -> std::sync::MutexGuard<'static, Vec<Link>> {
     LINKS.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
@@ -49,6 +54,14 @@ impl crate::screen::core::audio_port::AudioHost for CaptureLink {
     fn set_wanted(&self, connection: &Connection, on: bool) {
         set_wanted(connection, on);
     }
+
+    fn sent_bytes(&self, connection: &Connection) -> u64 {
+        let id = connection.stable_id();
+        links()
+            .iter()
+            .find(|(link, _, _)| *link == id)
+            .map_or(0, |(_, _, sent)| sent.load(Ordering::Acquire))
+    }
 }
 
 /// Attaches the sound link to a session's connection (after `HELLO_OK`
@@ -56,23 +69,24 @@ impl crate::screen::core::audio_port::AudioHost for CaptureLink {
 fn attach(connection: &Connection) {
     let (wanted, watched) = watch::channel(false);
     let id = connection.stable_id();
-    links().push((id, wanted));
+    let sent = Arc::new(AtomicU64::new(0));
+    links().push((id, wanted, sent.clone()));
     let connection = connection.clone();
     tokio::spawn(async move {
-        run(&connection, watched).await;
-        links().retain(|(link, _)| *link != id);
+        run(&connection, watched, &sent).await;
+        links().retain(|(link, _, _)| *link != id);
     });
 }
 
 /// The viewer's `AUDIO`: the sound on or off.
 fn set_wanted(connection: &Connection, on: bool) {
     let id = connection.stable_id();
-    if let Some((_, wanted)) = links().iter().find(|(link, _)| *link == id) {
+    if let Some((_, wanted, _)) = links().iter().find(|(link, _, _)| *link == id) {
         wanted.send_replace(on);
     }
 }
 
-async fn run(connection: &Connection, mut wanted: watch::Receiver<bool>) {
+async fn run(connection: &Connection, mut wanted: watch::Receiver<bool>, sent: &AtomicU64) {
     let mut failures = 0u32;
     loop {
         // Until the viewer wants the sound.
@@ -101,7 +115,11 @@ async fn run(connection: &Connection, mut wanted: watch::Receiver<bool>) {
                     // Dropped when the connection cannot take it now.
                     Some(packet) => {
                         failures = 0;
-                        let _ = connection.send_datagram(Bytes::from(packet));
+                        let bytes = packet.len() as u64;
+                        // Counted against „Höchste Datenrate“ (`sent_bytes`).
+                        if connection.send_datagram(Bytes::from(packet)).is_ok() {
+                            sent.fetch_add(bytes, Ordering::AcqRel);
+                        }
                     }
                     None => {
                         failures = failures.saturating_add(1);

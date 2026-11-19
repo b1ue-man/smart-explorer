@@ -19,6 +19,19 @@ impl RateController {
         self.update_control(now_us);
     }
 
+    /// The sound sent on the session's connection so far, `total` bytes at
+    /// `now_us` (Codex 5/4): what came since the last reading counts like
+    /// the control stream, so the pictures get the ceiling less control and
+    /// sound. Returns the new bytes (for the statistics).
+    pub fn on_audio_total(&mut self, now_us: u64, total: u64) -> u64 {
+        let fresh = total.saturating_sub(self.audio_seen);
+        self.audio_seen = total;
+        if fresh != 0 {
+            self.on_control_bytes(now_us, fresh);
+        }
+        fresh
+    }
+
     /// The control stream's rate of the last window at `now_us`.
     pub fn update_control(&mut self, now_us: u64) {
         self.control.prune(now_us);
