@@ -121,6 +121,10 @@ impl Pipeline {
                 mode.sharpness = wanted;
                 mode
             });
+        // The scope of this choice is the sharpness it names, also before the
+        // mode takes it (a `SET_MODE` after this frame changes nothing more).
+        let sharpness =
+            sharp_mode.map_or(self.quality_policy.mode.sharpness, |mode| mode.sharpness);
         let tiles_offered = crate::screen::core::negotiate::tiles_offered(&set.decoders);
         self.quality_policy.tiles_offered = tiles_offered;
         if next.choice == self.pairing.current && next.sharp == self.pairing.sharp {
@@ -134,7 +138,7 @@ impl Pipeline {
             // Review 2026-11-19: after „Automatisch“ gave way to the tiles
             // (every video encoder failed), a chosen codec of the same
             // pairing kept the tiles; it ends with its reason instead.
-            let scope = FallbackScope::of(next.preference, self.quality_policy.mode.sharpness);
+            let scope = FallbackScope::of(next.preference, sharpness);
             if self.quality_policy.encoder_failed && !(scope.tiles_allowed() && tiles_offered) {
                 self.quality_policy.pending_error = Some(format!(
                     "chosen_codec_failed: {}: no encoder of the chosen codec is left",
@@ -180,7 +184,7 @@ impl Pipeline {
         }
         // A chosen codec whose encoders all failed here never becomes the
         // tiles (plan 2026-11-18): the session ends with the reason.
-        let scope = FallbackScope::of(next.preference, self.quality_policy.mode.sharpness);
+        let scope = FallbackScope::of(next.preference, sharpness);
         let refused = (failed && !(scope.tiles_allowed() && tiles_offered)).then(|| {
             format!(
                 "chosen_codec_failed: {}: no encoder of the chosen codec is left",
