@@ -267,8 +267,13 @@ impl ScreenHostBackend for BridgeBackend {
         if !streaming {
             return Err(ControlBlock::ControlUnavailable);
         }
-        channels::send_input(json!({"op": "input", "events": events}));
-        Ok(())
+        // A full queue (the app takes no input) is reported as a block,
+        // never dropped in silence.
+        if channels::send_input(json!({"op": "input", "events": events})) {
+            Ok(())
+        } else {
+            Err(ControlBlock::ControlUnavailable)
+        }
     }
 }
 

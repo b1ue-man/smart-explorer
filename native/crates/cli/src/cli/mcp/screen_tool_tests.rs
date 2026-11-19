@@ -50,7 +50,8 @@ fn screen_task_mcp_screen_tool_schema() {
         assert!(DESCRIPTION.contains(fact), "{fact}");
     }
     // The tool as the catalog publishes it: closed object, `action`
-    // required, read-only (nothing on any device changes).
+    // required, not read-only (`audio` with `on` stores a setting), not
+    // destructive, idempotent.
     let tool = super::super::catalog::tools()
         .into_iter()
         .find(|tool| tool.name == "screen")
@@ -61,7 +62,9 @@ fn screen_task_mcp_screen_tool_schema() {
     assert_eq!(tool.input_schema["properties"], properties);
     assert_eq!(tool.description.as_deref(), Some(DESCRIPTION));
     let annotations = tool.annotations.as_ref().expect("annotations");
-    assert_eq!(annotations.read_only_hint, Some(true));
+    assert_eq!(annotations.read_only_hint, Some(false));
+    assert_eq!(annotations.destructive_hint, Some(false));
+    assert_eq!(annotations.idempotent_hint, Some(true));
 }
 
 #[test]

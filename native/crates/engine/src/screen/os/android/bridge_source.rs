@@ -43,7 +43,7 @@ const STILL_TIMEOUT: Duration = Duration::from_secs(2);
 const KEY_TIMEOUT: Duration = Duration::from_secs(2);
 /// Wait for the app while it prepares or asks its user, per frame.
 const START_POLL: Duration = Duration::from_millis(200);
-/// A bit rate change smaller than this share is not sent to the app.
+/// A bit rate rise smaller than this share is not sent to the app (a fall always is).
 const BITRATE_STEP_PERCENT: u64 = 10;
 /// Bytes of the size header of a still.
 const STILL_HEADER: usize = 8;

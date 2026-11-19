@@ -151,8 +151,10 @@ impl BridgeSource {
             if request.keyframe {
                 self.channel.send(json!({"op": "keyframe"}));
             }
+            // A lower target always goes out: it may be the viewer's „Höchste Datenrate“, a hard
+            // ceiling the encoder must not stay above. Only a rise waits for a 10 % step.
             let step = self.bitrate * BITRATE_STEP_PERCENT / 100;
-            if request.target_bps.abs_diff(self.bitrate) > step {
+            if request.target_bps < self.bitrate || request.target_bps - self.bitrate > step {
                 self.channel
                     .send(json!({"op": "bitrate", "bps": request.target_bps}));
                 self.bitrate = request.target_bps;

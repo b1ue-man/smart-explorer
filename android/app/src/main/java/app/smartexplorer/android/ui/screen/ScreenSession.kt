@@ -333,6 +333,13 @@ class ScreenSession(private val target: ScreenTarget, private val backend: Scree
     @Volatile var choice: ViewerCodecChoice = ViewerCodecChoice()
         private set
 
+    /**
+     * The source this session was opened with (`null` the primary monitor): the host shows it from the start, so a
+     * `SET_MODE` names a source only when it differs (a named source makes the host open its capture again).
+     */
+    @Volatile var openedSource: String? = null
+        private set
+
     /** The data-rate ceiling this session was opened with (`null` automatic); [switchedTo] never overwrites it. */
     @Volatile var openedMaxRateBps: Long? = null
         private set
@@ -388,6 +395,7 @@ class ScreenSession(private val target: ScreenTarget, private val backend: Scree
     /** Opens the session; a failure arrives as [CoreException] and leaves the session closed. */
     suspend fun open(mode: String, source: String?, displayWidth: Int, displayHeight: Int, maxFps: Int, decoders: List<DecoderOffer>, choice: ViewerCodecChoice = ViewerCodecChoice()) {
         this.choice = choice
+        this.openedSource = source
         this.openedMaxRateBps = choice.maxRateBps
         synchronized(lock) {
             wantedMode=ScreenModeRequest(if(mode=="preview") "preview" else "full")

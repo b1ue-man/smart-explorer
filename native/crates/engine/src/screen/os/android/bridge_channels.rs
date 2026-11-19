@@ -40,6 +40,9 @@ pub const PUSH_INVALID: i32 = -2;
 const MAX_QUEUED: usize = 8;
 /// Control messages kept per channel (the app polls at least once a second).
 const MAX_CONTROL: usize = 64;
+/// How long a batch of input waits for room in a full input queue: one poll
+/// interval of the app.
+const INPUT_ROOM_WAIT: Duration = Duration::from_secs(1);
 
 /// A session start as the app needs it (`screenHostStart`).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -160,6 +163,8 @@ struct Register {
 static REGISTER: Mutex<Option<Register>> = Mutex::new(None);
 static INPUT: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
 static INPUT_READY: Condvar = Condvar::new();
+/// Signalled when the app took a batch of input off [`INPUT`].
+static INPUT_ROOM: Condvar = Condvar::new();
 
 fn with<R>(apply: impl FnOnce(&mut Register) -> R) -> R {
     let mut register = lock(&REGISTER);
@@ -341,7 +346,11 @@ pub fn control(id: u64, timeout: Duration) -> Option<String> {
         let (mut queue, _) = INPUT_READY
             .wait_timeout_while(queue, timeout, |queue| queue.is_empty())
             .unwrap_or_else(PoisonError::into_inner);
-        return queue.pop_front();
+        let taken = queue.pop_front();
+        if taken.is_some() {
+            INPUT_ROOM.notify_all();
+        }
+        return taken;
     }
     match channel(id) {
         Some(channel) => channel.take_control(timeout),
@@ -350,13 +359,20 @@ pub fn control(id: u64, timeout: Duration) -> Option<String> {
 }
 
 /// Queues the input of the controlling viewer for the accessibility service.
-pub fn send_input(message: Value) {
-    let mut queue = lock(&INPUT);
+/// A full queue never loses a queued batch (it may hold a key or button
+/// release): the batch waits up to `INPUT_ROOM_WAIT` for the app to take
+/// one, and is refused (`false`) when the app took none.
+pub fn send_input(message: Value) -> bool {
+    let queue = lock(&INPUT);
+    let (mut queue, _) = INPUT_ROOM
+        .wait_timeout_while(queue, INPUT_ROOM_WAIT, |queue| queue.len() >= MAX_CONTROL)
+        .unwrap_or_else(PoisonError::into_inner);
     if queue.len() >= MAX_CONTROL {
-        queue.pop_front();
+        return false;
     }
     queue.push_back(message.to_string());
     INPUT_READY.notify_all();
+    true
 }
 
 /// `screen.hostReady`: the app captures (after the system dialog) or serves

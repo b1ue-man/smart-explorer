@@ -29,12 +29,16 @@ struct State {
     target: Option<SourceId>,
     sas: SasGuard,
     conn: Option<(RustConnection, Window)>,
+    /// The part of a notch per axis (x, y) not sent yet: viewers send
+    /// fractions of a notch (a touchpad), X11 only whole notches.
+    wheel_rest: (i32, i32),
 }
 
 static STATE: Mutex<State> = Mutex::new(State {
     target: None,
     sas: SasGuard::new(),
     conn: None,
+    wheel_rest: (0, 0),
 });
 
 fn state() -> MutexGuard<'static, State> {
@@ -43,7 +47,9 @@ fn state() -> MutexGuard<'static, State> {
 
 /// The source this host process opened (`host_worker_main`).
 pub fn set_target(source: &SourceId) {
-    state().target = (!matches!(source, SourceId::Synthetic)).then(|| source.clone());
+    let mut state = state();
+    state.target = (!matches!(source, SourceId::Synthetic)).then(|| source.clone());
+    state.wheel_rest = (0, 0);
 }
 
 /// A rectangle in root coordinates.
@@ -123,19 +129,25 @@ fn fake<C: Connection>(
     Ok(())
 }
 
+/// Whole notches of `rest` plus `amount` (1/120 notch); the remainder stays
+/// in `rest` for the next event of the axis.
+fn whole_notches(rest: &mut i32, amount: i16) -> i32 {
+    let total = rest.saturating_add(i32::from(amount));
+    *rest = total % NOTCH;
+    total / NOTCH
+}
+
 fn wheel<C: Connection>(
     conn: &C,
     root: Window,
+    rest: &mut i32,
     amount: i16,
     positive: u8,
     negative: u8,
 ) -> io::Result<()> {
-    if amount == 0 {
-        return Ok(());
-    }
-    let button = if amount > 0 { positive } else { negative };
-    let notches = (i32::from(amount).abs() + NOTCH / 2) / NOTCH;
-    for _ in 0..notches.max(1) {
+    let notches = whole_notches(rest, amount);
+    let button = if notches > 0 { positive } else { negative };
+    for _ in 0..notches.abs() {
         fake(conn, root, BUTTON_PRESS, button, (0, 0))?;
         fake(conn, root, BUTTON_RELEASE, button, (0, 0))?;
     }
@@ -149,6 +161,7 @@ pub(super) fn send<C: Connection>(
     area: Area,
     events: &[InputEvent],
     sas: &mut SasGuard,
+    wheel_rest: &mut (i32, i32),
 ) -> io::Result<usize> {
     let mut skipped = 0;
     for event in events {
@@ -162,8 +175,8 @@ pub(super) fn send<C: Connection>(
             }
             // Up and right are positive (C5); X11 scrolls up with 4, right with 7.
             InputEvent::Wheel { dx, dy } => {
-                wheel(conn, root, *dy, 4, 5)?;
-                wheel(conn, root, *dx, 7, 6)?;
+                wheel(conn, root, &mut wheel_rest.1, *dy, 4, 5)?;
+                wheel(conn, root, &mut wheel_rest.0, *dx, 7, 6)?;
             }
             InputEvent::Key { hid_usage, down } => {
                 if !sas.allows(*hid_usage, *down) {
@@ -219,12 +232,17 @@ pub fn inject(events: &[InputEvent]) -> Result<(), ControlBlock> {
         let root = conn.setup().roots[screen].root;
         state.conn = Some((conn, root));
     }
-    let State { sas, conn, .. } = &mut *state;
+    let State {
+        sas,
+        conn,
+        wheel_rest,
+        ..
+    } = &mut *state;
     let Some((conn, root)) = conn.as_ref() else {
         return Err(ControlBlock::ControlUnavailable);
     };
     let area = area_of(conn, *root, &target).map_err(|_| ControlBlock::ControlUnavailable)?;
-    match send(conn, *root, area, events, sas) {
+    match send(conn, *root, area, events, sas, wheel_rest) {
         Ok(0) => Ok(()),
         Ok(skipped) => {
             eprintln!("screen host process: {skipped} characters have no key on this host");
@@ -292,7 +310,12 @@ pub fn inject_bound(
         let root = conn.setup().roots[screen].root;
         state.conn = Some((conn, root));
     }
-    let State { sas, conn, .. } = &mut *state;
+    let State {
+        sas,
+        conn,
+        wheel_rest,
+        ..
+    } = &mut *state;
     let Some((conn, root)) = conn.as_ref() else {
         return Err(ControlBlock::ControlUnavailable);
     };
@@ -310,7 +333,7 @@ pub fn inject_bound(
             }
         }
     }
-    if send(conn, *root, area, events, sas).is_err() {
+    if send(conn, *root, area, events, sas, wheel_rest).is_err() {
         state.conn = None;
         return Err(ControlBlock::ControlUnavailable);
     }

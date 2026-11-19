@@ -205,8 +205,13 @@ pub(in crate::screen::os) async fn apply_portal_input(
             // Up is positive in the core (C5); the portal's steps go down.
             InputEvent::Wheel { dx, dy } => {
                 let mut result = Ok(());
-                if *dy != 0 {
-                    let steps = -(i32::from(*dy).abs() / 120).max(1) * i32::from(dy.signum());
+                // Viewers send fractions of a notch (a touchpad, 1/120 each);
+                // the portal takes whole steps: the rest per axis waits for
+                // the next event (review 2026-11-19: every fraction became
+                // a whole step).
+                let (steps_y, steps_x) = wheel_steps(*dx, *dy);
+                if steps_y != 0 {
+                    let steps = -steps_y;
                     result = remote
                         .notify_pointer_axis_discrete(
                             session,
@@ -216,8 +221,8 @@ pub(in crate::screen::os) async fn apply_portal_input(
                         )
                         .await;
                 }
-                if *dx != 0 && result.is_ok() {
-                    let steps = (i32::from(*dx).abs() / 120).max(1) * i32::from(dx.signum());
+                if steps_x != 0 && result.is_ok() {
+                    let steps = steps_x;
                     result = remote
                         .notify_pointer_axis_discrete(
                             session,
@@ -414,4 +419,20 @@ pub(in crate::screen::os) async fn dispatch_portal_batch(
         }
         Batch::Release { .. } => {}
     }
+}
+
+/// The rest of a notch per axis (x, y) not sent to the portal yet; one host
+/// process injects for one session.
+static WHEEL_REST: Mutex<(i32, i32)> = Mutex::new((0, 0));
+
+/// Whole notches (vertical, horizontal; up and right positive) of `dx`,
+/// `dy` (1/120 notch) plus the rest kept from earlier events.
+fn wheel_steps(dx: i16, dy: i16) -> (i32, i32) {
+    let mut rest = WHEEL_REST
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let total_y = rest.1.saturating_add(i32::from(dy));
+    let total_x = rest.0.saturating_add(i32::from(dx));
+    *rest = (total_x % 120, total_y % 120);
+    (total_y / 120, total_x / 120)
 }

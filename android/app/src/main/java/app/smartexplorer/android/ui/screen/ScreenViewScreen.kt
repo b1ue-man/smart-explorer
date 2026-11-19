@@ -263,7 +263,8 @@ fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, a
     }
     LaunchedEffect(session, ui.accepted) {
         if(ui.accepted && session!=null && owned.any {it===session}) {
-            session.setMode("full",settings.source,sharpness=settings.sharpness,lossless=settings.lossless)
+            // The session was opened with its source; naming it again would make the host open its capture anew.
+            session.setMode("full",settings.source.takeIf { it != session.openedSource },sharpness=settings.sharpness,lossless=settings.lossless)
         }
     }
     LaunchedEffect(immersive, barVisible) { if (immersive && barVisible) { delay(3000); barVisible = false } }
@@ -424,7 +425,7 @@ fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, a
                 if (switched && own != null) {
                     // „Verlustfrei“ is a live switch beside the negotiation: leaving it for another codec turns it off here,
                     // because the host keeps a new pairing under „Verlustfrei“ until that switch goes off.
-                    own.setMode("full", next.source, sharpness = next.sharpness, lossless = next.lossless)
+                    own.setMode("full", next.source.takeIf { it != previous.source }, sharpness = next.sharpness, lossless = next.lossless)
                     if (previous.choice.maxRateBps != next.choice.maxRateBps) own.setMaxRate(next.choice.maxRateBps)
                 } else {
                     if (own != null && prior != null && own.choice == next.choice) own.restoreChoice(prior)
@@ -433,7 +434,10 @@ fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, a
             }
             return
         }
-        session?.setMode("full",next.source,sharpness=next.sharpness,lossless=next.lossless)
+        // The source goes out only when it changed (a named source makes the host open its capture again, which
+        // interrupts picture and control); „Höchste Datenrate“ alone goes out only as `RATE_CEILING`.
+        val rateOnly = previous.copy(choice = previous.choice.copy(maxRateBps = next.choice.maxRateBps)) == next
+        if (!rateOnly) session?.setMode("full",next.source.takeIf { it != previous.source },sharpness=next.sharpness,lossless=next.lossless)
         if (previous.choice.maxRateBps != next.choice.maxRateBps) session?.setMaxRate(next.choice.maxRateBps)
     }
     val ended = ui.ended

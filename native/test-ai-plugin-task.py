@@ -65,7 +65,7 @@ EXPECTED_TOOLS = [
     "screen", "screen_window", "screen_input", "tcp_forward", "apps", "rdp", "login",
 ]
 # Tools whose annotation says readOnlyHint (catalog.rs `read_only(..)`).
-READ_ONLY = {"status", "connections", "list", "stat", "read", "search", "job_status", "screen"}
+READ_ONLY = {"status", "connections", "list", "stat", "read", "search", "job_status"}
 # Tools Claude Code loads upfront (`_meta["anthropic/alwaysLoad"]`, catalog.rs `UPFRONT`).
 UPFRONT = {"connections", "list", "stat", "read", "write", "edit", "mkdir", "remove", "copy", "move",
            "search", "job_status"}

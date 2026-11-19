@@ -119,7 +119,7 @@ einen bereits initialisierten Hostprozess.
 | `exec` | Befehl auf gespeichertem SFTP-Remote (SSH) oder Share-Peer, als Job; mit `session` in einer dauerhaften Shell | zerstörend |
 | `sessions` | dauerhafte Shell-Sitzungen auflisten (mit `kind` `commands` oder `terminal`), einer mit `se shell -T --attachable` geöffneten Befehlssitzung beitreten (`attach`; Terminalsitzungen werden abgelehnt), Aktivität der anderen lesen (`activity`), schließen bzw. lösen (`close`) | ändernd |
 | `job_status`, `job_input`, `job_cancel` | Jobs verfolgen (Ausgabe ab Offset), stdin senden, abbrechen | lesend / ändernd |
-| `screen` | Geräte, Bildschirmfähigkeit, Quellen und begrenzte Standbilder | nur lesend |
+| `screen` | Geräte, Bildschirmfähigkeit, Quellen und begrenzte Standbilder; `audio` mit `on` speichert die Toneinstellung des Betrachters | ändernd (nur `audio` mit `on`), sonst lesend |
 | `screen_input` | Eingabe über den autorisierten Bildschirmvertrag | ändernd |
 | `screen_window` | Nativen Fensterbetrachter mit gebundener Quelle öffnen | ändernd |
 | `tcp_forward` | Autorisierten TCP-Tunnel starten, anzeigen und schließen | ändernd |
