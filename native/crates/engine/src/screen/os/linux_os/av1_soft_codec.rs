@@ -18,6 +18,7 @@
 //! target leaves 70 %…140 % of the rate it runs with [P: own value].
 use std::io;
 use std::sync::{Arc, OnceLock};
+use std::time::{Duration, Instant};
 
 use super::super::av1_soft::{
     dav1d_available, svt_library, Dav1dDecoder, SvtAv1Encoder, DAV1D_LIBRARIES,
@@ -94,6 +95,7 @@ impl SvtAv1Factory {
             size,
             fps: fps.max(1),
             running: 0,
+            rate_keyed: None,
         };
         let encoder = HwH264Encoder::new(session, SVT_NAME.into(), size, fps, grant);
         // Merge W2: the bit rate up to the pairing's level, no fixed ceiling.
@@ -141,7 +143,16 @@ struct SvtSession {
     fps: u32,
     /// The bit rate the open encoder runs with.
     running: u32,
+    /// Before SVT-AV1 4.0: when a lowered rate last came with its key frame.
+    rate_keyed: Option<Instant>,
 }
+
+/// Review 2026-11-19 (F2): before SVT-AV1 4.0 a new rate needs a key frame
+/// (`av1_soft_rate.rs`); lowered rates come with at most one such key frame
+/// in this time, so a line that sinks step by step does not make a key frame
+/// of every picture. A lowering in between waits for it; the stream's byte
+/// budget keeps the ceiling meanwhile. Rises keep the band (`REOPEN_HIGH`).
+const RATE_KEY_GAP: Duration = Duration::from_secs(1);
 
 /// Whether `wanted` lies outside the band around `running` (B-25 note).
 fn needs_reopen(running: u32, wanted: u32) -> bool {
@@ -169,13 +180,20 @@ impl HwH264Session for SvtSession {
         // running one and `set_rate` gives it the new rate
         // (`native_ffi/av1_soft_rate.rs`). SVT-AV1 4.x takes a rate on any
         // picture: every lowering and every rise past 2 % goes, as on the
-        // other encoders (C10). Before 4.0.0 a rate needs a key picture: it
-        // changes only outside the band of `needs_reopen`, now with a key
-        // frame of the running encoder instead of a new encoder.
+        // other encoders (C10). Before 4.0.0 a rate needs a key picture of the
+        // running encoder: every lowering goes, at most one a `RATE_KEY_GAP`
+        // (F2), a rise only outside the band of `needs_reopen`.
         let wanted = rate.bits_per_second;
         if let Some(encoder) = self.encoder.as_mut() {
             let change = if encoder.rate_needs_keyframe() {
-                needs_reopen(self.running, wanted)
+                let due = self
+                    .rate_keyed
+                    .is_none_or(|at| at.elapsed() >= RATE_KEY_GAP);
+                let lower = wanted < self.running;
+                if lower && due {
+                    self.rate_keyed = Some(Instant::now());
+                }
+                (lower && due) || (!lower && needs_reopen(self.running, wanted))
             } else {
                 wanted < self.running
                     || u64::from(wanted.abs_diff(self.running)) * 50 >= u64::from(self.running)

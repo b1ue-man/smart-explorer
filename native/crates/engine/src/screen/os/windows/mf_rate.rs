@@ -77,6 +77,14 @@ fn read_value(api: &ICodecAPI, key: &GUID) -> Option<u32> {
     u32::try_from(&value).ok()
 }
 
+/// Review 2026-11-19 (F1): the mean bit rate an MFT that refused its rate
+/// runs at, as it reads it back; `u32::MAX` when it does not tell (its
+/// default, taken as above any target, so the rate watch gives it up).
+pub(in crate::screen::os) fn running_rate(api: Option<&ICodecAPI>) -> u32 {
+    api.and_then(|api| read_value(api, &CODECAPI_AVEncCommonMeanBitRate))
+        .unwrap_or(u32::MAX)
+}
+
 /// Sets the mean bit rate and reads it back (plan 2026-11-17): `true` when
 /// the encoder refuses it or reads back a value more than 2 % above it.
 /// Review 2026-11-19 (T5 a): a value read back below the rate keeps the

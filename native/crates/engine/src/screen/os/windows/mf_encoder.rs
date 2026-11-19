@@ -35,7 +35,7 @@ use super::mf_common::{ensure_com, EncoderSetup};
 use super::mf_encoder_sync::{force_keyframe, start, stop, UNITS_PER_SECOND};
 use super::mf_media::{
     bounded_bitrate, configure_hardware, floored, is_keyframe, mark_ltr, opened_limit,
-    refused_lowering, retune_bounded, sharp_mode, Output,
+    refused_lowering, retune_bounded, running_rate, sharp_mode, Output,
 };
 use super::{mf_capture_media, mf_capture_output};
 use crate::screen::core::capture_admission::{CaptureGrant, CaptureOwner};
@@ -181,6 +181,10 @@ impl AsyncEncoder {
         let sequence_header = mf_capture_output::sequence_header(&transform);
         let refused = settings.refused();
         let rate_refused = refused.contains(&super::mf_media::SETTINGS[3]);
+        // F1: a refused opening rate is not the one it runs (`running_rate`).
+        let bitrate = rate_refused
+            .then(|| running_rate(api.as_ref()))
+            .unwrap_or(bitrate);
         if !refused.is_empty() {
             eprintln!(
                 "screen encoder {}: settings at the encoder's default: {}",

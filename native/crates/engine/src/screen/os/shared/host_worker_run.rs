@@ -311,7 +311,9 @@ fn serve(
         };
         // The pointer of the overlay goes out ahead of the answer, so the
         // daemon has it when the picture is done.
-        let sent = flush_cursor(output).and_then(|()| reply.write(output));
+        let sent = flush_cursor(output)
+            .and_then(|()| super::producing::report_floor(output))
+            .and_then(|()| reply.write(output));
         drop(reply);
         drop(quiet);
         if let Err(error) = sent {

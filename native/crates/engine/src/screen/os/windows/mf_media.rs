@@ -51,7 +51,7 @@ mod rate;
 pub(in crate::screen::os) use rate::{bitrate_limit, level_max_bitrate};
 pub(in crate::screen::os) use rate::{
     bounded_bitrate, floored, one_frame_buffer, opened_limit, opening_rate, refused_lowering,
-    retune_bounded, set_mean_bitrate, sharp_mode,
+    retune_bounded, running_rate, set_mean_bitrate, sharp_mode,
 };
 
 fn pack(high: u32, low: u32) -> u64 {

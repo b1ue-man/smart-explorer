@@ -183,6 +183,12 @@ pub(super) trait VendorSession {
     fn rate_ceiling(&self, _fps: u32) -> Option<u64> {
         None
     }
+    /// The bit rate the session runs at when it knows it (review
+    /// 2026-11-19, F1): `u64::MAX` for a rate it never took (it runs at its
+    /// default, above any target); `None`: the rate asked last.
+    fn running_bps(&self) -> Option<u64> {
+        None
+    }
     /// The driver refused the last rate it was given (plan 2026-11-17).
     fn rate_refused(&self) -> bool {
         false
@@ -466,7 +472,10 @@ impl<S: VendorSession> ScreenEncoder for VendorEncoder<S> {
     fn rate_state(&self) -> Option<EncoderRateState> {
         let rate = self.rate?;
         Some(EncoderRateState {
-            applied_bps: u64::from(rate.bits_per_second),
+            applied_bps: self
+                .session
+                .running_bps()
+                .unwrap_or(u64::from(rate.bits_per_second)),
             refused: self.session.rate_refused(),
         })
     }

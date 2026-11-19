@@ -1,6 +1,26 @@
 //! Captured frame production and admitted codec replacement.
 use super::*;
 use crate::screen::core::capture_picture::SourcePicture;
+use std::sync::atomic::AtomicU64;
+
+/// Review 2026-11-19 (F3): the lowest bit rate the `PRODUCE` encoder runs
+/// at above the rate asked (as `Encoding::report_floor` reports it for the
+/// stream), and the value last sent; one host process serves one session.
+/// The request loop sends a change ahead of its answer (`report_floor`).
+static PRODUCE_FLOOR: AtomicU64 = AtomicU64::new(0);
+static PRODUCE_FLOOR_SENT: AtomicU64 = AtomicU64::new(0);
+
+/// Sends a changed `PRODUCE_FLOOR` as `ENCODER_FLOOR` (0: none again).
+pub(super) fn report_floor(output: &dispatch::Output) -> io::Result<()> {
+    let floor = PRODUCE_FLOOR.load(Ordering::Acquire);
+    if PRODUCE_FLOOR_SENT.swap(floor, Ordering::AcqRel) == floor {
+        return Ok(());
+    }
+    let mut output = output
+        .lock()
+        .map_err(|_| io::Error::other("worker output poisoned"))?;
+    crate::screen::core::worker_wire::send_encoder_floor(&mut *output, floor)
+}
 impl Worker {
     pub(super) fn produce(&mut self, request: &StageRequest) -> WorkerReply {
         if let Err(error) = self.admit(request.frame_contract) {
@@ -127,6 +147,12 @@ impl Worker {
             match encoded.and_then(|frame| keyed(frame, &request)) {
                 Ok(frame) => {
                     running.delivered += 1;
+                    let floor = running
+                        .encoder
+                        .rate_state()
+                        .filter(|state| !state.refused && state.applied_bps > request.target_bps)
+                        .map_or(0, |state| state.applied_bps);
+                    PRODUCE_FLOOR.store(floor, Ordering::Release);
                     break (frame, running);
                 }
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => {

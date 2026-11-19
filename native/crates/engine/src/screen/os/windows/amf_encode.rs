@@ -480,6 +480,14 @@ impl VendorSession for AmfSession {
     fn rate_refused(&self) -> bool {
         self.rate_refusal.is_some()
     }
+
+    /// F1: the rate it runs; unknown (its default) when it refused the rate
+    /// it opened with and took none since.
+    fn running_bps(&self) -> Option<u64> {
+        let never = self.rate_refusal == Some(self.rate);
+        let rate = u64::from(self.rate.bits_per_second);
+        Some(if never { u64::MAX } else { rate })
+    }
 }
 
 #[path = "amf_rate.rs"]

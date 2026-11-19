@@ -360,8 +360,7 @@ pub(super) struct NvencSession {
     core: Core<Arc<NvApi>>,
     registered: Vec<Registered>,
     tick: u64,
-    /// The mapped input of a picture that timed out (`nvenc_late.rs`).
-    late: Option<Ptr>,
+    late: Option<Ptr>, // the mapped input of a timed-out picture (`nvenc_late.rs`)
     // Dropped last: the session lives on this device.
     _device: ID3D11Device,
 }
@@ -440,8 +439,7 @@ impl VendorSession for NvencSession {
         let lowered = self.core.rate.lowered_by(rate);
         let retune = (self.core.rate.differs(rate) || lowered) && self.core.refused != Some(*rate);
         if let Some(Err(error)) = retune.then(|| self.core.retune(rate)) {
-            // Review 2026-11-19 C10 (`RateParams::refused_lowering`).
-            rate.refused_lowering(lowered, "nvenc", &error)?;
+            rate.refused_lowering(lowered, "nvenc", &error)?; // review 2026-11-19 C10
             eprintln!("screen encoder nvenc: keeps its rate: {error}");
         }
         let handle = self.registration(picture.texture)?;
@@ -483,6 +481,10 @@ impl VendorSession for NvencSession {
 
     fn rate_refused(&self) -> bool {
         self.core.refused.is_some()
+    }
+    /// F1: the rate the session runs (a refused one is not taken).
+    fn running_bps(&self) -> Option<u64> {
+        Some(u64::from(self.core.rate.bits_per_second))
     }
 }
 
