@@ -49,6 +49,8 @@ mod capture_lifetime;
 pub mod family_backend;
 #[path = "host_worker_log.rs"]
 pub mod host_log;
+#[path = "host_worker_input_limit.rs"]
+mod input_limit;
 #[path = "host_worker_session_queries.rs"]
 pub mod session_queries;
 #[path = "host_worker_stream.rs"]
@@ -372,12 +374,8 @@ impl WorkerLink {
         if let Err(error) = sent {
             return Err(self.lost(error));
         }
-        // P9: only input keeps a limit on the answer itself; every other
-        // request waits while the process shows signs of work. Input stays
-        // strict with a longer limit too (a batch with text, review
-        // 2026-11-19 Gemini 11.3, `send_bound_input`).
-        let strict = limit <= INPUT_TIMEOUT
-            || matches!(request, WorkerRequest::Input(_) | WorkerRequest::Release(_));
+        // P9: only input keeps a limit on the answer itself (`input_limit`).
+        let strict = limit <= INPUT_TIMEOUT || input_limit::strict_answer(request);
         match self.reader.receive(limit, strict) {
             Ok(Ok(Some(reply))) => self.accept(reply),
             Ok(Ok(None)) | Err(RecvTimeoutError::Disconnected) => {

@@ -98,6 +98,50 @@ pub(super) fn owe(left: Vec<crate::screen::core::input_model::InputEvent>) {
         .extend(left);
 }
 
+/// Keysyms of a text whose release the portal refused (Codex 4/18).
+static PORTAL_OWED_SYMS: Mutex<Vec<i32>> = Mutex::new(Vec::new());
+
+/// `sym` was pressed and its release refused: it stays owed, and the next
+/// batch reports the refusal.
+pub(super) fn owe_sym(sym: i32) {
+    PORTAL_REFUSED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get_or_insert(crate::screen::core::wire_control::ControlBlock::UnsupportedOnHost);
+    PORTAL_OWED_SYMS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .push(sym);
+}
+
+/// Releases the owed keysyms; `false` (the rest owed again) when the portal
+/// refuses one of them again.
+pub(super) async fn release_owed_syms(
+    remote: &ashpd::desktop::remote_desktop::RemoteDesktop,
+    session: &ashpd::desktop::Session<ashpd::desktop::remote_desktop::RemoteDesktop>,
+) -> bool {
+    let syms = std::mem::take(
+        &mut *PORTAL_OWED_SYMS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+    );
+    for (index, sym) in syms.iter().enumerate() {
+        let up = crate::screen::os::portal_input::key_state(false);
+        if remote
+            .notify_keyboard_keysym(session, *sym, up, Default::default())
+            .await
+            .is_err()
+        {
+            let mut owed = PORTAL_OWED_SYMS
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            owed.splice(0..0, syms[index..].iter().copied());
+            return false;
+        }
+    }
+    true
+}
+
 pub(super) fn take_owed() -> Vec<crate::screen::core::input_model::InputEvent> {
     std::mem::take(
         &mut *PORTAL_OWED
@@ -113,6 +157,10 @@ pub(in crate::screen::os) fn reset_portal_input() {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
     PORTAL_OWED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clear();
+    PORTAL_OWED_SYMS
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .clear();

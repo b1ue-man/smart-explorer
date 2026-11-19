@@ -293,9 +293,13 @@ pub fn inject(events: &[InputEvent]) -> Result<(), ControlBlock> {
         .clone()
         .ok_or(ControlBlock::ControlUnavailable)?;
     let area = target_area(&target).ok_or(ControlBlock::ControlUnavailable)?;
+    // Gemini 3/22: the guard follows only input that went in; a refused
+    // batch leaves it as it was (a Ctrl+Alt Windows refused blocks no
+    // later Delete).
+    let saved = state.sas;
     let inputs = records(events, area, virtual_desktop(), &mut state.sas);
     drop(state);
-    submit(&inputs)
+    submit(&inputs).inspect_err(|_| state().sas = saved)
 }
 
 /// A key without a Windows key (cut, copy, paste: HID 0x7B–0x7D have no
@@ -358,8 +362,9 @@ pub fn inject_family(
             }
         }
     }
+    let saved = state().sas;
     let inputs = records_with_position(events, area, desk, &mut state().sas, family_absolute);
-    submit(&inputs)
+    submit(&inputs).inspect_err(|_| state().sas = saved)
 }
 
 fn family_absolute(area: Area, desk: Area, x: u16, y: u16) -> (i32, i32) {

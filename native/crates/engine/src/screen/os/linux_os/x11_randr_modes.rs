@@ -400,31 +400,6 @@ pub fn restore<C: Connection>(conn: &C, root: Window) -> io::Result<Option<Frame
     Ok(Some(size))
 }
 
-/// `switch` with the server grabbed, as one change for every other client.
-fn switch_grabbed<C: Connection>(
-    conn: &C,
-    root: Window,
-    target: &Target,
-    mode: Mode,
-    size: FrameSize,
-    crtcs: &[Crtc],
-    config_timestamp: u32,
-) -> io::Result<()> {
-    let (place, screen) = layout(conn, crtcs, target.crtc, size, config_timestamp)?;
-    conn.grab_server()
-        .map_err(failed)?
-        .check()
-        .map_err(failed)?;
-    let switched = switch(conn, root, target, mode, place, screen, config_timestamp);
-    let released = conn
-        .ungrab_server()
-        .map_err(failed)
-        .and_then(|cookie| cookie.check().map_err(failed));
-    conn.flush().map_err(failed)?;
-    switched?;
-    released
-}
-
 /// Removes se's modes other than `keep` from the output and the server; a
 /// mode still bound elsewhere stays, which is no failure.
 fn remove_own_modes<C: Connection>(
@@ -445,50 +420,6 @@ fn remove_own_modes<C: Connection>(
     }
 }
 
-/// The CRTC off, the screen to the new size, the CRTC on with the mode.
-fn switch<C: Connection>(
-    conn: &C,
-    root: Window,
-    target: &Target,
-    mode: Mode,
-    place: (i16, i16),
-    screen: FrameSize,
-    config_timestamp: u32,
-) -> io::Result<()> {
-    let set = |mode: Mode, place: (i16, i16), outputs: &[Output]| -> io::Result<()> {
-        let reply = conn
-            .randr_set_crtc_config(
-                target.crtc,
-                CURRENT_TIME,
-                config_timestamp,
-                place.0,
-                place.1,
-                mode,
-                Rotation::ROTATE0,
-                outputs,
-            )
-            .map_err(failed)?
-            .reply()
-            .map_err(failed)?;
-        if reply.status == SetConfig::SUCCESS {
-            Ok(())
-        } else {
-            Err(failed(format!(
-                "SetCrtcConfig refused ({})",
-                u8::from(reply.status)
-            )))
-        }
-    };
-    set(0, (0, 0), &[])?;
-    conn.randr_set_screen_size(
-        root,
-        side(screen.width)?,
-        side(screen.height)?,
-        millimetres(screen.width),
-        millimetres(screen.height),
-    )
-    .map_err(failed)?
-    .check()
-    .map_err(failed)?;
-    set(mode, place, &[target.output])
-}
+#[path = "x11_randr_switch.rs"]
+mod switching;
+use switching::switch_grabbed;

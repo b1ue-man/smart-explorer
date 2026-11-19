@@ -71,6 +71,9 @@ impl InputLane {
                                 .lock()
                                 .map_err(|_| io::Error::other("worker output poisoned"))
                                 .and_then(|mut output| send_reply(&mut *output, &reply))
+                                // Codex 4/17: also while input keeps coming
+                                // (no idle 50 ms), a refusal goes at once.
+                                .and_then(|()| report_refusal(&known, &output))
                         }
                         None => report_refusal(&known, &output),
                     };

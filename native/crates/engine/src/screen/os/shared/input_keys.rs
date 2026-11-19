@@ -107,7 +107,7 @@ pub fn toolbar_keys() -> Vec<u16> {
 /// (Gemini 12.2): each of the four keys is held or not; before, every
 /// repeated press of a held Ctrl or Alt counted once more and one release
 /// took one off, so after a held Ctrl+Alt every Delete stayed dropped.
-#[derive(Debug, Default)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct SasGuard {
     /// Left Ctrl, right Ctrl, left Alt, right Alt (bits 0–3).
     held: u8,

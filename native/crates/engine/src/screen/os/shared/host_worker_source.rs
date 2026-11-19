@@ -31,8 +31,14 @@ impl WorkerInputSink {
                 "family_request_cancelled",
             ));
         }
+        let limit = match &command {
+            crate::screen::core::worker_family::FamilyCommand::Input(input) => {
+                super::input_limit::input_limit(&input.events)
+            }
+            _ => INPUT_TIMEOUT,
+        };
         match link
-            .ask(&WorkerRequest::Family(command), INPUT_TIMEOUT)
+            .ask(&WorkerRequest::Family(command), limit)
             .map_err(|failure| failure.error)?
         {
             WorkerReply::Family(reply) => Ok(reply),

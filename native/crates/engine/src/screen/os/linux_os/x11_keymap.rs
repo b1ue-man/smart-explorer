@@ -26,6 +26,8 @@ pub(super) fn keysym_of(character: char) -> Keysym {
         '\t' => 0xFF09,        // Tab
         '\u{8}' => 0xFF08,     // BackSpace
         ' '..='~' | '\u{A0}'..='\u{FF}' => character as u32,
+        // The layouts bind the euro sign as `EuroSign` (Gemini 3/11).
+        '€' => 0x20AC,
         other => 0x0100_0000 + other as u32,
     }
 }
@@ -45,11 +47,18 @@ pub(super) fn typed_chars(text: &str) -> impl Iterator<Item = char> + '_ {
     })
 }
 
+/// `ISO_Level3_Shift` (AltGr).
+const LEVEL3_SHIFT: Keysym = 0xFE03;
+
 /// The keyboard mapping as the server holds it now.
 pub(super) struct KeyMap {
     pub min: Keycode,
     pub per_code: u8,
     pub syms: Vec<Keysym>,
+    /// The AltGr key, when one carries `ISO_Level3_Shift` and is a modifier:
+    /// the third and fourth level (columns 4 and 5) are typed with it
+    /// (Gemini 3/11: `@`, `{`, `€` … on a German layout took the spare key).
+    pub level3: Option<Keycode>,
 }
 
 impl KeyMap {
@@ -62,11 +71,22 @@ impl KeyMap {
             .map_err(io::Error::other)?
             .reply()
             .map_err(io::Error::other)?;
-        Ok(Self {
+        let mut map = Self {
             min,
             per_code: reply.keysyms_per_keycode,
             syms: reply.keysyms,
-        })
+            level3: None,
+        };
+        let modifiers = conn
+            .get_modifier_mapping()
+            .map_err(io::Error::other)?
+            .reply()
+            .map_err(io::Error::other)?;
+        map.level3 = map
+            .find(LEVEL3_SHIFT)
+            .filter(|(code, shift, _)| !shift && modifiers.keycodes.contains(code))
+            .map(|(code, _, _)| code);
+        Ok(map)
     }
 
     fn row(&self, index: usize) -> &[Keysym] {
@@ -82,18 +102,27 @@ impl KeyMap {
         }
     }
 
-    /// The key of `sym` and whether Shift is needed.
-    pub(super) fn find(&self, sym: Keysym) -> Option<(Keycode, bool)> {
-        (0..self.codes()).find_map(|index| {
-            let row = self.row(index);
-            let code = self.min + index as u8;
-            if row.first() == Some(&sym) {
-                Some((code, false))
-            } else if row.get(1) == Some(&sym) {
-                Some((code, true))
-            } else {
-                None
-            }
+    /// The key of `sym`, whether Shift and whether AltGr is needed; the
+    /// first two levels before the third and fourth.
+    pub(super) fn find(&self, sym: Keysym) -> Option<(Keycode, bool, bool)> {
+        let levels: &[(usize, bool, bool)] = if self.level3.is_some() {
+            &[
+                (0, false, false),
+                (1, true, false),
+                (4, false, true),
+                (5, true, true),
+            ]
+        } else {
+            &[(0, false, false), (1, true, false)]
+        };
+        levels.iter().find_map(|(column, shift, level3)| {
+            (0..self.codes()).find_map(|index| {
+                (self.row(index).get(*column) == Some(&sym)).then_some((
+                    self.min + index as u8,
+                    *shift,
+                    *level3,
+                ))
+            })
         })
     }
 
@@ -113,7 +142,16 @@ fn press<C: Connection>(conn: &C, root: Window, code: Keycode, down: bool) -> io
     Ok(())
 }
 
-fn tap<C: Connection>(conn: &C, root: Window, code: Keycode, shift: bool) -> io::Result<()> {
+fn tap<C: Connection>(
+    conn: &C,
+    root: Window,
+    code: Keycode,
+    shift: bool,
+    level3: Option<Keycode>,
+) -> io::Result<()> {
+    if let Some(altgr) = level3 {
+        press(conn, root, altgr, true)?;
+    }
     if shift {
         press(conn, root, SHIFT_KEYCODE, true)?;
     }
@@ -121,6 +159,9 @@ fn tap<C: Connection>(conn: &C, root: Window, code: Keycode, shift: bool) -> io:
     press(conn, root, code, false)?;
     if shift {
         press(conn, root, SHIFT_KEYCODE, false)?;
+    }
+    if let Some(altgr) = level3 {
+        press(conn, root, altgr, false)?;
     }
     Ok(())
 }
@@ -143,7 +184,7 @@ pub(super) fn typable<'a, C: Connection>(
 ) -> io::Result<bool> {
     let map = KeyMap::read(conn)?;
     Ok(map.spare().is_some()
-        || texts.all(|text| text.chars().all(|c| map.find(keysym_of(c)).is_some())))
+        || texts.all(|text| typed_chars(text).all(|c| map.find(keysym_of(c)).is_some())))
 }
 
 /// Types `text`; returns how many characters had no key at all.
@@ -152,8 +193,8 @@ pub(super) fn type_text<C: Connection>(conn: &C, root: Window, text: &str) -> io
     let mut skipped = 0;
     for character in typed_chars(text) {
         let sym = keysym_of(character);
-        if let Some((code, shift)) = map.find(sym) {
-            tap(conn, root, code, shift)?;
+        if let Some((code, shift, level3)) = map.find(sym) {
+            tap(conn, root, code, shift, map.level3.filter(|_| level3))?;
             continue;
         }
         let Some(spare) = map.spare() else {
@@ -165,7 +206,7 @@ pub(super) fn type_text<C: Connection>(conn: &C, root: Window, text: &str) -> io
         conn.change_keyboard_mapping(1, spare, per, &column)
             .map_err(io::Error::other)?;
         sync(conn)?;
-        tap(conn, root, spare, false)?;
+        tap(conn, root, spare, false, None)?;
         sync(conn)?;
         // Clients read the mapping lazily: give them the press first.
         std::thread::sleep(std::time::Duration::from_millis(20));
@@ -186,7 +227,7 @@ mod tests {
     fn screen_task_x11_keysym_and_keymap_lookup() {
         assert_eq!(keysym_of('a'), 0x61);
         assert_eq!(keysym_of('ä'), 0xE4);
-        assert_eq!(keysym_of('€'), 0x0100_20AC);
+        assert_eq!(keysym_of('€'), 0x20AC);
         assert_eq!(keysym_of('\n'), 0xFF0D);
         assert_eq!(keysym_of('\r'), 0xFF0D);
         assert_eq!(typed_chars("a\r\nb\rc").collect::<String>(), "a\nb\rc");
@@ -194,10 +235,32 @@ mod tests {
             min: 8,
             per_code: 2,
             syms: vec![0, 0, 0x61, 0x41, 0x31, 0x21, 0, 0],
+            level3: None,
         };
-        assert_eq!(map.find(0x61), Some((9, false)));
-        assert_eq!(map.find(0x21), Some((10, true)));
+        assert_eq!(map.find(0x61), Some((9, false, false)));
+        assert_eq!(map.find(0x21), Some((10, true, false)));
         assert_eq!(map.find(0xE4), None);
         assert_eq!(map.spare(), Some(11));
+        // Gemini 3/11: with an AltGr key the third and fourth levels count
+        // (German `q`: q Q @ … in columns 0, 1, 4), the first two first.
+        let german = KeyMap {
+            min: 8,
+            per_code: 6,
+            syms: vec![
+                0x71, 0x51, 0x71, 0x51, 0x40, 0x0FD9, // q
+                0x65, 0x45, 0x65, 0x45, 0x20AC, 0, // e
+                0, 0, 0, 0, 0, 0, // spare
+            ],
+            level3: Some(92),
+        };
+        assert_eq!(german.find(0x40), Some((8, false, true)));
+        assert_eq!(german.find(0x20AC), Some((9, false, true)));
+        assert_eq!(german.find(0x0FD9), Some((8, true, true)));
+        assert_eq!(german.find(0x51), Some((8, true, false)));
+        let plain = KeyMap {
+            level3: None,
+            ..german
+        };
+        assert_eq!(plain.find(0x40), None);
     }
 }

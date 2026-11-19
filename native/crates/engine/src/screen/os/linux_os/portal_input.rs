@@ -159,7 +159,7 @@ pub(super) fn send_input(lease: &InputLease, events: &[InputEvent]) -> Result<()
     }
     if binding
         .as_ref()
-        .is_some_and(|binding| binding.logical_size.is_none())
+        .is_some_and(|binding| binding.current_logical_size().is_none())
         && events.iter().any(|event| {
             matches!(
                 event,

@@ -250,6 +250,8 @@ pub(in crate::screen::os) async fn apply_portal_input(
             },
             InputEvent::Text { text } => {
                 let mut result = Ok(());
+                // Codex 4/18: a pressed keysym whose release failed stays owed.
+                let mut stuck = None;
                 for character in crate::screen::os::x11_keymap::typed_chars(text) {
                     let sym = keysym_of(character) as i32;
                     for down in [true, false] {
@@ -262,17 +264,21 @@ pub(in crate::screen::os) async fn apply_portal_input(
                                     Default::default(),
                                 )
                                 .await;
+                            if result.is_ok() {
+                                stuck = down.then_some(sym);
+                            }
                         }
                     }
+                }
+                if let Some(sym) = stuck {
+                    refusal::owe_sym(sym);
                 }
                 result
             }
             InputEvent::Touch { .. } | InputEvent::Action { .. } => Ok(()),
         };
-        // A refused call (an unsupported keysym, review 2026-11-19 Gemini
-        // 12.3) drops the rest of the batch, not the source: a portal session
-        // that really ended stops its PipeWire stream, which expires the
-        // source itself (`StreamIdentity::on_state`).
+        // A refused call drops the rest of the batch, not the source (Gemini
+        // 12.3): an ended portal session expires it (`StreamIdentity::on_state`).
         if sent.is_err() {
             return Err((index, ControlBlock::UnsupportedOnHost));
         }
@@ -378,14 +384,8 @@ impl crate::screen::core::host_backend::ScreenInputSink for PortalInputSink {
         if reference_generation != memory.generation().value() {
             return Err(crate::screen::core::wire_control::ControlBlock::ControlUnavailable);
         }
-        // The portal refused an earlier batch (S2): this one reports it.
-        if let Some(block) = PORTAL_REFUSED
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take()
-        {
-            return Err(block);
-        }
+        // Codex 4/17: an earlier batch's refusal is no answer to this one;
+        // it reaches the session by `take_refusal` (and `INPUT_REFUSED`).
         crate::screen::os::portal_input::send_input(&self.lease, events)
     }
     /// The portal refused a queued batch (S2): reported without waiting for
@@ -438,9 +438,13 @@ pub(in crate::screen::os) async fn dispatch_portal_batch(
     use crate::screen::os::portal_input::Batch;
     match batch {
         Batch::Input(events) => {
-            // Codex 3/11: owed releases go first; while the portal refuses
-            // them, this batch goes neither, its releases are owed too.
+            // Owed releases first; refused again, this batch's go owed too (Codex 3/11).
             let owed = refusal::take_owed();
+            if !refusal::release_owed_syms(remote, session).await {
+                refusal::owe(owed);
+                refusal::owe(portal_releases(&events, 0));
+                return;
+            }
             if !owed.is_empty() {
                 let left = apply_portal_release(remote, session, &owed, sas).await;
                 if !left.is_empty() {
@@ -467,6 +471,7 @@ pub(in crate::screen::os) async fn dispatch_portal_batch(
             identity: bound,
             events,
         } if Arc::ptr_eq(&bound, identity) && bound.session == path => {
+            refusal::release_owed_syms(remote, session).await;
             let left = apply_portal_release(remote, session, &events, sas).await;
             if !left.is_empty() {
                 eprintln!("screen host process: the portal refused a release");
