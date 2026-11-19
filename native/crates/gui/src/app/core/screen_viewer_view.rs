@@ -286,6 +286,23 @@ impl ViewState {
     /// Carries out a choice of the toolbar that concerns this view; the
     /// others (device, all devices, full screen) are the app's.
     pub fn apply(&mut self, action: &ToolbarAction, common: &mut Common, display: FrameSize) {
+        // The picture area, not the window with its toolbar (Gemini 3/18);
+        // what goes out as `SET_MODE` is the size `follow_size` compares with.
+        let display = self.measured.unwrap_or(display);
+        // A new choice of „Codec“, „Dekodierer“, „Bibliothek“ or „Anzeige“:
+        // the notice of the one before goes; one that still holds is named
+        // again (Gemini 3/23: old errors stood over the working picture).
+        let choice = matches!(
+            action,
+            ToolbarAction::Codec(_)
+                | ToolbarAction::Decoder(_)
+                | ToolbarAction::DecoderLibrary(_)
+                | ToolbarAction::Display(_)
+        );
+        if let Some(session) = self.session.as_ref().filter(|_| choice) {
+            session.info().notice = None;
+            session.shared.direct.forget_noted();
+        }
         match action {
             // The source shown already, or none the host could name (an empty
             // monitor list): the host keeps its source, so the view keeps its
@@ -300,6 +317,7 @@ impl ViewState {
                     self.widget.source_changed(session);
                     let mode = full_set_mode(source.clone(), display, &common.prefs);
                     session.send(ViewerFrame::SetMode(mode));
+                    self.sent_display = display;
                 }
             }
             ToolbarAction::RefreshWindows => {
@@ -315,6 +333,7 @@ impl ViewState {
                     session.codec_chosen(*codec);
                     let mode = full_set_mode(None, display, &common.prefs);
                     session.send(ViewerFrame::SetMode(mode));
+                    self.sent_display = display;
                 }
             }
             // P5 (plan 2026-11-17): „Monitor“ and „Auflösung“ go live to a

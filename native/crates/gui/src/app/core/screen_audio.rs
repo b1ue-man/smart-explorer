@@ -78,7 +78,7 @@ pub fn toolbar_row(ui: &mut egui::Ui, info: Option<&SessionInfo>, out: &mut Vec<
 /// „Ton“ switched in the toolbar: stored, played or muted here, and sent
 /// to a host that takes it.
 pub fn switch(session: Option<&ViewerSession>, on: bool) {
-    let _ = set_audio(on);
+    super::screen_toolbar_ui::note_save(set_audio(on));
     crate::screen::os::audio::set_playing(on);
     if let Some(session) = session {
         let takes = negotiated(&session.info());

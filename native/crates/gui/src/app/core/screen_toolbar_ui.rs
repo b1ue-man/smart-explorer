@@ -201,7 +201,10 @@ fn source_text(input: &ToolbarInput) -> String {
 fn device_row(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Vec<ToolbarAction>) {
     wrap::reserve_pair(ui, "Gerät:", input.current_name);
     wrap::item(ui, "device", |ui| device_list(ui, input, out));
-    if wrap::item(ui, "all_devices", |ui| ui.button("Alle Geräte").clicked()) {
+    if wrap::item(ui, "all_devices", |ui| {
+        wrap::reserve(ui, wrap::button_width(ui, "Alle Geräte"));
+        ui.button("Alle Geräte").clicked()
+    }) {
         out.push(ToolbarAction::AllDevices);
     }
 }
@@ -217,13 +220,15 @@ fn device_list(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Vec<ToolbarAct
         )
     })
     .show_ui(ui, |ui| {
+        wrap::popup(ui);
         for entry in input.devices {
             let label = match &entry.room {
                 Some(room) => format!("{} ({room})", entry.name),
                 None => entry.name.clone(),
             };
             let selected = entry.target.same_device(input.current);
-            if ui.selectable_label(selected, label).clicked() && !selected {
+            let entry = ui.selectable_label(selected, &label).on_hover_text(&label);
+            if entry.clicked() && !selected {
                 out.push(ToolbarAction::Device(entry.target.clone()));
             }
         }
@@ -264,6 +269,7 @@ fn source_row(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Vec<ToolbarActi
             )
         })
         .show_ui(ui, |ui| {
+            wrap::popup(ui);
             if ui
                 .selectable_label(
                     input.source.is_none() || input.source == whole_screen(hello).as_ref(),
@@ -320,8 +326,9 @@ fn source_row(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Vec<ToolbarActi
                         if ui
                             .add_enabled(
                                 selectable,
-                                egui::SelectableLabel::new(input.source == Some(&source), label),
+                                egui::SelectableLabel::new(input.source == Some(&source), &label),
                             )
+                            .on_hover_text(&label)
                             .clicked()
                         {
                             out.push(ToolbarAction::Source(Some(source)));
@@ -391,6 +398,8 @@ fn control_items(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Vec<ToolbarA
     }
     let mut on = input.control_on;
     let taken = input.controlled_by.is_some();
+    // A disabled child never breaks its row itself (Gemini 3/8).
+    wrap::reserve(ui, wrap::button_width(ui, "Steuern"));
     if ui
         .add_enabled(!taken, egui::SelectableLabel::new(on, "Steuern"))
         .on_hover_text("Strg+Umschalt+K")
@@ -463,6 +472,7 @@ mod applied;
 #[path = "screen_toolbar_codec.rs"]
 mod codec_rows;
 pub use codec_rows::apply_codec;
+pub(super) use codec_rows::note_save;
 #[path = "screen_toolbar_display.rs"]
 mod display_rows;
 #[path = "screen_toolbar_view.rs"]
@@ -472,11 +482,8 @@ mod wrap;
 pub use display_rows::{apply_virtual_display, send_live};
 pub use wrap::toolbar_editing;
 
-/// Draws the toolbar and returns what the user chose. P9 (plan 2026-11-17):
-/// every item keeps its whole width, so one that does not fit the rest of a
-/// row moves to the next row as a whole; under egui's default a list or
-/// label at the end of a row was squeezed into the space left (its text
-/// wrapped inside the closed list) and items looked cut off.
+/// Draws the toolbar and returns what the user chose; every item keeps its
+/// whole width and moves to the next row as a whole (P9, `wrap`).
 pub fn show(ui: &mut egui::Ui, input: &ToolbarInput) -> Vec<ToolbarAction> {
     let mut out = Vec::new();
     ui.horizontal_wrapped(|ui| {

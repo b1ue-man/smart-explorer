@@ -104,11 +104,13 @@ fn p9_task_toolbar_names_the_applied_state() {
     let d3d11 = facts(CodecKind::Av1, FFMPEG_HW, false, 5);
     assert_eq!(
         display(DisplayChoice::Direct3d11, &d3d11),
-        Applied::Other("wgpu – Direct3D 11 zeigt das Bild noch nicht".into())
+        Applied::Other("kein Bild – Direct3D 11 zeigt das Bild noch nicht".into())
     );
     assert_eq!(
         display(DisplayChoice::Direct3d11, &mf),
-        Applied::Other(format!("wgpu – Bild ist keine D3D11VA-Textur ({MF_HW})"))
+        Applied::Other(format!(
+            "kein Bild – Bild ist keine D3D11VA-Textur ({MF_HW})"
+        ))
     );
     let shown = facts(CodecKind::Av1, FFMPEG_HW, true, 5);
     assert_eq!(
@@ -201,7 +203,7 @@ fn wahlgilt_task_toolbar_never_claims_an_unapplied_choice() {
             "wgpu",
             Some("no device")
         ),
-        Applied::Other("wgpu – Direct3D 11 nicht verfügbar: no device".into())
+        Applied::Other("kein Bild – Direct3D 11 nicht verfügbar: no device".into())
     );
     // „wgpu“ chosen while glow draws the window.
     let shown = facts(CodecKind::Hevc, MF_HW, false, 5);
@@ -226,6 +228,6 @@ fn wahlgilt_task_toolbar_never_claims_an_unapplied_choice() {
     // Tiles are no D3D11VA texture either.
     assert_eq!(
         display_state_in(DisplayChoice::Direct3d11, &tiles, false, "wgpu", None),
-        Applied::Other("wgpu – Bild ist keine D3D11VA-Textur (tiles)".into())
+        Applied::Other("kein Bild – Bild ist keine D3D11VA-Textur (tiles)".into())
     );
 }

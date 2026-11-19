@@ -355,7 +355,7 @@ impl ScreenViewerApp {
     /// Changes a setting and stores it.
     fn change_prefs(&mut self, change: impl FnOnce(&mut ViewerPrefs)) {
         change(&mut self.common.prefs);
-        let _ = self.common.prefs.save();
+        super::screen_toolbar_ui::note_save(self.common.prefs.save());
     }
 
     fn transition(&mut self, ctx: &egui::Context, transition: Transition) {

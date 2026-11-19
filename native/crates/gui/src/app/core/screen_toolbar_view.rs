@@ -22,6 +22,7 @@ pub(super) fn view_row(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Vec<To
         }
     });
     let fullscreen = wrap::item(ui, "fullscreen", |ui| {
+        wrap::reserve(ui, wrap::button_width(ui, "Vollbild"));
         ui.selectable_label(input.fullscreen, "Vollbild")
             .on_hover_text(
                 "Vollbild verlassen: Strg+Alt+Pause oder Strg+Alt+Umschalt+F; F11 schaltet \
@@ -61,6 +62,8 @@ pub(super) fn view_row(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Vec<To
         out.push(ToolbarAction::Stats(stats));
     }
     wrap::item(ui, "audio", |ui| {
+        // A disabled switch never breaks its row itself (Gemini 3/8).
+        wrap::reserve(ui, wrap::checkbox_width(ui, "Ton"));
         super::super::screen_audio::toolbar_row(ui, input.info, out);
     });
     // „Codec“ (replaces „Verlustfrei“), „Dekodierer“, „Höchste Datenrate“.

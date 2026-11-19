@@ -89,19 +89,21 @@ pub struct StreamRequest {
 }
 
 impl StreamRequest {
-    /// The decoders the hello names under the viewer's codec and decoder
-    /// choice; the tiles stay under „Automatisch“ only (plan 2026-11-18
-    /// „Netzrate“: a chosen codec is never replaced; the host reads the
-    /// choice from the missing tiles). „Verlustfrei“ offers the tiles alone
-    /// (fix 2026-11-19): it negotiated like „Automatisch“, opened a video
-    /// codec until its `SET_MODE` came, and a preview dropped it again.
+    /// The decoders the hello names under „Codec“ and „Dekodierer“: tiles
+    /// under „Automatisch“ (a chosen codec offers none, the host reads the
+    /// choice from that), tiles alone for „Verlustfrei“ (fix 2026-11-19), no
+    /// tiles (software) beside video for a chosen „Hardware“ (Codex 4/15).
     pub fn chosen_decoders(&self) -> Vec<CodecOffer> {
-        let codec = match self.codec.unwrap_or_default() {
+        let setting = self.codec.unwrap_or_default();
+        let decoder = self.decoder.unwrap_or_default();
+        let codec = match setting {
             CodecSetting::Lossless => crate::screen::core::negotiate::CodecPreference::Tiles,
             setting => setting.preference(),
         };
-        let offers = codec.filter_decoders(&self.decoders);
-        self.decoder.unwrap_or_default().filter_offers(&offers)
+        let mut offers = decoder.filter_offers(&codec.filter_decoders(&self.decoders));
+        let hardware = decoder == DecoderPreference::Hardware && setting != CodecSetting::Lossless;
+        offers.retain(|offer| !hardware || offer.hardware);
+        offers
     }
 
     /// A named „Codec“/„Dekodierer“ that leaves no decoder to offer (fix

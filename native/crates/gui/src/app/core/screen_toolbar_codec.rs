@@ -31,7 +31,7 @@ static SAVE_ERROR: Mutex<Option<String>> = Mutex::new(None);
 
 /// Keeps the outcome of storing a choice: an error stays shown in the
 /// toolbar until a later save succeeds.
-pub(super) fn note_save(result: std::io::Result<()>) {
+pub(crate) fn note_save(result: std::io::Result<()>) {
     let mut slot = SAVE_ERROR.lock().unwrap_or_else(PoisonError::into_inner);
     *slot = result.err().map(|error| error.to_string());
 }
@@ -106,6 +106,7 @@ pub(super) fn codec_rows(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Vec<
             super::wrap::fitted(ui, egui::ComboBox::from_id_salt("screen_codec"), text)
         })
         .show_ui(ui, |ui| {
+            super::wrap::popup(ui);
             for setting in CodecSetting::ALL {
                 ui.selectable_value(&mut chosen, setting, setting.label());
             }
@@ -126,6 +127,7 @@ pub(super) fn codec_rows(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Vec<
             super::wrap::fitted(ui, egui::ComboBox::from_id_salt("screen_decoder"), text)
         })
         .show_ui(ui, |ui| {
+            super::wrap::popup(ui);
             for choice in DecoderPreference::ALL {
                 ui.selectable_value(&mut picked, choice, choice.label());
             }
@@ -179,6 +181,7 @@ fn output_rows(
             )
         })
         .show_ui(ui, |ui| {
+            super::wrap::popup(ui);
             for choice in DecoderLibrary::ALL {
                 ui.selectable_value(&mut chosen, choice, choice.label());
             }
@@ -202,6 +205,7 @@ fn output_rows(
             super::wrap::fitted(ui, egui::ComboBox::from_id_salt("screen_display"), text)
         })
         .show_ui(ui, |ui| {
+            super::wrap::popup(ui);
             for choice in DisplayChoice::ALL {
                 ui.selectable_value(&mut picked, choice, choice.label());
             }
@@ -295,29 +299,58 @@ const RATE_UNIT: &str = "Mbit/s";
 /// parsable text is left (Enter or focus lost; a German comma is the decimal
 /// point). Every key stroke went out as `RATE_CEILING` before (Gemini 10).
 fn rate_field(ui: &mut egui::Ui, mbit: f64) -> Option<f64> {
+    use crate::screen::core::rate_control::MIN_BITRATE_BPS;
     let id = egui::Id::new("screen_max_rate_text");
-    let shown = || format!("{mbit:.2}").replace('.', ",");
+    let error_id = egui::Id::new("screen_max_rate_error");
+    // To the bit (Codex 4/20: two decimals turned 1,236 into 1,24 on a mere
+    // click in and out), without trailing zeros, with the decimal comma.
+    let shown = format!("{mbit:.6}");
+    let shown = shown
+        .trim_end_matches('0')
+        .trim_end_matches('.')
+        .replace('.', ",");
     let mut text = ui
         .data(|data| data.get_temp::<String>(id))
-        .unwrap_or_else(shown);
+        .unwrap_or_else(|| shown.clone());
     let field = egui::TextEdit::singleline(&mut text)
         .desired_width(RATE_FIELD_WIDTH)
         .clip_text(true);
     let edited = ui.add(field);
     super::wrap::note_editing(ui, &edited);
+    let error = ui.data(|data| data.get_temp::<String>(error_id));
+    if let Some(error) = error.as_deref() {
+        super::wrap::note(
+            ui,
+            RichText::new(error).color(crate::app::theme::warning(ui)),
+        );
+    }
     if edited.has_focus() {
         ui.data_mut(|data| data.insert_temp(id, text));
         return None;
     }
     ui.data_mut(|data| data.remove::<String>(id));
-    if !edited.lost_focus() {
+    // Escape leaves the field without its typed text (Gemini 3/8); a text
+    // nobody changed is no new choice.
+    let escaped = ui.input(|input| input.key_pressed(egui::Key::Escape));
+    if !edited.lost_focus() || escaped || text.trim() == shown {
         return None;
     }
-    text.trim()
-        .replace(',', ".")
-        .parse::<f64>()
-        .ok()
-        .filter(|value| value.is_finite())
+    let minimum = MIN_BITRATE_BPS as f64 / 1e6;
+    let parsed = text.trim().replace(',', ".").parse::<f64>().ok();
+    let error = match parsed.filter(|value| value.is_finite()) {
+        None => Some(format!("„{}“ ist keine Zahl", text.trim())),
+        // Never raised in silence to the minimum (Codex 4/20).
+        Some(value) if value < minimum => Some(format!(
+            "mindestens {} Mbit/s",
+            format!("{minimum}").replace('.', ",")
+        )),
+        Some(_) => None,
+    };
+    ui.data_mut(|data| match &error {
+        Some(error) => data.insert_temp(error_id, error.clone()),
+        None => data.remove::<String>(error_id),
+    });
+    parsed.filter(|_| error.is_none())
 }
 
 /// Whether the host reports `stored` as the ceiling it applies
@@ -343,11 +376,13 @@ pub(super) fn max_rate_row(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Ve
     // own sizing (`wrap::checkbox_width`, `text_edit_width`).
     let label = "Höchste Datenrate";
     let gap = ui.spacing().item_spacing.x;
-    let mut group = super::wrap::checkbox_width(ui, label);
-    if limited {
-        group += gap + super::wrap::text_edit_width(RATE_FIELD_WIDTH);
-        group += gap + super::wrap::label_width(ui, RATE_UNIT);
-    }
+    // The whole group, also while unticked: a click ticks it and draws the
+    // field in the same pass (Codex 4/21).
+    let group = super::wrap::checkbox_width(ui, label)
+        + gap
+        + super::wrap::text_edit_width(RATE_FIELD_WIDTH)
+        + gap
+        + super::wrap::label_width(ui, RATE_UNIT);
     super::wrap::reserve(ui, group);
     let mut changed = super::wrap::checkbox(ui, &mut limited, label)
         .on_hover_text("Ohne Haken: automatisch. Wirkt sofort, wenn das Gerät es unterstützt.")
@@ -366,9 +401,10 @@ pub(super) fn max_rate_row(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Ve
             info.rate_ceiling == crate::daemon::RateCeilingState::UnsupportedByHost
         })
     {
-        ui.colored_label(
-            crate::app::theme::warning(ui),
-            "vom Gerät nicht unterstützt",
+        let warning = crate::app::theme::warning(ui);
+        super::wrap::note(
+            ui,
+            RichText::new("vom Gerät nicht unterstützt").color(warning),
         );
     } else if limited && confirmed(input, stored) {
         // The host's own statistics name this ceiling (Codex 3/22): only

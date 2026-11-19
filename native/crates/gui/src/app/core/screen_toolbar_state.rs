@@ -284,7 +284,9 @@ pub fn display_state_in(
                     facts.decoder.as_deref().unwrap_or("Kacheln")
                 ),
             };
-            Applied::Other(format!("{window} – {why}"))
+            // A chosen „Direct3D 11“ shows such a picture no other way
+            // (Codex 3/12): the window does not draw it either (Gemini 7).
+            Applied::Other(format!("kein Bild – {why}"))
         }
     }
 }

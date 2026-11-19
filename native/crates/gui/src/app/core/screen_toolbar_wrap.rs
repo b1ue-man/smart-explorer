@@ -65,7 +65,10 @@ fn editing_id() -> egui::Id {
 /// the focus back in every frame, so digits typed into „Höchste Datenrate“
 /// or „Eigene Größe“ went to the host as keys.
 pub(super) fn note_editing(ui: &egui::Ui, response: &egui::Response) {
-    if response.has_focus() {
+    // The pass in which Enter left the field counts too (Codex 4/7: the
+    // picture took the focus back in that same pass and sent Enter to the
+    // host).
+    if response.has_focus() || response.lost_focus() {
         let pass = ui.ctx().cumulative_pass_nr();
         ui.ctx()
             .data_mut(|data| data.insert_temp(editing_id(), pass));
@@ -190,7 +193,8 @@ pub(super) fn note(ui: &mut egui::Ui, text: impl Into<WidgetText>) {
             TextStyle::Body,
         )
         .size()
-        .x;
+        .x
+        + TEXT_SLACK;
     let (left, right) = bounds(ui);
     reserve(ui, width.min(right - left));
     ui.add(egui::Label::new(text).wrap());
@@ -209,6 +213,16 @@ pub(super) fn checkbox_width(ui: &egui::Ui, text: &str) -> f32 {
     let spacing = ui.spacing();
     (spacing.icon_width + spacing.icon_spacing + text_width(ui, text, TextStyle::Body))
         .max(spacing.interact_size.x)
+}
+
+/// The open list of a toolbar list (Codex 4/22): egui lays its entries
+/// out unwrapped (`combo_box.rs` 399-409, `TextWrapMode::Extend`), so a
+/// long device or window name reached past the window. The entries are cut
+/// at the window's right edge instead (the whole name is their tooltip).
+pub(super) fn popup(ui: &mut egui::Ui) {
+    let right = ui.ctx().screen_rect().right() - 8.0;
+    ui.set_max_width((right - ui.max_rect().left()).max(40.0));
+    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
 }
 
 /// A switch of the bar: it starts a new row when it does not fit the rest

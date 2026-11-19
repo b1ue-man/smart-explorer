@@ -120,8 +120,11 @@ impl InputMapper {
         self.backlog.extend(released);
         self.held_buttons.clear();
         self.text_keys.clear();
+        // Modifiers still held locally are kept from the host until they are
+        // let go, but only when the host had one down (Gemini 3/23: the
+        // first shortcut after any release was swallowed).
+        self.suppress_modifiers = self.mods.ctrl || self.mods.alt || self.mods.shift;
         self.mods = Modifiers::NONE;
-        self.suppress_modifiers = true;
         self.touch_active = false;
     }
 

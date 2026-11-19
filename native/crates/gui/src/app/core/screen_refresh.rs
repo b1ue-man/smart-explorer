@@ -31,9 +31,24 @@ pub fn fps_from_millihertz(refresh: Option<u32>) -> u16 {
         .unwrap_or(FALLBACK_FPS)
 }
 
+/// How long an answer of the system counts (Gemini 3/23: every `SET_MODE`
+/// opened a new X11/Wayland connection on the window's thread); a window
+/// moved to another monitor is asked again after it.
+const ASKED_FOR: std::time::Duration = std::time::Duration::from_secs(2);
+
 /// The rate the full view asks for now.
 pub fn wanted_fps() -> u16 {
-    fps_from_millihertz(platform::refresh_millihertz())
+    use std::sync::{Mutex, PoisonError};
+    static KNOWN: Mutex<Option<(std::time::Instant, u16)>> = Mutex::new(None);
+    let mut known = KNOWN.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some((at, fps)) = *known {
+        if at.elapsed() < ASKED_FOR {
+            return fps;
+        }
+    }
+    let fps = fps_from_millihertz(platform::refresh_millihertz());
+    *known = Some((std::time::Instant::now(), fps));
+    fps
 }
 
 #[cfg(test)]

@@ -273,6 +273,12 @@ pub fn to_tile(mut session: ViewerSession, edge: u32, interval_ms: u64) -> Optio
     // A tile draws no pointer overlay: the host's pointer goes back into
     // the picture (P6).
     session.send(ViewerFrame::CursorOverlay(false));
+    // A tile plays no sound: the host stops sending it (Gemini 3/23); the
+    // view it is raised to again asks with the setting (`screen_audio::follow`).
+    let sound = super::screen_audio::negotiated(&session.info());
+    if sound {
+        session.send(ViewerFrame::Audio(false));
+    }
     session.send(ViewerFrame::SetMode(preview_set_mode(edge, interval_ms)));
     session.set_prefer_yuv(false);
     session.set_present_gap_ms(preview_gap_ms(interval_ms));

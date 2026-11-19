@@ -230,13 +230,23 @@ impl super::screen_session::ViewerSession {
         // the report and sends no fresh picture for it: a view that stays
         // visible keeps its picture and input, and one shown again after it
         // was hidden asks for a key frame (a still screen sends none).
-        let was_hidden = lock(&self.shared.visibility)
+        let (was_hidden, was_shown) = lock(&self.shared.visibility)
             .as_ref()
-            .is_some_and(|(previous, _)| previous.hidden());
-        if modern || report.hidden() {
+            .map_or((false, false), |(previous, sent_modern)| {
+                (previous.hidden(), *sent_modern && !previous.hidden())
+            });
+        // A view that stays shown only changed its visible part (Codex 4/3):
+        // the host keeps source, encoder and held input and answers with a
+        // key frame in the stream, so the shown picture, its receipts and the
+        // held keys and buttons stay; only a view hidden or shown again
+        // waits for the host's fresh picture.
+        let stays_shown = modern && was_shown && !report.hidden();
+        if !stays_shown && (modern || report.hidden()) {
             self.shared.invalidate_presentation();
         }
-        lock(&self.shared.resume).report(&report, modern);
+        if !stays_shown {
+            lock(&self.shared.resume).report(&report, modern);
+        }
         *lock(&self.shared.visibility) = Some((report.clone(), modern));
         if modern {
             self.send(crate::screen::core::wire_control::ViewerFrame::Visibility(

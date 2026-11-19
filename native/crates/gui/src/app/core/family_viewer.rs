@@ -149,7 +149,9 @@ impl FamilyViewerApp {
             self.target.clone(),
             request,
             self.control,
-            true,
+            // Planes only where the window draws them (Gemini 3/23: under
+            // glow the first key frame came as planes and was dropped).
+            super::screen_render_owner::get(ctx).is_some_and(|owner| owner.yuv()),
             0,
         ));
     }

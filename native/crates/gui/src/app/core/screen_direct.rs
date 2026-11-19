@@ -7,24 +7,18 @@
 //! wgpu/glow path stays for pictures as planes or BGRA, on Linux and under
 //! „wgpu“ or „Automatisch“; a chosen „Direct3D 11“ never falls back to it.
 //!
-//! Receipts: a picture is presented only while `Shared::can_present`
-//! allows it, and its `PRESENTED` receipt goes out after the swap chain
-//! took it; a picture that may not be shown yet (the host's visibility
-//! acknowledgement is outstanding, or the window has no swap chain yet) is
-//! held by the presenter and shown from the window's thread later, as
-//! `ViewerSession::keep_if_awaiting_floor` does for the slot.
+//! Receipts: a picture is presented while `Shared::can_present` allows it,
+//! its `PRESENTED` receipt after the swap chain took it; one that may not be
+//! shown yet is held and shown from the window's thread later.
 //!
 //! Overlays: the child covers egui's picture area. Menus, open popups, the
 //! statistics, the full-screen button, tooltips, hints and the status are
 //! cut out of its region (`screen_direct_layout`). The child stays while
 //! the session does not stream (egui's dimming cannot lie over it; the
 //! status names the state), so the picture never turns black for it.
-//! The host's pointer cannot be drawn by egui over the child: while the
-//! presenter is attached and the view only watches, the host draws it into
-//! the picture again (`CURSOR_OVERLAY` off), also for pictures that come
-//! through the slot, so the wish never follows the path of single pictures;
-//! while it steers, the local system pointer stays visible over the picture
-//! (the host follows it anyway).
+//! egui cannot draw the host's pointer over the child: while the presenter
+//! is attached and the view only watches, the host draws it into every
+//! picture (`CURSOR_OVERLAY` off); while it steers, the local pointer shows.
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -163,6 +157,12 @@ impl DirectSlot {
     /// a new connection send it, `screen_decode_events.rs`).
     pub fn cursor_overlay(&self) -> bool {
         !self.pointer_in_picture.load(Ordering::Acquire)
+    }
+
+    /// A new choice: a decoder that still gives no D3D11 picture is named
+    /// again (`not_direct`, Gemini 3/23).
+    pub fn forget_noted(&self) {
+        *lock(&self.noted) = None;
     }
 }
 
