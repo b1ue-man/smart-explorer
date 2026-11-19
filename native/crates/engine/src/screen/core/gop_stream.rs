@@ -169,7 +169,7 @@ const PACE_MIN_WAIT_US: u64 = 1_000;
 /// records reach the stream no faster than `rate_bps` after the saved
 /// `credit` bytes, so „Höchste Datenrate“ holds on the line too and the
 /// budget is in no debt after a large picture (no pause after it).
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 struct Pace {
     rate_bps: u64,
     credit: u64,
