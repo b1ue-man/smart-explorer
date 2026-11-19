@@ -294,9 +294,9 @@ impl InputMapper {
                 }
             }
             Event::Ime(ime) => self.ime(ime),
-            Event::Copy => self.chord("c"),
-            Event::Cut => self.cut(),
-            Event::Paste(text) => self.paste(text),
+            Event::Copy if !self.altgr_clipboard(Key::C) => self.chord("c"),
+            Event::Cut if !self.altgr_clipboard(Key::X) => self.cut(),
+            Event::Paste(text) if !self.altgr_clipboard(Key::V) => self.paste(text),
             Event::Touch { id, phase, pos, .. } => self.touch(id.0, *phase, *pos, geometry),
             Event::WindowFocused(false) => self.release_all(),
             _ => {}

@@ -134,6 +134,22 @@ impl InputMapper {
         true
     }
 
+    /// egui-winit reads AltGr+C, X or V as Ctrl+C, X or V (`lib.rs` 758-775,
+    /// 1023-1039: `command` is Ctrl) and makes `Copy`, `Cut` or `Paste` of
+    /// it, never a key (round 8: Polish AltGr+C is „ć“, Hungarian AltGr+V
+    /// „@“). With AltGr held the character of `physical` goes out as `Text`;
+    /// `false` (none, or no AltGr): the shortcut as before.
+    pub(super) fn altgr_clipboard(&mut self, physical: Key) -> bool {
+        if !self.caps.text || !platform::altgr_held() {
+            return false;
+        }
+        let Some(text) = platform::altgr_text(physical, self.mods.shift) else {
+            return false;
+        };
+        self.text(&text);
+        true
+    }
+
     /// Ctrl+V or Umschalt+Einfg that egui-winit swallowed (a clipboard
     /// without text): the shortcut goes to the host once per press, which
     /// pastes its own clipboard. egui-winit makes `Paste` on the press only
@@ -150,7 +166,9 @@ impl InputMapper {
         }
         let recent =
             |at: Option<Instant>, since: Instant| at.is_some_and(|at| at + PASTE_WAIT >= since);
-        let held = platform::paste_keys_held(mods.ctrl, mods.shift);
+        // AltGr+V is a character on some layouts (`altgr_clipboard`).
+        let altgr = self.caps.text && platform::altgr_held();
+        let held = !altgr && platform::paste_keys_held(mods.ctrl, mods.shift);
         if held && self.paste.press.is_none() {
             self.paste.press = Some(Press {
                 since: now,
