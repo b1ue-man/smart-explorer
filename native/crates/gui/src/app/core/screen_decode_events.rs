@@ -210,6 +210,7 @@ impl DecodeState {
         self.broken_frame = None;
         self.last_record = None;
         self.keyframes = KeyframeRequester::default();
+        self.shared.forget_first_stream();
         self.shared.cancel_presentation();
         // The new host session knows no visibility report and counts its
         // frames from one (H2: the old floor refused every new frame): the

@@ -119,6 +119,10 @@ impl ScreenViewerApp {
                 session.info().notice = Some(text);
                 return true;
             }
+            // Codex 8/7: the decode thread's codec watch starts afresh.
+            if let Some(session) = view.session.as_ref() {
+                session.choice_made();
+            }
             let local = matches!(
                 action,
                 ToolbarAction::Decoder(_) | ToolbarAction::DecoderLibrary(_)

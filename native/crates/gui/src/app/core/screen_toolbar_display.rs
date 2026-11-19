@@ -234,9 +234,12 @@ pub fn apply_virtual_display(choice: VirtualDisplayChoice) -> bool {
     if prefs() == choice {
         return false;
     }
+    // Only the changed part (Codex 8/12: the unchanged one of this window
+    // undid one stored meanwhile by another process).
+    let before = prefs();
     let saved = super::super::screen_prefs::set_virtual_display_choice(
-        Some(choice.wish),
-        Some(choice.size),
+        (choice.wish != before.wish).then_some(choice.wish),
+        (choice.size != before.size).then_some(choice.size),
     );
     let taken = prefs() == choice;
     if taken {

@@ -11,6 +11,12 @@ fn down(key: u16) -> bool {
     state < 0
 }
 
+/// Einfg is held now: egui-winit makes Strg+Einfg the same `Copy` as
+/// Strg+C (`lib.rs` 1029), and the host gets the keys that were pressed.
+pub fn insert_held() -> bool {
+    down(VK_INSERT)
+}
+
 /// Ctrl+V, or Umschalt+Einfg without Ctrl, is held now.
 pub fn paste_keys_held(ctrl: bool, shift: bool) -> bool {
     (ctrl && down(VK_V)) || (shift && !ctrl && down(VK_INSERT))

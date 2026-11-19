@@ -176,6 +176,12 @@ fn screen_metadata_runtime_task_visibility_race_keeps_the_proven_report() {
     );
     window.shown = None;
     window.rects.clear();
+    // Codex 8/2: a sample that raced (`raced`) keeps the proven state.
+    window.raced = true;
+    assert!(tracker
+        .report(&window, area, Some(&geometry), 2.0)
+        .is_none());
+    window.raced = false;
     let widened = tracker.report(&window, area, Some(&geometry), 2.0).unwrap();
     assert_eq!(widened.state, VisibilityState::Unknown);
     assert_eq!(widened.rects, full);

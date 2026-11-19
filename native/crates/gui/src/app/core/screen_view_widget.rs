@@ -270,10 +270,8 @@ impl ViewWidget {
         session.refresh_visibility();
         match session.take_picture() {
             Some(picture) if !window.hidden() && !session.is_ended() => {
-                if session.can_present(picture.presented.clone()) {
+                if let Some(picture) = session.presentable(picture) {
                     self.accept(&ctx, session, picture);
-                } else {
-                    session.keep_if_awaiting_floor(picture);
                 }
             }
             Some(_) => {}

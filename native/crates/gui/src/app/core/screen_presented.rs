@@ -153,6 +153,23 @@ impl Shared {
         }
     }
 
+    /// Show `frame` now, keep it for the acknowledgement, or drop it: one
+    /// decision under both locks (Codex 8/3: an acknowledgement between
+    /// `can_present` and `awaiting_floor` dropped the only still picture).
+    pub(super) fn decide(&self, frame: &PresentedFrame) -> Presentable {
+        let presentation = lock(&self.presentation);
+        let resume = lock(&self.resume);
+        if !presentation.matches(frame) || !self.display_active() {
+            Presentable::Stale
+        } else if resume.can_present(frame.frame_id) {
+            Presentable::Now
+        } else if resume.awaiting_floor() {
+            Presentable::Wait
+        } else {
+            Presentable::Stale
+        }
+    }
+
     pub(super) fn can_present(&self, frame: &PresentedFrame) -> bool {
         lock(&self.presentation).matches(frame)
             && lock(&self.resume).can_present(frame.frame_id)
@@ -275,6 +292,24 @@ impl super::screen_session::ViewerSession {
         }
     }
 
+    /// `picture` when it may be shown now; one that waits for the host's
+    /// acknowledgement goes back into the slot, a stale one is counted
+    /// (`Shared::decide`, one decision).
+    pub fn presentable(
+        &self,
+        picture: super::screen_session::Picture,
+    ) -> Option<super::screen_session::Picture> {
+        match self.shared.decide(&picture.presented) {
+            Presentable::Now => return Some(picture),
+            Presentable::Wait => self.shared.keep_picture(picture),
+            Presentable::Stale => {
+                let floor = super::screen_chain_window::flow::Dropped::Floor;
+                self.shared.update(|info| info.latency.flow.dropped(floor));
+            }
+        }
+        None
+    }
+
     /// A picture that matches the presentation but arrived before the host's
     /// visibility acknowledgement goes back into the slot instead of being
     /// dropped: a host with an unchanged screen sends no next picture, and
@@ -288,4 +323,15 @@ impl super::screen_session::ViewerSession {
             self.shared.update(|info| info.latency.flow.dropped(floor));
         }
     }
+}
+
+/// What becomes of a decoded picture (`Shared::decide`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Presentable {
+    /// Shown now.
+    Now,
+    /// Kept until the host's visibility acknowledgement names its floor.
+    Wait,
+    /// Of an old presentation or below the floor: dropped.
+    Stale,
 }

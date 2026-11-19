@@ -211,6 +211,7 @@ pub fn sample(frame: &eframe::Frame, ctx: &egui::Context) -> WindowVisibility {
         shown: Some(shown),
         rects: Vec::new(),
         exit_chord,
+        raced: false,
     };
     if minimized || !shown {
         return result;
@@ -242,6 +243,7 @@ pub fn sample(frame: &eframe::Frame, ctx: &egui::Context) -> WindowVisibility {
             .any(|(cover, rect)| opaque_rect(*cover) != Some(*rect))
     {
         result.shown = None;
+        result.raced = true;
     } else {
         result.rects = visible
             .into_iter()

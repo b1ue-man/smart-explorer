@@ -91,13 +91,21 @@ pub fn given_up_line(codec: CodecKind, reason: &str, next: Option<&[CodecKind]>)
 }
 
 impl DecodeState {
+    /// A choice made since the last event starts the watch afresh.
+    fn renew_guard(&mut self) {
+        let choice = self.shared.local.choices.load(Ordering::Acquire);
+        self.guard.renew(choice);
+    }
+
     pub(super) fn guard_record(&mut self, codec: CodecKind) {
+        self.renew_guard();
         if let Some(codec) = self.guard.on_record(codec, Instant::now()) {
             self.give_up(codec);
         }
     }
 
     pub(super) fn guard_failure(&mut self, codec: CodecKind) {
+        self.renew_guard();
         if let Some(codec) = self.guard.on_failure(codec, Instant::now()) {
             self.give_up(codec);
         }
@@ -106,12 +114,14 @@ impl DecodeState {
     /// A decoded picture of `codec`; `lag` pictures submitted after it are
     /// still in the decoder.
     pub(super) fn guard_picture(&mut self, codec: CodecKind, lag: usize) {
+        self.renew_guard();
         if let Some(codec) = self.guard.on_picture(codec, Instant::now(), lag) {
             self.give_up(codec);
         }
     }
 
     pub(super) fn guard_tick(&mut self) {
+        self.renew_guard();
         if let Some(codec) = self.guard.on_tick(Instant::now()) {
             self.give_up(codec);
         }

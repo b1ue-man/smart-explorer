@@ -187,7 +187,11 @@ pub(super) fn reserve(ui: &mut egui::Ui, width: f32) {
 /// starts a new row when it does not fit the rest of this one and wraps
 /// inside the bar instead of running past its edge (fix 2026-11-19).
 pub(super) fn note(ui: &mut egui::Ui, text: impl Into<WidgetText>) {
-    let text = text.into();
+    note_label(ui, text.into(), None);
+}
+
+/// `note`, with `sense` for a label that acts (`checkbox`).
+fn note_label(ui: &mut egui::Ui, text: WidgetText, sense: Option<egui::Sense>) -> egui::Response {
     let width = text
         .clone()
         .into_galley(
@@ -209,7 +213,11 @@ pub(super) fn note(ui: &mut egui::Ui, text: impl Into<WidgetText>) {
         rest(ui).max(1.0),
         TextStyle::Body,
     );
-    ui.add(egui::Label::new(WidgetText::Galley(galley)));
+    let label = egui::Label::new(WidgetText::Galley(galley));
+    match sense {
+        Some(sense) => ui.add(label.sense(sense)),
+        None => ui.add(label),
+    }
 }
 
 /// The outer width of a button showing `text`. A button inside a child `Ui`
@@ -268,9 +276,15 @@ pub(super) fn checkbox(ui: &mut egui::Ui, on: &mut bool, text: &str) -> egui::Re
     if width <= rest(ui) {
         return ui.checkbox(on, text);
     }
-    let response = ui.checkbox(on, "");
-    note(ui, text);
-    response
+    // The wrapped text switches as the box does (Codex 8/15: a click on it
+    // did nothing in a narrow window, the whole switch in a wide one).
+    let mut response = ui.checkbox(on, "");
+    let label = note_label(ui, text.into(), Some(egui::Sense::click()));
+    if label.clicked() {
+        *on = !*on;
+        response.mark_changed();
+    }
+    response.union(label)
 }
 
 /// The outer width of a label showing `text` (body text, unwrapped).

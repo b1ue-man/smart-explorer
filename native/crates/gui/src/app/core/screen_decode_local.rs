@@ -121,6 +121,9 @@ pub struct DecodeLocal {
     pub pool: PicturePool,
     /// Counts the „Dekodierer“ choices taken over without a new session.
     pub switches: AtomicU64,
+    /// Counts the explicit „Codec“/„Dekodierer“/„Bibliothek“ choices made
+    /// during the session (`DecoderGuard::renew`, Codex 8/7).
+    pub choices: AtomicU64,
     /// The host announced `set_decoders_v1` (`StreamEvent::Accepted`, P1).
     pub set_decoders: AtomicBool,
     /// The session announced a continuation for some decoder (B-36): the
@@ -231,6 +234,12 @@ impl super::screen_session::ViewerSession {
             .store(continues, Ordering::Release);
         self.send(ViewerFrame::SetDecoders(frame));
         true
+    }
+
+    /// The user made a new „Codec“, „Dekodierer“ or „Bibliothek“ choice for
+    /// this session: the decode thread's codec watch starts afresh.
+    pub fn choice_made(&self) {
+        self.shared.local.choices.fetch_add(1, Ordering::AcqRel);
     }
 
     /// Whether the host announced `SET_DECODERS` (else a choice reopens).

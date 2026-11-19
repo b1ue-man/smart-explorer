@@ -295,7 +295,7 @@ impl InputMapper {
                 }
             }
             Event::Ime(ime) => self.ime(ime),
-            Event::Copy => self.chord("c"),
+            Event::Copy => self.copy(),
             Event::Cut => self.cut(),
             Event::Paste(text) => self.paste(text),
             Event::Touch { id, phase, pos, .. } => self.touch(id.0, *phase, *pos, geometry),

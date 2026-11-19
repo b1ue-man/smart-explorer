@@ -56,6 +56,12 @@ fn open() -> Option<Keys> {
     Some(keys)
 }
 
+/// egui-winit turns Strg+Einfg into `Copy` on Windows only: here it comes
+/// as the key itself.
+pub fn insert_held() -> bool {
+    false
+}
+
 /// Ctrl+V, or Umschalt+Einfg without Ctrl, is held now (X11 only).
 pub fn paste_keys_held(ctrl: bool, shift: bool) -> bool {
     if !(ctrl || shift) || wayland() {

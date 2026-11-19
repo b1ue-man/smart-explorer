@@ -18,6 +18,9 @@ pub struct WindowVisibility {
     pub shown: Option<bool>,
     pub rects: Vec<Rect>,
     pub exit_chord: bool,
+    /// The Z order or the geometry changed between the sample's two reads
+    /// (`shown` is `None`): it proves nothing, the last proven state holds.
+    pub raced: bool,
 }
 impl WindowVisibility {
     pub fn hidden(&self) -> bool {
@@ -58,6 +61,17 @@ impl VisibilityTracker {
         // the window shown again, so that goes out as `Unknown` without a
         // size (Codex 3/2: the view stayed black for good).
         if geometry.is_none() && !window.hidden() && self.last.is_none() {
+            return None;
+        }
+        // Codex 8/2: a raced sample after a proven state says nothing new (a
+        // reorder behind a view that stayed covered read as `Unknown`, which
+        // the host takes for shown: a new encoder for a hidden picture). The
+        // next usable sample decides, a shown window included.
+        if window.raced
+            && self.last.as_ref().is_some_and(|last| {
+                last.state != VisibilityState::Unknown && last.minimized == window.minimized
+            })
+        {
             return None;
         }
         let mut rects = Vec::new();

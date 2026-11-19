@@ -155,6 +155,12 @@ impl Shared {
     pub(crate) fn note_stream(&self, codec: CodecKind) {
         let _ = lock(&self.first_codec).get_or_insert(codec);
     }
+
+    /// A new host session began (a second `Accepted`, Codex 8/8): its first
+    /// stream counts, not the one of the connection before.
+    pub(crate) fn forget_first_stream(&self) {
+        *lock(&self.first_codec) = None;
+    }
 }
 
 /// Whether a session whose first stream was `first` must open again for

@@ -22,6 +22,10 @@ mod platform;
 mod platform;
 #[cfg(not(any(windows, target_os = "linux")))]
 mod platform {
+    pub fn insert_held() -> bool {
+        false
+    }
+
     pub fn paste_keys_held(_ctrl: bool, _shift: bool) -> bool {
         false
     }
@@ -48,6 +52,22 @@ pub(super) struct PasteWatch {
 }
 
 impl InputMapper {
+    /// `Copy`: Strg+Einfg as itself where egui-winit made it `Copy` (Codex
+    /// 8/11: a terminal copies on Strg+Einfg and interrupts on Strg+C),
+    /// else Strg+C.
+    pub(super) fn copy(&mut self) {
+        if !platform::insert_held() {
+            self.chord("c");
+            return;
+        }
+        let held = Modifiers {
+            ctrl: true,
+            ..self.mods
+        };
+        self.sync_modifiers(held);
+        self.tap("insert");
+    }
+
     /// Ctrl+V (`v`) or Umschalt+Einfg (`insert`) to the host, which pastes
     /// its own clipboard.
     fn paste_shortcut(&mut self, insert: bool) {

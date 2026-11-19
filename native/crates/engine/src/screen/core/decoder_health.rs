@@ -186,6 +186,8 @@ pub struct DecoderGuard {
     given_up: bool,
     /// Late pictures in a row.
     lagged: u32,
+    /// The viewer's explicit choice this watch belongs to (`renew`).
+    choice: u64,
 }
 
 impl DecoderGuard {
@@ -194,6 +196,20 @@ impl DecoderGuard {
             *self = Self {
                 codec: Some(codec),
                 since: Some(now),
+                choice: self.choice,
+                ..Self::default()
+            };
+        }
+    }
+
+    /// A new explicit „Codec“, „Dekodierer“ or „Bibliothek“ choice (`choice`
+    /// counts them) starts the watch afresh, verdict included (Codex 8/7:
+    /// after a named codec failed, „Automatisch“ on the same codec found it
+    /// given up and never left it).
+    pub fn renew(&mut self, choice: u64) {
+        if choice != self.choice {
+            *self = Self {
+                choice,
                 ..Self::default()
             };
         }

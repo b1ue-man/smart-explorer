@@ -434,7 +434,10 @@ impl DirectView {
         if !direct.target_visible.load(Ordering::Acquire) {
             // Drawn into a child nobody sees, it would give a false receipt.
             *held = Some(stamp);
-        } else if session.can_present(stamp.clone()) {
+            return;
+        }
+        let decision = session.shared.decide(&stamp);
+        if decision == super::screen_presented::Presentable::Now {
             match presenter.show_held(owner(&session.shared)) {
                 Ok(true) => {
                     drop(held);
@@ -446,15 +449,12 @@ impl DirectView {
                     report(&session.shared, &error.to_string());
                 }
             }
-        } else if session.shared.awaiting_floor(&stamp) {
+        } else if decision == super::screen_presented::Presentable::Wait {
             *held = Some(stamp);
         } else {
             drop(held);
-            // Not presentable under the host's visibility floor (statistics).
             let floor = super::screen_chain_window::flow::Dropped::Floor;
-            session
-                .shared
-                .update(|info| info.latency.flow.dropped(floor));
+            session.shared.update(|i| i.latency.flow.dropped(floor));
         }
     }
 

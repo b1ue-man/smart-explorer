@@ -197,7 +197,9 @@ pub fn decoder_choice() -> DecoderPreference {
 }
 
 /// Stores „Codec“ and „Dekodierer“ at once (`None` keeps that value) and
-/// makes the decoder choice the one of this process's decoders.
+/// makes the decoder choice the one of this process's decoders. The file
+/// keeps its own value of a field left out (Codex 8/12: this process's older
+/// copy undid a choice another process, `se screen view`, stored since).
 pub fn set_codec_choice(
     codec: Option<CodecSetting>,
     decoder: Option<DecoderPreference>,
@@ -207,7 +209,8 @@ pub fn set_codec_choice(
     *CODEC.lock().unwrap_or_else(PoisonError::into_inner) = Some(chosen);
     crate::screen::core::negotiate::set_decoder_preference(chosen.1.unwrap_or_default());
     let mut prefs = ViewerPrefs::load_from(&prefs_path());
-    prefs.apply_codec(chosen);
+    let stored_decoder = prefs.decoder;
+    prefs.apply_codec((codec, decoder.or(stored_decoder)));
     prefs.save_to(&prefs_path())
 }
 
@@ -235,7 +238,8 @@ pub fn display_choice() -> DisplayChoice {
 }
 
 /// Stores „Dekodierer-Bibliothek“ and „Anzeige“ at once (`None` keeps that
-/// value) and makes the library the one of this process's decoders.
+/// value, the file's own for the file, Codex 8/12) and makes the library
+/// the one of this process's decoders.
 pub fn set_output_choice(
     library: Option<DecoderLibrary>,
     display: Option<DisplayChoice>,
@@ -245,7 +249,8 @@ pub fn set_output_choice(
     *OUTPUT.lock().unwrap_or_else(PoisonError::into_inner) = Some(chosen);
     crate::screen::core::decoder_library::set_decoder_library(chosen.0.unwrap_or_default());
     let mut prefs = ViewerPrefs::load_from(&prefs_path());
-    (prefs.decoder_library, prefs.display) = chosen;
+    prefs.decoder_library = library.or(prefs.decoder_library);
+    prefs.display = display.or(prefs.display);
     prefs.save_to(&prefs_path())
 }
 
@@ -264,7 +269,8 @@ pub fn virtual_display_choice() -> VirtualDisplayChoice {
 }
 
 /// Stores „Monitor“ (`None` keeps it) and „Auflösung“ (`None` keeps it,
-/// `Some(None)` follows the window) at once.
+/// `Some(None)` follows the window) at once; the file keeps its own value
+/// of a part left out (Codex 8/12).
 pub fn set_virtual_display_choice(
     wish: Option<VirtualDisplayWish>,
     size: Option<Option<FrameSize>>,
@@ -277,11 +283,24 @@ pub fn set_virtual_display_choice(
         chosen.size = size;
     }
     chosen.validate()?;
+    let mut prefs = ViewerPrefs::load_from(&prefs_path());
+    let mut stored = prefs.virtual_display.unwrap_or_default();
+    if let Some(wish) = wish {
+        stored.wish = wish;
+    }
+    if let Some(size) = size {
+        stored.size = size;
+    }
     *VIRTUAL_DISPLAY
         .lock()
         .unwrap_or_else(PoisonError::into_inner) = Some(Some(chosen));
-    let mut prefs = ViewerPrefs::load_from(&prefs_path());
-    prefs.virtual_display = Some(chosen);
+    // A stored part another process left invalid with this one is not
+    // written (the process's own choice holds).
+    prefs.virtual_display = Some(if stored.validate().is_ok() {
+        stored
+    } else {
+        chosen
+    });
     prefs.save_to(&prefs_path())
 }
 

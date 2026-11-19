@@ -410,10 +410,7 @@ fn accept_preview_picture(
     if hidden {
         return None;
     }
-    if !session.can_present(picture.presented.clone()) {
-        session.keep_if_awaiting_floor(picture);
-        return None;
-    }
+    let picture = session.presentable(picture)?;
     let super::screen_session::PictureData::Bgra(image) = picture.data else {
         return None;
     };
