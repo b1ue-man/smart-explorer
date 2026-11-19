@@ -161,7 +161,7 @@ impl ScreenViewerApp {
             if let Some(y) = ctx.input(|input| input.pointer.hover_pos().map(|pos| pos.y)) {
                 if y < 4.0 {
                     self.toolbar_open = true;
-                } else if y > self.toolbar_height + 12.0 {
+                } else if y > self.toolbar_height + 12.0 && !choice::menu_open(ctx) {
                     self.toolbar_open = false;
                 }
             }

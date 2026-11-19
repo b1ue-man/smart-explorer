@@ -32,6 +32,17 @@ pub(super) fn toolbar(ctx: &egui::Context, fullscreen: bool, add: impl FnOnce(&m
     ctx.data_mut(|data| data.insert_temp(egui::Id::new(OVERLAY_BOTTOM), bottom));
 }
 
+/// A list or menu of the toolbar is open, or the pointer lies over one: the
+/// full-screen toolbar stays (Codex 5/20: it closed under the pointer on its
+/// way to an entry below it, and the open list went with it).
+pub(super) fn menu_open(ctx: &egui::Context) -> bool {
+    let over = ctx
+        .pointer_hover_pos()
+        .and_then(|pos| ctx.layer_id_at(pos))
+        .is_some_and(|layer| layer.order != egui::Order::Background);
+    over || ctx.memory(|memory| memory.any_popup_open())
+}
+
 const OVERLAY_BOTTOM: &str = "screen_toolbar_overlay_bottom";
 
 /// Where the full-screen toolbar drawn in this pass ends (points), if any.

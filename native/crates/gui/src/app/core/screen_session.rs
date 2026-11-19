@@ -30,6 +30,7 @@ pub use super::screen_chain_window::LatencyWindow;
 
 #[path = "screen_session_choice.rs"]
 mod choice;
+pub(crate) use choice::hardware_bars_tiles;
 
 /// The planes or the pixels of a decoded picture.
 pub enum PictureData {

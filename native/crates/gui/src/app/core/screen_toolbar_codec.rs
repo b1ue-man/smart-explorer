@@ -355,14 +355,17 @@ fn rate_field(ui: &mut egui::Ui, mbit: f64) -> Option<f64> {
 
 /// Whether the host reports `stored` as the ceiling it applies
 /// (`STATS` → `ChainReport::rate_ceiling_kbps`, sent once a second by a
-/// host with the picture chain report).
+/// host with the picture chain report). The report counts whole kbit/s, so
+/// it proves only a ceiling of whole kbit/s (Codex 5/23: a report of the
+/// value before, rounded alike, confirmed a new one); finer ceilings are
+/// not called „übernommen“.
 fn confirmed(input: &ToolbarInput, stored: Option<u64>) -> bool {
     let reported = input
         .info
         .and_then(|info| info.stats.as_ref())
         .and_then(|stats| stats.chain.as_ref())
         .and_then(|chain| chain.rate_ceiling_kbps);
-    stored.is_some_and(|bps| reported == Some(bps / 1000))
+    stored.is_some_and(|bps| bps % 1000 == 0 && reported == Some(bps / 1000))
 }
 
 pub(super) fn max_rate_row(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Vec<ToolbarAction>) {
@@ -376,18 +379,20 @@ pub(super) fn max_rate_row(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Ve
     // own sizing (`wrap::checkbox_width`, `text_edit_width`).
     let label = "Höchste Datenrate";
     let gap = ui.spacing().item_spacing.x;
-    // The whole group, also while unticked: a click ticks it and draws the
-    // field in the same pass (Codex 4/21).
-    let group = super::wrap::checkbox_width(ui, label)
-        + gap
-        + super::wrap::text_edit_width(RATE_FIELD_WIDTH)
-        + gap
-        + super::wrap::label_width(ui, RATE_UNIT);
+    // What is drawn this pass is measured (Codex 5/21: the unticked switch
+    // broke its row for a field it did not draw); the field of a switch
+    // ticked in this pass follows in the next one, measured with it.
+    let shown = stored.is_some();
+    let mut group = super::wrap::checkbox_width(ui, label);
+    if shown {
+        group += gap + super::wrap::text_edit_width(RATE_FIELD_WIDTH);
+        group += gap + super::wrap::label_width(ui, RATE_UNIT);
+    }
     super::wrap::reserve(ui, group);
     let mut changed = super::wrap::checkbox(ui, &mut limited, label)
         .on_hover_text("Ohne Haken: automatisch. Wirkt sofort, wenn das Gerät es unterstützt.")
         .changed();
-    if limited {
+    if limited && shown {
         if let Some(typed) = rate_field(ui, mbit) {
             let typed = typed.max(MIN_BITRATE_BPS as f64 / 1e6);
             changed |= typed != mbit;

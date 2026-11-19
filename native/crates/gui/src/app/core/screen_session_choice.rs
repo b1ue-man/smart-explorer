@@ -43,7 +43,8 @@ impl Shared {
     /// The `SET_MODE` of the viewer's switch to the tiles, once; `None`
     /// when it was asked before or the choice is a named codec.
     pub(crate) fn request_lossless(&self) -> Option<SetMode> {
-        if !tiles_allowed(self.codec_choice()) {
+        let codec = self.codec_choice();
+        if !tiles_allowed(codec) || hardware_bars_tiles(codec) {
             return None;
         }
         if self.lossless_fallback.swap(true, Ordering::AcqRel) {
@@ -90,6 +91,14 @@ impl Shared {
             .opened_lossless
             .store(lossless, Ordering::Release);
     }
+}
+
+/// A chosen „Dekodierer: Hardware“ takes no fallback to the tiles, whose
+/// decoding is software (Codex 5/13); „Verlustfrei“ chose the tiles itself.
+pub fn hardware_bars_tiles(codec: CodecSetting) -> bool {
+    let decoder = super::screen_prefs::decoder_choice();
+    decoder == crate::screen::core::negotiate::DecoderPreference::Hardware
+        && codec != CodecSetting::Lossless
 }
 
 /// Whether the viewer may switch the session to the tiles itself: under

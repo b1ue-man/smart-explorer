@@ -169,6 +169,18 @@ impl DecodeState {
                     }
                 }
                 let tiles = next.is_empty();
+                if tiles && super::super::screen_session::hardware_bars_tiles(chosen) {
+                    // No other hardware decoder: the chosen „Hardware“ takes
+                    // no software tiles; its error is shown (Codex 5/13).
+                    let text = format!(
+                        "{} liefert auf diesem Gerät kein Bild ({reason}). „Dekodierer: \
+                         Hardware“ ist gewählt und kein anderer Hardware-Dekodierer passt; \
+                         die Kacheln (Software) werden nicht genommen.",
+                        label(codec)
+                    );
+                    self.shared.update(|info| info.notice = Some(text));
+                    return false;
+                }
                 note(&given_up_line(codec, reason, Some(&next)));
                 if tiles {
                     note(&format!(

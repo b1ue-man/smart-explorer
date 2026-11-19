@@ -348,6 +348,18 @@ impl InputMapper {
     }
 
     fn key(&mut self, key: Key, pressed: bool, repeat: bool, modifiers: Modifiers) {
+        // A key the host got is let go there whatever the modifiers are now
+        // (Codex 5/14: Ctrl+S, then Shift, then S up read as a shortcut).
+        let forwarded =
+            key_usage_of(key).filter(|usage| !pressed && self.keys_down.contains(usage));
+        if let Some(hid_usage) = forwarded {
+            self.keys_down.retain(|down| *down != hid_usage);
+            self.emit(InputEvent::Key {
+                hid_usage,
+                down: false,
+            });
+            return;
+        }
         if local_key(key, modifiers).is_some() {
             if !pressed {
                 self.swallowed.retain(|held| *held != key);
