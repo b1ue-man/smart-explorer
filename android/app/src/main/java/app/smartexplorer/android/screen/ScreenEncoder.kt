@@ -60,6 +60,9 @@ internal class ScreenEncoder(private val config: EncoderConfig, private val budg
     @Volatile private var failureHandler: ((String) -> Unit)? = null
     @Volatile private var lastFailure: String? = null
     fun setFailureHandler(handler: (String) -> Unit) { failureHandler=handler; lastFailure?.let(handler) }
+    /** A parameter MediaCodec refused (its key, its message): the encoder keeps running at the values before. */
+    @Volatile private var noticeHandler: ((String, String) -> Unit)? = null
+    fun setNoticeHandler(handler: (String, String) -> Unit) { noticeHandler=handler }
     private val pending = ScreenCaptureInputs<ScreenCaptureBuffer>()
     @Volatile private var forceKeyframe = true
     private var lastPixels: ScreenCaptureBuffer? = null
@@ -105,17 +108,22 @@ internal class ScreenEncoder(private val config: EncoderConfig, private val budg
     /** Register before starting a Canvas producer, including spontaneous drain failure. */
     fun retainSurface(): ScreenCaptureLease = surfaceOwners.retain(checkNotNull(surfaceLease)) {running}
 
-    fun requestKeyFrame() { forceKeyframe=true; parameters { putInt(MediaCodec.PARAMETER_KEY_REQUEST_SYNC_FRAME, 0) } }
+    fun requestKeyFrame() { forceKeyframe=true; parameters(MediaCodec.PARAMETER_KEY_REQUEST_SYNC_FRAME) { putInt(MediaCodec.PARAMETER_KEY_REQUEST_SYNC_FRAME, 0) } }
 
-    fun setBitrate(bps: Int) = parameters { putInt(MediaCodec.PARAMETER_KEY_VIDEO_BITRATE, bps.coerceIn(bitrateRange.lower, bitrateRange.upper)) }
+    /** The lowest bit rate this encoder runs at: a lower rate asked of it is raised to this one (its MediaCodec range). */
+    val lowestBitrate: Int get() = bitrateRange.lower
 
-    private fun parameters(fill: Bundle.() -> Unit) {
+    fun setBitrate(bps: Int) = parameters(MediaCodec.PARAMETER_KEY_VIDEO_BITRATE) { putInt(MediaCodec.PARAMETER_KEY_VIDEO_BITRATE, bps.coerceIn(bitrateRange.lower, bitrateRange.upper)) }
+
+    private fun parameters(name: String, fill: Bundle.() -> Unit) {
         synchronized(codecLock) {
             if (!running || released) return
             try {
                 codec.setParameters(Bundle().apply(fill))
             } catch (e: RuntimeException) {
                 Log.w(TAG, "Kodiererparameter nicht gesetzt: ${e.message}")
+                // Not only in the log (review 2026-11-19): the viewer hears it through the core.
+                noticeHandler?.invoke(name, e.message ?: e.javaClass.simpleName)
             }
         }
     }

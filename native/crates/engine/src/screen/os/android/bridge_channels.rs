@@ -40,6 +40,9 @@ pub const PUSH_INVALID: i32 = -2;
 const MAX_QUEUED: usize = 8;
 /// Control messages kept per channel (the app polls at least once a second).
 const MAX_CONTROL: usize = 64;
+/// Notices of the app waiting for the session (`Channel::push_notice`): the
+/// session takes one per frame, so this only bounds a burst.
+const MAX_NOTICES: usize = 8;
 /// How long a batch of input waits for room in a full input queue: one poll
 /// interval of the app.
 const INPUT_ROOM_WAIT: Duration = Duration::from_secs(1);
@@ -105,6 +108,12 @@ struct Queues {
     waiting_keyframe: bool,
     encoder_failure: Option<String>,
     active_epoch: Option<u32>,
+    /// The lowest bit rate the encoder of `active_epoch` runs at (the app's
+    /// MediaCodec range, `screen.hostNotice`); `None` until the app said it.
+    rate_floor: Option<u64>,
+    /// Notices of the app for the viewer (`HostStage::take_notice`), oldest
+    /// first; each is given once.
+    notices: VecDeque<String>,
 }
 
 /// One host session as the app sees it.
@@ -258,12 +267,28 @@ pub fn close_fixture(id: u64) {
 
 /// The source ended on the host side: the app stops on its next poll.
 pub fn close(id: u64, reason: &str) {
-    if let Some(channel) = with(|register| register.channels.remove(&id)) {
+    let (removed, last) = with(|register| {
+        let removed = register.channels.remove(&id);
+        (removed, register.channels.is_empty())
+    });
+    if let Some(channel) = removed {
         if !matches!(channel.phase(), Phase::Ended(_)) {
             channel.set_phase(Phase::Ended(reason.into()));
             session_event(id, "ended", Some(reason));
         }
+        if last {
+            drop_pending_input();
+        }
     }
+}
+
+/// The last session ended: the app's input reader stops with it, so input
+/// still queued belongs to no session any more. It is dropped here instead of
+/// being performed when the next session starts the reader again (review
+/// 2026-11-19, Codex 2/1).
+fn drop_pending_input() {
+    lock(&INPUT).clear();
+    INPUT_ROOM.notify_all();
 }
 
 pub fn channel(id: u64) -> Option<Arc<Channel>> {
@@ -373,6 +398,22 @@ pub fn send_input(message: Value) -> bool {
     queue.push_back(message.to_string());
     INPUT_READY.notify_all();
     true
+}
+
+/// `screen.hostNotice` with `rateFloor`: the lowest bit rate of the
+/// encoder of `epoch` (the `epoch` of its `configure`).
+pub fn rate_floor(id: u64, epoch: u32, bps: u64) -> Result<(), String> {
+    let channel = channel(id).ok_or_else(|| format!("Keine Bildschirmsitzung {id}"))?;
+    channel.set_rate_floor(epoch, bps);
+    Ok(())
+}
+
+/// `screen.hostNotice` with a sentence for the viewer (an encoder that
+/// refused a parameter).
+pub fn notice(id: u64, text: String) -> Result<(), String> {
+    let channel = channel(id).ok_or_else(|| format!("Keine Bildschirmsitzung {id}"))?;
+    channel.push_notice(text);
+    Ok(())
 }
 
 /// `screen.hostReady`: the app captures (after the system dialog) or serves

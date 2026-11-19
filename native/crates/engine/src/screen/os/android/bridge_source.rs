@@ -68,6 +68,9 @@ pub struct BridgeSource {
     capture_active: bool,
     activity_request: u64,
     limits: FrameLimits,
+    /// The viewer heard that the encoder's lowest rate is above the rate
+    /// asked of it; cleared once it no longer is (one notice per arising).
+    floor_noticed: bool,
 }
 
 impl BridgeSource {
@@ -88,12 +91,22 @@ impl BridgeSource {
             capture_active: true,
             activity_request: 0,
             limits,
+            floor_noticed: false,
         }
     }
 
     fn synthetic(&self) -> bool {
         self.channel.start.source == "synthetic"
     }
+}
+
+/// The notice of an encoder whose lowest bit rate `floor` is above the rate
+/// `asked` of it (`HostStage::take_notice`).
+pub(super) fn floor_notice(floor: u64, asked: u64) -> String {
+    format!(
+        "the encoder's lowest bit rate {floor} bit/s is above the bit rate {asked} bit/s \
+         asked of it; it sends at its lowest rate"
+    )
 }
 
 /// How long one delta picture may take: two frame intervals, at least 50 ms.
@@ -248,6 +261,31 @@ impl HostStage for BridgeSource {
             }
             CodecKind::H264 | CodecKind::Hevc | CodecKind::Av1 => self.h264_frame(request, encoder),
         }
+    }
+
+    /// Review 2026-11-19: what the app's encoder could not do as asked while
+    /// it keeps running, once when it arises: a parameter it refused (the
+    /// app's sentence) or a lowest bit rate above the rate asked of it. The
+    /// stage knows the rate it asked for (`self.bitrate`, the pipeline's
+    /// target), not the viewer's „Höchste Datenrate“, so the sentence names
+    /// that rate; the ceiling itself is held by the pipeline's byte budget.
+    fn take_notice(&mut self) -> Option<String> {
+        if let Some(text) = self.channel.take_notice() {
+            return Some(text);
+        }
+        let floor = self
+            .channel
+            .rate_floor()
+            .filter(|floor| self.bitrate > 0 && *floor > self.bitrate);
+        let Some(floor) = floor else {
+            self.floor_noticed = false;
+            return None;
+        };
+        if self.floor_noticed {
+            return None;
+        }
+        self.floor_noticed = true;
+        Some(floor_notice(floor, self.bitrate))
     }
 
     /// r1: the capture path of the statistics (`HostStats::chain`):

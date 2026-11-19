@@ -11,6 +11,10 @@
 //! - `screen.hostReady {session, width, height, encoder, hardware?,
 //!   projection?}` after the system dialog or for still previews.
 //! - `screen.hostEnded {session, reason}`.
+//! - `screen.hostNotice {session, epoch, rateFloor}` (the lowest bit rate of
+//!   the encoder of `epoch`) or `{session, parameter, detail?}` (a parameter
+//!   the encoder refused): a notice for the viewer while the encoder keeps
+//!   running (`HostStage::take_notice`, review 2026-11-19).
 //!
 //! Events: `screenHostStart {session, source, still, maxWidth, maxHeight,
 //! viewerName, viewerDeviceId}`, `screenSession {session, state, reason}`.
@@ -104,6 +108,7 @@ pub(super) fn handle(method: &str, args: &Value) -> Option<Result<Value, ApiErro
         "screen.hostStop" => stop(args),
         "screen.hostReady" => ready(args),
         "screen.hostEnded" => ended(args),
+        "screen.hostNotice" => notice(args),
         _ => return None,
     })
 }
@@ -328,6 +333,44 @@ fn ended(args: &Value) -> Result<Value, ApiError> {
         ));
     }
     channels::ended(id, reason).map_err(|message| ApiError::new("not_found", message))?;
+    Ok(json!({}))
+}
+
+fn notice(args: &Value) -> Result<Value, ApiError> {
+    let id = session_arg(args)?;
+    let not_found = |message| ApiError::new("not_found", message);
+    if let Some(floor) = args.get("rateFloor") {
+        let bps = floor
+            .as_u64()
+            .filter(|bps| *bps > 0)
+            .ok_or_else(|| invalid("„rateFloor“ ist eine Bitrate in bit/s."))?;
+        let epoch = opt_i64(args, "epoch")
+            .and_then(|epoch| u32::try_from(epoch).ok())
+            .ok_or_else(|| invalid("Parameter „epoch“ fehlt oder ist ungültig."))?;
+        channels::rate_floor(id, epoch, bps).map_err(not_found)?;
+        return Ok(json!({}));
+    }
+    let name = str_arg(args, "parameter")?;
+    let detail = opt_str(args, "detail").unwrap_or_default();
+    if name.is_empty()
+        || !name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+    {
+        return Err(invalid(
+            "„parameter“ ist ein Parametername aus Buchstaben, Ziffern, - und _.",
+        ));
+    }
+    let text = if detail.is_empty() {
+        format!("the encoder refused the parameter {name}")
+    } else {
+        format!("the encoder refused the parameter {name}: {detail}")
+    };
+    // The notice travels as a `STATE` reason: too long a text is refused, never cut.
+    if !fits_wire(&text) {
+        return Err(invalid("„detail“ ist zu lang."));
+    }
+    channels::notice(id, text).map_err(not_found)?;
     Ok(json!({}))
 }
 

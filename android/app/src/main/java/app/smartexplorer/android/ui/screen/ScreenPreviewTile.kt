@@ -93,6 +93,8 @@ fun ScreenPreviewTile(
     var transformTick by remember { mutableIntStateOf(0) }
     val transform = remember { ViewTransform { transformTick++ } }
     val target = remember(device) { device.toTarget() }
+    // The stored „Codec“, „Dekodierer“ and „Höchste Datenrate“ (Codex 2/15): the rate binds the preview too.
+    val stored = remember { ScreenViewPrefs.load(context) }
     val skip = (intervalMs / 1000).coerceAtLeast(1)
 
     LaunchedEffect(device.online) {
@@ -135,7 +137,10 @@ fun ScreenPreviewTile(
         repeat(2) { withFrameNanos { } }
         val opened = ScreenSession(target, backend)
         try {
-            opened.open("preview", null, PREVIEW_EDGE, PREVIEW_EDGE, if (intervalMs <= 500) 2 else 1, listOf(DecoderOffer(codec = "tiles")))
+            // A preview draws bitmaps only (no Surface for MediaCodec), so it offers the tiles; „Höchste Datenrate“
+            // applies as stored. A named video codec is shown below as the full view's choice, not silently replaced.
+            opened.open("preview", null, PREVIEW_EDGE, PREVIEW_EDGE, if (intervalMs <= 500) 2 else 1, listOf(DecoderOffer(codec = "tiles")),
+                ViewerCodecChoice(maxRateBps = stored.maxRateBps))
             session = opened
         } catch (e: CoreException) {
             failure = e.message
@@ -274,6 +279,10 @@ fun ScreenPreviewTile(
                 TextButton(onClick = { nativePixels = !nativePixels }) { Text(if (nativePixels) "Einpassen" else "1:1") }
                 Text(device.name, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                 Box(Modifier.size(10.dp).clip(CircleShape).background(dot))
+            }
+            if (!ViewerCodecChoice.tilesFallbackAllowed(stored.codec)) {
+                Text("Vorschau verlustfrei (Kacheln); „${ScreenCodecNotices.label(stored.codec)}“ gilt in der Vollansicht.",
+                    style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp))
             }
         }
     }

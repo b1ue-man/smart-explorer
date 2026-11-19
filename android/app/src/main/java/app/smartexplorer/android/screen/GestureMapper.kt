@@ -59,7 +59,15 @@ internal class GestureMapper(private val width: () -> Int, private val height: (
                     }
                 }
                 "wheel" -> {
+                    val dx = event.int("dx")
                     val dy = event.int("dy")
+                    if (dx != 0) {
+                        // Right is positive (C5): the content moves left, so the finger does; an eighth of the width per notch.
+                        val distance = width() / 8f * dx / 120f
+                        val (fromX, fromY) = if (positioned) x to y else (width() - 1).coerceAtLeast(0) / 2f to (height() - 1).coerceAtLeast(0) / 2f
+                        val endX = (fromX - distance).coerceIn(0f, (width() - 1).coerceAtLeast(0).toFloat())
+                        add(PhoneAction.Stroke(listOf(fromX to fromY, endX to fromY), 150))
+                    }
                     if (dy != 0) {
                         // One notch scrolls an eighth of the display; up moves the content down.
                         val distance = height() / 8f * dy / 120f

@@ -192,6 +192,24 @@ object ScreenApi {
         )
     }
 
+    /** The encoder of [epoch] runs at no less than [bps] bit/s (its MediaCodec range): the core tells the viewer when that is above the rate it asked for. */
+    suspend fun rateFloor(session: Long, epoch: Int, bps: Int) {
+        Core.call("screen.hostNotice", buildJsonObject {
+            put("session", session)
+            put("epoch", epoch)
+            put("rateFloor", bps)
+        })
+    }
+
+    /** The encoder refused the parameter [name] ([detail]: its message); the encoder keeps running, the viewer hears it. */
+    suspend fun parameterRefused(session: Long, name: String, detail: String) {
+        Core.call("screen.hostNotice", buildJsonObject {
+            put("session", session)
+            put("parameter", name)
+            put("detail", detail)
+        })
+    }
+
     /** The app ended [session]: `consent_denied`, `host_locked`, `host_stopped`, `capture_failed`. */
     suspend fun ended(session: Long, reason: String) {
         Core.call(

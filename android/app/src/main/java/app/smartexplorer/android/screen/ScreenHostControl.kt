@@ -365,6 +365,17 @@ internal object ScreenHostControl {
             return@synchronized
         }
         encoder.setFailureHandler {reason->if(session.encoderToken===token && captureCurrent(session,identity,epoch)) encoderFailed(session,epoch,reason)}
+        // Notices that end nothing (review 2026-11-19): a refused parameter and the encoder's lowest rate, which the
+        // core compares with the rate it asked for (`bridge_source.rs`, `take_notice`).
+        encoder.setNoticeHandler { name, detail ->
+            if (session.encoderToken === token) scope.launch {
+                try { ScreenApi.parameterRefused(session.start.session, name, detail) } catch (e: CoreException) { Log.w(TAG, "Hinweis nicht gemeldet: ${e.message}") }
+            }
+        }
+        val floor = encoder.lowestBitrate
+        scope.launch {
+            try { ScreenApi.rateFloor(session.start.session, epoch, floor) } catch (e: CoreException) { Log.w(TAG, "Mindestrate nicht gemeldet: ${e.message}") }
+        }
         var newFrames: ScreenProjectionFrames?=null
         try {if (synthetic) {
             val lease=encoder.retainSurface()
@@ -673,6 +684,8 @@ internal object ScreenHostControl {
                 } ?: continue
                 val events = message["events"] as? JsonArray ?: continue
                 for (action in mapper.map(events)) {
+                    // Input of a session that ended meanwhile is not performed (review 2026-11-19, Codex 2/1).
+                    if (sessions.isEmpty()) break
                     val done = CountDownLatch(1)
                     AccessLink.perform(action) { done.countDown() }
                     val wait = (action as? PhoneAction.Stroke)?.durationMs ?: 0

@@ -28,12 +28,42 @@ impl Channel {
                 .and_then(Value::as_u64)
                 .and_then(|epoch| u32::try_from(epoch).ok());
             state.1.encoder_failure = None;
+            // The new encoder names its own lowest rate.
+            state.1.rate_floor = None;
         }
         if state.1.control.len() >= MAX_CONTROL {
             state.1.control.pop_front();
         }
         state.1.control.push_back(message.to_string());
         self.changed.notify_all();
+    }
+
+    /// The lowest bit rate of the encoder of `epoch`; a report of an older
+    /// encoder is dropped.
+    pub fn set_rate_floor(&self, epoch: u32, bps: u64) {
+        let mut state = lock(&self.state);
+        if state.1.active_epoch == Some(epoch) {
+            state.1.rate_floor = Some(bps);
+        }
+    }
+
+    /// The lowest bit rate of the running encoder, once the app named it.
+    pub fn rate_floor(&self) -> Option<u64> {
+        lock(&self.state).1.rate_floor
+    }
+
+    /// Queues a notice for the viewer; at most `MAX_NOTICES` wait.
+    pub fn push_notice(&self, text: String) {
+        let mut state = lock(&self.state);
+        if state.1.notices.len() >= MAX_NOTICES {
+            state.1.notices.pop_front();
+        }
+        state.1.notices.push_back(text);
+    }
+
+    /// The oldest notice not given yet.
+    pub fn take_notice(&self) -> Option<String> {
+        lock(&self.state).1.notices.pop_front()
     }
 
     /// Drops every queued picture (a new encoder epoch begins).
