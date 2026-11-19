@@ -224,8 +224,8 @@ fn device_list(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Vec<ToolbarAct
                 None => entry.name.clone(),
             };
             let selected = entry.target.same_device(input.current);
-            let entry = ui.selectable_label(selected, &label).on_hover_text(&label);
-            if entry.clicked() && !selected {
+            let row = ui.selectable_label(selected, &label).on_hover_text(&label);
+            if row.clicked() && !selected {
                 out.push(ToolbarAction::Device(entry.target.clone()));
             }
         }
