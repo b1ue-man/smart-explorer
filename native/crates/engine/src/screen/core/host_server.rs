@@ -446,6 +446,7 @@ pub async fn serve(context: HostContext, viewer: ProvenViewer) -> io::Result<()>
     // Plan 2026-11-18 „Netzrate“: the viewer's codec choice as its decoders
     // name it; a chosen codec is never replaced by another or the tiles.
     pipeline.set_codec_preference(hello.codec_preference());
+    pipeline.set_tiles_offered(super::negotiate::tiles_offered(&hello.all_decoders()));
     // Codex 4/6: „Höchste Datenrate“ from the first picture on.
     if let Some(ceiling) = hello.max_rate_bps.filter(|bps| *bps > 0) {
         pipeline.set_rate_ceiling(Some(ceiling));

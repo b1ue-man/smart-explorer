@@ -114,6 +114,8 @@ impl Pipeline {
             self.tile_limit = Some(limit);
         }
         self.quality_policy.mode.chosen = next.preference;
+        let tiles_offered = crate::screen::core::negotiate::tiles_offered(&set.decoders);
+        self.quality_policy.tiles_offered = tiles_offered;
         if next.choice == self.pairing.current && next.sharp == self.pairing.sharp {
             let failed = &self.quality_policy.failed_codecs;
             let fallbacks = next
@@ -126,7 +128,7 @@ impl Pipeline {
             // (every video encoder failed), a chosen codec of the same
             // pairing kept the tiles; it ends with its reason instead.
             let scope = FallbackScope::of(next.preference, self.quality_policy.mode.sharpness);
-            if self.quality_policy.encoder_failed && !scope.tiles_allowed() {
+            if self.quality_policy.encoder_failed && !(scope.tiles_allowed() && tiles_offered) {
                 self.quality_policy.pending_error = Some(format!(
                     "chosen_codec_failed: {}: no encoder of the chosen codec is left",
                     scope.key()
@@ -169,7 +171,7 @@ impl Pipeline {
         // A chosen codec whose encoders all failed here never becomes the
         // tiles (plan 2026-11-18): the session ends with the reason.
         let scope = FallbackScope::of(next.preference, self.quality_policy.mode.sharpness);
-        let refused = (failed && !scope.tiles_allowed()).then(|| {
+        let refused = (failed && !(scope.tiles_allowed() && tiles_offered)).then(|| {
             format!(
                 "chosen_codec_failed: {}: no encoder of the chosen codec is left",
                 scope.key()
@@ -186,6 +188,7 @@ impl Pipeline {
         policy.failed_codecs = failed_codecs;
         policy.pending_error = refused;
         policy.queued_notices = std::mem::take(&mut self.quality_policy.queued_notices);
+        policy.tiles_offered = tiles_offered;
         self.quality_policy = policy;
         // `set_sharp_choice` keeps an alternative of the running codec.
         let effective = self.choice;

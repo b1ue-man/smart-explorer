@@ -324,6 +324,9 @@ impl Pacer {
     /// acknowledgements of them are ignored) and the next frame is a key
     /// frame on a new stream.
     pub fn on_stream_reset(&mut self) {
+        // Pictures of the old stream the viewer did not show are not
+        // waited for (Codex 5/3): the next picture starts the new one.
+        self.received.clear();
         self.in_flight.clear();
         self.unacked_bytes = 0;
         self.keyframe_due = true;
@@ -335,6 +338,7 @@ impl Pacer {
     /// `on_stream_reset`, but no key frame is due for it; one already due
     /// stays due.
     pub fn on_stream_reset_continued(&mut self) {
+        self.received.clear();
         self.in_flight.clear();
         self.unacked_bytes = 0;
         self.resets += 1;

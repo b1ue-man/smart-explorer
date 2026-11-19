@@ -130,9 +130,8 @@ impl Pipeline {
         // picture (`host_frame_send.rs`), and bounded in time: a viewer that
         // takes no more ends the snapshot, not the session's pictures.
         let pace = self.rate.stream_pace(started_us, video);
-        if let Some((rate, credit)) = pace {
-            gop.pace_next_frame(rate, credit);
-        }
+        let (rate, credit) = pace.unwrap_or((u64::MAX, 0));
+        gop.pace_next_frame(rate, credit, Some(self.work.ceiling_cell()));
         let line_bps = pace.map_or(self.rate.sustained_bps(), |(rate, _)| {
             rate.min(self.rate.sustained_bps())
         });
@@ -148,13 +147,8 @@ impl Pipeline {
             _=work.cancelled(work_epoch)=>Err(io::Error::from(io::ErrorKind::Interrupted)),
             result=writing=>result,
         };
-        // Its stream's header as for live pictures (`host_frame_send.rs`).
-        let extension = if gop.header().frame_contract.is_some() {
-            2 + 1024
-        } else {
-            0
-        };
-        let header_bytes = (crate::screen::core::wire_binary::GOP_HEADER_BYTES + extension) as u64;
+        // Its stream's header as the writer wrote it (`host_frame_send.rs`).
+        let header_bytes = gop.header_bytes();
         let booked = written.as_ref().map_or(planned, |bytes| *bytes) + header_bytes;
         self.rate.on_stream_sent(started_us, booked, video);
         // The statistics' sent rate counts the snapshot (Gemini 3/6).

@@ -1,5 +1,6 @@
 //! One operation may run; control messages invalidate it without dropping its capture source.
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use tokio::sync::Notify;
 
 #[derive(Default)]
@@ -7,8 +8,18 @@ pub(super) struct WorkControl {
     epoch: AtomicU64,
     reference: AtomicU64,
     changed: Notify,
+    /// „Höchste Datenrate“ as it is now (0: none), read by a picture's send
+    /// between its pieces (Codex 5/12: a lowered ceiling waited for the
+    /// running picture).
+    ceiling: Arc<AtomicU64>,
 }
 impl WorkControl {
+    pub(super) fn set_live_ceiling(&self, ceiling: Option<u64>) {
+        self.ceiling.store(ceiling.unwrap_or(0), Ordering::Release);
+    }
+    pub(super) fn ceiling_cell(&self) -> Arc<AtomicU64> {
+        self.ceiling.clone()
+    }
     pub(super) fn epoch(&self) -> u64 {
         self.epoch.load(Ordering::Acquire)
     }

@@ -34,7 +34,8 @@ pub use trust::CodecTrust;
 #[path = "negotiate_chosen.rs"]
 mod chosen;
 pub use chosen::{
-    negotiate_chosen, preference_named_by, preference_of, ChosenUnavailable, EMPTY_OFFER,
+    negotiate_chosen, preference_named_by, preference_of, tiles_offered, ChosenUnavailable,
+    EMPTY_OFFER,
 };
 
 /// Most offers one list of a hello may carry: codec × profile × hardware

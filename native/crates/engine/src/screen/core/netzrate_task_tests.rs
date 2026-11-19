@@ -213,7 +213,7 @@ fn netzrate_task_chosen_codec_is_never_replaced() {
     );
     // The pipeline ends a chosen codec without an encoder with an error.
     let produce = include_str!("host_pipeline_produce.rs");
-    assert!(produce.contains("if !self.quality_policy.scope().tiles_allowed() {"));
+    assert!(produce.contains("if !self.quality_policy.tiles_allowed() {"));
     assert!(include_str!("host_fallback.rs").contains("chosen_codec_failed: {}"));
 }
 

@@ -154,6 +154,8 @@ pub struct GopWriter {
     continues: bool,
     /// The pace of the frame being written (`pace_next_frame`).
     pace: Option<Pace>,
+    /// The bytes its header took on the stream (`header_bytes`).
+    header_bytes: u64,
 }
 
 /// Bytes of one paced piece of a record: the budget is kept to about the
@@ -173,28 +175,53 @@ struct Pace {
     credit: u64,
     started: tokio::time::Instant,
     written: u64,
+    /// The ceiling as it is now (0: none, Codex 5/12): a lowered one holds
+    /// the rest of the picture already.
+    limit: Option<std::sync::Arc<std::sync::atomic::AtomicU64>>,
+}
+
+impl Pace {
+    fn rate(&self) -> u64 {
+        let live = self
+            .limit
+            .as_ref()
+            .map_or(0, |cell| cell.load(std::sync::atomic::Ordering::Acquire));
+        if live == 0 {
+            self.rate_bps
+        } else {
+            self.rate_bps.min(live)
+        }
+    }
 }
 
 impl GopWriter {
     pub async fn open(connection: &Connection, header: GopHeader) -> io::Result<Self> {
         let mut send = connection.open_uni().await.map_err(io::Error::other)?;
-        write_gop_header(&mut send, &header).await?;
+        let header_bytes = write_gop_header(&mut send, &header).await?;
         Ok(Self {
             send,
             header,
             continues: false,
             pace: None,
+            header_bytes,
         })
     }
 
     /// Paces the records of the next `write_frame_admitted` at `rate_bps`
     /// after `credit` bytes at once.
-    pub fn pace_next_frame(&mut self, rate_bps: u64, credit: u64) {
+    /// `limit`: the session's ceiling as it is now, read per piece.
+    pub fn pace_next_frame(
+        &mut self,
+        rate_bps: u64,
+        credit: u64,
+        limit: Option<std::sync::Arc<std::sync::atomic::AtomicU64>>,
+    ) {
         self.pace = Some(Pace {
             rate_bps: rate_bps.max(1),
             credit,
             started: tokio::time::Instant::now(),
             written: 0,
+            limit,
         });
     }
 
@@ -206,10 +233,11 @@ impl GopWriter {
         pace.written = pace.written.saturating_add(bytes as u64);
         let elapsed =
             u128::from(u64::try_from(pace.started.elapsed().as_micros()).unwrap_or(u64::MAX));
-        let earned = u128::from(pace.rate_bps) * elapsed / 8 / 1_000_000;
+        let rate = pace.rate().max(1);
+        let earned = u128::from(rate) * elapsed / 8 / 1_000_000;
         let allowed = u128::from(pace.credit).saturating_add(earned);
         let ahead = u128::from(pace.written).saturating_sub(allowed);
-        let wait_us = ahead * 8 * 1_000_000 / u128::from(pace.rate_bps);
+        let wait_us = ahead * 8 * 1_000_000 / u128::from(rate);
         if wait_us >= u128::from(PACE_MIN_WAIT_US) {
             let wait = u64::try_from(wait_us).unwrap_or(u64::MAX);
             tokio::time::sleep(std::time::Duration::from_micros(wait)).await;
@@ -218,6 +246,12 @@ impl GopWriter {
 
     pub fn header(&self) -> &GopHeader {
         &self.header
+    }
+
+    /// The bytes the stream's header took (Codex 5/22: the budget booked
+    /// the 1 KiB the extension may take at most).
+    pub fn header_bytes(&self) -> u64 {
+        self.header_bytes
     }
 
     /// Marks the stream, opened and still empty, as a continuation: its

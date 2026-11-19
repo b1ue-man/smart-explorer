@@ -261,6 +261,25 @@ fn bildkette_task_proto_set_decoders_with_and_without_the_capability() {
         CodecPreference::Sharp
     );
     assert_eq!(preference_of(None, &[h264(true)]), CodecPreference::H264);
+    // Codex 5/5: an explicit „Automatisch“ under „Dekodierer: Hardware“
+    // (H.264 and HEVC, no tiles) stays „Automatisch“, and no tiles are
+    // negotiated for a viewer that left them out.
+    let hardware = [h264(true), hevc(true)];
+    assert_eq!(
+        preference_of(Some(CodecSetting::Auto), &hardware),
+        CodecPreference::Auto
+    );
+    let mixed_host = [h264(false), hevc(true), CodecOffer::tiles()];
+    let auto = negotiate_chosen(
+        &mixed_host,
+        &hardware,
+        CodecPreference::Auto,
+        None,
+        CodecTrust::ALL,
+    )
+    .unwrap();
+    assert!(!auto.is_empty() && auto.iter().all(|c| c.codec.is_video()));
+    assert!(!crate::screen::core::negotiate::tiles_offered(&hardware));
     assert_eq!(
         preference_of(Some(CodecSetting::Lossless), &[CodecOffer::tiles()]),
         CodecPreference::Auto

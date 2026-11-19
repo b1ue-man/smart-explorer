@@ -38,6 +38,8 @@ struct Pending {
     control_bytes: u64,
     /// The newest `PRESENTED` while a picture operation runs, and when.
     presented: Option<(u64, u64)>,
+    /// A new route: the stream starts anew, the encoder stays (Codex 5/9).
+    route_reset: bool,
     receipts: VecDeque<Receipt>,
 }
 struct Facts {
@@ -220,6 +222,9 @@ impl PipelineActor {
         }
         if std::mem::take(&mut self.pending.keyframe) {
             p.request_keyframe();
+        }
+        if std::mem::take(&mut self.pending.route_reset) {
+            p.reset_stream();
         }
         if let Some((frame, at)) = self.pending.presented.take() {
             p.pacer.on_presented(frame, at);

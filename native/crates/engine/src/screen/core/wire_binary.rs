@@ -285,11 +285,14 @@ struct GopExtension {
     family_layout_revision: Option<u64>,
 }
 
+/// Writes the header of a picture stream; returns the bytes it took (the
+/// byte budget books them, review 2026-11-19 Codex 5/22).
 pub async fn write_gop_header<W: AsyncWrite + Unpin>(
     writer: &mut W,
     header: &GopHeader,
-) -> io::Result<()> {
+) -> io::Result<u64> {
     writer.write_all(&header.encode()?).await?;
+    let mut written = GOP_HEADER_BYTES as u64;
     if let Some(contract) = header.frame_contract {
         let extension = GopExtension {
             contract,
@@ -301,8 +304,10 @@ pub async fn write_gop_header<W: AsyncWrite + Unpin>(
         }
         writer.write_all(&(json.len() as u16).to_be_bytes()).await?;
         writer.write_all(&json).await?;
+        written += 2 + json.len() as u64;
     }
-    writer.flush().await
+    writer.flush().await?;
+    Ok(written)
 }
 
 pub async fn read_gop_header<R: AsyncRead + Unpin>(reader: &mut R) -> io::Result<GopHeader> {

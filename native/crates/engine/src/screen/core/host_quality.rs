@@ -128,6 +128,10 @@ pub(super) struct QualityPolicy {
     /// `STATE` reasons that wait for the next run because another one took
     /// the slot of this run (`Pipeline::note_encoder`, review 2026-11-19 V2).
     pub(super) queued_notices: Vec<String>,
+    /// The viewer offers the tiles (`negotiate::tiles_offered`); one that
+    /// excluded them („Dekodierer: Hardware“) never gets them as a
+    /// fallback, also under „Automatisch“ (review 2026-11-19, Codex 5/5).
+    pub(super) tiles_offered: bool,
 }
 
 /// Which pairings may stand in for a failed encoder (plan 2026-11-18).
@@ -261,6 +265,7 @@ impl QualityPolicy {
             small_picture: None,
             follow_source: None,
             queued_notices: Vec::new(),
+            tiles_offered: true,
             mode: QualityMode {
                 kind: StreamKind::Video,
                 full_size: None,
@@ -282,6 +287,11 @@ impl QualityPolicy {
         // P9: sharpness (lossless) no longer caps the rate at 15 frames/s;
         // the hardware is the limit (encoding capacity, line, viewer).
         requested.clamp(1, self.viewer_fps)
+    }
+    /// Whether the tiles may take over: „Automatisch“ and a viewer that
+    /// offers them.
+    pub(super) fn tiles_allowed(&self) -> bool {
+        self.tiles_offered && self.scope().tiles_allowed()
     }
     /// Which pairings may stand in for a failed encoder.
     pub(super) fn scope(&self) -> FallbackScope {
@@ -335,6 +345,11 @@ impl Pipeline {
     /// The pairings of the other video codecs (`codec_fallbacks`).
     pub fn set_codec_fallbacks(&mut self, fallbacks: Vec<CodecChoice>) {
         self.quality_policy.fallbacks = fallbacks;
+    }
+
+    /// Whether the viewer's decoders allow the tiles (Codex 5/5).
+    pub fn set_tiles_offered(&mut self, offered: bool) {
+        self.quality_policy.tiles_offered = offered;
     }
 
     /// The codec the viewer chose (plan 2026-11-18): at the opening, before

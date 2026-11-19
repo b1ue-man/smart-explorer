@@ -52,9 +52,10 @@ impl Pipeline {
             // The first route seen is the session's own, no change of it
             // (Gemini 3/5: every session logged a route change and ended an
             // encoder epoch at its first tick).
+            // Codex 5/9: a new path restarts the stream, not the encoder.
             if self.route_epoch.is_some_and(|known| known != epoch) {
-                self.note_restart("the connection's route changed");
-                self.invalidate_reference();
+                self.note_restart("the connection's route changed: new stream");
+                self.reset_stream();
             }
             self.route_epoch = Some(epoch);
             if !route.application_allowed {
@@ -77,7 +78,7 @@ impl Pipeline {
         if video && (fitted.width < 2 || fitted.height < 2) {
             // A chosen codec waits for a picture it can carry (plan
             // 2026-11-18); only „Automatisch“ takes the tiles meanwhile.
-            if !self.quality_policy.scope().tiles_allowed() {
+            if !self.quality_policy.tiles_allowed() {
                 return Ok(self.wait_for_size(fitted));
             }
             self.fall_back_to_tiles();
@@ -103,7 +104,7 @@ impl Pipeline {
             if video && self.fit_pairing_for_size() {
                 return Ok(Produced::Reset);
             }
-            if video && !self.quality_policy.scope().tiles_allowed() {
+            if video && !self.quality_policy.tiles_allowed() {
                 return Err(self.chosen_codec_failed(io::Error::other(format!(
                     "no pairing carries {}x{} at one frame a second",
                     size.width, size.height
@@ -443,7 +444,7 @@ impl Pipeline {
             ));
             return Ok(Produced::Reset);
         }
-        if !self.quality_policy.scope().tiles_allowed() {
+        if !self.quality_policy.tiles_allowed() {
             return Err(self.chosen_codec_failed(error));
         }
         self.quality_policy.note_failed_codec(self.choice.codec);

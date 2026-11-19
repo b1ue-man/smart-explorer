@@ -51,7 +51,13 @@ impl Pipeline {
         self.quality.size = self.fitted_size();
         // A new rate alone keeps the encoder (B-03); a rate above the one it
         // was opened with restarts it at the next tick (`Pipeline::tick`).
-        if !mode.same_but_rate(&previous) || self.choice != previous_choice {
+        // Codex 5/8: the viewer's decoder stage alone is no encoder change;
+        // its new decoder starts at the key frame it asks for.
+        let encoder_choice = super::super::negotiate::CodecChoice {
+            decoder_hardware: previous_choice.decoder_hardware,
+            ..self.choice
+        };
+        if !mode.same_but_rate(&previous) || encoder_choice != previous_choice {
             self.note_restart("mode or codec pairing changed (SET_MODE/SET_DECODERS)");
             self.invalidate_reference();
         }
@@ -107,6 +113,7 @@ impl Pipeline {
 
     /// „Höchste Datenrate“ of the viewer (B-09); `None` is automatic.
     pub fn set_rate_ceiling(&mut self, ceiling_bps: Option<u64>) {
+        self.work.set_live_ceiling(ceiling_bps);
         self.rate.set_ceiling(ceiling_bps);
     }
 

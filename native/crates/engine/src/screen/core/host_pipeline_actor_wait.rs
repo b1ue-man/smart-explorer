@@ -95,6 +95,8 @@ impl PipelineActor {
     /// „Bildkette“ B-09): applied by the next `apply`, without an interrupt
     /// of the running picture operation.
     pub fn set_rate_ceiling(&mut self, ceiling: Option<u64>) {
+        // A picture being written holds the new ceiling at once (Codex 5/12).
+        self.work.set_live_ceiling(ceiling);
         self.pending.ceiling = Some(ceiling);
         self.poll();
     }

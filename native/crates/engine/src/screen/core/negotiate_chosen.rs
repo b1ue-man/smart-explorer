@@ -17,6 +17,9 @@ use crate::screen::core::sharp_mode;
 /// The reason of a viewer that names no decoder in `SET_DECODERS`: the
 /// wording of the chosen codec without a decoder, which every viewer
 /// translates (`codec_reason_text`, `ScreenChoiceNotices.kt`).
+/// No encoder of the host fits the viewer's decoders.
+const NO_FIT: &str = "no encoder and decoder of this codec fit together";
+
 pub const EMPTY_OFFER: &str = "the viewer has no decoder of this codec";
 
 /// No pairing of the chosen codec: the reason for the viewer.
@@ -55,7 +58,21 @@ pub fn negotiate_chosen(
 ) -> Result<Vec<CodecChoice>, ChosenUnavailable> {
     let all = negotiate_trusted(encoders, decoders, preference, contract, trust);
     let video: Vec<CodecChoice> = match preference {
-        CodecPreference::Auto | CodecPreference::Tiles => return Ok(all),
+        CodecPreference::Auto | CodecPreference::Tiles if tiles_offered(decoders) => {
+            return Ok(all)
+        }
+        // Codex 5/5: a viewer that names decoders but no tiles excluded them
+        // („Dekodierer: Hardware“): no tiles are negotiated for it.
+        CodecPreference::Auto | CodecPreference::Tiles => {
+            let video: Vec<CodecChoice> = all.into_iter().filter(|c| c.codec.is_video()).collect();
+            if video.is_empty() {
+                return Err(ChosenUnavailable {
+                    preference: CodecPreference::Auto,
+                    reason: NO_FIT.into(),
+                });
+            }
+            return Ok(video);
+        }
         CodecPreference::Sharp => sharp_mode::sharp_order(&all)
             .into_iter()
             .filter(|choice| choice.codec.is_video() && choice.encoder_hardware)
@@ -86,7 +103,7 @@ pub fn negotiate_chosen(
     }) {
         "the viewer has no decoder of this codec"
     } else {
-        "no encoder and decoder of this codec fit together"
+        NO_FIT
     };
     Err(ChosenUnavailable {
         preference,
@@ -108,15 +125,19 @@ pub fn negotiate_chosen(
 /// (`preference_named_by`). A „Scharf (GPU)“ viewer that decodes only one
 /// of H.264 and HEVC read as that codec, with its software encoders; a
 /// viewer before the field keeps the old reading.
+/// Whether `decoders` allow the tiles: they name them, or name nothing (a
+/// viewer before codec negotiation, which gets the tiles as before).
+pub fn tiles_offered(decoders: &[CodecOffer]) -> bool {
+    decoders.is_empty() || decoders.iter().any(|offer| offer.codec == CodecKind::Tiles)
+}
+
 pub fn preference_of(choice: Option<CodecSetting>, decoders: &[CodecOffer]) -> CodecPreference {
+    // Codex 5/5: an explicit „Automatisch“ (or „Verlustfrei“, which
+    // negotiates like it) is read as such; guessed from H.264 and HEVC
+    // decoders under „Dekodierer: Hardware“ it read as „Scharf (GPU)“.
     match choice {
-        Some(
-            setting @ (CodecSetting::H264
-            | CodecSetting::Hevc
-            | CodecSetting::Av1
-            | CodecSetting::Sharp),
-        ) => setting.preference(),
-        _ => preference_named_by(decoders),
+        Some(setting) => setting.preference(),
+        None => preference_named_by(decoders),
     }
 }
 

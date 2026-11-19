@@ -39,8 +39,16 @@ impl PipelineActor {
         let moved = path(route) != path(self.route);
         self.route = route;
         if moved {
+            // Codex 5/9: the transport changed, not the picture: the stream
+            // starts anew on the new path with a key frame of the running
+            // encoder (`reset_stream`), which keeps the reference input
+            // binds to, as a key frame does (`request_keyframe`).
+            let before = self.work.reference();
             self.interrupt();
-            self.pending.invalidate = true;
+            if !self.blocked && self.work.reference() == before + 1 {
+                self.facts.reference = self.work.reference();
+            }
+            self.pending.route_reset = true;
         }
     }
 

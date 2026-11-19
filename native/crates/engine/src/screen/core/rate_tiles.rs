@@ -30,14 +30,13 @@ impl RateController {
     }
 
     /// The user's ceiling less the control stream's rate: what the
-    /// pictures may take; never below the floor of the target (or the
-    /// ceiling itself below it). `None` without a user ceiling.
+    /// pictures may put on the line, down to nothing (Codex 5/4: raised to
+    /// the floor of the target, pictures and control together exceeded the
+    /// ceiling). The target E keeps its floor (`ceiling_bps`); the byte
+    /// budget holds the rest. `None` without a user ceiling.
     pub fn user_picture_bps(&self) -> Option<u64> {
-        self.user_ceiling_bps.map(|ceiling| {
-            ceiling
-                .saturating_sub(self.control_bps)
-                .max(super::MIN_BITRATE_BPS.min(ceiling))
-        })
+        self.user_ceiling_bps
+            .map(|ceiling| ceiling.saturating_sub(self.control_bps).max(1))
     }
 
     /// `(control rate, ceiling)` once when the control stream alone came

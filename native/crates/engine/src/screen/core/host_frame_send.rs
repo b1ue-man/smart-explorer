@@ -24,9 +24,8 @@ impl Pipeline {
         // B-36: a new stream whose first frame is no key frame continues the
         // encoder's chain from the confirmed picture.
         let mut continued = false;
-        // Review 2026-11-19 (Codex 3/9): a new stream's header goes on the
-        // line as well; booked with the picture, its extension at the 1 KiB
-        // the writer allows at most (`wire_binary::write_gop_header`).
+        // Review 2026-11-19 (Codex 3/9, 5/22): a new stream's header goes on
+        // the line as well; booked with the picture as the writer wrote it.
         let mut header_bytes = 0u64;
         if self.gop.is_none() {
             let header = GopHeader {
@@ -48,12 +47,7 @@ impl Pipeline {
             };
             match opened {
                 Ok(mut gop) => {
-                    let extension = if gop.header().frame_contract.is_some() {
-                        2 + 1024
-                    } else {
-                        0
-                    };
-                    header_bytes = (super::super::wire_binary::GOP_HEADER_BYTES + extension) as u64;
+                    header_bytes = gop.header_bytes();
                     continued = !frame.keyframe && self.continue_from.is_some();
                     if continued {
                         gop.mark_continuation();
@@ -102,9 +96,10 @@ impl Pipeline {
             let ahead = u128::from(planned.saturating_sub(credit));
             (ahead * 8 * 1_000_000 / u128::from(rate)).min(u128::from(u64::MAX)) as u64
         });
-        if let Some((rate, credit)) = pace {
-            gop.pace_next_frame(rate, credit);
-        }
+        // Codex 5/12: also without a budget now, a ceiling set while the
+        // picture is written holds its rest (`pace.rate()`).
+        let (rate, credit) = pace.unwrap_or((u64::MAX, 0));
+        gop.pace_next_frame(rate, credit, Some(self.work.ceiling_cell()));
         let active_budget =
             stale.saturating_add(Duration::from_micros(serialization_us.max(paced_us)));
         let send_started = std::time::Instant::now();
