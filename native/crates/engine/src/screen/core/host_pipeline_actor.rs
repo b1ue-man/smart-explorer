@@ -30,6 +30,8 @@ struct Pending {
     snapshot: Option<Option<FrameSize>>,
     /// The capture state is reported once more (`retarget_visible_rects`).
     confirm: bool,
+    /// The source takes this size itself (`expect_source_size`).
+    expect: Option<FrameSize>,
     receipts: VecDeque<Receipt>,
 }
 struct Facts {
@@ -192,6 +194,9 @@ impl PipelineActor {
         };
         if let Some(source) = self.pending.source.take() {
             p.set_source(source);
+        }
+        if let Some(size) = self.pending.expect.take() {
+            p.expect_source_size(size);
         }
         if let Some(mode) = self.pending.mode.take() {
             p.set_quality_mode(mode);

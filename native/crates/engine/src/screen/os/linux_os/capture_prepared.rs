@@ -160,7 +160,7 @@ pub(in crate::screen::os) async fn apply_portal_input(
         let sent = match event {
             InputEvent::PointerAbs { x, y } | InputEvent::Touch { id: 0, x, y, .. } => {
                 // Missing logical size is not permission to use pixel/global-display coordinates.
-                let Some((width, height)) = granted.logical_size else {
+                let Some((width, height)) = granted.current_logical_size() else {
                     return;
                 };
                 let (px, py) = stream_point((f64::from(width), f64::from(height)), *x, *y);

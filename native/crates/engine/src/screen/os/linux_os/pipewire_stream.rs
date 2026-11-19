@@ -157,6 +157,7 @@ unsafe extern "C" fn on_param_changed(data: *mut c_void, id: u32, param: *const 
         match negotiated {
             Some(negotiated) if FrameLimits::RESOURCE.check(negotiated.size).is_ok() => {
                 let (format, size) = (negotiated.format, negotiated.size);
+                data.identity.on_format(size.width, size.height);
                 data.latest
                     .trace
                     .format(&format!("{format:?} {}x{}", size.width, size.height));

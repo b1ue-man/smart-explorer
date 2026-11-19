@@ -74,6 +74,16 @@ impl PipelineActor {
         self.pending.mode = Some(mode);
         self.poll();
     }
+    /// The virtual display follows the window to `size`
+    /// (`virtual_display_host::resize`): the picture keeps its bounds until
+    /// the source has it (`Pipeline::expect_source_size`), so one encoder
+    /// opens for both. Before the `SET_MODE` with that size; applied before
+    /// it (`apply`), without an interrupt.
+    pub fn expect_source_size(&mut self, size: FrameSize) {
+        self.pending.expect = Some(size);
+        self.poll();
+    }
+
     /// The negotiated contract carries hybrid regions: their encoder keeps
     /// per-region state bound to the visible area, so a change of it starts
     /// a new reference (`Session::visibility`).

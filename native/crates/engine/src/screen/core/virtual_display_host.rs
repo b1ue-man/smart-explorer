@@ -396,17 +396,24 @@ fn apply(
 
 /// A `SET_MODE` size of a session's full view; ignored for a session
 /// without a claim and for one with a fixed size.
-pub fn resize(session: &str, size: Option<FrameSize>) {
+/// `true` when the display will take `size` for this session: it decides
+/// the display's size and the driver can show it as asked (`fit_mode`), so
+/// the session's source follows (`Pipeline::expect_source_size`).
+pub fn resize(session: &str, size: Option<FrameSize>) -> bool {
     let Some(size) = size else {
-        return;
+        return false;
     };
     let Some(shared) = SHARED.get() else {
-        return;
+        return false;
     };
-    let known = lock(&shared.state).planner.resize(session, size);
+    let mut state = lock(&shared.state);
+    let known = state.planner.resize(session, size);
     if known {
         shared.changed.notify_all();
     }
+    known
+        && state.planner.owner_session() == Some(session)
+        && state.planner.target(state.limit) == Some(size)
 }
 
 /// The size the host process of the capture session `capture` offers the

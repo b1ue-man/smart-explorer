@@ -82,8 +82,14 @@ impl Session<'_> {
         };
         // P5 (plan 2026-11-17): the display follows the full view's window
         // size when this session claimed it; at most once a second.
-        if set.mode == StreamMode::Full {
-            crate::screen::core::virtual_display_host::resize(&self.handle.id(), set.size);
+        // The picture waits for the display's new size, so only that change
+        // opens a new encoder (review 2026-11-19, Gemini 13.1).
+        if set.mode == StreamMode::Full
+            && crate::screen::core::virtual_display_host::resize(&self.handle.id(), set.size)
+        {
+            if let Some(size) = set.size {
+                self.pipeline.expect_source_size(size);
+            }
         }
         self.pipeline
             .set_mode(kind, set.size, set.fps, set.sharpness, set.lossless);
