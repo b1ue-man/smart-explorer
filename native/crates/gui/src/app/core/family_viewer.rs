@@ -91,6 +91,8 @@ impl FamilyViewerApp {
             )
         });
         let gpu = super::screen_render_owner::get(ctx).is_some_and(|owner| owner.yuv());
+        // The symbols of its lines (`symbol_fonts`, Gemini 3/8).
+        super::screen_present::symbol_fonts(ctx);
         let device = target
             .device_id
             .clone()

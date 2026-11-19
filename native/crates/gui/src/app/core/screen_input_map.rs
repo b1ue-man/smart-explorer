@@ -79,6 +79,9 @@ pub struct InputMapper {
     suppress_modifiers: bool,
     /// Keys the host receives as `Text`: neither press nor release is sent.
     text_keys: Vec<Key>,
+    /// Usages whose press went to the host: only their release follows
+    /// (Codex 4/7: an Enter that confirmed a toolbar field sent its release).
+    keys_down: Vec<u16>,
     wheel_rest: (f32, f32),
     touch_active: bool,
     /// Keys without a usage that were dropped (shown in the statistics).
@@ -101,6 +104,7 @@ impl InputMapper {
             swallowed: Vec::new(),
             suppress_modifiers: false,
             text_keys: Vec::new(),
+            keys_down: Vec::new(),
             wheel_rest: (0.0, 0.0),
             touch_active: false,
             unmapped_keys: 0,
@@ -120,6 +124,7 @@ impl InputMapper {
         self.backlog.extend(released);
         self.held_buttons.clear();
         self.text_keys.clear();
+        self.keys_down.clear();
         // Modifiers still held locally are kept from the host until they are
         // let go, but only when the host had one down (Gemini 3/23: the
         // first shortcut after any release was swallowed).
@@ -376,12 +381,23 @@ impl InputMapper {
             }
             return;
         };
-        if self.caps.keyboard {
-            self.emit(InputEvent::Key {
-                hid_usage,
-                down: pressed,
-            });
+        if !self.caps.keyboard {
+            return;
         }
+        if pressed {
+            if !self.keys_down.contains(&hid_usage) {
+                self.keys_down.push(hid_usage);
+            }
+        } else if let Some(index) = self.keys_down.iter().position(|down| *down == hid_usage) {
+            self.keys_down.remove(index);
+        } else {
+            // A release without a press the host got is never sent.
+            return;
+        }
+        self.emit(InputEvent::Key {
+            hid_usage,
+            down: pressed,
+        });
     }
 
     /// Ctrl+C, X and V arrive as their own events without a key event.

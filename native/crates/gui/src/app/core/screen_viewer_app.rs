@@ -77,7 +77,7 @@ impl ScreenViewerApp {
         });
         // The toolbar names the window's renderer and present mode (user
         // rule 2026-11-18, `screen_present::set_window`).
-        super::screen_present::set_window(cc.wgpu_render_state.is_none(), prefs.low_latency);
+        super::screen_present::set_window(ctx, cc.wgpu_render_state.is_none(), prefs.low_latency);
         let gpu = super::screen_render_owner::get(ctx).is_some_and(|owner| owner.yuv());
         let backend = Backend::production(ctx);
         let devices = super::screen_devices::Devices::start(ctx);

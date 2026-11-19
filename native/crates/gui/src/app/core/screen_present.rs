@@ -123,11 +123,25 @@ const WINDOW_IS_GLOW: u8 = 2;
 static OPENED_LOW_LATENCY: AtomicU8 = AtomicU8::new(LATENCY_UNREAD);
 
 /// The window opened with `glow` (else wgpu) and „Niedrigste Latenz“
-/// `low_latency` (`ScreenViewerApp::new`).
-pub fn set_window(glow: bool, low_latency: bool) {
+/// `low_latency` (`ScreenViewerApp::new`); its fonts get the symbols.
+pub fn set_window(ctx: &eframe::egui::Context, glow: bool, low_latency: bool) {
+    symbol_fonts(ctx);
     let window = if glow { WINDOW_IS_GLOW } else { WINDOW_WGPU };
     WINDOW_GLOW.store(window, Ordering::Release);
     OPENED_LOW_LATENCY.store(latency_state(low_latency), Ordering::Release);
+}
+
+/// The font fallback of the main window (`theme::install`) without its
+/// theme: egui's proportional fonts (Ubuntu-Light, NotoEmoji, the icon font)
+/// lack „▾“ and „→“ of the toolbar (checked in their cmap, epaint default
+/// fonts 0.29.1); the bundled Hack has them (Gemini 3/8).
+pub fn symbol_fonts(ctx: &eframe::egui::Context) {
+    use eframe::egui::{FontDefinitions, FontFamily};
+    let mut fonts = FontDefinitions::default();
+    if let Some(family) = fonts.families.get_mut(&FontFamily::Proportional) {
+        family.push("Hack".to_string());
+    }
+    ctx.set_fonts(fonts);
 }
 
 /// The name of the window's renderer in the toolbar.
