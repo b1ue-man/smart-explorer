@@ -423,6 +423,7 @@ fn keys_menu(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Vec<ToolbarActio
         return;
     }
     wrap::item(ui, "keys", |ui| {
+        wrap::reserve(ui, wrap::button_width(ui, "Tasten ▾"));
         ui.add_enabled_ui(input.control_on, |ui| {
             ui.menu_button("Tasten ▾", |ui| {
                 for (usage, label) in &keys {

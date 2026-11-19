@@ -72,12 +72,23 @@ pub(super) fn fitted(
     list.width(width).selected_text(text)
 }
 
-/// Starts a new row unless `width` fits the rest of the current one.
+/// Starts a new row unless `width` fits the rest of the current one. The
+/// rest of the row is `available_size_before_wrap` (egui 0.29.1 `ui.rs`
+/// 996): in a wrapping layout `available_width` is the width of a whole row
+/// (`layout.rs` 439-445), so the check never broke a row (fix 2026-11-19).
 pub(super) fn reserve(ui: &mut egui::Ui, width: f32) {
     let at_row_start = ui.cursor().left() <= ui.max_rect().left() + ROW_START_SLACK;
-    if breaks_before(Some(width), ui.available_width(), at_row_start) {
+    let rest = ui.available_size_before_wrap().x;
+    if breaks_before(Some(width), rest, at_row_start) {
         ui.end_row();
     }
+}
+
+/// The outer width of a button showing `text`. A button inside a child `Ui`
+/// (`add_enabled_ui`, `scope`) needs it reserved: the child starts at the
+/// cursor, and egui breaks a row only after its start (`layout.rs` 534).
+pub(super) fn button_width(ui: &egui::Ui, text: &str) -> f32 {
+    text_width(ui, text, TextStyle::Button) + 2.0 * ui.spacing().button_padding.x
 }
 
 /// A label and the list that belongs to it stay in one row: the row breaks
