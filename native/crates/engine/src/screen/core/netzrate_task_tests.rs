@@ -420,8 +420,8 @@ fn review1119_task_video_keeps_the_user_ceiling() {
     rate.set_ceiling(Some(rate.control_bps() / 2));
     assert!(rate.control_over_ceiling().is_some());
     assert_eq!(rate.control_over_ceiling(), None, "once");
-    let session = include_str!("host_session.rs");
-    assert!(session.contains("self.pipeline.book_control_bytes(sent);"));
+    let session = include_str!("host_session_send.rs");
+    assert!(session.contains("None => self.pipeline.book_control_bytes(sent),"));
     // Codex 5/4, round 6 L3: the session's sound counts with the control
     // stream as the rate between two readings of the link's running total.
     let mut sound = RateController::new(PathKind::Direct, 0);

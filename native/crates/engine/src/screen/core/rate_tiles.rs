@@ -124,11 +124,23 @@ impl RateController {
     /// Whether a picture of the stream may be captured and encoded at
     /// `now_us`.
     pub fn stream_admit(&self, now_us: u64, video: bool) -> bool {
+        // The session's held-back control frames wait for the same budget
+        // at the same rate (Codex 6/8); without a user ceiling for none.
+        let rate = self
+            .user_ceiling_bps
+            .and_then(|_| self.stream_budget_bps(now_us, video));
+        self.tiles.set_rate(rate);
         if self.picture_share_short() {
             return false;
         }
         self.stream_budget_bps(now_us, video)
             .is_none_or(|rate| self.tiles.admits(now_us, rate))
+    }
+
+    /// The byte budget the session's held-back control frames share with
+    /// the pictures (`tiles_rate::SharedBudget`, Codex 6/8).
+    pub fn shared_budget(&self) -> crate::screen::core::tiles_rate::SharedBudget {
+        self.tiles.clone()
     }
 
     /// A picture of the stream of `bytes` started its send at `at_us`.

@@ -170,7 +170,7 @@ pub struct RateController {
     /// Delivery rate, round-trip floor and refusals (`queue`, P9).
     queue: queue::QueueState,
     /// The byte budget of the tiles under the target (`tiles_rate`, 2026-11-18).
-    tiles: crate::screen::core::tiles_rate::TileBudget,
+    tiles: crate::screen::core::tiles_rate::SharedBudget,
     /// The control stream's bytes (`rate_tiles.rs`, review 2026-11-19) and
     /// their rate of the last window; whether it was above the ceiling.
     control: RateWindow,

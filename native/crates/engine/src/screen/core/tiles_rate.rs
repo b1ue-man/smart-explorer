@@ -120,6 +120,53 @@ impl TileBudget {
     }
 }
 
+/// The stream's byte budget, shared by the pictures (the pipeline's rate
+/// control) and the large control frames the session holds back for it
+/// (review 2026-11-19, Codex 6/8: window lists, icons, family lists and
+/// pointer shapes wait for the same budget as the pictures, so their sum
+/// keeps „Höchste Datenrate“). `rate` is the budget's rate as the pipeline
+/// last set it; `None` without a user ceiling (nothing waits then).
+#[derive(Clone, Debug, Default)]
+pub struct SharedBudget(std::sync::Arc<std::sync::Mutex<(TileBudget, Option<u64>)>>);
+
+impl SharedBudget {
+    fn with<R>(&self, f: impl FnOnce(&mut (TileBudget, Option<u64>)) -> R) -> R {
+        f(&mut self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner))
+    }
+    pub fn admits(&self, now_us: u64, rate_bps: u64) -> bool {
+        self.with(|(budget, _)| budget.admits(now_us, rate_bps))
+    }
+    pub fn wait_us(&self, now_us: u64, rate_bps: u64) -> u64 {
+        self.with(|(budget, _)| budget.wait_us(now_us, rate_bps))
+    }
+    pub fn on_sent(&self, at_us: u64, bytes: u64, rate_bps: u64) {
+        self.with(|(budget, _)| budget.on_sent(at_us, bytes, rate_bps));
+    }
+    pub fn credit_bits(&self, now_us: u64, rate_bps: u64) -> u64 {
+        self.with(|(budget, _)| budget.credit_bits(now_us, rate_bps))
+    }
+    pub fn on_congestion(&self, now_us: u64) {
+        self.with(|(budget, _)| budget.on_congestion(now_us));
+    }
+    pub fn set_loss_limited(&self, limited: bool) {
+        self.with(|(budget, _)| budget.set_loss_limited(limited));
+    }
+    pub fn network_limited(&self, now_us: u64) -> bool {
+        self.with(|(budget, _)| budget.network_limited(now_us))
+    }
+    /// The budget's rate for the held-back control frames; `None` lets
+    /// them go at once.
+    pub fn set_rate(&self, rate_bps: Option<u64>) {
+        self.with(|(_, rate)| *rate = rate_bps);
+    }
+    pub fn rate(&self) -> Option<u64> {
+        self.with(|(_, rate)| *rate)
+    }
+}
+
 /// What a tile stream whose oldest picture is past its stale time does
 /// (fix „Diashow“ 2026-11-18).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

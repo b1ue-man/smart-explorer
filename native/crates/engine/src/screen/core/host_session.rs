@@ -40,6 +40,8 @@ mod control;
 mod family;
 #[path = "host_input_release.rs"]
 mod input_release;
+#[path = "host_session_send.rs"]
+mod send;
 #[path = "host_visibility.rs"]
 mod visibility;
 
@@ -90,6 +92,8 @@ pub(super) struct Session<'a> {
     metadata: MetadataRequests,
     family: family::FamilyState,
     cursor: control::CursorLink,
+    /// Large control frames held back for the byte budget (Codex 6/8).
+    outbox: send::Outbox,
 }
 
 /// How a session ended: the reason and the `ERROR` the viewer gets first.
@@ -112,6 +116,7 @@ impl<'a> Session<'a> {
         families_supported: bool,
         family_source: Option<String>,
     ) -> Self {
+        let outbox = send::Outbox::new(pipeline.shared_budget());
         let pipeline = PipelineActor::new(pipeline, connection.clone());
         let observed_reference_floor = pipeline.reference_floor();
         Self {
@@ -139,6 +144,7 @@ impl<'a> Session<'a> {
             metadata: MetadataRequests::new(FRAME_QUEUE),
             family: family::FamilyState::new(families_supported, family_source),
             cursor: Default::default(),
+            outbox,
         }
     }
 
@@ -200,6 +206,12 @@ impl<'a> Session<'a> {
                     let after = self.pipeline.work_started();
                     missed_tick = clock::tick_missed(started, after, self.pipeline.working());
                 }
+                // Held-back control frames go as the byte budget allows (Codex 6/8).
+                _ = self.outbox.ready(), if self.outbox.waiting() => {
+                    if self.flush_outbox().await.is_err() {
+                        break self.unwritable();
+                    }
+                }
                 _ = self.cursor.changed() => {
                     if self.poll_cursor().await.is_err() {
                         break self.unwritable();
@@ -228,46 +240,6 @@ impl<'a> Session<'a> {
         };
         reader.abort();
         self.finish(ending).await;
-    }
-
-    async fn frame(&mut self, frame: HostFrame) -> io::Result<()> {
-        let peer = self.connection.remote_id().to_string();
-        let sent = control_sender::send_counted(peer, &mut self.send, &frame).await?;
-        // The control stream counts against „Höchste Datenrate“ (2026-11-19).
-        self.pipeline.book_control_bytes(sent);
-        Ok(())
-    }
-
-    /// The answer of a finished metadata job, as the synchronous path gave
-    /// it: a failed window list is an `ERROR` and the session goes on, a
-    /// failed icon lookup omits the icon, a lost right or a failed family
-    /// list ends the session.
-    async fn metadata_reply(
-        &mut self,
-        fallback: Fallback,
-        result: io::Result<HostFrame>,
-    ) -> io::Result<()> {
-        let response = match (fallback, result) {
-            (Fallback::Windows, Err(error)) => {
-                return self
-                    .error(ScreenErrorCode::CaptureFailed, error.to_string())
-                    .await
-            }
-            (fallback, result) => fallback.settle(result)?,
-        };
-        host_metadata::send(
-            self.context,
-            self.principal,
-            self.mode,
-            self.connection,
-            &mut self.send,
-            &response,
-            self.handle.stop_signal(),
-        )
-        .await?;
-        self.pipeline
-            .book_control_bytes(control_sender::wire_bytes(&response));
-        Ok(())
     }
 
     async fn report(&mut self, state: SessionState, reason: Option<&str>) -> io::Result<()> {

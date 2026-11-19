@@ -118,6 +118,12 @@ impl Pipeline {
         self.bounds = mode_bounds(&self.quality_policy.mode, self.display);
     }
 
+    /// The byte budget the session's held-back control frames share with
+    /// the pictures (Codex 6/8, `host_session_send.rs`).
+    pub fn shared_budget(&self) -> crate::screen::core::tiles_rate::SharedBudget {
+        self.rate.shared_budget()
+    }
+
     /// The control stream wrote `bytes` (`Session::frame`, review
     /// 2026-11-19): they count in the statistics' sent rate and, under a
     /// user ceiling, leave the pictures that much less of it.
