@@ -38,7 +38,8 @@ use crate::screen::core::wire_binary::{FrameRecord, GopHeader};
 
 pub(super) const SVT_NAME: &str = "svt-av1";
 pub(super) const DAV1D_NAME: &str = "dav1d";
-/// The rate an encoder runs with may drift this far before it reopens.
+/// The rate an SVT-AV1 before 4.0.0 runs with may drift this far before it
+/// takes a new one (with a key frame, `SvtAv1Encoder::set_rate`).
 const REOPEN_LOW: f64 = 0.7;
 const REOPEN_HIGH: f64 = 1.4;
 /// SVT-AV1 refuses pictures below 64 × 64 (assumption A-SVT-MIN).
@@ -132,7 +133,7 @@ impl EncoderFactory for SvtAv1Factory {
     }
 }
 
-/// One SVT-AV1 encoder, reopened when the rate drifts too far.
+/// One SVT-AV1 encoder; a new rate goes to the running one (`set_rate`).
 struct SvtSession {
     encoder: Option<SvtAv1Encoder>,
     library: &'static str,
@@ -163,9 +164,28 @@ impl HwH264Session for SvtSession {
         let HwInput::I420(yuv) = input else {
             return Err(invalid("SVT-AV1 takes I420"));
         };
-        // A key frame no longer opens the encoder anew (`SvtAv1Encoder::
-        // encode_with` asks it of the running one, Codex round 4, finding 10).
-        let reopened = self.encoder.is_none() || needs_reopen(self.running, rate.bits_per_second);
+        // Neither a key frame nor a new rate opens the encoder anew (review
+        // 2026-11-19): `SvtAv1Encoder::encode_with` asks the key frame of the
+        // running one and `set_rate` gives it the new rate
+        // (`native_ffi/av1_soft_rate.rs`). SVT-AV1 4.x takes a rate on any
+        // picture: every lowering and every rise past 2 % goes, as on the
+        // other encoders (C10). Before 4.0.0 a rate needs a key picture: it
+        // changes only outside the band of `needs_reopen`, now with a key
+        // frame of the running encoder instead of a new encoder.
+        let wanted = rate.bits_per_second;
+        if let Some(encoder) = self.encoder.as_mut() {
+            let change = if encoder.rate_needs_keyframe() {
+                needs_reopen(self.running, wanted)
+            } else {
+                wanted < self.running
+                    || u64::from(wanted.abs_diff(self.running)) * 50 >= u64::from(self.running)
+            };
+            if change {
+                encoder.set_rate(u64::from(wanted));
+                self.running = wanted;
+            }
+        }
+        let reopened = self.encoder.is_none();
         if reopened {
             self.encoder = None;
             let opened = SvtAv1Encoder::open(

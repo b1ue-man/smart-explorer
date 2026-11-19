@@ -37,6 +37,8 @@ const SVT_DEADLINE: Duration = Duration::from_secs(2);
 
 #[path = "av1_dav1d.rs"]
 mod dav1d;
+#[path = "av1_soft_rate.rs"]
+mod rate;
 pub(super) use dav1d::{dav1d_available, Dav1dDecoder};
 
 /// The leading fields of `EbBufferHeaderType`, equal from 2.3.0 to 4.3.0,
@@ -95,8 +97,9 @@ struct SvtIoFormat {
 }
 
 /// Screen settings: preset 12, CBR (`str_to_rc_mode` selects `PRED_LOW_DELAY_B`;
-/// SVT-AV1 1.7 `svt_av1_verify_settings` forbids `enable-force-key-frames` in
-/// CBR low-delay mode, so mid-stream key frames reopen the encoder).
+/// SVT-AV1 forbids `enable-force-key-frames` in CBR low delay; a key frame is
+/// asked per picture with `pic_type`, a rate with a private node,
+/// `av1_soft_rate.rs`).
 pub(super) fn svt_settings(
     size: FrameSize,
     fps: u32,
@@ -200,6 +203,10 @@ pub(super) struct SvtAv1Encoder {
     deinit: unsafe extern "C" fn(Handle) -> c_int,
     deinit_handle: unsafe extern "C" fn(Handle) -> c_int,
     abi: SvtAbi,
+    /// 4.x: a new rate on any picture; else with a key picture (`rate`).
+    rate_any_picture: bool,
+    /// A new rate (bit/s) for the next picture.
+    rate_pending: Option<u64>,
     size: FrameSize,
     fps: u32,
     bits_per_second: u64,
@@ -252,6 +259,8 @@ impl SvtAv1Encoder {
             deinit: symbol(&lib, library, "svt_av1_enc_deinit")?,
             deinit_handle: symbol(&lib, library, "svt_av1_enc_deinit_handle")?,
             abi,
+            rate_any_picture: rate::rate_on_any_picture(&text),
+            rate_pending: None,
             size,
             fps,
             bits_per_second,
@@ -299,6 +308,18 @@ impl SvtAv1Encoder {
         Ok(encoder)
     }
 
+    /// The running encoder takes `bits_per_second` from the next picture on
+    /// (`av1_soft_rate.rs`), with a key frame before 4.0.0.
+    pub(super) fn set_rate(&mut self, bits_per_second: u64) {
+        self.bits_per_second = bits_per_second;
+        self.rate_pending = Some(bits_per_second);
+    }
+
+    /// Whether a new rate needs a key frame (SVT-AV1 before 4.0.0).
+    pub(super) fn rate_needs_keyframe(&self) -> bool {
+        !self.rate_any_picture
+    }
+
     /// Encodes one I420 picture and hands the borrowed packet slice to `deliver`.
     pub(super) fn encode_with(
         &mut self,
@@ -342,6 +363,15 @@ impl SvtAv1Encoder {
         input.p_buffer = (&mut io_format as *mut SvtIoFormat).cast();
         input.n_filled_len = (yuv.y.len() + yuv.u.len() + yuv.v.len()) as u32;
         input.pts = self.frames;
+        // A new rate goes with this picture; before 4.0.0 only a key picture
+        // takes it. Node and rate stay until `send` returned (it copies them).
+        let pending = self.rate_pending.take();
+        let keyframe = keyframe || (pending.is_some() && !self.rate_any_picture);
+        let mut info = rate::SvtAv1RateInfo::new(pending.unwrap_or(0));
+        let mut node = rate::EbPrivDataNode::rate(&mut info);
+        if pending.is_some() {
+            input.p_app_private = (&mut node as *mut rate::EbPrivDataNode).cast();
+        }
         input.tail[self.abi.pic_type_word()] = if keyframe {
             EB_AV1_KEY_PICTURE
         } else {
