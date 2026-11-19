@@ -392,19 +392,36 @@ impl Encoding {
         if request.frame_id != frame_id {
             request.to_mut().frame_id = frame_id;
         }
+        let mut forced_key = false;
         if let Some(last_good) = recover.filter(|_| !request.keyframe) {
             let continued = self.running.as_mut().is_some_and(|running| {
                 running.encoder.recover_references(last_good) == Recovery::Continued
             });
+            // An encoder that cannot continue (every Media Foundation and
+            // AMF encoder: `ScreenEncoder::recover_references` defaults to
+            // `KeyframeNeeded`) answers with a key frame of its own. Fix of
+            // 2026-11-19: it was replaced instead, so every stale stream on
+            // a session that negotiated continuation opened a new encoder
+            // (about one a second on the measured NVIDIA host). An answer
+            // that is no key frame gives way to a new encoder below: a delta
+            // picture would count as the continuation it is not.
             if !continued {
-                self.running = None;
+                forced_key = true;
+                eprintln!(
+                    "screen encoder: cannot continue from frame {last_good}: key frame of the running encoder"
+                );
                 request.to_mut().keyframe = true;
             }
         }
         // W4 (B3): every stage of the rank once; the stage arms the station
         // `convert` clock around its own conversion call (r1).
         let readbacks_before = crate::screen::core::capture_picture::readbacks();
-        let encoded = self.encode_with_fallback(&image, request.clone(), &grant);
+        let mut encoded = self.encode_with_fallback(&image, request.clone(), &grant);
+        if forced_key && encoded.as_ref().is_ok_and(|(frame, _, _)| !frame.keyframe) {
+            eprintln!("screen encoder: no key frame on request after a reset: new encoder");
+            self.running = None;
+            encoded = self.encode_with_fallback(&image, request.clone(), &grant);
+        }
         let on_gpu =
             on_gpu && crate::screen::core::capture_picture::readbacks() == readbacks_before;
         let convert_us = crate::screen::core::convert_clock::take().unwrap_or(0);
