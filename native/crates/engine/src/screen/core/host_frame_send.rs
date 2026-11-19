@@ -24,6 +24,10 @@ impl Pipeline {
         // B-36: a new stream whose first frame is no key frame continues the
         // encoder's chain from the confirmed picture.
         let mut continued = false;
+        // Review 2026-11-19 (Codex 3/9): a new stream's header goes on the
+        // line as well; booked with the picture, its extension at the 1 KiB
+        // the writer allows at most (`wire_binary::write_gop_header`).
+        let mut header_bytes = 0u64;
         if self.gop.is_none() {
             let header = GopHeader {
                 gop_id: self.next_gop_id,
@@ -44,6 +48,12 @@ impl Pipeline {
             };
             match opened {
                 Ok(mut gop) => {
+                    let extension = if gop.header().frame_contract.is_some() {
+                        2 + 1024
+                    } else {
+                        0
+                    };
+                    header_bytes = (super::super::wire_binary::GOP_HEADER_BYTES + extension) as u64;
                     continued = !frame.keyframe && self.continue_from.is_some();
                     if continued {
                         gop.mark_continuation();
@@ -95,7 +105,7 @@ impl Pipeline {
             _=work.cancelled(work_epoch)=>Err(io::Error::from(io::ErrorKind::Interrupted)),
             result=writing=>result,
         };
-        let booked = written.as_ref().map_or(planned, |bytes| *bytes);
+        let booked = written.as_ref().map_or(planned, |bytes| *bytes) + header_bytes;
         self.rate.on_stream_sent(send_started_us, booked, video);
         let bytes = match written {
             Ok(bytes) => {

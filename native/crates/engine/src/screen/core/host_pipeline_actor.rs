@@ -32,6 +32,8 @@ struct Pending {
     confirm: bool,
     /// The source takes this size itself (`expect_source_size`).
     expect: Option<FrameSize>,
+    /// A key frame inside the open group (`retarget_visible_rects`).
+    refresh: bool,
     receipts: VecDeque<Receipt>,
 }
 struct Facts {
@@ -215,6 +217,15 @@ impl PipelineActor {
         if std::mem::take(&mut self.pending.keyframe) {
             p.request_keyframe();
         }
+        if std::mem::take(&mut self.pending.refresh) {
+            // Codex 3/4: a key frame in the open group keeps its stream and
+            // the viewer's decoder; without a group it opens one.
+            if p.gop.is_some() {
+                p.pacer.request_keyframe();
+            } else {
+                p.request_keyframe();
+            }
+        }
         if std::mem::take(&mut self.pending.confirm) {
             if let Err(error) = p.confirm_capture_active() {
                 self.capture_error = Some(error);
@@ -271,7 +282,12 @@ impl PipelineActor {
         let Some(mut p) = self.pipeline.take() else {
             return Ok(());
         };
-        let snapshot = requested.or_else(|| self.pending.snapshot.take());
+        let mut snapshot = requested.or_else(|| self.pending.snapshot.take());
+        // A snapshot waits in the queue while the stream's byte budget is in
+        // debt; ticks go on meanwhile (review 2026-11-19, Codex 3/8).
+        if snapshot.is_some() && !p.snapshot_admitted() {
+            self.pending.snapshot = snapshot.take();
+        }
         self.job_snapshot = snapshot;
         let connection = self.connection.clone();
         let epoch = self.work.epoch();

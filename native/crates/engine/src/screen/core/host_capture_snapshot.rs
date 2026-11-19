@@ -39,6 +39,14 @@ impl Snapshot {
 }
 
 impl Pipeline {
+    /// Whether the stream's byte budget admits a snapshot now (review
+    /// 2026-11-19, Codex 3/8): a snapshot is a picture of the stream like
+    /// every other (`stream_admit`); the actor keeps it queued until then.
+    pub fn snapshot_admitted(&self) -> bool {
+        self.rate
+            .stream_admit(now_us(), self.choice.codec.is_video())
+    }
+
     /// `SNAPSHOT`: one lossless key frame of the current source, at most
     /// `max` large, on a picture stream of the kind `snapshot`.
     pub async fn snapshot(
@@ -62,9 +70,6 @@ impl Pipeline {
                 io::ErrorKind::Interrupted,
             )));
         }
-        // Snapshot consumes a newer GOP id: retire live state now so its next
-        // frame is a fresh keyframe and old presentation receipts stay invalid.
-        self.reset_stream();
         let mut stage = self
             .stage
             .take()
@@ -92,6 +97,12 @@ impl Pipeline {
         }
         self.sync_source_reference();
         let shot = shot?;
+        // The snapshot consumes a newer GOP id, after which the viewer takes
+        // the live group for stale: retire live state so its next frame is a
+        // fresh key frame. Review 2026-11-19 (Codex 2/13, 3/8): only once
+        // the snapshot was captured; a failed one keeps the live group (frame
+        // ids only rise, `wire_binary::FrameSequence::accept`).
+        self.reset_stream();
         let header = shot.header(self.next_gop_id);
         let Snapshot {
             records,
@@ -119,7 +130,14 @@ impl Pipeline {
             result=gop.write_frame_admitted(frame_id,capture_ts_us,true,records)=>result,
         };
         let video = self.choice.codec.is_video();
-        let booked = written.as_ref().map_or(planned, |bytes| *bytes);
+        // Its stream's header as for live pictures (`host_frame_send.rs`).
+        let extension = if gop.header().frame_contract.is_some() {
+            2 + 1024
+        } else {
+            0
+        };
+        let header_bytes = (crate::screen::core::wire_binary::GOP_HEADER_BYTES + extension) as u64;
+        let booked = written.as_ref().map_or(planned, |bytes| *bytes) + header_bytes;
         self.rate.on_stream_sent(started_us, booked, video);
         if !work.current(work_epoch) {
             gop.reset();
