@@ -126,6 +126,9 @@ impl Session<'_> {
             // „Höchste Datenrate“ of the viewer (B-09, `rate_ceiling_v1`).
             ViewerFrame::RateCeiling(ceiling) => {
                 self.pipeline.set_rate_ceiling(ceiling);
+                // Held control frames follow the new ceiling at once, also
+                // while a picture operation holds the pipeline (round 7 P7).
+                self.outbox.follow_ceiling(ceiling);
                 Ok(())
             }
             // New decoders after „Codec“/„Dekodierer“ (`set_decoders_v1`):

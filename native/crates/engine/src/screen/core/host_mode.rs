@@ -136,6 +136,11 @@ impl Pipeline {
     pub fn set_rate_ceiling(&mut self, ceiling_bps: Option<u64>) {
         self.work.set_live_ceiling(ceiling_bps);
         self.rate.set_ceiling(ceiling_bps);
+        // Round 7 P7: the held control frames' rate follows at once, not at
+        // the next picture (`stream_admit` sets it; its answer is unused).
+        let _ = self
+            .rate
+            .stream_admit(now_us(), self.choice.codec.is_video());
     }
 
     /// Replaces the source (`SET_MODE` with another source).

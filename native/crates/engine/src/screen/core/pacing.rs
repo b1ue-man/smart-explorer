@@ -135,6 +135,9 @@ pub struct Pacer {
     /// `PRESENTED`; whether one picture may follow that `PRESENTED`
     /// (`viewer_behind`).
     received: VecDeque<(u64, u64)>,
+    /// The last visibility acknowledgement's floor: pictures below it are
+    /// never waited for (`forget_received_below`).
+    received_floor: u64,
     presented: Option<(u64, u64)>,
     present_credit: bool,
 }
@@ -155,6 +158,7 @@ impl Default for Pacer {
             queue: None,
             ack_age_us: 0,
             received: VecDeque::new(),
+            received_floor: 0,
             presented: None,
             present_credit: false,
         }

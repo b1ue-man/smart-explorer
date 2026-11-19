@@ -230,7 +230,11 @@ impl PipelineActor {
         if std::mem::take(&mut self.pending.keyframe) {
             p.request_keyframe();
         }
-        if std::mem::take(&mut self.pending.route_reset) {
+        // A stream the interrupted operation reset already is not reset
+        // again (round 7 P5).
+        if std::mem::take(&mut self.pending.route_reset)
+            && (p.gop.is_some() || p.pacer.frames_in_flight() != 0)
+        {
             p.reset_stream();
         }
         if let Some((frame, at)) = self.pending.presented.take() {

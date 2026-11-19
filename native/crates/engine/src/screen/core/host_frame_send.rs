@@ -74,28 +74,14 @@ impl Pipeline {
         };
         let gop_id = gop.header().gop_id;
         self.next_frame_id += 1;
-        let encoded_bytes: u64 = frame.records.iter().map(|r| r.len() as u64).sum();
-        // At the rate the line was measured to carry (plan 2026-11-17): a
-        // large lossless key frame on a line slower than the target gets the
-        // time it needs.
-        let serialization_us = (u128::from(encoded_bytes) * 8 * 1_000_000
-            / u128::from(self.rate.sustained_bps().max(1)))
-        .min(u128::from(u64::MAX)) as u64;
-        // Review 2026-11-19 (Codex 13): the byte budget books what the writer
-        // puts on the stream, the record headers included, when the send
-        // starts (`rate_tiles.rs`); a cut-off write counts whole.
-        let planned = encoded_bytes
-            + super::super::wire_binary::RECORD_HEADER_BYTES as u64 * frame.records.len() as u64;
+        // Review 2026-11-19 (Codex 13, 6/9): the byte budget books what the
+        // writer handed to the stream, the record headers included, at the
+        // start of the send (`rate_tiles.rs`), also of a write cut off.
         let video = self.choice.codec.is_video();
         let send_started_us = now_us();
         // Codex 4/5: the records reach the stream within the byte budget,
-        // after its saved credit at its rate (`GopWriter::pace_next_frame`);
-        // the write gets the time that takes.
+        // after its saved credit at its rate (`GopWriter::pace_next_frame`).
         let pace = self.rate.stream_pace(send_started_us, video);
-        let paced_us = pace.map_or(0, |(rate, credit)| {
-            let ahead = u128::from(planned.saturating_sub(credit));
-            (ahead * 8 * 1_000_000 / u128::from(rate)).min(u128::from(u64::MAX)) as u64
-        });
         // Codex 5/12: also without a budget now, a ceiling set while the
         // picture is written holds its rest (`pace.rate()`).
         let (rate, credit) = pace.unwrap_or((u64::MAX, 0));
@@ -106,24 +92,12 @@ impl Pipeline {
             self.rate.control_bps(),
             self.rate.sustained_bps(),
         );
-        // Codex 6/9: a stalled stream ends the write piece by piece
-        // (`GopWriter::piece`); the whole write gets the time the picture
-        // takes at the pictures' floor of the ceiling as it is now, so a
-        // ceiling lowered during it slows it instead of breaking it off.
-        let ceiling = self
-            .work
-            .ceiling_cell()
-            .load(std::sync::atomic::Ordering::Acquire);
-        let floor_us = if ceiling == 0 {
-            0
-        } else {
-            let floor = crate::screen::core::rate_control::picture_floor_bps(ceiling);
-            (u128::from(planned) * 8 * 1_000_000 / u128::from(floor)).min(u128::from(u64::MAX))
-                as u64
-        };
-        let active_budget = stale.saturating_add(Duration::from_micros(
-            serialization_us.max(paced_us).max(floor_us),
-        ));
+        // Codex 6/9, round 7 P3: a stalled stream ends the write piece by
+        // piece (`GopWriter::piece`, at the rate the line was measured to
+        // carry, the pace's own waits never count); the whole write's limit
+        // is only a safety net, so a ceiling set or lowered during it slows
+        // the picture instead of breaking it off.
+        let active_budget = crate::screen::core::gop_stream::WRITE_SAFETY_LIMIT;
         let send_started = std::time::Instant::now();
         let writing = crate::screen::core::gop_stream::write_with_route(
             connection,

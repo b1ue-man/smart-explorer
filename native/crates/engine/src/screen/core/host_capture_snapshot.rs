@@ -118,12 +118,9 @@ impl Pipeline {
         // snapshot was captured and its stream is open; a failed one keeps
         // the live group (frame ids only rise, `FrameSequence::accept`).
         self.reset_stream();
-        // Review 2026-11-19 (Codex 13): the snapshot's bytes count against
-        // the stream's byte budget as every picture's (`rate_tiles.rs`); a
-        // cut-off write counts whole.
-        let planned = crate::screen::core::wire_binary::RECORD_HEADER_BYTES as u64
-            * records.len() as u64
-            + records.iter().map(|r| r.len() as u64).sum::<u64>();
+        // Review 2026-11-19 (Codex 13, 6/9): the snapshot's bytes count
+        // against the stream's byte budget as every picture's
+        // (`rate_tiles.rs`), of a write cut off what it handed on.
         let started_us = now_us();
         let video = self.choice.codec.is_video();
         // Codex 4/5, 4/14: paced within the stream's byte budget like a live
@@ -138,12 +135,9 @@ impl Pipeline {
             self.rate.control_bps(),
             self.rate.sustained_bps(),
         );
-        let line_bps = pace.map_or(self.rate.sustained_bps(), |(rate, _)| {
-            rate.min(self.rate.sustained_bps())
-        });
-        let send_us = (u128::from(planned) * 8 * 1_000_000 / u128::from(line_bps.max(1)))
-            .min(u128::from(u64::MAX)) as u64;
-        let budget = stale.saturating_add(Duration::from_micros(send_us));
+        // Round 7 P4: as a live picture (`host_frame_send.rs`): a stall ends
+        // the write piece by piece, the whole write's limit is a safety net.
+        let budget = crate::screen::core::gop_stream::WRITE_SAFETY_LIMIT;
         let writing = crate::screen::core::gop_stream::write_with_route(
             connection,
             budget,

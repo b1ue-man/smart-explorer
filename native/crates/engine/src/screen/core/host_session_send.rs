@@ -19,6 +19,8 @@ use crate::screen::core::tiles_rate::SharedBudget;
 /// Frames held back at most; one more goes at once (a viewer that asks
 /// faster than the ceiling carries is not answered never).
 const HELD_FRAMES: usize = 32;
+/// Replaced shapes remembered (their ids only rise; a few cover a burst).
+const REPLACED_SHAPES: usize = 8;
 
 /// One held-back frame; a metadata reply goes through its authorized writer.
 enum Held {
@@ -40,6 +42,10 @@ pub(super) struct Outbox {
     /// The pointer shape still held, and the newest position that needs it.
     shape: Option<u32>,
     position: Option<HostFrame>,
+    /// Shapes replaced before they went (round 7 P8): their positions are
+    /// dropped, since a viewer draws a position only with its own shape
+    /// (`CursorView::visible`) and would hide the pointer.
+    replaced: Vec<u32>,
 }
 
 impl Outbox {
@@ -49,7 +55,17 @@ impl Outbox {
             held: VecDeque::new(),
             shape: None,
             position: None,
+            replaced: Vec::new(),
         }
+    }
+
+    /// A new user ceiling: held frames wait for at most its rate until the
+    /// pipeline sets the exact rest for them (`RateController::stream_admit`);
+    /// without a ceiling they go at once.
+    pub(super) fn follow_ceiling(&self, ceiling: Option<u64>) {
+        let rate =
+            ceiling.map(|ceiling| self.budget.rate().map_or(ceiling, |rate| rate.min(ceiling)));
+        self.budget.set_rate(rate);
     }
 
     pub(super) fn waiting(&self) -> bool {
@@ -89,7 +105,14 @@ impl Outbox {
             // positions wait for it, a window list does not.
             self.held
                 .retain(|other| !matches!(other.frame(), HostFrame::CursorShape(_)));
-            self.shape = Some(shape.id);
+            if let Some(old) = self.shape.replace(shape.id) {
+                if self.replaced.len() == REPLACED_SHAPES {
+                    self.replaced.remove(0);
+                }
+                self.replaced.push(old);
+                // Its position goes neither now nor with the new shape.
+                self.position = None;
+            }
             self.held.push_front(held);
             return;
         }
@@ -100,6 +123,9 @@ impl Outbox {
 impl Session<'_> {
     pub(super) async fn frame(&mut self, frame: HostFrame) -> io::Result<()> {
         if let HostFrame::CursorPosition(position) = &frame {
+            if self.outbox.replaced.contains(&position.shape_id) {
+                return Ok(());
+            }
             if self.outbox.shape == Some(position.shape_id) {
                 self.outbox.position = Some(frame);
                 return Ok(());

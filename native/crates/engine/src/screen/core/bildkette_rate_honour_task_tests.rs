@@ -275,7 +275,10 @@ fn bildkette_task_rate_lossless_keyframe_not_stale_on_slower_link() {
     let produce = include_str!("host_pipeline_produce.rs");
     assert!(produce.contains("self.pacer.set_drain_rate(self.rate.sustained_bps());"));
     let send = include_str!("host_frame_send.rs");
-    assert!(send.contains("u128::from(self.rate.sustained_bps().max(1))"));
+    // Round 7 P3: the measured rate bounds each piece of the write, the
+    // pace's own waits excluded (`GopWriter::piece`).
+    assert!(send.contains("self.rate.sustained_bps(),"));
+    assert!(include_str!("gop_stream.rs").contains("u128::from(pace.line_bps)"));
     let pipeline = include_str!("host_pipeline.rs");
     assert!(pipeline.contains("self.rate.on_stale_stream(now_us(), stale_us);"));
 }

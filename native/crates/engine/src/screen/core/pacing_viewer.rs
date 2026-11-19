@@ -21,7 +21,11 @@ pub(super) const MAX_RECEIVED: usize = 256;
 impl Pacer {
     /// The viewer acknowledged `frame_id` at `at_us`: it has the picture.
     pub fn on_received(&mut self, frame_id: u64, at_us: u64) {
-        if self.presented.is_none_or(|(shown, _)| frame_id > shown) {
+        // Round 7 P9: an acknowledgement below the visibility floor that
+        // comes after it is not waited for either.
+        if frame_id >= self.received_floor
+            && self.presented.is_none_or(|(shown, _)| frame_id > shown)
+        {
             if self.received.len() == MAX_RECEIVED {
                 self.received.pop_front();
             }
@@ -50,6 +54,7 @@ impl Pacer {
     /// A visibility acknowledgement named `floor`: the viewer shows no
     /// picture below it (round 6 L4), so those are not waited for.
     pub fn forget_received_below(&mut self, floor: u64) {
+        self.received_floor = self.received_floor.max(floor);
         while self
             .received
             .front()

@@ -161,55 +161,10 @@ pub struct GopWriter {
     handed: u64,
 }
 
-/// Bytes of one paced piece of a record: the budget is kept to about the
-/// time this many bytes take at its rate.
-const PACE_CHUNK: usize = 16 * 1024;
-/// A wait shorter than this is not taken (the timer's resolution); the
-/// line gets at most this much ahead of the rate.
-const PACE_MIN_WAIT_US: u64 = 1_000;
-/// The longest single wait (round 6 L2): a ceiling raised meanwhile, or
-/// control traffic that sank, speeds the rest of the picture up within it.
-const PACE_MAX_WAIT_US: u64 = 100_000;
-
-/// The byte budget of one frame's send (review 2026-11-19, Codex 4/5): its
-/// records reach the stream no faster than `rate_bps` after the saved
-/// `credit` bytes, so „Höchste Datenrate“ holds on the line too and the
-/// budget is in no debt after a large picture (no pause after it).
-#[derive(Clone, Debug)]
-struct Pace {
-    rate_bps: u64,
-    credit: u64,
-    started: tokio::time::Instant,
-    written: u64,
-    /// The ceiling as it is now (0: none, Codex 5/12), the ceiling when
-    /// the picture started, and the control and sound rate then.
-    limit: Option<std::sync::Arc<std::sync::atomic::AtomicU64>>,
-    ceiling_at_start: u64,
-    control_bps: u64,
-    /// The rate the line was measured to carry: a piece the stream does not
-    /// take within the stale time plus its time at it is a stall (Codex 6/9;
-    /// the pace's own waits never count).
-    line_bps: u64,
-}
-
-impl Pace {
-    /// The rate now: the picture's rate while the ceiling stays; after a
-    /// change of it, the new ceiling less control and sound, never below the
-    /// pictures' floor (round 6 L2: it could only sink, and down to a bit a
-    /// second); without a ceiling any more, the picture's rate.
-    fn rate(&self) -> u64 {
-        let live = self
-            .limit
-            .as_ref()
-            .map_or(0, |cell| cell.load(std::sync::atomic::Ordering::Acquire));
-        if live == 0 || live == self.ceiling_at_start {
-            self.rate_bps
-        } else {
-            live.saturating_sub(self.control_bps)
-                .max(super::rate_control::picture_floor_bps(live))
-        }
-    }
-}
+#[path = "gop_stream_pace.rs"]
+mod pace;
+pub use pace::WRITE_SAFETY_LIMIT;
+use pace::{Pace, PACE_CHUNK, PACE_MAX_WAIT_US, PACE_MIN_WAIT_US};
 
 impl GopWriter {
     pub async fn open(connection: &Connection, header: GopHeader) -> io::Result<Self> {

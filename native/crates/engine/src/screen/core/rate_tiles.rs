@@ -126,9 +126,15 @@ impl RateController {
     pub fn stream_admit(&self, now_us: u64, video: bool) -> bool {
         // The session's held-back control frames wait for the same budget
         // at the same rate (Codex 6/8); without a user ceiling for none.
-        let rate = self
-            .user_ceiling_bps
-            .and_then(|_| self.stream_budget_bps(now_us, video));
+        // Round 7 P2: with too little left for pictures, the held frames get
+        // only that rest, not the pictures' floor (the sum keeps the ceiling).
+        let rate = if self.picture_share_short() {
+            self.user_ceiling_bps
+                .map(|ceiling| ceiling.saturating_sub(self.control_bps).max(1))
+        } else {
+            self.user_ceiling_bps
+                .and_then(|_| self.stream_budget_bps(now_us, video))
+        };
         self.tiles.set_rate(rate);
         if self.picture_share_short() {
             return false;
