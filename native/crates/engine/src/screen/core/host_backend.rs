@@ -48,6 +48,13 @@ pub trait ScreenInputSink: Send + Sync {
         Err(ControlBlock::ControlUnavailable)
     }
     fn release(&self, events: &[InputEvent]) -> Result<(), ControlBlock>;
+    /// The last release of a session that gives the control up or ends
+    /// (`host_input_release.rs`, `drain_releases`): a sink that queues input
+    /// for later (Android) also takes back what of this session still waits;
+    /// every other sink lets go as with `release`.
+    fn revoke(&self, events: &[InputEvent]) -> Result<(), ControlBlock> {
+        self.release(events)
+    }
     /// A batch `inject` accepted that the platform refused afterwards (an
     /// Android gesture, a Wayland portal call): the session reports it as a
     /// block once (review 2026-11-19). `None` for sinks that answer in

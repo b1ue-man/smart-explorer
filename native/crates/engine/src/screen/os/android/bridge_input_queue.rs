@@ -135,8 +135,9 @@ pub fn send_controlling_input(session: u64, events: &[InputEvent]) -> bool {
     push(queue, session, events)
 }
 
-/// The release job of `session` (it gives control up, hides its view,
-/// changes its source or ends; `host_input_release.rs`): its batches still
+/// The last release of `session` when it gives control up or ends
+/// (`ScreenInputSink::revoke`, `host_input_release.rs`, `drain_releases`;
+/// round 7: not the releases of a session that keeps steering): its batches still
 /// waiting and the release itself only end the strokes in the app's gesture
 /// state (`perform: false`). Nothing the session queued before is performed
 /// after it let go, and the release of a held button performs no stroke
@@ -145,6 +146,9 @@ pub fn send_release(session: u64, events: &[InputEvent]) -> bool {
     let mut queue = queue();
     for batch in queue.iter_mut().filter(|batch| batch.session == session) {
         batch.perform = false;
+    }
+    if events.is_empty() {
+        return true;
     }
     if queue.len() >= HARD_LIMIT {
         return false;

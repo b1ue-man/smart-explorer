@@ -104,10 +104,17 @@ impl Session<'_> {
     /// in one job, unless a job runs (`poll_input_release` starts the next
     /// one when it ends). `true` while a job runs.
     pub(super) fn flush_releases(&mut self) -> bool {
+        self.flush_releases_as(false)
+    }
+    /// `flush_releases`; `revoke`: the session gives the control up or ends
+    /// (`drain_releases`), so a queueing sink also takes back what of it
+    /// still waits (`ScreenInputSink::revoke`, round 7). Every other release
+    /// (a held-back batch's ups, a new reference) keeps the session's input.
+    fn flush_releases_as(&mut self, revoke: bool) -> bool {
         if self.input_release.is_none() {
             let mut events = std::mem::take(&mut *failed_list(&self.health.failed));
             events.append(&mut self.health.queued);
-            self.start_release(events, false);
+            self.start_release(events, false, revoke);
         }
         self.input_release.is_some()
     }
@@ -133,7 +140,7 @@ impl Session<'_> {
     /// `InputHealth::failed` (`Retained`). `nudge`: also without events when
     /// the source has a sink, so a sink that owes releases of its own (the
     /// Wayland portal's refused ones) can deliver them (round 6, R3).
-    fn start_release(&mut self, events: Vec<InputEvent>, nudge: bool) {
+    fn start_release(&mut self, events: Vec<InputEvent>, nudge: bool, revoke: bool) {
         let sink = self.pipeline.input_sink();
         if events.is_empty() && !(nudge && sink.is_some()) {
             return;
@@ -151,6 +158,7 @@ impl Session<'_> {
         // while it exists (`input`), so later batches follow the releases.
         if let Ok(runtime) = tokio::runtime::Handle::try_current() {
             let job: Box<dyn Fn(&[InputEvent]) -> Result<(), ControlBlock> + Send> = match sink {
+                Some(sink) if revoke => Box::new(move |events| sink.revoke(events)),
                 Some(sink) => Box::new(move |events| sink.release(events)),
                 None => {
                     let backend = self.context.backend.clone();
@@ -204,11 +212,11 @@ impl Session<'_> {
         self.finish_release().await;
         let held = self.pressed.release_all();
         self.health.queued.extend(held);
-        if !self.flush_releases() {
-            self.start_release(Vec::new(), true);
+        if !self.flush_releases_as(true) {
+            self.start_release(Vec::new(), true, true);
         }
         self.finish_release().await;
-        if self.input_release.is_none() && self.flush_releases() {
+        if self.input_release.is_none() && self.flush_releases_as(true) {
             self.finish_release().await;
         }
     }

@@ -108,7 +108,7 @@ pub(super) struct BridgeInputSink {
 impl BridgeInputSink {
     /// `controlling`: a batch of the input path, which the session sends only
     /// while it holds control (it drops other sessions' leftovers); `false`:
-    /// the session's release job, which revokes its waiting batches.
+    /// a release of the session's release job, performed like its input.
     fn queue(&self, events: &[InputEvent], controlling: bool) -> Result<(), ControlBlock> {
         if !super::super::bridge_channels::prereqs().accessibility_on() {
             return Err(ControlBlock::ControlUnavailable);
@@ -119,7 +119,7 @@ impl BridgeInputSink {
         let queued = if controlling {
             super::super::bridge_channels::send_controlling_input(id, events)
         } else {
-            super::super::bridge_channels::send_release(id, events)
+            super::super::bridge_channels::send_input(id, events)
         };
         if queued {
             Ok(())
@@ -147,6 +147,20 @@ impl ScreenInputSink for BridgeInputSink {
 
     fn release(&self, events: &[InputEvent]) -> Result<(), ControlBlock> {
         self.queue(events, false)
+    }
+
+    /// The session gives the control up or ends (round 7): what of it still
+    /// waits and this release only end its strokes in the app's gesture
+    /// state; nothing of it is performed afterwards (Codex 6/4).
+    fn revoke(&self, events: &[InputEvent]) -> Result<(), ControlBlock> {
+        if !super::super::bridge_channels::prereqs().accessibility_on() {
+            return Err(ControlBlock::ControlUnavailable);
+        }
+        if super::super::bridge_channels::send_release(self.channel.id, events) {
+            Ok(())
+        } else {
+            Err(ControlBlock::ControlUnavailable)
+        }
     }
 
     /// A batch the app queued but did not perform (`inputRefused`).
