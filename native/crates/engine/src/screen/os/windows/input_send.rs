@@ -280,6 +280,7 @@ fn records_with_position(
 
 /// Injects `events` into this Windows session, or names why not.
 pub fn inject(events: &[InputEvent]) -> Result<(), ControlBlock> {
+    unsupported_keys(events)?;
     if secure_desktop::on_secure_desktop() {
         return Err(ControlBlock::SecureDesktop);
     }
@@ -297,12 +298,26 @@ pub fn inject(events: &[InputEvent]) -> Result<(), ControlBlock> {
     submit(&inputs)
 }
 
+/// A key without a Windows key (cut, copy, paste: HID 0x7B–0x7D have no
+/// scan code or virtual key of their own) refuses the batch instead of
+/// leaving the key out silently (review 2026-11-19, Codex 3/19).
+fn unsupported_keys(events: &[InputEvent]) -> Result<(), ControlBlock> {
+    let missing = events.iter().any(|event| {
+        matches!(event, InputEvent::Key { hid_usage, .. } if windows_key(*hid_usage).is_none())
+    });
+    if missing {
+        return Err(ControlBlock::UnsupportedOnHost);
+    }
+    Ok(())
+}
+
 /// Family positions use the very physical rectangle admitted by HostSession.
 /// The raw monitor/window path above deliberately retains its old mapping.
 pub fn inject_family(
     geometry: crate::remote_window::CaptureGeometry,
     events: &[InputEvent],
 ) -> Result<(), ControlBlock> {
+    unsupported_keys(events)?;
     if secure_desktop::on_secure_desktop() {
         return Err(ControlBlock::SecureDesktop);
     }

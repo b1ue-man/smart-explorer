@@ -292,10 +292,10 @@ pub(in crate::screen::os) async fn apply_portal_release(
     session: &ashpd::desktop::Session<ashpd::desktop::remote_desktop::RemoteDesktop>,
     events: &[crate::screen::core::input_model::InputEvent],
     sas: &mut crate::screen::os::input_keys::SasGuard,
-) {
+) -> Vec<crate::screen::core::input_model::InputEvent> {
     use crate::screen::core::input_model::{InputEvent, PointerButton, TouchPhase};
     use crate::screen::os::portal_input::{button_code, key_state};
-    for event in events {
+    for (index, event) in events.iter().enumerate() {
         let result = match event {
             InputEvent::Key {
                 hid_usage,
@@ -341,12 +341,14 @@ pub(in crate::screen::os) async fn apply_portal_release(
                     )
                     .await
             }
-            _ => return,
+            _ => return Vec::new(),
         };
+        // Codex 3/11: the releases the portal refused stay owed (S2).
         if result.is_err() {
-            return;
+            return events[index..].to_vec();
         }
     }
+    Vec::new()
 }
 
 pub(in crate::screen::os) fn portal_input_sink(
@@ -427,6 +429,17 @@ pub(in crate::screen::os) async fn dispatch_portal_batch(
     use crate::screen::os::portal_input::Batch;
     match batch {
         Batch::Input(events) => {
+            // Codex 3/11: owed releases go first; while the portal refuses
+            // them, this batch goes neither, its releases are owed too.
+            let owed = refusal::take_owed();
+            if !owed.is_empty() {
+                let left = apply_portal_release(remote, session, &owed, sas).await;
+                if !left.is_empty() {
+                    refusal::owe(left);
+                    refusal::owe(portal_releases(&events, 0));
+                    return;
+                }
+            }
             if let Err((failed, block)) =
                 apply_portal_input(remote, session, identity, path, &events, sas).await
             {
@@ -436,17 +449,20 @@ pub(in crate::screen::os) async fn dispatch_portal_batch(
                      held keys of the batch are released"
                 );
                 let releases = portal_releases(&events, failed);
-                apply_portal_release(remote, session, &releases, sas).await;
-                *PORTAL_REFUSED
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(block);
+                let left = apply_portal_release(remote, session, &releases, sas).await;
+                refusal::refuse(block);
+                refusal::owe(left);
             }
         }
         Batch::Release {
             identity: bound,
             events,
         } if Arc::ptr_eq(&bound, identity) && bound.session == path => {
-            apply_portal_release(remote, session, &events, sas).await;
+            let left = apply_portal_release(remote, session, &events, sas).await;
+            if !left.is_empty() {
+                eprintln!("screen host process: the portal refused a release");
+            }
+            refusal::owe(left);
         }
         Batch::Release { .. } => {}
     }

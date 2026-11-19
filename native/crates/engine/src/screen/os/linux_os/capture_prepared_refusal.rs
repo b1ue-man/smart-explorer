@@ -71,12 +71,51 @@ pub(super) fn portal_releases(
 pub(super) static PORTAL_REFUSED: Mutex<Option<crate::screen::core::wire_control::ControlBlock>> =
     Mutex::new(None);
 
+/// Releases the portal refused (Codex 3/11): they go before the next batch.
+static PORTAL_OWED: Mutex<Vec<crate::screen::core::input_model::InputEvent>> =
+    Mutex::new(Vec::new());
+
+/// The next batch reports `block` (S2).
+pub(super) fn refuse(block: crate::screen::core::wire_control::ControlBlock) {
+    *PORTAL_REFUSED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(block);
+}
+
+/// `left` stays owed; the next batch reports the refusal (Codex 3/11).
+pub(super) fn owe(left: Vec<crate::screen::core::input_model::InputEvent>) {
+    if left.is_empty() {
+        return;
+    }
+    let mut refused = PORTAL_REFUSED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    refused.get_or_insert(crate::screen::core::wire_control::ControlBlock::UnsupportedOnHost);
+    drop(refused);
+    PORTAL_OWED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .extend(left);
+}
+
+pub(super) fn take_owed() -> Vec<crate::screen::core::input_model::InputEvent> {
+    std::mem::take(
+        &mut *PORTAL_OWED
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+    )
+}
+
 /// A new portal identity was bound: no refusal and no wheel rest of the
 /// one before carry over (S2, S5).
 pub(in crate::screen::os) fn reset_portal_input() {
     *PORTAL_REFUSED
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+    PORTAL_OWED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clear();
     *super::WHEEL_REST
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = (0, 0);
