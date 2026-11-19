@@ -51,7 +51,7 @@ impl Pipeline {
         // A new rate alone keeps the encoder (B-03); a rate above the one it
         // was opened with restarts it at the next tick (`Pipeline::tick`).
         if !mode.same_but_rate(&previous) || self.choice != previous_choice {
-            self.note_restart("the viewer's mode or codec changed (SET_MODE): new encoder");
+            self.note_restart("mode or codec pairing changed (SET_MODE/SET_DECODERS)");
             self.invalidate_reference();
         }
         self.resize();

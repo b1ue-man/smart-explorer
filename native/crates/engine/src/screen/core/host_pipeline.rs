@@ -313,6 +313,7 @@ impl Pipeline {
     /// Ends the current picture group and its encoder; the next frame is a
     /// key frame of a new encoder.
     fn drop_encoder(&mut self) {
+        self.note_restart(&format!("encoder epoch {} ends", self.encoder_epoch));
         self.new_group();
         if let Some(stage) = &mut self.stage {
             stage.encoder = None;
@@ -363,6 +364,7 @@ impl Pipeline {
     /// `invalidate_reference`/`resize`, which open a new one). An encoder
     /// that answers with no key frame is replaced then (`kept_encoder`).
     fn reset_stream(&mut self) {
+        self.note_restart("stream reset: next a key frame of the running encoder");
         if let Some(gop) = self.gop.take() {
             gop.reset();
         }
