@@ -103,6 +103,9 @@ pub(super) fn keyboard(
     if *owned && !keys {
         mapper.release_all();
     }
+    if !keys {
+        mapper.note_local(ui.input(|input| input.modifiers));
+    }
     *owned = keys;
     let modifiers = match keys {
         true => ui.input(|input| input.modifiers),

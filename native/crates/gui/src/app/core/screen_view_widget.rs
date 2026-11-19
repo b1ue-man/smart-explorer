@@ -169,8 +169,7 @@ impl ViewWidget {
         mapper.has_backlog()
     }
 
-    /// Lifts whatever the host still holds down for this viewer (control
-    /// ends, the session ends); the lifts leave before any later frame.
+    /// Lifts whatever the host still holds down for this viewer, first.
     pub fn release_input(&mut self, session: &ViewerSession) {
         if let Some(mapper) = self.mapper.as_mut() {
             mapper.release_all();
@@ -345,8 +344,7 @@ impl ViewWidget {
             }
             shown = rendered.then_some(Geometry { rect: dest, size });
         }
-        // Nothing drawn (no picture yet, or it was revoked after a decode
-        // error): the status, else the hint, names why (fix 2026-11-19).
+        // Nothing drawn (no picture yet, or revoked): status or hint say why.
         let reason = Some(params.status)
             .filter(|s| !s.is_empty())
             .or(params.hint);
@@ -446,12 +444,15 @@ impl ViewWidget {
             if self.mapper.is_some() {
                 self.release_input(session);
             }
+            let held = ui.input(|input| input.modifiers);
+            self.mapper
+                .iter_mut()
+                .for_each(|mapper| mapper.note_local(held));
             return (locals, escape);
         }
         let mapper = self.mapper.get_or_insert_with(|| InputMapper::new(hello));
-        // While the control is on every key belongs to the host, so the
-        // picture keeps the keyboard focus (a menu that is open keeps it, a
-        // text field of the toolbar that is being edited too).
+        // While steering the picture keeps the keyboard focus (an open menu
+        // or an edited toolbar field keeps it instead).
         let editing = super::screen_toolbar_ui::toolbar_editing(ui.ctx());
         let clicked = response.clicked() || response.drag_started();
         if clicked || (!editing && !ui.memory(|memory| memory.any_popup_open())) {

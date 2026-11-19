@@ -235,6 +235,12 @@ pub(super) fn popup(ui: &mut egui::Ui, texts: impl IntoIterator<Item = impl AsRe
     ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
 }
 
+/// An explaining line inside an open list: it wraps at the list's width
+/// instead of being cut there (K2, `popup` sizes the list to its entries).
+pub(super) fn list_note(ui: &mut egui::Ui, text: &str) {
+    ui.add(egui::Label::new(text).wrap());
+}
+
 /// A switch of the bar: it starts a new row when it does not fit the rest
 /// of this one; a text wider than the whole bar (a very narrow window, B3)
 /// goes beside an empty switch as a wrapping label instead of past the edge.

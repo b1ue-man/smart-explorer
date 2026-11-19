@@ -303,15 +303,16 @@ fn source_row(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Vec<ToolbarActi
                 }
             }
             ui.separator();
+            let android = "Die Quelle wird auf dem Android-Gerät im Systemdialog ausgewählt.";
             if system_selected {
-                ui.label("Die Quelle wird auf dem Android-Gerät im Systemdialog ausgewählt.");
+                wrap::list_note(ui, android);
             }
             if hello
                 .limits
                 .iter()
                 .any(|limit| limit == "wayland_window_pick_on_host")
             {
-                ui.label("Das Fenster wählt der Nutzer am Gerät im Systemdialog.");
+                wrap::list_note(ui, "Das Fenster wählt der Nutzer am Gerät im Systemdialog.");
             }
             let windows = input.info.and_then(|info| info.windows.as_ref());
             for window in windows

@@ -85,6 +85,10 @@ pub struct InputMapper {
     /// No frame went through since the mapper began or let everything go:
     /// modifiers already held then belong to the local user (H5).
     fresh: bool,
+    /// The modifiers held in the frames before (`note_local`): only these
+    /// stay local in the first frame (K1: a modifier pressed in it is the
+    /// user's input for the host).
+    armed: Modifiers,
     wheel_rest: (f32, f32),
     touch_active: bool,
     /// Keys without a usage that were dropped (shown in the statistics).
@@ -109,10 +113,25 @@ impl InputMapper {
             text_keys: Vec::new(),
             keys_down: Vec::new(),
             fresh: true,
+            // Made in its first frame: what is held came before it.
+            armed: Modifiers {
+                ctrl: true,
+                shift: true,
+                alt: true,
+                ..Modifiers::NONE
+            },
             wheel_rest: (0.0, 0.0),
             touch_active: false,
             unmapped_keys: 0,
             preedit: None,
+        }
+    }
+
+    /// A frame in which the host gets no keys: the modifiers held then
+    /// belong to the local user (K1, `fresh`).
+    pub fn note_local(&mut self, mods: Modifiers) {
+        if self.fresh {
+            self.armed = mods;
         }
     }
 
@@ -130,6 +149,7 @@ impl InputMapper {
         self.text_keys.clear();
         self.keys_down.clear();
         self.fresh = true;
+        self.armed = Modifiers::NONE;
         // Modifiers still held locally are kept from the host until they are
         // let go, but only when the host had one down (Gemini 3/23: the
         // first shortcut after any release was swallowed).
@@ -173,10 +193,8 @@ impl InputMapper {
             return;
         }
         // Modifiers held from before (Strg+Umschalt+K turned steering on)
-        // stay local until they are let go (H5: they went down and up at the
-        // host, which may switch the keyboard layout on Windows).
-        // A new press only: the repeat of a key still held from before (K of
-        // Strg+Umschalt+K) is none (round 6).
+        // stay local until let go (H5, K1); a new press (no repeat, round 6)
+        // or a chord shows input for the host.
         let pressing = events.iter().any(|event| {
             matches!(
                 event,
@@ -185,10 +203,21 @@ impl InputMapper {
                     repeat: false,
                     ..
                 } | Event::PointerButton { pressed: true, .. }
+                    | Event::Copy
+                    | Event::Cut
+                    | Event::Paste(_)
             )
         });
-        if std::mem::take(&mut self.fresh) && !pressing {
-            self.suppress_modifiers |= frame_mods.ctrl || frame_mods.alt || frame_mods.shift;
+        // A frame without modifiers and presses decides nothing yet (one in
+        // which a toolbar field holds the keyboard passes none).
+        let any = frame_mods.ctrl || frame_mods.alt || frame_mods.shift;
+        if self.fresh && (any || pressing) {
+            self.fresh = false;
+            let armed = self.armed;
+            let held = (frame_mods.ctrl && armed.ctrl)
+                || (frame_mods.alt && armed.alt)
+                || (frame_mods.shift && armed.shift);
+            self.suppress_modifiers |= held && !pressing;
         }
         if self.suppress_modifiers {
             if frame_mods.ctrl || frame_mods.alt || frame_mods.shift {
