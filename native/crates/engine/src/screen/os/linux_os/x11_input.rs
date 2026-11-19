@@ -242,6 +242,7 @@ pub fn inject(events: &[InputEvent]) -> Result<(), ControlBlock> {
         return Err(ControlBlock::ControlUnavailable);
     };
     let area = area_of(conn, *root, &target).map_err(|_| ControlBlock::ControlUnavailable)?;
+    texts_typable(conn, events)?;
     match send(conn, *root, area, events, sas, wheel_rest) {
         Ok(0) => Ok(()),
         Ok(skipped) => {
@@ -333,11 +334,42 @@ pub fn inject_bound(
             }
         }
     }
-    if send(conn, *root, area, events, sas, wheel_rest).is_err() {
-        state.conn = None;
-        return Err(ControlBlock::ControlUnavailable);
+    texts_typable(conn, events)?;
+    match send(conn, *root, area, events, sas, wheel_rest) {
+        Ok(0) => Ok(()),
+        // Only when the mapping changed since `texts_typable`; the batch
+        // went (its presses count as held), so it is no refusal.
+        Ok(skipped) => {
+            eprintln!("screen host process: {skipped} characters have no key on this host");
+            Ok(())
+        }
+        Err(_) => {
+            state.conn = None;
+            Err(ControlBlock::ControlUnavailable)
+        }
     }
-    Ok(())
+}
+
+/// Codex 21 (review 2026-11-19): a batch whose text cannot go whole is
+/// refused before any of it is sent, with a reason the viewer shows
+/// (before, the characters without a key were left out and the batch
+/// counted as sent).
+fn texts_typable<C: Connection>(conn: &C, events: &[InputEvent]) -> Result<(), ControlBlock> {
+    let mut texts = events.iter().filter_map(|event| match event {
+        InputEvent::Text { text } => Some(text.as_str()),
+        _ => None,
+    });
+    let Some(first) = texts.next() else {
+        return Ok(());
+    };
+    match x11_keymap::typable(conn, std::iter::once(first).chain(texts)) {
+        Ok(true) => Ok(()),
+        Ok(false) => {
+            eprintln!("screen host process: text with characters that have no key on this host");
+            Err(ControlBlock::UnsupportedOnHost)
+        }
+        Err(_) => Err(ControlBlock::ControlUnavailable),
+    }
 }
 
 /// Session-owned compensating ups do not need an existing source window or

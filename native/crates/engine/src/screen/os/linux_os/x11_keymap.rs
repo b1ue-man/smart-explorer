@@ -134,6 +134,18 @@ fn sync<C: Connection>(conn: &C) -> io::Result<()> {
     Ok(())
 }
 
+/// Codex 21 (review 2026-11-19): whether every character of `texts` gets a
+/// key: one of the mapping, or the spare keycode `type_text` remaps for the
+/// others. A text that cannot go whole is refused before any of it goes.
+pub(super) fn typable<'a, C: Connection>(
+    conn: &C,
+    mut texts: impl Iterator<Item = &'a str>,
+) -> io::Result<bool> {
+    let map = KeyMap::read(conn)?;
+    Ok(map.spare().is_some()
+        || texts.all(|text| text.chars().all(|c| map.find(keysym_of(c)).is_some())))
+}
+
 /// Types `text`; returns how many characters had no key at all.
 pub(super) fn type_text<C: Connection>(conn: &C, root: Window, text: &str) -> io::Result<usize> {
     let mut map = KeyMap::read(conn)?;
