@@ -53,7 +53,9 @@ pub(super) fn retune(
     limit: u32,
 ) -> Option<bool> {
     let target = bounded_bitrate(target_bps, limit);
-    if (i64::from(target) - i64::from(*current)).abs() * 50 < i64::from(*current) {
+    // Review 2026-11-19 L1: the 2 % band holds back rises only; every
+    // lowering is set, so the encoder never stays above a lowered rate.
+    if target >= *current && (i64::from(target) - i64::from(*current)) * 50 < i64::from(*current) {
         return None;
     }
     let refused = set_mean_bitrate(api?, target);

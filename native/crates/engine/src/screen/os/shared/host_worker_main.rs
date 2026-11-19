@@ -84,6 +84,13 @@ impl Running {
     }
 }
 
+/// Review 2026-11-19 L2: the rate watch gave the encoder up
+/// (`RateGuard::gave_up`); its factory is refused at once, never replaced by
+/// a fresh instance of itself.
+fn gave_up(error: &io::Error) -> bool {
+    crate::screen::core::rate_control::honour::RateGuard::gave_up(error)
+}
+
 /// Review 2026-11-19 C5: an encoder that answers a requested key frame with
 /// no picture failed (the stage reported it as "unchanged", so a viewer
 /// without its first picture stayed black without a reason); its failure

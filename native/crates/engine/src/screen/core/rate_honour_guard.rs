@@ -48,7 +48,31 @@ pub struct RateGuard {
     opened: std::time::Instant,
 }
 
+/// The failure of a watched encoder that ignores its rate (review
+/// 2026-11-19 L2): it reads as before (`encoder_ignores_rate: …`), and a
+/// stage tells it from a passing failure (`RateGuard::gave_up`).
+#[derive(Debug)]
+struct IgnoresRate(String);
+
+impl std::fmt::Display for IgnoresRate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for IgnoresRate {}
+
 impl RateGuard {
+    /// Whether `error` is the watch's verdict that the encoder ignores its
+    /// rate (review 2026-11-19 L2): its factory goes onto the refused list
+    /// at once; a fresh instance of it would start its watch from nothing
+    /// and run another `HONOUR_WINDOW` of frames above the rate.
+    pub fn gave_up(error: &io::Error) -> bool {
+        error
+            .get_ref()
+            .is_some_and(|inner| inner.is::<IgnoresRate>())
+    }
+
     /// The verdict of the watch so far.
     pub fn verdict(&self) -> HonourVerdict {
         self.meter.verdict()
@@ -75,10 +99,10 @@ impl RateGuard {
                 .meter
                 .ratio()
                 .map_or("-".to_string(), |r| format!("{r:.2}"));
-            return Err(io::Error::other(format!(
+            return Err(io::Error::other(IgnoresRate(format!(
                 "encoder_ignores_rate: {} (frame size / budget {ratio})",
                 self.inner.name()
-            )));
+            ))));
         }
         Ok(())
     }

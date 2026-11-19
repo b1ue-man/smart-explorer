@@ -65,7 +65,7 @@ impl Encoding {
                 Err(error) => {
                     let _ = crate::screen::core::convert_clock::take();
                     let factory = running.factory.clone();
-                    let refuses = running.failure_refuses();
+                    let refuses = running.failure_refuses() || gave_up(&error);
                     eprintln!("screen encoder: {} failed: {error}", running.encoder.name());
                     self.running = None;
                     if factory == crate::screen::core::codec_registry::TILES_NAME {

@@ -134,7 +134,7 @@ impl Worker {
                 }
                 Err(error) => {
                     let factory = running.factory.clone();
-                    let refuses = running.failure_refuses();
+                    let refuses = running.failure_refuses() || gave_up(&error);
                     self.encoder = None;
                     if factory == crate::screen::core::codec_registry::TILES_NAME {
                         return failed(ScreenErrorCode::EncoderFailed, error);

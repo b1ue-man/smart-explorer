@@ -380,8 +380,10 @@ impl VendorSession for AmfSession {
             if let Some(ltr) = self.ltr.as_mut() {
                 ltr.set_fps(rate.fps);
             }
-            let rated = [names.target, names.peak];
-            if let Some(name) = refused.iter().find(|name| rated.contains(*name)) {
+            // The peak counts in quality VBR (sharp mode) only; CBR may refuse it.
+            let peak = rate.quality.map(|_| names.peak);
+            let rated = [Some(names.target), peak];
+            if let Some(name) = refused.iter().find(|name| rated.contains(&Some(**name))) {
                 let error = io::Error::other(format!("AMF refused {name}"));
                 rate.refused_lowering(lowered, AMF_NAME, &error)?;
             }
