@@ -234,5 +234,7 @@ class ScreenInputMapperTest {
         assertEquals(1 to "", keyboardEdit(pad + "ab", pad + "a"))
         assertEquals(1 to "", keyboardEdit(pad, pad.dropLast(1)))
         assertEquals(0 to "ä", keyboardEdit(pad, pad + "ä"))
+        // An emoji is two UTF-16 units but one character the host deletes with one backspace.
+        assertEquals(1 to "", keyboardEdit(pad + "a\uD83D\uDE00", pad + "a"))
     }
 }

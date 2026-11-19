@@ -320,7 +320,9 @@ internal fun keyboardEdit(before: String, after: String): Pair<Int, String> {
     val suffix = before.substring(prefix).commonSuffixWith(after.substring(prefix)).length
     // A deleted padding character is a backspace the user pressed on an
     // empty field: it deletes on the remote side as well.
-    val removed = before.length - suffix - prefix
+    // One backspace per character as the host deletes it: a code point, not a UTF-16 unit (an emoji is two units
+    // and deleting it sent two backspaces, the second one deleting a character more on the host).
+    val removed = before.codePointCount(prefix, before.length - suffix)
     val inserted = after.substring(prefix, after.length - suffix).replace("\u200B", "")
     return removed to inserted
 }
