@@ -332,6 +332,29 @@ pub async fn send(
     until(connection, Some(stop.clone()), sent).await
 }
 
+/// One piece of an encoded metadata reply (round 8, Codex 8/5): every write
+/// needs `mode`'s rights, as `send`'s.
+pub async fn send_piece(
+    context: &HostContext,
+    principal: &ProvenPrincipal,
+    mode: SessionMode,
+    connection: &Connection,
+    send: &mut SendStream,
+    piece: &[u8],
+    stop: watch::Receiver<Option<EndReason>>,
+) -> io::Result<()> {
+    let mut writer = AuthorizedWriter {
+        writer: send,
+        context,
+        principal,
+        mode,
+        stop: Some(&stop),
+    };
+    let peer = connection.remote_id().to_string();
+    let sent = super::control_sender::write_piece(&peer, &mut writer, piece);
+    until(connection, Some(stop.clone()), sent).await
+}
+
 /// `HELLO_OK`; every write needs `mode`'s rights. A stop is left to the
 /// session loop, which reports it to the viewer as before.
 pub async fn hello(

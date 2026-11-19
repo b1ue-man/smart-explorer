@@ -117,10 +117,13 @@ impl PipelineActor {
     /// rectangles go to the next picture, the encoder and the capture stay.
     /// The viewer drops its shown picture with every report and waits for a
     /// picture at or after the acknowledged floor (gui `ResumeGate`), and a
-    /// still screen gives none (`Captured::Unchanged`), so the next picture
-    /// is a key frame of the running encoder, inside the open group (Codex
-    /// 3/4: a new group cost a new stream and a new decoder on the viewer,
-    /// which takes a key frame inside its group already).
+    /// still screen gives none (`Captured::Unchanged`): the capture takes a
+    /// picture for the new area (`visibility::visible_moved`). A plain video
+    /// stream's reference holds the whole picture, so that picture is no key
+    /// frame (round 8, Codex 8/9); tiles and hybrid regions, which sent only
+    /// what was visible, get a key frame of the running encoder inside the
+    /// open group (Codex 3/4: a new group cost a new stream and a new decoder
+    /// on the viewer, which takes a key frame inside its group already).
     /// The capture's state is reported once more, which lets the session
     /// send the acknowledgement with the floor after this change.
     pub fn retarget_visible_rects(&mut self, rects: Option<Vec<VisibleRect>>) -> io::Result<()> {
@@ -131,7 +134,7 @@ impl PipelineActor {
             ));
         }
         self.pending.visible = Some(rects);
-        self.pending.refresh = true;
+        self.pending.visible_refresh = true;
         self.pending.confirm = true;
         self.poll();
         Ok(())

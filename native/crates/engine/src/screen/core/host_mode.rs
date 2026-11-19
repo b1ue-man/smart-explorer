@@ -17,6 +17,20 @@ use crate::screen::core::wire_binary::StreamKind;
 use crate::screen::core::wire_control::{FrameAck, HostStats};
 
 impl Pipeline {
+    /// Whether a changed visible area needs a key frame (round 8, Codex
+    /// 8/9): the tiles and hybrid regions send only what is visible, a plain
+    /// video stream's reference holds the whole picture, when its stage
+    /// takes a picture of a still screen for the new area.
+    pub fn visible_needs_keyframe(&mut self) -> bool {
+        !self.choice.codec.is_video()
+            || self.frame_contract.is_some_and(|c| c.hybrid_regions)
+            || self.stage.as_mut().is_some_and(|stage| {
+                stage
+                    .source
+                    .host_stage()
+                    .is_some_and(|host| !host.pictures_a_moved_view())
+            })
+    }
     /// `SET_MODE`: the stream kind, the size the viewer wants and the rate.
     pub fn set_mode(&mut self, kind: StreamKind, size: Option<FrameSize>, fps: Option<u16>) {
         let current = self.quality_policy.mode;
@@ -168,6 +182,7 @@ impl Pipeline {
             encoder_book: None,
             refused,
             chain: self.chain.clone(),
+            visible: None,
         });
         self.quality.size = self.fitted_size();
         self.invalidate_reference();

@@ -33,8 +33,11 @@ struct Pending {
     confirm: bool,
     /// The source takes this size itself (`expect_source_size`).
     expect: Option<FrameSize>,
-    /// A key frame inside the open group (`retarget_visible_rects`).
+    /// A key frame inside the open group (`request_keyframe`).
     refresh: bool,
+    /// A changed visible area (`retarget_visible_rects`): a key frame only
+    /// where the running reference lacks pixels (`visible_needs_keyframe`).
+    visible_refresh: bool,
     /// Control stream bytes written while a picture operation runs.
     control_bytes: u64,
     /// The newest `PRESENTED` while a picture operation runs, and when.
@@ -247,7 +250,8 @@ impl PipelineActor {
         if control != 0 {
             p.book_control_bytes(control);
         }
-        if std::mem::take(&mut self.pending.refresh) {
+        let visible = std::mem::take(&mut self.pending.visible_refresh);
+        if std::mem::take(&mut self.pending.refresh) || (visible && p.visible_needs_keyframe()) {
             // Codex 3/4: a key frame in the open group keeps its stream and
             // the viewer's decoder; without a group it opens one.
             if p.gop.is_some() {

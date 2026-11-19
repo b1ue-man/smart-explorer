@@ -163,6 +163,9 @@ struct Worker {
     capture_session: Option<Arc<crate::screen::core::capture_admission::SessionAdmission>>,
     remote: Arc<dispatch::RemoteAuthority>,
     release_sink: Option<Arc<dyn crate::screen::core::host_backend::ScreenInputSink>>,
+    /// The visible area the last picture was taken for (round 8, Codex 8/9,
+    /// `visibility::visible_moved`).
+    visible: Option<Vec<crate::screen::core::visibility::VisibleRect>>,
 }
 
 fn failed(code: ScreenErrorCode, error: impl ToString) -> WorkerReply {

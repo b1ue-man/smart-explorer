@@ -158,6 +158,7 @@ fn new_worker(
         capture_session: Some(admission),
         remote,
         release_sink: None,
+        visible: None,
     };
     (worker, source, output, recorded)
 }

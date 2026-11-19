@@ -105,6 +105,7 @@ fn worker(kind: io::ErrorKind) -> Worker {
             Vec::<u8>::new(),
         )))),
         release_sink: None,
+        visible: None,
     }
 }
 

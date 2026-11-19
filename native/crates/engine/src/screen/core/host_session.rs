@@ -190,7 +190,9 @@ impl<'a> Session<'a> {
                         }
                     }
                 },
-                (fallback, result) = self.metadata.next() => {
+                // A full outbox holds the metadata answers back (round 8,
+                // Codex 8/5): no answer goes without the budget's credit.
+                (fallback, result) = self.metadata.next(), if !self.outbox.full() => {
                     if self.metadata_reply(fallback, result).await.is_err() {
                         let signalled = *stop.borrow();
                         break signalled.map_or_else(|| self.unwritable(), |reason| (reason, None));

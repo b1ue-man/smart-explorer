@@ -132,6 +132,12 @@ fn capture_once(worker: &mut Worker, job: &CaptureJob, frame_id: u64, refresh: b
     }
     let capture_ts_us = now_us();
     let started = Instant::now();
+    // A new visible area needs a picture too (round 8, Codex 8/9).
+    let refresh = refresh
+        | crate::screen::core::visibility::visible_moved(
+            &mut worker.visible,
+            request.visible_rects.as_deref(),
+        );
     let Some((captured, after, source_size, grant)) = worker.source.as_mut().map(|source| {
         // A picture may stay on the GPU (BK3b): the encoding stage hands it
         // to a GPU encoder, every other encoder gets it read back.

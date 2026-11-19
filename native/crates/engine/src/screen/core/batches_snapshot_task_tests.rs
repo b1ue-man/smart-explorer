@@ -65,6 +65,7 @@ fn batches_task_b6_snapshot_preserves_accepted_limits_family_and_legacy_pixels()
             refused: Vec::new(),
             memory: None,
             chain: Default::default(),
+            visible: None,
         };
         let shot = still_tiles(&mut stage, 4, FrameSize::MAX, accepted).unwrap();
         let header = shot.header(9);
@@ -153,6 +154,7 @@ fn batches_task_b6_abandoned_capture_output_retires_records_before_lease() {
         refused: Vec::new(),
         memory: Some(memory),
         chain: Default::default(),
+        visible: None,
     };
     let result = ResultOwner {
         records: vec![vec![0; 64]],

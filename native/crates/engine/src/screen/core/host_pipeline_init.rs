@@ -46,6 +46,7 @@ impl Pipeline {
                 encoder_book: None,
                 refused: Vec::new(),
                 chain: chain.clone(),
+                visible: None,
             }),
             choice,
             quality_policy,

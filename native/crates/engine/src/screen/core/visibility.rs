@@ -121,6 +121,20 @@ pub struct VisibilityAck {
     pub min_frame_id: u64,
 }
 
+/// Whether a picture must be taken for `wanted` although nothing changed:
+/// the visible area differs from the one the last picture was taken for;
+/// remembers `wanted` (round 8, Codex 8/9: a plain video stream answers a
+/// new visible area with a picture of its running reference, not a key
+/// frame; the viewer waits for a picture at or after the acknowledged
+/// floor).
+pub fn visible_moved(last: &mut Option<Vec<VisibleRect>>, wanted: Option<&[VisibleRect]>) -> bool {
+    if last.as_deref() == wanted {
+        return false;
+    }
+    *last = wanted.map(<[VisibleRect]>::to_vec);
+    true
+}
+
 #[cfg(test)]
 mod review_tests {
     use super::*;

@@ -146,6 +146,13 @@ pub trait HostStage: Send {
     fn floor_notice(&mut self, _ceiling_bps: Option<u64>) -> Option<String> {
         None
     }
+    /// Whether the stage takes a picture of an unchanged screen when the
+    /// visible area changed (`visibility::visible_moved`, round 8 Codex 8/9).
+    /// A stage that does not (the Android app's encoder answers only a key
+    /// frame request) gets a key frame for a new visible area, as before.
+    fn pictures_a_moved_view(&self) -> bool {
+        false
+    }
     /// B-36: whether the stage passes `recover_references` on to its
     /// encoder (`ScreenEncoder::recover_references`). A stage that does not
     /// keeps the old reset: a new encoder and a key frame.

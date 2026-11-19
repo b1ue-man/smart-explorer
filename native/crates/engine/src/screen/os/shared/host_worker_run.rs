@@ -228,6 +228,7 @@ pub(super) fn run() -> i32 {
         capture_session: None,
         remote: remote.clone(),
         release_sink: None,
+        visible: None,
     }));
     let stream = super::clock::Stream::new(
         worker.clone(),

@@ -213,6 +213,7 @@ fn rig(delay: Duration, control: bool) -> Rig {
         capture_session: Some(admission),
         remote: remote.clone(),
         release_sink: None,
+        visible: None,
     }));
     let encodes = Arc::new(EncodeProbe::default());
     let stream = Stream::new(

@@ -30,6 +30,8 @@ pub(in crate::screen) struct Stage {
     pub(in crate::screen) memory: super::super::frame_memory::MemoryHold,
     /// The pipeline's station meter (BK0).
     pub(in crate::screen) chain: super::super::chain_meter::SharedChain,
+    /// The visible area the last picture was taken for (`visible_moved`).
+    pub(in crate::screen) visible: Option<Vec<super::super::visibility::VisibleRect>>,
 }
 
 fn micros_since(started: std::time::Instant) -> u64 {
@@ -124,9 +126,15 @@ fn capture_and_encode(
     let generation = stage.source.reference_generation();
     // A continuation needs a picture even when nothing changed: the lost
     // frames may have carried the last change.
+    // A new visible area needs a picture too (round 8, Codex 8/9).
+    let moved = super::super::visibility::visible_moved(
+        &mut stage.visible,
+        request.visible_rects.as_deref(),
+    );
     let captured = stage.source.capture(
         request.frame_id,
         request.keyframe
+            || moved
             || recover.is_some()
             || stage
                 .encoder

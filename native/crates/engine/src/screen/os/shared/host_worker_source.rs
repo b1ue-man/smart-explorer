@@ -381,6 +381,12 @@ impl HostStage for WorkerSource {
         Some(text)
     }
 
+    /// Both `PRODUCE` and the picture stream take a picture for a new
+    /// visible area (`host_worker_produce.rs`, `host_worker_capture_stage.rs`).
+    fn pictures_a_moved_view(&self) -> bool {
+        true
+    }
+
     /// B-36: only the picture stream carries the wish (`STREAM`); `PRODUCE`
     /// keeps the reset with a new encoder.
     fn continues_references(&self) -> bool {

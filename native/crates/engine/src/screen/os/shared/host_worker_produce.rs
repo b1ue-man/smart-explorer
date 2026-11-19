@@ -72,8 +72,16 @@ impl Worker {
             return WorkerReply::Frame(StageFrame::Unchanged { source_size });
         }
         let capture_ts_us = now_us();
+        // A new visible area needs a picture too (round 8, Codex 8/9).
+        let moved = crate::screen::core::visibility::visible_moved(
+            &mut self.visible,
+            request.visible_rects.as_deref(),
+        );
+        let Some(source) = self.source.as_mut() else {
+            return failed(ScreenErrorCode::CaptureFailed, "no source is open");
+        };
         // A picture may stay on the GPU for a GPU encoder (BK3b).
-        let captured = source.capture_picture(request.frame_id, refresh);
+        let captured = source.capture_picture(request.frame_id, refresh || moved);
         let after = source.reference_generation();
         let source_size = source.size();
         if after != before {
