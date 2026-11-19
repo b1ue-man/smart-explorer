@@ -103,12 +103,16 @@ impl Drop for Event {
     }
 }
 
-/// COM on this thread (multithreaded apartment).
+/// COM on this thread (multithreaded apartment). Gemini round 3, 22: a
+/// thread already in a single-threaded apartment (`RPC_E_CHANGED_MODE`)
+/// keeps it and has COM all the same, as `mf_common::ensure_com` takes it;
+/// the audio endpoint works in either.
 fn com() -> io::Result<()> {
     // SAFETY: no reserved pointer; S_FALSE (already initialised) is fine.
-    unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }
-        .ok()
-        .map_err(os_error)
+    match unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.ok() {
+        Err(error) if error.code() == windows::Win32::Foundation::RPC_E_CHANGED_MODE => Ok(()),
+        result => result.map_err(os_error),
+    }
 }
 
 /// A fresh client of the default render endpoint.

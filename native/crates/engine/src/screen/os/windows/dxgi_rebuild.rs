@@ -152,11 +152,11 @@ impl DxgiCapture {
         self.budget
             .replace(geometry)
             .map_err(DxgiFailure::at(FallbackStep::CaptureMemory))?;
-        self.live = Some(duplicate(
-            &self.prepared,
-            &self.budget,
-            self.follow_desktop,
-        )?);
+        // Gemini round 3, 13: a refused duplication gives its new grant back
+        // at once instead of holding it until the next try.
+        let live = duplicate(&self.prepared, &self.budget, self.follow_desktop)
+            .inspect_err(|_| self.budget.suspend())?;
+        self.live = Some(live);
         self.size = geometry.displayed();
         Ok(())
     }

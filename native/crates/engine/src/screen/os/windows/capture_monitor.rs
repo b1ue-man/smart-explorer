@@ -116,9 +116,11 @@ impl MonitorGrabber {
     /// Graphics Capture first and opened it again with a new generation, a
     /// new encoder after every refused try). The session admission funds
     /// both plans at once (`capture_authority.rs`, `fund`: plans add up to
-    /// the platform capacity, each source counts its owners); only when
-    /// both do not fit (`WouldBlock`) the try ends Graphics Capture first,
-    /// as before.
+    /// the platform capacity, each source counts its owners). When both do
+    /// not fit (`WouldBlock`) the try counts as refused and Graphics Capture
+    /// keeps running (Codex round 4, finding 13: ending it first for a
+    /// try could leave the monitor without a capture); Desktop Duplication
+    /// comes back with the next opening of the source.
     fn try_first(&mut self) -> bool {
         let now = Instant::now();
         if !self.retry.is_some_and(|plan| plan.due(now)) {
@@ -130,13 +132,6 @@ impl MonitorGrabber {
         let previous = self.current.reference_generation();
         match first(previous) {
             Ok(grabber) => self.came_back(grabber, now),
-            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                eprintln!(
-                    "screen capture: Desktop Duplication does not fit beside Graphics Capture \
-                     ({error}); tried with Graphics Capture ended"
-                );
-                self.try_first_alone(now, previous)
-            }
             Err(error) => {
                 self.refused_again(now, &error);
                 false
@@ -164,38 +159,6 @@ impl MonitorGrabber {
                 plan.wait().as_secs()
             );
         }
-    }
-
-    /// The try with the fallback and its grant ended first (both plans do
-    /// not fit at once); a refused try opens Graphics Capture again with the
-    /// generation after the try's.
-    fn try_first_alone(&mut self, now: Instant, previous: u64) -> bool {
-        self.current = Box::new(Retired {
-            size: self.current.size(),
-            generation: previous,
-        });
-        let Some(first) = self.first.as_mut() else {
-            return true;
-        };
-        match first(previous) {
-            Ok(grabber) => return self.came_back(grabber, now),
-            Err(error) => self.refused_again(now, &error),
-        }
-        // The try may have used the next generation: one after it.
-        let Some(open) = self.fallback.as_mut() else {
-            return true;
-        };
-        match open(previous.saturating_add(1)) {
-            Ok(grabber) => self.current = grabber,
-            Err(error) => {
-                eprintln!("screen capture: Graphics Capture did not open again: {error}");
-                self.current = Box::new(Retired {
-                    size: self.current.size(),
-                    generation: previous.saturating_add(1),
-                });
-            }
-        }
-        true
     }
 }
 

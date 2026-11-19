@@ -283,7 +283,19 @@ fn serve(
         };
         // A request that takes pictures or ends their production rests the
         // stages of the picture stream first (their memory is the same).
-        let quiet = super::clock::quiet_for(&request).map(|reset| stream.quiesce(reset));
+        // Gemini round 3, 5.4: a capture switch to the state it has already
+        // changes no capture and keeps the stream's encoder.
+        let same = match &request {
+            WorkerRequest::SetCaptureActive(active) => {
+                worker
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .capture_active
+                    == *active
+            }
+            _ => false,
+        };
+        let quiet = super::clock::quiet_for(&request).map(|reset| stream.quiesce(reset && !same));
         let reply = {
             let mut worker = worker.lock().unwrap_or_else(PoisonError::into_inner);
             let reply = worker.prepare_reply(request);

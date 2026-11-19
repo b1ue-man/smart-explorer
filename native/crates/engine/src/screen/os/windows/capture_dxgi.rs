@@ -254,7 +254,11 @@ impl Grabber for DxgiCapture {
         }
         // The overlay switched: a new duplication starts with a whole picture
         // in the new state (with or without the blended pointer).
-        if self.last.is_some() && self.pointer.as_ref().is_some_and(|p| p.take_switched()) {
+        // Codex round 4, finding 8: without a picture none was made in the
+        // mode before; the next one is read in the current mode, so a switch
+        // that came before it needs no new duplication.
+        let switched = self.pointer.as_ref().is_some_and(|p| p.take_switched());
+        if switched && self.last.is_some() {
             return match self.reopen() {
                 Ok(()) => Ok(SourcePicture::Unchanged),
                 Err(error) => paused(error),

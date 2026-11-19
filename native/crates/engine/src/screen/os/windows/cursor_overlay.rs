@@ -13,7 +13,7 @@
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use windows::Graphics::Capture::GraphicsCaptureSession;
 
@@ -27,6 +27,12 @@ type RawHandle = *mut c_void;
 
 /// Time between two readings of the pointer.
 const SAMPLE_EVERY: Duration = Duration::from_millis(8);
+/// Codex round 4, finding 24: a shape that could not be read is read again
+/// after this long (a passing failure no longer hides the pointer for as
+/// long as its shape stays; one that stays unreadable costs a read a second).
+const SHAPE_RETRY: Duration = Duration::from_secs(1);
+/// The handle of the shape last failed to read and when.
+static SHAPE_FAILED: Mutex<Option<(usize, Instant)>> = Mutex::new(None);
 /// `CURSORINFO::flags`: the pointer is shown.
 const CURSOR_SHOWING: u32 = 1;
 /// `DrawIconEx` flags `DI_NORMAL`: image and mask.
@@ -255,7 +261,13 @@ fn sample(overlay: &WorkerCursor, last_handle: &mut usize) {
     }
     let shown = info.flags & CURSOR_SHOWING != 0 && !info.cursor.is_null();
     let handle = info.cursor as usize;
-    if shown && (handle != *last_handle || overlay.shape_serial().is_none()) {
+    let retry_due = {
+        let failed = SHAPE_FAILED
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        failed.is_none_or(|(of, at)| of != handle || at.elapsed() >= SHAPE_RETRY)
+    };
+    if shown && (handle != *last_handle || overlay.shape_serial().is_none()) && retry_due {
         *last_handle = handle;
         let shape = measure(info.cursor).and_then(|(width, height, hot_x, hot_y)| {
             let rgba = render(info.cursor, width, height)?;
@@ -271,6 +283,14 @@ fn sample(overlay: &WorkerCursor, last_handle: &mut usize) {
                 },
             )
         });
+        // A failed read keeps the handle unknown, so it is read again.
+        let failed = shape.is_none().then(|| (handle, Instant::now()));
+        if failed.is_some() {
+            *last_handle = 0;
+        }
+        *SHAPE_FAILED
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = failed;
         overlay.publish_shape(handle as u64, shape);
     }
     let Some(area) = input_send::source_area() else {

@@ -446,7 +446,13 @@ impl GpuInput {
         if ring.device != self.raw {
             return Err(gone());
         }
+        // Gemini round 3, 14: the CPU upload of a first picture (and the
+        // target the ring does not need) go back to the grant; they held
+        // its codec input for as long as the encoder ran.
+        self.upload = None;
         if ring.size == self.size {
+            self.target = None;
+            self.scale = None;
             let texture = ring.take(index, tag).ok_or_else(gone)?;
             self.in_flight = Some((ring, index));
             return Ok(texture);

@@ -20,6 +20,7 @@ use super::vaapi_probe::{VaDevice, VaVideoDecodeCaps};
 use super::vaapi_surface as surface;
 use crate::screen::core::codec_registry::DecoderFactory;
 use crate::screen::core::decoded_frame::DecodedFrame;
+use crate::screen::core::decoder_health::{session_epoch, SessionSlots};
 use crate::screen::core::frame_budget::FrameLimits;
 use crate::screen::core::frame_size_caps::check_video_dimensions;
 use crate::screen::core::host_backend::{Chroma, ScreenDecoder, YuvPicture};
@@ -28,40 +29,35 @@ use crate::screen::core::pixel_convert::{nv12_to_bgra, BgraImage, FrameSize, Nv1
 use crate::screen::core::wire::invalid;
 use crate::screen::core::wire_binary::{FrameRecord, GopHeader};
 
-/// HEVC/AV1 decoders (factory names) that failed in this process.
-static REFUSED: Mutex<Vec<String>> = Mutex::new(Vec::new());
+/// The HEVC/AV1 decoders (factory names) whose decoder failed (`.0`) and those that had their one
+/// spare (`.1`), per viewer session (`decoder_health::session_epoch`, as
+/// FFmpeg's given-up stages). Review 2026-11-19 (Gemini 8.2): a decoder that
+/// showed pictures and then fails gets one new decoder (the viewer opens one
+/// for the next picture group); a failure before the first picture, or the
+/// next one after that spare, refuses it. Codex round 4, finding 19: for
+/// the session it happened in only; a later session opens VA-API again
+/// (before, one bitstream error kept it off until the viewer restarted).
+static FAILED: Mutex<SessionSlots<(Vec<String>, Vec<String>)>> = Mutex::new(SessionSlots::new());
 
 pub(super) fn refused(name: &str) -> bool {
-    REFUSED
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+    let mut failed = FAILED.lock().unwrap_or_else(PoisonError::into_inner);
+    failed
+        .get(session_epoch())
+        .0
         .iter()
         .any(|entry| entry == name)
 }
 
-/// Review 2026-11-19 (Gemini 8.2): a decoder that showed pictures and then
-/// fails gets one new decoder of its factory (the viewer opens one for the
-/// next picture group); a failure before the first picture, or the next
-/// failure after that one spare, refuses it for the process. Before, one
-/// passing bitstream error kept VA-API off until the viewer restarted.
-static SPARED: Mutex<Vec<String>> = Mutex::new(Vec::new());
-
 /// A decoder of `name` failed; `shown`: after a picture it showed.
 pub(super) fn refuse_failed(name: &str, shown: bool) {
-    if shown {
-        let mut spared = SPARED.lock().unwrap_or_else(PoisonError::into_inner);
-        if !spared.iter().any(|entry| entry == name) {
-            spared.push(name.to_owned());
-            return;
-        }
+    let mut failed = FAILED.lock().unwrap_or_else(PoisonError::into_inner);
+    let (refused, spared) = failed.get(session_epoch());
+    if shown && !spared.iter().any(|entry| entry == name) {
+        spared.push(name.to_owned());
+        return;
     }
-    refuse(name);
-}
-
-pub(super) fn refuse(name: &str) {
-    let mut list = REFUSED.lock().unwrap_or_else(PoisonError::into_inner);
-    if !list.iter().any(|entry| entry == name) {
-        list.push(name.to_owned());
+    if !refused.iter().any(|entry| entry == name) {
+        refused.push(name.to_owned());
     }
 }
 

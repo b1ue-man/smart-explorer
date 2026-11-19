@@ -387,7 +387,12 @@ impl VirtualDisplayDriver for WindowsVirtualDisplay {
     /// not se's, else the first attached one) in the mode it lists nearest
     /// to `size`; se's virtual monitor leaves the desktop first.
     fn physical_mode(&self, size: FrameSize) -> io::Result<FrameSize> {
-        restore_layout()?;
+        // Gemini round 3, 22: only se's virtual monitor on the desktop needs
+        // the layout back first; a second physical mode keeps the saved
+        // original and switches the display once, not back and then on.
+        if ours(&outputs()).is_some_and(|output| output.fact.attached) {
+            restore_layout()?;
+        }
         let found = outputs();
         let physical = found
             .iter()

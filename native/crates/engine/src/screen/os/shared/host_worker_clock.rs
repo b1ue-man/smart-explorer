@@ -344,6 +344,9 @@ impl Stream {
                 crate::screen::core::rate_control::model::set_session_quality(order.quality_target);
                 state.serial += 1;
                 state.reset_encoder = true;
+                // Gemini round 3, 5.4: the new encoder's key frame needs a
+                // picture also on a still screen (its held one went).
+                state.key_wanted = true;
                 state.failed = false;
                 state.event = None;
                 state.unchanged = None;

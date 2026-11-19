@@ -202,6 +202,11 @@ fn capture_adapter_encodes(codec: CodecKind) -> bool {
     vendor
 }
 
+/// The PCI vendor id of the capture's adapter, when known.
+fn capture_vendor() -> Option<u32> {
+    dxgi_adapters::vendor_of_luid(d3d_input::capture_adapter()?)
+}
+
 /// The PCI vendor id of the adapter `device` runs on.
 pub(super) fn vendor_of(device: &ID3D11Device) -> Option<u32> {
     let dxgi: IDXGIDevice = device.cast().ok()?;
@@ -271,7 +276,13 @@ impl VendorFactory {
         match d3d_input::attach_device(size, |device| vendor_of(device) == Some(pci)) {
             Ok(gpu) => Ok(gpu),
             Err(reason) => match d3d_input::input_route(Err(reason), true) {
-                InputRoute::OwnDevice if !capture_adapter_encodes(self.codec) => {
+                // Gemini round 3, 12: the capture's own adapter of this
+                // vendor without video support (`NoVideo`, `Disabled`) takes
+                // a device of its own there; another vendor's encoder on the
+                // capture's adapter goes first only for another adapter.
+                InputRoute::OwnDevice
+                    if capture_vendor() == Some(pci) || !capture_adapter_encodes(self.codec) =>
+                {
                     d3d_input::own_for_vendor(pci, size)
                 }
                 _ => Err(io::Error::new(
