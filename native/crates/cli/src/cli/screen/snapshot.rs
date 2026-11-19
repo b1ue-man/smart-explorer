@@ -54,19 +54,47 @@ pub(super) fn check_target(out: &Path, force: bool) -> Result<(), String> {
     Ok(())
 }
 
-/// Writes `png` to `out` through a temporary file in the same folder.
+/// Writes `png` to `out` through a temporary file in the same folder. The
+/// temporary file is created exclusively; without `force` the picture is
+/// published so that an existing `out` fails the call, also one another
+/// process wrote since `check_target` (Codex 7/11: two snapshots to one file
+/// both reported success, one picture was lost).
 pub(super) fn write_png(out: &Path, png: &[u8], force: bool) -> Result<(), String> {
+    use std::io::Write as _;
     check_target(out, force)?;
+    let failed = |error: std::io::Error| format!("{}: {error}", out.display());
     let mut temporary = out.as_os_str().to_owned();
     temporary.push(format!(".se-tmp-{}", std::process::id()));
     let temporary = PathBuf::from(temporary);
-    let written = std::fs::write(&temporary, png)
-        .and_then(|()| std::fs::rename(&temporary, out))
-        .map_err(|error| format!("{}: {error}", out.display()));
-    if written.is_err() {
+    let exclusive = |path: &Path| {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+            .and_then(|mut file| file.write_all(png).and_then(|()| file.sync_all()))
+    };
+    if let Err(error) = exclusive(&temporary) {
         let _ = std::fs::remove_file(&temporary);
+        return Err(failed(error));
     }
-    written
+    let published = if force {
+        std::fs::rename(&temporary, out)
+    } else {
+        // A hard link fails when `out` exists, atomically; a file system
+        // without links gets `out` created exclusively instead.
+        match std::fs::hard_link(&temporary, out) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Err(error),
+            Err(_) => exclusive(out),
+        }
+    };
+    let _ = std::fs::remove_file(&temporary);
+    published.map_err(|error| match error.kind() {
+        std::io::ErrorKind::AlreadyExists => {
+            format!("{} existiert schon; --force überschreibt", out.display())
+        }
+        _ => failed(error),
+    })
 }
 
 /// The JSON of a saved still picture.

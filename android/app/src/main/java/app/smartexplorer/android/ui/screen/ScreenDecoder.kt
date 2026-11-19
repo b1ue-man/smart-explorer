@@ -86,6 +86,9 @@ class ScreenDecoder(
     private var codecSurface: Surface? = null
     /** The codec key of the running decoder (`h264`, `hevc`, `av1`); only H.264 is checked with `ScreenFrameLimits.checkAvc`. */
     private var activeCodec=ScreenEncoderCodecs.H264
+    /** Whether the running MediaCodec decoder is a hardware one, and the „Dekodierer“ choice the decoders were opened under. */
+    private var codecHardware=false
+    private var openedUnder: String?=null
     private val avcChecked get()=activeCodec==ScreenEncoderCodecs.H264
     private var heldIndex = -1
     private val pulls=pullBuffers ?: ScreenPullBuffers(bufferBudget)
@@ -200,6 +203,15 @@ class ScreenDecoder(
             payloadOffset+=8; len-=8
         }
         if(!pulls.acceptsPayload(len,flags and FLAG_TILES!=0)) {fail();return}
+        // „Dekodierer“ changed while the group runs (Codex 7/8): a decoder of a stage the new choice does not allow
+        // goes, and the key frame its failure asks for opens one of the chosen stage. The hybrid decoder chose its
+        // MediaCodec by the old choice, so it goes on every change.
+        val wanted=choice().decoder
+        if(openedUnder!=null && wanted!=openedUnder) {
+            openedUnder=wanted
+            val stale=(codec!=null && !ScreenDecoderPolicy.stageAllowed(wanted,codecHardware)) || hybrid!=null
+            if(stale) { fail(); return }
+        }
         if (flags and FLAG_HYBRID != 0) {
             // After a local decoder failure (`fail()`: no hybrid decoder) the host answers the key frame request
             // inside the running group, without `NEW_STREAM`: its key frame that begins a picture opens the
@@ -215,7 +227,8 @@ class ScreenDecoder(
                     if(rejectedHybridGop==info.gop) return
                     frameEpoch=presentationEpoch()
                     releaseCodec(); hybrid?.close();hybrid=null;bitmap=null
-                    hybrid = ScreenHybridDecoder(info.width,info.height,pulls.budget,choice().decoder) {running}; hybridGop=gop
+                    openedUnder=choice().decoder
+                    hybrid = ScreenHybridDecoder(info.width,info.height,pulls.budget,openedUnder!!) {running}; hybridGop=gop
                 }
                 if(rejectedHybridGop==hybridGop) return
                 require(hybridGop==gop)
@@ -423,6 +436,7 @@ class ScreenDecoder(
                     }, Handler(Looper.getMainLooper()))
                     created.start()
                     codec=created; codecGop=gop; awaitingKeyframe=true; activeCodec=codecKey; codecSurface=target
+                    codecHardware=candidate.isHardwareAccelerated; openedUnder=wanted.decoder
                     listener.onDecoderStage(codecKey,candidate.name,candidate.isHardwareAccelerated)
                     return true
                 } catch(e: RuntimeException) {

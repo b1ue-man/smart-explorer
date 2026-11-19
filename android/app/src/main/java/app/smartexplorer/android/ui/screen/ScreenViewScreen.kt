@@ -199,6 +199,10 @@ fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, a
 
     val host = if (ui.platform == "android") InputHost.ANDROID else InputHost.DESKTOP
     val geometry = remember { floatArrayOf(1f, 1f, 1f) }
+    // The picture's pixel size for the pointer position (`ViewTransform.toSource`, Codex 7/13).
+    val pictureSize = remember { intArrayOf(0, 0) }
+    pictureSize[0] = ui.stream?.width ?: 0
+    pictureSize[1] = ui.stream?.height ?: 0
     val aspect = ui.stream?.let { it.width.toFloat() / it.height.coerceAtLeast(1) } ?: (metrics.widthPixels.toFloat() / metrics.heightPixels)
     val viewConfig = remember { ViewConfiguration.get(context) }
     val longPressMs = ViewConfiguration.getLongPressTimeout().toLong()
@@ -206,7 +210,7 @@ fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, a
         ScreenInputMapper(
             host = host,
             config = InputConfig(longPressMs, viewConfig.scaledTouchSlop.toFloat(), viewConfig.scaledVerticalScrollFactor),
-            toSource = { x, y -> transform.toSource(x, y, geometry[0], geometry[1], geometry[2]) },
+            toSource = { x, y -> transform.toSource(x, y, geometry[0], geometry[1], geometry[2], pictureSize[0], pictureSize[1]) },
             caps = ui.input,
             onZoom = { scale, fx, fy -> transform.zoomBy(scale, fx, fy, geometry[0], geometry[1], geometry[2]) },
         )

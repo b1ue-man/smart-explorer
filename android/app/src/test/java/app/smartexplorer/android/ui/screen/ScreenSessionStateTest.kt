@@ -121,5 +121,10 @@ class ScreenSessionStateTest {
         transform.reset()
         assertEquals(32767.5, transform.toSource(500f, 250f, 1000f, 500f, 2f).first.toDouble(), 1.0)
         assertEquals(65535, transform.toSource(5000f, 250f, 1000f, 500f, 2f).first)
+        // With the picture's pixels the host's rounding down hits exactly the pixel under the finger (Codex 7/13).
+        for ((viewX, pixel) in listOf(0.2f to 0, 0.6f to 1, 500f to 960, 999.9f to 1919)) {
+            val x = transform.toSource(viewX, 250f, 1000f, 500f, 2f, 1920, 960).first
+            assertEquals(pixel, (x.toLong() * 1919 / 65535).toInt())
+        }
     }
 }

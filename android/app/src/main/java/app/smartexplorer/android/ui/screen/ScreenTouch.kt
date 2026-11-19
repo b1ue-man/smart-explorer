@@ -84,13 +84,26 @@ class ViewTransform(private val onChange: () -> Unit = {}) {
         panY = panY.coerceIn(-limitY, limitY)
     }
 
-    /** The position 0–65535 across the source of a view point (clamped to the picture). */
-    fun toSource(x: Float, y: Float, viewW: Float, viewH: Float, aspect: Float): Pair<Int, Int> {
+    /**
+     * The position 0–65535 across the source of a view point (clamped to the picture). With the picture's pixel size
+     * ([pixelsW] × [pixelsH]) the point first becomes the picture pixel under it and then that pixel's position,
+     * rounded up as the CLI does (`input_action.rs`): Windows and X11 map back rounding down and so hit exactly that
+     * pixel (Codex 7/13: the last of 1920 columns landed two columns to the left).
+     */
+    fun toSource(x: Float, y: Float, viewW: Float, viewH: Float, aspect: Float, pixelsW: Int = 0, pixelsH: Int = 0): Pair<Int, Int> {
         val (w, h) = contentSize(viewW, viewH, aspect)
         val left = ((viewW - w) / 2 + panX).roundToInt().toFloat()
         val top = ((viewH - h) / 2 + panY).roundToInt().toFloat()
-        val axis = { value: Float, size: Float -> (value / size * FULL_RANGE).toInt().coerceIn(0, FULL_RANGE.toInt()) }
-        return axis(x - left, w) to axis(y - top, h)
+        val axis = { value: Float, size: Float, pixels: Int ->
+            if (pixels > 0 && size > 0f) {
+                val pixel = (value / size * pixels).toInt().coerceIn(0, pixels - 1)
+                val span = (pixels - 1).coerceAtLeast(1).toLong()
+                ((pixel.toLong() * FULL_RANGE.toLong() + span - 1) / span).coerceAtMost(FULL_RANGE.toLong()).toInt()
+            } else {
+                (value / size * FULL_RANGE).toInt().coerceIn(0, FULL_RANGE.toInt())
+            }
+        }
+        return axis(x - left, w, pixelsW) to axis(y - top, h, pixelsH)
     }
 
     companion object {
