@@ -123,6 +123,10 @@ pub struct Pacer {
     /// P9: the delivered rate and the round-trip floor the queue guard
     /// follows (`set_queue`); without them the guard of `guard_bytes`.
     queue: Option<(u64, u64)>,
+    /// Smoothed time from handing a frame to the stream until its
+    /// acknowledgement arrived (µs, 0: none yet). Unlike the path's round
+    /// trip it holds the viewer's decoding before its `FRAME_ACK`.
+    ack_age_us: u64,
 }
 
 impl Default for Pacer {
@@ -139,6 +143,7 @@ impl Default for Pacer {
             timing: None,
             drain_bps: None,
             queue: None,
+            ack_age_us: 0,
         }
     }
 }
@@ -236,12 +241,23 @@ impl Pacer {
 
     /// The stale time and the frame limit for the next decision.
     pub fn stale_limits(&self, target_bps: u64) -> (u64, usize) {
+        // The bytes drain at most at the measured delivered rate (fix
+        // 2026-11-19): the sustained estimate runs up to 1.5 times of it.
+        let delivered = self.queue.map_or(u64::MAX, |(rate_bps, _)| rate_bps.max(1));
         let drain_bps = self
             .drain_bps
-            .map_or(target_bps, |drain| drain.min(target_bps));
+            .map_or(target_bps, |drain| drain.min(target_bps))
+            .min(delivered);
         match self.timing {
             Some((srtt_us, interval_us)) => {
-                let stale = stale_after_us(srtt_us, interval_us, self.unacked_bytes, drain_bps);
+                // Fix 2026-11-19: the round trip of a frame is the age of its
+                // acknowledgement, the viewer's decoding included; with only
+                // the path's round trip (a LAN: 3 frame intervals, 12.5 ms at
+                // 240 frames/s) a viewer that decodes longer reset the stream
+                // with every frame, each reset a key frame and half the rate.
+                let ack_age = self.ack_age_us.min(STALE_STREAM_US / STALE_RTT_FACTOR);
+                let round_trip = srtt_us.max(ack_age);
+                let stale = stale_after_us(round_trip, interval_us, self.unacked_bytes, drain_bps);
                 (stale, in_flight_limit(stale, interval_us))
             }
             None => (STALE_STREAM_US, MAX_IN_FLIGHT_FRAMES),
@@ -282,6 +298,12 @@ impl Pacer {
         });
         self.unacked_bytes = self.unacked_bytes.saturating_sub(released);
         acked
+    }
+
+    /// The age of an acknowledged frame (arrival minus `SentFrame::sent_us`,
+    /// both clocks of this host), averaged like the frame sizes.
+    pub fn note_ack_age(&mut self, age_us: u64) {
+        self.ack_age_us = average(self.ack_age_us, age_us.max(1));
     }
 
     /// The picture stream was reset: every frame in flight is forgotten (late
