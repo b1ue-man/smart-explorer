@@ -109,6 +109,18 @@ impl Pipeline {
             self.tile_limit = Some(limit);
         }
         self.quality_policy.mode.chosen = next.preference;
+        // Gemini 5/5: a frame that names the viewer's choice sets „Scharf
+        // (GPU)“ itself (on for it, off for any other choice), so the host
+        // does not wait for a `SET_MODE`; without a choice it stays.
+        let sharp_mode = set
+            .codec_choice
+            .map(|choice| choice == crate::screen::core::negotiate::CodecSetting::Sharp)
+            .filter(|wanted| *wanted != self.quality_policy.mode.sharpness)
+            .map(|wanted| {
+                let mut mode = self.quality_policy.mode;
+                mode.sharpness = wanted;
+                mode
+            });
         let tiles_offered = crate::screen::core::negotiate::tiles_offered(&set.decoders);
         self.quality_policy.tiles_offered = tiles_offered;
         if next.choice == self.pairing.current && next.sharp == self.pairing.sharp {
@@ -128,6 +140,9 @@ impl Pipeline {
                     "chosen_codec_failed: {}: no encoder of the chosen codec is left",
                     scope.key()
                 ));
+            }
+            if let Some(mode) = sharp_mode {
+                self.set_quality_mode(mode);
             }
             if self.continue_from.is_some() && !self.continuation_offered() {
                 self.reset_stream();
@@ -192,8 +207,8 @@ impl Pipeline {
         self.choice = effective;
         // Under „Verlustfrei“ the tiles stay the effective choice: nothing
         // restarts (not even an idle stage), the pairing waits in the policy.
-        if self.quality_choice() != effective {
-            self.set_quality_mode(mode);
+        if self.quality_choice() != effective || sharp_mode.is_some() {
+            self.set_quality_mode(sharp_mode.unwrap_or(mode));
         }
         if self.continue_from.is_some() && !self.continuation_offered() {
             self.reset_stream();
