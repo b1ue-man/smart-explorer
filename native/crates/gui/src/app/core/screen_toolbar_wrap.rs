@@ -157,15 +157,19 @@ fn fitted_in(
         ui.end_row();
     }
     // What still does not fit (wider than the bar, or the rest right of its
-    // label) keeps that width and shortens its text (egui
-    // `ComboBox::wrap_mode`), so it never runs past the edge.
+    // label) keeps that width and shortens its text here: egui shortens at
+    // the row's own right edge (`combo_box.rs` 336-344, `available_width`),
+    // which an item before may have widened (Gemini 5/8).
     let room = rest(ui);
-    let list = if width > room {
-        list.wrap_mode(egui::TextWrapMode::Truncate)
-    } else {
-        list
-    };
-    list.width(width.min(room)).selected_text(text)
+    if width <= room {
+        return list.width(width).selected_text(text);
+    }
+    let spacing = ui.spacing();
+    let frame = TEXT_SLACK + spacing.icon_width + spacing.icon_spacing;
+    let text_room = (room - frame - 2.0 * spacing.button_padding.x).max(0.0);
+    let truncate = Some(egui::TextWrapMode::Truncate);
+    let galley = text.into_galley(ui, truncate, text_room, TextStyle::Button);
+    list.width(room).selected_text(WidgetText::Galley(galley))
 }
 
 /// Starts a new row unless `width` fits the rest of the current one. The
@@ -197,7 +201,15 @@ pub(super) fn note(ui: &mut egui::Ui, text: impl Into<WidgetText>) {
         + TEXT_SLACK;
     let (left, right) = bounds(ui);
     reserve(ui, width.min(right - left));
-    ui.add(egui::Label::new(text).wrap());
+    // Wrapped at the bar's edge itself: egui's `Label::wrap` counts to the
+    // row's own edge, which an item before may have widened (Gemini 5/8).
+    let galley = text.into_galley(
+        ui,
+        Some(egui::TextWrapMode::Wrap),
+        rest(ui).max(1.0),
+        TextStyle::Body,
+    );
+    ui.add(egui::Label::new(WidgetText::Galley(galley)));
 }
 
 /// The outer width of a button showing `text`. A button inside a child `Ui`
@@ -226,9 +238,14 @@ pub(super) fn popup(ui: &mut egui::Ui, texts: impl IntoIterator<Item = impl AsRe
         .into_iter()
         .map(|text| text_width(ui, text.as_ref(), TextStyle::Button))
         .fold(0.0_f32, f32::max);
-    // The button padding, a source's icon and the scroll bar.
-    let wanted = widest + 2.0 * ui.spacing().button_padding.x + 40.0;
-    let right = ui.ctx().screen_rect().right() - 8.0;
+    // The button padding, a source's icon (22 points and a gap) and the
+    // scroll bar; the popup's frame and scroll bar lie right of the room
+    // the entries get (Gemini 5/8: the list ran 10-14 points past the edge).
+    let spacing = ui.spacing();
+    let scroll = spacing.scroll.allocated_width();
+    let wanted = widest + 2.0 * spacing.button_padding.x + 22.0 + spacing.item_spacing.x + scroll;
+    let margin = egui::Frame::popup(ui.style()).total_margin().right;
+    let right = ui.ctx().screen_rect().right() - 8.0 - margin - scroll;
     let room = (right - ui.max_rect().left()).max(40.0);
     let floor = ui.min_rect().width();
     ui.set_max_width(wanted.max(floor).min(room));

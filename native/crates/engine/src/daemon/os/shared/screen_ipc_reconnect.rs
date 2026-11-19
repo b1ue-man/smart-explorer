@@ -247,6 +247,12 @@ async fn replay(modes: &ModeMemory, next: &ViewerSession) {
     }
 }
 
+/// „Höchste Datenrate“ as the viewer last chose it (`opening`: the one of
+/// the first request).
+fn ceiling(modes: &ModeMemory, opening: Option<u64>) -> Option<u64> {
+    modes.rate_ceiling().unwrap_or(opening)
+}
+
 fn hold(memory: &Mutex<MemoryHold>, session: &ViewerSession) {
     *memory.lock().unwrap_or_else(PoisonError::into_inner) = session.memory.clone();
 }
@@ -363,7 +369,12 @@ pub(super) async fn relay_session(
             service: redial.service.clone(),
             target: redial.target.clone(),
             expected_node: redial.expected_node.clone(),
-            request: request.clone(),
+            // The ceiling chosen since the opening goes in the hello itself
+            // (Gemini 5/10): the new session never starts above it.
+            request: ViewerRequest {
+                max_rate_bps: ceiling(&modes, max_rate_bps),
+                ..request.clone()
+            },
             metadata,
             pending: None,
         };
@@ -402,7 +413,11 @@ pub(super) async fn relay_session(
                     hello: session.hello.clone(),
                     path,
                     local_limits: session.local_limits,
-                    rate_ceiling: RateCeilingState::of(max_rate_bps, session.rate_ceiling),
+                    // The ceiling now, not the opening's (Gemini 5/10).
+                    rate_ceiling: RateCeilingState::of(
+                        ceiling(&modes, max_rate_bps),
+                        session.rate_ceiling,
+                    ),
                     set_decoders: session.set_decoders,
                 };
                 if let Ok(json) = wire::to_json(&again) {

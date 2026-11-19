@@ -26,7 +26,9 @@ use super::ffmpeg_decoder::FfmpegDecoder;
 use super::ffmpeg_ffi;
 use crate::screen::core::codec_registry::DecoderFactory;
 use crate::screen::core::decoder_health::{session_epoch, SessionSlots};
-use crate::screen::core::decoder_library::{decoder_library, library_allowed, DecoderLibrary};
+use crate::screen::core::decoder_library::{
+    decoder_library, library_allowed, note_chosen_presence, DecoderLibrary,
+};
 use crate::screen::core::ffmpeg_plan::{self as plan, FfmpegStage};
 use crate::screen::core::host_backend::ScreenDecoder;
 use crate::screen::core::negotiate::{
@@ -158,11 +160,20 @@ impl DecoderFactory for FfmpegFactory {
         // Not kept while FFmpeg is missing: a copy installed later counts.
         // Not kept while the viewer device is missing either.
         match ffmpeg_ffi::ffmpeg() {
-            Ok(ffmpeg) => match self.find_offers(&ffmpeg) {
-                (offers, true) => self.offers.get_or_init(|| offers).clone(),
-                (offers, false) => offers,
-            },
-            Err(_) => Vec::new(),
+            Ok(ffmpeg) => {
+                note_chosen_presence(DecoderLibrary::Ffmpeg, true);
+                match self.find_offers(&ffmpeg) {
+                    (offers, true) => self.offers.get_or_init(|| offers).clone(),
+                    (offers, false) => offers,
+                }
+            }
+            Err(_) => {
+                // FFmpeg chosen and absent: named even where no Media
+                // Foundation gate notes it (Gemini 5/7, Windows N/Server
+                // Core without decoder transforms).
+                note_chosen_presence(DecoderLibrary::Ffmpeg, false);
+                Vec::new()
+            }
         }
     }
 
@@ -176,7 +187,10 @@ impl DecoderFactory for FfmpegFactory {
                 format!("{} does not decode {}", self.name(), header.codec.key()),
             ));
         }
-        let ffmpeg = ffmpeg_ffi::ffmpeg()?;
+        let ffmpeg = ffmpeg_ffi::ffmpeg().inspect_err(|_| {
+            note_chosen_presence(DecoderLibrary::Ffmpeg, false);
+        })?;
+        note_chosen_presence(DecoderLibrary::Ffmpeg, true);
         let fits = super::viewer_d3d11::shared()
             .is_ok_and(|device| device.decodes(header.codec, Some(header.size)));
         let stages = open_stages(
@@ -246,6 +260,17 @@ impl DecoderFactory for MediaFoundationGate {
 
     fn keeps_references(&self, codec: CodecKind) -> bool {
         self.inner.keeps_references(codec)
+    }
+
+    /// The Media Foundation decoder of `header`'s codec whose hardware stage
+    /// a chosen „Hardware“ gave up goes behind the others, like FFmpeg's
+    /// (Gemini 5/7: the gate answered `false` always).
+    fn retries_given_up(&self, header: &GopHeader) -> bool {
+        let decodes = self
+            .offers()
+            .iter()
+            .any(|offer| offer.codec == header.codec);
+        decodes && super::mf_decoder::hardware_given_up(header)
     }
 
     /// The adapter of the wrapped decoder (P3: the key of its verdicts).

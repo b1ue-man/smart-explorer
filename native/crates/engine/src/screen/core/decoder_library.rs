@@ -86,6 +86,15 @@ pub fn library_allowed(
     }
 }
 
+/// Notes whether the chosen `library` itself is there, where no gate of the
+/// other library asks (Gemini 5/7: FFmpeg chosen and missing on a Windows
+/// without Media Foundation decoders went without its message).
+pub fn note_chosen_presence(library: DecoderLibrary, present: bool) {
+    if decoder_library() == library {
+        note_presence(library, present);
+    }
+}
+
 /// The library the gate last found absent while it was chosen (code, 0: none).
 static MISSING: AtomicU8 = AtomicU8::new(0);
 

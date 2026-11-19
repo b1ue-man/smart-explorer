@@ -59,6 +59,17 @@ const MAX_TYPES: u32 = 64;
 const MAX_PADDING: u32 = 127;
 
 /// Whether this host decodes `codec` in hardware (`se screen codec`).
+/// Whether a chosen „Dekodierer: Hardware“ finds the hardware stage of
+/// `header`'s codec given up in this viewer session (`open` tries it again
+/// as the last resort; Gemini 5/7: the register sorts it behind the others).
+pub(super) fn hardware_given_up(header: &GopHeader) -> bool {
+    let size = (header.size.width, header.size.height);
+    chosen_decoder_preference() == DecoderPreference::Hardware
+        && header.codec.is_video()
+        && hardware_offered(header.codec)
+        && !known(header.codec).allows_hardware(size)
+}
+
 pub(super) fn hardware_offered(codec: CodecKind) -> bool {
     d3d::hardware_offered(codec)
 }

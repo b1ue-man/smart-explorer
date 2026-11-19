@@ -378,6 +378,21 @@ fn confirmed(input: &ToolbarInput, stored: Option<u64>) -> bool {
     stored.is_some_and(|bps| bps % 1000 == 0 && reported == Some(bps / 1000))
 }
 
+/// Why a sent ceiling `stored` is not called „übernommen“ (`confirmed`).
+fn unconfirmed(input: &ToolbarInput, stored: Option<u64>) -> Option<&'static str> {
+    let bps = stored?;
+    let reported = input
+        .info
+        .and_then(|info| info.stats.as_ref())
+        .and_then(|stats| stats.chain.as_ref())
+        .and_then(|chain| chain.rate_ceiling_kbps);
+    Some(match reported {
+        None => "gesendet; noch keine Bestätigung des Geräts",
+        Some(_) if bps % 1000 != 0 => "gesendet; das Gerät bestätigt nur ganze kbit/s",
+        Some(_) => "gesendet; das Gerät meldet noch eine andere Obergrenze",
+    })
+}
+
 pub(super) fn max_rate_row(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Vec<ToolbarAction>) {
     use crate::screen::core::rate_control::MIN_BITRATE_BPS;
     let stored = super::super::screen_prefs::max_rate_bps();
@@ -407,11 +422,15 @@ pub(super) fn max_rate_row(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Ve
         ui.data_mut(|data| data.remove::<String>(rate_error_id()));
     }
     if limited && shown {
+        // Field and unit break the row themselves when the group was wider
+        // than the bar (Gemini 5/8).
+        super::wrap::reserve(ui, super::wrap::text_edit_width(RATE_FIELD_WIDTH));
         if let Some(typed) = rate_field(ui, mbit) {
             let typed = typed.max(MIN_BITRATE_BPS as f64 / 1e6);
             changed |= typed != mbit;
             mbit = typed;
         }
+        super::wrap::reserve(ui, super::wrap::label_width(ui, RATE_UNIT));
         ui.label(RATE_UNIT);
         // After the unit, an entry of its own (Codex 6/21: between field
         // and unit it tore the unit away from its number).
@@ -436,6 +455,11 @@ pub(super) fn max_rate_row(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Ve
         // The host's own statistics name this ceiling (Codex 3/22): only
         // then is it „übernommen“, not when `RATE_CEILING` was merely sent.
         super::wrap::note(ui, RichText::new("vom Gerät übernommen").small());
+    } else if let Some(text) =
+        unconfirmed(input, stored).filter(|_| limited && input.info.is_some())
+    {
+        // Sent, but not (yet) named back (Gemini 5/10: no word at all).
+        super::wrap::note(ui, RichText::new(text).small());
     }
     if changed {
         let rate = limited.then(|| (mbit * 1e6).round().max(MIN_BITRATE_BPS as f64) as u64);

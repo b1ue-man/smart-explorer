@@ -15,6 +15,7 @@ use super::screen_texts::state_text;
 use super::screen_toolbar_ui::ToolbarAction;
 use super::screen_view_widget::ViewWidget;
 use crate::screen::core::input_model::{InputEvent, SystemAction};
+use crate::screen::core::negotiate::CodecSetting;
 use crate::screen::core::pixel_convert::FrameSize;
 use crate::screen::core::session_state::SessionState;
 use crate::screen::core::window_list::SourceId;
@@ -294,6 +295,23 @@ impl ViewState {
         }
     }
 
+    /// A „Codec“ choice for the running session: its `SET_MODE` (`sharpness`,
+    /// `lossless`); the viewer's own switch to the tiles ends with a new
+    /// choice (user rule 2026-11-18).
+    pub(super) fn codec_mode(
+        &mut self,
+        codec: CodecSetting,
+        prefs: &ViewerPrefs,
+        display: FrameSize,
+    ) {
+        let display = self.measured.unwrap_or(display);
+        if let Some(session) = &self.session {
+            session.codec_chosen(codec);
+            session.send(ViewerFrame::SetMode(full_set_mode(None, display, prefs)));
+            self.sent_display = display;
+        }
+    }
+
     /// Carries out a choice of the toolbar that concerns this view; the
     /// others (device, all devices, full screen) are the app's.
     pub fn apply(&mut self, action: &ToolbarAction, common: &mut Common, display: FrameSize) {
@@ -337,16 +355,7 @@ impl ViewState {
                 }
             }
             ToolbarAction::Control(on) => self.take_control(common, display, *on),
-            ToolbarAction::Codec(codec) => {
-                if let Some(session) = &self.session {
-                    // The viewer's own switch to the tiles ends with a new
-                    // choice (user rule 2026-11-18).
-                    session.codec_chosen(*codec);
-                    let mode = full_set_mode(None, display, &common.prefs);
-                    session.send(ViewerFrame::SetMode(mode));
-                    self.sent_display = display;
-                }
-            }
+            ToolbarAction::Codec(codec) => self.codec_mode(*codec, &common.prefs, display),
             // P5 (plan 2026-11-17): „Monitor“ and „Auflösung“ go live to a
             // host that answered `live` (P9); an older one takes them with
             // the hello, so the session opens again.

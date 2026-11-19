@@ -58,7 +58,12 @@ impl ScreenViewerApp {
     /// negotiates again (`SET_DECODERS`, P1), or the session opens again.
     /// `true` when the session opens again before the view applies the
     /// choice to the running one.
-    pub(super) fn choice(&mut self, action: &ToolbarAction, out: &mut Vec<Transition>) -> bool {
+    pub(super) fn choice(
+        &mut self,
+        action: &ToolbarAction,
+        out: &mut Vec<Transition>,
+        display: crate::screen::core::pixel_convert::FrameSize,
+    ) -> bool {
         // A codec given up under „Automatisch“ is out of its session only
         // (fix of 2026-11-18); the new choice takes the session's give-ups
         // back (`ViewerSession::codec_chosen`).
@@ -73,7 +78,7 @@ impl ScreenViewerApp {
             _ => None,
         };
         let again = screen_toolbar_ui::apply_codec(action, &mut self.common.prefs);
-        let Mode::View(view) = &self.mode else {
+        let Mode::View(view) = &mut self.mode else {
             return false;
         };
         // A session that began with the tiles takes no video codec by
@@ -87,7 +92,20 @@ impl ScreenViewerApp {
         if again {
             let frame = super::super::screen_pool::decoders_frame(&self.common.backend.offers);
             let codec = self.common.prefs.codec_setting();
-            let refused = super::super::screen_session::library_refusal_for(&frame.decoders, codec);
+            let decoder = super::super::screen_prefs::decoder_choice();
+            let refused = super::super::screen_session::library_refusal_for(&frame.decoders, codec)
+                // Nothing left to offer (Gemini 5/7: „Hardware“ under
+                // „Verlustfrei“): the daemon's text at the opening.
+                .or_else(|| {
+                    frame.decoders.is_empty().then(|| {
+                        format!(
+                            "Codec „{}“ mit Dekodierer „{}“: kein passender Dekodierer auf \
+                             diesem Gerät.",
+                            codec.label(),
+                            decoder.label()
+                        )
+                    })
+                });
             if let (Some(text), Some(session)) = (refused, view.session.as_ref()) {
                 // No tiles in silence (N5): neither the decode thread nor the
                 // host switch, the reason is shown; `true` keeps
@@ -99,9 +117,35 @@ impl ScreenViewerApp {
                 action,
                 ToolbarAction::Decoder(_) | ToolbarAction::DecoderLibrary(_)
             ) && view.session.as_ref().is_some_and(|s| s.switch_decoder());
+            // A new codec's `SET_MODE` and `SET_DECODERS` in the order the
+            // host never meets a stale `sharpness` in (Gemini 5/5): leaving
+            // „Scharf (GPU)“ the mode first (a software encoder of the new
+            // codec was refused as not sharp), entering it the decoders
+            // first (the running codec may have no sharp encoder).
+            let codec = match action {
+                ToolbarAction::Codec(codec) => Some(*codec),
+                _ => None,
+            };
+            let mode_first = codec.filter(|codec| !codec.sharpness());
+            let can = view.session.as_ref().is_some_and(|s| s.can_set_decoders());
+            if let Some(codec) = mode_first.filter(|_| can) {
+                view.codec_mode(codec, &self.common.prefs, display);
+            }
             let sent = view.session.as_ref().is_some_and(|s| s.set_decoders(frame));
             if !local && !sent {
                 out.push(Transition::View(view.target.clone()));
+            }
+            if let Some(codec) = codec.filter(|_| sent) {
+                if mode_first.is_none() {
+                    view.codec_mode(codec, &self.common.prefs, display);
+                }
+                // The mode went out here; `ViewState::apply` would send it
+                // again. What else it does for a choice: the notice goes.
+                if let Some(session) = view.session.as_ref() {
+                    session.info().notice = None;
+                    session.shared.direct.forget_noted();
+                }
+                return true;
             }
         }
         false

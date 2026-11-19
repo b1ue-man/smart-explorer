@@ -106,14 +106,21 @@ pub(super) fn display_rows(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Ve
         super::wrap::note_editing(ui, &edited);
         let parsed = parse_size(text);
         let entered = edited.lost_focus() && ui.input(|state| state.key_pressed(egui::Key::Enter));
+        // Each part breaks the row itself when the group was wider than the
+        // bar (Gemini 5/8: `add_enabled` draws in a child that never breaks
+        // and ran past the edge).
+        super::wrap::reserve(ui, super::wrap::button_width(ui, "Übernehmen"));
         let applied = ui
             .add_enabled(parsed.is_some(), egui::Button::new("Übernehmen"))
             .clicked();
         if (applied || entered) && parsed.is_some() {
             chosen.size = parsed;
             custom = None;
-        } else if ui.small_button("Abbrechen").clicked() {
-            custom = None;
+        } else {
+            super::wrap::reserve(ui, super::wrap::button_width(ui, "Abbrechen"));
+            if ui.small_button("Abbrechen").clicked() {
+                custom = None;
+            }
         }
     }
     ui.data_mut(|data| data.insert_temp(custom_id, custom));

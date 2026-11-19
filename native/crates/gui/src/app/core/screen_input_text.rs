@@ -22,6 +22,43 @@ impl InputMapper {
         });
     }
 
+    /// egui-winit turns Ctrl+V and (Windows) Umschalt+Einfg into `Paste`
+    /// with the viewer's clipboard (Gemini 5/9): a host with keys gets the
+    /// shortcut the user pressed (its own clipboard), Umschalt+Einfg as
+    /// itself instead of Strg+Umschalt+V; a host that takes text only
+    /// (Android) gets the text, where the chord did nothing.
+    pub(super) fn paste(&mut self, text: &str) {
+        if !self.caps.keyboard {
+            if self.caps.text {
+                self.text(text);
+            }
+        } else if self.mods.shift && !self.mods.ctrl {
+            self.tap("insert");
+        } else {
+            self.chord("v");
+        }
+    }
+
+    /// `Cut`: Strg+X, or (Windows) Umschalt+Entf as itself (Gemini 5/9:
+    /// the chord made it Strg+Umschalt+X).
+    pub(super) fn cut(&mut self) {
+        if self.mods.shift && !self.mods.ctrl {
+            self.tap("delete");
+        } else {
+            self.chord("x");
+        }
+    }
+
+    /// One press and release of the key `name` under the held modifiers.
+    fn tap(&mut self, name: &str) {
+        let Some(hid_usage) = key_usage(name).filter(|_| self.caps.keyboard) else {
+            return;
+        };
+        for down in [true, false] {
+            self.emit(InputEvent::Key { hid_usage, down });
+        }
+    }
+
     /// `Text` events of at most `MAX_TEXT_BYTES`, without NUL.
     pub(super) fn text(&mut self, text: &str) {
         let mut rest: String = text.chars().filter(|c| *c != '\0').collect();

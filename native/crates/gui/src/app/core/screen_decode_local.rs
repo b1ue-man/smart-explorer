@@ -221,7 +221,7 @@ impl super::screen_session::ViewerSession {
     /// changed codec; a changed decoder of the same codec takes over at the
     /// next key frame (`switch_decoder`).
     pub fn set_decoders(&self, frame: SetDecoders) -> bool {
-        if !self.shared.local.set_decoders.load(Ordering::Acquire) {
+        if !self.can_set_decoders() {
             return false;
         }
         let continues = frame.gop_continue || !frame.gop_continue_decoders.is_empty();
@@ -231,6 +231,11 @@ impl super::screen_session::ViewerSession {
             .store(continues, Ordering::Release);
         self.send(ViewerFrame::SetDecoders(frame));
         true
+    }
+
+    /// Whether the host announced `SET_DECODERS` (else a choice reopens).
+    pub fn can_set_decoders(&self) -> bool {
+        self.shared.local.set_decoders.load(Ordering::Acquire)
     }
 
     /// V1: takes a new „Dekodierer“ choice (already the process's,

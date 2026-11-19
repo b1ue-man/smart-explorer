@@ -334,7 +334,7 @@ impl ScreenViewerApp {
                 | ToolbarAction::Decoder(_)
                 | ToolbarAction::DecoderLibrary(_)
                 | ToolbarAction::Display(_) => {
-                    if self.choice(&action, &mut out) {
+                    if self.choice(&action, &mut out, display) {
                         continue;
                     }
                 }
