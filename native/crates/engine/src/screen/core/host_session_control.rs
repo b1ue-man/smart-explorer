@@ -301,12 +301,18 @@ impl Session<'_> {
                 }
                 self.health.unconfirmed = None;
                 // D6/E2: a block or hold the viewer heard ends with the
-                // first batch that reached the host after it.
+                // first batch that reached the host after it; a block the
+                // platform reported late stays shown its minimum time (Z2).
                 let held = std::mem::take(&mut self.health.held_reported);
-                if self.health.block_reported.take().is_some() || held {
+                let late = self
+                    .health
+                    .block_shown_until
+                    .is_some_and(|until| Instant::now() < until);
+                let cleared = !late && self.health.block_reported.take().is_some();
+                if cleared || held {
                     let state = ControlState {
                         holder: self.handle.controller(),
-                        blocked: None,
+                        blocked: self.health.block_reported,
                         held: None,
                     };
                     self.frame(HostFrame::ControlState(state)).await?;
@@ -367,7 +373,7 @@ impl Session<'_> {
                         .await;
                 }
             },
-            ControlAction::Release => self.release_control(),
+            ControlAction::Release => self.release_control().await,
         }
         let state = ControlState {
             holder: self.handle.controller(),
@@ -379,10 +385,15 @@ impl Session<'_> {
         self.frame(HostFrame::ControlState(state)).await
     }
 
-    /// Lets go of every pressed input and of the control.
-    pub(super) fn release_control(&mut self) {
+    /// Lets go of every pressed input and of the control. Z3/Z4: a release
+    /// job still running ends first, then everything held now and every
+    /// failed release goes in one job, and only after that job (at most
+    /// `CLOSE_GRACE` each) another session may take the control.
+    pub(super) async fn release_control(&mut self) {
+        self.finish_release().await;
         // D7: releases that failed before go out with this one.
         self.release_all_and_failed();
+        self.finish_release().await;
         if self.handle.release_control() {
             let audit = self.context.audit;
             log_event(

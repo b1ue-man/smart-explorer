@@ -457,7 +457,7 @@ impl<'a> Session<'a> {
     async fn finish(mut self, (reason, error): Ending) {
         self.metadata.cancel();
         self.pipeline.cancel();
-        self.release_control();
+        self.release_control().await;
         let last = async {
             if let Some(error) = error {
                 self.frame(HostFrame::Error(error)).await?;

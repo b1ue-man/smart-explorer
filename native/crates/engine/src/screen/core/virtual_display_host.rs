@@ -109,8 +109,8 @@ struct SessionContext {
     start: SessionStart,
     /// The viewer's monitor and the one the host moved it to.
     track: annotate::SourceTrack,
-    /// The session shows a source the viewer chose, not the display (W1).
-    own_source: bool,
+    /// W1: a source the viewer chose (keeps the display's monitor); `None`: the display.
+    own: Option<Option<String>>,
 }
 
 /// The report of one session: its own, or the display's (a session whose
@@ -230,7 +230,7 @@ pub fn start(driver: Option<Arc<dyn VirtualDisplayDriver>>, start: &SessionStart
             driver: driver.clone(),
             start: start.clone(),
             track: annotate::SourceTrack::opened(start.monitor.clone()),
-            own_source: false,
+            own: None,
         },
     );
     let claim = DisplayClaim {
@@ -397,10 +397,9 @@ fn apply(
     report
 }
 
-/// A `SET_MODE` size of a session's full view (ignored without a claim or
-/// with a fixed size); `true` when the session shows the display, decides
-/// its size and the driver shows `size` as asked (`fit_mode`): the source
-/// follows (`Pipeline::expect_source_size`).
+/// A `SET_MODE` size of a session's full view (ignored without a claim or a
+/// fixed size); `true` when the session shows the display, decides its size
+/// and the driver shows `size` as asked: the source follows it.
 pub fn resize(session: &str, size: Option<FrameSize>) -> bool {
     let Some(size) = size else {
         return false;
@@ -413,20 +412,21 @@ pub fn resize(session: &str, size: Option<FrameSize>) -> bool {
     if known {
         shared.changed.notify_all();
     }
-    let shows = state.sessions.get(session).is_some_and(|k| !k.own_source);
+    let shows = state.sessions.get(session).is_some_and(|k| k.own.is_none());
     known
         && shows
         && state.planner.owner_session() == Some(session)
         && state.planner.target(state.limit) == Some(size)
 }
 
-/// The session shows its own choice (`SET_MODE`) or the display (W1).
-pub fn source_chosen(session: &str, own: bool) {
-    let Some(shared) = SHARED.get() else {
-        return;
-    };
+/// Before `source_changed`: the session shows its own choice (`SET_MODE`)
+/// or the display; the display's monitor named again is the display (W1).
+pub fn source_chosen(session: &str, own: bool, monitor: Option<&str>) {
+    let Some(shared) = SHARED.get() else { return };
     if let Some(known) = lock(&shared.state).sessions.get_mut(session) {
-        known.own_source = own;
+        let display = known.own.take().unwrap_or(known.start.monitor.clone());
+        let other = monitor.is_none() || monitor != display.as_deref();
+        known.own = (own && other).then_some(display);
     }
 }
 

@@ -33,6 +33,9 @@ pub(super) struct InputHealth {
     pub(super) block_reported: Option<ControlBlock>,
     /// E2: the viewer heard that input is held back, once per hold.
     pub(super) held_reported: bool,
+    /// Z2: a block the platform reported late (`take_refusal`) stays shown
+    /// until then, also when the next batch goes through.
+    pub(super) block_shown_until: Option<Instant>,
     /// D2: a batch refused as `control_unavailable` that may only have named
     /// a reference the source left meanwhile: its reference and the picture
     /// operations started when it was refused (`Session::stale_refusal`).
@@ -129,6 +132,24 @@ impl Session<'_> {
         let mut events = self.pressed.release_all();
         events.append(&mut failed_list(&self.health.failed));
         self.start_release(events);
+    }
+    /// Z3/Z4: waits for the running release job, at most `CLOSE_GRACE`; a
+    /// job that takes longer goes on alone (its failed releases come back
+    /// to `InputHealth::failed`), and the host log names it.
+    pub(super) async fn finish_release(&mut self) {
+        let Some(job) = self.input_release.take() else {
+            return;
+        };
+        self.release_blocked = match tokio::time::timeout(CLOSE_GRACE, job).await {
+            Ok(Ok(result)) => result.err(),
+            Ok(Err(_)) => Some(ControlBlock::ControlUnavailable),
+            Err(_) => {
+                super::visibility::note_viewer(
+                    "the release of held input outlasted the close grace; the control goes on",
+                );
+                Some(ControlBlock::ControlUnavailable)
+            }
+        };
     }
     pub(super) fn poll_input_release(&mut self) {
         let Some(mut job) = self.input_release.take() else {

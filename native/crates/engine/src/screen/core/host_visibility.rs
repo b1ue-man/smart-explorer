@@ -257,9 +257,10 @@ impl Session<'_> {
                     SourceId::Monitor(id) => Some(id.clone()),
                     _ => None,
                 };
+                // W1: a source the viewer chose does not follow the display,
+                // unless it is the display's own monitor (before the change).
+                virtual_display::source_chosen(&self.handle.id(), own, monitor.as_deref());
                 virtual_display::source_changed(&self.handle.id(), monitor);
-                // W1: a source the viewer chose does not follow the display.
-                virtual_display::source_chosen(&self.handle.id(), own);
                 self.cursor_source_changed().await?;
                 Ok(true)
             }

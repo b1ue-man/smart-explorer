@@ -4,6 +4,10 @@
 //! only name a reference the source just left (D2).
 use super::*;
 
+/// How long a block the platform reported after the batch stays shown (Z2):
+/// at least one look at the toolbar [assumption: 3 s, not measured].
+const LATE_BLOCK_SHOWN: Duration = Duration::from_secs(3);
+
 impl Session<'_> {
     /// `CONTROL_STATE` with `blocked`; the next batch that reaches the host
     /// clears it again (D6).
@@ -12,6 +16,7 @@ impl Session<'_> {
         blocked: crate::screen::core::wire_control::ControlBlock,
     ) -> io::Result<()> {
         self.health.block_reported = Some(blocked);
+        self.health.block_shown_until = None;
         // This state names no hold: the next hold is reported again (N4).
         self.health.held_reported = false;
         let state = ControlState {
@@ -41,7 +46,10 @@ impl Session<'_> {
         if !self.handle.holds_control() {
             return Ok(());
         }
-        self.report_block(block).await
+        self.report_block(block).await?;
+        // Z2: no other signal names it (Wayland): it stays shown a while.
+        self.health.block_shown_until = Some(Instant::now() + LATE_BLOCK_SHOWN);
+        Ok(())
     }
 
     /// Why input waits now, if it does (E2).
