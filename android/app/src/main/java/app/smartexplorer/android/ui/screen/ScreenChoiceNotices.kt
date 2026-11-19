@@ -236,6 +236,11 @@ object ScreenCodecNotices {
      * The phone's decoder cannot run the host's picture ([reason] of the decoder) while the [chosen] codec forbids the
      * automatic switch to the tiles ([ViewerCodecChoice.tilesFallbackAllowed]): an error instead of another codec.
      */
+    /** „Verlustfrei“ and „Dekodierer: Hardware“ chosen together: the tiles exist only in software. */
+    fun losslessNeedsSoftware(): String =
+        "Fehler: „Verlustfrei“ wird nur in Software dekodiert, aber „Dekodierer: Hardware“ ist gewählt. " +
+            "Bitte eine der beiden Wahlen ändern."
+
     fun decoderUnavailable(chosen: String, decoder: String, reason: String): String {
         val stage = when (decoder) {
             ViewerCodecChoice.DECODER_HARDWARE -> " mit „Dekodierer: Hardware“"

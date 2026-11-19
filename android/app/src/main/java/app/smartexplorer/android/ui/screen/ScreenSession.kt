@@ -622,13 +622,15 @@ class ScreenSession(private val target: ScreenTarget, private val backend: Scree
             !current.streams.containsKey(gopId) || codecFallbackGop==gopId) return@synchronized
         if(mode!="full" && mode!="preview") return@synchronized
         // A named codec never gives way to the tiles on its own, and neither does „Dekodierer: Hardware“: the tiles
-        // are drawn in software (Codex 5/13, Gemini 5/7). Under „Verlustfrei“ the tiles are the choice itself and stay
-        // allowed (the desktop's rule). The reason is shown, the choice stays.
-        val hardwareChosen = choice.decoder == ViewerCodecChoice.DECODER_HARDWARE &&
-            current.chosenCodec != ViewerCodecChoice.CODEC_LOSSLESS
+        // are drawn in software (Codex 5/13, Gemini 5/7). „Verlustfrei“ with „Hardware“ are two choices that cannot
+        // both hold: said as such, as on the desktop. The reason is shown, the choice stays.
+        val hardwareChosen = choice.decoder == ViewerCodecChoice.DECODER_HARDWARE
         if (!ViewerCodecChoice.tilesFallbackAllowed(current.chosenCodec) || hardwareChosen) {
             codecFallbackGop = gopId
-            mutable.value = current.copy(codecError = ScreenCodecNotices.decoderUnavailable(current.chosenCodec, choice.decoder, reason))
+            val text = if (current.chosenCodec == ViewerCodecChoice.CODEC_LOSSLESS && hardwareChosen)
+                ScreenCodecNotices.losslessNeedsSoftware()
+            else ScreenCodecNotices.decoderUnavailable(current.chosenCodec, choice.decoder, reason)
+            mutable.value = current.copy(codecError = text)
             return@synchronized
         }
         codecFallbackGop=gopId;forceLossless=true;rejectedGop=current.stream?.gop;displayEpoch++
