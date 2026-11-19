@@ -390,4 +390,23 @@ fn review1119_task_video_keeps_the_user_ceiling() {
     // The pipeline asks the budget for every codec and books every picture.
     let produce = include_str!("host_pipeline_produce.rs").replace("\r\n", "\n");
     assert!(produce.contains("if !self.rate.stream_admit(now, video) {"));
+    // The control stream's bytes count against the ceiling: the pictures
+    // get the rest, never less than the floor; above the whole ceiling the
+    // viewer hears it once. Without a ceiling only the statistics count.
+    let mut rate = RateController::new(PathKind::Direct, 0);
+    rate.on_control_bytes(0, 20_000);
+    rate.on_control_bytes(500_000, 20_000);
+    assert!(rate.control_bps() > 0);
+    assert_eq!(rate.user_picture_bps(), None);
+    assert_eq!(rate.control_over_ceiling(), None);
+    rate.set_ceiling(Some(2_000_000));
+    let pictures = rate.user_picture_bps().unwrap();
+    assert!(pictures < 2_000_000 && pictures >= MIN_BITRATE_BPS);
+    assert_eq!(rate.stream_budget_bps(0, true), Some(pictures));
+    assert!(rate.ceiling_bps() <= pictures);
+    rate.set_ceiling(Some(rate.control_bps() / 2));
+    assert!(rate.control_over_ceiling().is_some());
+    assert_eq!(rate.control_over_ceiling(), None, "once");
+    let session = include_str!("host_session.rs");
+    assert!(session.contains("self.pipeline.book_control_bytes(sent);"));
 }

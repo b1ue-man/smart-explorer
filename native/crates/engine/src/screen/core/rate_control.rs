@@ -170,6 +170,11 @@ pub struct RateController {
     queue: queue::QueueState,
     /// The byte budget of the tiles under the target (`tiles_rate`, 2026-11-18).
     tiles: crate::screen::core::tiles_rate::TileBudget,
+    /// The control stream's bytes (`rate_tiles.rs`, review 2026-11-19) and
+    /// their rate of the last window; whether it was above the ceiling.
+    control: RateWindow,
+    control_bps: u64,
+    control_over: bool,
 }
 
 impl RateController {
@@ -204,6 +209,9 @@ impl RateController {
             honour: honour::SessionHonour::default(),
             queue: queue::QueueState::default(),
             tiles: Default::default(),
+            control: RateWindow::default(),
+            control_bps: 0,
+            control_over: false,
         }
     }
 

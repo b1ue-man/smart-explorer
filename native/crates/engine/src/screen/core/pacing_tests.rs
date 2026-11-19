@@ -199,3 +199,37 @@ fn screen_task_pacing_frame_clock_cadence() {
     assert_eq!(FrameClock::new(0).interval_us(), 1_000_000);
     assert_eq!(FrameClock::new(1_000).interval_us(), 1_000_000 / 240);
 }
+
+/// Review 2026-11-19 (Gemini 3/3): the viewer's acknowledgement leaves when
+/// a picture is read off the network; what it shows (`PRESENTED`) paces the
+/// pictures: more than `VIEWER_BACKLOG_FRAMES` received and not shown hold
+/// the next one back, only while presentations come.
+#[test]
+fn review1119_task_pictures_follow_what_the_viewer_shows() {
+    use super::{PRESENTED_FRESH_US, VIEWER_BACKLOG_FRAMES};
+    let mut pacer = Pacer::default();
+    let sent = |frame_id: u64| SentFrame {
+        gop_id: 1,
+        frame_id,
+        bytes: 1_000,
+        sent_us: 0,
+        keyframe: frame_id == 1,
+    };
+    for frame in 1..=20 {
+        pacer.on_frame_sent(sent(frame));
+    }
+    pacer.on_ack(1, 20);
+    // A viewer that sends no `PRESENTED` (older ones, the bench) is never held.
+    assert!(!pacer.viewer_behind(0));
+    pacer.on_presented(20 - VIEWER_BACKLOG_FRAMES, 1_000);
+    assert!(!pacer.viewer_behind(1_000));
+    pacer.on_presented(5, 2_000);
+    assert!(pacer.viewer_behind(2_000));
+    // A viewer that stopped showing (a gate, a hidden view) is not waited for.
+    assert!(!pacer.viewer_behind(2_000 + PRESENTED_FRESH_US + 1));
+    // It never resets a stream: the stale time and the decision stay.
+    assert_eq!(
+        pacer.decide(2_000, 6_000_000, PathKind::Direct, 1_000),
+        PaceDecision::Encode { keyframe: false }
+    );
+}

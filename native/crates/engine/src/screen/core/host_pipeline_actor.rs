@@ -34,6 +34,8 @@ struct Pending {
     expect: Option<FrameSize>,
     /// A key frame inside the open group (`retarget_visible_rects`).
     refresh: bool,
+    /// Control stream bytes written while a picture operation runs.
+    control_bytes: u64,
     receipts: VecDeque<Receipt>,
 }
 struct Facts {
@@ -217,6 +219,10 @@ impl PipelineActor {
         if std::mem::take(&mut self.pending.keyframe) {
             p.request_keyframe();
         }
+        let control = std::mem::take(&mut self.pending.control_bytes);
+        if control != 0 {
+            p.book_control_bytes(control);
+        }
         if std::mem::take(&mut self.pending.refresh) {
             // Codex 3/4: a key frame in the open group keeps its stream and
             // the viewer's decoder; without a group it opens one.
@@ -248,6 +254,8 @@ impl PipelineActor {
                 }
                 Receipt::Presented(gop, frame) => {
                     p.on_presented(gop, frame);
+                    // What the viewer shows paces the pictures (Gemini 3/3).
+                    p.pacer.on_presented(frame, now_us());
                 }
             }
         }

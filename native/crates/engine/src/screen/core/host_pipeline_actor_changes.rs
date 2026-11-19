@@ -109,6 +109,17 @@ impl PipelineActor {
         Ok(())
     }
 
+    /// The session wrote `bytes` on its control stream (review 2026-11-19):
+    /// booked now, or after the running picture operation.
+    pub fn book_control_bytes(&mut self, bytes: u64) {
+        match self.pipeline.as_mut() {
+            Some(p) => p.book_control_bytes(bytes),
+            None => {
+                self.pending.control_bytes = self.pending.control_bytes.saturating_add(bytes);
+            }
+        }
+    }
+
     /// `KEYFRAME_REQUEST` naming the viewer's group `gop`. Review 2026-11-19
     /// (Codex 4/9): a decoder that failed or was changed on a stream that
     /// still arrives (`DecodeError`, `Join`) takes a key frame inside the

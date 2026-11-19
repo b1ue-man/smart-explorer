@@ -182,7 +182,9 @@ impl RateController {
     /// (a user ceiling below it is held by the byte budget alone).
     pub fn ceiling_bps(&self) -> u64 {
         let codec = self.codec_ceiling_bps.unwrap_or(u64::MAX);
-        let user = self.user_ceiling_bps.unwrap_or(u64::MAX);
+        // The pictures' share of the user's ceiling (the control stream
+        // takes the rest, `user_picture_bps`).
+        let user = self.user_picture_bps().unwrap_or(u64::MAX);
         codec.min(user).max(MIN_BITRATE_BPS)
     }
 

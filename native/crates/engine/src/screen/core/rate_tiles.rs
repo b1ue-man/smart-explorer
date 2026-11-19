@@ -11,6 +11,45 @@
 use super::RateController;
 
 impl RateController {
+    /// The control stream wrote `bytes` at `now_us` (`STATE`, `STATS`, the
+    /// pointer, window lists; review 2026-11-19): they count against the
+    /// user's ceiling, which the pictures get less of (`user_picture_bps`).
+    pub fn on_control_bytes(&mut self, now_us: u64, bytes: u64) {
+        self.control.push(now_us, bytes);
+        self.update_control(now_us);
+    }
+
+    /// The control stream's rate of the last window at `now_us`.
+    pub fn update_control(&mut self, now_us: u64) {
+        self.control.prune(now_us);
+        self.control_bps = self.control.rate_bps().unwrap_or(0);
+    }
+
+    pub fn control_bps(&self) -> u64 {
+        self.control_bps
+    }
+
+    /// The user's ceiling less the control stream's rate: what the
+    /// pictures may take; never below the floor of the target (or the
+    /// ceiling itself below it). `None` without a user ceiling.
+    pub fn user_picture_bps(&self) -> Option<u64> {
+        self.user_ceiling_bps.map(|ceiling| {
+            ceiling
+                .saturating_sub(self.control_bps)
+                .max(super::MIN_BITRATE_BPS.min(ceiling))
+        })
+    }
+
+    /// `(control rate, ceiling)` once when the control stream alone came
+    /// above the user's ceiling (a notice for the viewer), else `None`.
+    pub fn control_over_ceiling(&mut self) -> Option<(u64, u64)> {
+        let ceiling = self.user_ceiling_bps?;
+        let over = self.control_bps > ceiling;
+        let fresh = over && !self.control_over;
+        self.control_over = over;
+        fresh.then_some((self.control_bps, ceiling))
+    }
+
     /// The rate the tiles' budget pays off at, at `now_us`: the ceiling
     /// (user's „Höchste Datenrate“, codec pairing) and, while the path
     /// signalled congestion (`TileBudget::network_limited`), the target E.
@@ -22,7 +61,7 @@ impl RateController {
         } else {
             self.ceiling_bps()
         };
-        self.user_ceiling_bps.map_or(rate, |user| rate.min(user))
+        self.user_picture_bps().map_or(rate, |user| rate.min(user))
     }
 
     /// The rate the byte budget of a stream pays off at: the tiles'
@@ -30,7 +69,7 @@ impl RateController {
     /// `None` (no budget) without one.
     pub fn stream_budget_bps(&self, now_us: u64, video: bool) -> Option<u64> {
         if video {
-            self.user_ceiling_bps
+            self.user_picture_bps()
         } else {
             Some(self.tiles_budget_bps(now_us))
         }

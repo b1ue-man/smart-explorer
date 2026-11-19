@@ -15,6 +15,7 @@ use tokio::sync::mpsc;
 
 use super::{HostContext, CLOSE_GRACE};
 use crate::screen::core::authorize::log_event;
+use crate::screen::core::control_sender;
 use crate::screen::core::gop_stream::now_us;
 use crate::screen::core::host_metadata::{self, Fallback, Requests as MetadataRequests};
 use crate::screen::core::host_pipeline::{
@@ -230,12 +231,11 @@ impl<'a> Session<'a> {
     }
 
     async fn frame(&mut self, frame: HostFrame) -> io::Result<()> {
-        crate::screen::core::control_sender::send(
-            self.connection.remote_id().to_string(),
-            &mut self.send,
-            &frame,
-        )
-        .await
+        let peer = self.connection.remote_id().to_string();
+        let sent = control_sender::send_counted(peer, &mut self.send, &frame).await?;
+        // The control stream counts against „Höchste Datenrate“ (2026-11-19).
+        self.pipeline.book_control_bytes(sent);
+        Ok(())
     }
 
     /// The answer of a finished metadata job, as the synchronous path gave
@@ -264,7 +264,10 @@ impl<'a> Session<'a> {
             &response,
             self.handle.stop_signal(),
         )
-        .await
+        .await?;
+        self.pipeline
+            .book_control_bytes(control_sender::wire_bytes(&response));
+        Ok(())
     }
 
     async fn report(&mut self, state: SessionState, reason: Option<&str>) -> io::Result<()> {

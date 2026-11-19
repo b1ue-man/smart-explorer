@@ -30,6 +30,21 @@ pub async fn send<W: AsyncWrite + Unpin>(
     writer: &mut W,
     frame: &HostFrame,
 ) -> io::Result<()> {
+    send_counted(peer, writer, frame).await.map(|_| ())
+}
+
+/// The bytes `frame` takes on the control stream: tag, length, payload.
+pub fn wire_bytes(frame: &HostFrame) -> u64 {
+    encode_host_frame(frame).map_or(0, |(_, payload)| 5 + payload.len() as u64)
+}
+
+/// `send`, with the bytes it wrote (review 2026-11-19: the control stream
+/// counts against „Höchste Datenrate“, `Pipeline::book_control_bytes`).
+pub async fn send_counted<W: AsyncWrite + Unpin>(
+    peer: String,
+    writer: &mut W,
+    frame: &HostFrame,
+) -> io::Result<u64> {
     let (tag, payload) = encode_host_frame(frame)?;
     if payload.len() > tag_limit(tag) {
         return Err(invalid("screen control frame exceeds tag limit"));
@@ -48,5 +63,5 @@ pub async fn send<W: AsyncWrite + Unpin>(
         writer.write_all(chunk).await?;
         writer.flush().await?;
     }
-    Ok(())
+    Ok(5 + payload.len() as u64)
 }

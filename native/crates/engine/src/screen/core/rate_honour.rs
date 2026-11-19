@@ -324,7 +324,7 @@ impl RateController {
         // Review 2026-11-19: at the user's ceiling nothing above it is
         // tolerated (`HONOURED_LIMIT_AT_CEILING`).
         let bound = self
-            .user_ceiling_bps
+            .user_picture_bps()
             .is_some_and(|ceiling| target_bps >= ceiling);
         self.honour.meter.set_bound(bound);
         self.honour

@@ -97,6 +97,14 @@ impl Pipeline {
         self.bounds = mode_bounds(&self.quality_policy.mode, self.display);
     }
 
+    /// The control stream wrote `bytes` (`Session::frame`, review
+    /// 2026-11-19): they count in the statistics' sent rate and, under a
+    /// user ceiling, leave the pictures that much less of it.
+    pub fn book_control_bytes(&mut self, bytes: u64) {
+        self.second_bytes = self.second_bytes.saturating_add(bytes);
+        self.rate.on_control_bytes(now_us(), bytes);
+    }
+
     /// „Höchste Datenrate“ of the viewer (B-09); `None` is automatic.
     pub fn set_rate_ceiling(&mut self, ceiling_bps: Option<u64>) {
         self.rate.set_ceiling(ceiling_bps);
@@ -203,6 +211,16 @@ impl Pipeline {
             self.rate.on_congestion_events(events, now_us());
         }
         self.rate.remember();
+        // The control stream's share of the ceiling; above the whole ceiling
+        // the viewer is told once (the pictures keep the floor).
+        self.rate.update_control(now_us());
+        if let Some((control, ceiling)) = self.rate.control_over_ceiling() {
+            self.note_encoder(format!(
+                "{}the control stream's {control} bit/s are above the highest data rate \
+                 {ceiling} bit/s",
+                crate::screen::core::codec_reason_text::ENCODER_NOTICE
+            ));
+        }
 
         self.quality.fps = cadence_fps(self.max_fps, self.rate.encode_capacity_fps());
         self.clock.set_fps(self.quality.fps);

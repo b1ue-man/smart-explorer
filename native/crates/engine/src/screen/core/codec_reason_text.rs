@@ -31,6 +31,8 @@ pub const ENCODER_NOTICE: &str = "encoder_notice: ";
 const NOTICE_LOWEST: &str = "the encoder's lowest bit rate ";
 const NOTICE_ABOVE: &str = " bit/s is above the highest data rate ";
 const NOTICE_PARAMETER: &str = "the encoder refused the parameter ";
+const NOTICE_CONTROL: &str = "the control stream's ";
+const NOTICE_CONTROL_ABOVE: &str = " bit/s are above the highest data rate ";
 /// An input the Android host's accessibility service did not perform
 /// (`screen.hostNotice {inputRefused}`, `mobile/…/screen_host.rs`) and its
 /// German text.
@@ -91,6 +93,17 @@ fn notice_sentence(text: &str) -> String {
     }
     if let Some((_, german)) = NOTICE_INPUT.iter().find(|(english, _)| text == *english) {
         return (*german).to_string();
+    }
+    if let Some((control, ceiling)) = text
+        .strip_prefix(NOTICE_CONTROL)
+        .and_then(|rest| rest.split_once(NOTICE_CONTROL_ABOVE))
+    {
+        let ceiling = ceiling.trim_end_matches(" bit/s");
+        return format!(
+            "Der Steuerkanal (Zeiger, Status, Fensterlisten) braucht allein {control} bit/s, \
+             mehr als die Höchste Datenrate ({ceiling} bit/s); die Bilder erhalten nur noch die \
+             Mindestrate"
+        );
     }
     if let Some(rest) = text.strip_prefix(NOTICE_PARAMETER) {
         let (name, detail) = rest.split_once(": ").unwrap_or((rest, ""));

@@ -165,6 +165,12 @@ impl Pipeline {
         if !self.rate.stream_admit(now, video) {
             return Ok(Produced::Idle);
         }
+        // Gemini 3/3: the viewer shows fewer pictures than it receives; the
+        // next one waits for it (no reset, the line's rate stays).
+        if self.pacer.viewer_behind(now) {
+            self.pacer.on_budget_drop();
+            return Ok(Produced::Dropped);
+        }
         // B-35: the stale time follows the smoothed round trip of the path
         // (`path_of` reads noq's smoothed estimate) and the cadence.
         self.pacer.set_timing(rtt_us, self.clock.interval_us());
