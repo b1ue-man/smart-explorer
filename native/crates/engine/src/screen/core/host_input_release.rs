@@ -39,6 +39,9 @@ pub(super) struct InputHealth {
     pub(super) handover: Option<Instant>,
     /// The handover ended; the viewer hears the new holder (M6).
     pub(super) holder_changed: bool,
+    /// A hidden view or a changed source asked for a revocation while a job
+    /// without one ran; the next job revokes.
+    revoke_pending: bool,
     /// D6: the block the viewer's last `CONTROL_STATE` named.
     pub(super) block_reported: Option<ControlBlock>,
     /// E2: the viewer heard that input is held back, once per hold.
@@ -105,9 +108,12 @@ impl Session<'_> {
     pub(super) fn release_pressed_revoking(&mut self) {
         let released = self.pressed.release_all();
         self.health.queued.extend(released);
-        if !self.flush_releases_as(true) {
-            self.start_release(Vec::new(), true, true);
+        // A job without the revocation runs: the next job revokes (whoever
+        // starts it: `poll_input_release`, `drain_releases`, a family path).
+        if self.input_release.is_some() {
+            self.health.revoke_pending = true;
         }
+        self.flush_releases_as(true);
     }
     /// Gemini 3/10, E2: the releases of keys and buttons the host holds go
     /// in from every batch, also one that is held back, refused or not this
@@ -133,9 +139,11 @@ impl Session<'_> {
     /// (a held-back batch's ups, a new reference) keeps the session's input.
     fn flush_releases_as(&mut self, revoke: bool) -> bool {
         if self.input_release.is_none() {
+            let revoke = revoke || std::mem::take(&mut self.health.revoke_pending);
             let mut events = std::mem::take(&mut *failed_list(&self.health.failed));
             events.append(&mut self.health.queued);
-            self.start_release(events, false, revoke);
+            // A revocation goes also with nothing to release (a nudge).
+            self.start_release(events, revoke, revoke);
         }
         self.input_release.is_some()
     }
@@ -283,7 +291,7 @@ impl Session<'_> {
                 self.release_blocked = Some(ControlBlock::ControlUnavailable)
             }
         }
-        if !self.health.queued.is_empty() {
+        if !self.health.queued.is_empty() || self.health.revoke_pending {
             self.flush_releases();
         }
     }
