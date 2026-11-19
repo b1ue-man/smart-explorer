@@ -162,8 +162,12 @@ impl PipelineActor {
         self.work.interrupt();
         self.blocked = true;
         // A snapshot the viewer asked for stays queued: it is of the session's
-        // current source, which an interrupt does not take away.
-        self.pending.invalidate = true;
+        // current source, which an interrupt does not take away. An interrupt
+        // invalidates no reference by itself (fix 2026-11-19): it did, so
+        // every `KEYFRAME_REQUEST` and every rate-only `SET_MODE` opened a new
+        // encoder; whoever needs a new reference asks for it (`set_source`,
+        // `set_visible_rects`, `invalidate_reference`, a new route, and the
+        // pipeline's own `set_quality_mode`/`begin_capture_active`).
     }
     fn receipt(&mut self, receipt: Receipt) {
         // Same bound as HostSession's control inbox; only acknowledgements, never pixels.
@@ -392,6 +396,7 @@ impl PipelineActor {
         rects: Option<Vec<crate::screen::core::visibility::VisibleRect>>,
     ) {
         self.interrupt();
+        self.pending.invalidate = true;
         self.pending.visible = Some(rects);
         self.poll();
     }
