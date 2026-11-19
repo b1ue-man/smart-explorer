@@ -247,6 +247,23 @@ async fn replay(modes: &ModeMemory, next: &ViewerSession) {
     }
 }
 
+/// The request of a session built again: the ceiling (Gemini 5/10) and the
+/// decoders with their „Codec“ (round 8 B4) as the viewer last chose them go
+/// in the hello itself, so the new session never starts above the ceiling
+/// nor with an encoder of the first request's codec that `SET_DECODERS`
+/// (`replay`, unchanged for the host then) would replace at once.
+fn current(modes: &ModeMemory, first: &ViewerRequest, opening: Option<u64>) -> ViewerRequest {
+    let mut request = first.clone();
+    request.max_rate_bps = ceiling(modes, opening);
+    if let Some(set) = modes.decoders() {
+        request.decoders = set.decoders;
+        request.gop_continue = set.gop_continue;
+        request.gop_continue_decoders = set.gop_continue_decoders;
+        request.codec_choice = set.codec_choice.or(first.codec_choice);
+    }
+    request
+}
+
 /// „Höchste Datenrate“ as the viewer last chose it (`opening`: the one of
 /// the first request).
 fn ceiling(modes: &ModeMemory, opening: Option<u64>) -> Option<u64> {
@@ -369,12 +386,7 @@ pub(super) async fn relay_session(
             service: redial.service.clone(),
             target: redial.target.clone(),
             expected_node: redial.expected_node.clone(),
-            // The ceiling chosen since the opening goes in the hello itself
-            // (Gemini 5/10): the new session never starts above it.
-            request: ViewerRequest {
-                max_rate_bps: ceiling(&modes, max_rate_bps),
-                ..request.clone()
-            },
+            request: current(&modes, &request, max_rate_bps),
             metadata,
             pending: None,
         };

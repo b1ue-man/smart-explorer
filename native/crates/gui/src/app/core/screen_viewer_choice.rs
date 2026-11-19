@@ -90,12 +90,18 @@ impl ScreenViewerApp {
             }
         }
         if again {
-            let frame = super::super::screen_pool::decoders_frame(&self.common.backend.offers);
+            let request = super::super::screen_pool::announced_request(&self.common.backend.offers);
+            let frame = request.decoders_frame();
             let codec = self.common.prefs.codec_setting();
             let decoder = super::super::screen_prefs::decoder_choice();
-            let refused = super::super::screen_session::library_refusal_for(&frame.decoders, codec)
+            // The library looks at the offers before „Codec“/„Dekodierer“
+            // narrow them, as at the opening (round 8 B3: the narrowed list
+            // named a missing video decoder where only the pair did not fit).
+            let library =
+                super::super::screen_session::library_refusal_for(&request.decoders, codec);
+            let refused = library
                 // Nothing left to offer (Gemini 5/7: „Hardware“ under
-                // „Verlustfrei“): the daemon's text at the opening.
+                // „Verlustfrei“).
                 .or_else(|| {
                     frame.decoders.is_empty().then(|| {
                         format!(
@@ -117,28 +123,20 @@ impl ScreenViewerApp {
                 action,
                 ToolbarAction::Decoder(_) | ToolbarAction::DecoderLibrary(_)
             ) && view.session.as_ref().is_some_and(|s| s.switch_decoder());
-            // A new codec's `SET_MODE` and `SET_DECODERS` in the order the
-            // host never meets a stale `sharpness` in (Gemini 5/5): leaving
-            // „Scharf (GPU)“ the mode first (a software encoder of the new
-            // codec was refused as not sharp), entering it the decoders
-            // first (the running codec may have no sharp encoder).
+            // A new codec: `SET_DECODERS` first, its `SET_MODE` after. The
+            // host reads the sharpness of the fallback range from
+            // `codec_choice` (round 8), so one encoder starts, not two when
+            // „Scharf (GPU)“ is left (Gemini 5/5).
             let codec = match action {
                 ToolbarAction::Codec(codec) => Some(*codec),
                 _ => None,
             };
-            let mode_first = codec.filter(|codec| !codec.sharpness());
-            let can = view.session.as_ref().is_some_and(|s| s.can_set_decoders());
-            if let Some(codec) = mode_first.filter(|_| can) {
-                view.codec_mode(codec, &self.common.prefs, display);
-            }
             let sent = view.session.as_ref().is_some_and(|s| s.set_decoders(frame));
             if !local && !sent {
                 out.push(Transition::View(view.target.clone()));
             }
             if let Some(codec) = codec.filter(|_| sent) {
-                if mode_first.is_none() {
-                    view.codec_mode(codec, &self.common.prefs, display);
-                }
+                view.codec_mode(codec, &self.common.prefs, display);
                 // The mode went out here; `ViewState::apply` would send it
                 // again. What else it does for a choice: the notice goes.
                 if let Some(session) = view.session.as_ref() {

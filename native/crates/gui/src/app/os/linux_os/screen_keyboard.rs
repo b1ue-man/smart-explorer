@@ -1,16 +1,12 @@
-//! Keyboard facts of the Linux viewer for the remote input (Gemini 5/9).
-//! AltGr needs nothing here: X11 and Wayland report it as level 3, so
-//! egui-winit hands its character over as `Text`. Ctrl+V and Umschalt+Einfg
-//! are swallowed by egui-winit for a clipboard without text, on X11 and
-//! Wayland alike; on X11 the server tells which keys are down
-//! (`QueryKeymap`). A Wayland client learns keys only through its own
-//! focused surface, and egui-winit keeps the swallowed key to itself, so a
-//! viewer window on Wayland cannot see it (it stays undetected there).
+//! Keyboard facts of the Linux viewer for the remote input (Gemini 5/9):
+//! whether Ctrl+V or Umschalt+Einfg is held (`screen_input_paste.rs`). On
+//! X11 the server tells which keys are down (`QueryKeymap`); a Wayland
+//! client learns keys only through its own focused surface, so there the
+//! release decides alone.
 //! winit picks Wayland when `WAYLAND_DISPLAY` or `WAYLAND_SOCKET` is set
 //! (winit 0.30 `platform_impl/linux/mod.rs` 736-744; se forces no backend).
 use std::sync::{Mutex, PoisonError};
 
-use eframe::egui::Key;
 use x11rb::connection::Connection as _;
 use x11rb::protocol::xproto::ConnectionExt as _;
 use x11rb::rust_connection::RustConnection;
@@ -18,14 +14,6 @@ use x11rb::rust_connection::RustConnection;
 /// `XK_v`, `XK_V` and `XK_Insert` (X11 `keysymdef.h`).
 const KEYSYM_V: [u32; 2] = [0x0076, 0x0056];
 const KEYSYM_INSERT: u32 = 0xFF63;
-
-pub fn altgr_held() -> bool {
-    false
-}
-
-pub fn altgr_text(_physical: Key, _shift: bool) -> Option<String> {
-    None
-}
 
 /// The X11 connection and the keycodes that carry V and Einfg.
 struct Keys {

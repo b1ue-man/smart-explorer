@@ -3,7 +3,7 @@
 //! across the picture, keys become HID usages (`input_model::key_usage`),
 //! modifiers the left keys (egui reports no right ones), typing and IME
 //! commits `Text` (the host's layout decides the character), shortcuts with
-//! Ctrl or Alt keys; AltGr characters `Text` (`screen_input_altgr.rs`).
+//! Ctrl or Alt keys (winit leaves Ctrl/Alt out of AltGr: its text is `Text`).
 //! Every press is tracked (`PressedInputs`) for `release_all`; one frame's
 //! events go out in batches (`take_batch`), the rest with the next frame.
 use std::collections::VecDeque;
@@ -87,7 +87,7 @@ pub struct InputMapper {
     wheel_rest: (f32, f32),
     touch_active: bool,
     /// Ctrl+V or Umschalt+Einfg watched for a swallowed paste (`missed_paste`).
-    paste: altgr::PasteWatch,
+    paste: paste::PasteWatch,
     /// Keys without a usage that were dropped (shown in the statistics).
     pub unmapped_keys: u64,
     /// The text of a running IME composition (shown, not sent).
@@ -119,7 +119,7 @@ impl InputMapper {
             },
             wheel_rest: (0.0, 0.0),
             touch_active: false,
-            paste: altgr::PasteWatch::default(),
+            paste: paste::PasteWatch::default(),
             unmapped_keys: 0,
             preedit: None,
         }
@@ -278,15 +278,16 @@ impl InputMapper {
             }
             Event::Key {
                 key,
-                physical_key,
                 pressed,
                 repeat,
                 modifiers,
+                ..
             } => {
-                if !self.altgr_key(*key, *physical_key, *pressed, *repeat, *modifiers) {
-                    self.sync_modifiers(*modifiers);
-                    self.key(*key, *pressed, *repeat, *modifiers);
+                if !*pressed {
+                    self.paste_released(*key, *modifiers);
                 }
+                self.sync_modifiers(*modifiers);
+                self.key(*key, *pressed, *repeat, *modifiers);
             }
             Event::Text(text) => {
                 if self.caps.text && !self.mods.ctrl && !self.mods.alt {
@@ -294,9 +295,9 @@ impl InputMapper {
                 }
             }
             Event::Ime(ime) => self.ime(ime),
-            Event::Copy if !self.altgr_clipboard(Key::C) => self.chord("c"),
-            Event::Cut if !self.altgr_clipboard(Key::X) => self.cut(),
-            Event::Paste(text) if !self.altgr_clipboard(Key::V) => self.paste(text),
+            Event::Copy => self.chord("c"),
+            Event::Cut => self.cut(),
+            Event::Paste(text) => self.paste(text),
             Event::Touch { id, phase, pos, .. } => self.touch(id.0, *phase, *pos, geometry),
             Event::WindowFocused(false) => self.release_all(),
             _ => {}
@@ -318,8 +319,8 @@ impl InputMapper {
         }
     }
 
-    /// Sends the modifier keys that changed since the last event, as given.
-    fn sync_exact(&mut self, now: Modifiers) {
+    /// Sends the modifier keys that changed since the last event.
+    fn sync_modifiers(&mut self, now: Modifiers) {
         let changes = [
             (now.ctrl, self.mods.ctrl, "ctrl_left"),
             (now.shift, self.mods.shift, "shift_left"),
@@ -485,8 +486,8 @@ impl InputMapper {
     }
 }
 
-#[path = "screen_input_altgr.rs"]
-mod altgr;
+#[path = "screen_input_paste.rs"]
+mod paste;
 #[path = "screen_input_text.rs"]
 mod text;
 

@@ -154,6 +154,13 @@ pub fn tiles_only_line(request: &StreamRequest, given_up: GivenUp) -> Option<Str
 /// `SET_DECODERS` with the viewer's current „Codec“ and „Dekodierer“ for
 /// `offers` (P1): the decoders and the announcement a new session's hello
 /// would carry.
+/// The request `decoders_frame` is made of: its `decoders` are the
+/// register's offers before „Codec“ and „Dekodierer“ narrow them.
+pub fn announced_request(offers: &[CodecOffer]) -> StreamRequest {
+    let base = preview_base(offers, PREVIEW_MIN_EDGE, DEFAULT_PREVIEW_INTERVAL_MS);
+    announced(base, GivenUp::default())
+}
+
 pub fn decoders_frame(offers: &[CodecOffer]) -> SetDecoders {
     decoders_frame_without(offers, GivenUp::default())
 }
