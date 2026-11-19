@@ -15,6 +15,12 @@ pub(super) fn run(
     (outbox, inbox): (mpsc::Sender<Outgoing>, mpsc::Receiver<Outgoing>),
     take_control: bool,
 ) {
+    // The decoders of this thread belong to this session alone (C23).
+    let epoch = shared
+        .local
+        .epoch
+        .load(std::sync::atomic::Ordering::Acquire);
+    crate::screen::core::decoder_health::enter_session(epoch);
     let wake = backend.wake.clone();
     // B-36: the decoder waits for the continuation only when announced.
     let continues = request.gop_continue || !request.gop_continue_decoders.is_empty();

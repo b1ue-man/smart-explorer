@@ -2,6 +2,13 @@
 use super::screen_input_map::Geometry;
 use crate::screen::core::visibility::{ViewerVisibility, VisibilityState, VisibleRect};
 use eframe::egui::Rect;
+use std::time::{Duration, Instant};
+
+/// A visible part that only moved (1:1 with pan, a window dragged under
+/// another one) is reported once it rested this long (fix 2026-11-19):
+/// every report revokes the shown picture and blocks input until the
+/// host's acknowledgement, so one per frame while panning stalled the view.
+pub const SETTLE: Duration = Duration::from_millis(300);
 
 /// OS facts. Rectangles are client-local physical pixels. `None` is honest
 /// uncertainty (Wayland or failed/racing native geometry), never occlusion.
@@ -22,11 +29,19 @@ pub struct VisibilityTracker {
     last: Option<ViewerVisibility>,
     geometry: Option<Geometry>,
     generation: u64,
+    /// Moved rectangles not reported yet and since when they rest.
+    pending: Option<(Vec<VisibleRect>, Instant)>,
 }
 impl VisibilityTracker {
     pub fn invalidate(&mut self) {
         self.last = None;
         self.geometry = None;
+        self.pending = None;
+    }
+
+    /// Moved rectangles wait for `SETTLE` (the caller repaints for them).
+    pub fn settling(&self) -> bool {
+        self.pending.is_some()
     }
     pub fn report(
         &mut self,
@@ -128,6 +143,27 @@ impl VisibilityTracker {
         // pixels); a picture that only moves on screen changes none of them
         // and must not cost a new reference picture.
         let size_changed = self.geometry.as_ref().map(|g| g.size) != geometry.map(|g| g.size);
+        // Only the rectangles moved, in the same state: reported once they rest.
+        let moved = !size_changed
+            && state != VisibilityState::Hidden
+            && self.last.as_ref().is_some_and(|last| {
+                last.state == state && last.minimized == window.minimized && last.rects != rects
+            });
+        if moved {
+            let now = Instant::now();
+            let rested = match &self.pending {
+                Some((held, since)) if *held == rects => now.duration_since(*since) >= SETTLE,
+                _ => {
+                    self.pending = Some((rects.clone(), now));
+                    false
+                }
+            };
+            if !rested {
+                self.geometry = geometry.copied();
+                return None;
+            }
+        }
+        self.pending = None;
         let changed = size_changed
             || self.last.as_ref().is_none_or(|last| {
                 last.state != state || last.minimized != window.minimized || last.rects != rects

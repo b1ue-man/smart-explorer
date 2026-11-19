@@ -16,13 +16,17 @@
 //! held by the presenter and shown from the window's thread later, as
 //! `ViewerSession::keep_if_awaiting_floor` does for the slot.
 //!
-//! Overlays: the child covers egui's picture area. Menus and open popups
-//! hide it while they are open; the statistics, the full-screen button,
-//! tooltips and hints are cut out of its region (`screen_direct_layout`).
+//! Overlays: the child covers egui's picture area. Menus, open popups, the
+//! statistics, the full-screen button, tooltips, hints and the status are
+//! cut out of its region (`screen_direct_layout`). The child stays while
+//! the session does not stream (egui's dimming cannot lie over it; the
+//! status names the state), so the picture never turns black for it.
 //! The host's pointer cannot be drawn by egui over the child: while the
-//! view only watches, the host draws it into the picture again
-//! (`CURSOR_OVERLAY` off); while it steers, the local system pointer stays
-//! visible over the picture (the host follows it anyway).
+//! presenter is attached and the view only watches, the host draws it into
+//! the picture again (`CURSOR_OVERLAY` off), also for pictures that come
+//! through the slot, so the wish never follows the path of single pictures;
+//! while it steers, the local system pointer stays visible over the picture
+//! (the host follows it anyway).
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -114,9 +118,15 @@ fn report(shared: &Shared, error: &str) {
 pub struct DirectSlot {
     presenter: Mutex<Option<Arc<dyn DirectPresenter>>>,
     held: Mutex<Option<PresentedFrame>>,
-    /// The host draws its pointer into the picture (this view shows the
-    /// picture through Direct3D 11 and does not steer).
+    /// The host draws its pointer into the picture (this view has the
+    /// Direct3D 11 presenter attached and does not steer).
     pointer_in_picture: AtomicBool,
+    /// The decoder whose planes a chosen „Direct3D 11“ named last.
+    noted: Mutex<Option<String>>,
+    /// The child was placed on screen last frame (window shown, area
+    /// visible, session not ended): only then does a picture count as
+    /// presented (fix 2026-11-19); otherwise it is held.
+    target_visible: AtomicBool,
 }
 
 /// The session's key for its held pictures.
@@ -166,6 +176,27 @@ fn receipt(
     });
 }
 
+/// The presenter is attached but the decoder gave its picture as planes or
+/// BGRA (Media Foundation, DXVA2, software, tiles; fix 2026-11-19): the
+/// picture goes through the window's renderer. A chosen „Direct3D 11“ names
+/// that with the decoder once per decoder (user rule 2026-11-18); under
+/// „Automatisch“ it is the designed path and stays silent.
+pub(super) fn not_direct(shared: &Shared) {
+    if super::screen_prefs::display_choice() != super::screen_prefs::DisplayChoice::Direct3d11 {
+        return;
+    }
+    let decoder = shared.info().decoder.clone().unwrap_or_default();
+    {
+        let mut noted = lock(&shared.direct.noted);
+        if noted.as_deref() == Some(decoder.as_str()) {
+            return;
+        }
+        *noted = Some(decoder.clone());
+    }
+    let reason = format!("der Dekodierer „{decoder}“ gibt keine Direct3D-11-Bilder aus");
+    report(shared, &reason);
+}
+
 /// The decode thread hands a GPU picture over; `false` when no presenter
 /// took it (the session falls back to planes from the next picture on).
 pub(super) fn deliver(
@@ -181,7 +212,7 @@ pub(super) fn deliver(
         info.latency.on_put(false);
         info.latency.on_taken();
     });
-    if !shared.can_present(&presented) {
+    if !shared.can_present(&presented) || !shared.direct.target_visible.load(Ordering::Acquire) {
         presenter.hold(picture, owner(shared));
         *lock(&shared.direct.held) = Some(presented);
         return true;
@@ -211,7 +242,7 @@ pub struct DirectPlace {
     pub area: Rect,
     /// The picture in the area (`screen_viewport::image_rect`), when known.
     pub dest: Option<Rect>,
-    /// The area is on screen and the session streams.
+    /// The area is on screen and the session has not ended.
     pub visible: bool,
     /// „Steuern“ is on in this view (the local pointer is the one). Only
     /// the user's switch, never the session's momentary input readiness:
@@ -233,6 +264,8 @@ pub struct DirectView {
     chosen: Option<super::screen_prefs::DisplayChoice>,
     /// The `CURSOR_OVERLAY` wish sent last.
     overlay: Option<bool>,
+    /// The child showed the presenter's picture last frame.
+    shown: bool,
 }
 
 impl DirectView {
@@ -326,6 +359,16 @@ impl DirectView {
             }
         }
         let placement = self.placement(&ctx, area, dest, overlays, visible);
+        let target = placement.is_some();
+        let was = session
+            .shared
+            .direct
+            .target_visible
+            .swap(target, Ordering::AcqRel);
+        if target && !was {
+            // A held picture is drawn by the next frame's `show_held`.
+            ctx.request_repaint();
+        }
         if let Some(surface) = self.surface.as_mut() {
             let placement = placement.as_ref().map(|(geometry, show)| (geometry, *show));
             if let Err(error) = surface.update(parent, placement) {
@@ -336,8 +379,16 @@ impl DirectView {
         }
         let showing = self.showing();
         ctx.data_mut(|data| data.insert_temp(egui::Id::new("screen_direct_showing"), showing));
-        // The pointer: drawn by the host while this view only watches.
-        let in_picture = showing && !steering;
+        // The pointer: drawn by the host while this view only watches and
+        // the presenter is attached. Only stable facts count, never whether
+        // the last picture came through the presenter or the slot (fix
+        // 2026-11-19): every change switches the host's pointer capture,
+        // which on Desktop Duplication starts a new capture generation and
+        // so a new encoder, and the slot takes pictures before the presenter
+        // attaches, after a key frame request and on every fallback. The
+        // events of a new connection send this same value with the hello.
+        let attached = self.presenter().is_some_and(|p| !p.failed());
+        let in_picture = attached && !steering;
         let direct = &session.shared.direct;
         direct
             .pointer_in_picture
@@ -349,10 +400,14 @@ impl DirectView {
     }
 
     fn show_held(&self, session: &ViewerSession, presenter: &dyn DirectPresenter) {
-        let Some(stamp) = lock(&session.shared.direct.held).take() else {
+        let direct = &session.shared.direct;
+        let Some(stamp) = lock(&direct.held).take() else {
             return;
         };
-        if session.can_present(stamp.clone()) {
+        if !direct.target_visible.load(Ordering::Acquire) {
+            // Drawn into a child nobody sees, it would give a false receipt.
+            *lock(&direct.held) = Some(stamp);
+        } else if session.can_present(stamp.clone()) {
             match presenter.show_held(owner(&session.shared)) {
                 Ok(true) => (session.presented_callback(stamp))(),
                 Ok(false) => *lock(&session.shared.direct.held) = Some(stamp),
@@ -365,33 +420,42 @@ impl DirectView {
 
     /// Where the child goes this frame and whether it shows (it is placed
     /// and its swap chain sized before the first picture); `None` hides it.
+    /// Every egui layer over the picture (popups, menus, tooltips, the
+    /// full-screen button) is cut out of the child, so an open combo box no
+    /// longer hides the whole picture (fix 2026-11-19: it went black, egui
+    /// draws no picture of its own while the child shows one).
     fn placement(
-        &self,
+        &mut self,
         ctx: &egui::Context,
         area: Rect,
         dest: Option<Rect>,
         overlays: &[Rect],
         visible: bool,
     ) -> Option<(layout::DirectGeometry, bool)> {
-        let dest = dest.filter(|_| visible)?;
-        let exit = egui::Id::new("screen_fullscreen_exit");
-        let (popup, layers) = ctx.memory(|memory| {
-            let layers: Vec<(Order, bool, Rect)> = memory
+        let showing = self.showing();
+        let Some(dest) = dest.filter(|_| visible) else {
+            self.shown = false;
+            return None;
+        };
+        // A picture that came through the slot hides the child one frame
+        // later: egui draws that picture this frame and presents it after
+        // this call, so hiding now showed egui's black area until then.
+        let show = showing || self.shown;
+        if show && !showing {
+            ctx.request_repaint();
+        }
+        self.shown = showing;
+        let layers: Vec<Rect> = ctx.memory(|memory| {
+            memory
                 .areas()
                 .visible_layer_ids()
                 .into_iter()
                 .filter(|layer| layer.order != Order::Background)
-                .filter_map(|layer| {
-                    let rect = memory.area_rect(layer.id)?;
-                    let cut_out = layer.id == exit || layer.order != Order::Foreground;
-                    Some((layer.order, cut_out, rect))
-                })
-                .collect();
-            (memory.any_popup_open(), layers)
+                .filter_map(|layer| memory.area_rect(layer.id))
+                .collect()
         });
-        let show = self.showing() && !layout::menu_over_picture(popup, &layers, area);
         let mut cut: Vec<Rect> = overlays.to_vec();
-        cut.extend(layers.iter().map(|(_, _, rect)| *rect));
+        cut.extend(layers);
         let geometry = layout::geometry(area, dest, ctx.pixels_per_point(), &cut);
         Some((geometry, show))
     }

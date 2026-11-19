@@ -193,6 +193,15 @@ impl ScreenViewerApp {
                 .as_ref()
                 .is_some_and(|session| !session.input_ready()))
         .then_some("Warte auf ein vollständiges aktuelles Bild …");
+        // The status goes over the picture too (fix 2026-11-19): as a panel
+        // each change of it resized the picture area (a visibility report,
+        // maybe a new size). An ended or refused session keeps the panel.
+        let over = view.is_over();
+        let status_bar = !self.fullscreen || self.toolbar_open;
+        let hint = match status.is_empty() {
+            true => waiting,
+            false => (status_bar && !over).then_some(status.as_str()),
+        };
         let name = view.device_name(common);
         let denied = view
             .session
@@ -228,11 +237,11 @@ impl ScreenViewerApp {
                 actions = screen_toolbar_ui::show(ui, &input);
                 self.toolbar_height = ui.min_rect().height();
             });
-            if view.is_over() || !status.is_empty() {
+            if over || (!status.is_empty() && view.session.is_none()) {
                 egui::TopBottomPanel::top("screen_status").show(ctx, |ui| {
                     ui.horizontal_wrapped(|ui| {
                         ui.label(&status);
-                        if view.is_over() {
+                        if over {
                             if ui.button("Erneut verbinden").clicked() {
                                 view.reconnect(common, display);
                             }
@@ -274,7 +283,7 @@ impl ScreenViewerApp {
                     dimmed: state != SessionState::Streaming,
                     status: &status,
                     stats: stats.as_deref(),
-                    hint: waiting,
+                    hint,
                 };
                 result = Some(view.widget.show(ui, session, &params));
             });

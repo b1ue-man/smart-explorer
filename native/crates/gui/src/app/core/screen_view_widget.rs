@@ -179,6 +179,8 @@ impl ViewWidget {
         self.release_input(session);
         session.invalidate_input();
         let _ = session.take_picture();
+        // The old source's picture leaves the Direct3D 11 child too.
+        self.direct.deactivate();
         self.current = None;
         self.cpu.reset();
         self.source_stamp = None;
@@ -348,13 +350,9 @@ impl ViewWidget {
             overlays.push(screen_stats_overlay::show(ui, area, lines));
         }
         if let Some(hint) = params.hint.filter(|_| shown.is_some()) {
-            overlays.push(painter.text(
-                area.left_top() + Vec2::new(8.0, 8.0),
-                Align2::LEFT_TOP,
-                hint,
-                FontId::proportional(14.0),
-                Color32::from_gray(230),
-            ));
+            let stats = overlays.first().copied();
+            let field = super::screen_view_widget_render::hint(&painter, area, hint, stats);
+            overlays.push(field);
         }
         if let Some(report) = self.visibility.report(
             &window,
@@ -370,14 +368,16 @@ impl ViewWidget {
             }
             session.set_visibility(report);
         }
+        if self.visibility.settling() {
+            ctx.request_repaint_after(super::screen_visibility::SETTLE);
+        }
         let (locals, escape) = self.input(ui, session, &response, params, shown.as_ref());
         let place = super::screen_direct::DirectPlace {
             area,
             dest: reported_geometry.map(|geometry| geometry.rect),
-            visible: !window.hidden()
-                && !session.is_ended()
-                && !params.dimmed
-                && ui.is_rect_visible(area),
+            // Not hidden while the session does not stream (`dimmed`): the
+            // child holds the last picture, egui has none to show instead.
+            visible: !window.hidden() && !session.is_ended() && ui.is_rect_visible(area),
             steering: params.control,
         };
         self.direct.frame(ui, session, place, &overlays);
@@ -453,7 +453,8 @@ impl ViewWidget {
         });
         if let (true, Some(geometry)) = (focused, geometry) {
             let modifiers = ui.input(|input| input.modifiers);
-            mapper.process(&events, modifiers, geometry);
+            let owned = super::screen_view_widget_render::owned_events(ui, response, &events);
+            mapper.process(&owned, modifiers, geometry);
             // The IME needs the area to place its candidate window.
             ui.ctx().output_mut(|output| {
                 output.ime = Some(egui::output::IMEOutput {

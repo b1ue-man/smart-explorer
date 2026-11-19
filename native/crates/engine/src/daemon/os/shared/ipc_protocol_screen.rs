@@ -90,13 +90,32 @@ pub struct StreamRequest {
 
 impl StreamRequest {
     /// The decoders the hello names under the viewer's codec and decoder
-    /// choice; the tiles stay under „Automatisch“ and „Verlustfrei“ only
-    /// (plan 2026-11-18 „Netzrate“: a chosen codec is never replaced; the
-    /// host reads the choice from the missing tiles).
+    /// choice; the tiles stay under „Automatisch“ only (plan 2026-11-18
+    /// „Netzrate“: a chosen codec is never replaced; the host reads the
+    /// choice from the missing tiles). „Verlustfrei“ offers the tiles alone
+    /// (fix 2026-11-19): it negotiated like „Automatisch“, opened a video
+    /// codec until its `SET_MODE` came, and a preview dropped it again.
     pub fn chosen_decoders(&self) -> Vec<CodecOffer> {
-        let codec = self.codec.unwrap_or_default().preference();
+        let codec = match self.codec.unwrap_or_default() {
+            CodecSetting::Lossless => crate::screen::core::negotiate::CodecPreference::Tiles,
+            setting => setting.preference(),
+        };
         let offers = codec.filter_decoders(&self.decoders);
         self.decoder.unwrap_or_default().filter_offers(&offers)
+    }
+
+    /// A named „Codec“/„Dekodierer“ that leaves no decoder to offer (fix
+    /// 2026-11-19; empty offers read like „Automatisch“ at the host): the
+    /// client refuses to open with this text.
+    pub fn unavailable_choice(&self) -> Option<String> {
+        let codec = self.codec.unwrap_or_default();
+        let decoder = self.decoder.unwrap_or_default();
+        let auto = codec.preference() == crate::screen::core::negotiate::CodecPreference::Auto;
+        let named = !auto || decoder != DecoderPreference::Automatic;
+        let (codec, decoder) = (codec.label(), decoder.label());
+        (named && self.chosen_decoders().is_empty()).then(|| {
+            format!("Codec „{codec}“ mit Dekodierer „{decoder}“: kein passender Dekodierer auf diesem Gerät; die Sitzung wird nicht geöffnet.")
+        })
     }
 }
 
@@ -303,10 +322,10 @@ mod tests {
             chosen,
             vec![CodecOffer::video(CodecKind::Av1, false, false)]
         );
-        // „Verlustfrei“ negotiates like „Automatisch“ (SET_MODE switches).
+        // „Verlustfrei“ offers the tiles alone (fix 2026-11-19).
         request.codec = Some(CodecSetting::Lossless);
         request.decoder = None;
-        assert_eq!(request.chosen_decoders(), request.decoders);
+        assert_eq!(request.chosen_decoders(), vec![CodecOffer::tiles()]);
         let json = serde_json::to_value(&request).unwrap();
         assert_eq!(json["codec"], "lossless");
         assert_eq!(

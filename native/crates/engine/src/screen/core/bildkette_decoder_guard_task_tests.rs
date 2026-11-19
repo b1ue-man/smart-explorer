@@ -35,15 +35,28 @@ fn bildkette_task_decoder_guard_gives_up_a_codec_without_picture_after_failures_
 }
 
 #[test]
-fn bildkette_task_decoder_guard_keeps_a_codec_that_showed_a_picture_and_the_tiles() {
+fn bildkette_task_decoder_guard_counts_failures_since_the_last_picture_and_keeps_the_tiles() {
     let start = Instant::now();
     let mut guard = DecoderGuard::default();
     guard.on_record(CodecKind::H264, start);
     guard.on_picture(CodecKind::H264, start, 0);
-    for _ in 0..FAILURE_LIMIT * 2 {
+    // Failures between pictures (packet loss) never add up.
+    for _ in 0..3 {
+        for _ in 1..FAILURE_LIMIT {
+            assert_eq!(guard.on_failure(CodecKind::H264, start), None);
+        }
+        assert_eq!(guard.on_picture(CodecKind::H264, start, 0), None);
+    }
+    // A still screen after pictures is no silence.
+    assert_eq!(guard.on_tick(start + SILENCE_LIMIT * 3), None);
+    // Fix 2026-11-19: a decoder that fails for good after pictures goes.
+    for _ in 1..FAILURE_LIMIT {
         assert_eq!(guard.on_failure(CodecKind::H264, start), None);
     }
-    assert_eq!(guard.on_tick(start + SILENCE_LIMIT * 3), None);
+    assert_eq!(
+        guard.on_failure(CodecKind::H264, start),
+        Some(CodecKind::H264)
+    );
 
     let mut guard = DecoderGuard::default();
     for _ in 0..FAILURE_LIMIT * 2 {

@@ -221,6 +221,11 @@ pub fn screen_stream(
     target: PeerOpenTarget,
     request: StreamRequest,
 ) -> Result<ScreenStream, String> {
+    // A named choice with nothing to offer is the viewer's error, never the
+    // host's „Automatisch“ (`StreamRequest::unavailable_choice`).
+    if let Some(text) = request.unavailable_choice() {
+        return Err(text);
+    }
     if let Some(expected) = request.expected_node.as_deref() {
         require_node_pin(expected)?;
         open_stream(ScreenIpcRequest::PinnedStream { target, request })

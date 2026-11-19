@@ -16,8 +16,10 @@ fn kachelfix_task_late_picture_is_no_failure_and_no_silence() {
     assert_eq!(guard.on_record(CodecKind::Hevc, start), None);
     assert_eq!(guard.on_failure(CodecKind::Hevc, start), None);
     assert_eq!(guard.on_picture(CodecKind::Hevc, start, 1), None);
-    // Further failures after a picture give nothing up.
-    for _ in 0..FAILURE_LIMIT * 2 {
+    // The late picture ended the run of failures: fewer than the limit
+    // after it give nothing up (fix 2026-11-19: a run counts since the
+    // last picture).
+    for _ in 1..FAILURE_LIMIT {
         assert_eq!(guard.on_failure(CodecKind::Hevc, start), None);
     }
     // A still screen: no record, no picture for long.

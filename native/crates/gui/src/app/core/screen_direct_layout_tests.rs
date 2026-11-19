@@ -1,6 +1,6 @@
 //! P8 (plan 2026-11-17): where the Direct3D 11 picture goes, which part of
-//! it the video processor draws, and when egui's menus hide it.
-use eframe::egui::{pos2, Order, Rect};
+//! it the video processor draws, and its colour spaces.
+use eframe::egui::{pos2, Rect};
 
 use super::*;
 
@@ -48,22 +48,6 @@ fn bildkette_task_d3d11_blit_rects_letterbox_and_one_to_one() {
         None
     );
     assert_eq!(blit_rects(1280, 720, fit, FrameSize::new(0, 0)), None);
-}
-
-#[test]
-fn bildkette_task_d3d11_menus_hide_overlays_cut_out() {
-    let area = points(0.0, 40.0, 800.0, 600.0);
-    let menu = (Order::Foreground, false, points(100.0, 30.0, 300.0, 200.0));
-    let button = (Order::Foreground, true, points(700.0, 48.0, 790.0, 70.0));
-    let tooltip = (Order::Tooltip, false, points(10.0, 50.0, 90.0, 70.0));
-    let elsewhere = (Order::Foreground, false, points(0.0, 0.0, 50.0, 30.0));
-    assert!(menu_over_picture(false, &[menu], area));
-    assert!(menu_over_picture(true, &[], area), "an open combo box");
-    assert!(!menu_over_picture(
-        false,
-        &[button, tooltip, elsewhere],
-        area
-    ));
 }
 
 #[test]

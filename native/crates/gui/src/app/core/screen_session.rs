@@ -298,9 +298,10 @@ impl ViewerSession {
         let (outbox, inbox) = mpsc::channel();
         // Decoder stages a library gave up for earlier sessions are tried
         // again (fix of 2026-11-18, `decoder_health::begin_session`).
-        crate::screen::core::decoder_health::begin_session();
+        let epoch = crate::screen::core::decoder_health::begin_session();
         request.expected_node = target.expected_node.clone();
         let shared = Shared::new(prefer_yuv, present_gap_ms);
+        shared.local.epoch.store(epoch, Ordering::Release);
         let opening = SetMode {
             mode: if request.mode == SessionMode::Preview {
                 StreamMode::Preview

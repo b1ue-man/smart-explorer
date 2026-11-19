@@ -1,6 +1,17 @@
 //! Session and host events for the desktop viewer; decoding owns the same state.
 use super::*;
 
+/// A „Höchste Datenrate“ the host cannot take is named in the status, not
+/// only beside the toolbar's field or in the statistics (fix 2026-11-19):
+/// the session runs without that ceiling.
+fn ceiling_notice(state: crate::daemon::RateCeilingState) -> Option<String> {
+    (state == crate::daemon::RateCeilingState::UnsupportedByHost).then(|| {
+        "Höchste Datenrate: vom Gerät nicht unterstützt (ältere Version); \
+         das Bild läuft ohne diese Grenze."
+            .into()
+    })
+}
+
 impl DecodeState {
     /// Applies one event; `true` when it was the session's last.
     pub fn on_event(&mut self, event: StreamEvent) -> bool {
@@ -73,6 +84,9 @@ impl DecodeState {
                     info.hello = Some(hello);
                     info.path = Some(path);
                     info.rate_ceiling = rate_ceiling;
+                    if let Some(text) = ceiling_notice(rate_ceiling) {
+                        info.notice = Some(text);
+                    }
                     info.accepted += 1;
                     if matches!(
                         info.state,
@@ -101,7 +115,9 @@ impl DecodeState {
                 // The overlay pointer (P6): a new connection starts without it.
                 self.shared.update(|info| info.cursor = Default::default());
                 if self.shared.wants_cursor() {
-                    // P8: off while the host draws it into a Direct3D 11 picture.
+                    // P8: off while the host draws it into the picture; the
+                    // same stable wish the view sends (`DirectView::frame`),
+                    // so the first picture brings no switch of the capture.
                     let wish = self.shared.direct.cursor_overlay();
                     let _ = (self.send)(&ViewerFrame::CursorOverlay(wish));
                 }
@@ -136,10 +152,10 @@ impl DecodeState {
                     return false;
                 }
                 // Only the rest of the group is lost: the shown picture stays
-                // (without receipts, input blocked) until the key frame, or
+                // (without receipts; input goes on) until the key frame, or
                 // (B-36) until the continuation the host sends after it
                 // reset the stream; the decoder then stays.
-                self.shared.suspend_presentation();
+                self.shared.pause_receipts();
                 let waits = self.waits_for_stream(gop_id);
                 if !waits && self.gop.as_ref().is_some_and(|gop| gop.id == gop_id) {
                     self.gop = None;
@@ -156,7 +172,12 @@ impl DecodeState {
             StreamEvent::Clock(offset) => self.shared.update(|info| info.clock_offset_us = offset),
             // A „Höchste Datenrate“ changed during the session (P1): the
             // statistics say whether the host took it.
-            StreamEvent::RateCeiling(state) => self.shared.update(|info| info.rate_ceiling = state),
+            StreamEvent::RateCeiling(state) => self.shared.update(|info| {
+                info.rate_ceiling = state;
+                if let Some(text) = ceiling_notice(state) {
+                    info.notice = Some(text);
+                }
+            }),
             StreamEvent::End(end) => {
                 self.gop = None;
                 self.shared.stop_presentation();

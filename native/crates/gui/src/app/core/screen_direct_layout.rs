@@ -5,11 +5,11 @@
 //! same rectangle the input mapping uses); the video processor gets the
 //! part of the picture inside the child (source and destination
 //! rectangles), black around it. Everything egui draws over the picture
-//! stays visible: interactive popups and menus over the picture hide the
-//! child for as long as they are open (they work in every case), the
-//! statistics field, the full-screen button, tooltips and hints are cut out
-//! of the child's region (`SetWindowRgn`), so egui's drawing shows there.
-use eframe::egui::{Order, Rect};
+//! stays visible: popups, menus, the statistics field, the full-screen
+//! button, tooltips, hints and the status are cut out of the child's region
+//! (`SetWindowRgn`), so egui's drawing shows there; the child lets every
+//! mouse message through to the window beneath, so they all stay usable.
+use eframe::egui::Rect;
 
 use crate::screen::core::pixel_convert::FrameSize;
 
@@ -151,18 +151,6 @@ pub fn colour_space_bits(stream: Option<(bool, bool)>) -> u32 {
             matrix | (range << 4)
         }
     }
-}
-
-/// Whether egui draws something over the picture area that must stay
-/// usable and therefore hides the child: an open popup (combo box) or a
-/// visible layer of `Order::Foreground` (a menu) that is not one of the
-/// overlays cut out of the child. `layers`: order, whether it is such a
-/// cut-out overlay, rectangle.
-pub fn menu_over_picture(popup_open: bool, layers: &[(Order, bool, Rect)], area: Rect) -> bool {
-    popup_open
-        || layers.iter().any(|(order, cut_out, rect)| {
-            *order == Order::Foreground && !*cut_out && rect.intersects(area)
-        })
 }
 
 #[cfg(test)]

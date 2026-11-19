@@ -207,7 +207,9 @@ pub fn preview_set_mode(edge: u32, interval_ms: u64) -> SetMode {
         size: Some(FrameSize::new(edge, edge)),
         fps: Some(preview_fps(interval_ms)),
         sharpness: false,
-        lossless: false,
+        // „Codec: Verlustfrei“ stays in the preview too (fix 2026-11-19):
+        // before, a view lowered to its tile left it for lossy tiles.
+        lossless: super::screen_prefs::codec_setting().lossless(),
     }
 }
 

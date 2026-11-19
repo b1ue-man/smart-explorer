@@ -126,6 +126,9 @@ pub struct DecodeLocal {
     /// The session announced a continuation for some decoder (B-36): the
     /// decode thread then waits for the host's next stream after `Broken`.
     pub continuation: AtomicBool,
+    /// The session's number for the decoder libraries' memory
+    /// (`decoder_health::begin_session`, entered by its decode thread).
+    pub epoch: AtomicU64,
 }
 
 impl DecodeLocal {

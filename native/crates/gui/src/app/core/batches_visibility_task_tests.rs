@@ -150,10 +150,19 @@ fn screen_metadata_runtime_task_visibility_race_keeps_the_proven_report() {
     assert!(tracker
         .report(&window, area, Some(&geometry), 2.0)
         .is_none());
-    // A proven partial cover is reported; a race afterwards widens it to the
-    // whole area conservatively (a real change of pixels).
+    // A proven partial cover is reported once it rested (fix 2026-11-19:
+    // moved rectangles wait for `SETTLE`); a race afterwards widens it to
+    // the whole area conservatively (a real change of pixels).
     window.rects = vec![Rect::from_min_max(pos2(0.0, 0.0), pos2(100.0, 100.0))];
+    assert!(tracker
+        .report(&window, area, Some(&geometry), 2.0)
+        .is_none());
+    assert!(tracker.settling());
+    if let Some((_, since)) = tracker.pending.as_mut() {
+        *since = Instant::now().checked_sub(SETTLE * 2).unwrap();
+    }
     let covered = tracker.report(&window, area, Some(&geometry), 2.0).unwrap();
+    assert!(!tracker.settling());
     assert_eq!(covered.state, VisibilityState::Visible);
     assert_eq!(
         covered.rects,
@@ -231,7 +240,7 @@ fn screen_metadata_runtime_task_picture_before_visibility_ack_is_kept_not_droppe
 }
 
 #[test]
-fn screen_metadata_runtime_task_new_picture_group_keeps_pixels_and_blocks_input() {
+fn screen_metadata_runtime_task_new_picture_group_keeps_pixels_and_input() {
     let shared = Shared::new(false, 0);
     shared.update(|info| info.state = SessionState::Streaming);
     let session = ViewerSession::fixture(shared.clone());
@@ -246,16 +255,19 @@ fn screen_metadata_runtime_task_new_picture_group_keeps_pixels_and_blocks_input(
         !shared.can_present(&first),
         "the old group gives no receipt"
     );
-    assert!(!session.input_ready(), "input waits for the new group");
+    // Fix 2026-11-19: the reference on screen did not change, held keys
+    // and buttons stay and typing goes on.
+    assert!(session.input_ready(), "a new group keeps the input");
     assert!(shared.can_present(&second));
-    (session.presented_callback(first.clone()))();
-    assert!(!session.input_ready());
     (session.presented_callback(second.clone()))();
     assert!(session.input_ready());
-    // A broken group keeps the pixels, ends their receipts, blocks input.
-    shared.suspend_presentation();
+    // A broken group keeps the pixels and ends their receipts; input goes on.
+    shared.pause_receipts();
     assert!(second.active());
     assert!(!shared.can_present(&second));
+    assert!(session.input_ready());
+    // A stream that pauses (host state) still blocks input.
+    shared.suspend_presentation();
     assert!(!session.input_ready());
     // Visibility and source changes still revoke the pixels.
     shared.invalidate_presentation();

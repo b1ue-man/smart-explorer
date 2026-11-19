@@ -84,15 +84,18 @@ impl Shared {
             lock(&self.resume).block();
         } else if state.gop_id != gop_id {
             // A new picture group (key frame after a stream reset, a decode
-            // error or a key frame request) ends the receipts of the old one
-            // and blocks input until its own first picture is presented, but
-            // the last shown pixels stay until that picture replaces them.
-            // Revoking them here blanked the picture from the group's first
-            // record until its key frame was transferred, decoded and
-            // uploaded: a black flash per stream reset.
+            // error or a key frame request, a continuation) ends the receipts
+            // of the old one, but the last shown pixels stay until its first
+            // picture replaces them. Revoking them here blanked the picture
+            // from the group's first record until its key frame was
+            // transferred, decoded and uploaded: a black flash per stream
+            // reset. Input goes on (fix 2026-11-19): the source, its size on
+            // screen and the host's visibility floor did not change, and
+            // blocking it here released every held key and button with each
+            // new group (a drag broke off, typing was lost); a real change of
+            // the reference invalidates the presentation and blocks it there.
             state.gop_id = gop_id;
             state.suspend_receipts();
-            lock(&self.resume).block();
         }
         PresentedFrame {
             session: state.session.clone(),
@@ -187,6 +190,14 @@ impl Shared {
         self.retirement.watch_memory(&memory);
         self.retirement.close();
         super::screen_render_owner::notify_all();
+    }
+
+    /// A broken or undecodable group: the shown pixels stay without their
+    /// receipt until the next group replaces them; input goes on, since the
+    /// reference on screen did not change (fix 2026-11-19, `begin_frame`).
+    pub fn pause_receipts(&self) {
+        lock(&self.presentation).suspend_receipts();
+        lock(&self.picture).take();
     }
 
     /// A paused stream retains its already valid last pixels for dimming, never their receipt.

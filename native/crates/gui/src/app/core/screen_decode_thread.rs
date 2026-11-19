@@ -344,7 +344,7 @@ impl DecodeState {
                 self.guard_failure(header.codec);
                 // The failed picture was never shown; the shown one stays
                 // without receipts until the requested key frame.
-                self.shared.suspend_presentation();
+                self.shared.pause_receipts();
                 self.chain.continuity.broken();
                 self.broken = Some(header.gop_id);
                 self.broken_frame = Some(record.frame_id);
@@ -401,6 +401,10 @@ impl DecodeState {
                 self.request_keyframe(KeyframeReason::DecodeError, gop.header.gop_id);
             }
             return;
+        }
+        if gop.gpu {
+            // The presenter waits but this picture came as planes or BGRA.
+            super::screen_direct::not_direct(&self.shared);
         }
         // Handed over, not copied (V1, BK9 U1); the storage comes back.
         let planes = if gop.yuv {

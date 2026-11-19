@@ -25,7 +25,7 @@ use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use super::ffmpeg_decoder::FfmpegDecoder;
 use super::ffmpeg_ffi;
 use crate::screen::core::codec_registry::DecoderFactory;
-use crate::screen::core::decoder_health::{for_session, session_epoch};
+use crate::screen::core::decoder_health::{session_epoch, SessionSlots};
 use crate::screen::core::decoder_library::{decoder_library, library_allowed, DecoderLibrary};
 use crate::screen::core::ffmpeg_plan::{self as plan, FfmpegStage};
 use crate::screen::core::host_backend::ScreenDecoder;
@@ -36,17 +36,17 @@ use crate::screen::core::negotiate::{
 use crate::screen::core::pixel_convert::FrameSize;
 use crate::screen::core::wire_binary::GopHeader;
 
-/// Hardware stages given up, per codec, with the viewer session they were
-/// given up in (`decoder_health::session_epoch`).
-type GivenUpStages = (u64, Vec<(CodecKind, FfmpegStage)>);
-static GIVEN_UP: Mutex<GivenUpStages> = Mutex::new((0, Vec::new()));
+/// Hardware stages given up, per codec, per viewer session
+/// (`decoder_health::session_epoch`, the session of the decode thread).
+type GivenUpStages = SessionSlots<Vec<(CodecKind, FfmpegStage)>>;
+static GIVEN_UP: Mutex<GivenUpStages> = Mutex::new(SessionSlots::new());
 
 /// A hardware stage of `codec` failed; only that codec's stage is given up
 /// (P9: a lost device no longer ends the hardware of every codec), until
 /// the next viewer session opens.
 pub(super) fn give_up(codec: CodecKind, stage: FfmpegStage) {
     let mut slot = GIVEN_UP.lock().unwrap_or_else(PoisonError::into_inner);
-    let given_up = for_session(&mut *slot, session_epoch());
+    let given_up = slot.get(session_epoch());
     if !given_up.contains(&(codec, stage)) {
         given_up.push((codec, stage));
         eprintln!(
@@ -59,7 +59,7 @@ pub(super) fn give_up(codec: CodecKind, stage: FfmpegStage) {
 
 fn hardware_allowed(codec: CodecKind, stage: FfmpegStage) -> bool {
     let mut slot = GIVEN_UP.lock().unwrap_or_else(PoisonError::into_inner);
-    !for_session(&mut *slot, session_epoch()).contains(&(codec, stage))
+    !slot.get(session_epoch()).contains(&(codec, stage))
 }
 
 /// The stages of `stages` to open: without the hardware stages given up,

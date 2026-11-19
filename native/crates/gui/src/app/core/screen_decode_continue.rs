@@ -76,12 +76,12 @@ impl DecodeState {
     }
 
     /// A stream whose start cannot be decoded: the shown picture stays
-    /// (without receipts, input blocked) until the requested key frame.
+    /// (without receipts; input goes on) until the requested key frame.
     fn skip_stream(&mut self, gop_id: u64, frame_id: u64) {
         self.chain.continuity.broken();
         self.latest_gop = gop_id;
         self.gop = None;
-        self.shared.suspend_presentation();
+        self.shared.pause_receipts();
         self.broken = Some(gop_id);
         self.broken_frame = Some(frame_id);
         self.request_keyframe(KeyframeReason::Reset, gop_id);
