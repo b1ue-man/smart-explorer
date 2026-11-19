@@ -460,11 +460,13 @@ impl VendorSession for NvencSession {
             result,
             "nvEncMapInputResource",
         )?;
+        let sent = self.core.frames;
         let coded = self
             .core
             .submit(&mapped, picture.frame_id, picture.idr, deliver);
-        let timed_out = matches!(&coded, Err(e) if e.kind() == io::ErrorKind::TimedOut);
-        if timed_out {
+        // Codex round 6, finding 3: a picture the driver took whose output
+        // was not taken (a timeout, a failed lock) stays mapped (`nvenc_late`).
+        if coded.is_err() && self.core.frames != sent {
             self.keep_late(mapped.mapped_resource);
         } else if let Some(unmap) = self.core.api.functions.unmap_input_resource {
             // SAFETY: the resource was mapped above; the picture is coded or timed out.
@@ -486,14 +488,8 @@ impl VendorSession for NvencSession {
     fn running_bps(&self) -> Option<u64> {
         Some(u64::from(self.core.rate.bits_per_second))
     }
-}
 
-impl Drop for NvencSession {
-    fn drop(&mut self) {
-        self.drain_late();
-        self.core.release_outputs();
-        for entry in std::mem::take(&mut self.registered) {
-            unregister(&self.core.api, self.core.encoder, entry);
-        }
+    fn end_late(&mut self) -> bool {
+        self.drain_late()
     }
 }

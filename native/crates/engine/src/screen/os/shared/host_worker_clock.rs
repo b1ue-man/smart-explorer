@@ -88,10 +88,14 @@ impl Identity {
         let request = &order.request;
         Self {
             epoch: request.encoder_epoch,
-            // Codex round 5, finding 8: the viewer's decoder stage is no
-            // change of the encoder (`same_encoder_choice`).
+            // Codex rounds 5/6, findings 8/10: the viewer's decoder stage and
+            // limits are no change of the encoder (`same_encoder_choice`;
+            // a size beyond new limits reopens there).
             choice: CodecChoice {
                 decoder_hardware: false,
+                max_size: FrameSize::MAX,
+                max_pixels: FrameSize::MAX.pixels(),
+                max_macroblocks_per_second: None,
                 ..request.choice
             },
             contract: request.frame_contract,

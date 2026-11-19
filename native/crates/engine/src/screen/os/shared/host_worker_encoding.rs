@@ -210,7 +210,7 @@ impl Encoding {
         let current = self.running.as_ref().is_some_and(|running| {
             running.book == book
                 && running.epoch == request.encoder_epoch
-                && same_encoder_choice(&running.choice, &request.choice)
+                && same_encoder_choice(&running.choice, &request.choice, request.size)
                 && running.frame_contract == request.frame_contract
                 && running.encoder.size() == request.size
         });

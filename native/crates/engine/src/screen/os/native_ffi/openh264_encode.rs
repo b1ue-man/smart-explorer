@@ -188,21 +188,33 @@ impl OpenH264Encoder {
         } else {
             [rate, max]
         };
-        let mut accepted = true;
-        for (option, layer) in order.into_iter().flatten() {
-            let mut info = BitrateInfo {
-                layer,
-                bitrate: target,
-            };
-            // SAFETY: the encoder encoded a frame, so it is initialized;
-            // `info` has the layout of `SBitrateInfo` and outlives the call,
-            // which copies the values.
-            let result = unsafe {
-                encoder
-                    .raw_api()
-                    .set_option(option, (&mut info as *mut BitrateInfo).cast::<c_void>())
-            };
-            accepted &= result == 0;
+        // SAFETY (both calls of `set`): the encoder encoded a frame, so it is
+        // initialized; `info` has the layout of `SBitrateInfo` and outlives
+        // the call, which copies the values.
+        let set = |encoder: &mut Encoder, (option, layer): (c_int, c_int), bitrate| {
+            let mut info = BitrateInfo { layer, bitrate };
+            let info = (&mut info as *mut BitrateInfo).cast::<c_void>();
+            unsafe { encoder.raw_api().set_option(option, info) == 0 }
+        };
+        let taken: Vec<(c_int, c_int)> = order
+            .into_iter()
+            .flatten()
+            .filter(|step| set(&mut *encoder, *step, target))
+            .collect();
+        let accepted = taken.len() == 4;
+        // Codex round 6, finding 20: the options taken of a refused change go
+        // back to the running rate (reverse order, so the target never
+        // exceeds the maximum); one that does not leaves the encoder's rate
+        // unknown, and the picture fails (a fresh encoder, B1).
+        if !accepted
+            && !taken
+                .iter()
+                .rev()
+                .all(|step| set(&mut *encoder, *step, current))
+        {
+            return Err(io::Error::other(format!(
+                "OpenH264 took part of {target} bit/s and not back {current} bit/s"
+            )));
         }
         if accepted {
             self.bitrate = target;

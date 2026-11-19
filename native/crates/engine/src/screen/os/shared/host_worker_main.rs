@@ -107,15 +107,25 @@ fn keyed(
     Ok(frame)
 }
 
-/// Codex round 5, finding 8: whether `a` and `b` ask the same of the encoder.
-/// The viewer's decoder stage (`decoder_hardware`) alone changes nothing of
-/// it: no encoder reads it, its new decoder starts at the key frame it asks
-/// for (as `Pipeline::set_quality_mode`, `host_mode.rs`).
-fn same_encoder_choice(a: &CodecChoice, b: &CodecChoice) -> bool {
-    CodecChoice {
-        decoder_hardware: a.decoder_hardware,
-        ..*b
-    } == *a
+/// Whether the encoder running for `a` serves `b` at `size`. Codex round 5,
+/// finding 8: the viewer's decoder stage (`decoder_hardware`) changes
+/// nothing of it (no encoder reads it; its new decoder starts at the key
+/// frame it asks for, as `Pipeline::set_quality_mode`). Codex round 6,
+/// finding 10: neither do the decoder's limits (`max_size`, `max_pixels`,
+/// `max_macroblocks_per_second`), which the encoders only check when they
+/// open (`check_request`, `open_encoder_for_stage_admitted`), as long as
+/// the running size still fits them. Codec, profile and encoder kind do.
+fn same_encoder_choice(
+    a: &CodecChoice,
+    b: &CodecChoice,
+    size: crate::screen::core::pixel_convert::FrameSize,
+) -> bool {
+    a.codec == b.codec
+        && a.profile == b.profile
+        && a.encoder_hardware == b.encoder_hardware
+        && size.width <= b.max_size.width
+        && size.height <= b.max_size.height
+        && size.pixels() <= b.max_pixels
 }
 
 /// What differs between the running encoder and `request` (measurement of
@@ -125,7 +135,7 @@ fn reopen_reason(running: &Running, request: &StageRequest, book: usize) -> &'st
         "the capture has a new grant"
     } else if running.epoch != request.encoder_epoch {
         "the session started a new stream"
-    } else if !same_encoder_choice(&running.choice, &request.choice) {
+    } else if !same_encoder_choice(&running.choice, &request.choice, request.size) {
         "the codec pairing changed"
     } else if running.frame_contract != request.frame_contract {
         "the frame contract changed"

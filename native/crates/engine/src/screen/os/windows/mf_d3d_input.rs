@@ -363,6 +363,12 @@ fn arm(
 
 impl GpuInput {
     /// The encoder gave the output of the last input: its slot is free again.
+    /// Codex round 6, finding 3: the ring slot in flight stays taken for good
+    /// (an encoder whose driver may still read it); the capture uses the others.
+    pub(in crate::screen::os) fn abandon(&mut self) {
+        std::mem::forget(self.in_flight.take());
+    }
+
     pub(in crate::screen::os) fn finish(&mut self) {
         if let Some((ring, index)) = self.in_flight.take() {
             ring.release(index);

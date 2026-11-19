@@ -34,9 +34,11 @@ impl NvencSession {
 
     /// Before the session goes: the late picture finished as the API asks,
     /// else everything of the session is kept (see the module comment).
-    pub(super) fn drain_late(&mut self) {
+    /// Whether its input may go back to the capture: `false` when it is kept
+    /// (Codex round 6, finding 3: `VendorEncoder` then keeps the ring slot).
+    pub(super) fn drain_late(&mut self) -> bool {
         let Some(mapped) = self.late.take() else {
-            return;
+            return true;
         };
         if self.late_finished() {
             if let Some(unmap) = self.core.api.functions.unmap_input_resource {
@@ -44,7 +46,7 @@ impl NvencSession {
                 // bitstream was locked.
                 unsafe { unmap(self.core.encoder, mapped) };
             }
-            return;
+            return true;
         }
         eprintln!("screen encoder nvenc: a late picture did not finish; the session is kept");
         std::mem::forget(std::mem::take(&mut self.registered));
@@ -52,6 +54,7 @@ impl NvencSession {
         self.core.event = std::ptr::null_mut();
         self.core.event_registered = false;
         self.core.encoder = std::ptr::null_mut();
+        false
     }
 
     /// The late picture completed, its bitstream locked, the flush done.
@@ -92,5 +95,15 @@ impl NvencSession {
             return false;
         }
         waited(LATE_WAIT_MS)
+    }
+}
+
+impl Drop for NvencSession {
+    fn drop(&mut self) {
+        self.drain_late();
+        self.core.release_outputs();
+        for entry in std::mem::take(&mut self.registered) {
+            unregister(&self.core.api, self.core.encoder, entry);
+        }
     }
 }

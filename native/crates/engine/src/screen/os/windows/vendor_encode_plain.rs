@@ -119,3 +119,14 @@ impl<S: VendorSession> VendorEncoder<S> {
         })
     }
 }
+
+/// Codex round 6, finding 3: a session whose late picture did not finish
+/// keeps the ring slot of its input (`GpuInput::abandon`); the capture then
+/// never writes into a texture the driver may still read.
+impl<S: VendorSession> Drop for VendorEncoder<S> {
+    fn drop(&mut self) {
+        if !self.session.end_late() {
+            self.gpu.abandon();
+        }
+    }
+}

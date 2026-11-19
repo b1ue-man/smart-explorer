@@ -41,7 +41,7 @@ impl Worker {
         let refresh = request.keyframe
             || self.encoder.as_ref().is_none_or(|running| {
                 running.epoch != request.encoder_epoch
-                    || !same_encoder_choice(&running.choice, &request.choice)
+                    || !same_encoder_choice(&running.choice, &request.choice, request.size)
                     || running.frame_contract != request.frame_contract
                     || running.encoder.size() != request.size
                     || running.encoder.needs_refresh()
@@ -225,7 +225,7 @@ impl Worker {
         let current = self.encoder.as_ref().is_some_and(|running| {
             running.book == book
                 && running.epoch == request.encoder_epoch
-                && same_encoder_choice(&running.choice, &request.choice)
+                && same_encoder_choice(&running.choice, &request.choice, request.size)
                 && running.frame_contract == request.frame_contract
                 && running.encoder.size() == request.size
         });

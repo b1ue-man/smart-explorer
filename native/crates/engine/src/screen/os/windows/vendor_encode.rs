@@ -191,6 +191,11 @@ pub(super) trait VendorSession {
     fn running_bps(&self) -> Option<u64> {
         None
     }
+    /// Before the session goes (Codex round 6, finding 3): whether its input
+    /// may go back to the capture; `false` while the driver may still read it.
+    fn end_late(&mut self) -> bool {
+        true
+    }
     /// The driver refused the last rate it was given (plan 2026-11-17).
     fn rate_refused(&self) -> bool {
         false
