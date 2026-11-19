@@ -153,6 +153,11 @@ pub fn prefs_path() -> PathBuf {
         .join("viewer.json")
 }
 
+/// Changes the stored settings under the lock all processes share.
+pub fn update_stored(change: impl FnOnce(&mut ViewerPrefs)) -> io::Result<()> {
+    store::update(&prefs_path(), change)
+}
+
 /// The settings this process loaded at its start, or saved last
 /// (`ViewerPrefs::save`).
 static LOADED: Mutex<Option<ViewerPrefs>> = Mutex::new(None);
@@ -169,9 +174,7 @@ pub fn max_rate_bps() -> Option<u64> {
 /// Stores „Höchste Datenrate“ (`None`: automatic) at once.
 pub fn set_max_rate_bps(rate: Option<u64>) -> io::Result<()> {
     *MAX_RATE.lock().unwrap_or_else(PoisonError::into_inner) = Some(rate);
-    let mut prefs = ViewerPrefs::load_from(&prefs_path());
-    prefs.max_rate_bps = rate;
-    prefs.save_to(&prefs_path())
+    store::update(&prefs_path(), |prefs| prefs.max_rate_bps = rate)
 }
 
 /// „Codec“ and „Dekodierer“ of this process: unread (`None`) or the values.
@@ -208,10 +211,10 @@ pub fn set_codec_choice(
     let chosen = (codec.or(old_codec), decoder.or(old_decoder));
     *CODEC.lock().unwrap_or_else(PoisonError::into_inner) = Some(chosen);
     crate::screen::core::negotiate::set_decoder_preference(chosen.1.unwrap_or_default());
-    let mut prefs = ViewerPrefs::load_from(&prefs_path());
-    let stored_decoder = prefs.decoder;
-    prefs.apply_codec((codec, decoder.or(stored_decoder)));
-    prefs.save_to(&prefs_path())
+    store::update(&prefs_path(), |prefs| {
+        let stored_decoder = prefs.decoder;
+        prefs.apply_codec((codec, decoder.or(stored_decoder)));
+    })
 }
 
 /// „Dekodierer-Bibliothek“ and „Anzeige“ of this process (P8): unread
@@ -248,10 +251,10 @@ pub fn set_output_choice(
     let chosen = (library.or(old_library), display.or(old_display));
     *OUTPUT.lock().unwrap_or_else(PoisonError::into_inner) = Some(chosen);
     crate::screen::core::decoder_library::set_decoder_library(chosen.0.unwrap_or_default());
-    let mut prefs = ViewerPrefs::load_from(&prefs_path());
-    prefs.decoder_library = library.or(prefs.decoder_library);
-    prefs.display = display.or(prefs.display);
-    prefs.save_to(&prefs_path())
+    store::update(&prefs_path(), |prefs| {
+        prefs.decoder_library = library.or(prefs.decoder_library);
+        prefs.display = display.or(prefs.display);
+    })
 }
 
 /// „Monitor“ and „Auflösung“ of this process: unread (`None`) or the value.
@@ -283,25 +286,21 @@ pub fn set_virtual_display_choice(
         chosen.size = size;
     }
     chosen.validate()?;
-    let mut prefs = ViewerPrefs::load_from(&prefs_path());
-    let mut stored = prefs.virtual_display.unwrap_or_default();
-    if let Some(wish) = wish {
-        stored.wish = wish;
-    }
-    if let Some(size) = size {
-        stored.size = size;
-    }
     *VIRTUAL_DISPLAY
         .lock()
         .unwrap_or_else(PoisonError::into_inner) = Some(Some(chosen));
-    // A stored part another process left invalid with this one is not
-    // written (the process's own choice holds).
-    prefs.virtual_display = Some(if stored.validate().is_ok() {
-        stored
-    } else {
-        chosen
-    });
-    prefs.save_to(&prefs_path())
+    store::update(&prefs_path(), |prefs| {
+        let mut stored = prefs.virtual_display.unwrap_or_default();
+        if let Some(wish) = wish {
+            stored.wish = wish;
+        }
+        if let Some(size) = size {
+            stored.size = size;
+        }
+        // A stored part left invalid with this one is not written.
+        let valid = stored.validate().is_ok();
+        prefs.virtual_display = Some(if valid { stored } else { chosen });
+    })
 }
 
 impl ViewerPrefs {
@@ -342,11 +341,9 @@ impl ViewerPrefs {
     }
 
     /// Stores the settings this process changed (user rule 2026-11-18):
-    /// the file is read again and only the fields that differ from what this
-    /// process loaded are written, so a value `se screen view` or the MCP
-    /// tool changed meanwhile stays. „Höchste Datenrate“, „Codec“,
-    /// „Dekodierer“, „Dekodierer-Bibliothek“, „Anzeige“, „Monitor“,
-    /// „Auflösung“ and „Ton“ are written by their own setters at once.
+    /// only the fields that differ from what it loaded go over the file, so
+    /// a value `se screen view` or the MCP tool changed meanwhile stays; the
+    /// rest is written by its own setter at once.
     pub fn save(&self) -> io::Result<()> {
         let mut loaded = LOADED.lock().unwrap_or_else(PoisonError::into_inner);
         let base = loaded.clone().unwrap_or_default();
@@ -355,10 +352,12 @@ impl ViewerPrefs {
         Ok(())
     }
 
-    /// Writes the fields of `self` that differ from `base` over the file at
-    /// `path` as it is now.
+    /// Writes the fields of `self` that differ from `base` over the file.
     pub fn save_changes_to(&self, base: &Self, path: &Path) -> io::Result<()> {
-        let mut stored = Self::load_from(path);
+        store::update(path, |stored| self.changes_onto(base, stored))
+    }
+
+    fn changes_onto(&self, base: &Self, stored: &mut Self) {
         macro_rules! changed {
             ($($field:ident),*) => {$(
                 if self.$field != base.$field {
@@ -380,7 +379,6 @@ impl ViewerPrefs {
             audio
         );
         stored.schema = SCHEMA;
-        stored.save_to(path)
     }
 
     pub fn save_to(&self, path: &Path) -> io::Result<()> {
@@ -493,6 +491,8 @@ mod bildkette_codec_tests {
     }
 }
 
+#[path = "screen_prefs_store.rs"]
+mod store;
 #[cfg(test)]
 #[path = "wahlgilt_prefs_task_tests.rs"]
 mod wahlgilt_prefs_task_tests;

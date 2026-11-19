@@ -44,9 +44,8 @@ pub fn audio_on() -> bool {
 /// Stores „Ton“ at once.
 pub fn set_audio(on: bool) -> io::Result<()> {
     *AUDIO.lock().unwrap_or_else(PoisonError::into_inner) = Some(Some(on));
-    let mut prefs = ViewerPrefs::load_from(&prefs_path());
-    prefs.audio = Some(on);
-    prefs.save_to(&prefs_path())
+    // Under the settings lock (`screen_prefs::update_stored`, Codex 8/12).
+    super::screen_prefs::update_stored(|prefs| prefs.audio = Some(on))
 }
 
 /// Whether the host of this session sends its sound in a format this
