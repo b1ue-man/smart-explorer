@@ -97,6 +97,17 @@ fn preview_base(offers: &[CodecOffer], edge: u32, interval_ms: u64) -> StreamReq
 fn announced(mut request: StreamRequest, given_up: GivenUp) -> StreamRequest {
     let offers = super::screen_decode_local::current_offers(&request.decoders);
     request.decoders = given_up.filter(&offers);
+    // A chosen „Dekodier-Bibliothek“ offers no tiles beside its video (the
+    // tiles decode in neither library), so the host never falls back to them
+    // (Codex 6/13). Safe since the hello and `SET_DECODERS` name the choice
+    // (`codec_choice`): the host no longer reads it from the missing tiles.
+    // A library without any video is refused before (`library_refusal`).
+    let library = super::screen_prefs::decoder_library_choice();
+    let lossless = request.codec == Some(super::screen_prefs::CodecSetting::Lossless);
+    let video = request.decoders.iter().any(|offer| offer.codec.is_video());
+    if library != super::screen_prefs::DecoderLibrary::Automatic && !lossless && video {
+        request.decoders.retain(|offer| offer.codec.is_video());
+    }
     request.gop_continue = super::screen_decode_local::announces(&request);
     request.gop_continue_decoders = super::screen_decode_local::continuing(&request);
     // Task tests with fake decoders write no log file.
