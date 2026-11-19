@@ -343,14 +343,7 @@ mod tests {
                 read_only,
                 matches!(
                     tool.name.as_ref(),
-                    "status"
-                        | "connections"
-                        | "list"
-                        | "stat"
-                        | "read"
-                        | "search"
-                        | "job_status"
-                        | "screen"
+                    "status" | "connections" | "list" | "stat" | "read" | "search" | "job_status"
                 ),
                 "{}",
                 tool.name

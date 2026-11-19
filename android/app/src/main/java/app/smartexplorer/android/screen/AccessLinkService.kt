@@ -31,6 +31,18 @@ class AccessLinkService : Service() {
                     if (service == null || points.isEmpty()) answer(callback, false)
                     else service.gesture(GestureMapper.gestureOf(PhoneAction.Stroke(points, duration))) { answer(callback, it) }
                 }
+                AccessProtocol.MULTI_GESTURE -> {
+                    val callback = data.readStrongBinder()
+                    val count = data.readInt().coerceIn(0, GestureMapper.MAX_STROKES)
+                    val strokes = List(count) {
+                        val start = data.readLong()
+                        val duration = data.readLong()
+                        val points = data.readInt().coerceIn(0, AccessProtocol.MAX_POINTS)
+                        PhoneAction.Stroke(List(points) { data.readFloat() to data.readFloat() }, duration, start)
+                    }.filter { it.points.isNotEmpty() }
+                    if (service == null || strokes.isEmpty()) answer(callback, false)
+                    else service.gesture(GestureMapper.gestureOf(strokes)) { answer(callback, it) }
+                }
                 AccessProtocol.TEXT -> {
                     val text = data.readString()
                     val done = service != null && text != null && (if (text == "\n") service.imeEnter() else service.appendText(text))
@@ -109,8 +121,10 @@ internal object AccessProtocol {
     const val GLOBAL = IBinder.FIRST_CALL_TRANSACTION + 3
     const val WINDOWS = IBinder.FIRST_CALL_TRANSACTION + 4
     const val STILL = IBinder.FIRST_CALL_TRANSACTION + 5
+    /** Several fingers at once (Codex 4/23): strokes with their start times in one gesture. */
+    const val MULTI_GESTURE = IBinder.FIRST_CALL_TRANSACTION + 6
     const val FIRST = PING
-    const val LAST = STILL
+    const val LAST = MULTI_GESTURE
 
     /** The answer to a callback (gesture end, still). */
     const val RESULT = IBinder.FIRST_CALL_TRANSACTION

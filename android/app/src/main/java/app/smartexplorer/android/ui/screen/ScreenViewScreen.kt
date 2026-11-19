@@ -254,6 +254,9 @@ fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, a
             switchJobs[0]?.cancel()
             owned.forEach { it.close() }
             if (family == null) adopted?.setMode("preview",settings.source)
+            // A „Höchste Datenrate“ changed in the full view binds the tile it returns to as well (Gemini 3/20).
+            if (family == null && adopted != null && adopted.choice.maxRateBps != settings.choice.maxRateBps)
+                adopted.setMaxRate(settings.choice.maxRateBps)
             CoroutineScope(Dispatchers.IO).launch { try { PairedLogin.end(autoLoginKey) } catch (_: Throwable) { Unit } }
         }
     }
@@ -465,13 +468,15 @@ fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, a
     val ended = ui.ended
     val openedRate = session?.openedMaxRateBps?.takeIf { ui.rateSends == 0 }
     val info = chainInfoLine(ui.stream?.codec, decoderStage, ScreenChainInfo.rateNote(ui.rateCeiling, openedRate, settings.choice.maxRateBps, ui.rateAnswered, ui.chainRateCeilingKbps))
+    val decodeFailedText = stringResource(R.string.screen_view_decode_failed)
     val status = when {
         ended != null -> ScreenTexts.endText(context, ended.code, ended.detail)
         failure != null -> failure.orEmpty()
         // The chosen codec is not in force: its reason, not a silent other codec (user rule of 2026-11-18).
         ui.codecError != null -> ui.codecError.orEmpty()
+        // The phone's own decoder failing is said before the wait for a picture it causes (Gemini 3/17).
+        failures > 3 -> decodeFailedText
         !ui.inputReady && controlOn -> "Warte auf vollständiges aktuelles Bild …"
-        failures > 3 -> stringResource(R.string.screen_view_decode_failed)
         // A held batch was not applied; its state only repeats an earlier block, so `held` comes first.
         ui.held != null && sending -> ScreenTexts.heldText(ui.held.orEmpty())
         ui.blocked != null && sending -> ScreenTexts.blockedText(context, ui.blocked.orEmpty())
@@ -629,7 +634,8 @@ fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, a
                         onKeyboard = { keyboardOn = !keyboardOn },
                         onZoomMode = { zoomMode = !zoomMode },
                         onSettings = { applySettings(it) },
-                        onStatus = if (failures > 3 && !settings.lossless) ({ failures = 0; applySettings(settings.copy(choice = settings.choice.copy(codec = ViewerCodecChoice.CODEC_LOSSLESS))) }) else null,
+                        // Only the shown offer „Verlustfrei einschalten“ switches, never a tap on another status (Gemini 3/17).
+                        onStatus = if (failures > 3 && !settings.lossless && status == decodeFailedText) ({ failures = 0; applySettings(settings.copy(choice = settings.choice.copy(codec = ViewerCodecChoice.CODEC_LOSSLESS))) }) else null,
                         onClose = { releaseInputs(); onClose() },
                         info = info,
                         displayLine = if (ui.accepted) ScreenDisplayReportText.line(settings.display, ui.virtualDisplay, ui.chainVirtualDisplay) else "",
@@ -726,7 +732,7 @@ private fun ScreenKeyboardField(mapper: ScreenInputMapper, flush: Channel<Unit>)
         singleLine = true,
         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
         keyboardActions = KeyboardActions(onSend = {
-            mapper.tapKey("enter")
+            mapper.enter()
             flush.trySend(Unit)
         }),
     )

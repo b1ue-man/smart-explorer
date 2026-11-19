@@ -196,6 +196,14 @@ class ScreenInputMapper(
         if (caps.keyboard) listOf(true, false).forEach { key(name, it) }
     }
 
+    /**
+     * The keyboard's send key: Enter as a key, or for a host that takes text but no keys (Android: `no_key_events`)
+     * as the text `"\n"`, which presses Enter in the focused field there (Gemini 3/21).
+     */
+    fun enter() {
+        if (caps.keyboard) tapKey("enter") else if (caps.text) onText("\n")
+    }
+
     /** A key of the host's toolbar by its HID usage, pressed and released. */
     fun tapUsage(usage: Int) {
         if (caps.keyboard) listOf(true, false).forEach { add(ev("key", "hid_usage" to usage, "down" to it)) }

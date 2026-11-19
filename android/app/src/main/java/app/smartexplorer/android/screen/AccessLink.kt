@@ -108,6 +108,24 @@ internal object AccessLink {
                 }) { _, _ -> true }
                 if (sent != true) done(false)
             }
+            is PhoneAction.Gesture -> {
+                // Points shared among the strokes: the parcel stays within one stroke's bound.
+                val strokes = action.strokes.take(GestureMapper.MAX_STROKES)
+                val each = (AccessProtocol.MAX_POINTS / strokes.size.coerceAtLeast(1)).coerceAtLeast(1)
+                val callback = callback { data -> done(data.readInt() == 1) }
+                val sent = call(AccessProtocol.MULTI_GESTURE, { data ->
+                    data.writeStrongBinder(callback)
+                    data.writeInt(strokes.size)
+                    strokes.forEach { stroke ->
+                        val points = stroke.points.take(each)
+                        data.writeLong(stroke.startMs)
+                        data.writeLong(stroke.durationMs)
+                        data.writeInt(points.size)
+                        points.forEach { (x, y) -> data.writeFloat(x); data.writeFloat(y) }
+                    }
+                }) { _, _ -> true }
+                if (sent != true) done(false)
+            }
             is PhoneAction.Text -> done(call(AccessProtocol.TEXT, { it.writeString(action.text) }) { _, reply -> reply.readInt() == 1 } ?: false)
             is PhoneAction.Global -> done(global(action.action))
         }

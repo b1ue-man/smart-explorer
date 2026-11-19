@@ -13,8 +13,11 @@ import kotlinx.serialization.json.intOrNull
 
 /** One action on the phone that the input of a viewer becomes. */
 internal sealed interface PhoneAction {
-    /** A finger path in display pixels over [durationMs]. */
-    data class Stroke(val points: List<Pair<Float, Float>>, val durationMs: Long) : PhoneAction
+    /** A finger path in display pixels over [durationMs], beginning [startMs] after its gesture began. */
+    data class Stroke(val points: List<Pair<Float, Float>>, val durationMs: Long, val startMs: Long = 0) : PhoneAction
+
+    /** Fingers that touched at the same time (a pinch): one gesture of several [strokes] (Codex 4/23). */
+    data class Gesture(val strokes: List<Stroke>) : PhoneAction
 
     /** Text for the focused field; `"\n"` presses Enter. */
     data class Text(val text: String) : PhoneAction
@@ -41,6 +44,19 @@ internal class GestureMapper(private val width: () -> Int, private val height: (
     private var pressed: MutableList<Pair<Float, Float>>? = null
     private var pressedAt = 0L
     private val touches = HashMap<Int, Pair<MutableList<Pair<Float, Float>>, Long>>()
+    /** The ended strokes of fingers that overlapped others still down; they go out together with the last. */
+    private val group = mutableListOf<PhoneAction.Stroke>()
+    private var groupStart = 0L
+
+    /** The fingers are all up: their strokes go out as one gesture (one finger: one stroke, as before). */
+    private fun flushGroup(out: MutableList<PhoneAction>) {
+        when (group.size) {
+            0 -> Unit
+            1 -> out.add(group[0].copy(startMs = 0))
+            else -> out.add(PhoneAction.Gesture(group.take(MAX_STROKES)))
+        }
+        group.clear()
+    }
 
     fun map(events: JsonArray, now: Long = SystemClock.uptimeMillis()): List<PhoneAction> = buildList {
         for (element in events) {
@@ -83,7 +99,7 @@ internal class GestureMapper(private val width: () -> Int, private val height: (
                         // Without a position (`se screen input --scroll`) a stroke from the top edge would pull down the
                         // notification shade: it starts in the middle of the display instead.
                         val (fromX, fromY) = if (positioned) x to y else (width() - 1).coerceAtLeast(0) / 2f to (height() - 1).coerceAtLeast(0) / 2f
-                        val endY = (fromY + distance).coerceIn(0f, height() - 1f)
+                        val endY = (fromY + distance).coerceIn(0f, (height() - 1).coerceAtLeast(0).toFloat())
                         add(PhoneAction.Stroke(listOf(fromX to fromY, fromX to endY), 150))
                     }
                 }
@@ -91,13 +107,22 @@ internal class GestureMapper(private val width: () -> Int, private val height: (
                     val id = event.int("id")
                     val point = scale(event.int("x"), width()) to scale(event.int("y"), height())
                     when (event.text("phase")) {
-                        "start" -> touches[id] = mutableListOf(point) to now
-                        "move" -> touches[id]?.first?.add(point)
-                        "end" -> touches.remove(id)?.let { (path, since) ->
-                            path.add(point)
-                            add(PhoneAction.Stroke(path, duration(now - since)))
+                        "start" -> {
+                            if (touches.isEmpty() && group.isEmpty()) groupStart = now
+                            touches[id] = mutableListOf(point) to now
                         }
-                        else -> touches.remove(id)
+                        "move" -> touches[id]?.first?.add(point)
+                        "end" -> {
+                            touches.remove(id)?.let { (path, since) ->
+                                path.add(point)
+                                group.add(PhoneAction.Stroke(path, duration(now - since), (since - groupStart).coerceIn(0L, MAX_STROKE_MS)))
+                            }
+                            if (touches.isEmpty()) flushGroup(this)
+                        }
+                        else -> {
+                            touches.remove(id)
+                            if (touches.isEmpty()) flushGroup(this)
+                        }
                     }
                 }
                 "text" -> event.text("text")?.takeIf { it.isNotEmpty() }?.let { add(PhoneAction.Text(it)) }
@@ -123,6 +148,8 @@ internal class GestureMapper(private val width: () -> Int, private val height: (
         private const val NOTCH = 120
         const val MIN_STROKE_MS = 1L
         const val MAX_STROKE_MS = 10_000L
+        /** Strokes of one gesture: `GestureDescription.getMaxStrokeCount()` is at least 10. */
+        const val MAX_STROKES = 10
 
         fun globalOf(action: String?): Int? = when (action) {
             "back" -> AccessibilityService.GLOBAL_ACTION_BACK
@@ -136,14 +163,19 @@ internal class GestureMapper(private val width: () -> Int, private val height: (
         }
 
         /** [stroke] as one gesture of the accessibility service. */
-        fun gestureOf(stroke: PhoneAction.Stroke): GestureDescription {
-            val path = Path()
-            stroke.points.forEachIndexed { index, (px, py) -> if (index == 0) path.moveTo(px, py) else path.lineTo(px, py) }
-            // A tap is a path without length: Android needs a point to press.
-            if (stroke.points.size == 1) path.lineTo(stroke.points[0].first, stroke.points[0].second)
-            return GestureDescription.Builder()
-                .addStroke(GestureDescription.StrokeDescription(path, 0, stroke.durationMs))
-                .build()
+        fun gestureOf(stroke: PhoneAction.Stroke): GestureDescription = gestureOf(listOf(stroke))
+
+        /** [strokes] as one gesture, each from its [PhoneAction.Stroke.startMs] (several fingers at once). */
+        fun gestureOf(strokes: List<PhoneAction.Stroke>): GestureDescription {
+            val builder = GestureDescription.Builder()
+            for (stroke in strokes.take(MAX_STROKES)) {
+                val path = Path()
+                stroke.points.forEachIndexed { index, (px, py) -> if (index == 0) path.moveTo(px, py) else path.lineTo(px, py) }
+                // A tap is a path without length: Android needs a point to press.
+                if (stroke.points.size == 1) path.lineTo(stroke.points[0].first, stroke.points[0].second)
+                builder.addStroke(GestureDescription.StrokeDescription(path, stroke.startMs, stroke.durationMs))
+            }
+            return builder.build()
         }
     }
 }

@@ -82,8 +82,13 @@ fun FamilyPicker(target: ScreenTarget, deviceName: String, onSelect: (ScreenTarg
                 LazyColumn(Modifier.heightIn(max = 360.dp)) {
                     items(list.entries, key = { it.source }) { entry ->
                         Column(Modifier.fillMaxWidth().clickable {
-                            FamilyApi.validate(entry)
-                            onSelect(target.copy(source = entry.source, control = control), entry)
+                            // An entry the app cannot confirm is said, not a crash of the UI thread (Gemini 3/21).
+                            try {
+                                FamilyApi.validate(entry)
+                                onSelect(target.copy(source = entry.source, control = control), entry)
+                            } catch (e: IllegalArgumentException) {
+                                error = e.message
+                            }
                         }.padding(vertical = 12.dp)) {
                             Text(entry.window.app); Text(entry.window.title)
                             Text(if (control) "Tippen: steuern" else "Tippen: ansehen")

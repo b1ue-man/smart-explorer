@@ -669,11 +669,13 @@ internal object ScreenHostControl {
     /** One thread hands the controlling viewer's input to the accessibility service, in order. */
     @Synchronized
     private fun ensureInput() {
-        if (input?.isAlive == true) return
-        input = thread(name = "screen-input", isDaemon = true) {
+        // `input` is cleared under this same lock by the reader itself when it stops (Gemini 3/21): a session that
+        // starts while an old reader is leaving its loop either keeps that reader or starts a new one, never neither.
+        if (input != null) return
+        input = thread(name = "screen-input", isDaemon = true) { try {
             // One gesture state per host session (round 4, Y1): a stroke of one viewer never mixes with another's.
             val mappers = HashMap<Long, GestureMapper>()
-            while (sessions.isNotEmpty()) {
+            while (readerContinues()) {
                 val raw = try {
                     NativeBridge.screenControl(0, CONTROL_POLL_MS)
                 } catch (e: LinkageError) {
@@ -704,11 +706,15 @@ internal object ScreenHostControl {
                     val done = CountDownLatch(1)
                     val performed = java.util.concurrent.atomic.AtomicBoolean(false)
                     AccessLink.perform(action) { ok -> performed.set(ok); done.countDown() }
-                    val wait = (action as? PhoneAction.Stroke)?.durationMs ?: 0
+                    val wait = when (action) {
+                        is PhoneAction.Stroke -> action.durationMs
+                        is PhoneAction.Gesture -> action.strokes.maxOfOrNull { it.startMs + it.durationMs } ?: 0L
+                        else -> 0L
+                    }
                     val answered = done.await(wait + STROKE_GRACE_MS, TimeUnit.MILLISECONDS)
                     if (refused == null && (!answered || !performed.get())) refused = when {
                         !answered -> "timeout"
-                        action is PhoneAction.Stroke -> "gesture"
+                        action is PhoneAction.Stroke || action is PhoneAction.Gesture -> "gesture"
                         action is PhoneAction.Text -> "text"
                         else -> "action"
                     }
@@ -718,7 +724,18 @@ internal object ScreenHostControl {
                     try { ScreenApi.inputRefused(owner, kind) } catch (e: CoreException) { Log.w(TAG, "Eingabefehler nicht gemeldet: ${e.message}") }
                 }
             }
-        }
+        } finally {
+            // However the reader ends, the next session can start a new one.
+            synchronized(this) { if (input === Thread.currentThread()) input = null }
+        } }
+    }
+
+    /** Whether the input reader goes on; when no session is left it stops and says so under the lock of [ensureInput]. */
+    @Synchronized
+    private fun readerContinues(): Boolean {
+        if (sessions.isNotEmpty()) return true
+        input = null
+        return false
     }
 
     private fun JsonObject.text(key: String): String? = (this[key] as? JsonPrimitive)?.contentOrNull

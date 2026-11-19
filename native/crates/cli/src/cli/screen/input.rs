@@ -4,8 +4,9 @@
 //! session in the mode `control` (the device needs „Bildschirm steuern“
 //! for this device, and its user may be asked first; the command then waits
 //! and says so on stderr), sends the input and ends the session.
-//! Coordinates: a number is a pixel of the source, a number with `%` a
-//! share of it (`50%,50%` is the middle). `--key` names keys of
+//! Coordinates: a number is a pixel of the source (a monitor; the device
+//! names no size of a window, so a window takes percent), a number with `%`
+//! a share of it (`50%,50%` is the middle). `--key` names keys of
 //! `se screen probe`'s toolbar and of the HID table (`a`, `enter`, `f5`,
 //! `ctrl_left+c`: pressed in order, released backwards). Ctrl+Alt+Delete is
 //! never sent. The input goes out once the session has received a complete
@@ -31,6 +32,7 @@ use crate::daemon::{screen_stream, StreamEvent, StreamRequest};
 use crate::screen::core::input_model::{key_usage, InputEvent, PointerButton, SystemAction};
 use crate::screen::core::negotiate::CodecOffer;
 use crate::screen::core::pixel_convert::FrameSize;
+use crate::screen::core::session_state::SessionState;
 use crate::screen::core::window_list::SourceId;
 use crate::screen::core::wire_control::{ControlBlock, HostFrame, InputHeld, ViewerFrame};
 use crate::screen::core::wire_hello::SessionMode;
@@ -328,7 +330,7 @@ pub(crate) fn deliver(
                 held: None,
             });
         }
-        let mut size = match &source {
+        let size = match &source {
             Some(SourceId::Monitor(id)) => hello.monitors.iter().find(|m| &m.id == id),
             None => hello
                 .monitors
@@ -339,19 +341,45 @@ pub(crate) fn deliver(
         }
         .map(|monitor| FrameSize::new(monitor.width, monitor.height))
         .filter(|size| size.width > 0 && size.height > 0);
+        // Pixels are pixels of the source: only the size the host names for
+        // it (`HELLO_OK` monitors) converts them. A picture's size is what the
+        // host sent, possibly scaled down, so a pixel of the source would land
+        // elsewhere (Codex 4/16): without the source's size pixels are refused.
+        if size.is_none() && needs_size(action) {
+            return Err(
+                "the device does not name the size of this source (a window's picture may \
+                        be scaled); give the position in percent, e.g. 50%,50%"
+                    .into(),
+            );
+        }
         // The host drops input silently until the viewer acknowledged a
         // picture of its current reference (`host_session_control.rs`,
         // `input`); the worker acknowledges every picture it receives, so
         // the input waits for the first complete one (at most `ANSWER_WAIT`).
         // Without one it is not sent (review 2026-11-19, Codex 3/20): a host
         // would drop it, so the answer says `held: waiting_for_picture`.
-        let deadline = Instant::now() + ANSWER_WAIT;
+        // While the host waits for its user's consent to share the screen
+        // (Android's MediaProjection dialog: `waiting_for_portal`), the wait
+        // for the user's answer applies (`accept_within`, none for the CLI),
+        // not the picture time (Gemini 3/19).
+        let mut deadline = Some(Instant::now() + ANSWER_WAIT);
         let mut picture = false;
-        while (!picture || (size.is_none() && needs_size(action))) && Instant::now() < deadline {
-            match next(Some(deadline - Instant::now()))? {
-                Some(StreamEvent::Record { header, record }) => {
-                    size = size.or(Some(header.size));
-                    picture |= !record.has_more();
+        while !picture {
+            let wait = match deadline {
+                Some(deadline) => match deadline.checked_duration_since(Instant::now()) {
+                    Some(left) if !left.is_zero() => Some(left),
+                    _ => break,
+                },
+                None => None,
+            };
+            match next(wait)? {
+                Some(StreamEvent::Record { record, .. }) => picture |= !record.has_more(),
+                Some(StreamEvent::Host(HostFrame::State(report))) => {
+                    deadline = if report.state == SessionState::WaitingForPortal {
+                        accept_within.map(|limit| Instant::now() + limit)
+                    } else {
+                        deadline.or(Some(Instant::now() + ANSWER_WAIT))
+                    };
                 }
                 Some(StreamEvent::End(end)) => return Err(end.code),
                 _ => {}

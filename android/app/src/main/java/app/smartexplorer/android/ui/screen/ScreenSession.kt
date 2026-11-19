@@ -249,7 +249,10 @@ object CoreScreenBackend : ScreenBackend {
 
     override suspend fun openWith(target: ScreenTarget, mode: String, source: String?, displayWidth: Int, displayHeight: Int, maxFps: Int, decoders: List<DecoderOffer>, choice: ViewerCodecChoice) =
         ScreenApi.viewOpen(target.relation, target.relationId, target.deviceId, mode, source, decoders, displayWidth, displayHeight, maxFps, ScreenScaling.awaitRendererLimit(), target.expectedNodeId,
-            maxRate = choice.maxRateBps, codec = choice.codec, decoder = choice.decoder, display = ScreenDisplayPrefs.current)
+            // „Monitor“/„Auflösung“ only for a full view: a preview tile never makes a host attach or resize a display
+            // (Gemini 3/20; the desktop's previews send none either, `screen_pool.rs`).
+            maxRate = choice.maxRateBps, codec = choice.codec, decoder = choice.decoder,
+            display = ScreenDisplayPrefs.current.takeIf { mode != "preview" })
 
     override suspend fun setRateCeiling(session: Long, mode: String, sharpness: Boolean, lossless: Boolean, maxRate: Long) =
         ScreenApi.viewSetMode(session, mode, sharpness = sharpness, lossless = lossless, maxRate = maxRate)
