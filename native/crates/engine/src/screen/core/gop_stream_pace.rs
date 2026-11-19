@@ -11,6 +11,11 @@ pub(super) const PACE_MIN_WAIT_US: u64 = 1_000;
 /// stream that takes no more bytes ends the write piece by piece
 /// (`GopWriter::piece`), and a lowered ceiling only slows it.
 pub const WRITE_SAFETY_LIMIT: std::time::Duration = std::time::Duration::from_secs(3600);
+/// The longest rest of a picture after a lowered ceiling (round 8 R1): a
+/// rest that takes longer at the new rate ends the picture's stream (the
+/// next picture is a key frame sized for the new ceiling) instead of
+/// crawling for minutes.
+pub(super) const LOWERED_REST_US: u64 = 2_000_000;
 /// The longest single wait (round 6 L2): a ceiling raised meanwhile, or
 /// control traffic that sank, speeds the rest of the picture up within it.
 pub(super) const PACE_MAX_WAIT_US: u64 = 100_000;
@@ -29,6 +34,8 @@ pub(super) struct Pace {
     pub(super) anchor: tokio::time::Instant,
     pub(super) anchor_rate: Option<u64>,
     pub(super) written: u64,
+    /// The bytes of the whole frame (`write_records_admitted`; 0: unknown).
+    pub(super) total: u64,
     /// The ceiling as it is now (0: none, Codex 5/12), the user ceiling the
     /// picture's rate was taken under (Codex 7/4), and the control and sound
     /// rate then.
@@ -53,12 +60,37 @@ impl Pace {
             .limit
             .as_ref()
             .map_or(0, |cell| cell.load(std::sync::atomic::Ordering::Acquire));
-        if live == 0 || live >= self.ceiling_at_start && self.ceiling_at_start != 0 {
+        if !self.lowered(live) {
             self.rate_bps
         } else {
+            // Round 8 R1: an admitted picture goes on at least at the
+            // pictures' floor of the new ceiling (control and sound measured
+            // before it may leave less, down to 1 bit/s, and the rest crawled
+            // for hours); `too_slow` ends one whose rest takes too long.
+            let floor = crate::screen::core::rate_control::picture_floor_bps(live);
             self.rate_bps
-                .min(live.saturating_sub(self.control_bps).max(1))
+                .min(live.saturating_sub(self.control_bps).max(floor))
         }
+    }
+
+    /// Whether `live` is a ceiling below the one the picture's rate was
+    /// taken under (or the first one).
+    fn lowered(&self, live: u64) -> bool {
+        live != 0 && (self.ceiling_at_start == 0 || live < self.ceiling_at_start)
+    }
+
+    /// Whether the rest of the picture after a lowered ceiling takes longer
+    /// than `LOWERED_REST_US` at `rate_bps` (round 8 R1).
+    pub(super) fn too_slow(&self, rate_bps: u64) -> bool {
+        let live = self
+            .limit
+            .as_ref()
+            .map_or(0, |cell| cell.load(std::sync::atomic::Ordering::Acquire));
+        if !self.lowered(live) || self.total == 0 {
+            return false;
+        }
+        let rest = u128::from(self.total.saturating_sub(self.written));
+        rest * 8 * 1_000_000 / u128::from(rate_bps.max(1)) > u128::from(LOWERED_REST_US)
     }
 
     /// The rate now and the bytes allowed on the line by now: what earlier

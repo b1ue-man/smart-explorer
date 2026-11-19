@@ -203,6 +203,7 @@ impl GopWriter {
             anchor: tokio::time::Instant::now(),
             anchor_rate: None,
             written: 0,
+            total: 0,
             limit,
             ceiling_at_start: rate_ceiling.unwrap_or(0),
             control_bps,
@@ -211,9 +212,9 @@ impl GopWriter {
     }
 
     /// Waits until `bytes` more may go on the line under the pace.
-    async fn paced(&mut self, bytes: usize) {
+    async fn paced(&mut self, bytes: usize) -> io::Result<()> {
         let Some(pace) = self.pace.as_mut() else {
-            return;
+            return Ok(());
         };
         pace.written = pace.written.saturating_add(bytes as u64);
         // Waits of at most `PACE_MAX_WAIT_US`, each with the rate as it is
@@ -221,14 +222,23 @@ impl GopWriter {
         // its start slept for hours after a ceiling change).
         loop {
             let Some(pace) = self.pace.as_mut() else {
-                return;
+                return Ok(());
             };
             // Codex 7/5: each stretch of time earns at the rate valid in it.
             let (rate, allowed) = pace.allowed();
             let ahead = u128::from(pace.written).saturating_sub(allowed);
             let wait_us = ahead * 8 * 1_000_000 / u128::from(rate);
             if wait_us < u128::from(PACE_MIN_WAIT_US) {
-                return;
+                return Ok(());
+            }
+            // Round 8 R1: after a lowered ceiling, a rest that would take
+            // long ends the picture's stream (a key frame sized for the new
+            // ceiling follows) instead of holding the picture for minutes.
+            if pace.too_slow(rate) {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "screen picture rest too slow for the lowered ceiling",
+                ));
             }
             let wait = u64::try_from(wait_us.min(u128::from(PACE_MAX_WAIT_US))).unwrap_or(0);
             tokio::time::sleep(std::time::Duration::from_micros(wait)).await;
@@ -346,6 +356,9 @@ impl GopWriter {
         {
             return Err(super::wire::invalid("admitted records exceed GOP contract"));
         }
+        if let (Some(pace), Some(total)) = (self.pace.as_mut(), total) {
+            pace.total = total as u64;
+        }
         let count = records.len();
         records.reverse();
         let mut written = 0u64;
@@ -388,7 +401,7 @@ impl GopWriter {
             ));
         }
         let head = super::wire_binary::record_head(payload.len(), frame_id, capture_ts_us, flags);
-        self.paced(head.len()).await;
+        self.paced(head.len()).await?;
         self.piece(bytes::Bytes::copy_from_slice(&head)).await?;
         let mut payload = bytes::Bytes::from(payload);
         if self.pace.is_none() {
@@ -396,7 +409,7 @@ impl GopWriter {
         }
         while !payload.is_empty() {
             let piece = payload.split_to(PACE_CHUNK.min(payload.len()));
-            self.paced(piece.len()).await;
+            self.paced(piece.len()).await?;
             self.piece(piece).await?;
         }
         Ok(())

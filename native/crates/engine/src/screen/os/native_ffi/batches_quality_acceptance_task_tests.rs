@@ -177,8 +177,10 @@ fn hybrid_still(registry: &CodecRegistry) -> Value {
     let mut clean = registry.open_decoder(&header).unwrap();
     let mut impaired = registry.open_decoder(&header).unwrap();
     let mut rows = Vec::new();
-    for id in 1..=6 {
-        request.frame_id = id;
+    for id in 1..=6u64 {
+        // Room between the frames for the repairs of the still (id 3).
+        let frame_id = id * 100;
+        request.frame_id = frame_id;
         request.keyframe = matches!(id, 1 | 6);
         let source = capture(size, if id == 3 { 2 } else { id });
         let mut builder = CaptureImageBuilder::new(
@@ -214,7 +216,7 @@ fn hybrid_still(registry: &CodecRegistry) -> Value {
                 }
                 _ => {}
             }
-            let record = record(id, encoded.keyframe, more, payload.clone());
+            let record = record(frame_id, encoded.keyframe, more, payload.clone());
             if clean.decode(&record).unwrap() {
                 assert!(!more);
                 assert_eq!(
@@ -239,16 +241,45 @@ fn hybrid_still(registry: &CodecRegistry) -> Value {
             }
         }
         assert_eq!(published, 1);
-        let quality = measure(&source, clean.picture()).unwrap();
-        if matches!(id, 1 | 3 | 6) {
-            assert_eq!(quality.different_pixels, 0);
-            assert_eq!(quality.ssim_luma, 1.0);
-            assert!(quality.psnr_infinite);
+        // Review 2026-11-19 (Gemini 5/2): a video key frame carries every
+        // tile as video; the still's tiles become exact by repairs of one
+        // frame's share of the target each, frame after frame, until none
+        // is pending.
+        if matches!(id, 1 | 6) {
+            assert!(video > 0);
+            assert_eq!(dirty, 0);
+            assert!(opened.encoder.needs_refresh());
         }
+        let mut repairs = 0u64;
         if id == 3 {
             assert_eq!(video, 0);
             assert!(dirty > 0);
-            assert!(!opened.encoder.needs_refresh());
+            let tiles = u64::from(size.width.div_ceil(64) * size.height.div_ceil(64));
+            while opened.encoder.needs_refresh() {
+                repairs += 1;
+                assert!(repairs <= tiles, "every repair frame repairs a tile");
+                request.frame_id = frame_id + repairs;
+                request.keyframe = false;
+                let encoded = opened.encoder.encode_captured(&captured, &request).unwrap();
+                for (index, payload) in encoded.records.iter().enumerate() {
+                    let more = index + 1 < encoded.records.len();
+                    match frame_protocol::decode(payload, size).unwrap().1 {
+                        Operation::Video { .. } => video += 1,
+                        Operation::Dirty { .. } => dirty += 1,
+                        _ => {}
+                    }
+                    let record = record(frame_id + repairs, false, more, payload.clone());
+                    assert_eq!(clean.decode(&record).unwrap(), !more);
+                    assert_eq!(impaired.decode(&record).unwrap(), !more);
+                }
+            }
+            assert_eq!(video, 0);
+        }
+        let quality = measure(&source, clean.picture()).unwrap();
+        if id == 3 {
+            assert_eq!(quality.different_pixels, 0);
+            assert_eq!(quality.ssim_luma, 1.0);
+            assert!(quality.psnr_infinite);
         }
         if id == 5 {
             assert!(withheld);
@@ -265,6 +296,7 @@ fn hybrid_still(registry: &CodecRegistry) -> Value {
             "quality": quality, "video_operations": video, "lossless_operations": dirty,
             "transport_accepted": impaired_published == 1, "codec_to_accepted": transport_quality,
             "still_same_pixels_as_frame": (id == 3).then_some(2),
+            "still_repair_frames": (id == 3).then_some(repairs),
             "fault": match id {4 => "GOP aborted before Begin", 5 => "missing-base dependent withheld", 6 => "first complete physical IDR and exact regions recover", _ => "none"}}));
     }
     drop(opened);
