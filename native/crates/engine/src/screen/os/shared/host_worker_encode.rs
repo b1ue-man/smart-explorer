@@ -287,8 +287,7 @@ pub(super) fn encode_loop(shared: Arc<Shared>) {
                     .identity
                     .is_some_and(|identity| identity.quality.is_some());
                 if let Some(work) = state.next_work() {
-                    // Gemini 13.3 (review 2026-11-19): the slot is free, the
-                    // capture stage captures now, not after its recheck.
+                    // Gemini 13.3: the slot is free, the capture stage captures now.
                     shared.changed.notify_all();
                     break work;
                 }
@@ -331,8 +330,8 @@ pub(in crate::screen::os) struct Encoding {
     checked: Instant,
     produced: u64,
     opener: Arc<dyn EncoderOpener>,
-    /// The stream asked for sharp mode, „Scharf (GPU)“ (review 2026-11-19
-    /// C16): only a GPU encoder may serve it.
+    floor_sent: u64, // the last `ENCODER_FLOOR` sent (X3, `report_floor`)
+    /// Sharp mode, „Scharf (GPU)“: only a GPU encoder serves it (C16).
     sharp: bool,
 }
 
@@ -439,6 +438,7 @@ impl Encoding {
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Err(unchanged()),
             Err(error) => return Err(reference.wrap(failed(ScreenErrorCode::EncoderFailed, error))),
         };
+        self.report_floor(shared, request.target_bps);
         drop(image);
         if frame.records.is_empty() {
             return Err(unchanged());

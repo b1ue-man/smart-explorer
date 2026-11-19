@@ -12,6 +12,7 @@
 use super::reader::StreamAnswer;
 use super::*;
 use crate::screen::core::chain_meter::{ChainMeter, Station, STATION_WINDOW};
+use crate::screen::core::cursor_overlay::CursorFeed as Feed;
 use crate::screen::core::frame_timing::CaptureFacts;
 use crate::screen::core::host_stage::{StreamHint, StreamReport};
 use crate::screen::core::worker_wire::{StreamMark, StreamOrder, STREAM_VERSION};
@@ -74,6 +75,13 @@ impl StreamClient {
 }
 
 impl SourceFacts {
+    /// What the reader thread publishes besides answers: the pointer, a
+    /// refusal of earlier input and the encoder's lowest bit rate.
+    pub(super) fn unasked(&self) -> (Arc<Feed>, super::reader::Refused, Arc<AtomicU64>) {
+        let (cursor, refused) = (self.cursor.clone(), self.refused.clone());
+        (cursor, refused, self.floor.clone())
+    }
+
     fn client(&self) -> MutexGuard<'_, StreamClient> {
         self.stream.lock().unwrap_or_else(PoisonError::into_inner)
     }

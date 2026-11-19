@@ -243,13 +243,16 @@ impl Pipeline {
                 .then_some(crate::screen::core::rate_control::model::SHARP_TARGET_QUALITY),
         };
         let encoding_started = std::time::Instant::now();
+        let ceiling = self.rate.user_ceiling_bps();
         let joined = tokio::task::spawn_blocking(move || {
             if let Some(host) = stage.source.host_stage() {
                 host.set_stream_hint(hint);
             }
             let produced = produce(&mut stage, backend.as_ref(), &request, recover);
             let (report, notice) = stage.source.host_stage().map_or((None, None), |host| {
-                (host.take_stream_report(), host.take_notice())
+                let report = host.take_stream_report();
+                let notice = host.take_notice();
+                (report, notice.or_else(|| host.floor_notice(ceiling)))
             });
             StageOutput {
                 result: (produced, request, report, notice),

@@ -56,7 +56,7 @@ impl WorkerReader {
         mut output: impl Read + Send + 'static,
         input: Arc<Mutex<std::process::ChildStdin>>,
         broker: Arc<CaptureBroker>,
-        (cursor, refused): (Arc<CursorFeed>, Refused),
+        (cursor, refused, floor): (Arc<CursorFeed>, Refused, Arc<AtomicU64>),
         stream: mpsc::Sender<StreamAnswer>,
     ) -> io::Result<Self> {
         let (sender, answers) = mpsc::sync_channel(1);
@@ -128,6 +128,12 @@ impl WorkerReader {
                             // The pointer of the overlay (P6) is no answer.
                             worker_wire::CURSOR => {
                                 cursor.publish(cursor_overlay::decode_update(&payload)?);
+                                Ok(Some(None))
+                            }
+                            // Nor the encoder's lowest bit rate (X3).
+                            worker_wire::ENCODER_FLOOR => {
+                                let bps = worker_wire::decode_encoder_floor(&payload)?;
+                                floor.store(bps, Ordering::Release);
                                 Ok(Some(None))
                             }
                             // Neither is a refusal of earlier input.

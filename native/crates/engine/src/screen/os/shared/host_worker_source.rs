@@ -344,6 +344,28 @@ impl HostStage for WorkerSource {
         self.drain_stream_chain(meter);
     }
 
+    /// The lowest bit rate the host process reported (`ENCODER_FLOOR`,
+    /// review 2026-11-19 X3) against the viewer's ceiling, once per pair.
+    fn floor_notice(&mut self, ceiling_bps: Option<u64>) -> Option<String> {
+        let floor = self.facts.floor.load(Ordering::Acquire);
+        let mut noticed = self
+            .facts
+            .floor_noticed
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let Some(text) = crate::screen::core::host_stage::floor_above_ceiling(floor, ceiling_bps)
+        else {
+            *noticed = None;
+            return None;
+        };
+        let pair = (floor, ceiling_bps.unwrap_or(0));
+        if *noticed == Some(pair) {
+            return None;
+        }
+        *noticed = Some(pair);
+        Some(text)
+    }
+
     /// B-36: only the picture stream carries the wish (`STREAM`); `PRODUCE`
     /// keeps the reset with a new encoder.
     fn continues_references(&self) -> bool {

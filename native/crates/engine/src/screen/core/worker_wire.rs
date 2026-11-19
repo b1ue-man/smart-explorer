@@ -74,6 +74,12 @@ pub const STREAMED: u8 = 28;
 /// a `ControlBlock`; the daemon's sink of that process reports it
 /// (`ScreenInputSink::take_refusal`). No answer to a request.
 pub const INPUT_REFUSED: u8 = 29;
+/// Unsolicited (review 2026-11-19, X3): the lowest bit rate the host
+/// process's encoder runs at above the rate asked of it (a device minimum),
+/// as 8 bytes big-endian; 0 when it runs the rate asked again. Sent when it
+/// changes; the daemon compares it with the viewer's ceiling
+/// (`HostStage::floor_notice`). No answer to a request.
+pub const ENCODER_FLOOR: u8 = 30;
 /// Version of the picture stream this program serves; 0 is `PRODUCE` only.
 pub const STREAM_VERSION: u32 = 1;
 
@@ -103,6 +109,7 @@ pub fn tag_limit(tag: u8) -> Option<usize> {
         | BOUND_INPUT | STREAM | OPENED | REFUSED | PAUSED | FAILED | INPUT_DONE | CURSOR
         | INPUT_REFUSED => Some(MAX_CONTROL_BYTES),
         STREAMED => Some(StreamMark::BYTES),
+        ENCODER_FLOOR => Some(8),
         CLOSE => Some(0),
         SET_CAPTURE_ACTIVE | CAPTURE_ACTIVE => Some(1),
         UNCHANGED => Some(8),
@@ -372,6 +379,19 @@ pub fn send_input_refused(writer: &mut impl Write, block: ControlBlock) -> io::R
 /// Reads the payload of `INPUT_REFUSED` (daemon side).
 pub fn decode_input_refused(payload: &[u8]) -> io::Result<ControlBlock> {
     from_json(payload)
+}
+
+/// Writes the encoder's lowest bit rate, unasked (host process side).
+pub fn send_encoder_floor(writer: &mut impl Write, floor_bps: u64) -> io::Result<()> {
+    write_message(writer, ENCODER_FLOOR, &floor_bps.to_be_bytes())
+}
+
+/// Reads the payload of `ENCODER_FLOOR` (daemon side).
+pub fn decode_encoder_floor(payload: &[u8]) -> io::Result<u64> {
+    let bytes: [u8; 8] = payload
+        .try_into()
+        .map_err(|_| invalid("encoder floor is 8 bytes"))?;
+    Ok(u64::from_be_bytes(bytes))
 }
 
 /// Writes one request (daemon side).

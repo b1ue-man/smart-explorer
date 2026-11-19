@@ -12,6 +12,7 @@ impl Encoding {
             checked: Instant::now(),
             produced: 0,
             opener,
+            floor_sent: 0,
             sharp: false,
         }
     }
@@ -91,6 +92,34 @@ impl Encoding {
                     }
                 }
             }
+        }
+    }
+
+    /// Review 2026-11-19 (X3): an encoder that runs above `target_bps` at a
+    /// rate it took (a device minimum, `mf_rate::floored`; `applied_bps`
+    /// of `ScreenEncoder::rate_state`) tells the daemon its lowest rate
+    /// (`ENCODER_FLOOR`) when that changes; 0 when it runs the rate asked
+    /// again. The daemon compares it with the viewer's ceiling.
+    pub(super) fn report_floor(&mut self, shared: &Shared, target_bps: u64) {
+        let floor = self
+            .running
+            .as_ref()
+            .and_then(|running| running.encoder.rate_state())
+            .filter(|state| !state.refused && state.applied_bps > target_bps)
+            .map_or(0, |state| state.applied_bps);
+        if floor == self.floor_sent {
+            return;
+        }
+        self.floor_sent = floor;
+        let sent = shared
+            .output
+            .lock()
+            .map_err(|_| io::Error::other("worker output poisoned"))
+            .and_then(|mut output| {
+                crate::screen::core::worker_wire::send_encoder_floor(&mut *output, floor)
+            });
+        if let Err(error) = sent {
+            eprintln!("screen host process: {error}");
         }
     }
 

@@ -138,6 +138,14 @@ pub trait HostStage: Send {
     /// process since the last call to the session's meter (plan 2026-11-14
     /// „Bildkette“ BK0); a stage without a host process has none.
     fn drain_chain(&mut self, _meter: &mut super::chain_meter::ChainMeter) {}
+    /// Review 2026-11-19 (X3): the notice of an encoder that runs at a lowest
+    /// bit rate above the viewer's „Höchste Datenrate“ `ceiling_bps`
+    /// (`floor_notice`), once per lowest rate and ceiling; the stream's byte
+    /// budget keeps the ceiling. A stage whose host process reports no such
+    /// rate has none (the Android bridge names its own in `take_notice`).
+    fn floor_notice(&mut self, _ceiling_bps: Option<u64>) -> Option<String> {
+        None
+    }
     /// B-36: whether the stage passes `recover_references` on to its
     /// encoder (`ScreenEncoder::recover_references`). A stage that does not
     /// keeps the old reset: a new encoder and a key frame.
@@ -148,4 +156,16 @@ pub trait HostStage: Send {
     /// only `last_good` or older; the encoder answers with a key frame when
     /// it cannot. Only called when `continues_references` holds.
     fn recover_references(&mut self, _last_good: u64) {}
+}
+
+/// Review 2026-11-19 (X3): the sentence of an encoder whose lowest bit rate
+/// `floor_bps` lies above the viewer's `ceiling_bps` (the wording
+/// `codec_reason_text::encoder_notice_text` shows in German on every
+/// viewer); `None` while it does not, or without a ceiling.
+pub fn floor_above_ceiling(floor_bps: u64, ceiling_bps: Option<u64>) -> Option<String> {
+    let ceiling = ceiling_bps.filter(|ceiling| floor_bps > *ceiling)?;
+    Some(format!(
+        "the encoder's lowest bit rate {floor_bps} bit/s is above the highest data rate \
+         {ceiling} bit/s; fewer pictures keep the ceiling"
+    ))
 }
