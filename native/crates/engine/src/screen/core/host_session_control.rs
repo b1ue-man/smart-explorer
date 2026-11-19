@@ -79,7 +79,8 @@ impl Session<'_> {
             }
             ViewerFrame::Visibility(report) => self.visibility(report).await,
             ViewerFrame::KeyframeRequest(request) => {
-                self.pipeline.request_keyframe(request.gop_id);
+                self.pipeline
+                    .request_keyframe(request.gop_id, request.reason);
                 Ok(())
             }
             ViewerFrame::Ping(ping) => {
@@ -253,6 +254,9 @@ impl Session<'_> {
         let reference = self.pipeline.input_reference_generation();
         let presented = self.pipeline.presentation_supported();
         if let Some(held) = self.hold_reason() {
+            if self.handle.holds_control() {
+                self.release_held_ups(events);
+            }
             return self.report_held(held).await;
         }
         if !presented

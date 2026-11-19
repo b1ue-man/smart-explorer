@@ -3,6 +3,7 @@
 //! 2026-11-19, V1/V2: about one new encoder a second with a GUI viewer).
 use super::{Connection, FrameSize, PipelineActor, StreamKind};
 use crate::screen::core::visibility::VisibleRect;
+use crate::screen::core::wire_control::KeyframeReason;
 use crate::share::route_state::RouteClass;
 use std::io;
 
@@ -106,5 +107,34 @@ impl PipelineActor {
         self.pending.confirm = true;
         self.poll();
         Ok(())
+    }
+
+    /// `KEYFRAME_REQUEST` naming the viewer's group `gop`. Review 2026-11-19
+    /// (Codex 4/9): a decoder that failed or was changed on a stream that
+    /// still arrives (`DecodeError`, `Join`) takes a key frame inside the
+    /// open group, as a visibility change does (`retarget_visible_rects`);
+    /// the stream, its bytes on the line and the viewer's reader stay. Only
+    /// a broken stream (`Reset`) gets a new one.
+    pub fn request_keyframe(&mut self, gop: Option<u64>, reason: KeyframeReason) {
+        if self.facts.keyframe
+            || self.facts.reference != self.work.reference()
+            || super::super::mode::keyframe_request_stale(gop, self.facts.gop)
+        {
+            return;
+        }
+        if reason != KeyframeReason::Reset {
+            self.pending.refresh = true;
+            self.poll();
+            return;
+        }
+        // A key frame keeps the reference input binds to (review 2026-11-19,
+        // E1): the running operation ends, input goes on.
+        let before = self.work.reference();
+        self.work.interrupt();
+        if !self.blocked && self.work.reference() == before + 1 {
+            self.facts.reference = self.work.reference();
+        }
+        self.pending.keyframe = true;
+        self.poll();
     }
 }

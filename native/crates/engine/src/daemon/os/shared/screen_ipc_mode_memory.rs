@@ -41,6 +41,13 @@ pub(crate) struct ModeMemory {
     /// The last `AUDIO` of the viewer (plan 2026-11-17 P9), replayed to a
     /// new session whose host answered `audio`.
     audio: Option<bool>,
+    /// The viewer's last `CONTROL_REQUEST` (review 2026-11-19, Gemini 3/9):
+    /// a released control stays released in the new session, a taken one
+    /// is taken again.
+    control: Option<crate::screen::core::wire_control::ControlAction>,
+    /// The viewer's last `VISIBILITY` (Gemini 3/9): a hidden or partly
+    /// covered view stays so in the new session.
+    visibility: Option<crate::screen::core::visibility::ViewerVisibility>,
 }
 
 #[derive(Clone, Debug)]
@@ -70,6 +77,14 @@ impl ModeMemory {
         }
         if let ViewerFrame::Audio(on) = frame {
             self.audio = Some(*on);
+            return;
+        }
+        if let ViewerFrame::ControlRequest(request) = frame {
+            self.control = Some(request.action);
+            return;
+        }
+        if let ViewerFrame::Visibility(report) = frame {
+            self.visibility = Some(report.clone());
             return;
         }
         let ViewerFrame::SetMode(set) = frame else {
@@ -111,6 +126,16 @@ impl ModeMemory {
         &self,
     ) -> Option<crate::screen::core::virtual_display::VirtualDisplayChoice> {
         self.display
+    }
+
+    /// The viewer's last control request; `None` when it sent none.
+    pub(crate) fn control(&self) -> Option<crate::screen::core::wire_control::ControlAction> {
+        self.control
+    }
+
+    /// The viewer's last visibility report; `None` when it sent none.
+    pub(crate) fn visibility(&self) -> Option<crate::screen::core::visibility::ViewerVisibility> {
+        self.visibility.clone()
     }
 
     /// The viewer's last `AUDIO`; `None` when it sent none.

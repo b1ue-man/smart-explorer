@@ -194,6 +194,12 @@ pub struct StreamInfo {
     /// 4.10a): `true` hardware; absent from hosts before BK6.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub decoder_hardware: Option<bool>,
+    /// The size of the source itself in its own pixels (a window may be sent
+    /// scaled down to `size`): what a pixel position of the source refers to
+    /// (`se screen input`, review 2026-11-19 Codex 4/16). Optional both ways:
+    /// a host before it leaves it out, a viewer before it ignores it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_size: Option<FrameSize>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

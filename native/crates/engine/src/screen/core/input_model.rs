@@ -437,6 +437,35 @@ impl PressedInputs {
         self.held.is_empty()
     }
 
+    /// `event` releases a key, button or touch held now: it is no longer
+    /// held, and `true` (Gemini 3/10, `Session::release_held_ups`).
+    pub fn take_release(&mut self, event: &InputEvent) -> bool {
+        let held = match event {
+            InputEvent::Key {
+                hid_usage,
+                down: false,
+            } => Held::Key(*hid_usage),
+            InputEvent::Button {
+                button,
+                down: false,
+            } => Held::Button(*button),
+            InputEvent::Touch {
+                id,
+                phase: TouchPhase::End | TouchPhase::Cancel,
+                ..
+            } => {
+                let before = self.held.len();
+                self.held
+                    .retain(|held| !matches!(held, Held::Touch { id: other, .. } if other == id));
+                return self.held.len() != before;
+            }
+            _ => return false,
+        };
+        let before = self.held.len();
+        self.held.retain(|entry| *entry != held);
+        self.held.len() != before
+    }
+
     /// The events that release everything still pressed, newest first, so
     /// modifiers go up last; afterwards nothing is held.
     pub fn release_all(&mut self) -> Vec<InputEvent> {

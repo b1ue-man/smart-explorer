@@ -343,6 +343,8 @@ impl ShareHost {
             virtual_display: request.virtual_display,
             // Codex 3/6: „Scharf (GPU)“ with one video decoder reads as such.
             codec_choice: request.codec,
+            // Codex 4/6: the ceiling holds from the first picture on.
+            max_rate_bps: request.max_rate_bps,
         };
         let redial = reconnect::Redial {
             service: service.clone(),
@@ -399,6 +401,7 @@ fn viewer_request(
         gop_continue_decoders: Vec::new(),
         virtual_display: None,
         codec_choice: None,
+        max_rate_bps: None,
     }
 }
 

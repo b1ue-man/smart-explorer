@@ -87,7 +87,6 @@ impl Pipeline {
         let serialization_us = (u128::from(encoded_bytes) * 8 * 1_000_000
             / u128::from(self.rate.sustained_bps().max(1)))
         .min(u128::from(u64::MAX)) as u64;
-        let active_budget = stale.saturating_add(Duration::from_micros(serialization_us));
         // Review 2026-11-19 (Codex 13): the byte budget books what the writer
         // puts on the stream, the record headers included, when the send
         // starts (`rate_tiles.rs`); a cut-off write counts whole.
@@ -95,6 +94,19 @@ impl Pipeline {
             + super::super::wire_binary::RECORD_HEADER_BYTES as u64 * frame.records.len() as u64;
         let video = self.choice.codec.is_video();
         let send_started_us = now_us();
+        // Codex 4/5: the records reach the stream within the byte budget,
+        // after its saved credit at its rate (`GopWriter::pace_next_frame`);
+        // the write gets the time that takes.
+        let pace = self.rate.stream_pace(send_started_us, video);
+        let paced_us = pace.map_or(0, |(rate, credit)| {
+            let ahead = u128::from(planned.saturating_sub(credit));
+            (ahead * 8 * 1_000_000 / u128::from(rate)).min(u128::from(u64::MAX)) as u64
+        });
+        if let Some((rate, credit)) = pace {
+            gop.pace_next_frame(rate, credit);
+        }
+        let active_budget =
+            stale.saturating_add(Duration::from_micros(serialization_us.max(paced_us)));
         let send_started = std::time::Instant::now();
         let writing = crate::screen::core::gop_stream::write_with_route(
             connection,

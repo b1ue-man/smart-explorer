@@ -400,24 +400,6 @@ impl PipelineActor {
         self.pending.invalidate = true;
         self.poll();
     }
-    /// `KEYFRAME_REQUEST` naming the viewer's broken group `gop`.
-    pub fn request_keyframe(&mut self, gop: Option<u64>) {
-        if self.facts.keyframe
-            || self.facts.reference != self.work.reference()
-            || super::mode::keyframe_request_stale(gop, self.facts.gop)
-        {
-            return;
-        }
-        // A key frame keeps the reference input binds to (review 2026-11-19,
-        // E1): the running operation ends, input goes on.
-        let before = self.work.reference();
-        self.work.interrupt();
-        if !self.blocked && self.work.reference() == before + 1 {
-            self.facts.reference = self.work.reference();
-        }
-        self.pending.keyframe = true;
-        self.poll();
-    }
     pub fn second(&mut self, _connection: &Connection) -> HostStats {
         self.pending.second = true;
         self.poll();

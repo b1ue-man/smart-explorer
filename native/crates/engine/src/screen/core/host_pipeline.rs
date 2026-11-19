@@ -243,19 +243,6 @@ impl Pipeline {
         self.totals
     }
 
-    /// What `STATE` reports of the running picture stream.
-    pub fn stream_info(&self) -> Option<StreamInfo> {
-        let (encoder, size) = self.running.as_ref()?;
-        Some(StreamInfo {
-            codec: self.choice.codec,
-            profile: self.choice.profile,
-            size: *size,
-            encoder: encoder.name.clone(),
-            hardware: encoder.hardware,
-            decoder_hardware: Some(self.choice.decoder_hardware),
-        })
-    }
-
     /// The source within the bounds of the mode and of the codec.
     fn output_limits(&self) -> io::Result<super::frame_budget::FrameLimits> {
         match self.frame_contract {
@@ -433,6 +420,8 @@ mod fallback;
 mod initialization;
 #[path = "host_pipeline_produce.rs"]
 mod producing;
+#[path = "host_pipeline_stream.rs"]
+mod stream_report;
 #[path = "host_pipeline_tiles.rs"]
 mod tiles_wait;
 

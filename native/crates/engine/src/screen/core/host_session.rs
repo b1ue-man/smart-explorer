@@ -238,11 +238,6 @@ impl<'a> Session<'a> {
         .await
     }
 
-    async fn error(&mut self, code: ScreenErrorCode, detail: String) -> io::Result<()> {
-        let error = ScreenWireError::new(code, Some(detail));
-        self.frame(HostFrame::Error(error)).await
-    }
-
     /// The answer of a finished metadata job, as the synchronous path gave
     /// it: a failed window list is an `ERROR` and the session goes on, a
     /// failed icon lookup omits the icon, a lost right or a failed family
@@ -294,6 +289,7 @@ impl<'a> Session<'a> {
     }
 
     async fn second(&mut self) -> io::Result<()> {
+        self.report_refusal().await?;
         if self.family.selected.is_some() {
             self.family_snapshot(false).await?;
         }

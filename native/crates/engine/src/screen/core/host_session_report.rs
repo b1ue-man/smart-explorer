@@ -9,6 +9,16 @@ use super::*;
 const LATE_BLOCK_SHOWN: Duration = Duration::from_secs(3);
 
 impl Session<'_> {
+    /// An `ERROR` for the viewer; the session goes on.
+    pub(in super::super) async fn error(
+        &mut self,
+        code: ScreenErrorCode,
+        detail: String,
+    ) -> io::Result<()> {
+        let error = ScreenWireError::new(code, Some(detail));
+        self.frame(HostFrame::Error(error)).await
+    }
+
     /// `CONTROL_STATE` with `blocked`; the next batch that reaches the host
     /// clears it again (D6).
     pub(super) async fn report_block(
@@ -35,7 +45,9 @@ impl Session<'_> {
     /// A batch the sink accepted and the platform refused afterwards (an
     /// Android gesture, a Wayland portal call) reaches the viewer as a block
     /// once, while this session holds the control (review 2026-11-19).
-    pub(super) async fn report_refusal(&mut self) -> io::Result<()> {
+    /// Also once a second (`Session::second`, Gemini 3/10): a still screen
+    /// may bring no viewer frame for a while.
+    pub(in super::super) async fn report_refusal(&mut self) -> io::Result<()> {
         let Some(block) = self
             .pipeline
             .input_sink()

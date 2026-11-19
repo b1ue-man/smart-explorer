@@ -152,6 +152,27 @@ pub struct GopWriter {
     header: GopHeader,
     /// The next frame is the first of a continuation (B-36).
     continues: bool,
+    /// The pace of the frame being written (`pace_next_frame`).
+    pace: Option<Pace>,
+}
+
+/// Bytes of one paced piece of a record: the budget is kept to about the
+/// time this many bytes take at its rate.
+const PACE_CHUNK: usize = 16 * 1024;
+/// A wait shorter than this is not taken (the timer's resolution); the
+/// line gets at most this much ahead of the rate.
+const PACE_MIN_WAIT_US: u64 = 1_000;
+
+/// The byte budget of one frame's send (review 2026-11-19, Codex 4/5): its
+/// records reach the stream no faster than `rate_bps` after the saved
+/// `credit` bytes, so „Höchste Datenrate“ holds on the line too and the
+/// budget is in no debt after a large picture (no pause after it).
+#[derive(Clone, Copy, Debug)]
+struct Pace {
+    rate_bps: u64,
+    credit: u64,
+    started: tokio::time::Instant,
+    written: u64,
 }
 
 impl GopWriter {
@@ -162,7 +183,37 @@ impl GopWriter {
             send,
             header,
             continues: false,
+            pace: None,
         })
+    }
+
+    /// Paces the records of the next `write_frame_admitted` at `rate_bps`
+    /// after `credit` bytes at once.
+    pub fn pace_next_frame(&mut self, rate_bps: u64, credit: u64) {
+        self.pace = Some(Pace {
+            rate_bps: rate_bps.max(1),
+            credit,
+            started: tokio::time::Instant::now(),
+            written: 0,
+        });
+    }
+
+    /// Waits until `bytes` more may go on the line under the pace.
+    async fn paced(&mut self, bytes: usize) {
+        let Some(pace) = self.pace.as_mut() else {
+            return;
+        };
+        pace.written = pace.written.saturating_add(bytes as u64);
+        let elapsed =
+            u128::from(u64::try_from(pace.started.elapsed().as_micros()).unwrap_or(u64::MAX));
+        let earned = u128::from(pace.rate_bps) * elapsed / 8 / 1_000_000;
+        let allowed = u128::from(pace.credit).saturating_add(earned);
+        let ahead = u128::from(pace.written).saturating_sub(allowed);
+        let wait_us = ahead * 8 * 1_000_000 / u128::from(pace.rate_bps);
+        if wait_us >= u128::from(PACE_MIN_WAIT_US) {
+            let wait = u64::try_from(wait_us).unwrap_or(u64::MAX);
+            tokio::time::sleep(std::time::Duration::from_micros(wait)).await;
+        }
     }
 
     pub fn header(&self) -> &GopHeader {
@@ -238,6 +289,21 @@ impl GopWriter {
         frame_id: u64,
         capture_ts_us: u64,
         keyframe: bool,
+        records: super::capture_records::CapturedRecords,
+    ) -> io::Result<u64> {
+        // The pace holds for this frame only (`pace_next_frame`).
+        let written = self
+            .write_records_admitted(frame_id, capture_ts_us, keyframe, records)
+            .await;
+        self.pace = None;
+        written
+    }
+
+    async fn write_records_admitted(
+        &mut self,
+        frame_id: u64,
+        capture_ts_us: u64,
+        keyframe: bool,
         mut records: super::capture_records::CapturedRecords,
     ) -> io::Result<u64> {
         let budget =
@@ -296,11 +362,25 @@ impl GopWriter {
             ));
         }
         let head = super::wire_binary::record_head(payload.len(), frame_id, capture_ts_us, flags);
+        self.paced(head.len()).await;
         self.send.write_all(&head).await.map_err(io::Error::from)?;
-        self.send
-            .write_chunk(bytes::Bytes::from(payload))
-            .await
-            .map_err(io::Error::from)
+        let mut payload = bytes::Bytes::from(payload);
+        if self.pace.is_none() {
+            return self
+                .send
+                .write_chunk(payload)
+                .await
+                .map_err(io::Error::from);
+        }
+        while !payload.is_empty() {
+            let piece = payload.split_to(PACE_CHUNK.min(payload.len()));
+            self.paced(piece.len()).await;
+            self.send
+                .write_chunk(piece)
+                .await
+                .map_err(io::Error::from)?;
+        }
+        Ok(())
     }
 
     /// Gives the stream up: the viewer drops what it has of it.

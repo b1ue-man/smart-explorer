@@ -36,6 +36,14 @@ impl RateController {
         }
     }
 
+    /// The pace of a picture's send at `now_us` (review 2026-11-19, Codex
+    /// 4/5): the budget's rate and the bytes of its saved credit; `None`
+    /// without a budget.
+    pub fn stream_pace(&self, now_us: u64, video: bool) -> Option<(u64, u64)> {
+        let rate = self.stream_budget_bps(now_us, video)?;
+        Some((rate.max(1), self.tiles.credit_bits(now_us, rate) / 8))
+    }
+
     /// Whether a picture of the stream may be captured and encoded at
     /// `now_us`.
     pub fn stream_admit(&self, now_us: u64, video: bool) -> bool {

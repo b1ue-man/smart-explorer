@@ -4,9 +4,9 @@
 //! session in the mode `control` (the device needs „Bildschirm steuern“
 //! for this device, and its user may be asked first; the command then waits
 //! and says so on stderr), sends the input and ends the session.
-//! Coordinates: a number is a pixel of the source (a monitor; the device
-//! names no size of a window, so a window takes percent), a number with `%`
-//! a share of it (`50%,50%` is the middle). `--key` names keys of
+//! Coordinates: a number is a pixel of the source (its own size, also of a
+//! window sent scaled down; a host that does not name a window's size takes
+//! percent only), a number with `%` a share of it (`50%,50%` is the middle). `--key` names keys of
 //! `se screen probe`'s toolbar and of the HID table (`a`, `enter`, `f5`,
 //! `ctrl_left+c`: pressed in order, released backwards). Ctrl+Alt+Delete is
 //! never sent. The input goes out once the session has received a complete
@@ -330,7 +330,7 @@ pub(crate) fn deliver(
                 held: None,
             });
         }
-        let size = match &source {
+        let mut size = match &source {
             Some(SourceId::Monitor(id)) => hello.monitors.iter().find(|m| &m.id == id),
             None => hello
                 .monitors
@@ -341,17 +341,6 @@ pub(crate) fn deliver(
         }
         .map(|monitor| FrameSize::new(monitor.width, monitor.height))
         .filter(|size| size.width > 0 && size.height > 0);
-        // Pixels are pixels of the source: only the size the host names for
-        // it (`HELLO_OK` monitors) converts them. A picture's size is what the
-        // host sent, possibly scaled down, so a pixel of the source would land
-        // elsewhere (Codex 4/16): without the source's size pixels are refused.
-        if size.is_none() && needs_size(action) {
-            return Err(
-                "the device does not name the size of this source (a window's picture may \
-                        be scaled); give the position in percent, e.g. 50%,50%"
-                    .into(),
-            );
-        }
         // The host drops input silently until the viewer acknowledged a
         // picture of its current reference (`host_session_control.rs`,
         // `input`); the worker acknowledges every picture it receives, so
@@ -362,9 +351,15 @@ pub(crate) fn deliver(
         // (Android's MediaProjection dialog: `waiting_for_portal`), the wait
         // for the user's answer applies (`accept_within`, none for the CLI),
         // not the picture time (Gemini 3/19).
+        // Pixels are pixels of the source: only the size the host names for
+        // it converts them (`HELLO_OK` monitors, or the source size of the
+        // stream in `STATE`). A picture's size is what the host sent,
+        // possibly scaled down, so a pixel of the source would land elsewhere
+        // (Codex 4/16).
         let mut deadline = Some(Instant::now() + ANSWER_WAIT);
         let mut picture = false;
-        while !picture {
+        let mut stream_reported = false;
+        while !picture || (needs_size(action) && size.is_none() && !stream_reported) {
             let wait = match deadline {
                 Some(deadline) => match deadline.checked_duration_since(Instant::now()) {
                     Some(left) if !left.is_zero() => Some(left),
@@ -375,6 +370,10 @@ pub(crate) fn deliver(
             match next(wait)? {
                 Some(StreamEvent::Record { record, .. }) => picture |= !record.has_more(),
                 Some(StreamEvent::Host(HostFrame::State(report))) => {
+                    if let Some(stream) = &report.stream {
+                        stream_reported = true;
+                        size = size.or(stream.source_size);
+                    }
                     deadline = if report.state == SessionState::WaitingForPortal {
                         accept_within.map(|limit| Instant::now() + limit)
                     } else {
@@ -391,6 +390,14 @@ pub(crate) fn deliver(
                 blocked: None,
                 held: Some(InputHeld::WaitingForPicture),
             });
+        }
+        if size.is_none() && needs_size(action) {
+            // A host before the source size in `STATE` names none for a window.
+            return Err(
+                "the device does not name the size of this source (a window's picture may \
+                 be scaled); give the position in percent, e.g. 50%,50%"
+                    .into(),
+            );
         }
         let batch = events(action, size)?;
         control

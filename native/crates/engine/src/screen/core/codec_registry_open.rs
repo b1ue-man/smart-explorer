@@ -402,6 +402,11 @@ impl CodecRegistry {
         skip_failed: bool,
         refusals: &mut Vec<String>,
     ) -> Option<Box<dyn ScreenDecoder>> {
+        // Codex 4/11: a factory that would only reopen the stages it gave up
+        // in this session comes after every other one of the pass (a chosen
+        // „Hardware“ took a failed FFmpeg stage again before Media
+        // Foundation's hardware decoder); it still opens when none does.
+        let mut last = Vec::new();
         for factory in &self.decoders {
             if !decodes_header(factory.as_ref(), header, pass) {
                 continue;
@@ -410,6 +415,18 @@ impl CodecRegistry {
                 refusals.push(format!("{}: failed its run-time check", factory.name()));
                 continue;
             }
+            if factory.retries_given_up(header) {
+                last.push(factory);
+                continue;
+            }
+            match factory.open(header) {
+                Ok(decoder) => return Some(decoder),
+                Err(error) => {
+                    refusals.push(format!("{} ({}): {error}", factory.name(), pass.key()))
+                }
+            }
+        }
+        for factory in last {
             match factory.open(header) {
                 Ok(decoder) => return Some(decoder),
                 Err(error) => {

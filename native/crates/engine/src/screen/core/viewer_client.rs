@@ -66,6 +66,9 @@ pub struct ViewerRequest {
     /// The viewer's „Codec“ for the hello (`ScreenClientHello::
     /// codec_choice`, review 2026-11-19 Codex 3/6); `None` names none.
     pub codec_choice: Option<super::negotiate::CodecSetting>,
+    /// „Höchste Datenrate“ for the hello (`ScreenClientHello::max_rate_bps`);
+    /// `None` is automatic.
+    pub max_rate_bps: Option<u64>,
 }
 
 /// Why a session did not start or ended.

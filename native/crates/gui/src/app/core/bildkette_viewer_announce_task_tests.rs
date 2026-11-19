@@ -142,6 +142,7 @@ fn bildkette_task_viewer_decoder_switch_decision_without_reopening() {
         encoder: "probe".into(),
         hardware: true,
         decoder_hardware: Some(true),
+        source_size: None,
     };
     // No stream yet: nothing runs that could take the choice over.
     assert!(!session.switch_decoder_with(&both, DecoderPreference::Software));

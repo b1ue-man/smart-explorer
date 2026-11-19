@@ -420,6 +420,7 @@ pub fn hello(mode: SessionMode, metadata: bool) -> ScreenClientHello {
         virtual_display: None,
         virtual_display_size: None,
         codec_choice: None,
+        max_rate_bps: None,
         audio: None,
     }
 }

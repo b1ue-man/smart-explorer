@@ -197,6 +197,23 @@ impl DecoderFactory for FfmpegFactory {
         ))
     }
 
+    /// Codex 4/11: every hardware stage it would open for `header` was
+    /// given up in this session (`open_stages` hands them back under a
+    /// chosen „Hardware“ only so the choice is never empty).
+    fn retries_given_up(&self, header: &GopHeader) -> bool {
+        if header.codec != self.codec || chosen_decoder_preference() != DecoderPreference::Hardware
+        {
+            return false;
+        }
+        let fits = super::viewer_d3d11::shared()
+            .is_ok_and(|device| device.decodes(header.codec, Some(header.size)));
+        let stages = plan::stages(decoder_preference(), header.codec, fits, true);
+        stages.iter().any(|stage| stage.hardware())
+            && !stages
+                .iter()
+                .any(|stage| stage.hardware() && hardware_allowed(header.codec, *stage))
+    }
+
     fn keeps_references(&self, codec: CodecKind) -> bool {
         codec == self.codec && codec != CodecKind::H264
     }

@@ -147,6 +147,7 @@ fn host_frames() -> Vec<HostFrame> {
                 encoder: "openh264".into(),
                 hardware: false,
                 decoder_hardware: None,
+                source_size: Some(FrameSize::new(3840, 2160)),
             }),
         }),
         HostFrame::Pong(Pong {

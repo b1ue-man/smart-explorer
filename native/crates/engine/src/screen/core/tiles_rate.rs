@@ -69,6 +69,13 @@ impl TileBudget {
         }
     }
 
+    /// The saved credit at `now_us` under `rate_bps` in bits (0 in debt):
+    /// what a picture may put on the line at once before its send is paced
+    /// (`GopWriter::pace_next_frame`).
+    pub fn credit_bits(&self, now_us: u64, rate_bps: u64) -> u64 {
+        u64::try_from(self.balance(now_us, rate_bps).max(0)).unwrap_or(u64::MAX)
+    }
+
     /// Whether a picture may be captured and encoded at `now_us`.
     pub fn admits(&self, now_us: u64, rate_bps: u64) -> bool {
         self.balance(now_us, rate_bps) >= 0

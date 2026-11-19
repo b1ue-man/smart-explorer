@@ -15,6 +15,12 @@ struct Flow {
     estimate: u64,
     reserved: u64,
     frames: Vec<(u64, u64, u64)>,
+    /// A key frame or first picture of the session waits for the budget of
+    /// its siblings to drain (review 2026-11-19, Codex 4/12).
+    waiting_us: Option<u64>,
+    /// The last refusal was for a sibling's sake, not for the session's
+    /// own bytes on the line (`refused_for_sibling`).
+    sibling: bool,
 }
 #[derive(Default)]
 struct Budget {
@@ -65,7 +71,21 @@ impl SenderBudget {
         keyframe: bool,
     ) -> Option<EncodePermit> {
         let mut state = self.shared.lock().ok()?;
-        state.flows.get_mut(&self.id)?.requested_us = now_us;
+        {
+            let flow = state.flows.get_mut(&self.id)?;
+            flow.requested_us = now_us;
+            flow.sibling = false;
+        }
+        // Codex 4/12: a sibling whose key frame waits for the shared budget
+        // gets it before new deltas of the running sessions; else a session
+        // that always had a picture on the line kept a second view of the
+        // same peer without its first picture.
+        let others_wait = state.flows.iter().any(|(id, flow)| {
+            *id != self.id
+                && flow
+                    .waiting_us
+                    .is_some_and(|at| now_us.saturating_sub(at) <= ACTIVE_US)
+        });
         // P9: two frames of the session always fit (one on the line, the
         // next one encoded meanwhile), as in the pacer's queue guard; on the
         // relay within its guard.
@@ -102,12 +122,20 @@ impl SenderBudget {
                     .saturating_add(flow.frames.iter().map(|f| f.2).sum::<u64>()),
             )
         };
-        let estimate = if keyframe || estimate == 0 {
+        let waits = keyframe || estimate == 0;
+        let estimate = if waits {
             if total != 0 {
+                let flow = state.flows.get_mut(&self.id)?;
+                flow.waiting_us = Some(now_us);
+                flow.sibling = own == 0;
                 return None;
             }
             picture_cap
         } else {
+            if others_wait {
+                state.flows.get_mut(&self.id)?.sibling = true;
+                return None;
+            }
             estimate
         };
         if own != 0 && (own >= picture_cap / count || total.saturating_add(estimate) > picture_cap)
@@ -123,12 +151,21 @@ impl SenderBudget {
             && state.turn != 0
             && state.turn != self.id
             && state.flows.get(&state.turn).is_some_and(|flow| {
-                flow.requested_us != 0 && now_us.saturating_sub(flow.requested_us) <= ACTIVE_US
+                flow.requested_us != 0
+                    && now_us.saturating_sub(flow.requested_us) <= ACTIVE_US
+                    // A waiting session yields only to another waiting one:
+                    // the running ones hold back for it (`others_wait`).
+                    && (!waits || flow.waiting_us.is_some())
             })
         {
+            state.flows.get_mut(&self.id)?.sibling = true;
             return None;
         }
-        state.flows.get_mut(&self.id)?.reserved = estimate;
+        {
+            let flow = state.flows.get_mut(&self.id)?;
+            flow.reserved = estimate;
+            flow.waiting_us = None;
+        }
         let mut ids: Vec<u64> = state.flows.keys().copied().collect();
         ids.sort_unstable();
         state.turn = ids
@@ -141,6 +178,15 @@ impl SenderBudget {
             id: self.id,
             committed: false,
         })
+    }
+    /// Whether the last refused `admit` held this session back for a
+    /// sibling (its key frame waits, or it is its turn), not because the
+    /// line holds the session's own bytes: no back pressure of its path.
+    pub fn refused_for_sibling(&self) -> bool {
+        self.shared
+            .lock()
+            .ok()
+            .is_some_and(|state| state.flows.get(&self.id).is_some_and(|flow| flow.sibling))
     }
     pub fn ack(&self, gop: u64, frame: u64) {
         if let Ok(mut state) = self.shared.lock() {

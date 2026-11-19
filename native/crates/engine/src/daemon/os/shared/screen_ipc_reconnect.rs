@@ -206,6 +206,47 @@ async fn end(out: &mpsc::Sender<(u8, Vec<u8>)>, code: String, detail: Option<Str
     }
 }
 
+/// What the viewer chose since the first opening, sent to a session built
+/// again (the new one starts from the first request): its modes, ceiling,
+/// decoders, display, sound, and (Gemini 3/9) its control and visibility.
+async fn replay(modes: &ModeMemory, next: &ViewerSession) {
+    for mode in modes.replay() {
+        let _ = next.control.send(ViewerFrame::SetMode(mode)).await;
+    }
+    if let Some(ceiling) = modes.rate_ceiling() {
+        let _ = next.control.send(ViewerFrame::RateCeiling(ceiling)).await;
+    }
+    // The decoders of the viewer's last „Codec“/„Dekodierer“ (P1): the new
+    // session opened with the first request's.
+    if let Some(set) = modes.decoders() {
+        let _ = next.control.send(ViewerFrame::SetDecoders(set)).await;
+    }
+    // „Monitor“/„Auflösung“ chosen in the session (P9); the viewer task drops
+    // it for a host without `live`.
+    if let Some(choice) = modes.display() {
+        let _ = next.control.send(ViewerFrame::SetDisplay(choice)).await;
+    }
+    // The host's sound (P9), only to a host that answered it.
+    if let Some(on) = modes.audio().filter(|_| next.hello.audio.is_some()) {
+        let _ = next.control.send(ViewerFrame::Audio(on)).await;
+    }
+    // A control the viewer released stays released, a taken one is taken.
+    if let Some(action) = modes.control() {
+        let request = crate::screen::core::wire_control::ControlRequest { action };
+        let _ = next
+            .control
+            .send(ViewerFrame::ControlRequest(request))
+            .await;
+    }
+    // The visible area, to a host that reads it (with a frame contract,
+    // `host_server.rs`, as the first session's did).
+    if let Some(report) = modes.visibility() {
+        if next.hello.frame_contract.is_some() {
+            let _ = next.control.send(ViewerFrame::Visibility(report)).await;
+        }
+    }
+}
+
 fn hold(memory: &Mutex<MemoryHold>, session: &ViewerSession) {
     *memory.lock().unwrap_or_else(PoisonError::into_inner) = session.memory.clone();
 }
@@ -235,6 +276,9 @@ pub(super) async fn relay_session(
     memory: Arc<Mutex<MemoryHold>>,
     max_rate_bps: Option<u64>,
 ) {
+    // The viewer's choices for a session built again (`ModeMemory`), also
+    // those made while the first opening is tried again (Gemini 3/9).
+    let mut modes = ModeMemory::default();
     let mut session = match open(link, &request, metadata, Some(out.clone())).await {
         Ok(session) => session,
         // P9: a first opening that may pass is tried again while it makes
@@ -251,8 +295,11 @@ pub(super) async fn relay_session(
             let now = Instant::now();
             let mut schedule = Schedule::new(now);
             schedule.failed(now, &error);
-            match again(dialer, SystemClock, &mut schedule, &mut input).await {
-                Outcome::Opened(session) => session,
+            match again(dialer, SystemClock, &mut schedule, &mut input, &mut modes).await {
+                Outcome::Opened(session) => {
+                    replay(&modes, &session).await;
+                    session
+                }
                 Outcome::Refused(error) => {
                     end(&out, error.code(), Some(error.detail())).await;
                     return;
@@ -276,7 +323,6 @@ pub(super) async fn relay_session(
         }
     };
     hold(&memory, &session);
-    let mut modes = ModeMemory::default();
     // „Höchste Datenrate“ (B-09): `RATE_CEILING` only to a host that
     // announced `rate_ceiling_v1`; the viewer hears what became of it.
     if max_rate_bps.is_some() && !metadata {
@@ -329,7 +375,7 @@ pub(super) async fn relay_session(
             .take()
             .filter(|_| !settled)
             .unwrap_or_else(|| Schedule::new(now));
-        let outcome = again(dialer, SystemClock, &mut schedule, &mut input).await;
+        let outcome = again(dialer, SystemClock, &mut schedule, &mut input, &mut modes).await;
         plan = Some(schedule);
         match outcome {
             Outcome::Opened(next) if !reads(contract, next.hello.frame_contract) => {
@@ -338,29 +384,7 @@ pub(super) async fn relay_session(
                 return;
             }
             Outcome::Opened(next) => {
-                // What the viewer chose after the first opening (the new
-                // session starts from the first request), then the pointer
-                // overlay (P6), a wish of the viewer, not of the host.
-                for mode in modes.replay() {
-                    let _ = next.control.send(ViewerFrame::SetMode(mode)).await;
-                }
-                if let Some(ceiling) = modes.rate_ceiling() {
-                    let _ = next.control.send(ViewerFrame::RateCeiling(ceiling)).await;
-                }
-                // The decoders of the viewer's last „Codec“/„Dekodierer“
-                // (P1): the new session opened with the first request's.
-                if let Some(set) = modes.decoders() {
-                    let _ = next.control.send(ViewerFrame::SetDecoders(set)).await;
-                }
-                // „Monitor“/„Auflösung“ chosen in the session (P9); the
-                // viewer task drops it for a host without `live`.
-                if let Some(choice) = modes.display() {
-                    let _ = next.control.send(ViewerFrame::SetDisplay(choice)).await;
-                }
-                // The host's sound (P9), only to a host that answered it.
-                if let Some(on) = modes.audio().filter(|_| next.hello.audio.is_some()) {
-                    let _ = next.control.send(ViewerFrame::Audio(on)).await;
-                }
+                replay(&modes, &next).await;
                 if session
                     .cursor_wish
                     .load(std::sync::atomic::Ordering::Acquire)

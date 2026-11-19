@@ -15,6 +15,8 @@ use crate::screen::core::rate_control::model::start_table_bps;
 
 #[path = "host_pipeline_admit.rs"]
 mod admit;
+#[path = "host_pipeline_prepare.rs"]
+mod prepare;
 
 /// Dropped pictures one report adds to the statistics at most.
 const MAX_REPORTED_DROPS: u64 = 1 << 16;
@@ -47,11 +49,14 @@ impl Pipeline {
         }
         if let Some(route) = crate::share::route_monitor::snapshot(connection) {
             let epoch = (route.generation, route.pause_epoch, route.class);
-            if self.route_epoch != Some(epoch) {
+            // The first route seen is the session's own, no change of it
+            // (Gemini 3/5: every session logged a route change and ended an
+            // encoder epoch at its first tick).
+            if self.route_epoch.is_some_and(|known| known != epoch) {
                 self.note_restart("the connection's route changed");
                 self.invalidate_reference();
-                self.route_epoch = Some(epoch);
             }
+            self.route_epoch = Some(epoch);
             if !route.application_allowed {
                 return Ok(Produced::Idle);
             }
@@ -207,7 +212,10 @@ impl Pipeline {
         }
         let Some(permit) = self.sender.admit(target, path, rtt_us, now, keyframe) else {
             self.pacer.on_budget_drop();
-            self.rate.on_back_pressure(now);
+            // Held back for a sibling session of the peer, not by the line.
+            if !self.sender.refused_for_sibling() {
+                self.rate.on_back_pressure(now);
+            }
             return Ok(Produced::Dropped);
         };
         let size = self.target_size();
@@ -437,47 +445,6 @@ impl Pipeline {
         self.note_encoder(format!("encoder_fallback_to_tiles: {error}"));
         self.fall_back_to_tiles();
         Ok(Produced::Reset)
-    }
-
-    async fn poll_prepared_source(&mut self, work_epoch: u64) -> Result<Produced, PipelineError> {
-        let mut stage = self
-            .stage
-            .take()
-            .ok_or_else(|| PipelineError::capture(io::Error::other("no screen preparation")))?;
-        let request = StageRequest {
-            frame_id: self.next_frame_id,
-            frame_contract: self.frame_contract,
-            visible_rects: None,
-            keyframe: true,
-            target_bps: self.rate.target_bps(),
-            size: FrameSize::new(0, 0),
-            choice: self.choice,
-            encoder_epoch: self.encoder_epoch,
-            fps: self.max_fps,
-        };
-        let job = tokio::task::spawn_blocking(move || {
-            let result = stage.source.prepare_capture(&request);
-            StageOutput { result, stage }
-        })
-        .await
-        .map_err(|error| PipelineError::capture(io::Error::other(error)))?;
-        self.stage = Some(job.stage);
-        if !self.work.current(work_epoch) {
-            self.reset_stream();
-            return Ok(Produced::Reset);
-        }
-        self.sync_source_reference();
-        match job.result {
-            Ok(Some(state)) => Ok(Produced::Paused(state)),
-            Ok(None) if self.source_size.width != 0 && self.source_size.height != 0 => {
-                Ok(Produced::Reset)
-            }
-            Ok(None) => Ok(Produced::Paused(SessionState::Starting)),
-            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                Ok(Produced::Paused(SessionState::Starting))
-            }
-            Err(error) => Err(PipelineError::capture(error)),
-        }
     }
 }
 

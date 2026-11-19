@@ -41,7 +41,10 @@ mod verify;
 pub use verify::VerifyLine;
 #[path = "codec_registry_rank.rs"]
 mod rank;
+#[path = "codec_registry_entries.rs"]
+mod rows;
 pub use rank::{first_rank_trust, keeps_first_rank};
+use rows::{entries, tiles_entry};
 
 /// Text at every place that controls OpenH264 (Cisco condition 3).
 pub const OPENH264_NOTICE: &str = "OpenH264 Video Codec provided by Cisco Systems, Inc.";
@@ -118,6 +121,13 @@ pub trait DecoderFactory: Send + Sync {
     /// The adapter of its hardware stage as the verdicts name it (P3).
     fn device(&self) -> String {
         String::new()
+    }
+    /// Whether it would open `header`'s stream only with stages it gave up
+    /// in this viewer session (FFmpeg's last resort under a chosen
+    /// „Dekodierer: Hardware“). The register tries it after every other
+    /// factory of the pass (review 2026-11-19, Codex 4/11).
+    fn retries_given_up(&self, _header: &GopHeader) -> bool {
+        false
     }
 }
 
@@ -247,42 +257,6 @@ fn ordered_offers(lists: impl Iterator<Item = Vec<CodecOffer>>) -> Vec<CodecOffe
     legacy
 }
 
-/// The rows of one implementation: one per codec it offers, in the order
-/// of its offers.
-fn entries(name: String, offers: &[CodecOffer], refused: Vec<String>) -> Vec<CodecEntry> {
-    let mut rows: Vec<CodecEntry> = Vec::new();
-    for offer in offers {
-        let index = match rows.iter().position(|row| row.codec == offer.codec) {
-            Some(index) => index,
-            None => {
-                rows.push(CodecEntry {
-                    codec: offer.codec,
-                    profiles: Vec::new(),
-                    name: name.clone(),
-                    hardware: false,
-                    profile_names: Vec::new(),
-                    refused_settings: refused.clone(),
-                    verdict: None,
-                });
-                rows.len() - 1
-            }
-        };
-        let row = &mut rows[index];
-        row.hardware |= offer.hardware;
-        if let Some(profile) = offer
-            .profile
-            .filter(|profile| !row.profiles.contains(profile))
-        {
-            row.profiles.push(profile);
-        }
-        let named = offer.codec.profile_name(offer.profile).to_string();
-        if !named.is_empty() && !row.profile_names.contains(&named) {
-            row.profile_names.push(named);
-        }
-    }
-    rows
-}
-
 /// The codecs that keep a decoder without a failed check (`judged`: each
 /// factory's offers and whether its check failed) of a kind `preference`
 /// allows. Fix of 2026-11-18: a stored decoder verdict comes from the round
@@ -302,18 +276,6 @@ fn sound_codecs(
         }
     }
     sound
-}
-
-fn tiles_entry() -> CodecEntry {
-    CodecEntry {
-        codec: CodecKind::Tiles,
-        profiles: Vec::new(),
-        name: TILES_NAME.into(),
-        hardware: false,
-        profile_names: Vec::new(),
-        refused_settings: Vec::new(),
-        verdict: None,
-    }
 }
 
 #[cfg(test)]

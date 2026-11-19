@@ -144,18 +144,23 @@ pub(super) fn retryable(error: &ViewerError) -> bool {
 }
 
 /// Waits for `wait`; `None` when the client closed meanwhile. Control frames
-/// of the client arriving now belong to the ended session and are dropped.
+/// of the client arriving now are not sent anywhere; the choices among them
+/// go into `modes`, which the next session gets (`ModeMemory::note`).
 async fn unless_closed<T>(
     mut wait: Pending<T>,
     input: &mut mpsc::Receiver<Option<ViewerFrame>>,
+    modes: &mut super::ModeMemory,
 ) -> Option<T> {
     loop {
         tokio::select! {
             biased;
             frame = input.recv() => {
-                if !matches!(frame, Some(Some(_))) {
+                let Some(Some(frame)) = frame else {
                     return None;
-                }
+                };
+                // Review 2026-11-19 (Gemini 3/9): a choice the viewer made
+                // meanwhile reaches the next session with the others.
+                modes.note(&frame);
             }
             value = &mut wait => return Some(value),
         }
@@ -169,17 +174,21 @@ pub(in super::super) async fn again<D: Dial, C: Clock>(
     clock: C,
     schedule: &mut Schedule,
     input: &mut mpsc::Receiver<Option<ViewerFrame>>,
+    modes: &mut super::ModeMemory,
 ) -> Outcome<D::Session> {
     loop {
         match schedule.step(clock.now()) {
             Step::GiveUp => return Outcome::GaveUp,
             Step::Wait(time) => {
-                if unless_closed(clock.sleep(time), input).await.is_none() {
+                if unless_closed(clock.sleep(time), input, modes)
+                    .await
+                    .is_none()
+                {
                     return Outcome::ViewerClosed;
                 }
             }
             Step::Attempt { remaining } => {
-                match unless_closed(dialer.dial(remaining), input).await {
+                match unless_closed(dialer.dial(remaining), input, modes).await {
                     None => return Outcome::ViewerClosed,
                     Some(Ok(session)) => return Outcome::Opened(session),
                     Some(Err(error)) if retryable(&error) => {

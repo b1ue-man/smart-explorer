@@ -230,6 +230,12 @@ pub struct ScreenClientHello {
     /// Absent (an older viewer): the host reads the decoders as before.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub codec_choice: Option<CodecSetting>,
+    /// „Höchste Datenrate“ in bit/s at the opening (review 2026-11-19,
+    /// Codex 4/6): the host holds it from the first picture on, before the
+    /// `RATE_CEILING` that follows the opening for older hosts arrives.
+    /// Absent: automatic, or a viewer before the field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_rate_bps: Option<u64>,
     /// The host's sound (plan 2026-11-17 P9, `audio_wire.rs`): `Some(1)`
     /// when this viewer plays it; an older host ignores it.
     #[serde(default, skip_serializing_if = "Option::is_none")]

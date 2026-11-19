@@ -108,8 +108,16 @@ impl Pipeline {
     ) -> io::Result<()> {
         if let Some(contract) = contract {
             contract.validate()?;
-            self.bounds = contract.limits.max_size;
-            self.display = self.bounds;
+            // The viewer's display from its hello within the contract
+            // (Gemini 3/5: the contract's largest size replaced it, so the
+            // first picture had the source size and the first `SET_MODE`
+            // with the window size opened the encoder again).
+            let max = contract.limits.max_size;
+            self.display = FrameSize::new(
+                self.display.width.min(max.width),
+                self.display.height.min(max.height),
+            );
+            self.bounds = self.display;
         }
         self.negotiated_contract = contract;
         self.frame_contract = contract.map(|mut c| {

@@ -1,5 +1,6 @@
 //! One release-only input job retains its original worker while capture is in flight.
 use super::*;
+use crate::screen::core::input_model::MAX_INPUT_EVENTS;
 use crate::screen::core::wire_control::ControlBlock;
 use std::future::Future;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -63,12 +64,31 @@ impl Drop for Retained {
 
 impl Session<'_> {
     pub(super) fn release_pressed(&mut self) {
-        // Input is held while this job exists, so a second batch cannot grow behind it.
+        let released = self.pressed.release_all();
+        // Input is held while this job exists, so a second batch cannot grow
+        // behind it; what is held now goes after it (Gemini 3/10: it was
+        // left held), with the next retry or the release of the control.
         if self.input_release.is_some() {
+            failed_list(&self.health.failed).extend(released);
             return;
         }
-        let released = self.pressed.release_all();
         self.start_release(released);
+    }
+    /// Gemini 3/10: the releases of keys and buttons the host holds go in
+    /// also while input waits (a hidden view, no presented picture yet, a
+    /// release first): they carry no position, and the viewer sends them
+    /// once only.
+    pub(super) fn release_held_ups(&mut self, events: &[InputEvent]) {
+        let ups: Vec<InputEvent> = events
+            .iter()
+            .filter(|event| self.pressed.take_release(event))
+            .cloned()
+            .collect();
+        if self.input_release.is_some() {
+            failed_list(&self.health.failed).extend(ups);
+        } else {
+            self.start_release(ups);
+        }
     }
     /// One release job for `events`; what fails goes back to
     /// `InputHealth::failed` (`Retained`).
@@ -88,7 +108,7 @@ impl Session<'_> {
         // session waits for the job as for every release: input is held
         // while it exists (`input`), so later batches follow the releases.
         if let Ok(runtime) = tokio::runtime::Handle::try_current() {
-            let job: Box<dyn FnOnce(&[InputEvent]) -> Result<(), ControlBlock> + Send> =
+            let job: Box<dyn Fn(&[InputEvent]) -> Result<(), ControlBlock> + Send> =
                 match self.pipeline.input_sink() {
                     Some(sink) => Box::new(move |events| sink.release(events)),
                     None => {
@@ -97,13 +117,34 @@ impl Session<'_> {
                     }
                 };
             self.input_release = Some(runtime.spawn_blocking(move || {
-                let result = job(&retained.events);
+                // Gemini 3/10: a host process takes at most `MAX_INPUT_EVENTS`
+                // per batch (`encode_batch`); what went in leaves `retained`.
+                let mut done = 0;
+                let mut result = Ok(());
+                for chunk in retained.events.chunks(MAX_INPUT_EVENTS) {
+                    result = job(chunk);
+                    if result.is_err() {
+                        break;
+                    }
+                    done += chunk.len();
+                }
+                retained.events.drain(..done);
                 retained.released = result.is_ok();
                 result
             }));
             return;
         }
-        self.release_blocked = self.context.backend.inject(&retained.events).err();
+        let mut done = 0;
+        let mut result = Ok(());
+        for chunk in retained.events.chunks(MAX_INPUT_EVENTS) {
+            result = self.context.backend.inject(chunk);
+            if result.is_err() {
+                break;
+            }
+            done += chunk.len();
+        }
+        retained.events.drain(..done);
+        self.release_blocked = result.err();
         retained.released = self.release_blocked.is_none();
     }
     /// D7: the releases that failed go out once more, alone: what the user

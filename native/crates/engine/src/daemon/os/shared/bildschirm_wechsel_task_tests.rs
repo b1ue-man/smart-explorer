@@ -82,7 +82,8 @@ fn run(
         .build()
         .unwrap();
     let mut schedule = Schedule::new(start);
-    let outcome = runtime.block_on(again(dialer, clock, &mut schedule, input));
+    let mut modes = ModeMemory::default();
+    let outcome = runtime.block_on(again(dialer, clock, &mut schedule, input, &mut modes));
     let dials = dials.lock().unwrap().clone();
     check(outcome, dials, start);
 }
