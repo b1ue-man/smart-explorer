@@ -255,8 +255,10 @@ class ScreenDecoder(
         }
         if (flags and FLAG_TILES != 0) {
             // The tiles are drawn in software: under „Dekodierer: Hardware“ they are refused with the reason, once per
-            // group (Gemini 5/7; e.g. a host without `set_decoders_v1` or the choice „Verlustfrei“).
-            if (choice().decoder == ViewerCodecChoice.DECODER_HARDWARE) {
+            // group (Gemini 5/7), except under „Verlustfrei“, which chooses the tiles itself (the desktop's rule,
+            // `hardware_bars_tiles`: the more explicit choice wins).
+            val wanted = choice()
+            if (wanted.decoder == ViewerCodecChoice.DECODER_HARDWARE && wanted.codec != ViewerCodecChoice.CODEC_LOSSLESS) {
                 if (rejectedTilesGop != gop) {
                     rejectedTilesGop = gop
                     listener.onHybridUnavailable(gop, "die verlustfreien Kacheln werden nur in Software gezeichnet")
