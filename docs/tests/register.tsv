@@ -1968,7 +1968,6 @@ native/crates/engine/src/screen/core/host_pipeline.rs	screen_metadata_runtime_ta
 native/crates/engine/src/screen/core/host_session_clock.rs	screen_metadata_runtime_task_missed_capture_tick_is_made_up_after_the_operation	behalten	K5	Aufnahmetakt wird nach laufender Operation nachgeholt	crates-task
 native/crates/engine/src/screen/core/input_model_tests.rs	screen_task_input_key_names_and_pointer_positions	behalten	K1	Fernsteuerung: Tasten loslassen, Namen, Zeigerpositionen	crates-task
 native/crates/engine/src/screen/core/input_model_tests.rs	screen_task_input_release_on_end	behalten	K1	Fernsteuerung: Tasten loslassen, Namen, Zeigerpositionen	crates-task
-native/crates/engine/src/screen/core/input_model_tests.rs	review1119_task_failed_release_is_held_again	behalten	K1	Fernsteuerung (Review 2026-11-19, D7): fehlgeschlagene Loslass-Ereignisse bleiben gehalten und gehen beim nächsten Loslassen in Druckreihenfolge erneut hinaus	crates-task
 native/crates/engine/src/screen/core/licenses.rs	screen_task_cisco_license_verbatim	behalten	K1	Cisco-Lizenztext von OpenH264 wortgetreu	crates-task
 native/crates/engine/src/screen/core/metrics_tests.rs	screen_task_metrics_latency_rates_and_clock	behalten	K5	se screen bench: Latenz, Raten, PSNR	crates-task
 native/crates/engine/src/screen/core/metrics_tests.rs	screen_task_metrics_static_psnr	behalten	K5	se screen bench: Latenz, Raten, PSNR	crates-task

@@ -277,9 +277,9 @@ impl Session<'_> {
             return self.report_block(blocked).await;
         }
         // D7: failed releases go out before the next batch (that batch waits
-        // behind them like behind every release).
+        // behind them like behind every release, and the viewer hears so, N2).
         if self.retry_releases() {
-            return Ok(());
+            return self.report_held(InputHeld::ReleasePending).await;
         }
         if !self.handle.holds_control() {
             let detail = "input without control".to_string();
@@ -321,7 +321,8 @@ impl Session<'_> {
             Err(blocked) => {
                 self.release_pressed();
                 if presented && self.stale_refusal(blocked, reference) {
-                    return Ok(());
+                    // Held back, not blocked (review O2a).
+                    return self.report_held(InputHeld::WaitingForPicture).await;
                 }
                 self.report_block(blocked).await?;
                 if !presented
@@ -387,6 +388,8 @@ impl Session<'_> {
         blocked: crate::screen::core::wire_control::ControlBlock,
     ) -> io::Result<()> {
         self.health.block_reported = Some(blocked);
+        // This state names no hold: the next hold is reported again (N4).
+        self.health.held_reported = false;
         let state = ControlState {
             holder: self.handle.controller(),
             blocked: Some(blocked),
@@ -454,9 +457,7 @@ impl Session<'_> {
     /// Lets go of every pressed input and of the control.
     pub(super) fn release_control(&mut self) {
         // D7: releases that failed before go out with this one.
-        if !self.retry_releases() {
-            self.release_pressed();
-        }
+        self.release_all_and_failed();
         if self.handle.release_control() {
             let audit = self.context.audit;
             log_event(

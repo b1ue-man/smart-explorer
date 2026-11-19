@@ -65,12 +65,17 @@ impl Session<'_> {
             return;
         }
         let released = self.pressed.release_all();
-        if released.is_empty() {
+        self.start_release(released);
+    }
+    /// One release job for `events`; what fails goes back to
+    /// `InputHealth::failed` (`Retained`).
+    fn start_release(&mut self, events: Vec<InputEvent>) {
+        if events.is_empty() {
             return;
         }
         let mut retained = Retained {
             failed: self.health.failed.clone(),
-            events: released,
+            events,
             released: false,
         };
         // Both ways run on the blocking pool (review 2026-11-19, M1): a source
@@ -97,11 +102,12 @@ impl Session<'_> {
         self.release_blocked = self.context.backend.inject(&retained.events).err();
         retained.released = self.release_blocked.is_none();
     }
-    /// D7: the releases that failed are held again and sent with what is
-    /// pressed now; `true` when there were any. Not on every reference
-    /// check (`refresh_input_reference`): only with the next input batch
-    /// and with the release of the control, so a lasting block (the secure
-    /// desktop) costs no release attempt per picture.
+    /// D7: the releases that failed go out once more, alone: what the user
+    /// holds now (a drag, Shift) stays held (review O2b). `true` when there
+    /// were any. Not on every reference check (`refresh_input_reference`):
+    /// only with the next input batch and with the release of the control,
+    /// so a lasting block (the secure desktop) costs no release attempt per
+    /// picture.
     pub(super) fn retry_releases(&mut self) -> bool {
         if self.input_release.is_some() {
             return false;
@@ -110,9 +116,18 @@ impl Session<'_> {
         if failed.is_empty() {
             return false;
         }
-        self.pressed.restore(&failed);
-        self.release_pressed();
+        self.start_release(failed);
         true
+    }
+    /// The release of the control: everything held now (newest first) and
+    /// the releases that failed before, in one job.
+    pub(super) fn release_all_and_failed(&mut self) {
+        if self.input_release.is_some() {
+            return;
+        }
+        let mut events = self.pressed.release_all();
+        events.append(&mut failed_list(&self.health.failed));
+        self.start_release(events);
     }
     pub(super) fn poll_input_release(&mut self) {
         let Some(mut job) = self.input_release.take() else {

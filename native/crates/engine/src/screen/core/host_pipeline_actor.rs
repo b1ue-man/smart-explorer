@@ -68,12 +68,7 @@ pub struct PipelineActor {
     stopped: bool,
     known_ack: Option<u64>,
     input_sink: Option<Arc<dyn crate::screen::core::host_backend::ScreenInputSink>>,
-    route: Option<(
-        u64,
-        u64,
-        Option<crate::share::route_state::RouteClass>,
-        bool,
-    )>,
+    route: changes::Route,
     mode: QualityMode,
     /// E3 (plan 2026-11-14): interactive while this pipeline streams the full view.
     presence: crate::screen::core::gop_stream::PicturePresence,
@@ -83,6 +78,7 @@ pub struct PipelineActor {
 }
 impl PipelineActor {
     pub fn new(mut pipeline: Pipeline, connection: Connection) -> Self {
+        let route = changes::route_of(&connection);
         let stats = pipeline.second(&connection);
         let admission = pipeline.admission.clone();
         let accepted = pipeline.negotiated_contract;
@@ -128,7 +124,7 @@ impl PipelineActor {
             stopped: false,
             known_ack: None,
             input_sink,
-            route: None,
+            route,
             mode,
             presence: crate::screen::core::gop_stream::PicturePresence::host(
                 mode.kind == StreamKind::Video,
@@ -367,24 +363,6 @@ impl PipelineActor {
         self.interrupt();
         self.input_sink = source.input_sink();
         self.pending.source = Some(source);
-        self.poll();
-    }
-    pub fn set_mode(
-        &mut self,
-        kind: StreamKind,
-        size: Option<FrameSize>,
-        fps: Option<u16>,
-        sharpness: bool,
-        lossless: bool,
-    ) {
-        let mode = self.mode.update(kind, size, fps, sharpness, lossless);
-        if self.mode == mode {
-            return;
-        }
-        self.mode = mode;
-        self.presence.set_full(mode.kind == StreamKind::Video);
-        self.interrupt();
-        self.pending.mode = Some(mode);
         self.poll();
     }
     pub fn set_visible_rects(

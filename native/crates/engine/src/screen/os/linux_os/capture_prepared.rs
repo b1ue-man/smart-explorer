@@ -268,8 +268,11 @@ pub(in crate::screen::os) async fn apply_portal_input(
             }
             InputEvent::Touch { .. } | InputEvent::Action { .. } => Ok(()),
         };
+        // A refused call (an unsupported keysym, review 2026-11-19 Gemini
+        // 12.3) drops the rest of the batch, not the source: a portal session
+        // that really ended stops its PipeWire stream, which expires the
+        // source itself (`StreamIdentity::on_state`).
         if sent.is_err() {
-            granted.invalidate();
             return;
         }
     }

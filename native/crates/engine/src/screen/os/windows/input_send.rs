@@ -410,9 +410,14 @@ fn submit(inputs: &[INPUT]) -> Result<(), ControlBlock> {
     // Part of the batch went in (review 2026-11-19, C14): the session takes
     // over a batch only whole, so a press that went in without its release
     // is let go here, newest first; the rest of the batch is dropped and
-    // the batch counts as not applied.
+    // the batch counts as not applied. Windows names no cause (SendInput:
+    // "neither GetLastError nor the return value will indicate the failure
+    // was caused by UIPI blocking"); the refusal is reported as the zero
+    // count is, at once and as Windows' own refusal (`elevated_window`), not
+    // as `control_unavailable`, which the session may take for a stale
+    // reference and hold back once (`stale_refusal`, review N5).
     let _ = send(&unreleased(&inputs[..sent]));
-    Err(ControlBlock::ControlUnavailable)
+    Err(ControlBlock::ElevatedWindow)
 }
 
 /// `SendInput` "returns the number of events that it successfully inserted
