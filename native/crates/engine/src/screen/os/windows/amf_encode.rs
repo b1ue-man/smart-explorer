@@ -304,14 +304,20 @@ impl AmfSession {
     }
 
     /// Sets `settings` on the component; refused ones stay at the default
-    /// and are named once.
-    fn apply(&mut self, settings: Vec<Setting>) {
+    /// and are named once (`refused` keeps every name ever refused, for the
+    /// log and `rate_refused`). Review 2026-11-19 C10: the names refused by
+    /// this call, so a refusal of the current rate is seen.
+    fn apply(&mut self, settings: Vec<Setting>) -> Vec<&'static str> {
         let this = self.component.object;
         // SAFETY: a live component.
         let storage = unsafe { &vtable::<ComponentVtbl>(this).storage };
-        let mut new = Vec::new();
+        let (mut new, mut now) = (Vec::new(), Vec::new());
         for (name, value) in settings {
-            if !set(storage, this, name, value) && !self.refused.contains(&name) {
+            if set(storage, this, name, value) {
+                continue;
+            }
+            now.push(name);
+            if !self.refused.contains(&name) {
                 self.refused.push(name);
                 new.push(name);
             }
@@ -323,6 +329,7 @@ impl AmfSession {
                 new.join(", ")
             );
         }
+        now
     }
 
     /// The access unit of `data` to `deliver`; whether it is a key frame.
@@ -364,12 +371,19 @@ impl VendorSession for AmfSession {
         deliver: &mut dyn FnMut(&[u8]) -> io::Result<()>,
     ) -> io::Result<bool> {
         let names = self.names;
-        // Review 2026-11-19 C10: a lowered rate is set however small the step.
-        if self.rate.differs(rate) || self.rate.lowered_by(rate) {
+        // Review 2026-11-19 C10: a lowered rate is set however small the
+        // step, and a refused one fails the picture instead of running above.
+        let lowered = self.rate.lowered_by(rate);
+        if self.rate.differs(rate) || lowered {
             self.rate = *rate;
-            self.apply(rate_settings(names, rate));
+            let refused = self.apply(rate_settings(names, rate));
             if let Some(ltr) = self.ltr.as_mut() {
                 ltr.set_fps(rate.fps);
+            }
+            let rated = [names.target, names.peak];
+            if let Some(name) = refused.iter().find(|name| rated.contains(*name)) {
+                let error = io::Error::other(format!("AMF refused {name}"));
+                rate.refused_lowering(lowered, AMF_NAME, &error)?;
             }
         }
         let context = self.context.object;

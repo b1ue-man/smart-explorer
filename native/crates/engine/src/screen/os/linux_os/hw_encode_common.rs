@@ -68,6 +68,11 @@ impl RateParams {
         );
         (a - b).abs() * 50 >= a || self.fps != other.fps
     }
+
+    /// Whether `other` lowers this rate at all (review 2026-11-19 C10).
+    pub(super) fn lowered_by(&self, other: &Self) -> bool {
+        other.bits_per_second < self.bits_per_second
+    }
 }
 
 /// MaxBR in bit/s of the H.264 level `avc_level_for` names for `size` at
@@ -277,14 +282,8 @@ impl<S: HwH264Session> HwH264Encoder<S> {
     fn rate(&mut self, target_bps: u64) -> RateParams {
         let wanted = RateParams::for_target(target_bps.min(self.ceiling()), self.fps);
         match self.rate {
-            // Review 2026-11-19 C10: the 2 % band holds back rises only; a
-            // lowered rate is passed on however small the step.
-            Some(current)
-                if !current.differs(&wanted)
-                    && wanted.bits_per_second >= current.bits_per_second =>
-            {
-                current
-            }
+            // Review 2026-11-19 C10: the 2 % band holds back rises only.
+            Some(current) if !current.differs(&wanted) && !current.lowered_by(&wanted) => current,
             _ => {
                 self.rate = Some(wanted);
                 wanted

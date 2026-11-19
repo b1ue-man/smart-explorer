@@ -463,13 +463,14 @@ fn p9_task_win_capture_monitor_fallback_is_temporary() {
     let past = Instant::now()
         .checked_sub(RETRY_FIRST)
         .expect("uptime of the test machine");
-    // A due try that is refused: Graphics Capture again, after the try's
-    // generation, and a longer wait.
+    // A due try that is refused: Graphics Capture keeps running with its
+    // generation (review 2026-11-19 C20: the try opens beside it), and a
+    // longer wait.
     monitor.retry = Some(RetryPlan::new(past));
     let _ = monitor.capture(false).unwrap();
     assert_eq!(tries.load(Ordering::SeqCst), 1);
     assert_eq!(monitor.path(), Some(CapturePath::GraphicsCapture));
-    assert_eq!(monitor.reference_generation(), 7);
+    assert_eq!(monitor.reference_generation(), 5);
     assert_eq!(monitor.retry.map(|plan| plan.wait()), Some(RETRY_FIRST * 2));
     // A due try that opens: Desktop Duplication, no plan left.
     refuse.store(false, Ordering::SeqCst);
@@ -477,6 +478,6 @@ fn p9_task_win_capture_monitor_fallback_is_temporary() {
     let _ = monitor.capture(false).unwrap();
     assert_eq!(tries.load(Ordering::SeqCst), 2);
     assert_eq!(monitor.path(), Some(CapturePath::DesktopDuplication));
-    assert_eq!(monitor.reference_generation(), 8);
+    assert_eq!(monitor.reference_generation(), 6);
     assert!(monitor.retry.is_none());
 }

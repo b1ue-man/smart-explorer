@@ -9,10 +9,11 @@
 //!
 //! P9: the fallback is temporary. While on Graphics Capture the monitor
 //! tries Desktop Duplication again by `RetryPlan` (after 2 s, then each wait
-//! twice as long, at most a minute apart): the fallback and its grant end,
-//! the duplication asks for its own plan and grant (`first`), and when it
-//! opens the report forgets the fallback; when it does not, Graphics Capture
-//! opens again with the generation after the failed try. Every switch and
+//! twice as long, at most a minute apart): the duplication asks for its own
+//! plan and grant (`first`) beside the running Graphics Capture, and when it
+//! opens it replaces the fallback and the report forgets the fallback; when
+//! it does not, Graphics Capture keeps running unchanged (review 2026-11-19
+//! C20; `MonitorGrabber::try_first`). Every switch and
 //! its reason (step and result code, `FallbackDetail`) goes to the host log
 //! and with the report to the viewer.
 //!
@@ -106,40 +107,79 @@ impl MonitorGrabber {
     }
 
     /// P9: tries Desktop Duplication again when its retry is due; true when
-    /// the capture changed (either way).
+    /// the capture changed.
+    ///
+    /// Review 2026-11-19 C20: the duplication is opened beside the running
+    /// Graphics Capture, which goes only once the duplication is open. A
+    /// refused try leaves Graphics Capture and its generation as they were,
+    /// so the encoder of the stream keeps running (before, every try ended
+    /// Graphics Capture first and opened it again with a new generation, a
+    /// new encoder after every refused try). The session admission funds
+    /// both plans at once (`capture_authority.rs`, `fund`: plans add up to
+    /// the platform capacity, each source counts its owners); only when
+    /// both do not fit (`WouldBlock`) the try ends Graphics Capture first,
+    /// as before.
     fn try_first(&mut self) -> bool {
         let now = Instant::now();
         if !self.retry.is_some_and(|plan| plan.due(now)) {
             return false;
         }
-        let (Some(first), Some(plan)) = (self.first.as_mut(), self.retry.as_mut()) else {
+        let Some(first) = self.first.as_mut() else {
             return false;
         };
         let previous = self.current.reference_generation();
-        // The fallback and its grant end before the duplication asks for its
-        // own grant.
+        match first(previous) {
+            Ok(grabber) => self.came_back(grabber, now),
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                eprintln!(
+                    "screen capture: Desktop Duplication does not fit beside Graphics Capture \
+                     ({error}); tried with Graphics Capture ended"
+                );
+                self.try_first_alone(now, previous)
+            }
+            Err(error) => {
+                self.refused_again(now, &error);
+                false
+            }
+        }
+    }
+
+    /// The duplication `grabber` replaces the fallback.
+    fn came_back(&mut self, grabber: Box<dyn Grabber>, now: Instant) -> bool {
+        self.current = grabber;
+        self.back = self.retry.take().map(|plan| (now, plan));
+        capture_source::update_report(|report| {
+            report.fallback = None;
+            report.detail = None;
+        });
+        eprintln!("screen capture: back on Desktop Duplication");
+        true
+    }
+
+    fn refused_again(&mut self, now: Instant, error: &io::Error) {
+        if let Some(plan) = self.retry.as_mut() {
+            plan.failed(now);
+            eprintln!(
+                "screen capture: Desktop Duplication still refused ({error}); next try in {} s",
+                plan.wait().as_secs()
+            );
+        }
+    }
+
+    /// The try with the fallback and its grant ended first (both plans do
+    /// not fit at once); a refused try opens Graphics Capture again with the
+    /// generation after the try's.
+    fn try_first_alone(&mut self, now: Instant, previous: u64) -> bool {
         self.current = Box::new(Retired {
             size: self.current.size(),
             generation: previous,
         });
+        let Some(first) = self.first.as_mut() else {
+            return true;
+        };
         match first(previous) {
-            Ok(grabber) => {
-                self.current = grabber;
-                self.back = self.retry.take().map(|plan| (now, plan));
-                capture_source::update_report(|report| {
-                    report.fallback = None;
-                    report.detail = None;
-                });
-                eprintln!("screen capture: back on Desktop Duplication");
-                return true;
-            }
-            Err(error) => {
-                plan.failed(now);
-                eprintln!(
-                    "screen capture: Desktop Duplication still refused ({error}); next try in {} s",
-                    plan.wait().as_secs()
-                );
-            }
+            Ok(grabber) => return self.came_back(grabber, now),
+            Err(error) => self.refused_again(now, &error),
         }
         // The try may have used the next generation: one after it.
         let Some(open) = self.fallback.as_mut() else {
