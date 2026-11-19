@@ -379,6 +379,15 @@ impl VirtualDisplayDriver for WindowsVirtualDisplay {
         Ok(FrameSize::new(now.dmPelsWidth, now.dmPelsHeight))
     }
 
+    /// The mode `apply` takes for `size` (review 2026-11-19): the virtual
+    /// monitor lists fixed modes (`MODE_SIZES`), so a followed window size
+    /// is announced as the listed one, not as the fitted size it never gets.
+    fn chosen_size(&self, size: FrameSize) -> Option<FrameSize> {
+        let found = outputs();
+        let virtual_output = ours(&found)?;
+        best_mode(size, &listed_modes(&virtual_output.name)).map(|mode| mode.size)
+    }
+
     fn request_setup(&self) -> SetupProgress {
         SetupProgress::Failed(REASON_DRIVER_MISSING.into())
     }

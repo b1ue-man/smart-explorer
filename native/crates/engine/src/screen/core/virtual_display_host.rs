@@ -405,13 +405,17 @@ pub fn resize(session: &str, size: Option<FrameSize>) -> Option<FrameSize> {
     let shared = SHARED.get()?;
     let mut state = lock(&shared.state);
     let known = state.planner.resize(session, size);
-    if known {
-        shared.changed.notify_all();
-    }
+    shared.changed.notify_all();
     let shows = state.sessions.get(session).is_some_and(|k| k.own.is_none());
-    (known && shows && state.planner.owner_session() == Some(session))
+    let fitted = (known && shows && state.planner.owner_session() == Some(session))
         .then(|| state.planner.target(state.limit))
-        .flatten()
+        .flatten()?;
+    // A driver with listed modes sets the nearest one (Windows).
+    let chosen = state.driver.clone().and_then(|d| {
+        drop(state);
+        d.chosen_size(fitted)
+    });
+    Some(chosen.unwrap_or(fitted))
 }
 
 /// Before `source_changed`: the session shows its own choice (`SET_MODE`)

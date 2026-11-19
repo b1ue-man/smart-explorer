@@ -69,6 +69,13 @@ pub trait VirtualDisplayDriver: Send + Sync {
     fn probe(&self) -> io::Result<DisplayProbe>;
     /// Sets the display to the fitted `size`; the size it has afterwards.
     fn apply(&self, size: FrameSize) -> io::Result<FrameSize>;
+    /// The size `apply(size)` will set, when the driver takes only listed
+    /// modes (Windows: the nearest one, `best_mode`); `None`: `size` itself
+    /// (X11 RandR makes se's own mode). Blocks briefly: call it without
+    /// the host's state lock.
+    fn chosen_size(&self, _size: FrameSize) -> Option<FrameSize> {
+        None
+    }
     /// Starts the driver setup in the background unless this version tried
     /// already; its state now.
     fn request_setup(&self) -> SetupProgress;
