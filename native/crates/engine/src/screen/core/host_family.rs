@@ -150,6 +150,17 @@ impl Session<'_> {
             ));
         }
         if request.operation == crate::remote_window::WindowOperation::Focus {
+            // Round 8 (I7): the batch being injected ends first.
+            if self.health.injecting.is_some() {
+                return self
+                    .frame(HostFrame::FamilyOperation(FamilyOperationResult {
+                        request_id: request.request_id,
+                        status: None,
+                        reason: Some("family_input_release_pending_or_control_lost".into()),
+                        snapshot: None,
+                    }))
+                    .await;
+            }
             self.release_pressed();
             if self.input_release.is_none() {
                 // The worker can retain failed releases after the daemon's
@@ -219,6 +230,9 @@ impl Session<'_> {
             || !self.pipeline.input_reference_ready()
             || self.input_release.is_some()
             || super::input_release::gate::busy()
+            // Round 8 (I7): a batch on its way or releases owed come first.
+            || self.health.injecting.is_some()
+            || self.releases_owed()
         {
             Some("family_waiting_for_presented_frame")
         } else if request.target.snapshot_revision != self.family.revision

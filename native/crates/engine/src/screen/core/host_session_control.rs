@@ -4,9 +4,37 @@ use super::*;
 use crate::screen::core::cursor_overlay::{CursorFeed, CursorPosition, CursorSeen, CursorUpdate};
 use crate::screen::core::wire_control::{ControlBlock, InputHeld};
 
-/// Batches that wait behind a running injection (Codex 7/10), as many as
-/// the session's frame queue holds (`FRAME_QUEUE`).
-const INPUT_BACKLOG: usize = 64;
+/// A batch of pointer moves and wheel steps only (round 8, I2).
+fn motion_only(events: &[InputEvent]) -> bool {
+    events.iter().all(|event| {
+        matches!(
+            event,
+            InputEvent::PointerAbs { .. } | InputEvent::Wheel { .. }
+        )
+    })
+}
+
+/// `events` joins `waiting` (both `motion_only`): the newest position, then
+/// the wheel steps of both added (saturating at the wire's range).
+fn merge_motion(waiting: &mut Vec<InputEvent>, events: &[InputEvent]) {
+    let (mut dx, mut dy) = (0i16, 0i16);
+    let mut position = None;
+    for event in waiting.iter().chain(events) {
+        match event {
+            InputEvent::PointerAbs { .. } => position = Some(event.clone()),
+            InputEvent::Wheel { dx: x, dy: y } => {
+                dx = dx.saturating_add(*x);
+                dy = dy.saturating_add(*y);
+            }
+            _ => {}
+        }
+    }
+    waiting.clear();
+    waiting.extend(position);
+    if dx != 0 || dy != 0 {
+        waiting.push(InputEvent::Wheel { dx, dy });
+    }
+}
 
 /// The pointer overlay of one session (plan 2026-11-14 P6).
 #[derive(Default)]
@@ -259,12 +287,16 @@ impl Session<'_> {
     /// `settle_input` takes the result and starts the next one.
     pub(super) async fn input(&mut self, events: &[InputEvent]) -> io::Result<()> {
         if self.health.injecting.is_some() || !self.health.backlog.is_empty() {
-            if self.health.backlog.len() < INPUT_BACKLOG {
-                self.health.backlog.push_back(events.to_vec());
-                return Ok(());
+            // Round 8 (I2): keys, buttons and touches are never dropped; a
+            // batch of only moves and wheel steps joins one waiting before
+            // it (the newest position, the steps added), which bounds them.
+            match self.health.backlog.back_mut() {
+                Some(waiting) if motion_only(waiting) && motion_only(events) => {
+                    merge_motion(waiting, events)
+                }
+                _ => self.health.backlog.push_back(events.to_vec()),
             }
-            self.release_held_ups(events);
-            return self.report_held(InputHeld::ReleasePending).await;
+            return Ok(());
         }
         self.start_batch(events).await
     }
@@ -329,6 +361,7 @@ impl Session<'_> {
             reference,
             presented,
             started: Instant::now(),
+            epoch: self.health.release_epoch,
         });
         Ok(())
     }

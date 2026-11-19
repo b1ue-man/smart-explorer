@@ -42,6 +42,7 @@ impl Session<'_> {
             reference,
             presented,
             started,
+            epoch,
             ..
         } = job;
         let events = &events[..];
@@ -56,6 +57,11 @@ impl Session<'_> {
             Ok(()) => {
                 for event in events {
                     self.pressed.observe(event);
+                }
+                // Round 8 (I5): everything held was let go while this batch
+                // went in; what it pressed goes too.
+                if epoch != self.health.release_epoch {
+                    self.release_pressed();
                 }
                 self.health.unconfirmed = None;
                 // D6/E2: a block or hold the viewer heard ends with the

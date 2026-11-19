@@ -55,6 +55,9 @@ pub(super) struct InputHealth {
     /// Codex 7/10: the batch being injected off the session loop, and the
     /// batches that wait behind it in their order.
     pub(super) injecting: Option<Injection>,
+    /// Round 8 (I5): counts every release of all held keys; a batch whose
+    /// injection began before one is let go again when it ends.
+    pub(super) release_epoch: u64,
     pub(super) backlog: std::collections::VecDeque<Vec<InputEvent>>,
 }
 
@@ -65,6 +68,8 @@ pub(super) struct Injection {
     pub(super) reference: u64,
     pub(super) presented: bool,
     pub(super) started: Instant,
+    /// `InputHealth::release_epoch` when it began.
+    pub(super) epoch: u64,
 }
 
 /// How often failed releases are tried again (a lasting refusal, the secure
@@ -103,6 +108,7 @@ impl Session<'_> {
     pub(super) fn release_pressed(&mut self) {
         let released = self.pressed.release_all();
         self.health.queued.extend(released);
+        self.health.release_epoch += 1;
         self.flush_releases();
     }
     /// `release_pressed` for a view hidden or a source changed (round 7):
@@ -113,9 +119,10 @@ impl Session<'_> {
         self.health.queued.extend(released);
         // A job without the revocation runs: the next job revokes (whoever
         // starts it: `poll_input_release`, `drain_releases`, a family path).
-        if self.input_release.is_some() {
+        if self.input_release.is_some() || self.health.injecting.is_some() {
             self.health.revoke_pending = true;
         }
+        self.health.release_epoch += 1;
         self.flush_releases_as(true);
     }
     /// Gemini 3/10, E2: the releases of keys and buttons the host holds go
@@ -247,7 +254,7 @@ impl Session<'_> {
         self.finish_release().await;
         let held = self.pressed.release_all();
         self.health.queued.extend(held);
-        if !self.flush_releases_as(true) {
+        if !self.flush_releases_as(true) && self.health.injecting.is_none() {
             self.start_release(Vec::new(), true, true);
         }
         self.finish_release().await;
@@ -268,7 +275,13 @@ impl Session<'_> {
             Ok(result) => result.map(|result| result.is_ok()).unwrap_or(false),
             Err(_) => {
                 super::visibility::note_viewer("an input injection outlasted the close grace");
-                true
+                // Round 8 (I8): it stays the session's, so no release runs
+                // beside it; `hand_releases_over` gives it to the keeper.
+                for event in &job.events {
+                    self.pressed.observe(event);
+                }
+                self.health.injecting = Some(job);
+                return;
             }
         };
         if applied {
@@ -323,16 +336,23 @@ impl Session<'_> {
     /// queued releases) leaves the session for the release keeper, which
     /// delivers it while every session's input waits (`gate::busy`).
     pub(super) fn hand_releases_over(&mut self) {
-        let job = self.input_release.take();
+        // An injection that outlasted its grace goes first (round 8, I8).
+        let jobs: Vec<_> = (self.health.injecting.take().map(|job| job.handle))
+            .into_iter()
+            .chain(self.input_release.take())
+            .collect();
         let queued = std::mem::take(&mut self.health.queued);
-        if job.is_none() && queued.is_empty() && failed_list(&self.health.failed).is_empty() {
+        if jobs.is_empty() && queued.is_empty() && failed_list(&self.health.failed).is_empty() {
             return;
         }
         let target = match self.pipeline.input_sink() {
             Some(sink) => gate::Target::Sink(sink),
             None => gate::Target::Backend(self.context.backend.clone()),
         };
-        gate::take_over(job, self.health.failed.clone(), queued, target);
+        // Round 8 (I3): the keeper owns this list now; the session goes on
+        // with a new one, so it never takes the keeper's releases.
+        let failed = std::mem::take(&mut self.health.failed);
+        gate::take_over(jobs, failed, queued, target);
     }
 }
 

@@ -51,6 +51,15 @@ impl crate::screen::core::host_backend::ScreenInputSink for WorkerInputSink {
     fn legacy_input_invalid(&self) -> bool {
         self.1.legacy_reconnect.load(Ordering::Acquire)
     }
+    /// The host process has exited (round 8, I4); a link busy with a picture
+    /// request counts as alive.
+    fn closed(&self) -> bool {
+        self.0.try_lock().is_ok_and(|mut link| {
+            link.child
+                .as_mut()
+                .is_some_and(|child| child.try_wait().ok().flatten().is_some())
+        })
+    }
     /// Input the host process's sink refused after its answer (the Wayland
     /// portal), which the process sent unasked (`INPUT_REFUSED`, review
     /// 2026-11-19); whoever takes it first reports it, this or the answer

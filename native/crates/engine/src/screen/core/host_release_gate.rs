@@ -42,10 +42,11 @@ impl Drop for Outstanding {
     }
 }
 
-/// Takes over the running release `job` (its failures land in `failed`)
-/// and the releases still `queued`.
+/// Takes over the running `jobs` (an injection that outlasted its grace,
+/// a release job; their failures land in `failed`), in their order, and
+/// the releases still `queued`.
 pub(super) fn take_over(
-    job: Option<tokio::task::JoinHandle<Result<(), ControlBlock>>>,
+    jobs: Vec<tokio::task::JoinHandle<Result<(), ControlBlock>>>,
     failed: Arc<Mutex<Vec<InputEvent>>>,
     mut queued: Vec<InputEvent>,
     target: Target,
@@ -59,7 +60,7 @@ pub(super) fn take_over(
     runtime.spawn(async move {
         let _outstanding = outstanding;
         let started = Instant::now();
-        if let Some(job) = job {
+        for job in jobs {
             let _ = job.await;
         }
         loop {
@@ -80,7 +81,10 @@ pub(super) fn take_over(
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
                 .extend(left);
-            if started.elapsed() >= GATE_LIMIT {
+            // Round 8 (I4): a sink whose host process ended takes nothing
+            // more; nobody's input waits for it.
+            let closed = matches!(&target, Target::Sink(sink) if sink.closed());
+            if closed || started.elapsed() >= GATE_LIMIT {
                 super::super::visibility::note_viewer("releases of a former holder were given up");
                 return;
             }
@@ -93,8 +97,10 @@ pub(super) fn take_over(
 fn deliver(target: &Target, events: Vec<InputEvent>) -> Vec<InputEvent> {
     let mut done = 0;
     for chunk in events.chunks(MAX_INPUT_EVENTS) {
+        // Round 8 (I6): the giving-up session's own releases: a queueing
+        // sink (Android) also takes back its input still waiting.
         let result = match target {
-            Target::Sink(sink) => sink.release(chunk),
+            Target::Sink(sink) => sink.revoke(chunk),
             Target::Backend(backend) => backend.inject(chunk),
         };
         if result.is_err() {

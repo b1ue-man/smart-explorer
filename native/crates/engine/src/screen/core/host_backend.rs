@@ -62,6 +62,11 @@ pub trait ScreenInputSink: Send + Sync {
     fn take_refusal(&self) -> Option<ControlBlock> {
         None
     }
+    /// The sink can take no input any more (its host process ended): a
+    /// keeper of releases stops trying at once (round 8, I4).
+    fn closed(&self) -> bool {
+        false
+    }
     /// Takes the pointer out of the picture (`true`) or back into it (P6,
     /// `cursor_overlay.rs`); `false` while this source does not separate it
     /// (it cannot, or its capture has not started: the wish is kept).
