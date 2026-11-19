@@ -79,6 +79,10 @@ impl Shared {
             ..mode
         };
         *lock(&self.codec) = codec;
+        let lossless = codec == CodecSetting::Lossless;
+        self.local
+            .opened_lossless
+            .store(lossless, Ordering::Release);
     }
 }
 
@@ -108,7 +112,11 @@ impl ViewerSession {
     /// the host reported its first stream too (Codex 11: the choice went
     /// out as `SET_DECODERS` and the host ended the session).
     pub fn needs_reopen(&self, codec: CodecSetting) -> bool {
-        let lossless = *lock(&self.shared.codec) == CodecSetting::Lossless;
+        // The choice at the opening counts, not the last one (U1: a video
+        // session switched to „Verlustfrei“ by `SET_DECODERS` goes back to a
+        // video codec the same way).
+        let opened = &self.shared.local.opened_lossless;
+        let lossless = opened.load(Ordering::Acquire);
         reopen_for(*lock(&self.shared.first_codec), codec)
             || (lossless && codec != CodecSetting::Lossless)
     }

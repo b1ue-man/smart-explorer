@@ -1,24 +1,6 @@
 //! Session and host events for the desktop viewer; decoding owns the same state.
 use super::*;
 
-/// A „Höchste Datenrate“ the host cannot take is named in the status, not
-/// only beside the toolbar's field or in the statistics (fix 2026-11-19):
-/// the session runs without that ceiling.
-const CEILING_UNSUPPORTED: &str =
-    "Höchste Datenrate: vom Gerät nicht unterstützt (ältere Version); das Bild läuft ohne diese Grenze.";
-
-/// Sets or clears that text as the state says; another notice stays.
-fn ceiling_notice(
-    info: &mut super::super::screen_session::SessionInfo,
-    state: crate::daemon::RateCeilingState,
-) {
-    if state == crate::daemon::RateCeilingState::UnsupportedByHost {
-        info.notice = Some(CEILING_UNSUPPORTED.into());
-    } else if info.notice.as_deref() == Some(CEILING_UNSUPPORTED) {
-        info.notice = None;
-    }
-}
-
 impl DecodeState {
     /// Applies one event; `true` when it was the session's last.
     pub fn on_event(&mut self, event: StreamEvent) -> bool {
@@ -91,7 +73,6 @@ impl DecodeState {
                     info.hello = Some(hello);
                     info.path = Some(path);
                     info.rate_ceiling = rate_ceiling;
-                    ceiling_notice(info, rate_ceiling);
                     info.accepted += 1;
                     if matches!(
                         info.state,
@@ -179,10 +160,7 @@ impl DecodeState {
             StreamEvent::Clock(offset) => self.shared.update(|info| info.clock_offset_us = offset),
             // A „Höchste Datenrate“ changed during the session (P1): the
             // statistics say whether the host took it.
-            StreamEvent::RateCeiling(state) => self.shared.update(|info| {
-                info.rate_ceiling = state;
-                ceiling_notice(info, state);
-            }),
+            StreamEvent::RateCeiling(state) => self.shared.update(|info| info.rate_ceiling = state),
             StreamEvent::End(end) => {
                 self.gop = None;
                 self.shared.stop_presentation();

@@ -132,6 +132,9 @@ pub struct DecodeLocal {
     /// The host ended the session for a video codec chosen in a tile
     /// session (`ViewerSession::reopen_wanted`).
     pub reopen: AtomicBool,
+    /// The session opened for „Verlustfrei“: its hello offered the tiles
+    /// alone (`ViewerSession::needs_reopen`).
+    pub opened_lossless: AtomicBool,
 }
 
 impl DecodeLocal {

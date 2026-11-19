@@ -43,7 +43,9 @@ fn kachelfix_task_late_picture_is_no_failure_and_no_silence() {
         Some(CodecKind::Av1)
     );
     assert!(
-        guard.reason().contains("Schlüsselbilder"),
+        guard
+            .reason()
+            .contains("in Folge ließen sich nicht dekodieren"),
         "{}",
         guard.reason()
     );

@@ -112,7 +112,26 @@ pub(super) fn fitted(
     list: egui::ComboBox,
     text: impl Into<WidgetText>,
 ) -> egui::ComboBox {
-    let text = text.into();
+    fitted_in(ui, list, text.into(), true)
+}
+
+/// `fitted` for the list of a label placed just before it („Gerät:“,
+/// „Quelle:“): `reserve_pair` broke the row before the label already, so
+/// the list never breaks away from it (U3); it is shortened to the rest.
+pub(super) fn fitted_after_label(
+    ui: &mut egui::Ui,
+    list: egui::ComboBox,
+    text: impl Into<WidgetText>,
+) -> egui::ComboBox {
+    fitted_in(ui, list, text.into(), false)
+}
+
+fn fitted_in(
+    ui: &mut egui::Ui,
+    list: egui::ComboBox,
+    text: WidgetText,
+    may_break: bool,
+) -> egui::ComboBox {
     // Measured as drawn (a `RichText` may be italic or of another size).
     let galley = text.clone().into_galley(
         ui,
@@ -127,7 +146,9 @@ pub(super) fn fitted(
         + spacing.icon_spacing
         + 2.0 * spacing.button_padding.x;
     let (left, right) = bounds(ui);
-    reserve(ui, width.min(right - left));
+    if may_break {
+        reserve(ui, width.min(right - left));
+    }
     // What still does not fit (wider than the bar, or the rest right of its
     // label) keeps that width and shortens its text (egui
     // `ComboBox::wrap_mode`), so it never runs past the edge.

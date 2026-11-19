@@ -210,7 +210,7 @@ fn device_list(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Vec<ToolbarAct
     ui.label("Gerät:");
     ({
         let text = input.current_name;
-        wrap::fitted(
+        wrap::fitted_after_label(
             ui,
             egui::ComboBox::from_id_salt("screen_viewer_device"),
             text,
@@ -257,7 +257,7 @@ fn source_row(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Vec<ToolbarActi
         ui.label("Quelle:");
         ({
             let text = applied::short_text(&source_text(input));
-            wrap::fitted(
+            wrap::fitted_after_label(
                 ui,
                 egui::ComboBox::from_id_salt("screen_viewer_source"),
                 text,

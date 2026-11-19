@@ -121,9 +121,9 @@ object ScreenTexts {
 
     /** Why the host held input back without applying it (`ControlState.held`, E2). */
     fun heldText(key: String): String = when (key) {
-        "viewer_hidden" -> "Eingabe zurückgehalten: Ansicht ist verdeckt"
-        "waiting_for_picture" -> "Eingabe wartet auf Bild"
-        "release_pending" -> "Eingabe wartet: gedrückte Tasten werden gelöst"
-        else -> "Eingabe vom Gerät zurückgehalten"
+        "viewer_hidden" -> "Eingabe verworfen: das Bild ist verdeckt oder minimiert"
+        "waiting_for_picture" -> "Eingabe verworfen: noch kein aktuelles Bild angezeigt"
+        "release_pending" -> "Eingabe verworfen: gehaltene Tasten werden erst gelöst"
+        else -> "Eingabe vom Gerät verworfen"
     }
 }

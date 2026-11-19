@@ -191,11 +191,20 @@ impl ViewState {
             return end.text.clone();
         }
         let text = state_text(info.state, info.reason.as_deref());
-        match (&info.notice, text.is_empty()) {
+        let mut status = match (&info.notice, text.is_empty()) {
             (Some(notice), true) => notice.clone(),
             (Some(notice), false) => format!("{text} – {notice}"),
             (None, _) => text,
+        };
+        // Its own line beside the notice (U2).
+        if info.rate_ceiling == crate::daemon::RateCeilingState::UnsupportedByHost {
+            let ceiling = super::screen_texts::CEILING_UNSUPPORTED;
+            status = match status.is_empty() {
+                true => ceiling.to_string(),
+                false => format!("{status} – {ceiling}"),
+            };
         }
+        status
     }
 
     /// The session ended or the target was refused: „Erneut verbinden“ helps.

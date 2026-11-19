@@ -245,7 +245,7 @@ impl DecoderGuard {
             )
         } else if self.failures >= FAILURE_LIMIT {
             format!(
-                "{} Schlüsselbilder ließen sich nicht dekodieren",
+                "{} Bilder in Folge ließen sich nicht dekodieren",
                 self.failures
             )
         } else {

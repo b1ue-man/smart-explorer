@@ -154,14 +154,20 @@ pub fn blocked_text(block: ControlBlock) -> &'static str {
     }
 }
 
-/// Why the host holds the input back for now (E2): the session waits, the
-/// input is not blocked.
+/// A „Höchste Datenrate“ the host cannot take, in the status line beside
+/// any other notice (U2: as the notice it pushed out and was pushed out by
+/// the errors of other chosen settings); `ViewState::status_text`.
+pub const CEILING_UNSUPPORTED: &str =
+    "Höchste Datenrate: vom Gerät nicht unterstützt (ältere Version); das Bild läuft ohne diese Grenze.";
+
+/// Why the host dropped the input batch (E2): it is not carried out later
+/// (U5: „wartet“ promised that), the input itself is not blocked.
 pub fn held_text(held: InputHeld) -> &'static str {
     match held {
-        InputHeld::ViewerHidden => "Eingabe wartet: das Bild ist verdeckt oder minimiert",
-        InputHeld::WaitingForPicture => "Eingabe wartet auf ein aktuelles Bild",
-        InputHeld::ReleasePending => "Eingabe wartet, bis gehaltene Tasten gelöst sind",
-        InputHeld::Other => "Eingabe wartet am Gerät",
+        InputHeld::ViewerHidden => "Eingabe verworfen: das Bild ist verdeckt oder minimiert",
+        InputHeld::WaitingForPicture => "Eingabe verworfen: noch kein aktuelles Bild angezeigt",
+        InputHeld::ReleasePending => "Eingabe verworfen: gehaltene Tasten werden erst gelöst",
+        InputHeld::Other => "Eingabe vom Gerät verworfen",
     }
 }
 
