@@ -218,6 +218,7 @@ impl Session<'_> {
             || !self.pipeline.presentation_supported()
             || !self.pipeline.input_reference_ready()
             || self.input_release.is_some()
+            || super::input_release::gate::busy()
         {
             Some("family_waiting_for_presented_frame")
         } else if request.target.snapshot_revision != self.family.revision

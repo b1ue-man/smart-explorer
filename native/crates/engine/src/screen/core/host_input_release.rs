@@ -5,6 +5,9 @@ use crate::screen::core::wire_control::ControlBlock;
 use std::future::Future;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
+#[path = "host_release_gate.rs"]
+pub(super) mod gate;
+
 /// Runs one input injection on tokio's blocking pool and waits for it. A
 /// host process answers input only after a running picture request (the
 /// worker sink waits up to `INPUT_TIMEOUT` for the link, then as long for
@@ -13,6 +16,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 /// driving other futures forward", `spawn_blocking` "runs the provided
 /// closure on a thread dedicated to blocking operations". The session still
 /// waits for the result, so input keeps its order and its control state.
+#[cfg_attr(not(test), allow(dead_code))] // the session spawns its own (Codex 7/10)
 pub(super) async fn inject_off_runtime(
     inject: impl FnOnce() -> Result<(), ControlBlock> + Send + 'static,
 ) -> Result<(), ControlBlock> {
@@ -34,11 +38,6 @@ pub(super) struct InputHealth {
     pub(super) queued: Vec<InputEvent>,
     /// The last new try of failed releases (`retry_failed_releases`).
     retried: Option<Instant>,
-    /// Codex 6/5: the control was given up while releases were still on
-    /// their way; it goes when they are in (`Session::finish_handover`).
-    pub(super) handover: Option<Instant>,
-    /// The handover ended; the viewer hears the new holder (M6).
-    pub(super) holder_changed: bool,
     /// A hidden view or a changed source asked for a revocation while a job
     /// without one ran; the next job revokes.
     revoke_pending: bool,
@@ -53,20 +52,24 @@ pub(super) struct InputHealth {
     /// a reference the source left meanwhile: its reference and the picture
     /// operations started when it was refused (`Session::stale_refusal`).
     pub(super) unconfirmed: Option<(u64, u64)>,
+    /// Codex 7/10: the batch being injected off the session loop, and the
+    /// batches that wait behind it in their order.
+    pub(super) injecting: Option<Injection>,
+    pub(super) backlog: std::collections::VecDeque<Vec<InputEvent>>,
+}
+
+/// One batch on its way to the platform (`Session::start_batch`).
+pub(super) struct Injection {
+    pub(super) handle: tokio::task::JoinHandle<Result<(), ControlBlock>>,
+    pub(super) events: Vec<InputEvent>,
+    pub(super) reference: u64,
+    pub(super) presented: bool,
+    pub(super) started: Instant,
 }
 
 /// How often failed releases are tried again (a lasting refusal, the secure
 /// desktop, costs no attempt per picture).
 const RELEASE_RETRY: std::time::Duration = std::time::Duration::from_secs(1);
-
-/// How long a given-up control waits for its releases (Codex 6/5), from
-/// the end of `drain_releases` on: the slowest sink is a host process,
-/// whose release first waits for the link a running picture request holds
-/// (at most `FRAME_TIMEOUT`, 10 s) and then for the answer (`INPUT_TIMEOUT`,
-/// 2 s; `WorkerInputSink::release`), so one job ends within 12 s or its
-/// process is ended (`WorkerLink::ask`). Android's queue and the Wayland
-/// portal queue without waiting.
-const HANDOVER_LIMIT: std::time::Duration = std::time::Duration::from_secs(12);
 
 fn failed_list(failed: &Mutex<Vec<InputEvent>>) -> MutexGuard<'_, Vec<InputEvent>> {
     failed.lock().unwrap_or_else(PoisonError::into_inner)
@@ -138,7 +141,9 @@ impl Session<'_> {
     /// still waits (`ScreenInputSink::revoke`, round 7). Every other release
     /// (a held-back batch's ups, a new reference) keeps the session's input.
     fn flush_releases_as(&mut self, revoke: bool) -> bool {
-        if self.input_release.is_none() {
+        // Releases never overtake a batch being injected (Codex 7/10):
+        // `settle_input` flushes them when it ended.
+        if self.input_release.is_none() && self.health.injecting.is_none() {
             let revoke = revoke || std::mem::take(&mut self.health.revoke_pending);
             let mut events = std::mem::take(&mut *failed_list(&self.health.failed));
             events.append(&mut self.health.queued);
@@ -238,6 +243,7 @@ impl Session<'_> {
     /// debts), then once more what that one could not deliver. A job that
     /// outlasts its grace goes on, and the host log names it.
     pub(super) async fn drain_releases(&mut self) {
+        self.finish_injection().await;
         self.finish_release().await;
         let held = self.pressed.release_all();
         self.health.queued.extend(held);
@@ -247,6 +253,28 @@ impl Session<'_> {
         self.finish_release().await;
         if self.input_release.is_none() && self.flush_releases_as(true) {
             self.finish_release().await;
+        }
+    }
+    /// Codex 7/10: before the control goes, the batch being injected ends
+    /// (at most `CLOSE_GRACE`); its keys count as held then, so the release
+    /// that follows lets go of them, and the batches waiting behind it are
+    /// dropped (their releases are part of that release).
+    async fn finish_injection(&mut self) {
+        self.health.backlog.clear();
+        let Some(mut job) = self.health.injecting.take() else {
+            return;
+        };
+        let applied = match tokio::time::timeout(CLOSE_GRACE, &mut job.handle).await {
+            Ok(result) => result.map(|result| result.is_ok()).unwrap_or(false),
+            Err(_) => {
+                super::visibility::note_viewer("an input injection outlasted the close grace");
+                true
+            }
+        };
+        if applied {
+            for event in &job.events {
+                self.pressed.observe(event);
+            }
         }
     }
     /// Z3/Z4: waits for the running release job, at most `CLOSE_GRACE`; a
@@ -272,10 +300,6 @@ impl Session<'_> {
     /// next job (failed ones wait for `retry_failed_releases`, so a lasting
     /// refusal costs no attempt per picture).
     pub(super) fn poll_input_release(&mut self) {
-        self.poll_release_job();
-        self.check_handover();
-    }
-    fn poll_release_job(&mut self) {
         let Some(mut job) = self.input_release.take() else {
             self.retry_failed_releases();
             return;
@@ -295,27 +319,20 @@ impl Session<'_> {
             self.flush_releases();
         }
     }
-    /// Codex 6/5, round 7 (M6): a control given up while releases were on
-    /// their way goes once they are in, or after `HANDOVER_LIMIT` (named in
-    /// the host log); checked with every poll (viewer frames and capture
-    /// ticks, which run during a handover also for a hidden view), so a
-    /// second viewer is not refused for longer. The viewer hears the new
-    /// holder with its next frame (`finish_handover`).
-    fn check_handover(&mut self) {
-        let Some(since) = self.health.handover else {
+    /// Codex 7/1: what is still on its way (the running job, failed and
+    /// queued releases) leaves the session for the release keeper, which
+    /// delivers it while every session's input waits (`gate::busy`).
+    pub(super) fn hand_releases_over(&mut self) {
+        let job = self.input_release.take();
+        let queued = std::mem::take(&mut self.health.queued);
+        if job.is_none() && queued.is_empty() && failed_list(&self.health.failed).is_empty() {
             return;
+        }
+        let target = match self.pipeline.input_sink() {
+            Some(sink) => gate::Target::Sink(sink),
+            None => gate::Target::Backend(self.context.backend.clone()),
         };
-        let owed = self.input_release.is_some() || self.releases_owed();
-        if owed && since.elapsed() < HANDOVER_LIMIT {
-            return;
-        }
-        if owed {
-            super::visibility::note_viewer(
-                "the control was handed over with releases still on their way",
-            );
-        }
-        self.give_up_control();
-        self.health.holder_changed = true;
+        gate::take_over(job, self.health.failed.clone(), queued, target);
     }
 }
 

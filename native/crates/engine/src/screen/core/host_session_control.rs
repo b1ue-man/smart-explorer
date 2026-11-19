@@ -2,7 +2,11 @@
 //! pointer overlay (P6) for one session.
 use super::*;
 use crate::screen::core::cursor_overlay::{CursorFeed, CursorPosition, CursorSeen, CursorUpdate};
-use crate::screen::core::wire_control::InputHeld;
+use crate::screen::core::wire_control::{ControlBlock, InputHeld};
+
+/// Batches that wait behind a running injection (Codex 7/10), as many as
+/// the session's frame queue holds (`FRAME_QUEUE`).
+const INPUT_BACKLOG: usize = 64;
 
 /// The pointer overlay of one session (plan 2026-11-14 P6).
 #[derive(Default)]
@@ -31,10 +35,10 @@ impl Session<'_> {
     pub(super) async fn on_frame(&mut self, frame: ViewerFrame) -> io::Result<()> {
         self.pipeline.poll();
         self.poll_input_release();
+        self.settle_input().await?;
         self.refresh_input_reference();
         self.end_hold().await?;
         self.report_refusal().await?;
-        self.finish_handover().await?;
         match frame {
             ViewerFrame::ListFamilies => {
                 if !self.family.supported {
@@ -245,7 +249,24 @@ impl Session<'_> {
         Ok(())
     }
 
+    /// One batch of the viewer (Codex 7/10): while an injection runs, it
+    /// waits behind it in order (`InputHealth::backlog`); the session loop
+    /// goes on with pictures and acknowledgements meanwhile, and
+    /// `settle_input` takes the result and starts the next one.
     pub(super) async fn input(&mut self, events: &[InputEvent]) -> io::Result<()> {
+        if self.health.injecting.is_some() || !self.health.backlog.is_empty() {
+            if self.health.backlog.len() < INPUT_BACKLOG {
+                self.health.backlog.push_back(events.to_vec());
+                return Ok(());
+            }
+            self.release_held_ups(events);
+            return self.report_held(InputHeld::ReleasePending).await;
+        }
+        self.start_batch(events).await
+    }
+
+    /// The checks of a batch, then its injection off the session loop.
+    async fn start_batch(&mut self, events: &[InputEvent]) -> io::Result<()> {
         if self.family.selected.is_some() {
             self.release_pressed();
             return self
@@ -293,68 +314,19 @@ impl Session<'_> {
             return self.report_held(InputHeld::ReleasePending).await;
         }
         let owned = events.to_vec();
-        let (backend, target) = (self.context.backend.clone(), sink.clone());
-        let injecting = Instant::now();
-        let applied = super::input_release::inject_off_runtime(move || match target {
+        let (backend, target) = (self.context.backend.clone(), sink);
+        let handle = tokio::task::spawn_blocking(move || match target {
             Some(sink) => sink.inject(&owned, reference, presented),
             None => backend.inject(&owned),
-        })
-        .await;
-        // Station `input_inject` (BK0): the injection of this batch.
-        let micros = u64::try_from(injecting.elapsed().as_micros()).unwrap_or(u64::MAX);
-        crate::screen::core::chain_meter::lock(self.pipeline.chain_meter()).record_us(
-            crate::screen::core::chain_meter::Station::InputInject,
-            micros,
-        );
-        match applied {
-            Ok(()) => {
-                for event in events {
-                    self.pressed.observe(event);
-                }
-                self.health.unconfirmed = None;
-                // D6/E2: a block or hold the viewer heard ends with the
-                // first batch that reached the host after it; a block the
-                // platform reported late stays shown its minimum time (Z2).
-                let held = std::mem::take(&mut self.health.held_reported);
-                let late = self
-                    .health
-                    .block_shown_until
-                    .is_some_and(|until| Instant::now() < until);
-                let cleared = !late && self.health.block_reported.take().is_some();
-                if cleared || held {
-                    let state = ControlState {
-                        holder: self.handle.controller(),
-                        blocked: self.health.block_reported,
-                        held: None,
-                    };
-                    self.frame(HostFrame::ControlState(state)).await?;
-                }
-                Ok(())
-            }
-            Err(blocked) => {
-                // S3: a refusal for a reference the source just left holds
-                // the batch back and keeps what the user holds; the new
-                // reference lets go of it when it moves the floor.
-                if presented && self.stale_refusal(blocked, reference) {
-                    // Held back, not blocked (review O2a); its releases of
-                    // held keys go in (E2: the viewer sends each once).
-                    self.release_held_ups(events);
-                    return self.report_held(InputHeld::WaitingForPicture).await;
-                }
-                self.release_pressed();
-                self.report_block(blocked).await?;
-                if !presented
-                    && sink
-                        .as_ref()
-                        .is_some_and(|sink| sink.legacy_input_invalid())
-                {
-                    self.error(ScreenErrorCode::ControlUnavailable,
-                        "Der Bildausschnitt hat sich geändert. Aufnahme läuft weiter; zum Steuern ist eine neue Verbindung erforderlich.".into()).await
-                } else {
-                    Ok(())
-                }
-            }
-        }
+        });
+        self.health.injecting = Some(super::input_release::Injection {
+            handle,
+            events: events.to_vec(),
+            reference,
+            presented,
+            started: Instant::now(),
+        });
+        Ok(())
     }
 
     pub(super) async fn control(&mut self, action: ControlAction) -> io::Result<()> {
@@ -365,7 +337,6 @@ impl Session<'_> {
         match action {
             ControlAction::Take => match self.handle.take_control() {
                 Ok(()) => {
-                    self.health.handover = None;
                     let audit = self.context.audit;
                     log_event(
                         audit,
@@ -408,13 +379,10 @@ impl Session<'_> {
         // Round 6 (R1): everything held, queued and failed goes before
         // another session may take the control.
         self.drain_releases().await;
-        // Codex 6/5: releases still on their way keep the control here (the
-        // viewer still sees itself holding it) until they are in, at most
-        // `HANDOVER_LIMIT`; a new holder's first press cannot meet them.
-        if self.input_release.is_some() || self.releases_owed() {
-            self.health.handover.get_or_insert_with(Instant::now);
-            return;
-        }
+        // Codex 7/1: what is still on its way goes to the release keeper,
+        // which holds every session's input until it is delivered; the
+        // control goes at once.
+        self.hand_releases_over();
         self.give_up_control();
     }
 
@@ -424,15 +392,12 @@ impl Session<'_> {
     /// still on their way are named in the host log.
     pub(super) async fn end_control(&mut self) {
         self.drain_releases().await;
-        if self.input_release.is_some() || self.releases_owed() {
-            super::visibility::note_viewer("the session ends with releases still on their way");
-        }
+        self.hand_releases_over();
         self.give_up_control();
     }
 
     /// The control goes back to the registry (after `release_control`).
     pub(super) fn give_up_control(&mut self) {
-        self.health.handover = None;
         if self.handle.release_control() {
             let audit = self.context.audit;
             log_event(
@@ -447,5 +412,7 @@ impl Session<'_> {
     }
 }
 
+#[path = "host_session_inject.rs"]
+mod inject;
 #[path = "host_session_report.rs"]
 mod report;

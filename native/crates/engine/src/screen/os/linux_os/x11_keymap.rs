@@ -60,6 +60,9 @@ pub(super) struct KeyMap {
     /// the third and fourth level (columns 4 and 5) are typed with it
     /// (Gemini 3/11: `@`, `{`, `€` … on a German layout took the spare key).
     pub level3: Option<Keycode>,
+    /// The keys of the Shift modifier (its row of the modifier mapping;
+    /// Codex 7/16: they were fixed to 50 and 62), `Shift_L` first.
+    pub shifts: Vec<Keycode>,
 }
 
 impl KeyMap {
@@ -77,6 +80,7 @@ impl KeyMap {
             per_code: reply.keysyms_per_keycode,
             syms: reply.keysyms,
             level3: None,
+            shifts: Vec::new(),
         };
         let modifiers = conn
             .get_modifier_mapping()
@@ -87,6 +91,19 @@ impl KeyMap {
             .find(LEVEL3_SHIFT)
             .filter(|(code, shift, _)| !shift && modifiers.keycodes.contains(code))
             .map(|(code, _, _)| code);
+        // Row 0 of the modifier mapping is Shift; without one, `Shift_L`.
+        let per_modifier = modifiers.keycodes.len() / 8;
+        map.shifts = modifiers.keycodes[..per_modifier]
+            .iter()
+            .copied()
+            .filter(|code| *code != 0)
+            .collect();
+        if let Some(left) = map.find(SHIFT_L).map(|(code, _, _)| code) {
+            map.shifts.sort_by_key(|code| *code != left);
+        }
+        if map.shifts.is_empty() {
+            map.shifts.push(SHIFT_KEYCODE);
+        }
         Ok(map)
     }
 
@@ -143,8 +160,8 @@ fn press<C: Connection>(conn: &C, root: Window, code: Keycode, down: bool) -> io
     Ok(())
 }
 
-/// `Shift_R` as a Linux code (54) plus the evdev offset 8.
-const SHIFT_R_KEYCODE: Keycode = 62;
+/// `Shift_L`.
+const SHIFT_L: Keysym = 0xFFE1;
 
 /// The keys down on the server now (`QueryKeymap`): the viewer may hold a
 /// modifier the text must not let go of (Codex 5/15).
@@ -171,17 +188,19 @@ fn tap<C: Connection>(
     root: Window,
     code: Keycode,
     level: Option<(bool, bool)>,
-    altgr: Option<Keycode>,
+    (altgr, shifts): (Option<Keycode>, &[Keycode]),
     held: &[Keycode],
 ) -> io::Result<()> {
     let mut lift: Vec<Keycode> = Vec::new();
-    let (mut press_shift, mut press_altgr) = (false, None);
+    let (mut press_shift, mut press_altgr) = (None, None);
     if let Some((shift, level3)) = level {
-        let shifts = [SHIFT_KEYCODE, SHIFT_R_KEYCODE];
         if shift {
-            press_shift = !shifts.iter().any(|key| held.contains(key));
+            press_shift = shifts
+                .first()
+                .copied()
+                .filter(|_| !shifts.iter().any(|key| held.contains(key)));
         } else {
-            lift.extend(shifts.into_iter().filter(|key| held.contains(key)));
+            lift.extend(shifts.iter().copied().filter(|key| held.contains(key)));
         }
         match altgr {
             Some(key) if level3 && !held.contains(&key) => press_altgr = Some(key),
@@ -195,13 +214,13 @@ fn tap<C: Connection>(
     if let Some(key) = press_altgr {
         press(conn, root, key, true)?;
     }
-    if press_shift {
-        press(conn, root, SHIFT_KEYCODE, true)?;
+    if let Some(key) = press_shift {
+        press(conn, root, key, true)?;
     }
     press(conn, root, code, true)?;
     press(conn, root, code, false)?;
-    if press_shift {
-        press(conn, root, SHIFT_KEYCODE, false)?;
+    if let Some(key) = press_shift {
+        press(conn, root, key, false)?;
     }
     if let Some(key) = press_altgr {
         press(conn, root, key, false)?;
@@ -335,7 +354,8 @@ fn type_unlatched<C: Connection>(
     for character in typed_chars(text) {
         let sym = keysym_of(character);
         if let Some((code, shift, level3)) = map.find(sym) {
-            tap(conn, root, code, Some((shift, level3)), map.level3, &held)?;
+            let keys = (map.level3, &map.shifts[..]);
+            tap(conn, root, code, Some((shift, level3)), keys, &held)?;
             continue;
         }
         let Some(spare) = map.spare() else {
@@ -347,7 +367,7 @@ fn type_unlatched<C: Connection>(
         conn.change_keyboard_mapping(1, spare, per, &column)
             .map_err(io::Error::other)?;
         sync(conn)?;
-        tap(conn, root, spare, None, None, &held)?;
+        tap(conn, root, spare, None, (None, &[]), &held)?;
         sync(conn)?;
         // Clients read the mapping lazily: give them the press first.
         std::thread::sleep(std::time::Duration::from_millis(20));
@@ -377,6 +397,7 @@ mod tests {
             per_code: 2,
             syms: vec![0, 0, 0x61, 0x41, 0x31, 0x21, 0, 0],
             level3: None,
+            shifts: vec![50],
         };
         assert_eq!(map.find(0x61), Some((9, false, false)));
         assert_eq!(map.find(0x21), Some((10, true, false)));
@@ -393,6 +414,7 @@ mod tests {
                 0, 0, 0, 0, 0, 0, // spare
             ],
             level3: Some(92),
+            shifts: vec![50],
         };
         assert_eq!(german.find(0x40), Some((8, false, true)));
         assert_eq!(german.find(0x20AC), Some((9, false, true)));

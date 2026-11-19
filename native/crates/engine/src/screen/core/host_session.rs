@@ -198,7 +198,7 @@ impl<'a> Session<'a> {
                     self.metadata.advance(self.context, self.principal);
                 }
                 // Hidden viewer: no capture tick, unless an acknowledgement or release waits.
-                _ = capture.tick(), if self.visible || self.visibility_ack_pending || self.input_release.is_some() || self.health.handover.is_some() => {
+                _ = capture.tick(), if self.visible || self.visibility_ack_pending || self.input_release.is_some() || self.health.injecting.is_some() => {
                     let started = self.pipeline.work_started();
                     if let Some(ending) = self.produce().await {
                         break ending;
@@ -288,6 +288,9 @@ impl<'a> Session<'a> {
     /// a self-paced stage only when its credit is free (`begin_chained`).
     async fn produce_with(&mut self, chained: bool) -> Option<Ending> {
         self.poll_input_release();
+        if self.settle_input().await.is_err() {
+            return Some(self.unwritable());
+        }
         if let Some(applied) = self.pipeline.poll_capture_active() {
             if let Err(error) = applied {
                 return Some((

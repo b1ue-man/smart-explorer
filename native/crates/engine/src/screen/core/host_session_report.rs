@@ -64,24 +64,12 @@ impl Session<'_> {
         Ok(())
     }
 
-    /// The new holder after a handover (`check_handover`) reaches the viewer.
-    pub(in super::super) async fn finish_handover(&mut self) -> io::Result<()> {
-        if !std::mem::take(&mut self.health.holder_changed) {
-            return Ok(());
-        }
-        let state = ControlState {
-            holder: self.handle.controller(),
-            blocked: None,
-            held: None,
-        };
-        self.frame(HostFrame::ControlState(state)).await
-    }
-
     /// Why input waits now, if it does (E2).
     pub(super) fn hold_reason(&self) -> Option<InputHeld> {
         if !self.visible {
             Some(InputHeld::ViewerHidden)
-        } else if self.input_release.is_some() {
+        } else if self.input_release.is_some() || super::super::input_release::gate::busy() {
+            // Codex 7/1: also a former holder's releases on their way.
             Some(InputHeld::ReleasePending)
         } else if self.input_floor.is_some() || !self.pipeline.input_reference_ready() {
             Some(InputHeld::WaitingForPicture)
