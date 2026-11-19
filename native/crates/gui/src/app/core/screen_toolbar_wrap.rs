@@ -178,6 +178,31 @@ pub(super) fn button_width(ui: &egui::Ui, text: &str) -> f32 {
     text_width(ui, text, TextStyle::Button) + 2.0 * ui.spacing().button_padding.x
 }
 
+/// The outer width of a checkbox with `text` (egui 0.29.1 `checkbox.rs`
+/// 59-71: icon, its spacing and the text, at least `interact_size`).
+pub(super) fn checkbox_width(ui: &egui::Ui, text: &str) -> f32 {
+    let spacing = ui.spacing();
+    (spacing.icon_width + spacing.icon_spacing + text_width(ui, text, TextStyle::Body))
+        .max(spacing.interact_size.x)
+}
+
+/// The outer width of a `DragValue` showing `text` (egui 0.29.1
+/// `drag_value.rs` 535, 587-593: a button in `drag_value_text_style` with
+/// the button padding, at least `interact_size`; while typed into it is a
+/// field of `interact_size`, never wider).
+pub(super) fn drag_value_width(ui: &egui::Ui, text: &str) -> f32 {
+    let style = ui.style().drag_value_text_style.clone();
+    (text_width(ui, text, style) + 2.0 * ui.spacing().button_padding.x)
+        .max(ui.spacing().interact_size.x)
+}
+
+/// The outer width of a single-line `TextEdit` of `desired` points (egui
+/// 0.29.1 `text_edit/builder.rs` 127, 492-522: the clipped single line is
+/// as wide as asked, plus the default margin of 4 points on each side).
+pub(super) fn text_edit_width(desired: f32) -> f32 {
+    desired + 8.0
+}
+
 /// A label and the list that belongs to it stay in one row: the row breaks
 /// before the label when both do not fit the rest of it.
 pub(super) fn reserve_pair(ui: &mut egui::Ui, label: &str, list_text: &str) {

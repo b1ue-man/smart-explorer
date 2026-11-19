@@ -47,6 +47,13 @@ pub struct ViewState {
     /// The display of the last frame; `resized_at` is when it last changed.
     seen_display: FrameSize,
     resized_at: Instant,
+    /// The picture area in physical pixels, measured before the session
+    /// opens (`measure`) and kept by `follow_size`; the opening asks the
+    /// host for it (G3: it asked for the whole window, the toolbar's height
+    /// more, and the first resize sent a new size at once).
+    measured: Option<FrameSize>,
+    /// The opening waited one frame for `measured`.
+    waited: bool,
 }
 
 impl ViewState {
@@ -61,6 +68,8 @@ impl ViewState {
             sent_display: FrameSize::new(0, 0),
             seen_display: FrameSize::new(0, 0),
             resized_at: Instant::now(),
+            measured: None,
+            waited: false,
         }
     }
 
@@ -100,7 +109,16 @@ impl ViewState {
         match checked {
             None => {}
             Some(Err(message)) => self.refused = Some(message),
-            Some(Ok(())) => self.open(common, display),
+            Some(Ok(())) => {
+                // One frame for the picture area to be measured; without it
+                // (it never came) the window's size as before.
+                if self.measured.is_none() && !self.waited {
+                    self.waited = true;
+                    return;
+                }
+                let display = self.measured.unwrap_or(display);
+                self.open(common, display)
+            }
         }
     }
 
@@ -176,8 +194,22 @@ impl ViewState {
         self.refused.is_some() || self.session.as_ref().is_some_and(ViewerSession::is_ended)
     }
 
+    /// Notes the picture area while no session draws in it (`measured`).
+    pub fn measure(&mut self, ui: &eframe::egui::Ui) {
+        let size = ui.available_size() * ui.ctx().pixels_per_point();
+        let size = FrameSize::new(
+            size.x.round().max(1.0) as u32,
+            size.y.round().max(1.0) as u32,
+        );
+        if self.measured != Some(size) {
+            self.measured = Some(size);
+            ui.ctx().request_repaint();
+        }
+    }
+
     /// Passes a resized window on to the host, once the size rests.
     pub fn follow_size(&mut self, display: FrameSize, prefs: &ViewerPrefs) {
+        self.measured = Some(display);
         let Some(session) = &self.session else {
             return;
         };

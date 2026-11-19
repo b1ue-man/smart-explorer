@@ -194,9 +194,8 @@ impl ScreenViewerApp {
                 .as_ref()
                 .is_some_and(|session| !session.input_ready()))
         .then_some("Warte auf ein vollständiges aktuelles Bild …");
-        // The status goes over the picture, in full screen too (fix
-        // 2026-11-19): as a panel each change resized the picture area. An
-        // ended or refused session keeps the panel.
+        // The status goes over the picture, in full screen too (a panel
+        // resized the picture area); an ended or refused session keeps it.
         let over = view.is_over();
         let hint = match status.is_empty() {
             true => waiting,
@@ -262,6 +261,7 @@ impl ScreenViewerApp {
                     return;
                 }
                 let Some(session) = &view.session else {
+                    view.measure(ui); // G3: the area the session will ask for
                     ui.centered_and_justified(|ui| ui.label(&status));
                     return;
                 };

@@ -81,6 +81,15 @@ pub(super) fn display_rows(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Ve
         .on_hover_text("Wirkt, wenn das Gerät einen eigenen Bildschirm zeigt.")
     });
     if let Some(text) = custom.as_mut() {
+        // Field and both buttons stay in one row (Gemini 5); „Abbrechen“ is
+        // a small button, measured as a button (never narrower).
+        let gap = ui.spacing().item_spacing.x;
+        let group = super::wrap::text_edit_width(90.0)
+            + gap
+            + super::wrap::button_width(ui, "Übernehmen")
+            + gap
+            + super::wrap::button_width(ui, "Abbrechen");
+        super::wrap::reserve(ui, group);
         let field = egui::TextEdit::singleline(text)
             .hint_text("2560x1440")
             .desired_width(90.0);

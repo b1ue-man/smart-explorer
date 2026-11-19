@@ -291,8 +291,18 @@ pub(super) fn max_rate_row(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Ve
     let start = stored.or_else(|| current.map(|stats| stats.target_kbps * 1000));
     let mut mbit = start.unwrap_or(MIN_BITRATE_BPS).max(MIN_BITRATE_BPS) as f64 / 1e6;
     let mut limited = stored.is_some();
+    // Switch and field stay in one row (Gemini 5): widths from egui's
+    // own sizing (`wrap::checkbox_width`, `drag_value_width`); at most two
+    // decimals, so the shown text is known before it is drawn.
+    let label = "Höchste Datenrate";
+    let mut group = super::wrap::checkbox_width(ui, label);
+    if limited {
+        let text = format!("{mbit:.2} Mbit/s");
+        group += ui.spacing().item_spacing.x + super::wrap::drag_value_width(ui, &text);
+    }
+    super::wrap::reserve(ui, group);
     let mut changed = ui
-        .checkbox(&mut limited, "Höchste Datenrate")
+        .checkbox(&mut limited, label)
         .on_hover_text("Ohne Haken: automatisch. Wirkt sofort, wenn das Gerät es unterstützt.")
         .changed();
     if limited {
@@ -305,6 +315,7 @@ pub(super) fn max_rate_row(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Ve
             .range(MIN_BITRATE_BPS as f64 / 1e6..=f64::MAX)
             .speed(speed)
             .suffix(" Mbit/s")
+            .max_decimals(2)
             .update_while_editing(false)
             .custom_parser(|text| text.trim().replace(',', ".").parse::<f64>().ok());
         let edited = ui.add(field);
