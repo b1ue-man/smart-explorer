@@ -276,10 +276,13 @@ impl<A: NvTable> Core<A> {
         lock.version = NV_ENC_LOCK_BITSTREAM_VER;
         lock.flags = LOCK_DO_NOT_WAIT;
         lock.output_bitstream = self.output;
-        let lock_bitstream = f.lock_bitstream.ok_or_else(missing)?;
+        let lock_bitstream = f
+            .lock_bitstream
+            .ok_or_else(missing)
+            .map_err(late::not_locked)?;
         // SAFETY: the completion event fired and `doNotWait` forbids blocking.
         let result = unsafe { lock_bitstream(self.encoder, &mut *lock) };
-        status(&self.api, self.encoder, result, "nvEncLockBitstream")?;
+        status(&self.api, self.encoder, result, "nvEncLockBitstream").map_err(late::not_locked)?;
         let delivered = if lock.bitstream_buffer_ptr.is_null() {
             Err(invalid("NVENC gave no bitstream"))
         } else {
@@ -360,7 +363,7 @@ pub(super) struct NvencSession {
     core: Core<Arc<NvApi>>,
     registered: Vec<Registered>,
     tick: u64,
-    late: Option<Ptr>, // the mapped input of a timed-out picture (`nvenc_late.rs`)
+    late: Option<(Ptr, bool)>, // a late picture's input, completed (`nvenc_late.rs`)
     // Dropped last: the session lives on this device.
     _device: ID3D11Device,
 }
@@ -464,10 +467,10 @@ impl VendorSession for NvencSession {
         let coded = self
             .core
             .submit(&mapped, picture.frame_id, picture.idr, deliver);
-        // Codex round 6, finding 3: a picture the driver took whose output
-        // was not taken (a timeout, a failed lock) stays mapped (`nvenc_late`).
-        if coded.is_err() && self.core.frames != sent {
-            self.keep_late(mapped.mapped_resource);
+        // Codex round 6/3, round 7: see `late::kind`.
+        let late = coded.as_ref().err().filter(|_| self.core.frames != sent);
+        if let Some(completed) = late.and_then(late::kind) {
+            self.keep_late(mapped.mapped_resource, completed);
         } else if let Some(unmap) = self.core.api.functions.unmap_input_resource {
             // SAFETY: the resource was mapped above; the picture is coded or timed out.
             unsafe { unmap(self.core.encoder, mapped.mapped_resource) };

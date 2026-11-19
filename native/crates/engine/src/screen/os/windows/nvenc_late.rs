@@ -6,11 +6,15 @@
 //! flush the encoder ... pass a NULL encode picture packet and ... wait for
 //! the flush event to be signaled by the encoder in asynchronous mode".
 //!
-//! A late picture keeps its input mapped (and its capture ring slot, which
-//! `GpuInput` gives back after the session went: `VendorEncoder` drops the
-//! session first). When the session goes, in this order and each step
-//! confirmed before the next: the late picture's own completion (the
-//! session's event, `LATE_WAIT_MS`), its bitstream locked and unlocked, the
+//! A failed picture the driver took (review round 7, `kind`): one whose
+//! completion was not awaited (a timeout) keeps its input mapped and its
+//! capture ring slot (`VendorEncoder` does not finish it on a timeout and
+//! drops the session first); one that completed but was never locked keeps
+//! its input mapped (its ring slot is free: the driver read it); one that
+//! was locked unmaps at once. When the session goes, in this order and each
+//! step confirmed before the next: the late picture's own completion (the
+//! session's event, `LATE_WAIT_MS`, skipped when it was awaited already),
+//! its bitstream locked and unlocked, the
 //! end-of-stream packet sent and its completion awaited on the same event
 //! (signalled once per completion, auto-reset; the picture's signal was
 //! taken by the first wait), then the input unmapped. A step that is not
@@ -26,10 +30,43 @@ const NV_ENC_PIC_FLAG_EOS: u32 = 0x8;
 /// Longest wait for each of the two completions.
 const LATE_WAIT_MS: u32 = 2_000;
 
+/// A failure of `nvEncLockBitstream` after the picture completed (review
+/// round 7): its input stays mapped until a lock succeeded.
+#[derive(Debug)]
+struct NotLocked(io::Error);
+
+impl std::fmt::Display for NotLocked {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl std::error::Error for NotLocked {}
+
+pub(super) fn not_locked(error: io::Error) -> io::Error {
+    io::Error::other(NotLocked(error))
+}
+
+/// Review round 7: what a failed picture the driver took leaves behind.
+/// `Some(false)`: its completion was not awaited (a timeout), the input
+/// stays mapped and its ring slot taken (`VendorEncoder` keeps it on a
+/// timeout); `Some(true)`: it completed but its bitstream was never locked,
+/// the input stays mapped; `None`: it completed and was locked (a failed
+/// delivery or unlock), the input goes at once, as the API allows.
+pub(super) fn kind(error: &io::Error) -> Option<bool> {
+    if error.kind() == io::ErrorKind::TimedOut {
+        return Some(false);
+    }
+    error
+        .get_ref()
+        .is_some_and(|inner| inner.is::<NotLocked>())
+        .then_some(true)
+}
+
 impl NvencSession {
-    /// The mapped input of a picture that timed out stays mapped.
-    pub(super) fn keep_late(&mut self, mapped: Ptr) {
-        self.late = Some(mapped);
+    /// The mapped input of a picture that failed stays mapped (`kind`).
+    pub(super) fn keep_late(&mut self, mapped: Ptr, completed: bool) {
+        self.late = Some((mapped, completed));
     }
 
     /// Before the session goes: the late picture finished as the API asks,
@@ -37,10 +74,10 @@ impl NvencSession {
     /// Whether its input may go back to the capture: `false` when it is kept
     /// (Codex round 6, finding 3: `VendorEncoder` then keeps the ring slot).
     pub(super) fn drain_late(&mut self) -> bool {
-        let Some(mapped) = self.late.take() else {
+        let Some((mapped, completed)) = self.late.take() else {
             return true;
         };
-        if self.late_finished() {
+        if self.late_finished(completed) {
             if let Some(unmap) = self.core.api.functions.unmap_input_resource {
                 // SAFETY: mapped by this session; its work completed and its
                 // bitstream was locked.
@@ -57,12 +94,13 @@ impl NvencSession {
         false
     }
 
-    /// The late picture completed, its bitstream locked, the flush done.
-    fn late_finished(&mut self) -> bool {
+    /// The late picture completed (awaited unless `completed`, whose signal
+    /// was taken already), its bitstream locked, the flush done.
+    fn late_finished(&mut self, completed: bool) -> bool {
         let event = self.core.event;
         // SAFETY: a wait on the session's live completion event.
         let waited = |ms| unsafe { WaitForSingleObject(event, ms) } == WAIT_OBJECT_0;
-        if !waited(LATE_WAIT_MS) {
+        if !completed && !waited(LATE_WAIT_MS) {
             return false;
         }
         let table = self.core.api.table();
