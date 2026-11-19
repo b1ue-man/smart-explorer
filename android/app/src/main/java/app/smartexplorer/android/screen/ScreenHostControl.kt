@@ -686,12 +686,26 @@ internal object ScreenHostControl {
                 // The host session the batch belongs to (0: none named); its input is performed only while it exists
                 // (review 2026-11-19, Codex 2/1 and 3/3), checked again right before each action.
                 val owner = message.long("session")
+                // The first action of the batch Android did not perform (Codex 2/19): its kind goes to the
+                // session's viewer as a notice, once per batch.
+                var refused: String? = null
                 for (action in mapper.map(events)) {
                     if (sessions.isEmpty() || (owner != 0L && !sessions.containsKey(owner))) break
                     val done = CountDownLatch(1)
-                    AccessLink.perform(action) { done.countDown() }
+                    val performed = java.util.concurrent.atomic.AtomicBoolean(false)
+                    AccessLink.perform(action) { ok -> performed.set(ok); done.countDown() }
                     val wait = (action as? PhoneAction.Stroke)?.durationMs ?: 0
-                    done.await(wait + STROKE_GRACE_MS, TimeUnit.MILLISECONDS)
+                    val answered = done.await(wait + STROKE_GRACE_MS, TimeUnit.MILLISECONDS)
+                    if (refused == null && (!answered || !performed.get())) refused = when {
+                        !answered -> "timeout"
+                        action is PhoneAction.Stroke -> "gesture"
+                        action is PhoneAction.Text -> "text"
+                        else -> "action"
+                    }
+                }
+                val kind = refused
+                if (kind != null && owner != 0L) scope.launch {
+                    try { ScreenApi.inputRefused(owner, kind) } catch (e: CoreException) { Log.w(TAG, "Eingabefehler nicht gemeldet: ${e.message}") }
                 }
             }
         }

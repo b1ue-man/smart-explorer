@@ -12,9 +12,11 @@
 //!   projection?}` after the system dialog or for still previews.
 //! - `screen.hostEnded {session, reason}`.
 //! - `screen.hostNotice {session, epoch, rateFloor}` (the lowest bit rate of
-//!   the encoder of `epoch`) or `{session, parameter, detail?}` (a parameter
-//!   the encoder refused): a notice for the viewer while the encoder keeps
-//!   running (`HostStage::take_notice`, review 2026-11-19).
+//!   the encoder of `epoch`), `{session, parameter, detail?}` (a parameter
+//!   the encoder refused) or `{session, inputRefused}` (`gesture`, `text`,
+//!   `action`, `timeout`: an input Android did not perform): a notice for
+//!   the viewer while encoder and session keep running
+//!   (`HostStage::take_notice`, review 2026-11-19).
 //!
 //! Events: `screenHostStart {session, source, still, maxWidth, maxHeight,
 //! viewerName, viewerDeviceId}`, `screenSession {session, state, reason}`.
@@ -348,6 +350,23 @@ fn notice(args: &Value) -> Result<Value, ApiError> {
             .and_then(|epoch| u32::try_from(epoch).ok())
             .ok_or_else(|| invalid("Parameter „epoch“ fehlt oder ist ungültig."))?;
         channels::rate_floor(id, epoch, bps).map_err(not_found)?;
+        return Ok(json!({}));
+    }
+    // Android did not perform an input of the session (Codex 2/19): a notice
+    // for its viewer; the host session learns of input only when it queues it.
+    if let Some(kind) = opt_str(args, "inputRefused") {
+        let text = match kind {
+            "gesture" => "the device cancelled a gesture of the input",
+            "text" => "the device refused a text of the input (no focused field)",
+            "action" => "the device refused a system action of the input",
+            "timeout" => "the device did not answer an input in time",
+            _ => {
+                return Err(invalid(
+                    "„inputRefused“ ist gesture, text, action oder timeout.",
+                ))
+            }
+        };
+        channels::notice(id, text.into(), false).map_err(not_found)?;
         return Ok(json!({}));
     }
     let name = str_arg(args, "parameter")?;

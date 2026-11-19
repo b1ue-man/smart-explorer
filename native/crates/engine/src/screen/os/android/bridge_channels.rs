@@ -26,7 +26,7 @@ use crate::screen::core::wire_binary::MAX_RECORD_BYTES;
 mod channel_state;
 #[path = "bridge_input_queue.rs"]
 mod input_queue;
-pub use input_queue::send_input;
+pub use input_queue::{send_controlling_input, send_input};
 
 pub const FLAG_KEYFRAME: u32 = 0x1;
 pub const FLAG_STILL: u32 = 0x2;

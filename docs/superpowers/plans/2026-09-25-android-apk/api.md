@@ -548,8 +548,9 @@ sind `screenPush`/`screenControl` (Host) und `screenPull` (Betrachter) in `nativ
 - `screen.hostSessions {}` → `{sessions:[…]}`
 - `screen.hostStop {session:Long}` oder `{session:"all"}` bzw. `{all:true}` → `{stopped:Int}`; beendet Sitzungen wie der Host-Nutzer.
 - `screen.hostReady {session, width, height, encoder, hardware?, projection?}` → `{}` (nach dem Systemdialog oder für Standbilder)
-- `screen.hostNotice {session, epoch, rateFloor}` oder `{session, parameter, detail?}` → `{}` (seit 2026-11-19): die niedrigste Rate des Encoders dieser Epoche bzw. ein abgelehnter `setParameters`-Schlüssel; der Kern meldet sie dem Betrachter als Hinweis (`encoder_notice:`), der Encoder läuft weiter.
+- `screen.hostNotice {session, epoch, rateFloor}`, `{session, parameter, detail?}` oder `{session, inputRefused}` → `{}` (seit 2026-11-19): die niedrigste Rate des Encoders dieser Epoche, ein abgelehnter `setParameters`-Schlüssel (`video-bitrate` lässt den Kern das nächste andere Ziel erneut senden) bzw. eine Eingabe, die Android nicht ausgeführt hat (`inputRefused`: `gesture`, `text`, `action` oder `timeout`); der Kern meldet sie dem Betrachter als Hinweis (`encoder_notice:`), Encoder und Sitzung laufen weiter.
 - `screen.hostEnded {session, reason}` → `{}`
+- Eingaben des steuernden Betrachters liest die App über `screenControl(0, …)` als `{"op":"input","session":Long,"events":[InputEvent]}` (Feld `session` seit 2026-11-19): `session` ist die Host-Sitzung, zu der der Stapel gehört (0: ohne Sitzung). Die App führt ihn nur aus, solange diese Sitzung besteht; beim Ende einer Sitzung verwirft der Kern ihre wartenden Stapel. Die Warteschlange wartet nie; bei Rückstau fasst sie reine Zeigerbewegungen und reine Raddrehungen zusammen.
 
 **Betrachter** (dieses Telefon sieht einen anderen Bildschirm):
 - `screen.devices {roomId?}` → `{devices:[{relation:"direct|room", relationId, deviceId, name, roomId, roomName, online,

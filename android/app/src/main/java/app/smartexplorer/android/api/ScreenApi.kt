@@ -210,6 +210,17 @@ object ScreenApi {
         })
     }
 
+    /**
+     * Android did not perform an input of [session] ([kind]: `gesture` cancelled, `text` or `action` refused, or no
+     * answer in time: `timeout`); the viewer hears it as a notice.
+     */
+    suspend fun inputRefused(session: Long, kind: String) {
+        Core.call("screen.hostNotice", buildJsonObject {
+            put("session", session)
+            put("inputRefused", kind)
+        })
+    }
+
     /** The app ended [session]: `consent_denied`, `host_locked`, `host_stopped`, `capture_failed`. */
     suspend fun ended(session: Long, reason: String) {
         Core.call(

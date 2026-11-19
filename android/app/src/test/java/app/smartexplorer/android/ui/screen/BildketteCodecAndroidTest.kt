@@ -203,7 +203,10 @@ class BildketteCodecAndroidTest {
     @Test
     fun bildkette_task_android_rate_note_tells_what_the_host_does_with_the_limit() {
         assertEquals(RateNote.Automatic, ScreenChainInfo.rateNote("automatic", null, null))
-        assertEquals(RateNote.Applied(8_000_000L), ScreenChainInfo.rateNote("applied", 8_000_000L, 8_000_000L))
+        // `applied` only says sent (Codex 3/22): the host's statistics confirm the limit.
+        assertEquals(RateNote.Sent(8_000_000L), ScreenChainInfo.rateNote("applied", 8_000_000L, 8_000_000L))
+        assertEquals(RateNote.Applied(8_000_000L), ScreenChainInfo.rateNote("applied", 8_000_000L, 8_000_000L, reportedKbps = 8_000L))
+        assertEquals(RateNote.Sent(8_000_000L), ScreenChainInfo.rateNote("applied", 8_000_000L, 8_000_000L, reportedKbps = 5_000L))
         // The host without `rate_ceiling_v1` ignores the limit; the view says so.
         assertEquals(RateNote.Unsupported(8_000_000L), ScreenChainInfo.rateNote("unsupported_by_host", 8_000_000L, 8_000_000L))
         // A limit changed during the session is sent; whether the host knows it stays open until the next connection.

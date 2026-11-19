@@ -336,7 +336,8 @@ fn on_event(
             let mut fields =
                 accepted_fields_with_limits(&hello, &path, *lock(&session.local_limits));
             // „Höchste Datenrate“ (BK6): `unsupported_by_host` lets the app
-            // say that the host cannot take it.
+            // say that the host cannot take it; `applied` only says it was
+            // sent, the statistics (`chain.rateCeilingKbps`) confirm it.
             fields["rateCeiling"] = json!(rate_ceiling.key());
             // P1: `screen.viewSetDecoders` changes codec and decoder in place.
             fields["setDecoders"] = json!(set_decoders);

@@ -53,6 +53,11 @@ data class ScreenSessionState(
     val frameContract: Boolean = false,
     val bufferBudget:ScreenBufferBudget? = null,
     val inputReady: Boolean = true,
+    /**
+     * The first frame the host's last `VISIBILITY_ACK` admits. Part of the state so that the ack always changes it:
+     * a picture kept before the ack (`awaitsAck`) is drawn by the recomposition that follows (Codex 3/10).
+     */
+    val ackedMinFrame: Long? = null,
     val path: String? = null,
     val platform: String? = null,
     val view: String = "off",
@@ -84,6 +89,8 @@ data class ScreenSessionState(
     val virtualDisplay: JsonObject? = null,
     /** `chain.virtualDisplay` of the latest statistics: the host's display now (`VirtualDisplayReport::chain_key`). */
     val chainVirtualDisplay: String? = null,
+    /** `chain.rateCeilingKbps` of the latest statistics: the „Höchste Datenrate“ the host applies, in kbit/s. */
+    val chainRateCeilingKbps: Long? = null,
     val stats: JsonObject? = null,
     /** `rateCeiling` of the `accepted` event: `automatic`, `applied` or `unsupported_by_host` (B-09); `null` before it. */
     val rateCeiling: String? = null,
@@ -146,6 +153,7 @@ data class ScreenSessionState(
         is ScreenViewEvent.Stats -> copy(
             stats = event.body,
             chainVirtualDisplay = ((event.body["chain"] as? JsonObject)?.get("virtualDisplay") as? JsonPrimitive)?.contentOrNull,
+            chainRateCeilingKbps = ((event.body["chain"] as? JsonObject)?.get("rateCeilingKbps") as? JsonPrimitive)?.contentOrNull?.toLongOrNull(),
         )
         is ScreenViewEvent.RateCeiling -> copy(rateCeiling = event.state, rateAnswers = rateAnswers + 1)
         is ScreenViewEvent.ControlState -> copy(holder = event.holder, blocked = event.blocked, held = event.held)
@@ -495,7 +503,7 @@ class ScreenSession(private val target: ScreenTarget, private val backend: Scree
             val early = earlyPresented
             earlyPresented = null
             if (early != null && displayable(early, beforeAck = false)) acceptPresented(early)
-            mutable.value = mutable.value.copy(inputReady = visibilityReport?.state != "hidden" &&
+            mutable.value = mutable.value.copy(ackedMinFrame = event.minFrameId, inputReady = visibilityReport?.state != "hidden" &&
                 latestComplete?.let { it >= event.minFrameId } == true)
         }
         val report = visibilityReport

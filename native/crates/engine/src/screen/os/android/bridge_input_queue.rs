@@ -84,7 +84,27 @@ fn merge(tail: &mut Vec<InputEvent>, batch: &[InputEvent]) -> bool {
 /// without waiting; `false` when the queue holds `HARD_LIMIT` batches and
 /// `events` merges with none.
 pub fn send_input(session: u64, events: &[InputEvent]) -> bool {
+    push(queue(), session, events)
+}
+
+/// [`send_input`] for a batch of the session that holds control now (its
+/// input path, not its release job). Control is one session's at a time
+/// (`registry.rs`, `take_control`), and the session checks it before every
+/// batch (`host_session_control.rs`, `holds_control`): any other session's
+/// batch still waiting belongs to a viewer that gave control up meanwhile,
+/// so it is dropped instead of performed for the new holder (review
+/// 2026-11-19, Codex 3/3).
+pub fn send_controlling_input(session: u64, events: &[InputEvent]) -> bool {
     let mut queue = queue();
+    queue.retain(|batch| batch.session == session || batch.session == 0);
+    push(queue, session, events)
+}
+
+fn push(
+    mut queue: MutexGuard<'static, VecDeque<Batch>>,
+    session: u64,
+    events: &[InputEvent],
+) -> bool {
     if queue.len() >= MERGE_FROM {
         if let Some(tail) = queue.back_mut().filter(|tail| tail.session == session) {
             if merge(&mut tail.events, events) {

@@ -96,6 +96,9 @@ private const val FIELD_PAD = 32
 /** Keys of the automatic login switch (`login.autoSwitch`), one per open full view. */
 private val autoLoginKeys = AtomicLong(0)
 
+/** The host's reason for ending a tiles session on a chosen video codec (`set_decoders::TILES_SESSION`). */
+private const val TILES_SESSION_REASON = "the session was opened for the tiles; reopen it for this codec"
+
 /** „Ganzer Bildschirm“ chosen while the host named no monitor: a missing source means „no change“ to the host. */
 private const val WHOLE_SCREEN_UNNAMED = "„Ganzer Bildschirm“ nicht möglich: Der Gastgeber nennt keinen Bildschirm. Die bisherige Quelle bleibt."
 
@@ -224,7 +227,13 @@ fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, a
         if (sending) session?.call { control(it, "take") } else releaseInputs()
     }
     LaunchedEffect(ui.inputReady) { if (ui.inputReady) hiddenSinceFrame = false }
-    LaunchedEffect(ui.ended) { if (ui.ended != null) releaseInputs() }
+    LaunchedEffect(ui.ended) {
+        val ended = ui.ended ?: return@LaunchedEffect
+        releaseInputs()
+        // A session opened for the tiles that the host ended for a chosen video codec (`set_decoders.rs`,
+        // TILES_SESSION): it opens again with the choice, as on the desktop (`screen_decode_events.rs`, Codex 3/14).
+        if (family == null && ended.detail?.contains(TILES_SESSION_REASON) == true) openOwn(mode)
+    }
     // E22: while the stream pauses with the secure desktop, the lock screen or no user session, the
     // paired device's login screen opens without a tap; it closes when the user session shows again.
     val autoLoginKey = remember { autoLoginKeys.incrementAndGet() }
@@ -455,7 +464,7 @@ fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, a
     }
     val ended = ui.ended
     val openedRate = session?.openedMaxRateBps?.takeIf { ui.rateSends == 0 }
-    val info = chainInfoLine(ui.stream?.codec, decoderStage, ScreenChainInfo.rateNote(ui.rateCeiling, openedRate, settings.choice.maxRateBps, ui.rateAnswered))
+    val info = chainInfoLine(ui.stream?.codec, decoderStage, ScreenChainInfo.rateNote(ui.rateCeiling, openedRate, settings.choice.maxRateBps, ui.rateAnswered, ui.chainRateCeilingKbps))
     val status = when {
         ended != null -> ScreenTexts.endText(context, ended.code, ended.detail)
         failure != null -> failure.orEmpty()

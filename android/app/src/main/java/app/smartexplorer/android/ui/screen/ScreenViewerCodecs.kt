@@ -210,11 +210,14 @@ data class ViewerChainInfo(val codec: String?, val decoderHardware: Boolean?, va
 sealed interface RateNote {
     /** No limit chosen. */
     data object Automatic : RateNote
-    /** A limit travels to a host that announced it (`accepted.rateCeiling` is `applied`). */
+    /**
+     * The host applies the limit: its statistics name it (`stats.chain.rateCeilingKbps`, as the desktop's
+     * `confirmed()`). `applied` of the bridge alone only says that it was sent (Codex 3/22).
+     */
     data class Applied(val bps: Long) : RateNote
     /** The host does not know the limit (`unsupported_by_host`): it has no effect. */
     data class Unsupported(val bps: Long) : RateNote
-    /** A limit changed while the session runs: sent, the host's answer (`rateCeiling` event) is still open. */
+    /** A limit was sent (`applied` of the bridge), the host's statistics do not name it (yet): nothing more is claimed. */
     data class Sent(val bps: Long) : RateNote
 }
 
@@ -223,11 +226,13 @@ object ScreenChainInfo {
      * [rateCeiling] is the `rateCeiling` of the `accepted` event (`automatic`, `applied`, `unsupported_by_host`; `null`
      * before it) or of the latest `rateCeiling` event, [openedBps] the limit the session was opened with, [chosenBps]
      * the limit chosen now; [answered]: [rateCeiling] is the answer to the limit chosen last during the session (r1).
+     * [reportedKbps] is the ceiling the host's statistics name (`stats.chain.rateCeilingKbps`, kbit/s; `null` from a
+     * host without that report): only it confirms the limit; `applied` means sent (Codex 3/22).
      */
-    fun rateNote(rateCeiling: String?, openedBps: Long?, chosenBps: Long?, answered: Boolean = false): RateNote = when {
+    fun rateNote(rateCeiling: String?, openedBps: Long?, chosenBps: Long?, answered: Boolean = false, reportedKbps: Long? = null): RateNote = when {
         chosenBps == null -> RateNote.Automatic
         rateCeiling == "unsupported_by_host" -> RateNote.Unsupported(chosenBps)
-        rateCeiling == "applied" && (answered || chosenBps == openedBps) -> RateNote.Applied(chosenBps)
+        reportedKbps != null && reportedKbps == chosenBps / 1000 -> RateNote.Applied(chosenBps)
         else -> RateNote.Sent(chosenBps)
     }
 }
