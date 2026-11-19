@@ -271,12 +271,33 @@ pub enum ControlBlock {
     Other,
 }
 
+/// Why the host held a batch back without injecting it (review 2026-11-19,
+/// E2): the session waits, input is not blocked.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InputHeld {
+    /// The viewer reported its view hidden.
+    ViewerHidden,
+    /// No picture of the current reference was presented yet.
+    WaitingForPicture,
+    /// The host lets go of held keys and buttons first.
+    ReleasePending,
+    /// A reason of a newer host.
+    #[serde(other)]
+    Other,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ControlState {
     #[serde(default)]
     pub holder: Option<ControlHolder>,
     #[serde(default)]
     pub blocked: Option<ControlBlock>,
+    /// The host held input back (E2). A JSON field older viewers skip
+    /// (`ControlState` has no `deny_unknown_fields`, `wire::from_json` is
+    /// `serde_json::from_slice`); absent while nothing is held.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub held: Option<InputHeld>,
 }
 
 /// `ERROR` during a session. `code` is a `ScreenErrorCode` key or a code of

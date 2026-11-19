@@ -275,9 +275,12 @@ impl Session<'_> {
                 self.input_floor = None;
             }
         }
-        if changed
-            || (self.pipeline.presentation_supported() && !self.pipeline.input_reference_ready())
-        {
+        // Only a new reference moves the floor (`Pipeline::drop_encoder`; a
+        // new picture group of the same one does not, review 2026-11-19
+        // E1). A reference that is not ready for a moment (a running
+        // operation after an interrupt) holds input in `input`, without
+        // letting go of the held keys.
+        if changed {
             self.input_floor = Some(floor);
             self.release_pressed();
         }

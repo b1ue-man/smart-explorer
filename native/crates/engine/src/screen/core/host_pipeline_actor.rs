@@ -409,7 +409,13 @@ impl PipelineActor {
         {
             return;
         }
-        self.interrupt();
+        // A key frame keeps the reference input binds to (review 2026-11-19,
+        // E1): the running operation ends, input goes on.
+        let before = self.work.reference();
+        self.work.interrupt();
+        if !self.blocked && self.work.reference() == before + 1 {
+            self.facts.reference = self.work.reference();
+        }
         self.pending.keyframe = true;
         self.poll();
     }

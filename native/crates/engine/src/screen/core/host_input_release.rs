@@ -29,8 +29,10 @@ pub(super) struct InputHealth {
     /// or `family_operation`); the platform's `release` leaves failed
     /// releases to its caller (`input_send::release`).
     failed: Arc<Mutex<Vec<InputEvent>>>,
-    /// D6: the viewer's last `CONTROL_STATE` named a block.
-    pub(super) block_reported: bool,
+    /// D6: the block the viewer's last `CONTROL_STATE` named.
+    pub(super) block_reported: Option<ControlBlock>,
+    /// E2: the viewer heard that input is held back, once per hold.
+    pub(super) held_reported: bool,
     /// D2: a batch refused as `control_unavailable` that may only have named
     /// a reference the source left meanwhile: its reference and the picture
     /// operations started when it was refused (`Session::stale_refusal`).

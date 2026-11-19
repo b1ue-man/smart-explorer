@@ -266,7 +266,9 @@ fn batches_task_b6_snapshot_returns_to_new_live_keyframe_without_stale_presentat
             let (shot, shot_frame) = received(&mut incoming, StreamKind::Snapshot).await;
             assert!(shot.gop_id > old.gop_id);
             assert!(contract_matches(shot.frame_contract, contract));
-            assert!(!pipeline.input_reference_ready());
+            // The snapshot is a new group of the same reference: input stays
+            // bound (review 2026-11-19, E1), old receipts end.
+            assert!(pipeline.input_reference_ready());
             assert!(!pipeline.on_presented(old.gop_id, old_frame.frame_id));
             assert!(!pipeline.on_presented(shot.gop_id, shot_frame.frame_id));
             assert!(pipeline.gop.is_none());

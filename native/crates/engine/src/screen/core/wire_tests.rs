@@ -187,6 +187,7 @@ fn host_frames() -> Vec<HostFrame> {
                 device_name: "Laptop".into(),
             }),
             blocked: Some(ControlBlock::ElevatedWindow),
+            held: Some(InputHeld::WaitingForPicture),
         }),
         HostFrame::Error(ScreenWireError::new(
             ScreenErrorCode::HostShutdown,
@@ -306,6 +307,27 @@ fn screen_task_wire_roundtrip_all_tags() {
             control,
             HostFrame::ControlState(ControlState {
                 blocked: Some(ControlBlock::Other),
+                held: None,
+                ..
+            })
+        ));
+        // `held` (review 2026-11-19, E2): absent from a state without it, so
+        // an older viewer reads the same JSON as before, and a held reason of
+        // a newer host decodes.
+        let plain = ControlState {
+            holder: None,
+            blocked: None,
+            held: None,
+        };
+        assert_eq!(
+            crate::screen::core::wire::to_json(&plain).unwrap(),
+            b"{\"holder\":null,\"blocked\":null}"
+        );
+        let held = decode_host_frame(CONTROL_STATE, br#"{"held":"future","extra":1}"#).unwrap();
+        assert!(matches!(
+            held,
+            HostFrame::ControlState(ControlState {
+                held: Some(InputHeld::Other),
                 ..
             })
         ));

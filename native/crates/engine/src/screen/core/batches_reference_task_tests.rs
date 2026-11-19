@@ -31,8 +31,14 @@ fn batches_task_b6_presentation_requires_sent_current_gop_case() {
     assert!(reference.presented(7, 1));
     assert!(reference.ready);
 
+    // A new group of the same reference keeps input bound (review
+    // 2026-11-19, E1); only its own receipts count from now on.
+    reference.restart_group();
+    assert!(reference.ready);
+    assert_eq!(reference.floor, 1);
+    assert!(!reference.presented(7, 1));
     reference.sent(8, 2, true);
-    assert!(!reference.ready);
+    assert!(reference.ready);
     assert!(!reference.presented(7, 1));
     assert!(reference.presented(8, 2));
 }

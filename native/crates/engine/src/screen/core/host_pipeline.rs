@@ -315,6 +315,8 @@ impl Pipeline {
     fn drop_encoder(&mut self) {
         self.note_restart(&format!("encoder epoch {} ends", self.encoder_epoch));
         self.new_group();
+        self.work.invalidate_reference();
+        self.presentation.invalidate(self.next_frame_id);
         if let Some(stage) = &mut self.stage {
             stage.encoder = None;
         }
@@ -324,10 +326,10 @@ impl Pipeline {
     }
 
     /// Ends the current picture group; the next frame is a key frame of the
-    /// running encoder (or of a new one, `drop_encoder`).
+    /// running encoder (or of a new one, `drop_encoder`). Input stays bound
+    /// (`ReferencePresentation::restart_group`, review 2026-11-19 E1).
     fn new_group(&mut self) {
-        self.work.invalidate_reference();
-        self.presentation.invalidate(self.next_frame_id);
+        self.presentation.restart_group();
         // The old GOP's receipt cannot hold a restarted preview hostage.
         self.preview_in_flight = None;
         self.preview_sent_us = 0;
@@ -420,8 +422,7 @@ impl Pipeline {
         self.confirmed.stream_reset();
         self.pacer.on_stream_reset_continued();
         self.sender.reset();
-        self.work.invalidate_reference();
-        self.presentation.invalidate(self.next_frame_id);
+        self.presentation.restart_group();
         self.continue_from = Some(last_good);
     }
 }

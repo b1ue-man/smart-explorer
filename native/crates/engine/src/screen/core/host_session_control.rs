@@ -2,6 +2,7 @@
 //! pointer overlay (P6) for one session.
 use super::*;
 use crate::screen::core::cursor_overlay::{CursorFeed, CursorPosition, CursorSeen, CursorUpdate};
+use crate::screen::core::wire_control::InputHeld;
 
 /// The pointer overlay of one session (plan 2026-11-14 P6).
 #[derive(Default)]
@@ -249,12 +250,17 @@ impl Session<'_> {
         let sink = self.pipeline.input_sink();
         let reference = self.pipeline.input_reference_generation();
         let presented = self.pipeline.presentation_supported();
-        if !self.visible
-            || self.input_floor.is_some()
-            || !self.pipeline.input_reference_ready()
-            || self.input_release.is_some()
-        {
-            return Ok(());
+        let held = if !self.visible {
+            Some(InputHeld::ViewerHidden)
+        } else if self.input_release.is_some() {
+            Some(InputHeld::ReleasePending)
+        } else if self.input_floor.is_some() || !self.pipeline.input_reference_ready() {
+            Some(InputHeld::WaitingForPicture)
+        } else {
+            None
+        };
+        if let Some(held) = held {
+            return self.report_held(held).await;
         }
         if !presented
             && sink
@@ -299,12 +305,14 @@ impl Session<'_> {
                     self.pressed.observe(event);
                 }
                 self.health.unconfirmed = None;
-                // D6: a block the viewer heard ends with the first batch
-                // that reached the host after it.
-                if std::mem::take(&mut self.health.block_reported) {
+                // D6/E2: a block or hold the viewer heard ends with the
+                // first batch that reached the host after it.
+                let held = std::mem::take(&mut self.health.held_reported);
+                if self.health.block_reported.take().is_some() || held {
                     let state = ControlState {
                         holder: self.handle.controller(),
                         blocked: None,
+                        held: None,
                     };
                     self.frame(HostFrame::ControlState(state)).await?;
                 }
@@ -352,6 +360,7 @@ impl Session<'_> {
                     let state = ControlState {
                         holder: Some(holder),
                         blocked: None,
+                        held: None,
                     };
                     self.frame(HostFrame::ControlState(state)).await?;
                     return self
@@ -364,8 +373,10 @@ impl Session<'_> {
         let state = ControlState {
             holder: self.handle.controller(),
             blocked: None,
+            held: None,
         };
-        self.health.block_reported = false;
+        self.health.block_reported = None;
+        self.health.held_reported = false;
         self.frame(HostFrame::ControlState(state)).await
     }
 
@@ -375,10 +386,29 @@ impl Session<'_> {
         &mut self,
         blocked: crate::screen::core::wire_control::ControlBlock,
     ) -> io::Result<()> {
-        self.health.block_reported = true;
+        self.health.block_reported = Some(blocked);
         let state = ControlState {
             holder: self.handle.controller(),
             blocked: Some(blocked),
+            held: None,
+        };
+        self.frame(HostFrame::ControlState(state)).await
+    }
+
+    /// E2: a batch the host held back (hidden view, no presented picture of
+    /// the current reference yet, a release first) is dropped as before;
+    /// the viewer hears it once per hold, while it holds the control. The
+    /// state repeats the block it heard last, so a viewer without `held`
+    /// (it skips the field) keeps showing that block.
+    async fn report_held(&mut self, held: InputHeld) -> io::Result<()> {
+        if self.health.held_reported || !self.handle.holds_control() {
+            return Ok(());
+        }
+        self.health.held_reported = true;
+        let state = ControlState {
+            holder: self.handle.controller(),
+            blocked: self.health.block_reported,
+            held: Some(held),
         };
         self.frame(HostFrame::ControlState(state)).await
     }

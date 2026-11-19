@@ -24,11 +24,23 @@ impl ReferencePresentation {
             ready: false,
         }
     }
+    /// The reference input binds to changed (source, capture generation,
+    /// size, visibility, contract: `Pipeline::drop_encoder`): input waits
+    /// for a presented picture from `floor` on.
     pub(super) fn invalidate(&mut self, floor: u64) {
         self.floor = floor;
         self.gop = None;
         self.sent.clear();
         self.ready = false;
+    }
+    /// A new picture group of the same reference (a key frame of the
+    /// running encoder, a continuation, a snapshot): the receipts of the old
+    /// group end, the binding of input stays (review 2026-11-19, E1). Input
+    /// positions are fractions of the source as it lies now
+    /// (`input_send::absolute`), which a new group does not move.
+    pub(super) fn restart_group(&mut self) {
+        self.gop = None;
+        self.sent.clear();
     }
     pub(super) fn sent(&mut self, gop: u64, frame: u64, keyframe: bool) {
         if self.gop != Some(gop) {
@@ -37,7 +49,6 @@ impl ReferencePresentation {
             }
             self.gop = Some(gop);
             self.sent.clear();
-            self.ready = false;
         }
         if frame < self.floor {
             return;
