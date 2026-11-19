@@ -98,6 +98,15 @@ impl RateWindow {
         }
     }
 
+    /// Bits per second of all bytes of the window over the whole window
+    /// (`RATE_WINDOW_US`), for a stream of few, irregular writes (the
+    /// control stream, review 2026-11-19 round 5 G3: two frames a moment
+    /// apart measured an enormous rate over their span).
+    pub(super) fn window_bps(&self) -> u64 {
+        let bits = u128::from(self.bytes) * 8 * 1_000_000 / u128::from(RATE_WINDOW_US);
+        u64::try_from(bits).unwrap_or(u64::MAX)
+    }
+
     /// Bits per second between the first and the last entry; the bytes of
     /// the first entry arrived before the span and do not count.
     pub(super) fn rate_bps(&self) -> Option<u64> {

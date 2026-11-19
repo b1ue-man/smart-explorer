@@ -22,7 +22,7 @@ impl RateController {
     /// The control stream's rate of the last window at `now_us`.
     pub fn update_control(&mut self, now_us: u64) {
         self.control.prune(now_us);
-        self.control_bps = self.control.rate_bps().unwrap_or(0);
+        self.control_bps = self.control.window_bps();
     }
 
     pub fn control_bps(&self) -> u64 {

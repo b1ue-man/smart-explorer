@@ -200,36 +200,55 @@ fn screen_task_pacing_frame_clock_cadence() {
     assert_eq!(FrameClock::new(1_000).interval_us(), 1_000_000 / 240);
 }
 
-/// Review 2026-11-19 (Gemini 3/3): the viewer's acknowledgement leaves when
-/// a picture is read off the network; what it shows (`PRESENTED`) paces the
-/// pictures: more than `VIEWER_BACKLOG_FRAMES` received and not shown hold
-/// the next one back, only while presentations come.
+/// Review 2026-11-19 (Gemini 3/3, round 5 G2/G5): the viewer's
+/// acknowledgement leaves when a picture is read off the network; what it
+/// shows (`PRESENTED`) paces the pictures. A picture received and not shown
+/// for more than `VIEWER_LAG_US` holds the next one back while the viewer
+/// shows pictures, one picture follows every `PRESENTED`, a viewer that
+/// keeps up is never held, and no stream is reset for it.
 #[test]
 fn review1119_task_pictures_follow_what_the_viewer_shows() {
-    use super::{PRESENTED_FRESH_US, VIEWER_BACKLOG_FRAMES};
+    use super::{PRESENTED_FRESH_US, VIEWER_LAG_US};
     let mut pacer = Pacer::default();
-    let sent = |frame_id: u64| SentFrame {
+    let frame = |frame_id: u64| SentFrame {
         gop_id: 1,
         frame_id,
         bytes: 1_000,
         sent_us: 0,
         keyframe: frame_id == 1,
     };
-    for frame in 1..=20 {
-        pacer.on_frame_sent(sent(frame));
+    // 240 pictures a second, received at once, shown 20 ms later: never held.
+    for id in 1..=20 {
+        pacer.on_frame_sent(frame(id));
+        let at = id * 4_166;
+        pacer.on_ack(1, id);
+        pacer.on_received(id, at);
+        pacer.on_presented(id.saturating_sub(5).max(1), at);
+        assert!(!pacer.viewer_behind(at + 20_000), "{id}");
     }
-    pacer.on_ack(1, 20);
-    // A viewer that sends no `PRESENTED` (older ones, the bench) is never held.
-    assert!(!pacer.viewer_behind(0));
-    pacer.on_presented(20 - VIEWER_BACKLOG_FRAMES, 1_000);
-    assert!(!pacer.viewer_behind(1_000));
-    pacer.on_presented(5, 2_000);
-    assert!(pacer.viewer_behind(2_000));
+    // A viewer without `PRESENTED` (older ones, the bench) is never held.
+    let mut old = Pacer::default();
+    old.on_frame_sent(frame(1));
+    old.on_ack(1, 1);
+    old.on_received(1, 0);
+    assert!(!old.viewer_behind(10 * VIEWER_LAG_US));
+    // The viewer shows picture 20 and then falls behind: 21 waits unshown.
+    pacer.on_presented(20, 100_000);
+    pacer.on_frame_sent(frame(21));
+    pacer.on_ack(1, 21);
+    pacer.on_received(21, 100_000);
+    let late = 100_000 + VIEWER_LAG_US + 1;
+    assert!(pacer.viewer_behind(late));
+    // Its next `PRESENTED` lets one picture follow, which uses the credit.
+    pacer.on_presented(20, late);
+    assert!(!pacer.viewer_behind(late));
+    pacer.on_frame_sent(frame(22));
+    assert!(pacer.viewer_behind(late));
     // A viewer that stopped showing (a gate, a hidden view) is not waited for.
-    assert!(!pacer.viewer_behind(2_000 + PRESENTED_FRESH_US + 1));
-    // It never resets a stream: the stale time and the decision stay.
+    assert!(!pacer.viewer_behind(late + PRESENTED_FRESH_US + 1));
+    // It never resets a stream: the decision stays.
     assert_eq!(
-        pacer.decide(2_000, 6_000_000, PathKind::Direct, 1_000),
+        pacer.decide(late, 6_000_000, PathKind::Direct, 1_000),
         PaceDecision::Encode { keyframe: false }
     );
 }

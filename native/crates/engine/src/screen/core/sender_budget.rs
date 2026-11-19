@@ -122,7 +122,19 @@ impl SenderBudget {
                     .saturating_add(flow.frames.iter().map(|f| f.2).sum::<u64>()),
             )
         };
-        let waits = keyframe || estimate == 0;
+        // Round 5 G4: a key frame inside the session's open group (a
+        // decoder's request, a visibility change) follows the session's own
+        // pictures on the same stream like a delta of the last picture's
+        // size: it waits only for its siblings, and its own pictures on the
+        // line are no back pressure for it. The byte budget still holds it.
+        let in_group = keyframe && own != 0 && estimate != 0;
+        if in_group && total.saturating_sub(own) != 0 {
+            let flow = state.flows.get_mut(&self.id)?;
+            flow.waiting_us = Some(now_us);
+            flow.sibling = true;
+            return None;
+        }
+        let waits = (keyframe || estimate == 0) && !in_group;
         let estimate = if waits {
             if total != 0 {
                 let flow = state.flows.get_mut(&self.id)?;

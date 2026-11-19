@@ -41,18 +41,9 @@ pub const STALE_FRAME_INTERVALS: u64 = 3;
 /// Highest frame rate of the frame clock: the highest common display
 /// refresh rate; capture never delivers more.
 pub const MAX_FPS: u32 = 240;
-/// Review 2026-11-19 (Gemini 3/3): pictures the viewer received (its
-/// `FRAME_ACK`, which leaves when the picture is read off the network) but
-/// did not show yet (its `PRESENTED`) beyond which the next picture is not
-/// made. The acknowledgement says nothing of a slow decoder or window: a
-/// host sent 30–120 pictures a second of which the viewer showed 1–10.
-/// [Assumption: the desktop relay holds up to 4 + 1 + 8 pictures and the
-/// decoder a few; 8 lets a viewer that keeps up never wait.]
-pub const VIEWER_BACKLOG_FRAMES: u64 = 8;
-/// How long the last `PRESENTED` counts: a viewer that shows nothing (a
-/// gate after a visibility change, a viewer without the frame) does not
-/// hold the pictures back.
-pub const PRESENTED_FRESH_US: u64 = 1_000_000;
+#[path = "pacing_viewer.rs"]
+mod viewer;
+pub use viewer::{PRESENTED_FRESH_US, VIEWER_LAG_US};
 
 /// Unacknowledged bytes the guard allows: the target rate over one round
 /// trip plus `QUEUE_ALLOWANCE_US`, on the relay path at most
@@ -139,10 +130,13 @@ pub struct Pacer {
     /// acknowledgement arrived (µs, 0: none yet). Unlike the path's round
     /// trip it holds the viewer's decoding before its `FRAME_ACK`.
     ack_age_us: u64,
-    /// The newest frame the viewer acknowledged, and the newest it showed
-    /// with the time its `PRESENTED` came (`viewer_behind`).
-    acked_frame: u64,
+    /// The pictures the viewer received and did not show yet, with the time
+    /// their acknowledgement came; the newest it showed with the time of its
+    /// `PRESENTED`; whether one picture may follow that `PRESENTED`
+    /// (`viewer_behind`).
+    received: VecDeque<(u64, u64)>,
     presented: Option<(u64, u64)>,
+    present_credit: bool,
 }
 
 impl Default for Pacer {
@@ -160,8 +154,9 @@ impl Default for Pacer {
             drain_bps: None,
             queue: None,
             ack_age_us: 0,
-            acked_frame: 0,
+            received: VecDeque::new(),
             presented: None,
+            present_credit: false,
         }
     }
 }
@@ -287,6 +282,7 @@ impl Pacer {
     }
 
     pub fn on_frame_sent(&mut self, frame: SentFrame) {
+        self.present_credit = false;
         if frame.keyframe {
             self.keyframe_due = false;
             self.key_bytes = average(self.key_bytes, frame.bytes);
@@ -302,7 +298,6 @@ impl Pacer {
     /// acknowledged frame for the rate control; frames forgotten by a reset
     /// return `None`.
     pub fn on_ack(&mut self, gop_id: u64, frame_id: u64) -> Option<SentFrame> {
-        self.acked_frame = self.acked_frame.max(frame_id);
         let mut acked = None;
         let mut released = 0u64;
         self.in_flight.retain(|frame| {
@@ -317,27 +312,6 @@ impl Pacer {
         });
         self.unacked_bytes = self.unacked_bytes.saturating_sub(released);
         acked
-    }
-
-    /// `PRESENTED` of `frame_id` at `now_us`: the viewer showed it.
-    pub fn on_presented(&mut self, frame_id: u64, now_us: u64) {
-        let newest = self
-            .presented
-            .map_or(frame_id, |(frame, _)| frame.max(frame_id));
-        self.presented = Some((newest, now_us));
-    }
-
-    /// Whether the viewer holds more received pictures than it shows
-    /// (`VIEWER_BACKLOG_FRAMES`) while it shows pictures: the next one waits
-    /// before capture and encoding, so the pictures follow what the viewer
-    /// really shows. No stream is reset for it and the line's rate stays; a
-    /// viewer that sends no `PRESENTED` (older ones, `se screen bench`) is
-    /// never held.
-    pub fn viewer_behind(&self, now_us: u64) -> bool {
-        self.presented.is_some_and(|(frame, at)| {
-            now_us.saturating_sub(at) <= PRESENTED_FRESH_US
-                && self.acked_frame.saturating_sub(frame) > VIEWER_BACKLOG_FRAMES
-        })
     }
 
     /// The age of an acknowledged frame (arrival minus `SentFrame::sent_us`,

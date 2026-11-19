@@ -36,6 +36,8 @@ struct Pending {
     refresh: bool,
     /// Control stream bytes written while a picture operation runs.
     control_bytes: u64,
+    /// The newest `PRESENTED` while a picture operation runs, and when.
+    presented: Option<(u64, u64)>,
     receipts: VecDeque<Receipt>,
 }
 struct Facts {
@@ -219,6 +221,9 @@ impl PipelineActor {
         if std::mem::take(&mut self.pending.keyframe) {
             p.request_keyframe();
         }
+        if let Some((frame, at)) = self.pending.presented.take() {
+            p.pacer.on_presented(frame, at);
+        }
         let control = std::mem::take(&mut self.pending.control_bytes);
         if control != 0 {
             p.book_control_bytes(control);
@@ -254,8 +259,6 @@ impl PipelineActor {
                 }
                 Receipt::Presented(gop, frame) => {
                     p.on_presented(gop, frame);
-                    // What the viewer shows paces the pictures (Gemini 3/3).
-                    p.pacer.on_presented(frame, now_us());
                 }
             }
         }

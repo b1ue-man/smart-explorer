@@ -180,6 +180,8 @@ impl Pipeline {
         if let Some(sent) = self.pacer.on_ack(ack.gop_id, ack.frame_id) {
             self.pacer
                 .note_ack_age(arrived_us.saturating_sub(sent.sent_us));
+            // The viewer has the picture; its `PRESENTED` follows (pacing).
+            self.pacer.on_received(ack.frame_id, arrived_us);
             // B-36: on the ordered stream every earlier frame arrived as
             // well. Only a frame this host sent and still awaits counts: an
             // acknowledgement that names any other id confirms nothing.

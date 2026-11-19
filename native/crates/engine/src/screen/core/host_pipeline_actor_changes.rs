@@ -109,6 +109,24 @@ impl PipelineActor {
         Ok(())
     }
 
+    /// Every `PRESENTED` of the viewer reaches the pacer (review 2026-11-19,
+    /// round 5 G1), also one the session does not take for input (a hidden
+    /// view, a pending visibility acknowledgement, another reference): what
+    /// the viewer shows paces the pictures (`Pacer::viewer_behind`).
+    pub fn note_presented(&mut self, frame: u64) {
+        let now = crate::screen::core::gop_stream::now_us();
+        match self.pipeline.as_mut() {
+            Some(p) => p.pacer.on_presented(frame, now),
+            None => {
+                let newest = self
+                    .pending
+                    .presented
+                    .map_or(frame, |(known, _)| known.max(frame));
+                self.pending.presented = Some((newest, now));
+            }
+        }
+    }
+
     /// The session wrote `bytes` on its control stream (review 2026-11-19):
     /// booked now, or after the running picture operation.
     pub fn book_control_bytes(&mut self, bytes: u64) {

@@ -58,6 +58,7 @@ impl Session<'_> {
                         "presentation was not negotiated",
                     ));
                 }
+                self.pipeline.note_presented(frame_id);
                 if self.visible
                     && !self.visibility_ack_pending
                     && self.pipeline.on_presented(gop_id, frame_id)
