@@ -186,6 +186,17 @@ impl DecodeState {
             StreamEvent::End(end) => {
                 self.gop = None;
                 self.shared.stop_presentation();
+                // A tile session the host ended for a chosen video codec:
+                // the view opens it again (Codex 11).
+                let tiles = crate::screen::core::set_decoders::TILES_SESSION;
+                if end
+                    .detail
+                    .as_deref()
+                    .is_some_and(|detail| detail.contains(tiles))
+                {
+                    let reopen = &self.shared.local.reopen;
+                    reopen.store(true, std::sync::atomic::Ordering::Release);
+                }
                 let text = end_text(&end.code, end.detail.as_deref());
                 self.shared.update(|info| {
                     info.end = Some(EndInfo {

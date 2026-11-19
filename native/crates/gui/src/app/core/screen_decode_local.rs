@@ -129,6 +129,9 @@ pub struct DecodeLocal {
     /// The session's number for the decoder libraries' memory
     /// (`decoder_health::begin_session`, entered by its decode thread).
     pub epoch: AtomicU64,
+    /// The host ended the session for a video codec chosen in a tile
+    /// session (`ViewerSession::reopen_wanted`).
+    pub reopen: AtomicBool,
 }
 
 impl DecodeLocal {

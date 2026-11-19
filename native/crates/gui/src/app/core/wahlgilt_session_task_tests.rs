@@ -109,4 +109,10 @@ fn wahlgilt_task_tile_session_opens_again_for_a_video_codec() {
     let session = ViewerSession::fixture(shared);
     assert!(session.needs_reopen(CodecSetting::H264));
     assert!(!session.needs_reopen(CodecSetting::Lossless));
+    // „Verlustfrei“ offers the tiles alone: a tile session before its first
+    // stream report too (Codex 11).
+    let session = ViewerSession::fixture(Shared::new(false, 0));
+    session.codec_chosen(CodecSetting::Lossless);
+    assert!(session.needs_reopen(CodecSetting::Av1));
+    assert!(!session.needs_reopen(CodecSetting::Lossless));
 }

@@ -95,6 +95,15 @@ impl ViewState {
 
     /// Opens the session when the profiles are read and name the device.
     pub fn ensure_session(&mut self, common: &Common, display: FrameSize) {
+        // The host ended a tile session for a chosen video codec: it opens
+        // again with the current source and choice (Codex 11).
+        if self
+            .session
+            .as_ref()
+            .is_some_and(ViewerSession::reopen_wanted)
+        {
+            self.end_session();
+        }
         super::screen_audio::follow(self.session.as_ref());
         if self.session.is_some() || self.refused.is_some() {
             return;

@@ -102,9 +102,22 @@ pub fn reopen_for(first: Option<CodecKind>, codec: CodecSetting) -> bool {
 }
 
 impl ViewerSession {
-    /// Whether the choice `codec` needs a new session (`reopen_for`).
+    /// Whether the choice `codec` needs a new session (`reopen_for`). A
+    /// session that runs for „Verlustfrei“ offers the tiles alone
+    /// (`StreamRequest::chosen_decoders`), so it is a tile session before
+    /// the host reported its first stream too (Codex 11: the choice went
+    /// out as `SET_DECODERS` and the host ended the session).
     pub fn needs_reopen(&self, codec: CodecSetting) -> bool {
+        let lossless = *lock(&self.shared.codec) == CodecSetting::Lossless;
         reopen_for(*lock(&self.shared.first_codec), codec)
+            || (lossless && codec != CodecSetting::Lossless)
+    }
+
+    /// The host ended the session because it was opened for the tiles and a
+    /// video codec was chosen (`set_decoders::TILES_SESSION`): the view opens
+    /// it again with its source and choice (`ViewState::ensure_session`).
+    pub fn reopen_wanted(&self) -> bool {
+        self.shared.local.reopen.load(Ordering::Acquire)
     }
 
     /// A new „Codec“ was chosen: the viewer's earlier switch to the tiles
