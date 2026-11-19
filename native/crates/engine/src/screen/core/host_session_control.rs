@@ -415,6 +415,18 @@ impl Session<'_> {
         self.give_up_control();
     }
 
+    /// The end of the session: everything held and owed goes as for
+    /// `release_control`, then the control goes in any case, with its audit
+    /// entry (round 7: the handle's drop gave it back without one); releases
+    /// still on their way are named in the host log.
+    pub(super) async fn end_control(&mut self) {
+        self.drain_releases().await;
+        if self.input_release.is_some() || self.releases_owed() {
+            super::visibility::note_viewer("the session ends with releases still on their way");
+        }
+        self.give_up_control();
+    }
+
     /// The control goes back to the registry (after `release_control`).
     fn give_up_control(&mut self) {
         self.health.handover = None;

@@ -8,7 +8,8 @@
 use std::io;
 
 use x11rb::connection::Connection;
-use x11rb::protocol::xproto::{ConnectionExt as _, Keycode, Keysym, Window};
+use x11rb::protocol::xkb::{self, ConnectionExt as _};
+use x11rb::protocol::xproto::{ConnectionExt as _, Keycode, Keysym, ModMask, Window};
 use x11rb::protocol::xtest::ConnectionExt as _;
 
 /// Event types of `XTestFakeInput`.
@@ -244,12 +245,69 @@ pub(super) fn type_text<C: Connection>(conn: &C, root: Window, text: &str) -> io
         press(conn, root, key, true)?;
         press(conn, root, key, false)?;
     }
+    // The levels are looked up in the first group's columns; another active
+    // group (a second layout) is locked to the first for the text and set
+    // back after it (review 2026-11-19).
+    let group = first_group(conn);
     let typed = type_unlatched(conn, root, text, map);
+    if let Some((locked, latched)) = group {
+        restore_group(conn, locked, latched);
+    }
     if let Some(key) = caps {
         press(conn, root, key, true)?;
         press(conn, root, key, false)?;
     }
     typed
+}
+
+/// The core keyboard (`XkbUseCoreKbd`).
+const CORE_KEYBOARD: u16 = 0x0100;
+
+/// Locks the first group when another one is active; the locked and the
+/// latched group before. `None` without XKB or with the first group active.
+fn first_group<C: Connection>(conn: &C) -> Option<(xkb::Group, i16)> {
+    let supported = conn.xkb_use_extension(1, 0).ok()?.reply().ok()?.supported;
+    let state = conn.xkb_get_state(CORE_KEYBOARD).ok()?.reply().ok()?;
+    if !supported || state.group == xkb::Group::M1 {
+        return None;
+    }
+    let none = ModMask::from(0u16);
+    conn.xkb_latch_lock_state(
+        CORE_KEYBOARD,
+        none,
+        none,
+        true,
+        xkb::Group::M1,
+        none,
+        true,
+        0,
+    )
+    .ok()?
+    .check()
+    .ok()?;
+    Some((state.locked_group, state.latched_group))
+}
+
+/// Sets the locked and latched group back (`first_group`); a failure leaves
+/// the first group, named in the host log.
+fn restore_group<C: Connection>(conn: &C, locked: xkb::Group, latched: i16) {
+    let none = ModMask::from(0u16);
+    let restored = conn
+        .xkb_latch_lock_state(
+            CORE_KEYBOARD,
+            none,
+            none,
+            true,
+            locked,
+            none,
+            true,
+            latched as u16,
+        )
+        .map_err(io::Error::other)
+        .and_then(|cookie| cookie.check().map_err(io::Error::other));
+    if let Err(error) = restored {
+        eprintln!("screen host process: the keyboard group could not be set back: {error}");
+    }
 }
 
 /// `Caps_Lock`.

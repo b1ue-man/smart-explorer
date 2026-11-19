@@ -8,9 +8,14 @@ use super::*;
 /// at least one look at the toolbar [assumption: 3 s, not measured].
 const LATE_BLOCK_SHOWN: Duration = Duration::from_secs(3);
 
-/// How long a given-up control waits for its releases (Codex 6/5)
-/// [assumption: 10 s, five `CLOSE_GRACE`s; not measured].
-const HANDOVER_LIMIT: Duration = Duration::from_secs(10);
+/// How long a given-up control waits for its releases (Codex 6/5), from
+/// the end of `drain_releases` on: the slowest sink is a host process,
+/// whose release first waits for the link a running picture request holds
+/// (at most `FRAME_TIMEOUT`, 10 s) and then for the answer (`INPUT_TIMEOUT`,
+/// 2 s; `WorkerInputSink::release`), so one job ends within 12 s or its
+/// process is ended (`WorkerLink::ask`). Android's queue and the Wayland
+/// portal queue without waiting.
+const HANDOVER_LIMIT: Duration = Duration::from_secs(12);
 
 impl Session<'_> {
     /// An `ERROR` for the viewer; the session goes on.
