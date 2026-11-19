@@ -45,7 +45,9 @@ impl Session<'_> {
                 report.geometry_generation,
                 report.rects.len()
             ));
-            let rects = (report.state == VisibilityState::Visible).then_some(report.rects);
+            // Gemini 3/23: in the size of the picture the host sends now.
+            let size = self.pipeline.stream_info().map(|stream| stream.size);
+            let rects = (report.state == VisibilityState::Visible).then(|| report.rects_in(size));
             self.pipeline.retarget_visible_rects(rects)?;
             self.visibility_ack_pending = true;
             return Ok(());
@@ -60,7 +62,7 @@ impl Session<'_> {
         self.pipeline.begin_capture_active(self.visible)?;
         self.pipeline
             .set_visible_rects(if report.state == VisibilityState::Visible {
-                Some(report.rects)
+                Some(report.rects_in(self.pipeline.stream_info().map(|stream| stream.size)))
             } else {
                 None
             });
@@ -86,16 +88,20 @@ impl Session<'_> {
         // P5 (plan 2026-11-17): the display follows the full view's window
         // size when this session claimed it; at most once a second.
         // The picture waits for the display's new size, so only that change
-        // opens a new encoder (review 2026-11-19, Gemini 13.1).
-        if set.mode == StreamMode::Full
-            && crate::screen::core::virtual_display_host::resize(&self.handle.id(), set.size)
-        {
-            if let Some(size) = set.size {
-                self.pipeline.expect_source_size(size);
-            }
+        // opens a new encoder (review 2026-11-19, Gemini 13.1); its bounds
+        // are the size the display takes (a width in steps of 8, Gemini
+        // 3/5.5), which the picture of that source has anyway.
+        let followed = if set.mode == StreamMode::Full {
+            crate::screen::core::virtual_display_host::resize(&self.handle.id(), set.size)
+        } else {
+            None
+        };
+        if let Some(fitted) = followed {
+            self.pipeline.expect_source_size(fitted);
         }
+        let size = followed.or(set.size);
         self.pipeline
-            .set_mode(kind, set.size, set.fps, set.sharpness, set.lossless);
+            .set_mode(kind, size, set.fps, set.sharpness, set.lossless);
         let shown = match (kind, self.mode) {
             (StreamKind::Preview, _) => SessionMode::Preview,
             (_, SessionMode::Control) => SessionMode::Control,

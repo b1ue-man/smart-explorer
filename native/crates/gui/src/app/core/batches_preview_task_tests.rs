@@ -20,6 +20,7 @@ fn report(hidden: bool) -> ViewerVisibility {
             VisibilityState::Visible
         },
         minimized: hidden,
+        picture: None,
         rects: if hidden {
             Vec::new()
         } else {

@@ -398,25 +398,20 @@ fn apply(
 }
 
 /// A `SET_MODE` size of a session's full view (ignored without a claim or a
-/// fixed size); `true` when the session shows the display, decides its size
-/// and the driver shows `size` as asked: the source follows it.
-pub fn resize(session: &str, size: Option<FrameSize>) -> bool {
-    let Some(size) = size else {
-        return false;
-    };
-    let Some(shared) = SHARED.get() else {
-        return false;
-    };
+/// fixed size); when the session shows the display and decides its size,
+/// the size the display takes (`fit_mode`, Gemini 3/5.5): the source follows.
+pub fn resize(session: &str, size: Option<FrameSize>) -> Option<FrameSize> {
+    let size = size?;
+    let shared = SHARED.get()?;
     let mut state = lock(&shared.state);
     let known = state.planner.resize(session, size);
     if known {
         shared.changed.notify_all();
     }
     let shows = state.sessions.get(session).is_some_and(|k| k.own.is_none());
-    known
-        && shows
-        && state.planner.owner_session() == Some(session)
-        && state.planner.target(state.limit) == Some(size)
+    (known && shows && state.planner.owner_session() == Some(session))
+        .then(|| state.planner.target(state.limit))
+        .flatten()
 }
 
 /// Before `source_changed`: the session shows its own choice (`SET_MODE`)

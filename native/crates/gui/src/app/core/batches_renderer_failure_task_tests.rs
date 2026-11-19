@@ -288,6 +288,7 @@ fn batches_task_b6_screen_renderer_failure_revokes_input_and_reuses_visibility_f
                 state: VisibilityState::Visible,
                 minimized: false,
                 rects: Vec::new(),
+                picture: None,
             },
             modern,
         );

@@ -188,6 +188,8 @@ impl VisibilityTracker {
             state,
             minimized: window.minimized,
             rects,
+            // Gemini 3/23: the picture size the rectangles are measured in.
+            picture: geometry.map(|g| g.size),
         };
         self.last = Some(report.clone());
         Some(report)

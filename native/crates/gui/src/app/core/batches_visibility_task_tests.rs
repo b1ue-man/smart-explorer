@@ -75,6 +75,7 @@ fn batches_task_b6_resume_gate_requires_matching_generation_and_fresh_frame() {
         geometry_generation: 1,
         state: VisibilityState::Visible,
         minimized: false,
+        picture: None,
         rects: vec![VisibleRect {
             x: 0,
             y: 0,
@@ -206,6 +207,7 @@ fn screen_metadata_runtime_task_picture_before_visibility_ack_is_kept_not_droppe
         state: VisibilityState::Visible,
         minimized: false,
         rects: Vec::new(),
+        picture: None,
     };
     // What `ViewerSession::set_visibility` does for a modern host.
     shared.invalidate_presentation();
