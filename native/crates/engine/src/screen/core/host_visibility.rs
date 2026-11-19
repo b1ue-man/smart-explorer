@@ -3,6 +3,17 @@
 use super::*;
 use crate::screen::core::window_list::SourceId;
 
+/// A viewer message that starts the picture stream anew, into the screen
+/// host log (measurement of 2026-11-19, as `Pipeline::note_restart`).
+pub(super) fn note_viewer(why: &str) {
+    let line = format!("screen stream: {why}");
+    // The unit tests write no file of the account they run under.
+    #[cfg(not(test))]
+    crate::screen::os::host_worker_client::host_log::note(None, &line);
+    #[cfg(test)]
+    let _ = line;
+}
+
 impl Session<'_> {
     pub(super) async fn visibility(
         &mut self,
@@ -20,6 +31,11 @@ impl Session<'_> {
             return Ok(());
         }
         self.visibility_generation = report.geometry_generation;
+        note_viewer(&format!(
+            "the viewer reported its visibility (generation {}, {} rectangles): new encoder",
+            report.geometry_generation,
+            report.rects.len()
+        ));
         self.visible = !report.hidden();
         self.release_pressed();
         self.pipeline.begin_capture_active(self.visible)?;

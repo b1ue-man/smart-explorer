@@ -101,6 +101,20 @@ impl Pipeline {
         {
             return false;
         }
+        self.note_restart(&format!(
+            "the source changed (size {}x{} -> {}x{}, capture generation {} -> {generation}, \
+             frame contract {}): new encoder",
+            self.source_size.width,
+            self.source_size.height,
+            size.width,
+            size.height,
+            self.source_generation,
+            if contract == self.frame_contract {
+                "same"
+            } else {
+                "changed"
+            }
+        ));
         self.frame_contract = contract;
         self.source_size = size;
         self.source_generation = generation;

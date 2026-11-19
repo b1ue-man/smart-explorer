@@ -118,6 +118,10 @@ fn capture_once(worker: &mut Worker, job: &CaptureJob, frame_id: u64, refresh: b
         );
     }
     if before != worker.reference_generation {
+        eprintln!(
+            "screen capture: capture generation {} -> {before}: the encoder starts anew",
+            worker.reference_generation
+        );
         worker.reference_generation = before;
         worker.encoder = None;
         return Tick::Turnover(wrap(worker, unchanged(source_size)));
@@ -144,6 +148,10 @@ fn capture_once(worker: &mut Worker, job: &CaptureJob, frame_id: u64, refresh: b
     };
     let capture_us = micros(started.elapsed());
     if after != before {
+        eprintln!(
+            "screen capture: capture generation {} -> {after}: the encoder starts anew",
+            worker.reference_generation
+        );
         worker.reference_generation = after;
         worker.encoder = None;
         let reply = match captured {

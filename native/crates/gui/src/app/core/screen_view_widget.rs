@@ -378,7 +378,7 @@ impl ViewWidget {
                 && !session.is_ended()
                 && !params.dimmed
                 && ui.is_rect_visible(area),
-            steering: params.control && session.input_ready(),
+            steering: params.control,
         };
         self.direct.frame(ui, session, place, &overlays);
         ViewResult {

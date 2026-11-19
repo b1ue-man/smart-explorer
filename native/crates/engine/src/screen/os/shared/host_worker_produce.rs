@@ -39,6 +39,10 @@ impl Worker {
         }
         let before = source.reference_generation();
         if before != self.reference_generation {
+            eprintln!(
+                "screen capture: capture generation {} -> {before}: the encoder starts anew",
+                self.reference_generation
+            );
             self.reference_generation = before;
             self.encoder = None;
             return WorkerReply::Frame(StageFrame::Unchanged { source_size });
@@ -53,6 +57,10 @@ impl Worker {
         let after = source.reference_generation();
         let source_size = source.size();
         if after != before {
+            eprintln!(
+                "screen capture: capture generation {} -> {after}: the encoder starts anew",
+                self.reference_generation
+            );
             self.reference_generation = after;
             self.encoder = None;
             return match captured {
@@ -180,6 +188,12 @@ impl Worker {
                 && running.encoder.size() == request.size
         });
         if !current {
+            if let Some(running) = &self.encoder {
+                eprintln!(
+                    "screen encoder: opens anew ({})",
+                    reopen_reason(running, request, book)
+                );
+            }
             self.encoder = None;
             let opened = codec_inventory::registry().open_encoder_for_stage_admitted(
                 request,

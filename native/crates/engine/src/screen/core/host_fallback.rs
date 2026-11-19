@@ -8,6 +8,18 @@ use crate::screen::core::first_picture::{StageAnswer, FIRST_PICTURE_DEADLINE_US}
 use crate::screen::core::pacing::codec_cap;
 
 impl Pipeline {
+    /// Why the session's picture stream (and with it often its encoder)
+    /// starts anew, into the screen host log (measurement of 2026-11-19: a
+    /// new encoder about once a second and no line that said why).
+    pub(super) fn note_restart(&self, why: &str) {
+        let line = format!("screen stream: {why}");
+        // The unit tests write no file of the account they run under.
+        #[cfg(not(test))]
+        crate::screen::os::host_worker_client::host_log::note(None, &line);
+        #[cfg(test)]
+        let _ = line;
+    }
+
     /// The stage answered a request without a picture: an encoder of a
     /// video codec that got pictures but delivered none for
     /// `FIRST_PICTURE_DEADLINE_US` counts as failed; a capture without a

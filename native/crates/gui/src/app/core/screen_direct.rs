@@ -213,7 +213,12 @@ pub struct DirectPlace {
     pub dest: Option<Rect>,
     /// The area is on screen and the session streams.
     pub visible: bool,
-    /// This view's input goes to the host (the local pointer is the one).
+    /// „Steuern“ is on in this view (the local pointer is the one). Only
+    /// the user's switch, never the session's momentary input readiness:
+    /// that one drops with every new picture stream, and each change of
+    /// this value switches the host's pointer capture, which on Desktop
+    /// Duplication starts a new capture generation and so a new stream
+    /// (fix 2026-11-19: the encoder was rebuilt about once a second).
     pub steering: bool,
 }
 

@@ -330,11 +330,20 @@ fn start_sampler() {
 /// publishes shape and position from its frames (`dxgi_pointer.rs`) and
 /// blends the pointer into its pictures while the overlay is off. A switch
 /// sets `switched`, so the duplication delivers a picture in the new state;
-/// the `GetCursorInfo` sampler is not needed.
+/// the `GetCursorInfo` sampler is not needed. Only a real change counts
+/// (fix 2026-11-19): the overlay calls the hook again with an unchanged
+/// state for a viewer that starts over (`WorkerCursor::apply`), and each
+/// `switched` rebuilds the duplication with a new capture generation,
+/// which drops the running encoder and starts a new stream.
 pub(super) fn attach_duplication(switched: Arc<AtomicBool>) {
     let overlay = worker();
     let flag = switched.clone();
-    overlay.set_hook(Box::new(move |_on| flag.store(true, Ordering::Release)));
+    let separated = AtomicBool::new(overlay.separated());
+    overlay.set_hook(Box::new(move |on| {
+        if separated.swap(on, Ordering::AcqRel) != on {
+            flag.store(true, Ordering::Release);
+        }
+    }));
     overlay.set_supported();
     // No picture was delivered yet: nothing switched needs a new one.
     switched.store(false, Ordering::Release);

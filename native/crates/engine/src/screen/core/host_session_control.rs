@@ -161,6 +161,15 @@ impl Session<'_> {
     /// frames from now on; otherwise it stays in the picture and only the
     /// one "nothing to draw" position below is ever sent.
     pub(super) async fn cursor_overlay(&mut self, on: bool) -> io::Result<()> {
+        super::visibility::note_viewer(&format!(
+            "the viewer asked for the pointer {} (before: {})",
+            if on {
+                "beside the picture"
+            } else {
+                "in the picture"
+            },
+            if self.cursor.wanted { "beside" } else { "in" }
+        ));
         self.cursor.wanted = on;
         self.apply_cursor().await
     }

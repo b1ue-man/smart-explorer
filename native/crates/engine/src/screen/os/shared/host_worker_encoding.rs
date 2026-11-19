@@ -126,6 +126,12 @@ impl Encoding {
                 && running.encoder.size() == request.size
         });
         if !current {
+            if let Some(running) = &self.running {
+                eprintln!(
+                    "screen encoder: opens anew ({})",
+                    reopen_reason(running, request, book)
+                );
+            }
             self.running = None;
             let opened = self.opener.open(request, &self.refused, grant.clone())?;
             self.running = Some(Running {

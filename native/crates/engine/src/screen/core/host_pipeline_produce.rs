@@ -44,6 +44,7 @@ impl Pipeline {
         if let Some(route) = crate::share::route_monitor::snapshot(connection) {
             let epoch = (route.generation, route.pause_epoch, route.class);
             if self.route_epoch != Some(epoch) {
+                self.note_restart("the connection's route changed");
                 self.invalidate_reference();
                 self.route_epoch = Some(epoch);
             }
@@ -101,6 +102,7 @@ impl Pipeline {
             return Ok(Produced::Reset);
         };
         if self.running.is_some() && open_fps > self.codec_fps {
+            self.note_restart("a higher frame rate is allowed: new encoder");
             self.drop_encoder();
             self.chain_ready = true;
             return Ok(Produced::Reset);
@@ -338,6 +340,7 @@ impl Pipeline {
                     // An encoder kept over a reset (`reset_stream`) gives
                     // way to a new one, whose first picture is a key frame.
                     if std::mem::take(&mut self.kept_encoder) {
+                        self.note_restart("the kept encoder gave no key frame: new encoder");
                         self.drop_encoder();
                         return Ok(Produced::Idle);
                     }

@@ -346,6 +346,12 @@ impl Pipeline {
             .as_ref()
             .is_some_and(|(_, running)| *running == size);
         if !same {
+            if let Some((_, before)) = &self.running {
+                self.note_restart(&format!(
+                    "picture size {}x{} -> {}x{}: new encoder",
+                    before.width, before.height, size.width, size.height
+                ));
+            }
             self.drop_encoder();
         }
     }
@@ -387,6 +393,7 @@ impl Pipeline {
     /// at most once per stale time, plan 2026-11-17).
     fn reset_stale_stream(&mut self) {
         let (stale_us, _) = self.pacer.stale_limits(self.rate.target_bps());
+        self.note_restart(&format!("unacknowledged beyond {} ms", stale_us / 1000));
         self.rate.on_stale_stream(now_us(), stale_us);
         let facts = super::gop_continue::ResetFacts {
             negotiated: self.continuation_offered(),

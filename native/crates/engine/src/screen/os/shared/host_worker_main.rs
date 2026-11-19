@@ -66,6 +66,22 @@ struct Running {
     book: usize,
 }
 
+/// What differs between the running encoder and `request` (measurement of
+/// 2026-11-19: a new encoder about once a second, without a line why).
+fn reopen_reason(running: &Running, request: &StageRequest, book: usize) -> &'static str {
+    if running.book != book {
+        "the capture has a new grant"
+    } else if running.epoch != request.encoder_epoch {
+        "the session started a new stream"
+    } else if running.choice != request.choice {
+        "the codec pairing changed"
+    } else if running.frame_contract != request.frame_contract {
+        "the frame contract changed"
+    } else {
+        "the picture size changed"
+    }
+}
+
 struct Worker {
     admitted: Option<Option<crate::screen::core::frame_budget::FrameContract>>,
     backend: Arc<dyn ScreenHostBackend>,
