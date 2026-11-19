@@ -106,14 +106,22 @@ impl AdmittedTilesEncoder {
             u64::from(self.size.width.div_ceil(64)),
             u64::from(self.size.height.div_ceil(64)),
         )?;
-        let capacity = if request.frame_contract.is_none() {
-            add(bgra_bytes(self.size)?, mul(tiles, 13)?)?
-        } else {
-            packet.encoded_bytes as u64
-        };
         let limit = packet
             .record_bytes
             .min(super::super::tiles_codec::MAX_TILES_RECORD_BYTES);
+        let capacity = if request.frame_contract.is_none() {
+            // Review 2026-11-19 (Gemini 9): every record reserves its whole
+            // limit and may leave less than one encoded tile unused; a full
+            // picture of raw tiles (noise, photos) did not fit the bare
+            // pixels and ended with „capture record builder exhausted“.
+            let tile = super::super::tiles_codec::MAX_ENCODED_TILE_BYTES as u64;
+            let need = add(bgra_bytes(self.size)?, mul(tiles, 13)?)?;
+            let per_record = (limit as u64).saturating_sub(tile).max(1);
+            let records = need.div_ceil(per_record).saturating_add(1).min(tiles + 1);
+            add(need, mul(records, tile.min(limit as u64))?)?
+        } else {
+            packet.encoded_bytes as u64
+        };
         let full = request.keyframe || !self.primed;
         let drops = dropped_pictures();
         if full || drops != self.drops_seen {

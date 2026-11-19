@@ -64,7 +64,8 @@ object ScreenCodecNotices {
     fun knownError(text: String): String? {
         val error = text.trim()
         val sharp = "Scharf (GPU): no GPU encoder of "
-        val mfLower = "the encoder refused to lower its bit rate from "
+        // `<name> refused to lower its bit rate from <rate> to <rate> bit/s` (Media Foundation: „the encoder“, OpenH264).
+        val lowerFrom = " refused to lower its bit rate from "
         val vendorLower = " refused to lower its bit rate to "
         val small = "the picture of "
         return when {
@@ -80,11 +81,13 @@ object ScreenCodecNotices {
                     if (passed.isNotEmpty()) append("; Software-Kodierer übergangen, Meldung: $passed")
                 }
             }
-            error.startsWith(mfLower) -> {
-                val rates = error.removePrefix(mfLower).removeSuffix(" bit/s")
-                "der Kodierer lehnte es ab, seine Bitrate von ${rates.substringBefore(" to ")} auf ${rates.substringAfter(" to ")} bit/s zu senken"
+            // The name is one word group: a longer detail is read from its „: “ on ([detailText]).
+            error.contains(lowerFrom) && !error.substringBefore(lowerFrom).contains(": ") -> {
+                val name = error.substringBefore(lowerFrom).let { if (it == "the encoder") "der Kodierer" else it }
+                val rates = error.substringAfter(lowerFrom).removeSuffix(" bit/s")
+                "$name lehnte es ab, seine Bitrate von ${rates.substringBefore(" to ")} auf ${rates.substringAfter(" to ")} bit/s zu senken"
             }
-            error.contains(vendorLower) -> {
+            error.contains(vendorLower) && !error.substringBefore(vendorLower).contains(": ") -> {
                 val name = error.substringBefore(vendorLower)
                 val rest = error.substringAfter(vendorLower)
                 val message = rest.substringAfter(" bit/s", "").removePrefix(":").trim()

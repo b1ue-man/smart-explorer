@@ -145,7 +145,16 @@ impl RateController {
 
     /// Remembers the sustained rate for the bound peer once the target was
     /// measured against the path (once a second, `Pipeline::second`).
+    /// Review 2026-11-19 (Gemini 9): not while the user's ceiling holds the
+    /// target; that rate measures the ceiling, not the path, and a later
+    /// session under „Automatisch“ started from it.
     pub fn remember(&self) {
+        if self
+            .user_ceiling_bps
+            .is_some_and(|ceiling| self.target_bps() >= ceiling)
+        {
+            return;
+        }
         self.probe.note(self.path, self.sustained_bps());
     }
 

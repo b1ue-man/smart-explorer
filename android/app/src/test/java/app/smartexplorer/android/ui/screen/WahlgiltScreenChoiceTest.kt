@@ -112,6 +112,10 @@ class WahlgiltScreenChoiceTest {
                 "from 6000000 to 3000000 bit/s", "h264")!!
         assertTrue(lowered.text, lowered.text.contains("der Kodierer lehnte es ab, seine Bitrate von 6000000 auf 3000000 bit/s zu senken"))
         assertEquals(
+            "OpenH264 lehnte es ab, seine Bitrate von 6000000 auf 3000000 bit/s zu senken",
+            ScreenCodecNotices.knownError("OpenH264 refused to lower its bit rate from 6000000 to 3000000 bit/s"),
+        )
+        assertEquals(
             "nvenc-h264 lehnte es ab, seine Bitrate auf 3000000 bit/s zu senken; Meldung: status 8",
             ScreenCodecNotices.knownError("nvenc-h264 refused to lower its bit rate to 3000000 bit/s: status 8"),
         )

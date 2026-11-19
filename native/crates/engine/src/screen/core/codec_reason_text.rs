@@ -19,7 +19,9 @@ const LEFT: &str = "no encoder of the chosen codec is left";
 const FIRST_PICTURE: &str = "no first picture from the encoder within ";
 const NO_PAIRING: &str = "no pairing carries ";
 const SHARP_LEFT: &str = "Scharf (GPU): no GPU encoder of ";
-const MF_REFUSED_LOWER: &str = "the encoder refused to lower its bit rate from ";
+/// `<name> refused to lower its bit rate from <rate> to <rate> bit/s`
+/// (Media Foundation names itself „the encoder“, OpenH264 by its name).
+const REFUSED_LOWER_FROM: &str = " refused to lower its bit rate from ";
 const VENDOR_REFUSED_LOWER: &str = " refused to lower its bit rate to ";
 const SMALL_PICTURE: &str = "the picture of ";
 
@@ -102,10 +104,15 @@ fn review_error_text(error: &str) -> Option<String> {
         }
         return Some(text);
     }
-    if let Some(rest) = error.strip_prefix(MF_REFUSED_LOWER) {
+    if let Some((name, rest)) = error.split_once(REFUSED_LOWER_FROM) {
         let (from, to) = rest.trim_end_matches(" bit/s").split_once(" to ")?;
+        let name = if name == "the encoder" {
+            "der Kodierer"
+        } else {
+            name
+        };
         return Some(format!(
-            "der Kodierer lehnte es ab, seine Bitrate von {from} auf {to} bit/s zu senken"
+            "{name} lehnte es ab, seine Bitrate von {from} auf {to} bit/s zu senken"
         ));
     }
     if let Some((name, rest)) = error.split_once(VENDOR_REFUSED_LOWER) {

@@ -75,11 +75,17 @@ impl QualityMode {
         self
     }
     /// Equal to `other` apart from the wanted rates: a new rate alone keeps
-    /// the encoder (plan 2026-11-14 „Bildkette“ B-03).
+    /// the encoder (plan 2026-11-14 „Bildkette“ B-03). Review 2026-11-19
+    /// (O1): the wanted sizes do not count either; a new window size gave a
+    /// new encoder even when the picture kept its size (a source smaller
+    /// than the window). `Pipeline::resize` compares the running encoder's
+    /// size with the new target size after it.
     pub(super) fn same_but_rate(&self, other: &Self) -> bool {
         let rates = Self {
             full_fps: other.full_fps,
             preview_fps: other.preview_fps,
+            full_size: other.full_size,
+            preview_size: other.preview_size,
             ..*self
         };
         rates == *other
@@ -326,6 +332,15 @@ impl Pipeline {
     /// the session's actor copies the mode. „Automatisch“ when not called.
     pub fn set_codec_preference(&mut self, chosen: CodecPreference) {
         self.quality_policy.mode.chosen = chosen;
+        // Review 2026-11-19 (Gemini 7): „Scharf (GPU)“ sets `sharpness` with
+        // its first `SET_MODE`, which may come after the first picture: the
+        // session opened a constant-rate encoder and replaced it at once.
+        // Its decoders name the choice already; nothing is open yet.
+        if chosen == CodecPreference::Sharp && !self.quality_policy.mode.sharpness {
+            self.quality_policy.mode.sharpness = true;
+            self.choice = self.quality_choice();
+            self.quality.size = self.fitted_size();
+        }
     }
 
     /// The encoder of the session's pairing failed and the stage tried every

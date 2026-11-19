@@ -3,6 +3,7 @@
 //! codec carries (review 2026-11-19). The byte budget of the stream is the
 //! rate control's (`rate_tiles.rs`).
 use crate::screen::core::host_pipeline::{Pipeline, Produced};
+use crate::screen::core::host_stage::{StageEncoder, StageRequest};
 use crate::screen::core::pixel_convert::FrameSize;
 use crate::screen::core::rate_control::PathKind;
 use crate::screen::core::wire_binary::StreamKind;
@@ -21,6 +22,26 @@ impl Pipeline {
             .unacked_bytes()
             .saturating_add(mean.saturating_mul(2))
             <= self.pacer.guard(target, path, rtt_us)
+    }
+
+    /// „Scharf (GPU)“ runs on the GPU encoders only (`FallbackScope::Sharp`):
+    /// a stage that answered with a software encoder (its rank took one
+    /// after the GPU encoder failed; only the host process's streamed stage
+    /// passed it over) does not send that picture; the scope's next pairing
+    /// or the visible error follows (review 2026-11-19, Gemini 7).
+    pub(super) fn sharp_refuses(
+        &self,
+        request: &StageRequest,
+        encoder: &StageEncoder,
+    ) -> Option<std::io::Error> {
+        let sharp = self.quality_policy.scope() == super::super::quality::FallbackScope::Sharp;
+        (sharp && request.choice.codec.is_video() && !encoder.hardware).then(|| {
+            std::io::Error::other(format!(
+                "Scharf (GPU): no GPU encoder of {} is left (failed: []; software passed over: {})",
+                request.choice.codec.key(),
+                encoder.name
+            ))
+        })
     }
 
     /// A chosen video codec waits for a picture of at least 2 x 2 pixels

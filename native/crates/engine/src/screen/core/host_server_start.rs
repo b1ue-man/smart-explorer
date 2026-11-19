@@ -241,7 +241,18 @@ pub(super) async fn prepare(
     // decoders (`preference_named_by`: a chosen codec names no tiles); a
     // chosen codec without a pairing ends the start with its reason.
     let preference = super::super::negotiate::preference_named_by(&decoders);
+    // Review 2026-11-19: a viewer of codec negotiation v2 sends
+    // `decoders_v2` (also empty); with no decoder at all it chose a codec
+    // it cannot decode, read as „Automatisch" it got the tiles. A viewer
+    // before v2 sends no list and keeps the tiles.
+    let empty_choice = decoders.is_empty() && hello.decoders_v2.is_some();
     let negotiate = |contract| {
+        if empty_choice {
+            return Err(super::super::negotiate::ChosenUnavailable {
+                preference: super::super::negotiate::CodecPreference::Auto,
+                reason: super::super::negotiate::EMPTY_OFFER.into(),
+            });
+        }
         super::super::negotiate::negotiate_chosen(
             &metadata.encoders,
             &decoders,

@@ -292,6 +292,12 @@ fn bildkette_task_rate_start_value_per_peer_and_path() {
         probe::remembered(&fresh, PathKind::Direct),
         Some(ramp.target_bps())
     );
+    // Review 2026-11-19 (Gemini 9): a target the user's ceiling holds is no
+    // measurement of the path and does not replace the remembered rate.
+    let measured = ramp.target_bps();
+    ramp.set_ceiling(Some(measured / 2));
+    ramp.remember();
+    assert_eq!(probe::remembered(&fresh, PathKind::Direct), Some(measured));
 }
 
 #[test]

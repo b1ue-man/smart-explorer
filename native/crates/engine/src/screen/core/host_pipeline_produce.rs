@@ -293,6 +293,9 @@ impl Pipeline {
                 capture_ts_us,
                 encoder,
             }) => {
+                if let Some(error) = self.sharp_refuses(&request, &encoder) {
+                    return self.give_up_encoder(error, true);
+                }
                 let encoded_bytes: u64 = frame.records.iter().map(|r| r.len() as u64).sum();
                 let waited = encoding_started
                     .elapsed()

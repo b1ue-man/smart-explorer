@@ -6,6 +6,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 const CONTROL_RESERVE: u64 = 256 * 1024;
+/// A session that asked for credit within this time counts as sending.
+const ACTIVE_US: u64 = 1_000_000;
 static PEERS: OnceLock<Mutex<HashMap<String, Weak<Mutex<Budget>>>>> = OnceLock::new();
 #[derive(Default)]
 struct Flow {
@@ -78,7 +80,20 @@ impl SenderBudget {
                     .saturating_add(flow.frames.iter().map(|f| f.2).sum::<u64>())
             })
             .sum();
-        let count = state.flows.len().max(1) as u64;
+        // Review 2026-11-19 (Gemini 9): the share is split among the
+        // sessions that send (debt, or a request within the second the turn
+        // keeps); a paused or hidden session halved it for the one that runs.
+        let count = state
+            .flows
+            .values()
+            .filter(|flow| {
+                flow.reserved != 0
+                    || !flow.frames.is_empty()
+                    || (flow.requested_us != 0
+                        && now_us.saturating_sub(flow.requested_us) <= ACTIVE_US)
+            })
+            .count()
+            .max(1) as u64;
         let (estimate, own) = {
             let flow = state.flows.get(&self.id)?;
             (
@@ -108,7 +123,7 @@ impl SenderBudget {
             && state.turn != 0
             && state.turn != self.id
             && state.flows.get(&state.turn).is_some_and(|flow| {
-                flow.requested_us != 0 && now_us.saturating_sub(flow.requested_us) <= 1_000_000
+                flow.requested_us != 0 && now_us.saturating_sub(flow.requested_us) <= ACTIVE_US
             })
         {
             return None;

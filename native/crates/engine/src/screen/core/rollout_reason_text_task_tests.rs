@@ -101,6 +101,12 @@ fn review1119_task_new_reasons_read_german() {
         "der Kodierer lehnte es ab, seine Bitrate von 6000000 auf 3000000 bit/s zu senken"
     );
     assert_eq!(
+        encoder_error_text("OpenH264 refused to lower its bit rate from 6000000 to 3000000 bit/s"),
+        "OpenH264 lehnte es ab, seine Bitrate von 6000000 auf 3000000 bit/s zu senken"
+    );
+    assert!(include_str!("../os/native_ffi/openh264_encode.rs")
+        .contains("\"OpenH264 refused to lower its bit rate from {current} to {target} bit/s\""));
+    assert_eq!(
         encoder_error_text("nvenc-h264 refused to lower its bit rate to 3000000 bit/s: status 8"),
         "nvenc-h264 lehnte es ab, seine Bitrate auf 3000000 bit/s zu senken; Meldung: status 8"
     );

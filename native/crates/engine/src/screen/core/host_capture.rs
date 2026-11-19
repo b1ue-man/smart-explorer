@@ -185,8 +185,10 @@ fn capture_and_encode(
         }
     };
     // B-36: the running encoder references the confirmed picture; one that
-    // cannot gives way to a new encoder whose first picture is a key frame,
-    // as after any reset.
+    // cannot answers with a key frame of its own, as after any reset
+    // (`Pipeline::reset_stream`, 2026-11-18). Review 2026-11-19 (Gemini 2):
+    // it gave way to a new encoder, for every encoder without reference
+    // invalidation (the trait's default) at every continued reset.
     let mut request = std::borrow::Cow::Borrowed(request);
     if let Some(last_good) = recover {
         let continued = stage.encoder.as_mut().is_some_and(|opened| {
@@ -194,7 +196,6 @@ fn capture_and_encode(
                 == super::super::ref_recovery::Recovery::Continued
         });
         if !continued {
-            stage.encoder = None;
             request.to_mut().keyframe = true;
         }
     }
