@@ -34,6 +34,9 @@ pub(super) struct InputHealth {
     pub(super) queued: Vec<InputEvent>,
     /// The last new try of failed releases (`retry_failed_releases`).
     retried: Option<Instant>,
+    /// Codex 6/5: the control was given up while releases were still on
+    /// their way; it goes when they are in (`Session::finish_handover`).
+    pub(super) handover: Option<Instant>,
     /// D6: the block the viewer's last `CONTROL_STATE` named.
     pub(super) block_reported: Option<ControlBlock>,
     /// E2: the viewer heard that input is held back, once per hold.

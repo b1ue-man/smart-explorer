@@ -34,6 +34,7 @@ impl Session<'_> {
         self.refresh_input_reference();
         self.end_hold().await?;
         self.report_refusal().await?;
+        self.finish_handover().await?;
         match frame {
             ViewerFrame::ListFamilies => {
                 if !self.family.supported {
@@ -361,6 +362,7 @@ impl Session<'_> {
         match action {
             ControlAction::Take => match self.handle.take_control() {
                 Ok(()) => {
+                    self.health.handover = None;
                     let audit = self.context.audit;
                     log_event(
                         audit,
@@ -403,6 +405,19 @@ impl Session<'_> {
         // Round 6 (R1): everything held, queued and failed goes before
         // another session may take the control.
         self.drain_releases().await;
+        // Codex 6/5: releases still on their way keep the control here (the
+        // viewer still sees itself holding it) until they are in, at most
+        // `HANDOVER_LIMIT`; a new holder's first press cannot meet them.
+        if self.input_release.is_some() || self.releases_owed() {
+            self.health.handover.get_or_insert_with(Instant::now);
+            return;
+        }
+        self.give_up_control();
+    }
+
+    /// The control goes back to the registry (after `release_control`).
+    fn give_up_control(&mut self) {
+        self.health.handover = None;
         if self.handle.release_control() {
             let audit = self.context.audit;
             log_event(

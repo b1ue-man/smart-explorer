@@ -8,6 +8,10 @@ use super::*;
 /// at least one look at the toolbar [assumption: 3 s, not measured].
 const LATE_BLOCK_SHOWN: Duration = Duration::from_secs(3);
 
+/// How long a given-up control waits for its releases (Codex 6/5)
+/// [assumption: 10 s, five `CLOSE_GRACE`s; not measured].
+const HANDOVER_LIMIT: Duration = Duration::from_secs(10);
+
 impl Session<'_> {
     /// An `ERROR` for the viewer; the session goes on.
     pub(in super::super) async fn error(
@@ -62,6 +66,31 @@ impl Session<'_> {
         // Z2: no other signal names it (Wayland): it stays shown a while.
         self.health.block_shown_until = Some(Instant::now() + LATE_BLOCK_SHOWN);
         Ok(())
+    }
+
+    /// Codex 6/5: a control given up while releases were on their way goes
+    /// once they are in, or after `HANDOVER_LIMIT` (named in the host log);
+    /// the viewer then hears who holds it.
+    pub(in super::super) async fn finish_handover(&mut self) -> io::Result<()> {
+        let Some(since) = self.health.handover else {
+            return Ok(());
+        };
+        let owed = self.input_release.is_some() || self.releases_owed();
+        if owed && since.elapsed() < HANDOVER_LIMIT {
+            return Ok(());
+        }
+        if owed {
+            super::super::visibility::note_viewer(
+                "the control was handed over with releases still on their way",
+            );
+        }
+        self.give_up_control();
+        let state = ControlState {
+            holder: self.handle.controller(),
+            blocked: None,
+            held: None,
+        };
+        self.frame(HostFrame::ControlState(state)).await
     }
 
     /// Why input waits now, if it does (E2).

@@ -234,7 +234,44 @@ pub(super) fn typable<'a, C: Connection>(
 
 /// Types `text`; returns how many characters had no key at all.
 pub(super) fn type_text<C: Connection>(conn: &C, root: Window, text: &str) -> io::Result<usize> {
-    let mut map = KeyMap::read(conn)?;
+    let map = KeyMap::read(conn)?;
+    // Codex 6/19: a latched Caps Lock turns the levels' letters; it is
+    // unlatched for the text and latched again after it, also on an error.
+    let caps = caps_latched(conn, root)?
+        .then(|| map.find(CAPS_LOCK).map(|(code, _, _)| code))
+        .flatten();
+    if let Some(key) = caps {
+        press(conn, root, key, true)?;
+        press(conn, root, key, false)?;
+    }
+    let typed = type_unlatched(conn, root, text, map);
+    if let Some(key) = caps {
+        press(conn, root, key, true)?;
+        press(conn, root, key, false)?;
+    }
+    typed
+}
+
+/// `Caps_Lock`.
+const CAPS_LOCK: Keysym = 0xFFE5;
+
+/// Whether the server's Lock modifier is latched now (`QueryPointer` mask).
+fn caps_latched<C: Connection>(conn: &C, root: Window) -> io::Result<bool> {
+    let mask = conn
+        .query_pointer(root)
+        .map_err(io::Error::other)?
+        .reply()
+        .map_err(io::Error::other)?
+        .mask;
+    Ok(u16::from(mask) & u16::from(x11rb::protocol::xproto::KeyButMask::LOCK) != 0)
+}
+
+fn type_unlatched<C: Connection>(
+    conn: &C,
+    root: Window,
+    text: &str,
+    mut map: KeyMap,
+) -> io::Result<usize> {
     let held = held_keys(conn)?;
     let mut skipped = 0;
     for character in typed_chars(text) {
