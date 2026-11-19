@@ -142,26 +142,71 @@ fn press<C: Connection>(conn: &C, root: Window, code: Keycode, down: bool) -> io
     Ok(())
 }
 
+/// `Shift_R` as a Linux code (54) plus the evdev offset 8.
+const SHIFT_R_KEYCODE: Keycode = 62;
+
+/// The keys down on the server now (`QueryKeymap`): the viewer may hold a
+/// modifier the text must not let go of (Codex 5/15).
+fn held_keys<C: Connection>(conn: &C) -> io::Result<Vec<Keycode>> {
+    let keys = conn
+        .query_keymap()
+        .map_err(io::Error::other)?
+        .reply()
+        .map_err(io::Error::other)?
+        .keys;
+    Ok((0..=255u8)
+        .filter(|code| keys[usize::from(code / 8)] & (1 << (code % 8)) != 0)
+        .collect())
+}
+
+/// Presses `code` at its level: `Some((shift, level3))`, or `None` for any
+/// level (a spare key carries the keysym in every column); `altgr` is the
+/// map's AltGr key. A Shift or AltGr the viewer holds (`held`) stays as it
+/// is when the level needs it; one the level must not have is lifted for
+/// the press and pressed again after (Codex 5/15: the text let go of a
+/// held Shift).
 fn tap<C: Connection>(
     conn: &C,
     root: Window,
     code: Keycode,
-    shift: bool,
-    level3: Option<Keycode>,
+    level: Option<(bool, bool)>,
+    altgr: Option<Keycode>,
+    held: &[Keycode],
 ) -> io::Result<()> {
-    if let Some(altgr) = level3 {
-        press(conn, root, altgr, true)?;
+    let mut lift: Vec<Keycode> = Vec::new();
+    let (mut press_shift, mut press_altgr) = (false, None);
+    if let Some((shift, level3)) = level {
+        let shifts = [SHIFT_KEYCODE, SHIFT_R_KEYCODE];
+        if shift {
+            press_shift = !shifts.iter().any(|key| held.contains(key));
+        } else {
+            lift.extend(shifts.into_iter().filter(|key| held.contains(key)));
+        }
+        match altgr {
+            Some(key) if level3 && !held.contains(&key) => press_altgr = Some(key),
+            Some(key) if !level3 && held.contains(&key) => lift.push(key),
+            _ => {}
+        }
     }
-    if shift {
+    for key in &lift {
+        press(conn, root, *key, false)?;
+    }
+    if let Some(key) = press_altgr {
+        press(conn, root, key, true)?;
+    }
+    if press_shift {
         press(conn, root, SHIFT_KEYCODE, true)?;
     }
     press(conn, root, code, true)?;
     press(conn, root, code, false)?;
-    if shift {
+    if press_shift {
         press(conn, root, SHIFT_KEYCODE, false)?;
     }
-    if let Some(altgr) = level3 {
-        press(conn, root, altgr, false)?;
+    if let Some(key) = press_altgr {
+        press(conn, root, key, false)?;
+    }
+    for key in &lift {
+        press(conn, root, *key, true)?;
     }
     Ok(())
 }
@@ -190,11 +235,12 @@ pub(super) fn typable<'a, C: Connection>(
 /// Types `text`; returns how many characters had no key at all.
 pub(super) fn type_text<C: Connection>(conn: &C, root: Window, text: &str) -> io::Result<usize> {
     let mut map = KeyMap::read(conn)?;
+    let held = held_keys(conn)?;
     let mut skipped = 0;
     for character in typed_chars(text) {
         let sym = keysym_of(character);
         if let Some((code, shift, level3)) = map.find(sym) {
-            tap(conn, root, code, shift, map.level3.filter(|_| level3))?;
+            tap(conn, root, code, Some((shift, level3)), map.level3, &held)?;
             continue;
         }
         let Some(spare) = map.spare() else {
@@ -206,7 +252,7 @@ pub(super) fn type_text<C: Connection>(conn: &C, root: Window, text: &str) -> io
         conn.change_keyboard_mapping(1, spare, per, &column)
             .map_err(io::Error::other)?;
         sync(conn)?;
-        tap(conn, root, spare, false, None)?;
+        tap(conn, root, spare, None, None, &held)?;
         sync(conn)?;
         // Clients read the mapping lazily: give them the press first.
         std::thread::sleep(std::time::Duration::from_millis(20));
