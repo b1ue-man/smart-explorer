@@ -27,6 +27,8 @@ use crate::share::PeerOpenTarget;
 
 #[path = "screen_view_cursor.rs"]
 mod cursor_events;
+#[path = "screen_view_epoch.rs"]
+mod epoch;
 
 pub(super) type SendFrame = Arc<dyn Fn(&ViewerFrame) -> io::Result<()> + Send + Sync>;
 type CloseFn = Arc<dyn Fn() -> io::Result<()> + Send + Sync>;
@@ -68,42 +70,14 @@ pub(super) struct ViewSession {
     pub set_decoders: AtomicBool,
     /// The host takes `SET_DISPLAY` (P9, `screen.viewSetDisplay`).
     pub set_display: AtomicBool,
+    /// Connections the relay accepted for this session (`screen_view_epoch.rs`).
+    connections: AtomicU64,
+    /// Added to the host's group ids of the current connection (a rebuilt
+    /// host session counts from 1 again, `screen_view_epoch.rs`).
+    gop_offset: AtomicU64,
 }
 
 impl ViewSession {
-    pub(super) fn send(&self, frame: &ViewerFrame) -> Result<(), ApiError> {
-        if lock(&self.family).is_some() && matches!(frame, ViewerFrame::Input(_)) {
-            return Err(ApiError::new(
-                "permission",
-                "Familieneingabe benötigt Snapshot und Fokusbestätigung.",
-            ));
-        }
-        if let ViewerFrame::Presented { gop_id, .. } = frame {
-            if lock(&self.family).as_ref().is_some_and(|family| {
-                family.snapshot.as_ref().is_none_or(|snapshot| {
-                    *lock(&self.family_picture) != Some((*gop_id, snapshot.layout_revision))
-                })
-            }) {
-                return Ok(());
-            }
-        }
-        let send = lock(&self.link)
-            .as_ref()
-            .map(|link| link.send.clone())
-            .ok_or_else(|| ApiError::new("busy", "Die Sitzung ist noch nicht verbunden."))?;
-        send(frame).map_err(|error| ApiError::new("network", error.to_string()))?;
-        if let ViewerFrame::Presented { gop_id, .. } = frame {
-            if lock(&self.family).as_ref().is_some_and(|family| {
-                family.snapshot.as_ref().is_some_and(|snapshot| {
-                    *lock(&self.family_picture) == Some((*gop_id, snapshot.layout_revision))
-                })
-            }) {
-                self.family_presented.store(true, Ordering::SeqCst);
-            }
-        }
-        Ok(())
-    }
-
     /// Releases what is still pressed (the host does too, at the end).
     pub(super) fn release_pressed(&self) {
         if let Some(family) = lock(&self.family).as_mut() {
@@ -173,6 +147,8 @@ fn new_session(mode: SessionMode) -> Arc<ViewSession> {
         cursor: Default::default(),
         set_decoders: AtomicBool::new(false),
         set_display: AtomicBool::new(false),
+        connections: AtomicU64::new(0),
+        gop_offset: AtomicU64::new(0),
     });
     lock(&SESSIONS).insert(id, session.clone());
     session
@@ -288,6 +264,7 @@ fn on_event(
             rate_ceiling,
             set_decoders,
         } => {
+            session.begin_connection();
             session.set_decoders.store(set_decoders, Ordering::SeqCst);
             let set_display = crate::screen::core::set_display::negotiated(Some(&hello));
             session.set_display.store(set_display, Ordering::SeqCst);
@@ -346,7 +323,8 @@ fn on_event(
             emit(id, "accepted", fields);
         }
         StreamEvent::Host(frame) => on_host_frame(session, encoder, own, frame),
-        StreamEvent::Record { header, record } => {
+        StreamEvent::Record { mut header, record } => {
+            header.gop_id = session.viewer_gop(header.gop_id);
             if let Some(family) = lock(&session.family).as_ref() {
                 if header.gop_id < session.latest_gop.load(Ordering::SeqCst) {
                     return;
@@ -367,7 +345,7 @@ fn on_event(
             }
         }
         StreamEvent::Broken { gop_id } => {
-            if let Some(output) = sink.broken(gop_id, now_us()) {
+            if let Some(output) = sink.broken(session.viewer_gop(gop_id), now_us()) {
                 on_sink_output(session, encoder, output);
             }
         }

@@ -475,6 +475,19 @@ class ScreenSession(private val target: ScreenTarget, private val backend: Scree
 
     private fun applyEvent(event: ScreenViewEvent) {
         val old = mutable.value
+        // A second `accepted`: the daemon rebuilt the host session without a new one here (Gemini 3/9.4). Its frame
+        // ids count from 1 again (the bridge keeps the group ids rising, `screen_view_epoch.rs`): a new picture epoch,
+        // no receipt of the connection before counts, and the visibility goes to the new host session again.
+        if (event is ScreenViewEvent.Accepted && old.accepted) {
+            displayEpoch++
+            minFrame = null
+            latestComplete = null
+            earlyPresented = null
+            lastPresented = null
+            rejectedGop = null
+            visibilitySentModern = false
+            mutable.value = old.copy(inputReady = false, ackedMinFrame = null, held = null, blocked = null)
+        }
         // The host fell back to the tiles: the viewer keeps them only where the choice allows it („Automatisch“,
         // „Verlustfrei“); under a named codec the fallback is an error ([ScreenCodecNotices]) and changes nothing here.
         if (event is ScreenViewEvent.State &&
