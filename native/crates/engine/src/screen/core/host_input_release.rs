@@ -37,6 +37,8 @@ pub(super) struct InputHealth {
     /// Codex 6/5: the control was given up while releases were still on
     /// their way; it goes when they are in (`Session::finish_handover`).
     pub(super) handover: Option<Instant>,
+    /// The handover ended; the viewer hears the new holder (M6).
+    pub(super) holder_changed: bool,
     /// D6: the block the viewer's last `CONTROL_STATE` named.
     pub(super) block_reported: Option<ControlBlock>,
     /// E2: the viewer heard that input is held back, once per hold.
@@ -53,6 +55,15 @@ pub(super) struct InputHealth {
 /// How often failed releases are tried again (a lasting refusal, the secure
 /// desktop, costs no attempt per picture).
 const RELEASE_RETRY: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// How long a given-up control waits for its releases (Codex 6/5), from
+/// the end of `drain_releases` on: the slowest sink is a host process,
+/// whose release first waits for the link a running picture request holds
+/// (at most `FRAME_TIMEOUT`, 10 s) and then for the answer (`INPUT_TIMEOUT`,
+/// 2 s; `WorkerInputSink::release`), so one job ends within 12 s or its
+/// process is ended (`WorkerLink::ask`). Android's queue and the Wayland
+/// portal queue without waiting.
+const HANDOVER_LIMIT: std::time::Duration = std::time::Duration::from_secs(12);
 
 fn failed_list(failed: &Mutex<Vec<InputEvent>>) -> MutexGuard<'_, Vec<InputEvent>> {
     failed.lock().unwrap_or_else(PoisonError::into_inner)
@@ -87,6 +98,16 @@ impl Session<'_> {
         let released = self.pressed.release_all();
         self.health.queued.extend(released);
         self.flush_releases();
+    }
+    /// `release_pressed` for a view hidden or a source changed (round 7):
+    /// input of this session still waiting in a queueing sink is taken back
+    /// as well (`ScreenInputSink::revoke`), also with nothing held.
+    pub(super) fn release_pressed_revoking(&mut self) {
+        let released = self.pressed.release_all();
+        self.health.queued.extend(released);
+        if !self.flush_releases_as(true) {
+            self.start_release(Vec::new(), true, true);
+        }
     }
     /// Gemini 3/10, E2: the releases of keys and buttons the host holds go
     /// in from every batch, also one that is held back, refused or not this
@@ -243,6 +264,10 @@ impl Session<'_> {
     /// next job (failed ones wait for `retry_failed_releases`, so a lasting
     /// refusal costs no attempt per picture).
     pub(super) fn poll_input_release(&mut self) {
+        self.poll_release_job();
+        self.check_handover();
+    }
+    fn poll_release_job(&mut self) {
         let Some(mut job) = self.input_release.take() else {
             self.retry_failed_releases();
             return;
@@ -261,6 +286,28 @@ impl Session<'_> {
         if !self.health.queued.is_empty() {
             self.flush_releases();
         }
+    }
+    /// Codex 6/5, round 7 (M6): a control given up while releases were on
+    /// their way goes once they are in, or after `HANDOVER_LIMIT` (named in
+    /// the host log); checked with every poll (viewer frames and capture
+    /// ticks, which run during a handover also for a hidden view), so a
+    /// second viewer is not refused for longer. The viewer hears the new
+    /// holder with its next frame (`finish_handover`).
+    fn check_handover(&mut self) {
+        let Some(since) = self.health.handover else {
+            return;
+        };
+        let owed = self.input_release.is_some() || self.releases_owed();
+        if owed && since.elapsed() < HANDOVER_LIMIT {
+            return;
+        }
+        if owed {
+            super::visibility::note_viewer(
+                "the control was handed over with releases still on their way",
+            );
+        }
+        self.give_up_control();
+        self.health.holder_changed = true;
     }
 }
 

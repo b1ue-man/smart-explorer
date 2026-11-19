@@ -23,7 +23,9 @@ fn screen_task_windows_input_records_map_positions_keys_text() {
     let (x, y) = absolute(right, DESK, 32_768, 32_768);
     assert!((49_140..=49_160).contains(&x), "{x}");
     assert!((32_700..=32_800).contains(&y), "{y}");
-    assert_eq!(absolute(right, DESK, 65_535, 65_535).0, 65_535);
+    // The last pixel's centre maps back into the last pixel (round 7, M5).
+    let last = absolute(right, DESK, 65_535, 65_535).0;
+    assert_eq!(i64::from(last) * 3840 / 65_536, 3839);
     let mut sas = SasGuard::new();
     let events = [
         InputEvent::Key {
@@ -172,8 +174,8 @@ fn screen_metadata_runtime_task_window_input_area_is_the_visible_frame() {
     // The source origin is the frame's first visible pixel, not the
     // invisible resize border GetWindowRect may add to its left.
     let (x, y) = absolute(area, desk, 0, 0);
-    assert_eq!(x, (100 * 65_535 / 1919) as i32);
-    assert_eq!(y, (50 * 65_535 / 1079) as i32);
+    assert_eq!(x, (201 * 32_768 / 1920) as i32);
+    assert_eq!(y, (101 * 32_768 / 1080) as i32);
     assert_eq!(window_area(10, 10, 10, 20), None);
     assert_eq!(window_area(10, 20, 30, 5), None);
     assert_eq!(window_area(i32::MIN, 0, i32::MAX, 1), None);

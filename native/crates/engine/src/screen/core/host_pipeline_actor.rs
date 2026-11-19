@@ -20,6 +20,7 @@ struct Pending {
     visible: Option<Option<Vec<crate::screen::core::visibility::VisibleRect>>>,
     active: Option<bool>,
     invalidate: bool,
+    rebind: bool, // a new input reference (`Pipeline::rebind_input`)
     keyframe: bool,
     second: bool,
     /// `RATE_CEILING` while the picture operation runs (B-09).
@@ -204,6 +205,7 @@ impl PipelineActor {
         };
         if let Some(source) = self.pending.source.take() {
             p.set_source(source);
+            p.rebind_input();
         }
         if let Some(size) = self.pending.expect.take() {
             p.expect_source_size(size);
@@ -221,6 +223,9 @@ impl PipelineActor {
         }
         if std::mem::take(&mut self.pending.invalidate) {
             p.invalidate_reference();
+        }
+        if std::mem::take(&mut self.pending.rebind) {
+            p.rebind_input();
         }
         if std::mem::take(&mut self.pending.keyframe) {
             p.request_keyframe();
@@ -405,20 +410,6 @@ impl PipelineActor {
         self.interrupt();
         self.input_sink = source.input_sink();
         self.pending.source = Some(source);
-        self.poll();
-    }
-    pub fn set_visible_rects(
-        &mut self,
-        rects: Option<Vec<crate::screen::core::visibility::VisibleRect>>,
-    ) {
-        self.interrupt();
-        self.pending.invalidate = true;
-        self.pending.visible = Some(rects);
-        self.poll();
-    }
-    pub fn invalidate_reference(&mut self) {
-        self.interrupt();
-        self.pending.invalidate = true;
         self.poll();
     }
     pub fn second(&mut self, _connection: &Connection) -> HostStats {

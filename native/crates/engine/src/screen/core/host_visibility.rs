@@ -58,7 +58,8 @@ impl Session<'_> {
             report.rects.len()
         ));
         self.visible = !report.hidden();
-        self.release_pressed();
+        // Round 7: a hidden view takes back its input still queued.
+        self.release_pressed_revoking();
         self.pipeline.begin_capture_active(self.visible)?;
         self.pipeline
             .set_visible_rects(if report.state == VisibilityState::Visible {
@@ -156,7 +157,8 @@ impl Session<'_> {
                 "family_contract_not_negotiated",
             ));
         }
-        self.release_pressed();
+        // Round 7: input queued for the old source does not reach the new one.
+        self.release_pressed_revoking();
         let own = wanted.is_some();
         // A display change always ends at a monitor.
         let content = wanted.as_ref().is_none_or(SourceId::is_screen_content);

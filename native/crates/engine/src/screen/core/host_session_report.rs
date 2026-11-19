@@ -8,15 +8,6 @@ use super::*;
 /// at least one look at the toolbar [assumption: 3 s, not measured].
 const LATE_BLOCK_SHOWN: Duration = Duration::from_secs(3);
 
-/// How long a given-up control waits for its releases (Codex 6/5), from
-/// the end of `drain_releases` on: the slowest sink is a host process,
-/// whose release first waits for the link a running picture request holds
-/// (at most `FRAME_TIMEOUT`, 10 s) and then for the answer (`INPUT_TIMEOUT`,
-/// 2 s; `WorkerInputSink::release`), so one job ends within 12 s or its
-/// process is ended (`WorkerLink::ask`). Android's queue and the Wayland
-/// portal queue without waiting.
-const HANDOVER_LIMIT: Duration = Duration::from_secs(12);
-
 impl Session<'_> {
     /// An `ERROR` for the viewer; the session goes on.
     pub(in super::super) async fn error(
@@ -73,23 +64,11 @@ impl Session<'_> {
         Ok(())
     }
 
-    /// Codex 6/5: a control given up while releases were on their way goes
-    /// once they are in, or after `HANDOVER_LIMIT` (named in the host log);
-    /// the viewer then hears who holds it.
+    /// The new holder after a handover (`check_handover`) reaches the viewer.
     pub(in super::super) async fn finish_handover(&mut self) -> io::Result<()> {
-        let Some(since) = self.health.handover else {
-            return Ok(());
-        };
-        let owed = self.input_release.is_some() || self.releases_owed();
-        if owed && since.elapsed() < HANDOVER_LIMIT {
+        if !std::mem::take(&mut self.health.holder_changed) {
             return Ok(());
         }
-        if owed {
-            super::super::visibility::note_viewer(
-                "the control was handed over with releases still on their way",
-            );
-        }
-        self.give_up_control();
         let state = ControlState {
             holder: self.handle.controller(),
             blocked: None,

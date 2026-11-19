@@ -428,7 +428,7 @@ impl Session<'_> {
     }
 
     /// The control goes back to the registry (after `release_control`).
-    fn give_up_control(&mut self) {
+    pub(super) fn give_up_control(&mut self) {
         self.health.handover = None;
         if self.handle.release_control() {
             let audit = self.context.audit;

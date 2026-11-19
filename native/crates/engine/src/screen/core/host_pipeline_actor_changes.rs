@@ -85,6 +85,24 @@ impl PipelineActor {
         self.pending.mode = Some(mode);
         self.poll();
     }
+    /// The visible area of a view that was hidden or is hidden now: a new
+    /// encoder and a new input reference (round 7, M1).
+    pub fn set_visible_rects(&mut self, rects: Option<Vec<VisibleRect>>) {
+        self.interrupt();
+        self.pending.invalidate = true;
+        self.pending.rebind = true;
+        self.pending.visible = Some(rects);
+        self.poll();
+    }
+    /// A new encoder and a new input reference (a family's new layout, a
+    /// view shown again).
+    pub fn invalidate_reference(&mut self) {
+        self.interrupt();
+        self.pending.invalidate = true;
+        self.pending.rebind = true;
+        self.poll();
+    }
+
     /// The virtual display follows the window to `size`
     /// (`virtual_display_host::resize`): the picture keeps its bounds until
     /// the source has it (`Pipeline::expect_source_size`), so one encoder

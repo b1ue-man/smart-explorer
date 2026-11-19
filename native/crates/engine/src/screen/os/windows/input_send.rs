@@ -146,11 +146,17 @@ fn virtual_desktop() -> Area {
 
 /// The `SendInput` coordinates (0–65535 over the virtual desktop) of the
 /// source position `x`, `y` (0–65535 over `source`).
+/// The centre of the target pixel (round 7, M5; as `family_absolute`):
+/// the value maps into that pixel whether Windows rounds `v * W / 65536`
+/// down or to the nearest pixel; the former `pixel * 65535 / (W - 1)` fell
+/// one pixel short under rounding down for pixels near the desktop's
+/// left or top edge [Windows' own rounding is not documented: the
+/// `MOUSEINPUT` docs name only the corners 0 and 65535].
 pub(super) fn absolute(source: Area, desk: Area, x: u16, y: u16) -> (i32, i32) {
     let along = |pos: u16, start: i32, length: i32, desk_start: i32, desk_length: i32| {
-        let pixel = i64::from(start) + i64::from(pos) * i64::from((length - 1).max(0)) / 65_535;
-        let span = i64::from((desk_length - 1).max(1));
-        ((pixel - i64::from(desk_start)) * 65_535 / span).clamp(0, 65_535) as i32
+        let pixel = i64::from(start) - i64::from(desk_start)
+            + i64::from(pos) * i64::from((length - 1).max(0)) / 65_535;
+        (((pixel * 2 + 1) * 32_768) / i64::from(desk_length.max(1))).clamp(0, 65_535) as i32
     };
     (
         along(x, source.left, source.width, desk.left, desk.width),

@@ -14,6 +14,7 @@ impl Pipeline {
         }
         self.capture_active = false;
         self.invalidate_reference();
+        self.rebind_input();
         if self.capture_transition.is_some() {
             return Ok(());
         }
@@ -96,6 +97,7 @@ impl Pipeline {
         self.capture_applied = None;
         self.capture_active = false;
         self.invalidate_reference();
+        self.rebind_input();
         let stage = self.stage.as_mut().ok_or_else(|| {
             io::Error::new(io::ErrorKind::NotConnected, "screen source unavailable")
         })?;

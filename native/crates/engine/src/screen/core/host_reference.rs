@@ -132,6 +132,17 @@ impl Pipeline {
         self.visible_rects = None;
         self.quality.size = self.fitted_size();
         self.invalidate_reference();
+        self.rebind_input();
         true
+    }
+    /// The input reference moved (round 7, M1): input positions are
+    /// fractions of the source as it lies now (`input_send::absolute`), so
+    /// only another source, its size or capture generation
+    /// (`sync_source_reference`), a capture that stopped and resumed, or a
+    /// family layout change it; a new encoder or picture group does not.
+    /// Input waits for a presented picture of the new reference.
+    pub(super) fn rebind_input(&mut self) {
+        self.work.invalidate_reference();
+        self.presentation.invalidate(self.next_frame_id);
     }
 }

@@ -301,9 +301,10 @@ impl Pipeline {
     /// key frame of a new encoder.
     fn drop_encoder(&mut self) {
         self.note_restart(&format!("encoder epoch {} ends", self.encoder_epoch));
+        // Round 7 (M1): a new encoder of the same source keeps the input
+        // reference (`ReferencePresentation::restart_group`); a new source,
+        // geometry or capture moves it (`rebind_input`).
         self.new_group();
-        self.work.invalidate_reference();
-        self.presentation.invalidate(self.next_frame_id);
         if let Some(stage) = &mut self.stage {
             stage.encoder = None;
         }
