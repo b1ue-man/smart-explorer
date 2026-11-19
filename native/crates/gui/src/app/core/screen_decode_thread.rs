@@ -456,13 +456,17 @@ impl DecodeState {
         }
         // The presenter waits but this picture came as planes or BGRA: a
         // chosen „Direct3D 11“ shows it no other way (Codex 16).
-        // No working presenter at all under a chosen „Direct3D 11“ (it could
-        // not be made, or it failed): its error stands, the window shows
-        // nothing either (Codex 3/12).
-        let barred = !gop.gpu && cfg!(windows) && !self.shared.direct.wanted() && {
-            use super::screen_prefs::{display_choice, DisplayChoice};
-            display_choice() == DisplayChoice::Direct3d11
-        };
+        // No working presenter under a chosen „Direct3D 11“: its error
+        // stands, the window shows nothing either (Codex 3/12).
+        // Only a full view has a presenter; tiles use the slot (B1).
+        let barred = !gop.gpu
+            && cfg!(windows)
+            && self.shared.full_view()
+            && !self.shared.direct.wanted()
+            && {
+                use super::screen_prefs::{display_choice, DisplayChoice};
+                display_choice() == DisplayChoice::Direct3d11
+            };
         if barred || gop.gpu && super::screen_direct::not_direct(&self.shared) {
             let display = super::screen_chain_window::flow::Dropped::Display;
             self.flow(|flow| flow.dropped(display));

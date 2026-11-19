@@ -148,6 +148,10 @@ fn fitted_in(
     let (left, right) = bounds(ui);
     if may_break {
         reserve(ui, width.min(right - left));
+    } else if rest(ui) < list_width(ui, "…") {
+        // Not even a shortened list fits right of its label (a very narrow
+        // window, B3): the list starts the next row, cut to the bar there.
+        ui.end_row();
     }
     // What still does not fit (wider than the bar, or the rest right of its
     // label) keeps that width and shortens its text (egui
@@ -205,6 +209,21 @@ pub(super) fn checkbox_width(ui: &egui::Ui, text: &str) -> f32 {
     let spacing = ui.spacing();
     (spacing.icon_width + spacing.icon_spacing + text_width(ui, text, TextStyle::Body))
         .max(spacing.interact_size.x)
+}
+
+/// A switch of the bar: it starts a new row when it does not fit the rest
+/// of this one; a text wider than the whole bar (a very narrow window, B3)
+/// goes beside an empty switch as a wrapping label instead of past the edge.
+pub(super) fn checkbox(ui: &mut egui::Ui, on: &mut bool, text: &str) -> egui::Response {
+    let width = checkbox_width(ui, text);
+    let (left, right) = bounds(ui);
+    reserve(ui, width.min(right - left));
+    if width <= rest(ui) {
+        return ui.checkbox(on, text);
+    }
+    let response = ui.checkbox(on, "");
+    note(ui, text);
+    response
 }
 
 /// The outer width of a label showing `text` (body text, unwrapped).

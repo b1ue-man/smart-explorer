@@ -349,8 +349,7 @@ pub(super) fn max_rate_row(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Ve
         group += gap + super::wrap::label_width(ui, RATE_UNIT);
     }
     super::wrap::reserve(ui, group);
-    let mut changed = ui
-        .checkbox(&mut limited, label)
+    let mut changed = super::wrap::checkbox(ui, &mut limited, label)
         .on_hover_text("Ohne Haken: automatisch. Wirkt sofort, wenn das Gerät es unterstützt.")
         .changed();
     if limited {

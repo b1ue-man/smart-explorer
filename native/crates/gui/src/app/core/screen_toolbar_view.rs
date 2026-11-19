@@ -34,8 +34,12 @@ pub(super) fn view_row(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Vec<To
     }
     let mut low_latency = input.prefs.low_latency;
     let latency_changed = wrap::item(ui, "low_latency", |ui| {
-        ui.checkbox(&mut low_latency, "Niedrigste Latenz (Bildrisse möglich)")
-            .changed()
+        wrap::checkbox(
+            ui,
+            &mut low_latency,
+            "Niedrigste Latenz (Bildrisse möglich)",
+        )
+        .changed()
     });
     if latency_changed {
         // P9: the Direct3D 11 display presents with it from its next picture.
@@ -52,7 +56,7 @@ pub(super) fn view_row(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Vec<To
     }
     let mut stats = input.stats_on;
     if wrap::item(ui, "stats", |ui| {
-        ui.checkbox(&mut stats, "Statistik").changed()
+        wrap::checkbox(ui, &mut stats, "Statistik").changed()
     }) {
         out.push(ToolbarAction::Stats(stats));
     }

@@ -27,6 +27,12 @@ use crate::screen::core::wire_control::{SetMode, StreamMode, ViewerFrame};
 impl Shared {
     /// Keeps the mode of every `SET_MODE` going out; the viewer's switch to
     /// the tiles stays in it until a new codec choice.
+    /// The session shows the full view (the last `SET_MODE` sent), whose
+    /// widget serves the Direct3D 11 presenter; previews never do (B1).
+    pub(crate) fn full_view(&self) -> bool {
+        lock(&self.decoder_mode).mode == StreamMode::Full
+    }
+
     pub(crate) fn decoder_mode(&self, frame: &mut ViewerFrame) {
         if let ViewerFrame::SetMode(mode) = frame {
             mode.lossless |= self.lossless_fallback.load(Ordering::Acquire);

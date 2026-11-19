@@ -355,6 +355,11 @@ impl DirectView {
         }
         let enabled = choice.direct() && !self.unavailable;
         if !enabled || parent == 0 {
+            // No window handle under a chosen „Direct3D 11“: named once (B2).
+            let fixed = choice == super::screen_prefs::DisplayChoice::Direct3d11;
+            if enabled && fixed && cfg!(windows) && lock(&LAST_ERROR).is_none() {
+                report(&session.shared, "das Fenster gibt kein Handle für das Bild");
+            }
             self.detach(session);
         } else if self.surface.is_none() {
             match platform::Surface::new() {
@@ -364,8 +369,7 @@ impl DirectView {
                 }
                 Err(error) => {
                     self.unavailable = true;
-                    // Under „Automatisch“ wgpu takes over by design; a chosen
-                    // „Direct3D 11“ names it (user rule 2026-11-18).
+                    // „Automatisch“ takes wgpu by design; a chosen one names it.
                     if choice == super::screen_prefs::DisplayChoice::Direct3d11 {
                         report(&session.shared, &error.to_string());
                     } else {
@@ -456,10 +460,7 @@ impl DirectView {
 
     /// Where the child goes this frame and whether it shows (it is placed
     /// and its swap chain sized before the first picture); `None` hides it.
-    /// Every egui layer over the picture (popups, menus, tooltips, the
-    /// full-screen button) is cut out of the child, so an open combo box no
-    /// longer hides the whole picture (fix 2026-11-19: it went black, egui
-    /// draws no picture of its own while the child shows one).
+    /// Every egui layer over the picture is cut out of the child.
     fn placement(
         &mut self,
         ctx: &egui::Context,
