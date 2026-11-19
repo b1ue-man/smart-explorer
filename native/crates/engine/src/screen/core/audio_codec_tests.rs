@@ -95,4 +95,16 @@ fn review1119_task_sound_follows_the_ceiling() {
     let mut payload = Vec::new();
     encoder.encode(&tone(0), &mut payload).unwrap();
     assert!(!payload.is_empty());
+    // Round 8 (Q2): one second (200 frames of 5 ms) under a ceiling of
+    // 150 kbit/s stays at its Opus rate (constant below `OPUS_CBR_BELOW`;
+    // the CBR rounding adds at most half a byte a frame, 800 bit/s).
+    let opus = opus_bitrate_for(Some(150_000));
+    let mut bytes = 0usize;
+    for frame in 1..=200 {
+        encoder.encode(&tone(frame), &mut payload).unwrap();
+        bytes += payload.len();
+    }
+    let sent = u64::try_from(bytes * 8).unwrap();
+    let rate = u64::try_from(opus).unwrap();
+    assert!(sent <= rate + 800, "{sent} bit/s for {rate} bit/s");
 }

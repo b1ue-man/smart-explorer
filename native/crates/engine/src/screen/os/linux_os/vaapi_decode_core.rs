@@ -42,11 +42,18 @@ static FAILED: Mutex<SessionSlots<(Vec<String>, Vec<String>)>> = Mutex::new(Sess
 pub(super) fn refused(name: &str) -> bool {
     // Gemini round 5, 7.2: a chosen „Dekodierer: Hardware“ is never replaced
     // (user rule): VA-API stays offered and is tried again for the next
-    // picture group, as FFmpeg keeps its hardware stages (`open_stages`).
+    // picture group, as FFmpeg keeps its hardware stages (`open_stages`);
+    // it goes after the other factories of the pass (`retries_given_up`).
+    !hardware_chosen() && failed(name)
+}
+
+fn hardware_chosen() -> bool {
     use crate::screen::core::negotiate::{chosen_decoder_preference, DecoderPreference};
-    if chosen_decoder_preference() == DecoderPreference::Hardware {
-        return false;
-    }
+    chosen_decoder_preference() == DecoderPreference::Hardware
+}
+
+/// Whether a decoder of `name` failed in this viewer session.
+fn failed(name: &str) -> bool {
     let mut failed = FAILED.lock().unwrap_or_else(PoisonError::into_inner);
     failed
         .get(session_epoch())
@@ -401,6 +408,14 @@ impl DecoderFactory for VaVideoDecoderFactory {
 
     fn keeps_references(&self, codec: CodecKind) -> bool {
         codec == self.caps.codec && continues(codec)
+    }
+
+    /// Round 8, Q1: under a chosen „Hardware“ a decoder that failed in this
+    /// session is tried after every other factory of the pass, so another
+    /// render node that works comes first (as FFmpeg and the Media
+    /// Foundation gate on Windows).
+    fn retries_given_up(&self, header: &GopHeader) -> bool {
+        header.codec == self.caps.codec && hardware_chosen() && failed(&self.name())
     }
 
     fn open(&self, header: &GopHeader) -> io::Result<Box<dyn ScreenDecoder>> {

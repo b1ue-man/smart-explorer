@@ -24,6 +24,16 @@ pub const OPUS_COMPLEXITY: i32 = 7;
 /// Datenrate“ (`opus_bitrate_for`): libopus' CELT still codes 5 ms frames
 /// there.
 pub const OPUS_MIN_BITRATE: i32 = 6_000;
+/// Review round 8 (Q2): below this rate the sound is coded at a constant
+/// rate. `opus-rs` 0.1.40 (`src/lib.rs`, `encode_impl`) reads `bitrate_bps`
+/// and `use_cbr` on every frame; in VBR "the CELT-internal bound
+/// (vbr_rate/reservoir) decides the per-frame size", capped only by the
+/// output buffer (1276 bytes), while CBR gives each frame
+/// `(bitrate_bps × frame_size / rate + 4) / 8` bytes. Under a low „Höchste
+/// Datenrate“ the 5 ms frames thus hold the rate exactly; above it VBR keeps
+/// its quality. [assumption: how far VBR overshoots at 6–32 kbit/s with
+/// 5 ms frames was not measured]
+pub const OPUS_CBR_BELOW: i32 = 32_000;
 /// Samples of one interleaved frame.
 pub const FRAME_VALUES: usize = FRAME_SAMPLES * CHANNELS as usize;
 
@@ -89,6 +99,7 @@ impl AudioEncoder {
     pub fn set_bitrate(&mut self, bps: i32) {
         if let Self::Opus(encoder) = self {
             encoder.bitrate_bps = bps.clamp(OPUS_MIN_BITRATE, OPUS_BITRATE);
+            encoder.use_cbr = encoder.bitrate_bps < OPUS_CBR_BELOW;
         }
     }
 
