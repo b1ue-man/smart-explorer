@@ -570,7 +570,7 @@ sind `screenPush`/`screenControl` (Host) und `screenPull` (Betrachter) in `nativ
   `pending {capability:"screenView|screenControl"}`; `accepted` die camelCase-Felder der Antwort des Hosts plus
   `path:"direct|relay"`; `state {state, reason}`; `stream {codec, profile, width, height, gop, encoder, hardware}`
   (bei **jeder** neuen Bildgruppe); `stats` die camelCase-Felder von `HostStats`, `rttMs` ist immer `null` (das Relais
-  meldet keine Rundreisezeit); `controlState {holder:"viewer|other|null", blocked}`; `windows` (wie `screen.windows`);
+  meldet keine Rundreisezeit); `controlState {holder:"viewer|other|null", blocked, held}` (`held`: `viewer_hidden|waiting_for_picture|release_pending|other` oder `null`, seit 2026-11-19: der Host hat Eingaben zurückgehalten); `windows` (wie `screen.windows`);
   `error {code, detail}`; `ended {code, detail}`.
 - Fehlerarten: `invalid` (ungültige Eingabe, unbekannte Taste), `permission` (Steuern nicht erlaubt), `not_found`, `internal`.
   Der Code kennt `invalid_argument` nicht; `unavailable` ist dort nur ein Zustandswert eines Tresors (§4.13), keine Fehlerart.
