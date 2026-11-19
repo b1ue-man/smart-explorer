@@ -31,6 +31,22 @@ impl Session<'_> {
             return Ok(());
         }
         self.visibility_generation = report.geometry_generation;
+        // A visible view that stays visible changed only its visible area
+        // (an edge pan, a moved or resized window): the encoder, the capture
+        // and the held keys stay (review 2026-11-19, V1/C3). The
+        // acknowledgement follows as for every report (`produce_with`).
+        if self.visible && !report.hidden() && !self.pipeline.hybrid_regions() {
+            note_viewer(&format!(
+                "the viewer reported its visibility (generation {}, {} rectangles): \
+                 same encoder, key frame",
+                report.geometry_generation,
+                report.rects.len()
+            ));
+            let rects = (report.state == VisibilityState::Visible).then_some(report.rects);
+            self.pipeline.retarget_visible_rects(rects)?;
+            self.visibility_ack_pending = true;
+            return Ok(());
+        }
         note_viewer(&format!(
             "the viewer reported its visibility (generation {}, {} rectangles): new encoder",
             report.geometry_generation,
@@ -53,7 +69,9 @@ impl Session<'_> {
     }
 
     pub(super) async fn set_mode(&mut self, set: SetMode) -> io::Result<()> {
-        if let Some(source) = set.source.as_ref() {
+        // The session's own source named again (Android names it with every
+        // setting) is no change of source (review 2026-11-19, C21).
+        if let Some(source) = set.source.as_ref().filter(|s| !self.shows_source(s)) {
             if !self.change_source(Some(source.clone()), None).await? {
                 return Ok(());
             }
@@ -90,6 +108,16 @@ impl Session<'_> {
         choice: crate::screen::core::virtual_display::VirtualDisplayChoice,
     ) -> io::Result<()> {
         self.change_source(None, Some(choice)).await.map(|_| ())
+    }
+
+    /// `source` is the one this session shows now (its view's `source`,
+    /// written at the start and by every change of source below).
+    fn shows_source(&self, source: &SourceId) -> bool {
+        let wanted = source.to_string();
+        let mut shown = false;
+        // A read: the registry publishes only a changed view.
+        self.handle.update(|view| shown = view.source == wanted);
+        shown
     }
 
     /// Prepares a source and puts it in place of the session's one: `wanted`

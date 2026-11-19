@@ -112,6 +112,9 @@ pub(super) struct QualityPolicy {
     /// A chosen codec lost its last pairing (`SET_DECODERS`): the next tick
     /// ends the session with this reason (plan 2026-11-18).
     pub(super) pending_error: Option<String>,
+    /// The picture too small for the chosen video codec that the viewer was
+    /// last told about (`Pipeline::wait_for_size`, review 2026-11-19).
+    pub(super) small_picture: Option<FrameSize>,
 }
 
 /// Which pairings may stand in for a failed encoder (plan 2026-11-18).
@@ -242,6 +245,7 @@ impl QualityPolicy {
             failed_codecs: Vec::new(),
             first_picture: FirstPictureWatch::default(),
             pending_error: None,
+            small_picture: None,
             mode: QualityMode {
                 kind: StreamKind::Video,
                 full_size: None,

@@ -461,6 +461,34 @@ impl PressedInputs {
             })
             .collect()
     }
+
+    /// Holds the events of `release_all` that did not reach the host again
+    /// (review 2026-11-19, D7), before what was pressed since and in their
+    /// press order, so the next `release_all` sends them once more.
+    pub fn restore(&mut self, released: &[InputEvent]) {
+        let mut held: Vec<Held> = Vec::new();
+        for event in released.iter().rev() {
+            let entry = match event {
+                InputEvent::Key { hid_usage, .. } => Held::Key(*hid_usage),
+                InputEvent::Button { button, .. } => Held::Button(*button),
+                InputEvent::Touch { id, x, y, .. } => Held::Touch {
+                    id: *id,
+                    x: *x,
+                    y: *y,
+                },
+                _ => continue,
+            };
+            let same = |other: &Held| match (other, entry) {
+                (Held::Touch { id: a, .. }, Held::Touch { id: b, .. }) => *a == b,
+                (other, entry) => *other == entry,
+            };
+            if !held.iter().any(same) && !self.held.iter().any(same) {
+                held.push(entry);
+            }
+        }
+        held.append(&mut self.held);
+        self.held = held;
+    }
 }
 
 #[cfg(test)]

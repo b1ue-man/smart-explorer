@@ -64,6 +64,40 @@ struct Running {
     choice: CodecChoice,
     frame_contract: Option<crate::screen::core::frame_budget::FrameContract>,
     book: usize,
+    /// Pictures this instance encoded.
+    delivered: u64,
+    /// This instance is the one fresh instance its factory gets after a
+    /// failure of a working instance (review 2026-11-19 B1).
+    replaces_failed: bool,
+}
+
+impl Running {
+    /// Whether a failure of this instance refuses its factory for the
+    /// session (review 2026-11-19 B1): an instance that fails at its first
+    /// picture, or the fresh instance after an earlier failure, does; a
+    /// working instance that fails once (a missing key frame, an event or
+    /// completion deadline) gets one fresh instance of the same factory, so
+    /// a single dropout no longer moves the whole session onto another,
+    /// possibly software, encoder.
+    fn failure_refuses(&self) -> bool {
+        self.delivered == 0 || self.replaces_failed
+    }
+}
+
+/// Review 2026-11-19 C5: an encoder that answers a requested key frame with
+/// no picture failed (the stage reported it as "unchanged", so a viewer
+/// without its first picture stayed black without a reason); its failure
+/// goes the way of every encoder failure (`Running::failure_refuses`).
+fn keyed(
+    frame: crate::screen::core::host_backend::CapturedEncodedFrame,
+    request: &StageRequest,
+) -> io::Result<crate::screen::core::host_backend::CapturedEncodedFrame> {
+    if request.keyframe && frame.records.is_empty() {
+        return Err(io::Error::other(
+            "the encoder gave no picture for a requested key frame",
+        ));
+    }
+    Ok(frame)
 }
 
 /// What differs between the running encoder and `request` (measurement of

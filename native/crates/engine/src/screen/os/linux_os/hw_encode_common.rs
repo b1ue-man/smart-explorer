@@ -277,7 +277,14 @@ impl<S: HwH264Session> HwH264Encoder<S> {
     fn rate(&mut self, target_bps: u64) -> RateParams {
         let wanted = RateParams::for_target(target_bps.min(self.ceiling()), self.fps);
         match self.rate {
-            Some(current) if !current.differs(&wanted) => current,
+            // Review 2026-11-19 C10: the 2 % band holds back rises only; a
+            // lowered rate is passed on however small the step.
+            Some(current)
+                if !current.differs(&wanted)
+                    && wanted.bits_per_second >= current.bits_per_second =>
+            {
+                current
+            }
             _ => {
                 self.rate = Some(wanted);
                 wanted

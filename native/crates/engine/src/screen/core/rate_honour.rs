@@ -21,6 +21,14 @@
 //!
 //! The session's meter runs in the pipeline (`RateController::on_encoded`),
 //! the watch next to the encoder; both see the same frames.
+//!
+//! Review 2026-11-19: at the user's „Höchste Datenrate“ nothing above it is
+//! tolerated: while se's target is that ceiling (`set_bound`), the
+//! session's meter corrects every window above `HONOURED_LIMIT_AT_CEILING`
+//! instead of tolerating up to `CORRECT_ABOVE`. Key frames stay out of the
+//! judgement (a key frame is several frame budgets by design); the byte
+//! budget of the stream books them and every other byte against the ceiling
+//! (`rate_tiles.rs`).
 use serde::{Deserialize, Serialize};
 
 use super::model::{frame_budget_bytes, LimitFacts};
@@ -36,6 +44,9 @@ pub const HONOUR_WINDOW: usize = 60;
 pub const FILL_SHARE: f64 = 0.5;
 pub const HONOURED_MAX: f64 = 1.3;
 pub const CORRECT_ABOVE: f64 = 1.5;
+/// While se's target is the user's ceiling: above this the session's meter
+/// corrects (frames of the budget are the ceiling).
+pub const HONOURED_LIMIT_AT_CEILING: f64 = 1.0;
 pub const DEMOTE_ABOVE: f64 = 4.0;
 pub const MIN_CORRECTION: f64 = 0.25;
 /// A corrected encoder whose frames stay below this share of se's budget
@@ -130,6 +141,8 @@ pub struct HonourMeter {
     correction: f64,
     verdict: HonourVerdict,
     ratio: Option<f64>,
+    /// se's target is the user's ceiling (`set_bound`).
+    bound: bool,
 }
 
 impl HonourMeter {
@@ -150,7 +163,14 @@ impl HonourMeter {
             correction: 1.0,
             verdict: HonourVerdict::Pending,
             ratio: None,
+            bound: false,
         }
+    }
+
+    /// Whether se's target is the user's ceiling: a correcting meter then
+    /// tolerates nothing above it (review 2026-11-19).
+    pub fn set_bound(&mut self, bound: bool) {
+        self.bound = bound;
     }
 
     /// One encoded frame of `bytes`: se's target was `target_bps`, the
@@ -181,9 +201,10 @@ impl HonourMeter {
     fn judge(&mut self, ratio: f64) -> HonourVerdict {
         self.ratio = Some(ratio);
         let floor = self.correcting && self.correction <= MIN_CORRECTION;
+        let at_ceiling = self.correcting && self.bound && ratio > HONOURED_LIMIT_AT_CEILING;
         self.verdict = if ratio > DEMOTE_ABOVE || (floor && ratio > CORRECT_ABOVE) {
             HonourVerdict::Ignores
-        } else if ratio > CORRECT_ABOVE {
+        } else if ratio > CORRECT_ABOVE || at_ceiling {
             HonourVerdict::Corrected
         } else if ratio > HONOURED_MAX {
             HonourVerdict::Tolerated
@@ -298,6 +319,12 @@ impl RateController {
             };
         }
         let fps = self.honour.interval.budget_fps(fps);
+        // Review 2026-11-19: at the user's ceiling nothing above it is
+        // tolerated (`HONOURED_LIMIT_AT_CEILING`).
+        let bound = self
+            .user_ceiling_bps
+            .is_some_and(|ceiling| target_bps >= ceiling);
+        self.honour.meter.set_bound(bound);
         self.honour
             .meter
             .on_frame(bytes, keyframe, target_bps, commanded_bps, fps)

@@ -122,6 +122,16 @@ impl Pipeline {
                 .filter(|choice| !failed.contains(&choice.codec))
                 .collect();
             self.quality_policy.fallbacks = fallbacks;
+            // Review 2026-11-19: after „Automatisch“ gave way to the tiles
+            // (every video encoder failed), a chosen codec of the same
+            // pairing kept the tiles; it ends with its reason instead.
+            let scope = FallbackScope::of(next.preference, self.quality_policy.mode.sharpness);
+            if self.quality_policy.encoder_failed && !scope.tiles_allowed() {
+                self.quality_policy.pending_error = Some(format!(
+                    "chosen_codec_failed: {}: no encoder of the chosen codec is left",
+                    scope.key()
+                ));
+            }
             if self.continue_from.is_some() && !self.continuation_offered() {
                 self.reset_stream();
             }

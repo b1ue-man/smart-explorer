@@ -94,6 +94,32 @@ impl RateParams {
         );
         (a - b).abs() * 50 >= a || self.fps != other.fps || self.quality != other.quality
     }
+
+    /// Whether `other` lowers this rate at all (review 2026-11-19 C10): a
+    /// lowered rate is set however small the step, so the encoder never keeps
+    /// running above the rate the session (and the user's ceiling) allows;
+    /// the 2 % band of `differs` holds back rises only.
+    pub(super) fn lowered_by(&self, other: &Self) -> bool {
+        other.bits_per_second < self.bits_per_second
+    }
+
+    /// A refused retune to this rate when it `lowered` the running one: the
+    /// encoder fails its picture instead of running above it, so the stage
+    /// opens a fresh one at this rate or the next encoder of the codec.
+    pub(super) fn refused_lowering(
+        &self,
+        lowered: bool,
+        name: &str,
+        error: &io::Error,
+    ) -> io::Result<()> {
+        if !lowered {
+            return Ok(());
+        }
+        Err(io::Error::other(format!(
+            "{name} refused to lower its bit rate to {} bit/s: {error}",
+            self.bits_per_second
+        )))
+    }
 }
 
 /// The NVENC rate settings take these parameters (`nvenc_settings.rs`;
@@ -240,7 +266,7 @@ impl<S: VendorSession> VendorEncoder<S> {
         let wanted = RateParams::for_target(target_bps.min(self.ceiling(fps)), fps)
             .with_quality(self.quality);
         match self.rate {
-            Some(current) if !current.differs(&wanted) => current,
+            Some(current) if !current.differs(&wanted) && !current.lowered_by(&wanted) => current,
             _ => {
                 self.rate = Some(wanted);
                 wanted

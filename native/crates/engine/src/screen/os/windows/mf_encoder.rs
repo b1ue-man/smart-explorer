@@ -34,8 +34,8 @@ use windows::Win32::Media::MediaFoundation::{
 use super::mf_common::{ensure_com, EncoderSetup};
 use super::mf_encoder_sync::{force_keyframe, start, stop, UNITS_PER_SECOND};
 use super::mf_media::{
-    bounded_bitrate, configure_hardware, is_keyframe, mark_ltr, opened_limit, retune_bounded,
-    Output,
+    bounded_bitrate, configure_hardware, is_keyframe, mark_ltr, opened_limit, refused_lowering,
+    retune_bounded, sharp_mode, Output,
 };
 use super::{mf_capture_media, mf_capture_output};
 use crate::screen::core::capture_admission::{CaptureGrant, CaptureOwner};
@@ -92,6 +92,8 @@ pub(super) struct AsyncEncoder {
     /// The MFT refused its mean bit rate or reads back another one (plan
     /// 2026-11-17, `ScreenEncoder::rate_state`).
     rate_refused: bool,
+    /// Sharp mode as peak-constrained VBR (`mf_rate::peak_mode`, B2).
+    peak: bool,
     /// D8: the last parameter sets and those of the output type.
     parameter_sets: Option<Vec<u8>>,
     sequence_header: Option<Vec<u8>>,
@@ -154,15 +156,13 @@ impl AsyncEncoder {
             .ok();
         let bitrate = bounded_bitrate(bps, u32::MAX);
         let (api, settings) = configure_hardware(&transform, bitrate, setup.fps);
-        // P9: sharp mode of an admitted session, where the MFT takes it.
+        // P9: sharp mode of an admitted session, where the MFT takes it, as
+        // peak-constrained VBR under the session rate (review 2026-11-19 B2:
+        // the quality mode kept no rate, the user's ceiling included).
         let quality = grant
             .as_ref()
             .and_then(|_| crate::screen::core::rate_control::model::session_quality());
-        if let (Some(api), Some(target)) = (api.as_ref(), quality) {
-            if !super::mf_media::quality_mode(api, target) {
-                eprintln!("screen encoder {}: no quality mode, CBR", setup.name);
-            }
-        }
+        let peak = sharp_mode(api.as_ref(), quality.is_some(), bitrate, &setup.name);
         if let Err(error) = start(&transform, &setup, bitrate) {
             if gpu.is_none() {
                 return Err(error);
@@ -202,6 +202,7 @@ impl AsyncEncoder {
             refresh: false,
             restarted: false,
             rate_refused,
+            peak,
             parameter_sets: None,
             sequence_header,
         })
@@ -395,9 +396,13 @@ impl ScreenEncoder for AsyncEncoder {
         let maximum = mf_capture_output::capture_limit(&grant, image, request, self.setup.size)?;
         ensure_com();
         let (limit, fps) = (self.limit, self.setup.fps);
-        let (api, target) = (self.api.as_ref(), request.target_bps);
-        if let Some(refused) = retune_bounded(api, &mut self.bitrate, target, limit, fps) {
+        let (api, target, peak) = (self.api.as_ref(), request.target_bps, self.peak);
+        if let Some(refused) = retune_bounded(api, &mut self.bitrate, target, limit, fps, peak) {
             self.rate_refused = refused;
+            if refused {
+                // B6: still above a lowered rate, the encoder gives way.
+                refused_lowering(self.bitrate, target, limit)?;
+            }
         }
         let key = request.keyframe || self.restarted;
         if key && (self.frames > 0 || self.restarted) {

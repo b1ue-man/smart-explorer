@@ -87,8 +87,9 @@ fn netzrate_task_tiles_keep_the_target_and_the_user_ceiling() {
     // The pipeline asks the budget before every tile picture and books it
     // when its send starts (fix „Diashow“: not again after the send).
     let produce = include_str!("host_pipeline_produce.rs").replace("\r\n", "\n");
-    assert!(produce.contains("if !video && !self.rate.tiles_admit(now) {"));
-    assert!(produce.contains("self.rate.on_tiles_sent(send_started_us, encoded_bytes);"));
+    // Review 2026-11-19: every codec, the video ones at the user's ceiling.
+    assert!(produce.contains("if !self.rate.stream_admit(now, video) {"));
+    assert!(produce.contains(".on_stream_sent(send_started_us, encoded_bytes, video);"));
     // Back pressure still reaches the rate control for every codec.
     assert!(produce.contains("self.rate.on_back_pressure(now);"));
 }
@@ -326,4 +327,66 @@ fn netzrate_task_static_screen_is_no_encoder_failure() {
     assert!(worker.contains("let refresh = request.keyframe"));
     let capture = include_str!("host_capture.rs").replace("\r\n", "\n");
     assert!(capture.contains("request.keyframe\n            || recover.is_some()"));
+}
+
+/// Review 2026-11-19 (R1–R3): „Höchste Datenrate“ is a hard ceiling for the
+/// video codecs as for the tiles: every sent byte, key frames included, is
+/// booked against it, also below the floor of the target; at the ceiling
+/// the session's honour meter tolerates nothing above it.
+#[test]
+fn review1119_task_video_keeps_the_user_ceiling() {
+    use crate::screen::core::rate_control::honour::{HonourMeter, HonourVerdict, HONOUR_WINDOW};
+    use crate::screen::core::rate_control::model::frame_budget_bytes;
+    use crate::screen::core::rate_control::MIN_BITRATE_BPS;
+    const SECONDS: u64 = 10;
+    // Without a user ceiling a video stream is not held.
+    let mut rate = RateController::new(PathKind::Direct, 0);
+    assert_eq!(rate.stream_budget_bps(0, true), None);
+    rate.on_stream_sent(0, 10_000_000, true);
+    assert!(rate.stream_admit(1, true));
+    // A ceiling below the floor stays as given; the target keeps the floor.
+    let ceiling = MIN_BITRATE_BPS / 2;
+    rate.set_ceiling(Some(ceiling));
+    assert_eq!(rate.user_ceiling_bps(), Some(ceiling));
+    assert_eq!(rate.target_bps(), MIN_BITRATE_BPS);
+    assert_eq!(rate.stream_budget_bps(0, true), Some(ceiling));
+    assert_eq!(rate.tiles_budget_bps(0), ceiling);
+    // An encoder at 1.4 times the ceiling, every 30th picture a key frame
+    // of 20 pictures: the line gets the ceiling over the time plus the
+    // saved credit and one key frame, no more.
+    let mut rate = RateController::new(PathKind::Direct, 0);
+    rate.set_ceiling(Some(1_000_000));
+    let delta = frame_budget_bytes(1_400_000, 30);
+    let (mut bits, mut index, mut now) = (0u64, 0u64, 0u64);
+    while now < SECONDS * 1_000_000 {
+        if rate.stream_admit(now, true) {
+            let bytes = if index % 30 == 0 { delta * 20 } else { delta };
+            index += 1;
+            rate.on_stream_sent(now, bytes, true);
+            bits += bytes * 8;
+        }
+        now += 33_333;
+    }
+    let bound = 1_000_000 * SECONDS + 1_000_000 * TILE_BURST_US / 1_000_000 + delta * 20 * 8;
+    assert!(bits <= bound, "{bits} > {bound}");
+    // Without the budget the same encoder sends well above the ceiling.
+    assert!(index < SECONDS * 30, "{index}");
+    // The honour meter at the ceiling corrects 1.2 times the budget instead
+    // of tolerating it; below the ceiling it is honoured as before.
+    let budget = frame_budget_bytes(1_000_000, 30);
+    let mut meter = HonourMeter::correcting();
+    meter.set_bound(true);
+    for _ in 0..HONOUR_WINDOW {
+        meter.on_frame(budget * 12 / 10, false, 1_000_000, 1_000_000, 30);
+    }
+    assert_eq!(meter.verdict(), HonourVerdict::Corrected);
+    assert!(meter.commanded_bps(1_000_000) < 1_000_000);
+    let mut free = HonourMeter::correcting();
+    for _ in 0..HONOUR_WINDOW {
+        free.on_frame(budget * 12 / 10, false, 1_000_000, 1_000_000, 30);
+    }
+    assert_eq!(free.verdict(), HonourVerdict::Honoured);
+    // The pipeline asks the budget for every codec and books every picture.
+    let produce = include_str!("host_pipeline_produce.rs").replace("\r\n", "\n");
+    assert!(produce.contains("if !self.rate.stream_admit(now, video) {"));
 }

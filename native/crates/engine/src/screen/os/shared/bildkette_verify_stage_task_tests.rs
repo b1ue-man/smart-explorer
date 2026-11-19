@@ -166,7 +166,9 @@ fn bildkette_task_verify_encode_does_not_rebuild_registry_per_picture() {
     }
     assert_eq!(opener.opens.load(Ordering::SeqCst), 1);
     assert_eq!(opener.stage_counts.load(Ordering::SeqCst), 0);
-    // A failure asks once and the next stage takes over with a key frame.
+    // The first failure of a working instance gets one fresh instance of the
+    // same factory with a key frame (review 2026-11-19 B1); its failure asks
+    // once for the stage count and the next stage takes over with a key frame.
     let opener = Arc::new(Opener {
         ok: 3,
         ..Opener::default()
@@ -178,11 +180,15 @@ fn bildkette_task_verify_encode_does_not_rebuild_registry_per_picture() {
             .encode_with_fallback(&image, Cow::Borrowed(&req), &grant)
             .unwrap();
         if frame_id == 4 {
+            assert!(frame.keyframe && hardware);
+            assert!(encoding.refused.is_empty());
+        }
+        if frame_id == 7 {
             assert!(frame.keyframe && !hardware);
         }
     }
     assert_eq!(encoding.refused, ["first"]);
-    assert_eq!(opener.opens.load(Ordering::SeqCst), 2);
+    assert_eq!(opener.opens.load(Ordering::SeqCst), 3);
     assert_eq!(opener.stage_counts.load(Ordering::SeqCst), 1);
     // A process keeps its register for one store and switch.
     let store = tempfile::tempdir().unwrap();

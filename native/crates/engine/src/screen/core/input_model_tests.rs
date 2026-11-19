@@ -128,3 +128,28 @@ fn screen_task_input_key_names_and_pointer_positions() {
         }
     );
 }
+
+/// Releases that failed are held again before what was pressed since and
+/// go out again with the next release, in the same order (review
+/// 2026-11-19, D7).
+#[test]
+fn review1119_task_failed_release_is_held_again() {
+    let mut pressed = PressedInputs::default();
+    for event in [
+        key("ctrl_left", true),
+        key("c", true),
+        button(PointerButton::Left, true),
+        touch(1, TouchPhase::Start, 10, 20),
+    ] {
+        pressed.observe(&event);
+    }
+    let failed = pressed.release_all();
+    assert!(pressed.is_empty());
+    pressed.observe(&key("x", true));
+    pressed.restore(&failed);
+    // A second restore of the same events holds nothing twice.
+    pressed.restore(&failed);
+    let mut again = failed.clone();
+    again.insert(0, key("x", false));
+    assert_eq!(pressed.release_all(), again);
+}

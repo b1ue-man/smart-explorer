@@ -74,6 +74,8 @@ pub(super) struct Session<'a> {
         tokio::task::JoinHandle<Result<(), crate::screen::core::wire_control::ControlBlock>>,
     >,
     release_blocked: Option<crate::screen::core::wire_control::ControlBlock>,
+    /// Failed releases and the block the viewer heard (`InputHealth`).
+    health: input_release::InputHealth,
     state: SessionState,
     reported_stream: Option<StreamInfo>,
     started: Instant,
@@ -122,6 +124,7 @@ impl<'a> Session<'a> {
             pressed: PressedInputs::default(),
             input_release: None,
             release_blocked: None,
+            health: Default::default(),
             state: SessionState::Starting,
             reported_stream: None,
             started: Instant::now(),

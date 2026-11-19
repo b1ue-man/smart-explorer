@@ -39,7 +39,9 @@ impl AsyncEncoder {
         // Plan 2026-11-17: a refused or differently read back rate is kept
         // for `ScreenEncoder::rate_state`.
         let api = self.api.as_ref();
-        if let Some(refused) = retune_bounded(api, &mut self.bitrate, target_bps, limit, fps) {
+        let peak = self.peak;
+        if let Some(refused) = retune_bounded(api, &mut self.bitrate, target_bps, limit, fps, peak)
+        {
             self.rate_refused = refused;
         }
         if keyframe && self.frames > 0 {

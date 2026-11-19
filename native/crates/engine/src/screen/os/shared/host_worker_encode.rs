@@ -283,6 +283,9 @@ pub(super) fn encode_loop(shared: Arc<Shared>) {
                     encoding.running = None;
                 }
                 state.needs_refresh = encoding.needs_refresh();
+                encoding.sharp = state
+                    .identity
+                    .is_some_and(|identity| identity.quality.is_some());
                 if let Some(work) = state.next_work() {
                     break work;
                 }
@@ -325,6 +328,9 @@ pub(in crate::screen::os) struct Encoding {
     checked: Instant,
     produced: u64,
     opener: Arc<dyn EncoderOpener>,
+    /// The stream asked for sharp mode, „Scharf (GPU)“ (review 2026-11-19
+    /// C16): only a GPU encoder may serve it.
+    sharp: bool,
 }
 
 #[path = "host_worker_encoding.rs"]

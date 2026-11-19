@@ -291,6 +291,14 @@ fn bildkette_task_proto_renegotiation_follows_the_opening_rank() {
     // A tiles session stays with the tiles.
     let tiles = renegotiate(&host, &[hevc(true), CodecOffer::tiles()], None, false).unwrap();
     assert_eq!(tiles.choice.codec, CodecKind::Tiles);
-    // The tiles are every pair's last fallback: never `None` under Auto.
-    assert!(renegotiate(&[], &[], None, true).is_some());
+    // The tiles are every pair's last fallback under Auto; a viewer that
+    // names no decoder at all chose a codec it cannot decode (review
+    // 2026-11-19): no tiles, the chosen codec's reason.
+    assert!(renegotiate(&[], &[CodecOffer::tiles()], None, true).is_some());
+    assert!(renegotiate(&[], &[], None, true).is_none());
+    let refused = renegotiate_for(&host, &[], None, true, CodecTrust::ALL).expect_err("no offer");
+    assert_eq!(
+        refused.to_string(),
+        "chosen_codec_unavailable: the viewer has no decoder of this codec"
+    );
 }

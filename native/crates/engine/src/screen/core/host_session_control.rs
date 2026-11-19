@@ -266,12 +266,14 @@ impl Session<'_> {
                 "Der Bildausschnitt hat sich geändert. Aufnahme läuft weiter; zum Steuern ist eine neue Verbindung erforderlich.".into()).await;
         }
         if let Some(blocked) = self.release_blocked.take() {
-            return self
-                .frame(HostFrame::ControlState(ControlState {
-                    holder: self.handle.controller(),
-                    blocked: Some(blocked),
-                }))
-                .await;
+            // D7: the releases that failed go out again in this batch's turn.
+            self.retry_releases();
+            return self.report_block(blocked).await;
+        }
+        // D7: failed releases go out before the next batch (that batch waits
+        // behind them like behind every release).
+        if self.retry_releases() {
+            return Ok(());
         }
         if !self.handle.holds_control() {
             let detail = "input without control".to_string();
@@ -296,15 +298,24 @@ impl Session<'_> {
                 for event in events {
                     self.pressed.observe(event);
                 }
+                self.health.unconfirmed = None;
+                // D6: a block the viewer heard ends with the first batch
+                // that reached the host after it.
+                if std::mem::take(&mut self.health.block_reported) {
+                    let state = ControlState {
+                        holder: self.handle.controller(),
+                        blocked: None,
+                    };
+                    self.frame(HostFrame::ControlState(state)).await?;
+                }
                 Ok(())
             }
             Err(blocked) => {
                 self.release_pressed();
-                let state = ControlState {
-                    holder: self.handle.controller(),
-                    blocked: Some(blocked),
-                };
-                self.frame(HostFrame::ControlState(state)).await?;
+                if presented && self.stale_refusal(blocked, reference) {
+                    return Ok(());
+                }
+                self.report_block(blocked).await?;
                 if !presented
                     && sink
                         .as_ref()
@@ -354,12 +365,68 @@ impl Session<'_> {
             holder: self.handle.controller(),
             blocked: None,
         };
+        self.health.block_reported = false;
         self.frame(HostFrame::ControlState(state)).await
+    }
+
+    /// `CONTROL_STATE` with `blocked`; the next batch that reaches the host
+    /// clears it again (D6).
+    async fn report_block(
+        &mut self,
+        blocked: crate::screen::core::wire_control::ControlBlock,
+    ) -> io::Result<()> {
+        self.health.block_reported = true;
+        let state = ControlState {
+            holder: self.handle.controller(),
+            blocked: Some(blocked),
+        };
+        self.frame(HostFrame::ControlState(state)).await
+    }
+
+    /// D2: a batch refused as `control_unavailable` may only have named a
+    /// reference the source left after the session last heard of it (the
+    /// sinks compare the batch's reference with the source's own, e.g.
+    /// `WindowsInput::inject`, and answer that with `control_unavailable`;
+    /// the session learns of the source's new reference with the next
+    /// picture operation and then holds input until the new reference is
+    /// presented, `refresh_input_reference`). Such a batch is dropped
+    /// without a block. The refusal is a block once a picture operation
+    /// that started after it has ended with the reference unchanged.
+    fn stale_refusal(
+        &mut self,
+        blocked: crate::screen::core::wire_control::ControlBlock,
+        reference: u64,
+    ) -> bool {
+        use crate::screen::core::wire_control::ControlBlock;
+        if blocked != ControlBlock::ControlUnavailable {
+            self.health.unconfirmed = None;
+            return false;
+        }
+        self.pipeline.poll();
+        let now = self.pipeline.input_reference_generation();
+        let started = self.pipeline.work_started();
+        match self.health.unconfirmed {
+            Some((before, at)) if before == reference && now == reference => {
+                let ended =
+                    started > at.saturating_add(1) || (started > at && !self.pipeline.working());
+                if ended {
+                    self.health.unconfirmed = None;
+                }
+                !ended
+            }
+            _ => {
+                self.health.unconfirmed = Some((reference, started));
+                true
+            }
+        }
     }
 
     /// Lets go of every pressed input and of the control.
     pub(super) fn release_control(&mut self) {
-        self.release_pressed();
+        // D7: releases that failed before go out with this one.
+        if !self.retry_releases() {
+            self.release_pressed();
+        }
         if self.handle.release_control() {
             let audit = self.context.audit;
             log_event(

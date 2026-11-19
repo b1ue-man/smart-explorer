@@ -2,6 +2,7 @@
 use super::*;
 use crate::screen::core::wire_control::ControlBlock;
 use std::future::Future;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 /// Runs one input injection on tokio's blocking pool and waits for it. A
 /// host process answers input only after a running picture request (the
@@ -19,6 +20,42 @@ pub(super) async fn inject_off_runtime(
         .unwrap_or(Err(ControlBlock::ControlUnavailable))
 }
 
+/// What the session keeps of input that did not go as asked (review
+/// 2026-11-19).
+#[derive(Default)]
+pub(super) struct InputHealth {
+    /// D7: release events whose injection failed. The release job puts them
+    /// here itself, so they stay whoever awaits the job (`poll_input_release`
+    /// or `family_operation`); the platform's `release` leaves failed
+    /// releases to its caller (`input_send::release`).
+    failed: Arc<Mutex<Vec<InputEvent>>>,
+    /// D6: the viewer's last `CONTROL_STATE` named a block.
+    pub(super) block_reported: bool,
+    /// D2: a batch refused as `control_unavailable` that may only have named
+    /// a reference the source left meanwhile: its reference and the picture
+    /// operations started when it was refused (`Session::stale_refusal`).
+    pub(super) unconfirmed: Option<(u64, u64)>,
+}
+
+fn failed_list(failed: &Mutex<Vec<InputEvent>>) -> MutexGuard<'_, Vec<InputEvent>> {
+    failed.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Release events on their way: unless their release succeeded they go
+/// back to `InputHealth::failed`, also when the release panicked.
+struct Retained {
+    failed: Arc<Mutex<Vec<InputEvent>>>,
+    events: Vec<InputEvent>,
+    released: bool,
+}
+impl Drop for Retained {
+    fn drop(&mut self) {
+        if !self.released {
+            failed_list(&self.failed).append(&mut self.events);
+        }
+    }
+}
+
 impl Session<'_> {
     pub(super) fn release_pressed(&mut self) {
         // Input is held while this job exists, so a second batch cannot grow behind it.
@@ -29,13 +66,40 @@ impl Session<'_> {
         if released.is_empty() {
             return;
         }
+        let mut retained = Retained {
+            failed: self.health.failed.clone(),
+            events: released,
+            released: false,
+        };
         if let Some(sink) = self.pipeline.input_sink() {
             if let Ok(runtime) = tokio::runtime::Handle::try_current() {
-                self.input_release = Some(runtime.spawn_blocking(move || sink.release(&released)));
+                self.input_release = Some(runtime.spawn_blocking(move || {
+                    let result = sink.release(&retained.events);
+                    retained.released = result.is_ok();
+                    result
+                }));
                 return;
             }
         }
-        self.release_blocked = self.context.backend.inject(&released).err();
+        self.release_blocked = self.context.backend.inject(&retained.events).err();
+        retained.released = self.release_blocked.is_none();
+    }
+    /// D7: the releases that failed are held again and sent with what is
+    /// pressed now; `true` when there were any. Not on every reference
+    /// check (`refresh_input_reference`): only with the next input batch
+    /// and with the release of the control, so a lasting block (the secure
+    /// desktop) costs no release attempt per picture.
+    pub(super) fn retry_releases(&mut self) -> bool {
+        if self.input_release.is_some() {
+            return false;
+        }
+        let failed = std::mem::take(&mut *failed_list(&self.health.failed));
+        if failed.is_empty() {
+            return false;
+        }
+        self.pressed.restore(&failed);
+        self.release_pressed();
+        true
     }
     pub(super) fn poll_input_release(&mut self) {
         let Some(mut job) = self.input_release.take() else {

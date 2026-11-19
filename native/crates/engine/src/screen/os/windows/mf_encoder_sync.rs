@@ -25,8 +25,8 @@ use windows::Win32::Media::MediaFoundation::{
 use super::mf_common::{ensure_com, subtype, EncoderSetup};
 use super::mf_media::{
     bounded_bitrate, configure_encoder, configure_hardware, h264_type, input_sample, is_keyframe,
-    nv12_bytes, nv12_type, opened_limit, process_output, sample_bytes_bounded, set_mean_bitrate,
-    set_value, video_type, Output,
+    nv12_bytes, nv12_type, opened_limit, process_output, refused_lowering, sample_bytes_bounded,
+    set_mean_bitrate, set_value, video_type, Output,
 };
 use super::{mf_capture_media, mf_capture_output};
 use crate::screen::core::capture_admission::{CaptureGrant, CaptureOwner};
@@ -228,6 +228,10 @@ impl SyncEncoder {
         let api = self.api.as_ref();
         if let Some(refused) = retune(api, &mut self.bitrate, request.target_bps, self.limit) {
             self.rate_refused = refused;
+            if refused {
+                // Review 2026-11-19 B6: still above a lowered rate, it gives way.
+                refused_lowering(self.bitrate, request.target_bps, self.limit)?;
+            }
         }
         if request.keyframe && self.frames > 0 {
             force_keyframe(self.api.as_ref());

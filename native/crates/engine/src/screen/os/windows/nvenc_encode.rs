@@ -440,8 +440,11 @@ impl VendorSession for NvencSession {
         rate: &RateParams,
         deliver: &mut dyn FnMut(&[u8]) -> io::Result<()>,
     ) -> io::Result<bool> {
-        let retune = self.core.rate.differs(rate) && self.core.refused != Some(*rate);
+        let lowered = self.core.rate.lowered_by(rate);
+        let retune = (self.core.rate.differs(rate) || lowered) && self.core.refused != Some(*rate);
         if let Some(Err(error)) = retune.then(|| self.core.retune(rate)) {
+            // Review 2026-11-19 C10 (`RateParams::refused_lowering`).
+            rate.refused_lowering(lowered, "nvenc", &error)?;
             eprintln!("screen encoder nvenc: keeps its rate: {error}");
         }
         let handle = self.registration(picture.texture)?;

@@ -364,7 +364,8 @@ impl VendorSession for AmfSession {
         deliver: &mut dyn FnMut(&[u8]) -> io::Result<()>,
     ) -> io::Result<bool> {
         let names = self.names;
-        if self.rate.differs(rate) {
+        // Review 2026-11-19 C10: a lowered rate is set however small the step.
+        if self.rate.differs(rate) || self.rate.lowered_by(rate) {
             self.rate = *rate;
             self.apply(rate_settings(names, rate));
             if let Some(ltr) = self.ltr.as_mut() {

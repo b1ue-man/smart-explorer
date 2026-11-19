@@ -80,6 +80,16 @@ pub fn codecs(
     (vec![encoder], vec![decoder], report)
 }
 
+/// Review 2026-11-19 C17: the decoder library the viewer chose on Windows
+/// (`decoder_library`, FFmpeg or Media Foundation), which decodes alone;
+/// OpenH264 is neither, so it offers and opens only under „Automatisch“.
+/// Elsewhere the choice changes nothing (one library).
+fn library_chosen() -> Option<crate::screen::core::decoder_library::DecoderLibrary> {
+    use crate::screen::core::decoder_library::{decoder_library, DecoderLibrary};
+    let chosen = decoder_library();
+    (cfg!(windows) && chosen != DecoderLibrary::Automatic).then_some(chosen)
+}
+
 pub struct OpenH264DecoderFactory {
     store: OpenH264Store,
 }
@@ -90,10 +100,22 @@ impl DecoderFactory for OpenH264DecoderFactory {
     }
 
     fn offers(&self) -> Vec<CodecOffer> {
+        if library_chosen().is_some() {
+            return Vec::new();
+        }
         openh264_decoder_offers()
     }
 
     fn open(&self, header: &GopHeader) -> io::Result<Box<dyn ScreenDecoder>> {
+        if let Some(library) = library_chosen() {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                format!(
+                    "Dekodier-Bibliothek „{}“ gewählt: OpenH264 dekodiert nur unter „Automatisch“",
+                    library.label()
+                ),
+            ));
+        }
         let limits = header.frame_contract.map_or(
             crate::screen::core::frame_budget::FrameLimits::LEGACY,
             |c| c.limits,

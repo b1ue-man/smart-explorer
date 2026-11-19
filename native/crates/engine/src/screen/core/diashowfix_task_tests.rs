@@ -125,7 +125,7 @@ fn diashowfix_task_tiles_follow_the_line_without_congestion() {
     assert!(control.contains("self.tiles.on_congestion(now_us);"));
     let produce = include_str!("host_pipeline_produce.rs").replace("\r\n", "\n");
     assert!(produce.contains("let send_started_us = now_us();"));
-    assert!(produce.contains("self.rate.on_tiles_sent(send_started_us, encoded_bytes);"));
+    assert!(produce.contains(".on_stream_sent(send_started_us, encoded_bytes, video);"));
 }
 
 #[test]

@@ -143,6 +143,19 @@ pub fn renegotiate_for(
     video_session: bool,
     trust: CodecTrust,
 ) -> Result<Option<Pairing>, ChosenUnavailable> {
+    // Review 2026-11-19: only a viewer that took `set_decoders_v1` sends
+    // this frame, and such a viewer names the tiles under „Automatisch“ and
+    // „Verlustfrei“; an empty offer is a chosen codec it has no decoder of
+    // (`CodecPreference::filter_decoders`), read as „Automatisch“ it got the
+    // tiles. A hello keeps the old reading: a viewer before codec
+    // negotiation sends no decoders (`ScreenHello::decoders` defaults) and
+    // gets the tiles as before.
+    if decoders.is_empty() {
+        return Err(ChosenUnavailable {
+            preference: CodecPreference::Auto,
+            reason: super::negotiate::EMPTY_OFFER.into(),
+        });
+    }
     let preference = preference_named_by(decoders);
     let choices = negotiate_chosen(encoders, decoders, preference, contract, trust)?;
     let Some(choice) = choices

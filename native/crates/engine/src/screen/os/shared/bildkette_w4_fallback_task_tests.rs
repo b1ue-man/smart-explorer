@@ -256,19 +256,32 @@ fn bildkette_task_win_w4_worker_rank_tries_every_stage_once_through_openh264() {
         .encode_with_fallback(&image, Cow::Borrowed(&req), &grant)
         .unwrap();
     assert_eq!(first_name, "nvenc");
+    // Review 2026-11-19 B1: the first failure of a working NVENC instance
+    // gets one fresh NVENC instance with a key frame; its failure walks on.
     let delta = stage_request(2, false, h264_high_choice());
     let (second, second_name, second_hw) = encoding
         .encode_with_fallback(&image, Cow::Borrowed(&delta), &grant)
         .unwrap();
-    assert!(second.keyframe && !second_hw && second_name == "mf-software");
+    assert!(second.keyframe && second_hw && second_name == "nvenc");
+    assert!(encoding.refused.is_empty());
+    let delta = stage_request(3, false, h264_high_choice());
+    let (third, third_name, third_hw) = encoding
+        .encode_with_fallback(&image, Cow::Borrowed(&delta), &grant)
+        .unwrap();
+    assert!(third.keyframe && !third_hw && third_name == "mf-software");
+    assert_eq!(encoding.refused, expected_rank[..3]);
     let calls = [
         ("nvenc".into(), 1, true),
         ("nvenc".into(), 2, false),
-        ("amf".into(), 2, true),
-        ("mf-hardware".into(), 2, true),
-        ("mf-software".into(), 2, true),
+        ("nvenc".into(), 2, true),
+        ("nvenc".into(), 3, false),
+        ("amf".into(), 3, true),
+        ("mf-hardware".into(), 3, true),
+        ("mf-software".into(), 3, true),
     ];
     assert_eq!(*log.encodes.lock().unwrap(), calls);
+    let opens = ["nvenc", "nvenc", "amf", "mf-hardware", "mf-software"];
+    assert_eq!(*log.opens.lock().unwrap(), opens);
 
     let log = Arc::new(CallLog::default());
     let mut encoding = Encoding::new(Arc::new(RegistryOpener(windows_h264_rank(None, 0, &log))));

@@ -28,6 +28,8 @@ struct Pending {
     decoders: Option<crate::screen::core::set_decoders::SetDecoders>,
     decoders_at: Option<std::time::Instant>,
     snapshot: Option<Option<FrameSize>>,
+    /// The capture state is reported once more (`retarget_visible_rects`).
+    confirm: bool,
     receipts: VecDeque<Receipt>,
 }
 struct Facts {
@@ -166,8 +168,9 @@ impl PipelineActor {
         // invalidates no reference by itself (fix 2026-11-19): it did, so
         // every `KEYFRAME_REQUEST` and every rate-only `SET_MODE` opened a new
         // encoder; whoever needs a new reference asks for it (`set_source`,
-        // `set_visible_rects`, `invalidate_reference`, a new route, and the
-        // pipeline's own `set_quality_mode`/`begin_capture_active`).
+        // `set_visible_rects`, `invalidate_reference`, a new route
+        // (`watch_route`), and the pipeline's own
+        // `set_quality_mode`/`begin_capture_active`).
     }
     fn receipt(&mut self, receipt: Receipt) {
         // Same bound as HostSession's control inbox; only acknowledgements, never pixels.
@@ -177,19 +180,7 @@ impl PipelineActor {
         self.pending.receipts.push_back(receipt);
     }
     pub fn poll(&mut self) {
-        let route = crate::share::route_monitor::snapshot(&self.connection).map(|route| {
-            (
-                route.generation,
-                route.pause_epoch,
-                route.class,
-                route.application_allowed,
-            )
-        });
-        if route != self.route {
-            self.route = route;
-            self.interrupt();
-            self.pending.invalidate = true;
-        }
+        self.watch_route();
         if let Some(mut job) = self.job.take() {
             let mut cx = std::task::Context::from_waker(futures_util::task::noop_waker_ref());
             match std::pin::Pin::new(&mut job).poll(&mut cx) {
@@ -222,6 +213,11 @@ impl PipelineActor {
         }
         if std::mem::take(&mut self.pending.keyframe) {
             p.request_keyframe();
+        }
+        if std::mem::take(&mut self.pending.confirm) {
+            if let Err(error) = p.confirm_capture_active() {
+                self.capture_error = Some(error);
+            }
         }
         if let Some(ceiling) = self.pending.ceiling.take() {
             p.set_rate_ceiling(ceiling);
@@ -463,6 +459,8 @@ impl PipelineActor {
         }
     }
 }
+#[path = "host_pipeline_actor_changes.rs"]
+mod changes;
 #[path = "host_pipeline_actor_wait.rs"]
 mod wait;
 fn dispose(pipeline: Pipeline) {

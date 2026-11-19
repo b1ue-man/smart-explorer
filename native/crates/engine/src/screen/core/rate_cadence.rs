@@ -178,7 +178,8 @@ pub fn codec_ceiling_bps(choice: &CodecChoice, size: FrameSize, fps: u32) -> u64
 
 /// The ceiling of the target: the codec pairing (B-06) and the user (B-09).
 impl RateController {
-    /// The highest target: codec pairing and user, never below the floor.
+    /// The highest target: codec pairing and user, never below the floor
+    /// (a user ceiling below it is held by the byte budget alone).
     pub fn ceiling_bps(&self) -> u64 {
         let codec = self.codec_ceiling_bps.unwrap_or(u64::MAX);
         let user = self.user_ceiling_bps.unwrap_or(u64::MAX);
@@ -188,9 +189,14 @@ impl RateController {
     /// „Höchste Datenrate“ of the viewer (B-09): `None` is automatic. Takes
     /// effect at once; a lower ceiling lowers the target with it, while the
     /// link estimate stays (plan 2026-11-17), so a raised ceiling returns to
-    /// what the line was measured to carry.
+    /// what the line was measured to carry. Review 2026-11-19: the ceiling
+    /// is kept as given, also below `MIN_BITRATE_BPS` (a hand-edited
+    /// `viewer.json` or another viewer sends that; it was raised to the
+    /// floor without a word): the target E and the encoder stay at the
+    /// floor, the byte budget of the stream holds the ceiling exactly
+    /// (`stream_budget_bps`).
     pub fn set_ceiling(&mut self, ceiling_bps: Option<u64>) {
-        self.user_ceiling_bps = ceiling_bps.map(|bps| bps.max(MIN_BITRATE_BPS));
+        self.user_ceiling_bps = ceiling_bps.map(|bps| bps.max(1));
     }
 
     pub fn user_ceiling_bps(&self) -> Option<u64> {

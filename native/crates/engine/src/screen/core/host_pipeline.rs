@@ -339,20 +339,19 @@ impl Pipeline {
         self.pacer.request_keyframe();
     }
 
-    /// Starts a new picture group when the target size changed.
+    /// A new picture group when the running encoder's size is not the target
+    /// one. Review 2026-11-19: no running encoder (first picture not back
+    /// yet) restarts nothing; the stages reopen for another size themselves.
     fn resize(&mut self) {
         let size = self.target_size();
-        let same = self
-            .running
-            .as_ref()
-            .is_some_and(|(_, running)| *running == size);
-        if !same {
-            if let Some((_, before)) = &self.running {
-                self.note_restart(&format!(
-                    "picture size {}x{} -> {}x{}: new encoder",
-                    before.width, before.height, size.width, size.height
-                ));
-            }
+        let Some((_, before)) = &self.running else {
+            return;
+        };
+        if *before != size {
+            self.note_restart(&format!(
+                "picture size {}x{} -> {}x{}: new encoder",
+                before.width, before.height, size.width, size.height
+            ));
             self.drop_encoder();
         }
     }

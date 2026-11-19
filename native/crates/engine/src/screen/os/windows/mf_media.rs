@@ -23,9 +23,8 @@ use std::mem::ManuallyDrop;
 
 use windows::core::{Interface, GUID, VARIANT};
 use windows::Win32::Media::MediaFoundation::{
-    eAVEncCommonRateControlMode_CBR, eAVEncCommonRateControlMode_Quality,
-    eAVEncH264VProfile_ConstrainedBase, eAVEncH264VProfile_High, CODECAPI_AVEncCommonBufferSize,
-    CODECAPI_AVEncCommonMeanBitRate, CODECAPI_AVEncCommonQuality,
+    eAVEncCommonRateControlMode_CBR, eAVEncH264VProfile_ConstrainedBase, eAVEncH264VProfile_High,
+    CODECAPI_AVEncCommonBufferSize, CODECAPI_AVEncCommonMeanBitRate,
     CODECAPI_AVEncCommonQualityVsSpeed, CODECAPI_AVEncCommonRateControlMode,
     CODECAPI_AVEncLowPowerEncoder, CODECAPI_AVEncMPVDefaultBPictureCount, CODECAPI_AVEncMPVGOPSize,
     CODECAPI_AVEncVideoLTRBufferControl, CODECAPI_AVEncVideoMarkLTRFrame,
@@ -51,7 +50,8 @@ mod rate;
 #[cfg(test)]
 pub(in crate::screen::os) use rate::{bitrate_limit, level_max_bitrate};
 pub(in crate::screen::os) use rate::{
-    bounded_bitrate, one_frame_buffer, opened_limit, retune_bounded, set_mean_bitrate,
+    bounded_bitrate, one_frame_buffer, opened_limit, refused_lowering, retune_bounded,
+    set_mean_bitrate, sharp_mode,
 };
 
 fn pack(high: u32, low: u32) -> u64 {
@@ -406,31 +406,6 @@ pub(in crate::screen::os) fn configure_hardware(
     let speed = set(&CODECAPI_AVEncCommonQualityVsSpeed, VARIANT::from(0u32));
     taken.note(SETTINGS[8], speed);
     (Some(api), taken)
-}
-
-/// P9, sharp mode: `eAVEncCommonRateControlMode_Quality` at the level of
-/// `target` (`CODECAPI_AVEncCommonQuality`, `rate_model::mf_quality`); an
-/// MFT that refuses either keeps CBR. Whether it was taken.
-pub(in crate::screen::os) fn quality_mode(api: &ICodecAPI, target: u8) -> bool {
-    let quality = eAVEncCommonRateControlMode_Quality.0 as u32;
-    let level = crate::screen::core::rate_control::model::mf_quality(target);
-    if !set_value(
-        api,
-        &CODECAPI_AVEncCommonRateControlMode,
-        VARIANT::from(quality),
-    ) {
-        return false;
-    }
-    if set_value(api, &CODECAPI_AVEncCommonQuality, VARIANT::from(level)) {
-        return true;
-    }
-    let cbr = eAVEncCommonRateControlMode_CBR.0 as u32;
-    set_value(
-        api,
-        &CODECAPI_AVEncCommonRateControlMode,
-        VARIANT::from(cbr),
-    );
-    false
 }
 
 /// Marks the next frame (a key frame) as long-term reference 0.

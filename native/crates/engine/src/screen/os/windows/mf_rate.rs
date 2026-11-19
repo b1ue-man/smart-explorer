@@ -4,9 +4,13 @@
 //! and the read-back of the mean bit rate. An encoder that refuses its rate
 //! or reads back another one is named so (`set_mean_bitrate`), and the
 //! watch of its rate gives it up (`rate_control::honour`).
+use std::io;
+
 use windows::core::{GUID, VARIANT};
 use windows::Win32::Media::MediaFoundation::{
-    CODECAPI_AVEncCommonBufferSize, CODECAPI_AVEncCommonMeanBitRate, ICodecAPI, IMFTransform,
+    eAVEncCommonRateControlMode_CBR, eAVEncCommonRateControlMode_PeakConstrainedVBR,
+    CODECAPI_AVEncCommonBufferSize, CODECAPI_AVEncCommonMaxBitRate,
+    CODECAPI_AVEncCommonMeanBitRate, CODECAPI_AVEncCommonRateControlMode, ICodecAPI, IMFTransform,
     MF_MT_MPEG2_LEVEL,
 };
 
@@ -107,26 +111,104 @@ pub(in crate::screen::os) fn opened_limit(
 }
 
 /// Sets a changed bit rate (at least 2 % off) within `limit` and its one
-/// frame buffer; a refusal keeps the old one. `None` when nothing was set,
-/// else whether the encoder refused the rate or reads back another one
-/// (`set_mean_bitrate`, plan 2026-11-17).
+/// frame buffer; a refusal keeps the old one. With `peak` (sharp mode,
+/// `peak_mode`) the peak rate moves with it and stays at or above the mean.
+/// `None` when nothing was set, else whether the encoder refused the rate
+/// or reads back another one (`set_mean_bitrate`, plan 2026-11-17).
 pub(in crate::screen::os) fn retune_bounded(
     api: Option<&ICodecAPI>,
     current: &mut u32,
     target_bps: u64,
     limit: u32,
     fps: u32,
+    peak: bool,
 ) -> Option<bool> {
     let target = bounded_bitrate(target_bps, limit);
     if (i64::from(target) - i64::from(*current)).abs() * 50 < i64::from(*current) {
         return None;
     }
     let api = api?;
+    let raising = target > *current;
+    if peak && raising && !set_max_bitrate(api, target) {
+        return Some(true);
+    }
     if set_mean_bitrate(api, target) {
+        return Some(true);
+    }
+    if peak && !raising && !set_max_bitrate(api, target) {
         return Some(true);
     }
     *current = target;
     let buffer = VARIANT::from(one_frame_buffer(target, fps));
     set_value(api, &CODECAPI_AVEncCommonBufferSize, buffer);
     Some(false)
+}
+
+/// Review 2026-11-19 B6: after a refused rate change, an encoder that still
+/// runs at `running` above the lowered target of `target_bps` would keep
+/// exceeding the rate the session (and the user's ceiling) allows. That
+/// encoder fails its frame instead: the stage opens a fresh one at the
+/// lowered rate (`Running::failure_refuses` of the host process) or the
+/// next encoder of the codec, or names the failure.
+pub(in crate::screen::os) fn refused_lowering(
+    running: u32,
+    target_bps: u64,
+    limit: u32,
+) -> io::Result<()> {
+    let target = bounded_bitrate(target_bps, limit);
+    if target < running {
+        return Err(io::Error::other(format!(
+            "the encoder refused to lower its bit rate from {running} to {target} bit/s"
+        )));
+    }
+    Ok(())
+}
+
+/// P9, sharp mode, on a Media Foundation encoder (review 2026-11-19 B2):
+/// `eAVEncCommonRateControlMode_Quality` keeps no rate at all (its mean bit
+/// rate is not used and Microsoft documents no peak for it), so the session
+/// rate would no longer bound the stream. Sharp mode is therefore
+/// peak-constrained VBR (`eAVEncCommonRateControlMode_PeakConstrainedVBR`)
+/// with the session rate as mean and peak (`CODECAPI_AVEncCommonMaxBitRate`),
+/// as the GPU vendors' sharp mode keeps the session rate as its peak. An MFT
+/// that refuses either keeps CBR. Whether it was taken.
+fn peak_mode(api: &ICodecAPI, bitrate: u32) -> bool {
+    let key = &CODECAPI_AVEncCommonRateControlMode;
+    let peak = eAVEncCommonRateControlMode_PeakConstrainedVBR.0 as u32;
+    if set_value(api, key, VARIANT::from(peak)) && set_max_bitrate(api, bitrate) {
+        return true;
+    }
+    let cbr = eAVEncCommonRateControlMode_CBR.0 as u32;
+    set_value(api, key, VARIANT::from(cbr));
+    false
+}
+
+/// Sharp mode of an opened MFT when the session asks for it (`sharp`):
+/// `peak_mode`, named in the host log either way. Whether it was taken.
+pub(in crate::screen::os) fn sharp_mode(
+    api: Option<&ICodecAPI>,
+    sharp: bool,
+    bitrate: u32,
+    name: &str,
+) -> bool {
+    let Some(api) = api.filter(|_| sharp) else {
+        return false;
+    };
+    let taken = peak_mode(api, bitrate);
+    if taken {
+        eprintln!(
+            "screen encoder {name}: sharp mode as peak-constrained VBR (Media Foundation keeps no rate in its quality mode)"
+        );
+    } else {
+        eprintln!("screen encoder {name}: sharp mode refused (no peak-constrained VBR), CBR");
+    }
+    taken
+}
+
+/// Sets the peak bit rate; `true` when the encoder takes it and reads back
+/// no higher one (or does not tell).
+fn set_max_bitrate(api: &ICodecAPI, bitrate: u32) -> bool {
+    let key = &CODECAPI_AVEncCommonMaxBitRate;
+    set_value(api, key, VARIANT::from(bitrate))
+        && read_value(api, key).is_none_or(|read| u64::from(read) * 50 <= u64::from(bitrate) * 51)
 }

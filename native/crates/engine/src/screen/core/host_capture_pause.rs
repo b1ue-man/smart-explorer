@@ -5,17 +5,29 @@ impl Pipeline {
     pub fn begin_capture_active(&mut self, active: bool) -> io::Result<()> {
         self.capture_requested = active;
         self.capture_ready = None;
+        // A capture that already is in the asked state keeps its reference
+        // (review 2026-11-19, C3); whoever needs a new one asks for it.
+        if self.capture_transition.is_none() && self.capture_applied == Some(active) {
+            self.capture_active = active;
+            self.capture_ready = Some(Ok(()));
+            return Ok(());
+        }
         self.capture_active = false;
         self.invalidate_reference();
         if self.capture_transition.is_some() {
             return Ok(());
         }
-        if self.capture_applied == Some(active) {
-            self.capture_active = active;
-            self.capture_ready = Some(Ok(()));
+        self.start_capture_transition(active)
+    }
+    /// The capture stays as it is (a visible view whose visible area alone
+    /// changed): `poll_capture_active` reports its state once more without
+    /// a new reference. A transition on its way reports itself; a capture
+    /// not in the asked state starts its transition (`begin_capture_active`).
+    pub fn confirm_capture_active(&mut self) -> io::Result<()> {
+        if self.capture_transition.is_some() || self.capture_ready.is_some() {
             return Ok(());
         }
-        self.start_capture_transition(active)
+        self.begin_capture_active(self.capture_requested)
     }
     pub(super) fn start_capture_transition(&mut self, active: bool) -> io::Result<()> {
         let runtime = tokio::runtime::Handle::try_current().map_err(io::Error::other)?;

@@ -162,14 +162,18 @@ impl OpenH264Encoder {
     /// Sets a changed bit rate (at least 2 % off) on the running encoder:
     /// the maximum first when it rises, the target first when it falls, so
     /// the target never exceeds the maximum. A refused option keeps the old
-    /// rate.
-    fn retune(&mut self, target: c_int) {
+    /// rate. Review 2026-11-19 C10: a lowered rate is set however small the
+    /// step (the 2 % band holds back rises only), and a refused lowering
+    /// fails the picture, so the stage opens a fresh encoder at that rate or
+    /// the next one instead of running above it.
+    fn retune(&mut self, target: c_int) -> io::Result<()> {
         let current = self.bitrate;
-        if (i64::from(target) - i64::from(current)).abs() * 50 < i64::from(current) {
-            return;
+        let lowered = target < current;
+        if !lowered && (i64::from(target) - i64::from(current)).abs() * 50 < i64::from(current) {
+            return Ok(());
         }
         let Some(encoder) = self.encoder.as_mut() else {
-            return;
+            return Ok(());
         };
         let max = [
             (ENCODER_OPTION_MAX_BITRATE, SPATIAL_LAYER_ALL),
@@ -202,7 +206,12 @@ impl OpenH264Encoder {
         }
         if accepted {
             self.bitrate = target;
+        } else if lowered {
+            return Err(io::Error::other(format!(
+                "OpenH264 refused to lower its bit rate from {current} to {target} bit/s"
+            )));
         }
+        Ok(())
     }
 }
 
@@ -220,7 +229,7 @@ impl ScreenEncoder for OpenH264Encoder {
         let target = clamp_bitrate(request.target_bps, self.limit);
         let first = self.encoder.is_none();
         if !first {
-            self.retune(target);
+            self.retune(target)?;
         }
         let yuv = admitted_i420(&grant, frame)?;
         let yuv = yuv.resource();
@@ -280,7 +289,7 @@ impl ScreenEncoder for OpenH264Encoder {
         let target = clamp_bitrate(target_bps, self.limit);
         let first = self.encoder.is_none();
         if !first {
-            self.retune(target);
+            self.retune(target)?;
         }
         let yuv = bgra_to_i420_parallel(&frame.view(), YuvMatrix::Bt709, FrameLimits::LEGACY)?;
         let (width, height) = (self.size.width as usize, self.size.height as usize);

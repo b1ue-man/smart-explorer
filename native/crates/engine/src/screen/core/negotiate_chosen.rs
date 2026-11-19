@@ -11,6 +11,11 @@ use super::{negotiate_trusted, CodecChoice, CodecKind, CodecOffer, CodecPreferen
 use crate::screen::core::frame_budget::FrameContract;
 use crate::screen::core::sharp_mode;
 
+/// The reason of a viewer that names no decoder in `SET_DECODERS`: the
+/// wording of the chosen codec without a decoder, which every viewer
+/// translates (`codec_reason_text`, `ScreenChoiceNotices.kt`).
+pub const EMPTY_OFFER: &str = "the viewer has no decoder of this codec";
+
 /// No pairing of the chosen codec: the reason for the viewer.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ChosenUnavailable {
@@ -20,6 +25,11 @@ pub struct ChosenUnavailable {
 
 impl std::fmt::Display for ChosenUnavailable {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // A viewer that names no decoder named no choice either: the reason
+        // alone, the viewer names its own choice (`EMPTY_OFFER`).
+        if self.preference == CodecPreference::Auto {
+            return write!(f, "chosen_codec_unavailable: {}", self.reason);
+        }
         write!(
             f,
             "chosen_codec_unavailable: {}: {}",

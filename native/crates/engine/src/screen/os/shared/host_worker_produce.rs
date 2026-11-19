@@ -107,12 +107,14 @@ impl Worker {
         };
         // An encoder that fails while encoding gives way to every remaining
         // stage of the rank once (`refused`, W4 B3); the stages are counted
-        // only after a failure (plan 2026-11-17 P3).
+        // only after a failure (plan 2026-11-17 P3). A working instance that
+        // fails first gets one fresh instance of its own factory
+        // (`Running::failure_refuses`, review 2026-11-19 B1).
         let mut request = std::borrow::Cow::Borrowed(request);
         let mut max_attempts: Option<usize> = None;
         let mut attempt = 0;
+        let mut fresh: Option<String> = None;
         let (frame, running) = loop {
-            attempt += 1;
             let running = match self.encoder_for(&request) {
                 Ok(running) => running,
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
@@ -120,17 +122,32 @@ impl Worker {
                 }
                 Err(error) => return failed(ScreenErrorCode::EncoderFailed, error),
             };
-            match running.encoder.encode_picture(&image, &request) {
-                Ok(frame) => break (frame, running),
+            running.replaces_failed |= fresh.take().as_ref() == Some(&running.factory);
+            let encoded = running.encoder.encode_picture(&image, &request);
+            match encoded.and_then(|frame| keyed(frame, &request)) {
+                Ok(frame) => {
+                    running.delivered += 1;
+                    break (frame, running);
+                }
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                     return WorkerReply::Frame(StageFrame::Unchanged { source_size })
                 }
                 Err(error) => {
                     let factory = running.factory.clone();
+                    let refuses = running.failure_refuses();
                     self.encoder = None;
                     if factory == crate::screen::core::codec_registry::TILES_NAME {
                         return failed(ScreenErrorCode::EncoderFailed, error);
                     }
+                    request.to_mut().keyframe = true;
+                    if !refuses {
+                        eprintln!(
+                            "screen encoder: {factory} failed: {error}: a fresh one with a key frame"
+                        );
+                        fresh = Some(factory);
+                        continue;
+                    }
+                    attempt += 1;
                     if !self.refused.contains(&factory) {
                         self.refused.push(factory);
                     }
@@ -142,7 +159,6 @@ impl Worker {
                     if attempt >= stages {
                         return failed(ScreenErrorCode::EncoderFailed, error);
                     }
-                    request.to_mut().keyframe = true;
                 }
             }
         };
@@ -208,6 +224,8 @@ impl Worker {
                 choice: request.choice,
                 frame_contract: request.frame_contract,
                 book,
+                delivered: 0,
+                replaces_failed: false,
             });
         }
         self.encoder

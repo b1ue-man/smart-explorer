@@ -10,8 +10,11 @@ use super::*;
 use crate::screen::core::first_picture::{starts_group, StageAnswer};
 use crate::screen::core::host_stage::{StreamHint, StreamReport};
 use crate::screen::core::pacing::codec_cap;
+use crate::screen::core::rate_control::codec_ceiling_bps;
 use crate::screen::core::rate_control::model::start_table_bps;
-use crate::screen::core::rate_control::{codec_ceiling_bps, PathKind};
+
+#[path = "host_pipeline_admit.rs"]
+mod admit;
 
 /// Dropped pictures one report adds to the statistics at most.
 const MAX_REPORTED_DROPS: u64 = 1 << 16;
@@ -68,12 +71,13 @@ impl Pipeline {
             // A chosen codec waits for a picture it can carry (plan
             // 2026-11-18); only „Automatisch“ takes the tiles meanwhile.
             if !self.quality_policy.scope().tiles_allowed() {
-                return Ok(Produced::Idle);
+                return Ok(self.wait_for_size(fitted));
             }
             self.fall_back_to_tiles();
             self.chain_ready = true;
             return Ok(Produced::Reset);
         }
+        self.quality_policy.small_picture = None;
         let rate = if video {
             self.choice.max_macroblocks_per_second
         } else {
@@ -148,8 +152,10 @@ impl Pipeline {
         let mut target = self.rate.target_bps();
         // Plan 2026-11-18 „Netzrate“ M1: the tiles keep the ceilings (and E
         // while the path is congested) by their byte budget; dirty tiles
-        // wait for the next picture, none is lost (`tiles_rate.rs`).
-        if !video && !self.rate.tiles_admit(now) {
+        // wait for the next picture, none is lost (`tiles_rate.rs`). Review
+        // 2026-11-19: a video stream keeps the user's ceiling by the same
+        // budget, key frames included (`rate_tiles.rs`).
+        if !self.rate.stream_admit(now, video) {
             return Ok(Produced::Idle);
         }
         // B-35: the stale time follows the smoothed round trip of the path
@@ -370,9 +376,9 @@ impl Pipeline {
                     .await;
                 if matches!(sent, Ok(Produced::Sent)) {
                     self.quality_policy.first_picture.restart();
-                    if !request.choice.codec.is_video() {
-                        self.rate.on_tiles_sent(send_started_us, encoded_bytes);
-                    }
+                    let video = request.choice.codec.is_video();
+                    self.rate
+                        .on_stream_sent(send_started_us, encoded_bytes, video);
                 }
                 sent
             }
@@ -427,21 +433,6 @@ impl Pipeline {
         self.note_encoder(format!("encoder_fallback_to_tiles: {error}"));
         self.fall_back_to_tiles();
         Ok(Produced::Reset)
-    }
-
-    /// One picture may be encoded ahead of its frame when the unacknowledged
-    /// bytes plus this frame and the next one (each the session's mean frame
-    /// size) stay under the queue guard of the pacer (`Pacer::guard`, P9);
-    /// a preview never does.
-    fn ahead_allowed(&self, target: u64, path: PathKind, rtt_us: u64) -> bool {
-        if self.kind == StreamKind::Preview || self.totals.frames == 0 {
-            return false;
-        }
-        let mean = self.totals.bytes / self.totals.frames;
-        self.pacer
-            .unacked_bytes()
-            .saturating_add(mean.saturating_mul(2))
-            <= self.pacer.guard(target, path, rtt_us)
     }
 
     async fn poll_prepared_source(&mut self, work_epoch: u64) -> Result<Produced, PipelineError> {
