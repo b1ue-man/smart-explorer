@@ -82,6 +82,8 @@ class ScreenDecoder(
     private var latestGop = 0L
     private var codecWidth=0
     private var codecHeight=0
+    /** The Surface the running decoder was configured with. */
+    private var codecSurface: Surface? = null
     /** The codec key of the running decoder (`h264`, `hevc`, `av1`); only H.264 is checked with `ScreenFrameLimits.checkAvc`. */
     private var activeCodec=ScreenEncoderCodecs.H264
     private val avcChecked get()=activeCodec==ScreenEncoderCodecs.H264
@@ -246,12 +248,19 @@ class ScreenDecoder(
             return
         }
         if (!newStream && !keyframe) return
-        // A new group (or a decoder that failed): the old decoder goes, its buffers with it.
         val payload = ByteArray(len)
         src.position(payloadOffset)
         src.get(payload)
         val info = awaitStream(gop) ?: return
         frameEpoch=presentationEpoch()
+        // The same group restarts at its key frame (the core's queue stalled or a record broke,
+        // `viewer_sink.rs`): same encoder, codec, size and Surface, so the running decoder is
+        // flushed and keeps going instead of being torn down and opened again.
+        if (restartInPlace(info, gop)) {
+            queueBytes(payload, pts, keyframe)
+            return
+        }
+        // A new group (or a decoder that failed): the old decoder goes, its buffers with it.
         releaseCodec()
         hybrid?.close();hybrid=null;hybridGop=-1L
         if (!configure(info, gop, payload)) return
@@ -314,12 +323,36 @@ class ScreenDecoder(
         }
     }
 
+    /**
+     * Restarts the running decoder at the key frame of its own group [gop] with `flush()` (synchronous mode: every
+     * buffer index is revoked, the codec stays configured and Executing). MediaCodec allows this only for data of
+     * the same format and only once the decoder gave output (before that the parameter sets would have to be
+     * submitted again), so anything else (another group, codec, size or Surface, no output yet, a refused flush)
+     * returns false and the caller opens a new decoder as before.
+     */
+    private fun restartInPlace(info: ScreenViewEvent.Stream, gop: Long): Boolean {
+        val c = codec ?: return false
+        if (gop != codecGop || awaitingKeyframe || info.codec != activeCodec ||
+            info.width != codecWidth || info.height != codecHeight) return false
+        val target = codecSurface ?: return false
+        if (surface() !== target) return false
+        try {
+            c.flush()
+        } catch (_: IllegalStateException) {
+            return false
+        }
+        heldIndex = -1
+        submitted.clear(); rendering.clear(); keyQueued=false
+        awaitingKeyframe = true
+        return true
+    }
+
     private fun awaitStream(gop: Long): ScreenViewEvent.Stream? {
-        var waited = 0
+        var waited = 0L
         while (running && waited <= STREAM_WAIT_MS) {
             streamOf(gop)?.takeIf { it.gop==gop }?.let { latestGop=gop; return it }
-            Thread.sleep(STREAM_POLL_MS)
-            waited += STREAM_POLL_MS.toInt()
+            Thread.sleep(STREAM_EVENT_POLL_MS)
+            waited += STREAM_EVENT_POLL_MS
         }
         if(running) fail()
         return null
@@ -384,7 +417,7 @@ class ScreenDecoder(
                         }
                     }, Handler(Looper.getMainLooper()))
                     created.start()
-                    codec=created; codecGop=gop; awaitingKeyframe=true; activeCodec=codecKey
+                    codec=created; codecGop=gop; awaitingKeyframe=true; activeCodec=codecKey; codecSurface=target
                     listener.onDecoderStage(codecKey,candidate.name,candidate.isHardwareAccelerated)
                     return true
                 } catch(e: RuntimeException) {
@@ -466,6 +499,7 @@ class ScreenDecoder(
         heldIndex = -1
         codecGop = -1L
         submitted.clear(); rendering.clear(); keyQueued=false
+        codecSurface = null
         val old = codec ?: return
         codec = null
         try {
@@ -499,6 +533,8 @@ class ScreenDecoder(
         /** The `stream` event arrives through the event poll, a moment after the first picture. */
         private const val STREAM_WAIT_MS = 2_000
         private const val STREAM_POLL_MS = 20L
+        /** How often [awaitStream] looks for the group's `stream` event: it holds the group's first picture meanwhile. */
+        private const val STREAM_EVENT_POLL_MS = 2L
 
         /** The decoders this phone offers the host: H.264 per profile and hardware, and always `tiles`. */
         fun offers(): List<DecoderOffer> {

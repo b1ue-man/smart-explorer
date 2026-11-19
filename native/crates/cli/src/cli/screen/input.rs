@@ -8,10 +8,13 @@
 //! share of it (`50%,50%` is the middle). `--key` names keys of
 //! `se screen probe`'s toolbar and of the HID table (`a`, `enter`, `f5`,
 //! `ctrl_left+c`: pressed in order, released backwards). Ctrl+Alt+Delete is
-//! never sent. JSON `{"delivered","blocked"}`; `blocked` is
-//! `elevated_window`, `secure_desktop`, `control_unavailable` or
-//! `unsupported_on_host`, and the exit code is 1 then. No input is ever
-//! logged.
+//! never sent. The input goes out once the session has received a complete
+//! picture (the host takes input only after the viewer acknowledged a picture
+//! of its current reference). JSON `{"sent","blocked"}`: `sent` says the input
+//! left this device; the host does not confirm that it applied it, so it is
+//! no delivery receipt. `blocked` is `elevated_window`, `secure_desktop`,
+//! `control_unavailable` or `unsupported_on_host`, and the exit code is 1
+//! then. No input is ever logged.
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
@@ -223,10 +226,12 @@ fn needs_size(action: &InputAction) -> bool {
     )
 }
 
-/// What the device did with the input.
+/// What became of the input: `sent` when it left this device and the
+/// device did not block it within `BLOCK_WAIT`. The host sends no receipt
+/// for applied input, so this is never a delivery confirmation.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Delivered {
-    pub delivered: bool,
+pub(crate) struct InputOutcome {
+    pub sent: bool,
     pub blocked: Option<ControlBlock>,
 }
 
@@ -239,7 +244,7 @@ pub(crate) fn deliver(
     action: &InputAction,
     accept_within: Option<Duration>,
     mut notice: impl FnMut(Capability),
-) -> Result<Delivered, String> {
+) -> Result<InputOutcome, String> {
     let request = StreamRequest {
         expected_node: None,
         frame_capabilities: None,
@@ -310,8 +315,8 @@ pub(crate) fn deliver(
             InputAction::Action(action) => hello.input.actions.contains(action),
         };
         if !supported {
-            return Ok(Delivered {
-                delivered: false,
+            return Ok(InputOutcome {
+                sent: false,
                 blocked: Some(ControlBlock::UnsupportedOnHost),
             });
         }
@@ -326,14 +331,21 @@ pub(crate) fn deliver(
         }
         .map(|monitor| FrameSize::new(monitor.width, monitor.height))
         .filter(|size| size.width > 0 && size.height > 0);
-        if size.is_none() && needs_size(action) {
-            let deadline = Instant::now() + ANSWER_WAIT;
-            while size.is_none() && Instant::now() < deadline {
-                if let Some(StreamEvent::Record { header, .. }) =
-                    next(Some(deadline - Instant::now()))?
-                {
-                    size = Some(header.size);
+        // The host drops input silently until the viewer acknowledged a
+        // picture of its current reference (`host_session_control.rs`,
+        // `input`); the worker acknowledges every picture it receives, so
+        // the input waits for the first complete one (at most `ANSWER_WAIT`;
+        // without one it still goes out, as before).
+        let deadline = Instant::now() + ANSWER_WAIT;
+        let mut picture = false;
+        while (!picture || (size.is_none() && needs_size(action))) && Instant::now() < deadline {
+            match next(Some(deadline - Instant::now()))? {
+                Some(StreamEvent::Record { header, record }) => {
+                    size = size.or(Some(header.size));
+                    picture |= !record.has_more();
                 }
+                Some(StreamEvent::End(end)) => return Err(end.code),
+                _ => {}
             }
         }
         let batch = events(action, size)?;
@@ -346,8 +358,8 @@ pub(crate) fn deliver(
                 Some(StreamEvent::Host(HostFrame::ControlState(state)))
                     if state.blocked.is_some() =>
                 {
-                    return Ok(Delivered {
-                        delivered: false,
+                    return Ok(InputOutcome {
+                        sent: false,
                         blocked: state.blocked,
                     })
                 }
@@ -362,8 +374,8 @@ pub(crate) fn deliver(
                 _ => {}
             }
         }
-        Ok(Delivered {
-            delivered: true,
+        Ok(InputOutcome {
+            sent: true,
             blocked: None,
         })
     })();
@@ -387,22 +399,22 @@ pub(super) fn run(args: InputArgs) -> Result<i32, String> {
         .transpose()
         .map_err(|error| format!("--source: {error}"))?;
     let choice = super::select_device(&args.device)?;
-    let delivered = deliver(
+    let outcome = deliver(
         choice.target,
         source,
         &action,
         None,
         super::pending_notice(choice.name),
     )?;
-    let blocked = delivered
+    let blocked = outcome
         .blocked
         .map(|blocked| serde_json::to_value(blocked).unwrap_or_default());
-    let value = json!({ "delivered": delivered.delivered, "blocked": blocked });
+    let value = json!({ "sent": outcome.sent, "blocked": blocked });
     super::output::print(args.json, &value, || match &blocked {
-        None => "delivered\n".to_string(),
+        None => "sent\n".to_string(),
         Some(reason) => format!("blocked\t{}\n", reason.as_str().unwrap_or_default()),
     });
-    Ok(if delivered.delivered { 0 } else { 1 })
+    Ok(if outcome.sent { 0 } else { 1 })
 }
 
 #[cfg(test)]
