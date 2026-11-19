@@ -286,7 +286,11 @@ fn serve(
         // Gemini round 3, 5.4: a capture switch to the state it has already
         // changes no capture and keeps the stream's encoder.
         let same = match &request {
-            WorkerRequest::SetCaptureActive(active) => {
+            // Gemini round 5, 6: the daemon's `Activity` too.
+            WorkerRequest::SetCaptureActive(active)
+            | WorkerRequest::CaptureControl(
+                crate::screen::core::worker_capture_wire::CaptureRequest::Activity(active),
+            ) => {
                 worker
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner)

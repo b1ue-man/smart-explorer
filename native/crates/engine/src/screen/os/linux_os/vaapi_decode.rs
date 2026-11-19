@@ -48,6 +48,13 @@ use crate::screen::core::wire_binary::{FrameRecord, GopHeader};
 static FAILED: Mutex<SessionSlots<(Vec<PathBuf>, Vec<PathBuf>)>> = Mutex::new(SessionSlots::new());
 
 pub(super) fn refused(node: &Path) -> bool {
+    // Gemini round 5, 7.2: a chosen „Dekodierer: Hardware“ is never replaced
+    // (user rule): VA-API stays offered and is tried again for the next
+    // picture group, as FFmpeg keeps its hardware stages (`open_stages`).
+    use crate::screen::core::negotiate::{chosen_decoder_preference, DecoderPreference};
+    if chosen_decoder_preference() == DecoderPreference::Hardware {
+        return false;
+    }
     let mut failed = FAILED.lock().unwrap_or_else(PoisonError::into_inner);
     failed
         .get(session_epoch())
