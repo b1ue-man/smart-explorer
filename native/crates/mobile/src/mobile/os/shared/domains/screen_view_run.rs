@@ -460,7 +460,10 @@ fn on_host_frame(session: &ViewSession, encoder: &mut (String, bool), own: &str,
             let blocked = state
                 .blocked
                 .and_then(|block| serde_json::to_value(block).ok());
-            let fields = json!({ "holder": holder, "blocked": blocked });
+            // E2: the host held input back without applying it; `null`
+            // while nothing is held (and from a host without the field).
+            let held = state.held.and_then(|held| serde_json::to_value(held).ok());
+            let fields = json!({ "holder": holder, "blocked": blocked, "held": held });
             emit(id, "controlState", fields);
         }
         HostFrame::Error(error) => {

@@ -450,6 +450,8 @@ fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, a
         ui.codecError != null -> ui.codecError.orEmpty()
         !ui.inputReady && controlOn -> "Warte auf vollständiges aktuelles Bild …"
         failures > 3 -> stringResource(R.string.screen_view_decode_failed)
+        // A held batch was not applied; its state only repeats an earlier block, so `held` comes first.
+        ui.held != null && sending -> ScreenTexts.heldText(ui.held.orEmpty())
         ui.blocked != null && sending -> ScreenTexts.blockedText(context, ui.blocked.orEmpty())
         ui.holder == "other" -> ScreenTexts.errorText(context, "control_busy")
         ui.errorCode != null -> ScreenTexts.errorText(context, ui.errorCode.orEmpty(), ui.errorDetail)

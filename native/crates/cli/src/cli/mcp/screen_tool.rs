@@ -137,7 +137,7 @@ fn audio(args: &Args) -> Result<CallToolResult, String> {
     ))
 }
 
-pub(super) const INPUT_DESCRIPTION: &str = "Clicks, moves the pointer, scrolls, types text, presses a key or a key combination, or runs an Android system action on the screen of a paired device (one input per call). The other device must have granted „screen control“ to this device; if it asks its user, the call waits up to `wait` seconds (default 30) and then fails with `approval_pending`. Coordinates are pixels of the source or percentages (`50%`). The answer says whether the input was sent (`sent`; the device sends no receipt that it applied it) or why the device blocked it (`elevated_window`, `secure_desktop`, `control_unavailable`, `unsupported_on_host`). Ctrl+Alt+Delete is never sent.";
+pub(super) const INPUT_DESCRIPTION: &str = "Clicks, moves the pointer, scrolls, types text, presses a key or a key combination, or runs an Android system action on the screen of a paired device (one input per call). The other device must have granted „screen control“ to this device; if it asks its user, the call waits up to `wait` seconds (default 30) and then fails with `approval_pending`. Coordinates are pixels of the source or percentages (`50%`). The answer says whether the input was sent (`sent`; the device sends no receipt that it applied it), why the device blocked it (`blocked`: `elevated_window`, `secure_desktop`, `control_unavailable`, `unsupported_on_host`) or why it held the input back without applying it (`held`: `viewer_hidden`, `waiting_for_picture`, `release_pending`, `other`). Ctrl+Alt+Delete is never sent.";
 
 pub(super) fn input_properties() -> Value {
     json!({
@@ -164,7 +164,7 @@ pub(super) fn input_properties() -> Value {
     })
 }
 
-/// The tool `screen_input`: one input, the answer `{"sent","blocked"}`.
+/// The tool `screen_input`: one input, the answer `{"sent","blocked","held"}`.
 pub(super) fn screen_input(args: &Args) -> Result<CallToolResult, String> {
     let selector = args.string("device")?;
     let source = args
@@ -202,6 +202,7 @@ pub(super) fn screen_input(args: &Args) -> Result<CallToolResult, String> {
         "device": device,
         "sent": outcome.sent,
         "blocked": outcome.blocked,
+        "held": outcome.held,
     })))
 }
 

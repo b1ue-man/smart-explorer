@@ -10,11 +10,14 @@
 //! `ctrl_left+c`: pressed in order, released backwards). Ctrl+Alt+Delete is
 //! never sent. The input goes out once the session has received a complete
 //! picture (the host takes input only after the viewer acknowledged a picture
-//! of its current reference). JSON `{"sent","blocked"}`: `sent` says the input
-//! left this device; the host does not confirm that it applied it, so it is
-//! no delivery receipt. `blocked` is `elevated_window`, `secure_desktop`,
-//! `control_unavailable` or `unsupported_on_host`, and the exit code is 1
-//! then. No input is ever logged.
+//! of its current reference). JSON `{"sent","blocked","held"}`: `sent` says
+//! the input left this device and the device neither blocked nor held it
+//! back; the host does not confirm that it applied it, so it is no delivery
+//! receipt. `blocked` is `elevated_window`, `secure_desktop`,
+//! `control_unavailable` or `unsupported_on_host`; `held` says the host held
+//! the input back without applying it (`viewer_hidden`,
+//! `waiting_for_picture`, `release_pending`, `other`). With either the exit
+//! code is 1. No input is ever logged.
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
@@ -27,7 +30,7 @@ use crate::screen::core::input_model::{key_usage, InputEvent, PointerButton, Sys
 use crate::screen::core::negotiate::CodecOffer;
 use crate::screen::core::pixel_convert::FrameSize;
 use crate::screen::core::window_list::SourceId;
-use crate::screen::core::wire_control::{ControlBlock, HostFrame, ViewerFrame};
+use crate::screen::core::wire_control::{ControlBlock, HostFrame, InputHeld, ViewerFrame};
 use crate::screen::core::wire_hello::SessionMode;
 use crate::share::access_grant::Capability;
 use crate::share::PeerOpenTarget;
@@ -227,12 +230,14 @@ fn needs_size(action: &InputAction) -> bool {
 }
 
 /// What became of the input: `sent` when it left this device and the
-/// device did not block it within `BLOCK_WAIT`. The host sends no receipt
-/// for applied input, so this is never a delivery confirmation.
+/// device neither blocked nor held it back within `BLOCK_WAIT`. The host
+/// sends no receipt for applied input, so this is never a delivery
+/// confirmation. `held`: the host dropped the batch without applying it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct InputOutcome {
     pub sent: bool,
     pub blocked: Option<ControlBlock>,
+    pub held: Option<InputHeld>,
 }
 
 /// Opens a control session to `target`, sends `action` and ends it.
@@ -318,6 +323,7 @@ pub(crate) fn deliver(
             return Ok(InputOutcome {
                 sent: false,
                 blocked: Some(ControlBlock::UnsupportedOnHost),
+                held: None,
             });
         }
         let mut size = match &source {
@@ -355,12 +361,22 @@ pub(crate) fn deliver(
         let deadline = Instant::now() + BLOCK_WAIT;
         while Instant::now() < deadline {
             match next(Some(deadline - Instant::now()))? {
+                // Held back (E2): not applied. Its `blocked` only repeats the
+                // block reported before this batch, so `held` decides.
+                Some(StreamEvent::Host(HostFrame::ControlState(state))) if state.held.is_some() => {
+                    return Ok(InputOutcome {
+                        sent: false,
+                        blocked: None,
+                        held: state.held,
+                    })
+                }
                 Some(StreamEvent::Host(HostFrame::ControlState(state)))
                     if state.blocked.is_some() =>
                 {
                     return Ok(InputOutcome {
                         sent: false,
                         blocked: state.blocked,
+                        held: None,
                     })
                 }
                 Some(StreamEvent::Host(HostFrame::Error(error))) => {
@@ -377,6 +393,7 @@ pub(crate) fn deliver(
         Ok(InputOutcome {
             sent: true,
             blocked: None,
+            held: None,
         })
     })();
     let _ = control.close();
@@ -409,10 +426,14 @@ pub(super) fn run(args: InputArgs) -> Result<i32, String> {
     let blocked = outcome
         .blocked
         .map(|blocked| serde_json::to_value(blocked).unwrap_or_default());
-    let value = json!({ "sent": outcome.sent, "blocked": blocked });
-    super::output::print(args.json, &value, || match &blocked {
-        None => "sent\n".to_string(),
-        Some(reason) => format!("blocked\t{}\n", reason.as_str().unwrap_or_default()),
+    let held = outcome
+        .held
+        .map(|held| serde_json::to_value(held).unwrap_or_default());
+    let value = json!({ "sent": outcome.sent, "blocked": blocked, "held": held });
+    super::output::print(args.json, &value, || match (&held, &blocked) {
+        (Some(reason), _) => format!("held\t{}\n", reason.as_str().unwrap_or_default()),
+        (None, Some(reason)) => format!("blocked\t{}\n", reason.as_str().unwrap_or_default()),
+        (None, None) => "sent\n".to_string(),
     });
     Ok(if outcome.sent { 0 } else { 1 })
 }

@@ -107,7 +107,10 @@ pub(super) fn event(session: &ViewSession, frame: &HostFrame) -> Option<Result<b
             }
             Ok((false, Vec::new()))
         }
-        HostFrame::ControlState(state) if state.blocked.is_some() || state.holder.is_none() => {
+        // A held state (E2) only repeats the block heard before; it is no new block.
+        HostFrame::ControlState(state)
+            if (state.blocked.is_some() && state.held.is_none()) || state.holder.is_none() =>
+        {
             family.disarm();
             return None;
         }

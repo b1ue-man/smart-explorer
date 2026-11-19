@@ -108,7 +108,7 @@ internal object CoreEvents {
             )
             "stats" -> ScreenViewEvent.Stats(session, event)
             "rateCeiling" -> ScreenViewEvent.RateCeiling(session, event.text("rateCeiling") ?: return null)
-            "controlState" -> ScreenViewEvent.ControlState(session, event.text("holder"), event.text("blocked"))
+            "controlState" -> ScreenViewEvent.ControlState(session, event.text("holder"), event.text("blocked"), event.text("held"))
             "visibilityAck" -> ScreenViewEvent.VisibilityAck(
                 session,
                 (event["geometryGeneration"] as? JsonPrimitive)?.longOrNull ?: return null,
@@ -201,7 +201,8 @@ sealed interface ScreenViewEvent : CoreEvent {
     data class RateCeiling(override val session: Long, val state: String) : ScreenViewEvent
 
     /** [holder] `viewer`, `other` or `null`; [blocked] a `ControlBlock` key. */
-    data class ControlState(override val session: Long, val holder: String?, val blocked: String?) : ScreenViewEvent
+    /** [held]: the host held input back without applying it (`viewer_hidden`, `waiting_for_picture`, `release_pending`, `other`); `null` while nothing is held. */
+    data class ControlState(override val session: Long, val holder: String?, val blocked: String?, val held: String? = null) : ScreenViewEvent
 
     data class Windows(override val session: Long, val body: JsonObject) : ScreenViewEvent
     data class Family(override val session: Long, val body: JsonObject) : ScreenViewEvent

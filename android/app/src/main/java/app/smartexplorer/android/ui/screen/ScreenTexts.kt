@@ -118,4 +118,12 @@ object ScreenTexts {
     /** Why input does not reach the host. */
     fun blockedText(context: Context, key: String): String =
         context.getString(blockRes(key) ?: R.string.screen_block_other)
+
+    /** Why the host held input back without applying it (`ControlState.held`, E2). */
+    fun heldText(key: String): String = when (key) {
+        "viewer_hidden" -> "Eingabe zurückgehalten: Ansicht ist verdeckt"
+        "waiting_for_picture" -> "Eingabe wartet auf Bild"
+        "release_pending" -> "Eingabe wartet: gedrückte Tasten werden gelöst"
+        else -> "Eingabe vom Gerät zurückgehalten"
+    }
 }

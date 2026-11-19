@@ -68,6 +68,8 @@ data class ScreenSessionState(
     /** `viewer`, `other` or `null`. */
     val holder: String? = null,
     val blocked: String? = null,
+    /** The host held input back without applying it (E2); the next applied batch clears it. */
+    val held: String? = null,
     val errorCode: String? = null,
     val errorDetail: String? = null,
     /** An automatic codec fallback, separate from a terminal session error. */
@@ -146,7 +148,7 @@ data class ScreenSessionState(
             chainVirtualDisplay = ((event.body["chain"] as? JsonObject)?.get("virtualDisplay") as? JsonPrimitive)?.contentOrNull,
         )
         is ScreenViewEvent.RateCeiling -> copy(rateCeiling = event.state, rateAnswers = rateAnswers + 1)
-        is ScreenViewEvent.ControlState -> copy(holder = event.holder, blocked = event.blocked)
+        is ScreenViewEvent.ControlState -> copy(holder = event.holder, blocked = event.blocked, held = event.held)
         is ScreenViewEvent.Windows -> copy(windows = runCatching { screenJson.decodeFromJsonElement<ScreenWindows>(event.body) }.getOrNull())
         is ScreenViewEvent.Family -> copy(family = screenJson.decodeFromJsonElement<FamilyState>(event.body))
         is ScreenViewEvent.Error -> copy(errorCode = event.code, errorDetail = event.detail,
