@@ -200,7 +200,6 @@ pub(super) struct SvtAv1Encoder {
     deinit: unsafe extern "C" fn(Handle) -> c_int,
     deinit_handle: unsafe extern "C" fn(Handle) -> c_int,
     abi: SvtAbi,
-    library_name: String,
     size: FrameSize,
     fps: u32,
     bits_per_second: u64,
@@ -253,7 +252,6 @@ impl SvtAv1Encoder {
             deinit: symbol(&lib, library, "svt_av1_enc_deinit")?,
             deinit_handle: symbol(&lib, library, "svt_av1_enc_deinit_handle")?,
             abi,
-            library_name: library.to_owned(),
             size,
             fps,
             bits_per_second,
@@ -308,10 +306,13 @@ impl SvtAv1Encoder {
         keyframe: bool,
         deliver: &mut dyn FnMut(&[&[u8]]) -> io::Result<()>,
     ) -> io::Result<()> {
-        if keyframe && self.frames > 0 {
-            let lib = self.library_name.clone();
-            *self = Self::open(&lib, self.size, self.fps, self.bits_per_second)?;
-        }
+        // Codex round 4, finding 10 / Gemini round 3, 5.6: a key frame is
+        // asked of the running encoder with `pic_type` = `EB_AV1_KEY_PICTURE`
+        // (below). SVT-AV1 places key frames on the fly in CBR low delay
+        // since 1.8.0 (CHANGELOG: "Key_frame placement during the encoding
+        // session for CBR lowdelay mode"; the app's `FTR_KF_ON_FLY_SAMPLE`
+        // sets `pic_type` of the one picture); se needs 2.3.0 (`svt_abi`).
+        // Before, every key frame opened the whole encoder anew.
         let size = self.size;
         let chroma = size.chroma();
         if yuv.size != size

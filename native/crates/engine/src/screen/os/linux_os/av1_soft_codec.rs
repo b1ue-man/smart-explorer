@@ -163,8 +163,9 @@ impl HwH264Session for SvtSession {
         let HwInput::I420(yuv) = input else {
             return Err(invalid("SVT-AV1 takes I420"));
         };
-        let reopened =
-            self.encoder.is_none() || idr || needs_reopen(self.running, rate.bits_per_second);
+        // A key frame no longer opens the encoder anew (`SvtAv1Encoder::
+        // encode_with` asks it of the running one, Codex round 4, finding 10).
+        let reopened = self.encoder.is_none() || needs_reopen(self.running, rate.bits_per_second);
         if reopened {
             self.encoder = None;
             let opened = SvtAv1Encoder::open(
