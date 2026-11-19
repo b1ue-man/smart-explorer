@@ -170,6 +170,8 @@ impl Session<'_> {
                 };
                 self.release_blocked = result.err();
             }
+            // Round 6 (R4): what came meanwhile or failed goes on at once.
+            self.flush_releases();
             self.family_admitted(true)?;
             if self.release_blocked.is_some() || !self.handle.holds_control() {
                 return self
@@ -200,6 +202,8 @@ impl Session<'_> {
     pub(super) async fn family_input(&mut self, request: FamilyInput) -> io::Result<()> {
         self.family_admitted(true)?;
         if let Some(blocked) = self.release_blocked.take() {
+            // Round 6 (R4): the batch's releases of held keys go anyway.
+            self.release_held_ups(&request.events);
             return self
                 .frame(HostFrame::FamilyInput(FamilyInputResult {
                     blocked: Some(blocked),

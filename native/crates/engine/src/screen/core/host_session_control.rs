@@ -254,10 +254,10 @@ impl Session<'_> {
         let sink = self.pipeline.input_sink();
         let reference = self.pipeline.input_reference_generation();
         let presented = self.pipeline.presentation_supported();
+        // Round 6: every branch that does not inject the batch still lets
+        // go of what the batch releases of this session's held keys.
         if let Some(held) = self.hold_reason() {
-            if self.handle.holds_control() {
-                self.release_held_ups(events);
-            }
+            self.release_held_ups(events);
             return self.report_held(held).await;
         }
         if !presented
@@ -272,19 +272,19 @@ impl Session<'_> {
         // W3: a session without the control injects nothing, old releases
         // neither (`release_control` sent them once when it let go).
         if !self.handle.holds_control() {
+            self.release_held_ups(events);
             let detail = "input without control".to_string();
             return self.error(ScreenErrorCode::RightNotGranted, detail).await;
         }
         if let Some(blocked) = self.release_blocked.take() {
-            // D7: the releases that failed go out again in this batch's turn;
-            // the batch's own releases of held keys too (E2).
+            // D7, E2: the failed releases, the queued ones and this batch's
+            // releases of held keys go in one job (`flush_releases`).
             self.release_held_ups(events);
-            self.retry_releases();
             return self.report_block(blocked).await;
         }
-        // D7: failed releases go out before the next batch (that batch waits
+        // D7: owed releases go out before the next batch (that batch waits
         // behind them like behind every release, and the viewer hears so, N2).
-        if self.retry_releases() {
+        if self.releases_owed() {
             self.release_held_ups(events);
             return self.report_held(InputHeld::ReleasePending).await;
         }
@@ -400,10 +400,9 @@ impl Session<'_> {
     /// failed release goes in one job, and only after that job (at most
     /// `CLOSE_GRACE` each) another session may take the control.
     pub(super) async fn release_control(&mut self) {
-        self.finish_release().await;
-        // D7: releases that failed before go out with this one.
-        self.release_all_and_failed();
-        self.finish_release().await;
+        // Round 6 (R1): everything held, queued and failed goes before
+        // another session may take the control.
+        self.drain_releases().await;
         if self.handle.release_control() {
             let audit = self.context.audit;
             log_event(

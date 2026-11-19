@@ -1,7 +1,7 @@
 //! A portal batch the portal refused (review 2026-11-19, S2, S5): what it
 //! pressed is let go, the next batch reports the refusal, and a new portal
 //! identity starts without the state of the one before.
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 /// A refused batch the session took as applied (`send_input` queued it):
 /// the releases of what the batch pressed before `failed` and did not let
@@ -172,4 +172,65 @@ pub(in crate::screen::os) fn reset_portal_input() {
     *super::WHEEL_REST
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = (0, 0);
+}
+
+/// One batch of the portal thread: owed releases first, then the batch
+/// (`Batch::Input`), or the releases alone (`Batch::Release`, also empty).
+pub(in crate::screen::os) async fn dispatch_portal_batch(
+    remote: &ashpd::desktop::remote_desktop::RemoteDesktop,
+    session: &ashpd::desktop::Session<ashpd::desktop::remote_desktop::RemoteDesktop>,
+    identity: &Arc<crate::screen::os::pipewire_stream::identity::StreamIdentity>,
+    path: &str,
+    batch: crate::screen::os::portal_input::Batch,
+    sas: &mut crate::screen::os::input_keys::SasGuard,
+) {
+    use crate::screen::os::portal_input::Batch;
+    match batch {
+        Batch::Input(events) => {
+            // Owed releases first; refused again, this batch's go owed too (Codex 3/11).
+            let owed = take_owed();
+            if !release_owed_syms(remote, session).await {
+                refuse_unsupported(); // E3: the batch went nowhere
+                owe(owed);
+                owe(portal_releases(&events, 0));
+                return;
+            }
+            if !owed.is_empty() {
+                let left = super::apply_portal_release(remote, session, &owed, sas).await;
+                if !left.is_empty() {
+                    owe(left);
+                    owe(portal_releases(&events, 0));
+                    return;
+                }
+            }
+            if let Err((failed, block)) =
+                super::apply_portal_input(remote, session, identity, path, &events, sas).await
+            {
+                // Never the events themselves: input is not logged.
+                eprintln!(
+                    "screen host process: the portal refused input ({block:?}); \
+                     held keys of the batch are released"
+                );
+                let releases = portal_releases(&events, failed);
+                let left = super::apply_portal_release(remote, session, &releases, sas).await;
+                refuse(block);
+                owe(left);
+            }
+        }
+        Batch::Release {
+            identity: bound,
+            events,
+        } if Arc::ptr_eq(&bound, identity) && bound.session == path => {
+            release_owed_syms(remote, session).await;
+            // Round 6 (R3): the releases owed from before go first.
+            let mut all = take_owed();
+            all.extend(events);
+            let left = super::apply_portal_release(remote, session, &all, sas).await;
+            if !left.is_empty() {
+                eprintln!("screen host process: the portal refused a release");
+            }
+            owe(left);
+        }
+        Batch::Release { .. } => {}
+    }
 }

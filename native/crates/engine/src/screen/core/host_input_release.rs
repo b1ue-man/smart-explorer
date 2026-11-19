@@ -30,6 +30,10 @@ pub(super) struct InputHealth {
     /// or `family_operation`); the platform's `release` leaves failed
     /// releases to its caller (`input_send::release`).
     failed: Arc<Mutex<Vec<InputEvent>>>,
+    /// Releases waiting for the next job (one runs); session thread only.
+    pub(super) queued: Vec<InputEvent>,
+    /// The last new try of failed releases (`retry_failed_releases`).
+    retried: Option<Instant>,
     /// D6: the block the viewer's last `CONTROL_STATE` named.
     pub(super) block_reported: Option<ControlBlock>,
     /// E2: the viewer heard that input is held back, once per hold.
@@ -42,6 +46,10 @@ pub(super) struct InputHealth {
     /// operations started when it was refused (`Session::stale_refusal`).
     pub(super) unconfirmed: Option<(u64, u64)>,
 }
+
+/// How often failed releases are tried again (a lasting refusal, the secure
+/// desktop, costs no attempt per picture).
+const RELEASE_RETRY: std::time::Duration = std::time::Duration::from_secs(1);
 
 fn failed_list(failed: &Mutex<Vec<InputEvent>>) -> MutexGuard<'_, Vec<InputEvent>> {
     failed.lock().unwrap_or_else(PoisonError::into_inner)
@@ -62,38 +70,69 @@ impl Drop for Retained {
     }
 }
 
+/// The release invariant (review 2026-11-19, round 6): every release of a
+/// key, button or touch this session holds (`pressed`) or owes (`queued`,
+/// `failed`) reaches the sink exactly once and as early as it can, whatever
+/// the control, the family mode, a running job, a timeout or the end of the
+/// session. One way sends them: `flush_releases`, one job at a time; what a
+/// job could not deliver comes back to `failed` (`Retained`), what arrives
+/// while one runs waits in `queued` and goes with the next job, which
+/// `poll_input_release` starts as soon as the running one ended.
 impl Session<'_> {
+    /// Everything held now is let go (a new reference, a refused batch).
     pub(super) fn release_pressed(&mut self) {
         let released = self.pressed.release_all();
-        // Input is held while this job exists, so a second batch cannot grow
-        // behind it; what is held now goes after it (Gemini 3/10: it was
-        // left held), with the next retry or the release of the control.
-        if self.input_release.is_some() {
-            failed_list(&self.health.failed).extend(released);
-            return;
-        }
-        self.start_release(released);
+        self.health.queued.extend(released);
+        self.flush_releases();
     }
-    /// Gemini 3/10: the releases of keys and buttons the host holds go in
-    /// also while input waits (a hidden view, no presented picture yet, a
-    /// release first): they carry no position, and the viewer sends them
-    /// once only.
+    /// Gemini 3/10, E2: the releases of keys and buttons the host holds go
+    /// in from every batch, also one that is held back, refused or not this
+    /// session's turn: they carry no position, and the viewer sends each once.
     pub(super) fn release_held_ups(&mut self, events: &[InputEvent]) {
         let ups: Vec<InputEvent> = events
             .iter()
             .filter(|event| self.pressed.take_release(event))
             .cloned()
             .collect();
-        if self.input_release.is_some() {
-            failed_list(&self.health.failed).extend(ups);
-        } else {
-            self.start_release(ups);
+        self.health.queued.extend(ups);
+        self.flush_releases();
+    }
+    /// The one way releases go: the failed ones (older) and the queued ones
+    /// in one job, unless a job runs (`poll_input_release` starts the next
+    /// one when it ends). `true` while a job runs.
+    pub(super) fn flush_releases(&mut self) -> bool {
+        if self.input_release.is_none() {
+            let mut events = std::mem::take(&mut *failed_list(&self.health.failed));
+            events.append(&mut self.health.queued);
+            self.start_release(events, false);
+        }
+        self.input_release.is_some()
+    }
+    /// Releases wait to be delivered (failed or queued); input waits behind
+    /// them (N2).
+    pub(super) fn releases_owed(&self) -> bool {
+        !self.health.queued.is_empty() || !failed_list(&self.health.failed).is_empty()
+    }
+    /// Failed releases are tried again at most once per `RELEASE_RETRY`
+    /// (from `poll_input_release`, on every viewer frame and capture tick),
+    /// with or without the control: they are this session's own.
+    fn retry_failed_releases(&mut self) {
+        let due = self
+            .health
+            .retried
+            .is_none_or(|at| at.elapsed() >= RELEASE_RETRY);
+        if due && !failed_list(&self.health.failed).is_empty() {
+            self.health.retried = Some(Instant::now());
+            self.flush_releases();
         }
     }
     /// One release job for `events`; what fails goes back to
-    /// `InputHealth::failed` (`Retained`).
-    fn start_release(&mut self, events: Vec<InputEvent>) {
-        if events.is_empty() {
+    /// `InputHealth::failed` (`Retained`). `nudge`: also without events when
+    /// the source has a sink, so a sink that owes releases of its own (the
+    /// Wayland portal's refused ones) can deliver them (round 6, R3).
+    fn start_release(&mut self, events: Vec<InputEvent>, nudge: bool) {
+        let sink = self.pipeline.input_sink();
+        if events.is_empty() && !(nudge && sink.is_some()) {
             return;
         }
         let mut retained = Retained {
@@ -108,17 +147,22 @@ impl Session<'_> {
         // session waits for the job as for every release: input is held
         // while it exists (`input`), so later batches follow the releases.
         if let Ok(runtime) = tokio::runtime::Handle::try_current() {
-            let job: Box<dyn Fn(&[InputEvent]) -> Result<(), ControlBlock> + Send> =
-                match self.pipeline.input_sink() {
-                    Some(sink) => Box::new(move |events| sink.release(events)),
-                    None => {
-                        let backend = self.context.backend.clone();
-                        Box::new(move |events| backend.inject(events))
-                    }
-                };
+            let job: Box<dyn Fn(&[InputEvent]) -> Result<(), ControlBlock> + Send> = match sink {
+                Some(sink) => Box::new(move |events| sink.release(events)),
+                None => {
+                    let backend = self.context.backend.clone();
+                    Box::new(move |events| backend.inject(events))
+                }
+            };
             self.input_release = Some(runtime.spawn_blocking(move || {
                 // Gemini 3/10: a host process takes at most `MAX_INPUT_EVENTS`
                 // per batch (`encode_batch`); what went in leaves `retained`.
+                if retained.events.is_empty() {
+                    // A nudge: the sink's own debts; it reports nothing of ours.
+                    retained.released = true;
+                    let _ = job(&[]);
+                    return Ok(());
+                }
                 let mut done = 0;
                 let mut result = Ok(());
                 for chunk in retained.events.chunks(MAX_INPUT_EVENTS) {
@@ -147,36 +191,23 @@ impl Session<'_> {
         self.release_blocked = result.err();
         retained.released = self.release_blocked.is_none();
     }
-    /// D7: the releases that failed go out once more, alone: what the user
-    /// holds now (a drag, Shift) stays held (review O2b). `true` when there
-    /// were any. Not on every reference check (`refresh_input_reference`):
-    /// only with the next input batch and with the release of the control,
-    /// so a lasting block (the secure desktop) costs no release attempt per
-    /// picture.
-    pub(super) fn retry_releases(&mut self) -> bool {
-        if self.input_release.is_some() {
-            return false;
+    /// Lets go of everything this session holds or owes and waits for it,
+    /// at most `CLOSE_GRACE` per job (giving up the control, the end of the
+    /// session; round 6, R1): the running job, then one job with all that is
+    /// held, queued and failed (on an empty list a nudge for the sink's own
+    /// debts), then once more what that one could not deliver. A job that
+    /// outlasts its grace goes on, and the host log names it.
+    pub(super) async fn drain_releases(&mut self) {
+        self.finish_release().await;
+        let held = self.pressed.release_all();
+        self.health.queued.extend(held);
+        if !self.flush_releases() {
+            self.start_release(Vec::new(), true);
         }
-        let failed = std::mem::take(&mut *failed_list(&self.health.failed));
-        if failed.is_empty() {
-            return false;
+        self.finish_release().await;
+        if self.input_release.is_none() && self.flush_releases() {
+            self.finish_release().await;
         }
-        self.start_release(failed);
-        true
-    }
-    /// The release of the control: everything held now (newest first) and
-    /// the releases that failed before, in one job.
-    pub(super) fn release_all_and_failed(&mut self) {
-        // A job still running (one that outlasted `CLOSE_GRACE`, E4): what
-        // is held now waits behind it with the failed releases.
-        if self.input_release.is_some() {
-            let held = self.pressed.release_all();
-            failed_list(&self.health.failed).extend(held);
-            return;
-        }
-        let mut events = self.pressed.release_all();
-        events.append(&mut failed_list(&self.health.failed));
-        self.start_release(events);
     }
     /// Z3/Z4: waits for the running release job, at most `CLOSE_GRACE`; a
     /// job that takes longer stays the session's (E4: input keeps waiting
@@ -191,23 +222,33 @@ impl Session<'_> {
             Ok(Err(_)) => self.release_blocked = Some(ControlBlock::ControlUnavailable),
             Err(_) => {
                 super::visibility::note_viewer(
-                    "the release of held input outlasted the close grace; the control goes on",
+                    "the release of held input outlasted the close grace; it goes on",
                 );
                 self.input_release = Some(job);
             }
         }
     }
+    /// The running job's end; releases queued meanwhile go at once in the
+    /// next job (failed ones wait for `retry_failed_releases`, so a lasting
+    /// refusal costs no attempt per picture).
     pub(super) fn poll_input_release(&mut self) {
         let Some(mut job) = self.input_release.take() else {
+            self.retry_failed_releases();
             return;
         };
         let mut cx = std::task::Context::from_waker(futures_util::task::noop_waker_ref());
         match std::pin::Pin::new(&mut job).poll(&mut cx) {
-            std::task::Poll::Pending => self.input_release = Some(job),
+            std::task::Poll::Pending => {
+                self.input_release = Some(job);
+                return;
+            }
             std::task::Poll::Ready(Ok(result)) => self.release_blocked = result.err(),
             std::task::Poll::Ready(Err(_)) => {
                 self.release_blocked = Some(ControlBlock::ControlUnavailable)
             }
+        }
+        if !self.health.queued.is_empty() {
+            self.flush_releases();
         }
     }
 }
