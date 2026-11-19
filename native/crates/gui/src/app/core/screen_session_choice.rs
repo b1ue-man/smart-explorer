@@ -98,8 +98,8 @@ impl Shared {
 /// FFmpeg nor Media Foundation, Codex 6/13) takes no fallback to the tiles;
 /// „Verlustfrei“ chose the tiles itself.
 pub fn hardware_bars_tiles(codec: CodecSetting) -> bool {
-    let decoder = super::screen_prefs::decoder_choice();
-    let library = super::screen_prefs::decoder_library_choice();
+    let decoder = super::super::screen_prefs::decoder_choice();
+    let library = super::super::screen_prefs::decoder_library_choice();
     let hardware = decoder == crate::screen::core::negotiate::DecoderPreference::Hardware;
     let named = library != crate::screen::core::decoder_library::DecoderLibrary::Automatic;
     (hardware || named) && codec != CodecSetting::Lossless
@@ -113,7 +113,7 @@ pub fn hardware_bars_tiles(codec: CodecSetting) -> bool {
 /// (`StreamRequest::unavailable_choice`, no tiles offered there).
 pub(super) fn library_refusal(request: &crate::daemon::StreamRequest) -> Option<String> {
     use crate::screen::core::decoder_library::DecoderLibrary;
-    let library = super::screen_prefs::decoder_library_choice();
+    let library = super::super::screen_prefs::decoder_library_choice();
     let codec = request.codec.unwrap_or_default();
     let video = request.decoders.iter().any(|offer| offer.codec.is_video());
     if library == DecoderLibrary::Automatic || codec == CodecSetting::Lossless || video {
