@@ -1,15 +1,11 @@
 //! The input of the desktop viewer (SCR-M7, U25-8): egui events become the
 //! `InputEvent`s of the `INPUT` frame. The pointer is mapped to 0–65535
-//! across the picture (never outside it), buttons and wheel notches (1/120)
-//! follow the HID model, keys become HID usages of `input_model::key_usage`,
-//! modifiers go out as the left keys when they change (egui reports no
-//! right ones), typing goes out as `Text` (so the host's layout decides the
-//! character) and shortcuts with Ctrl or Alt as keys, and an IME commit goes
-//! out as `Text`. Every press is tracked (`PressedInputs`), so
-//! `release_all` lifts whatever is still down when control ends, the window
-//! loses the focus or the session ends. The events of one frame are bundled
-//! into batches (`take_batch`); what does not fit goes out with the next
-//! frame.
+//! across the picture, keys become HID usages (`input_model::key_usage`),
+//! modifiers the left keys (egui reports no right ones), typing and IME
+//! commits `Text` (the host's layout decides the character), shortcuts with
+//! Ctrl or Alt keys; AltGr characters `Text` (`screen_input_altgr.rs`).
+//! Every press is tracked (`PressedInputs`) for `release_all`; one frame's
+//! events go out in batches (`take_batch`), the rest with the next frame.
 use std::collections::VecDeque;
 
 use eframe::egui::{
@@ -86,11 +82,12 @@ pub struct InputMapper {
     /// modifiers already held then belong to the local user (H5).
     fresh: bool,
     /// The modifiers held in the frames before (`note_local`): only these
-    /// stay local in the first frame (K1: a modifier pressed in it is the
-    /// user's input for the host).
+    /// stay local in the first frame (K1).
     armed: Modifiers,
     wheel_rest: (f32, f32),
     touch_active: bool,
+    /// Ctrl+V or Umschalt+Einfg held (`missed_paste`).
+    paste_held: bool,
     /// Keys without a usage that were dropped (shown in the statistics).
     pub unmapped_keys: u64,
     /// The text of a running IME composition (shown, not sent).
@@ -122,6 +119,7 @@ impl InputMapper {
             },
             wheel_rest: (0.0, 0.0),
             touch_active: false,
+            paste_held: false,
             unmapped_keys: 0,
             preedit: None,
         }
@@ -139,8 +137,7 @@ impl InputMapper {
         !self.backlog.is_empty()
     }
 
-    /// Everything the host holds down for this viewer is lifted (control
-    /// ends, the window lost the focus, the session ends).
+    /// Everything the host holds down for this viewer is lifted.
     pub fn release_all(&mut self) {
         self.flush_move();
         let released = self.pressed.release_all();
@@ -180,6 +177,8 @@ impl InputMapper {
 
     /// Maps the events of one frame; `frame_mods` are the modifiers at its end.
     pub fn process(&mut self, events: &[Event], frame_mods: Modifiers, geometry: &Geometry) {
+        let extended = self.missed_paste(events, frame_mods);
+        let events = extended.as_deref().unwrap_or(events);
         if events.iter().any(|event| matches!(event, Event::Key {
             key, modifiers, pressed: true, ..
         } if matches!(local_key(*key, *modifiers), Some(super::screen_input_keys::LocalKey::Fullscreen | super::screen_input_keys::LocalKey::ExitFullscreen)))) {
@@ -280,13 +279,15 @@ impl InputMapper {
             }
             Event::Key {
                 key,
+                physical_key,
                 pressed,
                 repeat,
                 modifiers,
-                ..
             } => {
-                self.sync_modifiers(*modifiers);
-                self.key(*key, *pressed, *repeat, *modifiers);
+                if !self.altgr_key(*key, *physical_key, *pressed, *repeat, *modifiers) {
+                    self.sync_modifiers(*modifiers);
+                    self.key(*key, *pressed, *repeat, *modifiers);
+                }
             }
             Event::Text(text) => {
                 if self.caps.text && !self.mods.ctrl && !self.mods.alt {
@@ -318,8 +319,8 @@ impl InputMapper {
         }
     }
 
-    /// Sends the modifier keys that changed since the last event.
-    fn sync_modifiers(&mut self, now: Modifiers) {
+    /// Sends the modifier keys that changed since the last event, as given.
+    fn sync_exact(&mut self, now: Modifiers) {
         let changes = [
             (now.ctrl, self.mods.ctrl, "ctrl_left"),
             (now.shift, self.mods.shift, "shift_left"),
@@ -376,8 +377,7 @@ impl InputMapper {
         }
     }
 
-    /// Wheel notches: up and to the right are positive; the rest of a notch
-    /// stays for the next event.
+    /// Wheel notches (up and right positive); a notch's rest stays.
     fn wheel(&mut self, unit: MouseWheelUnit, dx: f32, dy: f32) {
         if !self.caps.pointer || !self.hover_inside {
             return;
@@ -387,8 +387,7 @@ impl InputMapper {
             MouseWheelUnit::Point => NOTCH / POINTS_PER_NOTCH,
             MouseWheelUnit::Page => NOTCH * LINES_PER_PAGE,
         };
-        // egui counts the way the content moves: down is positive, but the
-        // wheel turned up scrolls up; right is positive, scrolling left.
+        // egui counts the way the content moves (down and right positive).
         let total_x = self.wheel_rest.0 - dx * scale;
         let total_y = self.wheel_rest.1 + dy * scale;
         let (whole_x, whole_y) = (total_x.trunc(), total_y.trunc());
@@ -487,6 +486,8 @@ impl InputMapper {
     }
 }
 
+#[path = "screen_input_altgr.rs"]
+mod altgr;
 #[path = "screen_input_text.rs"]
 mod text;
 
