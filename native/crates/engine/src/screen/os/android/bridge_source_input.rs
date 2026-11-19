@@ -109,16 +109,16 @@ impl BridgeInputSink {
     /// `controlling`: a batch of the input path, which the session sends only
     /// while it holds control (it drops other sessions' leftovers).
     fn queue(&self, events: &[InputEvent], controlling: bool) -> Result<(), ControlBlock> {
-        if !super::bridge_channels::prereqs().accessibility_on() {
+        if !super::super::bridge_channels::prereqs().accessibility_on() {
             return Err(ControlBlock::ControlUnavailable);
         }
         // Never waits (the session loop awaits this call); a full queue is a
         // reported block, never a silent loss.
         let id = self.channel.id;
         let queued = if controlling {
-            super::bridge_channels::send_controlling_input(id, events)
+            super::super::bridge_channels::send_controlling_input(id, events)
         } else {
-            super::bridge_channels::send_input(id, events)
+            super::super::bridge_channels::send_input(id, events)
         };
         if queued {
             Ok(())
@@ -135,7 +135,7 @@ impl ScreenInputSink for BridgeInputSink {
         _reference_generation: u64,
         _presented: bool,
     ) -> Result<(), ControlBlock> {
-        let streaming = super::bridge_channels::channels()
+        let streaming = super::super::bridge_channels::channels()
             .iter()
             .any(|channel| matches!(channel.phase(), Phase::Ready { .. }) && !channel.start.still);
         if !streaming {
