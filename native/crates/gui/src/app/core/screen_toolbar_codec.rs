@@ -284,6 +284,54 @@ pub fn apply_codec(
 /// „Höchste Datenrate“ (B-09): automatic, or a ceiling in Mbit/s, stored at
 /// once (`screen_prefs::set_max_rate_bps`) and sent to the host. A new
 /// ceiling starts with the session's current target.
+/// The width of the „Höchste Datenrate“ field in points: a typed value
+/// scrolls inside it (17a: egui's `DragValue` grew with the typed text, past
+/// the toolbar's edge).
+const RATE_FIELD_WIDTH: f32 = 70.0;
+const RATE_UNIT: &str = "Mbit/s";
+
+/// The field of „Höchste Datenrate“: the stored value while it is not typed
+/// into, the typed text while it is; `Some` with the value in Mbit/s once a
+/// parsable text is left (Enter or focus lost; a German comma is the decimal
+/// point). Every key stroke went out as `RATE_CEILING` before (Gemini 10).
+fn rate_field(ui: &mut egui::Ui, mbit: f64) -> Option<f64> {
+    let id = egui::Id::new("screen_max_rate_text");
+    let shown = || format!("{mbit:.2}").replace('.', ",");
+    let mut text = ui
+        .data(|data| data.get_temp::<String>(id))
+        .unwrap_or_else(shown);
+    let field = egui::TextEdit::singleline(&mut text)
+        .desired_width(RATE_FIELD_WIDTH)
+        .clip_text(true);
+    let edited = ui.add(field);
+    super::wrap::note_editing(ui, &edited);
+    if edited.has_focus() {
+        ui.data_mut(|data| data.insert_temp(id, text));
+        return None;
+    }
+    ui.data_mut(|data| data.remove::<String>(id));
+    if !edited.lost_focus() {
+        return None;
+    }
+    text.trim()
+        .replace(',', ".")
+        .parse::<f64>()
+        .ok()
+        .filter(|value| value.is_finite())
+}
+
+/// Whether the host reports `stored` as the ceiling it applies
+/// (`STATS` → `ChainReport::rate_ceiling_kbps`, sent once a second by a
+/// host with the picture chain report).
+fn confirmed(input: &ToolbarInput, stored: Option<u64>) -> bool {
+    let reported = input
+        .info
+        .and_then(|info| info.stats.as_ref())
+        .and_then(|stats| stats.chain.as_ref())
+        .and_then(|chain| chain.rate_ceiling_kbps);
+    stored.is_some_and(|bps| reported == Some(bps / 1000))
+}
+
 pub(super) fn max_rate_row(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Vec<ToolbarAction>) {
     use crate::screen::core::rate_control::MIN_BITRATE_BPS;
     let stored = super::super::screen_prefs::max_rate_bps();
@@ -291,14 +339,14 @@ pub(super) fn max_rate_row(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Ve
     let start = stored.or_else(|| current.map(|stats| stats.target_kbps * 1000));
     let mut mbit = start.unwrap_or(MIN_BITRATE_BPS).max(MIN_BITRATE_BPS) as f64 / 1e6;
     let mut limited = stored.is_some();
-    // Switch and field stay in one row (Gemini 5): widths from egui's
-    // own sizing (`wrap::checkbox_width`, `drag_value_width`); at most two
-    // decimals, so the shown text is known before it is drawn.
+    // Switch, field and unit stay in one row (Gemini 5): widths from egui's
+    // own sizing (`wrap::checkbox_width`, `text_edit_width`).
     let label = "Höchste Datenrate";
+    let gap = ui.spacing().item_spacing.x;
     let mut group = super::wrap::checkbox_width(ui, label);
     if limited {
-        let text = format!("{mbit:.2} Mbit/s");
-        group += ui.spacing().item_spacing.x + super::wrap::drag_value_width(ui, &text);
+        group += gap + super::wrap::text_edit_width(RATE_FIELD_WIDTH);
+        group += gap + super::wrap::label_width(ui, RATE_UNIT);
     }
     super::wrap::reserve(ui, group);
     let mut changed = ui
@@ -306,21 +354,12 @@ pub(super) fn max_rate_row(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Ve
         .on_hover_text("Ohne Haken: automatisch. Wirkt sofort, wenn das Gerät es unterstützt.")
         .changed();
     if limited {
-        // One percent of the value per dragged pixel.
-        let speed = mbit / 100.0;
-        // Typed values count once the field is left (Gemini 10: every key
-        // stroke went out as `RATE_CEILING`, a half-typed „0“ as the
-        // minimum); a German comma is read as the decimal point.
-        let field = egui::DragValue::new(&mut mbit)
-            .range(MIN_BITRATE_BPS as f64 / 1e6..=f64::MAX)
-            .speed(speed)
-            .suffix(" Mbit/s")
-            .max_decimals(2)
-            .update_while_editing(false)
-            .custom_parser(|text| text.trim().replace(',', ".").parse::<f64>().ok());
-        let edited = ui.add(field);
-        super::wrap::note_editing(ui, &edited);
-        changed |= edited.changed();
+        if let Some(typed) = rate_field(ui, mbit) {
+            let typed = typed.max(MIN_BITRATE_BPS as f64 / 1e6);
+            changed |= typed != mbit;
+            mbit = typed;
+        }
+        ui.label(RATE_UNIT);
     }
     // P9: what the session does with the ceiling.
     if limited
@@ -332,6 +371,10 @@ pub(super) fn max_rate_row(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Ve
             crate::app::theme::warning(ui),
             "vom Gerät nicht unterstützt",
         );
+    } else if limited && confirmed(input, stored) {
+        // The host's own statistics name this ceiling (Codex 3/22): only
+        // then is it „übernommen“, not when `RATE_CEILING` was merely sent.
+        super::wrap::note(ui, RichText::new("vom Gerät übernommen").small());
     }
     if changed {
         let rate = limited.then(|| (mbit * 1e6).round().max(MIN_BITRATE_BPS as f64) as u64);

@@ -207,14 +207,9 @@ pub(super) fn checkbox_width(ui: &egui::Ui, text: &str) -> f32 {
         .max(spacing.interact_size.x)
 }
 
-/// The outer width of a `DragValue` showing `text` (egui 0.29.1
-/// `drag_value.rs` 535, 587-593: a button in `drag_value_text_style` with
-/// the button padding, at least `interact_size`; while typed into it is a
-/// field of `interact_size`, never wider).
-pub(super) fn drag_value_width(ui: &egui::Ui, text: &str) -> f32 {
-    let style = ui.style().drag_value_text_style.clone();
-    (text_width(ui, text, style) + 2.0 * ui.spacing().button_padding.x)
-        .max(ui.spacing().interact_size.x)
+/// The outer width of a label showing `text` (body text, unwrapped).
+pub(super) fn label_width(ui: &egui::Ui, text: &str) -> f32 {
+    text_width(ui, text, TextStyle::Body)
 }
 
 /// The outer width of a single-line `TextEdit` of `desired` points (egui
