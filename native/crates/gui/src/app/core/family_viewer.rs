@@ -232,11 +232,16 @@ impl eframe::App for FamilyViewerApp {
                 }
                 if let Some(session) = &self.session {
                     let info = session.info().clone();
+                    // A codec reason or a stage's notice in German (fix 2026-11-19).
+                    let reason = info.reason.as_deref().map(|reason| {
+                        super::screen_texts::codec_reason_text(reason, None)
+                            .unwrap_or_else(|| reason.to_string())
+                    });
                     let status = info
                         .end
                         .as_ref()
                         .map(|end| end.text.as_str())
-                        .or(info.reason.as_deref())
+                        .or(reason.as_deref())
                         .unwrap_or("Fensterverbindung wird hergestellt …");
                     // The display line as in the viewer (B-40, BK9).
                     let lines = self.diagnostics.then(|| {

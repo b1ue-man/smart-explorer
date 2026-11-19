@@ -11,7 +11,9 @@
 //!   is not available; the session ends with the encoder error and this
 //!   text instead of sending another codec. Measurement of 2026-11-18: the
 //!   texts and the host's reasons in German (`core::codec_reason_text`).
-use crate::screen::core::codec_reason_text::{chosen_text, codec_key_label, fallback_detail_text};
+use crate::screen::core::codec_reason_text::{
+    chosen_text, codec_key_label, encoder_notice_text, fallback_detail_text, ENCODER_NOTICE,
+};
 use crate::screen::core::negotiate::{CodecPreference, CodecSetting};
 
 const FALLBACK: &str = "encoder_fallback_to_";
@@ -58,6 +60,11 @@ pub fn codec_reason_text(reason: &str, chosen: Option<CodecSetting>) -> Option<S
             format!("Kodierer am Gerät gewechselt: läuft jetzt {running}{chosen}.")
         };
         return Some(with(text, &fallback_detail_text(detail)));
+    }
+    // A notice of the host's stage (`encoder_notice: …`): the encoder and the
+    // codec stay, so it reads as a notice, never as a change or an error.
+    if reason.starts_with(ENCODER_NOTICE.trim_end()) {
+        return encoder_notice_text(reason);
     }
     let (rest, failed) = if let Some(rest) = reason.strip_prefix(FAILED) {
         (rest, true)
@@ -159,5 +166,17 @@ mod tests {
         assert!(detail.unwrap_or_default().starts_with("HEVC gewählt, aber"));
         assert_eq!(codec_detail_text(Some("device lost")), None);
         assert_eq!(codec_detail_text(None), None);
+        // A notice of the host's stage stays a notice: no change of codec,
+        // no error of the choice (fix 2026-11-19).
+        let notice = codec_reason_text(
+            "encoder_notice: the encoder refused the parameter quality: E_FAIL",
+            Some(CodecSetting::Hevc),
+        )
+        .unwrap();
+        assert!(
+            notice.starts_with("Hinweis vom Gerät: Der Kodierer lehnte den Parameter quality ab")
+        );
+        assert!(!notice.contains("gewechselt") && !notice.contains("gewählt"));
+        assert_eq!(codec_detail_text(Some("encoder_notice: x")), None);
     }
 }

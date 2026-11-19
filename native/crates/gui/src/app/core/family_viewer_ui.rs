@@ -106,7 +106,13 @@ impl FamilyViewerApp {
                             ui.label(notice);
                         }
                     }
-                    if let Some(reason) = info.reason.as_ref().or(info.notice.as_ref()) {
+                    // A codec reason or a stage's notice in German, never
+                    // the host's English key (fix 2026-11-19).
+                    let reason = info.reason.as_deref().map(|reason| {
+                        super::super::screen_texts::codec_reason_text(reason, None)
+                            .unwrap_or_else(|| reason.to_string())
+                    });
+                    if let Some(reason) = reason.as_ref().or(info.notice.as_ref()) {
                         ui.label(reason);
                     }
                 }
