@@ -262,14 +262,29 @@ pub(super) async fn prepare(
         )
     };
     let mut choices = negotiate(contract);
-    if !choices.as_ref().is_ok_and(|choices| !choices.is_empty())
+    // Without a video pairing under hybrid regions (they need decoders with
+    // pixel access) the same offers without them first. Review 2026-11-19
+    // (Codex 12): a result of the tiles alone counts as none; „Automatisch"
+    // took the tiles while plain video worked. Without video there either,
+    // a hybrid result of the tiles stays.
+    let video = |result: &Result<Vec<super::super::negotiate::CodecChoice>, _>| {
+        result
+            .as_ref()
+            .is_ok_and(|choices| choices.iter().any(|c| c.codec.is_video()))
+    };
+    if !video(&choices)
         && contract.is_some_and(|contract| contract.hybrid_regions)
         && decoders.iter().any(|offer| offer.codec.is_video())
     {
-        if let Some(contract) = contract.as_mut() {
+        let plain = contract.map(|mut contract| {
             contract.hybrid_regions = false;
+            contract
+        });
+        let retry = negotiate(plain);
+        if video(&retry) || !choices.as_ref().is_ok_and(|choices| !choices.is_empty()) {
+            contract = plain;
+            choices = retry;
         }
-        choices = negotiate(contract);
     }
     let choices = match choices {
         Ok(choices) => choices,

@@ -133,6 +133,10 @@ pub fn renegotiate_trusted(
         .flatten()
 }
 
+/// The reason a session opened for the tiles gives a chosen video codec:
+/// the viewer opens the session anew with its choice.
+pub const TILES_SESSION: &str = "the session was opened for the tiles; reopen it for this codec";
+
 /// `renegotiate_trusted` under the viewer's choice (plan 2026-11-18): `Err`
 /// names why a chosen codec has no pairing; `Ok(None)` when no pairing
 /// exists for this session.
@@ -163,6 +167,15 @@ pub fn renegotiate_for(
         .copied()
         .find(|choice| video_session || choice.codec == CodecKind::Tiles)
     else {
+        // Review 2026-11-19 (Codex 11): a session opened for the tiles
+        // cannot take a chosen video codec (its output plan is the tiles'),
+        // and keeping the tiles ignored the choice without a word.
+        if !choices.is_empty() {
+            return Err(ChosenUnavailable {
+                preference,
+                reason: TILES_SESSION.into(),
+            });
+        }
         return Ok(None);
     };
     let sharp = sharp_alternative(&choices, &choice);

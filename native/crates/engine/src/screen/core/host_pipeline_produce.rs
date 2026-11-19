@@ -364,9 +364,8 @@ impl Pipeline {
                     .and_then(|report| report.frame_id)
                     .map_or(request.frame_id, |id| id.max(request.frame_id));
                 self.next_frame_id = frame_id;
-                // The tiles' budget books the picture when its send starts:
-                // the time the send takes is not charged twice.
-                let send_started_us = now_us();
+                // The byte budget books the picture at the writer
+                // (`host_frame_send.rs`), when its send starts.
                 let sent = self
                     .send(
                         connection,
@@ -380,9 +379,6 @@ impl Pipeline {
                     .await;
                 if matches!(sent, Ok(Produced::Sent)) {
                     self.quality_policy.first_picture.restart();
-                    let video = request.choice.codec.is_video();
-                    self.rate
-                        .on_stream_sent(send_started_us, encoded_bytes, video);
                 }
                 sent
             }

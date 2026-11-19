@@ -291,6 +291,14 @@ fn bildkette_task_proto_renegotiation_follows_the_opening_rank() {
     // A tiles session stays with the tiles.
     let tiles = renegotiate(&host, &[hevc(true), CodecOffer::tiles()], None, false).unwrap();
     assert_eq!(tiles.choice.codec, CodecKind::Tiles);
+    // Review 2026-11-19 (Codex 11): a chosen video codec in a session opened
+    // for the tiles is refused with its reason, never ignored.
+    let refused = renegotiate_for(&host, &[h264(true)], None, false, CodecTrust::ALL)
+        .expect_err("tiles session");
+    assert_eq!(refused.reason, TILES_SESSION);
+    assert!(refused
+        .to_string()
+        .starts_with("chosen_codec_unavailable: h264: "));
     // The tiles are every pair's last fallback under Auto; a viewer that
     // names no decoder at all chose a codec it cannot decode (review
     // 2026-11-19): no tiles, the chosen codec's reason.

@@ -78,6 +78,13 @@ impl Pipeline {
             / u128::from(self.rate.sustained_bps().max(1)))
         .min(u128::from(u64::MAX)) as u64;
         let active_budget = stale.saturating_add(Duration::from_micros(serialization_us));
+        // Review 2026-11-19 (Codex 13): the byte budget books what the writer
+        // puts on the stream, the record headers included, when the send
+        // starts (`rate_tiles.rs`); a cut-off write counts whole.
+        let planned = encoded_bytes
+            + super::super::wire_binary::RECORD_HEADER_BYTES as u64 * frame.records.len() as u64;
+        let video = self.choice.codec.is_video();
+        let send_started_us = now_us();
         let send_started = std::time::Instant::now();
         let writing = crate::screen::core::gop_stream::write_with_route(
             connection,
@@ -88,6 +95,8 @@ impl Pipeline {
             _=work.cancelled(work_epoch)=>Err(io::Error::from(io::ErrorKind::Interrupted)),
             result=writing=>result,
         };
+        let booked = written.as_ref().map_or(planned, |bytes| *bytes);
+        self.rate.on_stream_sent(send_started_us, booked, video);
         let bytes = match written {
             Ok(bytes) => {
                 // Station `send` (BK0): all records handed to the stream.

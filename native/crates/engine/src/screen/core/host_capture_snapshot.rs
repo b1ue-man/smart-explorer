@@ -107,10 +107,20 @@ impl Pipeline {
         let mut gop = opened
             .map_err(|error| PipelineError::capture(io::Error::other(error)))?
             .map_err(PipelineError::capture)?;
+        // Review 2026-11-19 (Codex 13): the snapshot's bytes count against
+        // the stream's byte budget as every picture's (`rate_tiles.rs`); a
+        // cut-off write counts whole.
+        let planned = crate::screen::core::wire_binary::RECORD_HEADER_BYTES as u64
+            * records.len() as u64
+            + records.iter().map(|r| r.len() as u64).sum::<u64>();
+        let started_us = now_us();
         let written = tokio::select! {biased;
             _=work.cancelled(work_epoch)=>Err(io::Error::from(io::ErrorKind::Interrupted)),
             result=gop.write_frame_admitted(frame_id,capture_ts_us,true,records)=>result,
         };
+        let video = self.choice.codec.is_video();
+        let booked = written.as_ref().map_or(planned, |bytes| *bytes);
+        self.rate.on_stream_sent(started_us, booked, video);
         if !work.current(work_epoch) {
             gop.reset();
             return Err(PipelineError::capture(io::Error::from(

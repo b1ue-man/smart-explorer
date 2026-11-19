@@ -89,7 +89,8 @@ fn netzrate_task_tiles_keep_the_target_and_the_user_ceiling() {
     let produce = include_str!("host_pipeline_produce.rs").replace("\r\n", "\n");
     // Review 2026-11-19: every codec, the video ones at the user's ceiling.
     assert!(produce.contains("if !self.rate.stream_admit(now, video) {"));
-    assert!(produce.contains(".on_stream_sent(send_started_us, encoded_bytes, video);"));
+    let send = include_str!("host_frame_send.rs");
+    assert!(send.contains("self.rate.on_stream_sent(send_started_us, booked, video);"));
     // Back pressure still reaches the rate control for every codec.
     assert!(produce.contains("self.rate.on_back_pressure(now);"));
 }

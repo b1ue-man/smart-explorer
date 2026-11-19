@@ -123,9 +123,11 @@ fn diashowfix_task_tiles_follow_the_line_without_congestion() {
     // pipeline books a picture when its send starts.
     let control = include_str!("rate_control.rs");
     assert!(control.contains("self.tiles.on_congestion(now_us);"));
-    let produce = include_str!("host_pipeline_produce.rs").replace("\r\n", "\n");
-    assert!(produce.contains("let send_started_us = now_us();"));
-    assert!(produce.contains(".on_stream_sent(send_started_us, encoded_bytes, video);"));
+    // Review 2026-11-19 (Codex 13): at the writer, the record headers and
+    // a cut-off write included.
+    let send = include_str!("host_frame_send.rs").replace("\r\n", "\n");
+    assert!(send.contains("let send_started_us = now_us();"));
+    assert!(send.contains("self.rate.on_stream_sent(send_started_us, booked, video);"));
 }
 
 #[test]
