@@ -192,9 +192,8 @@ impl InputMapper {
             }
             return;
         }
-        // Modifiers held from before (Strg+Umschalt+K turned steering on)
-        // stay local until let go (H5, K1); a new press (no repeat, round 6)
-        // or a chord shows input for the host.
+        // Modifiers held from before stay local until let go (H5, K1); a
+        // new press (no repeat, round 6) or a chord is input for the host.
         let pressing = events.iter().any(|event| {
             matches!(
                 event,
@@ -208,8 +207,10 @@ impl InputMapper {
                     | Event::Paste(_)
             )
         });
-        // A frame without modifiers and presses decides nothing yet (one in
-        // which a toolbar field holds the keyboard passes none).
+        if events.contains(&Event::WindowFocused(true)) {
+            (self.fresh, self.armed) = (true, frame_mods); // N3: Alt+Tab back
+        }
+        // A frame without modifiers and presses decides nothing yet.
         let any = frame_mods.ctrl || frame_mods.alt || frame_mods.shift;
         if self.fresh && (any || pressing) {
             self.fresh = false;

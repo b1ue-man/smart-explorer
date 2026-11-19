@@ -110,9 +110,13 @@ fn screen_task_input_key_names_and_pointer_positions() {
     assert_eq!(pointer_to_pixel(65_535, 65_535, size), (1919, 1079));
     assert_eq!(pixel_to_pointer(1919, 1079, size), (65_535, 65_535));
     assert_eq!(pixel_to_pointer(5000, 0, size), (65_535, 0));
-    for pixel in [0, 1, 959, 960, 1918, 1919] {
+    // Every pixel comes back exactly through the hosts' rounding down
+    // (round 7, N4: about half of them were one pixel off).
+    for pixel in 0..1920 {
         let (x, _) = pixel_to_pointer(pixel, 0, size);
         assert_eq!(pointer_to_pixel(x, 0, size).0, pixel);
+        let host = u64::from(x) * 1919 / 65_535;
+        assert_eq!(host, u64::from(pixel));
     }
     assert_eq!(pixel_to_pointer(0, 0, FrameSize::new(1, 1)), (0, 0));
 

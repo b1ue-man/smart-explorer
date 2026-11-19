@@ -112,10 +112,19 @@ pub fn hardware_bars_tiles(codec: CodecSetting) -> bool {
 /// before; „Dekodierer: Hardware“ is refused by the daemon client
 /// (`StreamRequest::unavailable_choice`, no tiles offered there).
 pub(super) fn library_refusal(request: &crate::daemon::StreamRequest) -> Option<String> {
+    library_refusal_for(&request.decoders, request.codec.unwrap_or_default())
+}
+
+/// `library_refusal` for the offers `decoders` under `codec`; also before
+/// a `SET_DECODERS` of a running session (N5: a new library without video
+/// decoders went out as tiles alone, and the host took them in silence).
+pub fn library_refusal_for(
+    decoders: &[crate::screen::core::negotiate::CodecOffer],
+    codec: CodecSetting,
+) -> Option<String> {
     use crate::screen::core::decoder_library::DecoderLibrary;
     let library = super::super::screen_prefs::decoder_library_choice();
-    let codec = request.codec.unwrap_or_default();
-    let video = request.decoders.iter().any(|offer| offer.codec.is_video());
+    let video = decoders.iter().any(|offer| offer.codec.is_video());
     if library == DecoderLibrary::Automatic || codec == CodecSetting::Lossless || video {
         return None;
     }

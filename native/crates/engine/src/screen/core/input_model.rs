@@ -233,23 +233,25 @@ pub fn key_name(usage: u16) -> Option<String> {
     }
 }
 
-/// The pixel of the source a position 0–65535 points at.
+/// The pixel of a position 0–65535, rounded down as every host maps it.
 pub fn pointer_to_pixel(x: u16, y: u16, size: FrameSize) -> (u32, u32) {
     let axis = |value: u16, side: u32| {
-        ((u64::from(value) * u64::from(side.saturating_sub(1)) + 32_767) / 65_535) as u32
+        (u64::from(value) * u64::from(side.saturating_sub(1)) / 65_535) as u32
     };
     (axis(x, size.width), axis(y, size.height))
 }
 
 /// The position 0–65535 of a pixel of the source; pixels beyond the source
-/// map onto its edge.
+/// map onto its edge. Rounded up, so the hosts' rounding down gives `px`
+/// (round 7, N4: the nearest value was one pixel off for half the pixels).
 pub fn pixel_to_pointer(px: u32, py: u32, size: FrameSize) -> (u16, u16) {
     let axis = |value: u32, side: u32| {
         let last = u64::from(side.saturating_sub(1));
         if last == 0 {
             0
         } else {
-            ((u64::from(value).min(last) * 65_535 + last / 2) / last) as u16
+            let scaled = u64::from(value).min(last) * 65_535;
+            scaled.div_ceil(last).min(65_535) as u16
         }
     };
     (axis(px, size.width), axis(py, size.height))

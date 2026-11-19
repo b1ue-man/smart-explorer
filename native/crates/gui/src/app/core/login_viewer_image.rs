@@ -219,6 +219,10 @@ impl LoginImage {
                     }
                 }
             }
+        } else {
+            // The modifiers held while input does not go out stay local in
+            // the first ready frame (N3, `InputMapper::note_local`).
+            self.mapper.note_local(ui.input(|input| input.modifiers));
         }
     }
 }

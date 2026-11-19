@@ -85,11 +85,20 @@ impl ScreenViewerApp {
             }
         }
         if again {
+            let frame = super::super::screen_pool::decoders_frame(&self.common.backend.offers);
+            let codec = self.common.prefs.codec_setting();
+            let refused = super::super::screen_session::library_refusal_for(&frame.decoders, codec);
+            if let (Some(text), Some(session)) = (refused, view.session.as_ref()) {
+                // No tiles in silence (N5): neither the decode thread nor the
+                // host switch, the reason is shown; `true` keeps
+                // `ViewState::apply` from clearing it.
+                session.info().notice = Some(text);
+                return true;
+            }
             let local = matches!(
                 action,
                 ToolbarAction::Decoder(_) | ToolbarAction::DecoderLibrary(_)
             ) && view.session.as_ref().is_some_and(|s| s.switch_decoder());
-            let frame = super::super::screen_pool::decoders_frame(&self.common.backend.offers);
             let sent = view.session.as_ref().is_some_and(|s| s.set_decoders(frame));
             if !local && !sent {
                 out.push(Transition::View(view.target.clone()));
