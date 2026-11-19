@@ -127,6 +127,18 @@ impl DecodeState {
     /// chose, under a named codec the error is shown and the codec stays.
     /// `true` when a `SET_DECODERS` or `SET_MODE` went out (the host starts
     /// a new stream; no key frame of the old one is asked for).
+    /// No other hardware decoder under a chosen „Dekodierer: Hardware“: the
+    /// software tiles are not taken, the error is shown (Codex 5/13).
+    fn hardware_stays(&mut self, codec: CodecKind, reason: &str) {
+        let text = format!(
+            "{} liefert auf diesem Gerät kein Bild ({reason}). „Dekodierer: Hardware“ ist \
+             gewählt und kein anderer Hardware-Dekodierer passt; die Kacheln (Software) \
+             werden nicht genommen.",
+            label(codec)
+        );
+        self.shared.update(|info| info.notice = Some(text));
+    }
+
     pub(super) fn leave_codec(&mut self, codec: CodecKind, reason: &str) -> bool {
         let chosen = self.shared.codec_choice();
         if chosen == CodecSetting::Lossless {
@@ -170,15 +182,7 @@ impl DecodeState {
                 }
                 let tiles = next.is_empty();
                 if tiles && super::super::screen_session::hardware_bars_tiles(chosen) {
-                    // No other hardware decoder: the chosen „Hardware“ takes
-                    // no software tiles; its error is shown (Codex 5/13).
-                    let text = format!(
-                        "{} liefert auf diesem Gerät kein Bild ({reason}). „Dekodierer: \
-                         Hardware“ ist gewählt und kein anderer Hardware-Dekodierer passt; \
-                         die Kacheln (Software) werden nicht genommen.",
-                        label(codec)
-                    );
-                    self.shared.update(|info| info.notice = Some(text));
+                    self.hardware_stays(codec, reason);
                     return false;
                 }
                 note(&given_up_line(codec, reason, Some(&next)));
@@ -200,6 +204,12 @@ impl DecodeState {
                 self.shared.update(|info| info.notice = Some(text));
                 return true;
             }
+        }
+        if super::super::screen_session::hardware_bars_tiles(chosen) {
+            // The local switch to the tiles is barred too (H4: it fell
+            // silent then).
+            self.hardware_stays(codec, reason);
+            return false;
         }
         let Some(mode) = self.shared.request_lossless() else {
             return false;

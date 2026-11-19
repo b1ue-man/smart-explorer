@@ -82,6 +82,9 @@ pub struct InputMapper {
     /// Usages whose press went to the host: only their release follows
     /// (Codex 4/7: an Enter that confirmed a toolbar field sent its release).
     keys_down: Vec<u16>,
+    /// No frame went through since the mapper began or let everything go:
+    /// modifiers already held then belong to the local user (H5).
+    fresh: bool,
     wheel_rest: (f32, f32),
     touch_active: bool,
     /// Keys without a usage that were dropped (shown in the statistics).
@@ -105,6 +108,7 @@ impl InputMapper {
             suppress_modifiers: false,
             text_keys: Vec::new(),
             keys_down: Vec::new(),
+            fresh: true,
             wheel_rest: (0.0, 0.0),
             touch_active: false,
             unmapped_keys: 0,
@@ -125,6 +129,7 @@ impl InputMapper {
         self.held_buttons.clear();
         self.text_keys.clear();
         self.keys_down.clear();
+        self.fresh = true;
         // Modifiers still held locally are kept from the host until they are
         // let go, but only when the host had one down (Gemini 3/23: the
         // first shortcut after any release was swallowed).
@@ -166,6 +171,18 @@ impl InputMapper {
                 }
             }
             return;
+        }
+        // Modifiers held from before (Strg+Umschalt+K turned steering on)
+        // stay local until they are let go (H5: they went down and up at the
+        // host, which may switch the keyboard layout on Windows).
+        let pressing = events.iter().any(|event| {
+            matches!(
+                event,
+                Event::Key { pressed: true, .. } | Event::PointerButton { pressed: true, .. }
+            )
+        });
+        if std::mem::take(&mut self.fresh) && !pressing {
+            self.suppress_modifiers |= frame_mods.ctrl || frame_mods.alt || frame_mods.shift;
         }
         if self.suppress_modifiers {
             if frame_mods.ctrl || frame_mods.alt || frame_mods.shift {
@@ -412,55 +429,6 @@ impl InputMapper {
         });
     }
 
-    /// Ctrl+C, X and V arrive as their own events without a key event.
-    fn chord(&mut self, name: &str) {
-        let Some(hid_usage) = key_usage(name).filter(|_| self.caps.keyboard) else {
-            return;
-        };
-        self.sync_modifiers(Modifiers {
-            ctrl: true,
-            ..self.mods
-        });
-        self.emit(InputEvent::Key {
-            hid_usage,
-            down: true,
-        });
-        self.emit(InputEvent::Key {
-            hid_usage,
-            down: false,
-        });
-    }
-
-    /// `Text` events of at most `MAX_TEXT_BYTES`, without NUL.
-    fn text(&mut self, text: &str) {
-        let mut rest: String = text.chars().filter(|c| *c != '\0').collect();
-        while !rest.is_empty() {
-            let mut end = rest.len().min(MAX_TEXT_BYTES);
-            while !rest.is_char_boundary(end) {
-                end -= 1;
-            }
-            let tail = rest.split_off(end);
-            let head = std::mem::replace(&mut rest, tail);
-            self.emit(InputEvent::Text { text: head });
-        }
-    }
-
-    fn ime(&mut self, ime: &ImeEvent) {
-        match ime {
-            ImeEvent::Commit(text) => {
-                self.preedit = None;
-                if self.caps.text {
-                    self.text(text);
-                }
-            }
-            ImeEvent::Preedit(text) => {
-                self.preedit = (!text.is_empty()).then(|| text.clone());
-            }
-            ImeEvent::Enabled => {}
-            ImeEvent::Disabled => self.preedit = None,
-        }
-    }
-
     fn touch(&mut self, id: u64, phase: EguiPhase, pos: Pos2, g: &Geometry) {
         if !self.caps.touch {
             return;
@@ -482,6 +450,9 @@ impl InputMapper {
         });
     }
 }
+
+#[path = "screen_input_text.rs"]
+mod text;
 
 #[cfg(test)]
 #[path = "screen_input_batch_tests.rs"]

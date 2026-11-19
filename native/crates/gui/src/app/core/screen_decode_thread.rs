@@ -6,15 +6,11 @@
 //! either. The relay acknowledges pictures and answers `PING` itself (SCR-M2);
 //! the viewer sends neither `FRAME_ACK` nor `PREVIEW_ACK`.
 //!
-//! Picture groups: a record of a newer group drops the previous group and
-//! opens a decoder for the new one; a record of an older group is stale and
-//! ignored. A decode error or a broken group is answered with one key frame
-//! request (`KeyframeRequester`: at most one open request); until a key frame
-//! of the group arrives its records are skipped. A group that continues the
-//! chain (B-36) keeps the decoder, and a new „Dekodierer“ choice opens its
-//! decoder at the next key frame (V1): `screen_decode_continue.rs`. The
-//! decoder hands its picture over and gets the storage of shown pictures
-//! back (`screen_decode_local.rs`).
+//! Picture groups: a newer group drops the previous one and opens its
+//! decoder, an older one is stale. A decode error or a broken group gets one
+//! key frame request (`KeyframeRequester`), its records are skipped until
+//! the key frame; continuations (B-36) and a new „Dekodierer“ (V1) in
+//! `screen_decode_continue.rs`, picture storage in `screen_decode_local.rs`.
 use std::collections::BTreeMap;
 use std::io;
 use std::sync::Arc;
@@ -211,6 +207,11 @@ impl DecodeState {
 
     fn record(&mut self, header: GopHeader, record: FrameRecord) {
         use super::screen_chain_window::flow::Dropped;
+        // A still picture (`SNAPSHOT`, never asked for here) never moves the
+        // live chain (Codex 5/19).
+        if header.kind == crate::screen::core::wire_binary::StreamKind::Snapshot {
+            return;
+        }
         if !record.has_more() {
             // A picture is complete at the decode thread with its last record.
             self.flow(|flow| flow.received());

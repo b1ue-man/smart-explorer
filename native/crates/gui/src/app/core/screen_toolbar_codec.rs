@@ -106,7 +106,7 @@ pub(super) fn codec_rows(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Vec<
             super::wrap::fitted(ui, egui::ComboBox::from_id_salt("screen_codec"), text)
         })
         .show_ui(ui, |ui| {
-            super::wrap::popup(ui);
+            super::wrap::popup(ui, CodecSetting::ALL.map(CodecSetting::label));
             for setting in CodecSetting::ALL {
                 ui.selectable_value(&mut chosen, setting, setting.label());
             }
@@ -127,7 +127,7 @@ pub(super) fn codec_rows(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Vec<
             super::wrap::fitted(ui, egui::ComboBox::from_id_salt("screen_decoder"), text)
         })
         .show_ui(ui, |ui| {
-            super::wrap::popup(ui);
+            super::wrap::popup(ui, DecoderPreference::ALL.map(DecoderPreference::label));
             for choice in DecoderPreference::ALL {
                 ui.selectable_value(&mut picked, choice, choice.label());
             }
@@ -181,7 +181,7 @@ fn output_rows(
             )
         })
         .show_ui(ui, |ui| {
-            super::wrap::popup(ui);
+            super::wrap::popup(ui, DecoderLibrary::ALL.map(DecoderLibrary::label));
             for choice in DecoderLibrary::ALL {
                 ui.selectable_value(&mut chosen, choice, choice.label());
             }
@@ -205,7 +205,7 @@ fn output_rows(
             super::wrap::fitted(ui, egui::ComboBox::from_id_salt("screen_display"), text)
         })
         .show_ui(ui, |ui| {
-            super::wrap::popup(ui);
+            super::wrap::popup(ui, DisplayChoice::ALL.map(DisplayChoice::label));
             for choice in DisplayChoice::ALL {
                 ui.selectable_value(&mut picked, choice, choice.label());
             }
@@ -298,10 +298,15 @@ const RATE_UNIT: &str = "Mbit/s";
 /// into, the typed text while it is; `Some` with the value in Mbit/s once a
 /// parsable text is left (Enter or focus lost; a German comma is the decimal
 /// point). Every key stroke went out as `RATE_CEILING` before (Gemini 10).
+/// Where the field's error waits for the next try (`rate_field`).
+fn rate_error_id() -> egui::Id {
+    egui::Id::new("screen_max_rate_error")
+}
+
 fn rate_field(ui: &mut egui::Ui, mbit: f64) -> Option<f64> {
     use crate::screen::core::rate_control::MIN_BITRATE_BPS;
     let id = egui::Id::new("screen_max_rate_text");
-    let error_id = egui::Id::new("screen_max_rate_error");
+    let error_id = rate_error_id();
     // To the bit (Codex 4/20: two decimals turned 1,236 into 1,24 on a mere
     // click in and out), without trailing zeros, with the decimal comma.
     let shown = format!("{mbit:.6}");
@@ -317,6 +322,11 @@ fn rate_field(ui: &mut egui::Ui, mbit: f64) -> Option<f64> {
         .clip_text(true);
     let edited = ui.add(field);
     super::wrap::note_editing(ui, &edited);
+    let escaped = ui.input(|input| input.key_pressed(egui::Key::Escape));
+    if edited.gained_focus() || escaped {
+        // A new try, or one given up (H6: the old error stood on).
+        ui.data_mut(|data| data.remove::<String>(error_id));
+    }
     let error = ui.data(|data| data.get_temp::<String>(error_id));
     if let Some(error) = error.as_deref() {
         super::wrap::note(
@@ -331,7 +341,6 @@ fn rate_field(ui: &mut egui::Ui, mbit: f64) -> Option<f64> {
     ui.data_mut(|data| data.remove::<String>(id));
     // Escape leaves the field without its typed text (Gemini 3/8); a text
     // nobody changed is no new choice.
-    let escaped = ui.input(|input| input.key_pressed(egui::Key::Escape));
     if !edited.lost_focus() || escaped || text.trim() == shown {
         return None;
     }
@@ -392,6 +401,10 @@ pub(super) fn max_rate_row(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Ve
     let mut changed = super::wrap::checkbox(ui, &mut limited, label)
         .on_hover_text("Ohne Haken: automatisch. Wirkt sofort, wenn das Gerät es unterstützt.")
         .changed();
+    if !limited {
+        // Unticked: no field, no error of it (H6).
+        ui.data_mut(|data| data.remove::<String>(rate_error_id()));
+    }
     if limited && shown {
         if let Some(typed) = rate_field(ui, mbit) {
             let typed = typed.max(MIN_BITRATE_BPS as f64 / 1e6);

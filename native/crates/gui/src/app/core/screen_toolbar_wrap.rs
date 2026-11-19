@@ -217,11 +217,21 @@ pub(super) fn checkbox_width(ui: &egui::Ui, text: &str) -> f32 {
 
 /// The open list of a toolbar list (Codex 4/22): egui lays its entries
 /// out unwrapped (`combo_box.rs` 399-409, `TextWrapMode::Extend`), so a
-/// long device or window name reached past the window. The entries are cut
-/// at the window's right edge instead (the whole name is their tooltip).
-pub(super) fn popup(ui: &mut egui::Ui) {
+/// long device or window name reached past the window. The list is as wide
+/// as its widest entry `texts` (H2/H3: as wide as the rest of the window,
+/// the justified entries filled it) and at most up to the window's right
+/// edge, where the entries are cut (the whole name is their tooltip).
+pub(super) fn popup(ui: &mut egui::Ui, texts: impl IntoIterator<Item = impl AsRef<str>>) {
+    let widest = texts
+        .into_iter()
+        .map(|text| text_width(ui, text.as_ref(), TextStyle::Button))
+        .fold(0.0_f32, f32::max);
+    // The button padding, a source's icon and the scroll bar.
+    let wanted = widest + 2.0 * ui.spacing().button_padding.x + 40.0;
     let right = ui.ctx().screen_rect().right() - 8.0;
-    ui.set_max_width((right - ui.max_rect().left()).max(40.0));
+    let room = (right - ui.max_rect().left()).max(40.0);
+    let floor = ui.min_rect().width();
+    ui.set_max_width(wanted.max(floor).min(room));
     ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
 }
 

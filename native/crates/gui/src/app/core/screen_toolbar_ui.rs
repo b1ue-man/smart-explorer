@@ -217,7 +217,11 @@ fn device_list(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Vec<ToolbarAct
         )
     })
     .show_ui(ui, |ui| {
-        wrap::popup(ui);
+        let names = input.devices.iter().map(|entry| match &entry.room {
+            Some(room) => format!("{} ({room})", entry.name),
+            None => entry.name.clone(),
+        });
+        wrap::popup(ui, names);
         for entry in input.devices {
             let label = match &entry.room {
                 Some(room) => format!("{} ({room})", entry.name),
@@ -266,7 +270,17 @@ fn source_row(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Vec<ToolbarActi
             )
         })
         .show_ui(ui, |ui| {
-            wrap::popup(ui);
+            let windows = input.info.and_then(|info| info.windows.as_ref());
+            let titles = windows.into_iter().flat_map(|list| {
+                let window = list
+                    .windows
+                    .iter()
+                    .map(|w| format!("{} ({})", w.title, w.app));
+                window.chain(list.apps.iter().map(|app| app.name.clone()))
+            });
+            let monitors = monitor_sources(hello).into_iter().map(|(label, _)| label);
+            let whole = ["Android-Systemauswahl".to_string()];
+            wrap::popup(ui, titles.chain(monitors).chain(whole));
             if ui
                 .selectable_label(
                     input.source.is_none() || input.source == whole_screen(hello).as_ref(),

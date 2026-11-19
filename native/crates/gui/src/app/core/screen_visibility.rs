@@ -205,9 +205,21 @@ pub struct ResumeGate {
     ready: bool,
     legacy: bool,
     latest: Option<u64>,
+    /// The acknowledgement of a renumbered report keeps floor and input.
+    keep: bool,
 }
 impl ResumeGate {
+    /// A report that keeps the shown picture (visible → visible, Codex 4/3)
+    /// gets the newest generation, which is the only one the host
+    /// acknowledges (H2: the gate waited for the one before for good). An
+    /// acknowledged floor stays, and so does the input; a floor still
+    /// awaited comes with this acknowledgement.
+    pub fn renumber(&mut self, generation: u64) {
+        self.generation = generation;
+        self.keep = self.floor.is_some();
+    }
     pub fn report(&mut self, report: &ViewerVisibility, modern: bool) {
+        self.keep = false;
         let was_hidden = !self.visible;
         self.visible = report.state != VisibilityState::Hidden && !report.minimized;
         self.generation = report.geometry_generation;
@@ -222,6 +234,9 @@ impl ResumeGate {
     }
     pub fn acknowledge(&mut self, generation: u64, min_frame: u64) {
         if generation == self.generation && self.visible {
+            if std::mem::take(&mut self.keep) {
+                return;
+            }
             self.floor = Some(min_frame);
             self.ready = self.latest.is_some_and(|frame| frame >= min_frame);
         }

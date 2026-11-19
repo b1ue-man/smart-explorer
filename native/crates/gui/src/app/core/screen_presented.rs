@@ -244,7 +244,9 @@ impl super::screen_session::ViewerSession {
         if !stays_shown && (modern || report.hidden()) {
             self.shared.invalidate_presentation();
         }
-        if !stays_shown {
+        if stays_shown {
+            lock(&self.shared.resume).renumber(report.geometry_generation);
+        } else {
             lock(&self.shared.resume).report(&report, modern);
         }
         *lock(&self.shared.visibility) = Some((report.clone(), modern));

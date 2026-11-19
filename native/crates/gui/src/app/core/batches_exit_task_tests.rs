@@ -32,6 +32,9 @@ fn batches_task_b6_exit_chord_stays_local_and_releases_host_modifiers() {
         shift: true,
         ..Modifiers::NONE
     };
+    // The modifiers go down while steering runs (H5: ones held from before
+    // its first frame stay local).
+    mapper.process(&[], Modifiers::NONE, &geometry);
     mapper.process(&[], mods, &geometry);
     let pressed = mapper.take_batch().unwrap();
     assert_eq!(pressed.len(), 3);

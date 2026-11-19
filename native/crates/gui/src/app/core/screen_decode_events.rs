@@ -210,6 +210,23 @@ impl DecodeState {
         self.last_record = None;
         self.keyframes = KeyframeRequester::default();
         self.shared.cancel_presentation();
+        // The new host session knows no visibility report and counts its
+        // frames from one (H2: the old floor refused every new frame): the
+        // last report goes to it again, and the gate waits for its answer.
+        let last = self
+            .shared
+            .visibility
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        if let Some((report, true)) = last {
+            self.shared
+                .resume
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .report(&report, true);
+            let _ = (self.send)(&ViewerFrame::Visibility(report));
+        }
     }
 
     /// The reading side broke without an end from the relay.

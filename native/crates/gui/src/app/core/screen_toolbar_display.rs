@@ -41,7 +41,7 @@ pub(super) fn display_rows(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Ve
             )
         })
         .show_ui(ui, |ui| {
-            super::wrap::popup(ui);
+            super::wrap::popup(ui, VirtualDisplayWish::ALL.map(VirtualDisplayWish::label));
             for wish in VirtualDisplayWish::ALL {
                 ui.selectable_value(&mut chosen.wish, wish, wish.label());
             }
@@ -67,7 +67,12 @@ pub(super) fn display_rows(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Ve
             )
         })
         .show_ui(ui, |ui| {
-            super::wrap::popup(ui);
+            let sizes = SIZE_CHOICES.iter().map(|size| size_text(*size));
+            let fixed = [
+                "Fenstergröße folgen".to_string(),
+                "Eigene Größe …".to_string(),
+            ];
+            super::wrap::popup(ui, sizes.chain(fixed));
             ui.selectable_value(&mut chosen.size, None, "Fenstergröße folgen");
             for size in SIZE_CHOICES {
                 ui.selectable_value(&mut chosen.size, Some(size), size_text(size));
