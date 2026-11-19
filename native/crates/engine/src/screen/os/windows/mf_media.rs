@@ -50,7 +50,7 @@ mod rate;
 #[cfg(test)]
 pub(in crate::screen::os) use rate::{bitrate_limit, level_max_bitrate};
 pub(in crate::screen::os) use rate::{
-    bounded_bitrate, one_frame_buffer, opened_limit, refused_lowering, retune_bounded,
+    bounded_bitrate, floored, one_frame_buffer, opened_limit, refused_lowering, retune_bounded,
     set_mean_bitrate, sharp_mode,
 };
 

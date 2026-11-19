@@ -34,8 +34,8 @@ use windows::Win32::Media::MediaFoundation::{
 use super::mf_common::{ensure_com, EncoderSetup};
 use super::mf_encoder_sync::{force_keyframe, start, stop, UNITS_PER_SECOND};
 use super::mf_media::{
-    bounded_bitrate, configure_hardware, is_keyframe, mark_ltr, opened_limit, refused_lowering,
-    retune_bounded, sharp_mode, Output,
+    bounded_bitrate, configure_hardware, floored, is_keyframe, mark_ltr, opened_limit,
+    refused_lowering, retune_bounded, sharp_mode, Output,
 };
 use super::{mf_capture_media, mf_capture_output};
 use crate::screen::core::capture_admission::{CaptureGrant, CaptureOwner};
@@ -396,7 +396,8 @@ impl ScreenEncoder for AsyncEncoder {
         let maximum = mf_capture_output::capture_limit(&grant, image, request, self.setup.size)?;
         ensure_com();
         let (limit, fps) = (self.limit, self.setup.fps);
-        let (api, target, peak) = (self.api.as_ref(), request.target_bps, self.peak);
+        let (api, peak) = (self.api.as_ref(), self.peak);
+        let target = floored(api, request.target_bps, self.bitrate);
         if let Some(refused) = retune_bounded(api, &mut self.bitrate, target, limit, fps, peak) {
             self.rate_refused = refused;
             if refused {

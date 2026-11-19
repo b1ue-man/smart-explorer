@@ -372,9 +372,8 @@ impl VendorSession for AmfSession {
         deliver: &mut dyn FnMut(&[u8]) -> io::Result<()>,
     ) -> io::Result<bool> {
         let names = self.names;
-        // Review 2026-11-19 C10: a lowered rate is set however small the
-        // step, and a refused one fails the picture instead of running above.
-        let lowered = self.rate.lowered_by(rate);
+        // C10 (review 2026-11-19): every lowering is set; a refused one fails.
+        let (lowered, previous) = (self.rate.lowered_by(rate), self.rate);
         if self.rate.differs(rate) || lowered {
             self.rate = *rate;
             let refused = self.apply(rate_settings(names, rate));
@@ -384,6 +383,7 @@ impl VendorSession for AmfSession {
             // The peak counts in quality VBR (sharp mode) only; CBR may refuse it.
             let rated = [Some(names.target), rate.quality.map(|_| names.peak)];
             if let Some(name) = refused.iter().find(|name| rated.contains(&Some(**name))) {
+                self.rate = previous; // T1: the rate it runs at stays the reference
                 let error = io::Error::other(format!("AMF refused {name}"));
                 rate.refused_lowering(lowered, AMF_NAME, &error)?;
             }

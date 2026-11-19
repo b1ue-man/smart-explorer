@@ -10,8 +10,8 @@ use super::super::mf_capture_output;
 use super::super::mf_common::ensure_com;
 use super::super::mf_encoder_sync::{force_keyframe, UNITS_PER_SECOND};
 use super::super::mf_media::{
-    input_sample, is_keyframe, nv12_bytes, process_output, refused_lowering, retune_bounded,
-    sample_bytes, Output,
+    floored, input_sample, is_keyframe, nv12_bytes, process_output, refused_lowering,
+    retune_bounded, sample_bytes, Output,
 };
 use super::{AsyncEncoder, Event, EVENT_DEADLINE};
 use crate::screen::core::host_backend::EncodedFrame;
@@ -41,6 +41,7 @@ impl AsyncEncoder {
         // for `ScreenEncoder::rate_state`.
         let api = self.api.as_ref();
         let peak = self.peak;
+        let target_bps = floored(api, target_bps, self.bitrate);
         if let Some(refused) = retune_bounded(api, &mut self.bitrate, target_bps, limit, fps, peak)
         {
             self.rate_refused = refused;

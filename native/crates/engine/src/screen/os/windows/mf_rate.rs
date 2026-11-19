@@ -78,14 +78,41 @@ fn read_value(api: &ICodecAPI, key: &GUID) -> Option<u32> {
 }
 
 /// Sets the mean bit rate and reads it back (plan 2026-11-17): `true` when
-/// the encoder refuses it or reads back a value more than 2 % off.
+/// the encoder refuses it or reads back a value more than 2 % above it.
+/// Review 2026-11-19 (T5 a): a value read back below the rate keeps the
+/// rate and its ceiling; it no longer counts as a refusal, which gave the
+/// encoder up (a new instance, then the next encoder) for a rate it keeps.
 pub(in crate::screen::os) fn set_mean_bitrate(api: &ICodecAPI, bitrate: u32) -> bool {
     let key = &CODECAPI_AVEncCommonMeanBitRate;
     if !set_value(api, key, VARIANT::from(bitrate)) {
         return true;
     }
     read_value(api, key)
-        .is_some_and(|read| u64::from(read.abs_diff(bitrate)) * 50 > u64::from(bitrate))
+        .is_some_and(|read| u64::from(read.saturating_sub(bitrate)) * 50 > u64::from(bitrate))
+}
+
+/// Review 2026-11-19 (T5 b): a lowered `target_bps` below the smallest mean
+/// bit rate the MFT reports (`GetParameterRange`) is that smallest rate; the
+/// MFT cannot go below it, so asking for less would only count as refused
+/// and restart the encoder. The stream's byte budget keeps the ceiling.
+/// A rise or an MFT that reports no range keeps `target_bps`.
+pub(in crate::screen::os) fn floored(
+    api: Option<&ICodecAPI>,
+    target_bps: u64,
+    running: u32,
+) -> u64 {
+    if target_bps >= u64::from(running) {
+        return target_bps;
+    }
+    let floor = api.and_then(|api| {
+        let (mut low, mut high, mut step) =
+            (VARIANT::default(), VARIANT::default(), VARIANT::default());
+        let key = &CODECAPI_AVEncCommonMeanBitRate;
+        // SAFETY: the three VARIANTs are owned locals the call fills.
+        unsafe { api.GetParameterRange(key, &mut low, &mut high, &mut step) }.ok()?;
+        u32::try_from(&low).ok()
+    });
+    target_bps.max(floor.map_or(0, u64::from))
 }
 
 /// The bit rate ceiling of the opened `transform` (after its types are set);
