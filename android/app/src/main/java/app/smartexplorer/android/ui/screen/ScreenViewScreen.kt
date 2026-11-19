@@ -284,7 +284,11 @@ fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, a
     LaunchedEffect(session, ui.accepted) {
         if(ui.accepted && session!=null && owned.any {it===session}) {
             // The session was opened with its source; naming it again would make the host open its capture anew.
-            session.setMode("full",settings.source.takeIf { it != session.openedSource },sharpness=settings.sharpness,lossless=settings.lossless)
+            val source = settings.source.takeIf { it != session.openedSource }
+            // An own session was opened as the full stream: only a changed source or the live switches
+            // „Scharf (GPU)“/„Verlustfrei“ need a `SET_MODE` (Gemini 5/6: one per start asked the host for nothing).
+            if (source != null || settings.sharpness || settings.lossless)
+                session.setMode("full",source,sharpness=settings.sharpness,lossless=settings.lossless)
         }
     }
     LaunchedEffect(immersive, barVisible) { if (immersive && barVisible) { delay(3000); barVisible = false } }
@@ -379,8 +383,9 @@ fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, a
             },
         )
         decoder.start()
-        // A decoder that starts in the middle of a picture group needs a key frame.
-        active.call { keyframe(it) }
+        // A decoder that starts in the middle of a picture group needs a key frame; before the first group the host
+        // begins with one anyway (Gemini 5/6).
+        if (active.state.value.stream != null) active.call { keyframe(it) }
         onDispose { activeDecoder.set(false); decoder.stop(); active.invalidateDisplay(false); drawing?.setStreamFrameRate(0) }
     }
 

@@ -100,6 +100,7 @@ class ScreenDecoder(
     private var hybridGop = -1L
     private var hybridFrameEpoch=0L
     private var rejectedHybridGop:Long?=null
+    private var rejectedTilesGop:Long?=null
     private var payloadOffset=HEADER_BYTES
     private var frameId: Long?=null
     private var frameEpoch=0L
@@ -253,6 +254,15 @@ class ScreenDecoder(
             return
         }
         if (flags and FLAG_TILES != 0) {
+            // The tiles are drawn in software: under „Dekodierer: Hardware“ they are refused with the reason, once per
+            // group (Gemini 5/7; e.g. a host without `set_decoders_v1` or the choice „Verlustfrei“).
+            if (choice().decoder == ViewerCodecChoice.DECODER_HARDWARE) {
+                if (rejectedTilesGop != gop) {
+                    rejectedTilesGop = gop
+                    listener.onHybridUnavailable(gop, "die verlustfreien Kacheln werden nur in Software gezeichnet")
+                }
+                return
+            }
             drawBitmap(src, gop, len)
             return
         }
