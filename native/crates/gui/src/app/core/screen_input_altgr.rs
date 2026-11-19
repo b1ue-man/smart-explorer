@@ -8,12 +8,17 @@
 //! stays off. egui-winit also turns Ctrl+V and (Windows) Umschalt+Einfg
 //! into `Paste` with the viewer's clipboard and sends nothing at all when
 //! that holds no text (`lib.rs` 766-774).
+use std::time::{Duration, Instant};
+
 use super::*;
 
 #[cfg(windows)]
 #[path = "../os/windows/screen_keyboard.rs"]
 mod platform;
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
+#[path = "../os/linux_os/screen_keyboard.rs"]
+mod platform;
+#[cfg(not(any(windows, target_os = "linux")))]
 mod platform {
     use eframe::egui::Key;
 
@@ -51,6 +56,27 @@ fn logical_char(key: Key) -> Option<char> {
         Key::Quote => '\'',
         _ => return None,
     })
+}
+
+/// How long a swallowed paste is waited for (`missed_paste`).
+const PASTE_WAIT: Duration = Duration::from_millis(50);
+
+/// One press of Ctrl+V or Umschalt+Einfg (`missed_paste`).
+struct Press {
+    since: Instant,
+    /// Frames since the one that saw the keys down.
+    frames: u32,
+    /// Umschalt+Einfg rather than Ctrl+V.
+    insert: bool,
+    /// Decided: egui's `Paste` came, or the shortcut went out.
+    done: bool,
+}
+
+/// The paste watch of a mapper.
+#[derive(Default)]
+pub(super) struct PasteWatch {
+    press: Option<Press>,
+    last_paste: Option<Instant>,
 }
 
 impl InputMapper {
@@ -109,17 +135,54 @@ impl InputMapper {
     }
 
     /// Ctrl+V or Umschalt+Einfg that egui-winit swallowed (a clipboard
-    /// without text): an empty `Paste` joins the frame once per press, and
-    /// `paste` sends the shortcut, so the host pastes its own clipboard. A
-    /// frame with egui's own `Paste` (the clipboard held text) adds none and
-    /// marks the press as handled, so nothing goes out twice; `frame_mods`
-    /// are `NONE` while a toolbar field holds the keyboard.
-    pub(super) fn missed_paste(&mut self, events: &[Event], mods: Modifiers) -> Option<Vec<Event>> {
+    /// without text): the shortcut goes to the host once per press, which
+    /// pastes its own clipboard. egui-winit makes `Paste` on the press only
+    /// (`lib.rs` 760-775, inside `if pressed`), so the press is decided
+    /// `PASTE_WAIT` and two frames after the keys were seen down, or when they
+    /// are let go: a `Paste` in any frame of that wait (or `PASTE_WAIT` before
+    /// it) means egui had the text, and nothing goes out twice whatever
+    /// frame the key state and the event fall into. `frame_mods` are
+    /// `NONE` while a toolbar field holds the keyboard.
+    pub(super) fn missed_paste(&mut self, events: &[Event], mods: Modifiers) {
+        let now = Instant::now();
+        if events.iter().any(|event| matches!(event, Event::Paste(_))) {
+            self.paste.last_paste = Some(now);
+        }
+        let recent =
+            |at: Option<Instant>, since: Instant| at.is_some_and(|at| at + PASTE_WAIT >= since);
         let held = platform::paste_keys_held(mods.ctrl, mods.shift);
-        let came = events.iter().any(|event| matches!(event, Event::Paste(_)));
-        let missed = held && !self.paste_held && !came;
-        self.paste_held = held;
-        let empty = Event::Paste(String::new());
-        missed.then(|| events.iter().cloned().chain([empty]).collect())
+        if held && self.paste.press.is_none() {
+            self.paste.press = Some(Press {
+                since: now,
+                frames: 0,
+                insert: mods.shift && !mods.ctrl,
+                done: false,
+            });
+        } else if let Some(press) = self.paste.press.as_mut() {
+            press.frames += 1;
+        }
+        let last = self.paste.last_paste;
+        let Some(press) = self.paste.press.as_mut() else {
+            return;
+        };
+        press.done |= recent(last, press.since);
+        let due = !held || (press.frames >= 2 && now >= press.since + PASTE_WAIT);
+        if due && !press.done {
+            press.done = true;
+            if press.insert {
+                let shifted = Modifiers {
+                    shift: true,
+                    ctrl: false,
+                    ..self.mods
+                };
+                self.sync_modifiers(shifted);
+                self.tap("insert");
+            } else {
+                self.chord("v");
+            }
+        }
+        if !held {
+            self.paste.press = None;
+        }
     }
 }

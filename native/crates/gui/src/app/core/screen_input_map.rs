@@ -86,8 +86,8 @@ pub struct InputMapper {
     armed: Modifiers,
     wheel_rest: (f32, f32),
     touch_active: bool,
-    /// Ctrl+V or Umschalt+Einfg held (`missed_paste`).
-    paste_held: bool,
+    /// Ctrl+V or Umschalt+Einfg watched for a swallowed paste (`missed_paste`).
+    paste: altgr::PasteWatch,
     /// Keys without a usage that were dropped (shown in the statistics).
     pub unmapped_keys: u64,
     /// The text of a running IME composition (shown, not sent).
@@ -119,7 +119,7 @@ impl InputMapper {
             },
             wheel_rest: (0.0, 0.0),
             touch_active: false,
-            paste_held: false,
+            paste: altgr::PasteWatch::default(),
             unmapped_keys: 0,
             preedit: None,
         }
@@ -177,8 +177,7 @@ impl InputMapper {
 
     /// Maps the events of one frame; `frame_mods` are the modifiers at its end.
     pub fn process(&mut self, events: &[Event], frame_mods: Modifiers, geometry: &Geometry) {
-        let extended = self.missed_paste(events, frame_mods);
-        let events = extended.as_deref().unwrap_or(events);
+        self.missed_paste(events, frame_mods);
         if events.iter().any(|event| matches!(event, Event::Key {
             key, modifiers, pressed: true, ..
         } if matches!(local_key(*key, *modifiers), Some(super::screen_input_keys::LocalKey::Fullscreen | super::screen_input_keys::LocalKey::ExitFullscreen)))) {

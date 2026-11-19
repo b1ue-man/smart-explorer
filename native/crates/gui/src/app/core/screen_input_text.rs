@@ -50,7 +50,7 @@ impl InputMapper {
     }
 
     /// One press and release of the key `name` under the held modifiers.
-    fn tap(&mut self, name: &str) {
+    pub(super) fn tap(&mut self, name: &str) {
         let Some(hid_usage) = key_usage(name).filter(|_| self.caps.keyboard) else {
             return;
         };
