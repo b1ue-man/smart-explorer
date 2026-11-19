@@ -233,6 +233,11 @@ fn windows_over(
                 session.close();
                 return Ok(list);
             }
+            // The daemon rebuilt the host session (Gemini 3/9.4); the relay
+            // dropped the request during the rebuild: it goes to the new one.
+            StreamEvent::Accepted { .. } => session
+                .send(&ViewerFrame::ListWindows)
+                .map_err(|error| error.to_string())?,
             StreamEvent::Host(HostFrame::Error(error)) => return Err(error_text(&error)),
             StreamEvent::End(end) => return Err(end_text(&end)),
             _ => {}
@@ -261,7 +266,7 @@ fn snapshot_over(
     read: Duration,
     pending: &mut dyn FnMut(Capability),
 ) -> Result<StillImage, String> {
-    let hello = accept(session, accept_within, pending)?;
+    let mut hello = accept(session, accept_within, pending)?;
     // The host shows the source of the session; the frame's own `source`
     // stays empty (U16-5).
     let request = SnapshotRequest {
@@ -269,7 +274,7 @@ fn snapshot_over(
         max_size,
     };
     session
-        .send(&ViewerFrame::Snapshot(request))
+        .send(&ViewerFrame::Snapshot(request.clone()))
         .map_err(|error| error.to_string())?;
     let deadline = Instant::now() + read;
     let mut records = Vec::new();
@@ -292,6 +297,17 @@ fn snapshot_over(
                 if !more {
                     break header;
                 }
+            }
+            // The daemon rebuilt the host session (Gemini 3/9.4): its group
+            // ids start again and the relay dropped the request during the
+            // rebuild, so the still is asked of the new session from scratch.
+            StreamEvent::Accepted { hello: again, .. } => {
+                hello = again;
+                records.clear();
+                stream = None;
+                session
+                    .send(&ViewerFrame::Snapshot(request.clone()))
+                    .map_err(|error| error.to_string())?;
             }
             StreamEvent::Host(HostFrame::Error(error)) => return Err(error_text(&error)),
             StreamEvent::End(end) => return Err(end_text(&end)),
@@ -388,6 +404,10 @@ pub fn screen_icon(
                 response.validate().map_err(|error| error.to_string())?;
                 return Ok(response.content);
             }
+            // Rebuilt host session (Gemini 3/9.4): the request goes to it.
+            StreamEvent::Accepted { .. } => session
+                .send(&ViewerFrame::IconRequest(request.clone()))
+                .map_err(|error| error.to_string())?,
             StreamEvent::Host(HostFrame::Error(error)) => return Err(error_text(&error)),
             StreamEvent::End(end) => return Err(end_text(&end)),
             _ => {}

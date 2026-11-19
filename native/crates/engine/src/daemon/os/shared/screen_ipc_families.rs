@@ -43,6 +43,10 @@ fn families(
                 list.validate().map_err(|error| error.to_string())?;
                 return Ok(list);
             }
+            // Rebuilt host session (Gemini 3/9.4): the request goes to it.
+            StreamEvent::Accepted { .. } => session
+                .send(&ViewerFrame::ListFamilies)
+                .map_err(|error| error.to_string())?,
             StreamEvent::Host(HostFrame::Error(error)) => return Err(error_text(&error)),
             StreamEvent::End(end) => return Err(end_text(&end)),
             _ => {}
