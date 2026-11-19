@@ -100,9 +100,16 @@ pub async fn accept_picture_streams_admitted(
         tokio::spawn(async move {
             let bytes = memory.as_ref().map(|lease| lease.bytes());
             let streams = (recv, before);
-            read_picture_stream(streams, events, acks, contract, bytes, local).await;
-            let _ = done.send(true);
+            let broken = events.clone();
+            let gop = read_picture_stream(streams, events, acks, contract, bytes, local).await;
+            // The slot of a broken stream comes free before its `Broken`
+            // waits for the decoder (Gemini 3/3: four broken readers that
+            // waited held every slot, and the host's next stream timed out).
             drop((permit, memory));
+            if let Some(gop_id) = gop {
+                let _ = broken.send(PictureEvent::Broken { gop_id }).await;
+            }
+            let _ = done.send(true);
         });
     }
 }
@@ -128,12 +135,12 @@ async fn read_picture_stream(
     contract: Option<frame_budget::FrameContract>,
     memory_bytes: Option<u64>,
     local: Option<frame_budget::FrameLimits>,
-) {
+) -> Option<u64> {
     let header = match read_gop_header(&mut recv).await {
         Ok(header) => header,
         Err(_) => {
             let _ = recv.stop(STREAM_RESET_CODE);
-            return;
+            return None;
         }
     };
     let contract_matches = frame_budget::contract_matches(header.frame_contract, contract);
@@ -150,12 +157,12 @@ async fn read_picture_stream(
         || local.is_some_and(|limits| limits.check(header.size).is_err())
     {
         let _ = recv.stop(STREAM_RESET_CODE);
-        return;
+        return None;
     }
     let Ok(budget) = frame_size_caps::PacketBudget::for_receive(header.frame_contract, local)
     else {
         let _ = recv.stop(STREAM_RESET_CODE);
-        return;
+        return None;
     };
     let mut sequence = RecordSequence::default();
     let mut allocation_budget = wire_binary::FrameReadBudget::default();
@@ -172,7 +179,7 @@ async fn read_picture_stream(
         .await
         {
             Ok(Some(record)) => record,
-            Ok(None) if !sequence.is_open() => return,
+            Ok(None) if !sequence.is_open() => return None,
             Ok(None) | Err(_) => break,
         };
         if current != record.frame_id {
@@ -226,9 +233,5 @@ async fn read_picture_stream(
     }
     // A broken stream is stopped at once, so its slot comes free (NR N1).
     let _ = recv.stop(STREAM_RESET_CODE);
-    let _ = events
-        .send(PictureEvent::Broken {
-            gop_id: header.gop_id,
-        })
-        .await;
+    Some(header.gop_id)
 }

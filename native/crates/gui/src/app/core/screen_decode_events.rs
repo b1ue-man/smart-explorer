@@ -64,6 +64,14 @@ impl DecodeState {
                             hello.icon_version == Some(crate::screen::core::app_icon::ICON_VERSION),
                         );
                 }
+                // The daemon built the session anew (Gemini 3/9.4): its
+                // groups and frames count from one again, so a new picture
+                // epoch starts; what the viewer asked for at the opening the
+                // daemon gave the new session already (`replay`).
+                let again = self.shared.info().accepted > 0;
+                if again {
+                    self.new_epoch();
+                }
                 // P1: a new „Codec“/„Dekodierer“ goes out as `SET_DECODERS`.
                 self.shared
                     .local
@@ -83,7 +91,7 @@ impl DecodeState {
                 });
                 // The stored „Verlustfrei“/„Scharf (GPU)“ (user rule
                 // 2026-11-18): only `SET_MODE` carries them to the host.
-                if let Some(mode) = self.shared.opening_mode() {
+                if let Some(mode) = self.shared.opening_mode().filter(|_| !again) {
                     let _ = (self.send)(&ViewerFrame::SetMode(mode));
                 }
                 // A chosen „Dekodier-Bibliothek“ that is absent is named,
@@ -92,7 +100,7 @@ impl DecodeState {
                     let text = crate::screen::core::decoder_library::missing_text(library);
                     self.shared.update(|info| info.notice = Some(text));
                 }
-                if self.take_control {
+                if self.take_control && !again {
                     let take = ControlRequest {
                         action: ControlAction::Take,
                     };
@@ -187,6 +195,21 @@ impl DecodeState {
             }
         }
         false
+    }
+
+    /// A new host session behind the same relay: the groups and frames
+    /// before it are no reference for its own (they count from one again).
+    fn new_epoch(&mut self) {
+        let switches = self.chain.switches;
+        self.chain = Default::default();
+        self.chain.switches = switches;
+        self.gop = None;
+        self.latest_gop = 0;
+        self.broken = None;
+        self.broken_frame = None;
+        self.last_record = None;
+        self.keyframes = KeyframeRequester::default();
+        self.shared.cancel_presentation();
     }
 
     /// The reading side broke without an end from the relay.

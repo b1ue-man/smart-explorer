@@ -142,7 +142,10 @@ impl DecodeState {
         self.chain.switches = switches;
         self.chain.reopen = true;
         self.chain.continuity.broken();
-        self.request_keyframe(KeyframeReason::Reset, self.latest_gop);
+        // The stream is sound: a key frame in the running group serves the
+        // new decoder (`reopens_at`), which the host sends for `DecodeError`
+        // without a new picture stream (Codex 4/9; `Reset` opened one).
+        self.request_keyframe(KeyframeReason::DecodeError, self.latest_gop);
     }
 
     /// The key frame that opens the decoder of a new choice (V1).

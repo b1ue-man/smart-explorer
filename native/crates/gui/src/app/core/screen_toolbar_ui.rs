@@ -14,15 +14,12 @@ use super::screen_devices::DeviceEntry;
 use super::screen_prefs::{Fit, ViewerPrefs};
 use super::screen_session::SessionInfo;
 use super::screen_target::ScreenTarget;
-use super::screen_texts::blocked_text;
-use crate::app::theme;
 use crate::screen::core::app_icon::{IconRef, IconTarget};
 use crate::screen::core::input_model::{
     SystemAction, KEY_CAPS_LOCK, KEY_MENU, KEY_MUTE, KEY_NUM_LOCK, KEY_PAUSE, KEY_PLAY_PAUSE,
     KEY_PRINT_SCREEN, KEY_SCROLL_LOCK, KEY_SUPER_LEFT, KEY_VOLUME_DOWN, KEY_VOLUME_UP,
 };
 use crate::screen::core::window_list::SourceId;
-use crate::screen::core::wire_control::ControlBlock;
 use crate::screen::core::wire_hello::ScreenHelloOk;
 use crate::share::access_grant::CapabilityDecision;
 
@@ -411,21 +408,9 @@ fn control_items(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Vec<ToolbarA
     if let Some(name) = input.controlled_by {
         wrap::note(ui, RichText::new(format!("Gesteuert von {name}")).small());
     }
-    let blocked: Option<ControlBlock> = input.info.and_then(|info| info.blocked);
-    // E2: input the host holds back is named while it waits; the block it
-    // repeats in that state is the one shown before, not a new one.
-    let held = input.info.and_then(|info| info.held);
-    match (held, blocked, input.control_on) {
-        (Some(held), _, true) => {
-            let text = super::screen_texts::held_text(held);
-            wrap::note(ui, RichText::new(text).color(theme::warning(ui)));
-        }
-        (None, Some(block), true) => {
-            let text = blocked_text(block);
-            wrap::note(ui, RichText::new(text).color(theme::warning(ui)));
-        }
-        _ => {}
-    }
+    // A held or blocked input is named over the picture
+    // (`ViewState::status_text`), not in the bar (Gemini 3/5.3: its line
+    // changed the bar's height, the picture area and so the visibility).
 }
 
 fn keys_menu(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Vec<ToolbarAction>) {

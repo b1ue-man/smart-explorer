@@ -300,7 +300,10 @@ impl ViewWidget {
         let size = direct_size
             .or_else(|| self.current.as_ref().map(Current::size))
             .or(self.source_geometry)
-            .or_else(|| self.direct.size());
+            .or_else(|| self.direct.size())
+            // The host's stream before its first picture: the visibility
+            // report goes out before it, not after it revoked it (Gemini 3/5.2).
+            .or_else(|| session.info().stream.as_ref().map(|stream| stream.size));
         let mut shown = None;
         let mut reported_geometry = None;
         if let Some(size) = size.filter(|size| size.width > 0 && size.height > 0) {

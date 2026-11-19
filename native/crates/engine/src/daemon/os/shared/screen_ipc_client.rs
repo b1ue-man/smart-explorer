@@ -300,10 +300,16 @@ impl ScreenStream {
         let event = decode_event(tag, &payload)?;
         match &event {
             StreamEvent::Accepted { hello, .. } => {
-                if self.frame_contract.is_some() {
+                // Again only after the daemon built the session anew under
+                // the same contract (`screen_ipc_reconnect.rs`, Gemini 3/9.4).
+                let key = |c: Option<FrameContract>| c.map(|c| (c.version, c.limits));
+                if self
+                    .frame_contract
+                    .is_some_and(|accepted| key(accepted) != key(hello.frame_contract))
+                {
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidData,
-                        "duplicate screen relay acceptance",
+                        "screen relay acceptance with another frame contract",
                     ));
                 }
                 if let Some(contract) = hello.frame_contract {

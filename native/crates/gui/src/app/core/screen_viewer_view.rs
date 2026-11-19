@@ -196,13 +196,24 @@ impl ViewState {
             (Some(notice), false) => format!("{text} – {notice}"),
             (None, _) => text,
         };
+        let mut add = |line: &str| {
+            status = match status.is_empty() {
+                true => line.to_string(),
+                false => format!("{status} – {line}"),
+            };
+        };
         // Its own line beside the notice (U2).
         if info.rate_ceiling == crate::daemon::RateCeilingState::UnsupportedByHost {
-            let ceiling = super::screen_texts::CEILING_UNSUPPORTED;
-            status = match status.is_empty() {
-                true => ceiling.to_string(),
-                false => format!("{status} – {ceiling}"),
-            };
+            add(super::screen_texts::CEILING_UNSUPPORTED);
+        }
+        // E2: input the host holds back, else a block, while it steers; a
+        // block repeated in the held state is the one named before.
+        if self.control_on {
+            if let Some(held) = info.held {
+                add(super::screen_texts::held_text(held));
+            } else if let Some(block) = info.blocked {
+                add(super::screen_texts::blocked_text(block));
+            }
         }
         status
     }

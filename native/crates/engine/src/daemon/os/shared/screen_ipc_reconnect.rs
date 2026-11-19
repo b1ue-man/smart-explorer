@@ -394,6 +394,23 @@ pub(super) async fn relay_session(
                 session = next;
                 opened = Instant::now();
                 hold(&memory, &session);
+                // The new host session counts its picture groups and frames
+                // from one again (Gemini 3/9.4): the viewer hears the hello
+                // once more and starts a new picture epoch with it.
+                let path = path_of(&session.connection).0.key().to_string();
+                let again = RelayHello::Accepted {
+                    hello: session.hello.clone(),
+                    path,
+                    local_limits: session.local_limits,
+                    rate_ceiling: RateCeilingState::of(max_rate_bps, session.rate_ceiling),
+                    set_decoders: session.set_decoders,
+                };
+                if let Ok(json) = wire::to_json(&again) {
+                    if out.send((RELAY_HELLO, json)).await.is_err() {
+                        session.close();
+                        return;
+                    }
+                }
             }
             Outcome::Refused(error) => {
                 end(&out, error.code(), Some(error.detail())).await;
