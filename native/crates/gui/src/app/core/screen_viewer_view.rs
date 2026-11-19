@@ -271,6 +271,9 @@ impl ViewState {
         match action {
             ToolbarAction::Source(source) => {
                 self.source = source.clone();
+                // A session opened again (a codec choice, Codex 6) starts from
+                // the target: it names the chosen source, not the first one.
+                self.target.source = source.clone();
                 if let Some(session) = &self.session {
                     self.widget.source_changed(session);
                     let mode = full_set_mode(source.clone(), display, &common.prefs);

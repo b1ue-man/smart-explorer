@@ -56,8 +56,16 @@ pub(super) fn run(
     let mut state = DecodeState::new(shared, backend.decoder.clone(), send, take_control);
     state.announce_continuation(continues);
     loop {
-        match next() {
+        let asked = std::time::Instant::now();
+        let next_event = next();
+        match next_event {
             Ok(event) => {
+                // A record that was already waiting: backlog in front of the
+                // decode thread (statistics, `screen_flow.rs`).
+                let waited = asked.elapsed() < super::screen_chain_window::flow::QUEUED_WITHIN;
+                if waited && matches!(event, crate::daemon::StreamEvent::Record { .. }) {
+                    state.count_queued();
+                }
                 let last = state.on_event(event);
                 wake();
                 if last {
@@ -71,6 +79,8 @@ pub(super) fn run(
             }
         }
     }
+    // The session's sums for the viewer log (statistics, user 2026-11-19).
+    state.log_flow();
     drop(state);
     drop(next);
     drop(memory);

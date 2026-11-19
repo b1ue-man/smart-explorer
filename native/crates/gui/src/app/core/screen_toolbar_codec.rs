@@ -31,7 +31,7 @@ static SAVE_ERROR: Mutex<Option<String>> = Mutex::new(None);
 
 /// Keeps the outcome of storing a choice: an error stays shown in the
 /// toolbar until a later save succeeds.
-fn note_save(result: std::io::Result<()>) {
+pub(super) fn note_save(result: std::io::Result<()>) {
     let mut slot = SAVE_ERROR.lock().unwrap_or_else(PoisonError::into_inner);
     *slot = result.err().map(|error| error.to_string());
 }

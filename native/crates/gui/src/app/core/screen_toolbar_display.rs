@@ -208,14 +208,25 @@ pub fn send_live(
 }
 
 /// Stores a new „Monitor“ or „Auflösung“ (`ToolbarAction::VirtualDisplay`);
-/// `true` when the session must open again with it.
+/// `true` when the choice changed and goes to the session (live or by
+/// opening again). A file that could not be written (Codex 18, fix
+/// 2026-11-19) no longer drops the choice: the process holds it already, so
+/// it applies to the session and the toolbar names the save error; only a
+/// choice that failed its check changes nothing.
 pub fn apply_virtual_display(choice: VirtualDisplayChoice) -> bool {
-    let before = super::super::screen_prefs::virtual_display_choice();
-    if before == choice {
+    let prefs = super::super::screen_prefs::virtual_display_choice;
+    if prefs() == choice {
         return false;
     }
-    super::super::screen_prefs::set_virtual_display_choice(Some(choice.wish), Some(choice.size))
-        .is_ok()
+    let saved = super::super::screen_prefs::set_virtual_display_choice(
+        Some(choice.wish),
+        Some(choice.size),
+    );
+    let taken = prefs() == choice;
+    if taken {
+        super::codec_rows::note_save(saved);
+    }
+    taken
 }
 
 #[cfg(test)]

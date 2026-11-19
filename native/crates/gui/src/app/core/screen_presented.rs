@@ -178,6 +178,8 @@ impl Shared {
         if !send() {
             return false;
         }
+        // A new picture was presented (statistics, `screen_flow.rs`).
+        self.info().latency.flow.presented();
         resume.complete(frame.frame_id);
         state.last = Some(frame);
         true
@@ -216,6 +218,51 @@ impl Shared {
 }
 
 impl super::screen_session::ViewerSession {
+    /// Queues the negotiated visibility report. Old peers retain their wire contract.
+    pub fn set_visibility(&self, mut report: crate::screen::core::visibility::ViewerVisibility) {
+        report.geometry_generation = lock(&self.shared.visibility)
+            .as_ref()
+            .map_or(1, |(previous, _)| {
+                previous.geometry_generation.saturating_add(1)
+            });
+        let modern = self.shared.modern();
+        // An older host (no visibility contract, Codex 10) hears nothing of
+        // the report and sends no fresh picture for it: a view that stays
+        // visible keeps its picture and input, and one shown again after it
+        // was hidden asks for a key frame (a still screen sends none).
+        let was_hidden = lock(&self.shared.visibility)
+            .as_ref()
+            .is_some_and(|(previous, _)| previous.hidden());
+        if modern || report.hidden() {
+            self.shared.invalidate_presentation();
+        }
+        lock(&self.shared.resume).report(&report, modern);
+        *lock(&self.shared.visibility) = Some((report.clone(), modern));
+        if modern {
+            self.send(crate::screen::core::wire_control::ViewerFrame::Visibility(
+                report,
+            ));
+        } else if was_hidden && !report.hidden() {
+            let request = crate::screen::core::wire_control::KeyframeRequest {
+                reason: crate::screen::core::wire_control::KeyframeReason::Reset,
+                gop_id: None,
+            };
+            self.send(crate::screen::core::wire_control::ViewerFrame::KeyframeRequest(request));
+        }
+    }
+
+    /// Replays the latest facts once HELLO proves the new frame contract.
+    pub fn refresh_visibility(&self) {
+        let modern = self.shared.modern();
+        let report = lock(&self.shared.visibility)
+            .as_ref()
+            .filter(|(_, sent_modern)| modern && !sent_modern)
+            .map(|(report, _)| report.clone());
+        if let Some(report) = report {
+            self.set_visibility(report);
+        }
+    }
+
     /// A picture that matches the presentation but arrived before the host's
     /// visibility acknowledgement goes back into the slot instead of being
     /// dropped: a host with an unchanged screen sends no next picture, and
@@ -223,6 +270,10 @@ impl super::screen_session::ViewerSession {
     pub fn keep_if_awaiting_floor(&self, picture: super::screen_session::Picture) {
         if self.shared.awaiting_floor(&picture.presented) {
             self.shared.keep_picture(picture);
+        } else {
+            // Not presentable under the host's visibility floor (statistics).
+            let floor = super::screen_chain_window::flow::Dropped::Floor;
+            self.shared.update(|info| info.latency.flow.dropped(floor));
         }
     }
 }

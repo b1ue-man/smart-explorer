@@ -143,7 +143,7 @@ pub struct Shared {
     present_gap_ms: AtomicU64,
     pub(super) resume: Mutex<ResumeGate>,
     pub(super) presentation: Mutex<super::screen_presented::PresentationState>,
-    visibility: Mutex<Option<(ViewerVisibility, bool)>>,
+    pub(super) visibility: Mutex<Option<(ViewerVisibility, bool)>>,
     decoder_mode: Mutex<SetMode>,
     /// The viewer switched to the tiles itself (`screen_session_choice.rs`).
     pub(super) lossless_fallback: AtomicBool,
@@ -386,34 +386,6 @@ impl ViewerSession {
     /// A paint drew the shown picture again because no new one came (r1).
     pub fn note_repeated(&self) {
         self.shared.update(|info| info.latency.on_repeated());
-    }
-
-    /// Queues the negotiated visibility report. Old peers retain their wire contract.
-    pub fn set_visibility(&self, mut report: ViewerVisibility) {
-        report.geometry_generation = lock(&self.shared.visibility)
-            .as_ref()
-            .map_or(1, |(previous, _)| {
-                previous.geometry_generation.saturating_add(1)
-            });
-        let modern = self.shared.modern();
-        self.shared.invalidate_presentation();
-        lock(&self.shared.resume).report(&report, modern);
-        *lock(&self.shared.visibility) = Some((report.clone(), modern));
-        if modern {
-            self.send(ViewerFrame::Visibility(report));
-        }
-    }
-
-    /// Replays the latest facts once HELLO proves the new frame contract.
-    pub fn refresh_visibility(&self) {
-        let modern = self.shared.modern();
-        let report = lock(&self.shared.visibility)
-            .as_ref()
-            .filter(|(_, sent_modern)| modern && !sent_modern)
-            .map(|(report, _)| report.clone());
-        if let Some(report) = report {
-            self.set_visibility(report);
-        }
     }
 
     pub fn invalidate_input(&self) {

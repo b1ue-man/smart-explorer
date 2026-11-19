@@ -161,6 +161,8 @@ impl DecodeState {
                 // (B-36) until the continuation the host sends after it
                 // reset the stream; the decoder then stays.
                 self.shared.pause_receipts();
+                let broken = super::super::screen_chain_window::flow::Dropped::Broken;
+                self.shared.update(|info| info.latency.flow.dropped(broken));
                 let waits = self.waits_for_stream(gop_id);
                 if !waits && self.gop.as_ref().is_some_and(|gop| gop.id == gop_id) {
                     self.gop = None;

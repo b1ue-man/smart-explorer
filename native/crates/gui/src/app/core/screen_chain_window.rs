@@ -9,6 +9,9 @@
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
+#[path = "screen_flow.rs"]
+pub mod flow;
+
 /// Samples the latency figures of the statistics are taken from. It only
 /// smooths the display: the figures follow the latest frames.
 pub const LATENCY_WINDOW: usize = 200;
@@ -59,6 +62,9 @@ pub struct LatencyWindow {
     /// Paints of the drawing thread that showed the previous picture again
     /// because no new one came (r1).
     pub repeated: u64,
+    /// Where the pictures go: received, decoded, presented, left out by
+    /// reason, key frame requests (`flow::PictureFlow`).
+    pub flow: flow::PictureFlow,
     put_at: Option<Instant>,
     timing_asked: Option<Instant>,
 }
@@ -77,6 +83,9 @@ impl LatencyWindow {
     /// the drawing thread never took.
     pub fn on_put(&mut self, unshown: bool) {
         self.dropped += u64::from(unshown);
+        if unshown {
+            self.flow.dropped(flow::Dropped::Overwritten);
+        }
         self.put_at = Some(Instant::now());
     }
 

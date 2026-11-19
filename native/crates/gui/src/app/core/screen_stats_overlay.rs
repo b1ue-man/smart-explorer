@@ -67,7 +67,11 @@ pub fn stats_lines(info: &SessionInfo, unmapped_keys: u64) -> Vec<String> {
         format!("Codec {codec}"),
         format!("Kodierer {encoder}"),
         format!("Dekodierer {decoder}"),
-        format!("{size} @ {} B/s", value(stats.map(|stats| stats.fps))),
+        // The host's sent pictures; the viewer's own flow follows below.
+        format!(
+            "{size} @ {} B/s gesendet",
+            value(stats.map(|stats| stats.fps))
+        ),
         format!(
             "{} kbit/s (Ziel {})",
             value(stats.map(|stats| stats.sent_kbps)),
@@ -89,6 +93,8 @@ pub fn stats_lines(info: &SessionInfo, unmapped_keys: u64) -> Vec<String> {
         ),
         latency,
     ];
+    // Where the pictures go in the viewer (user 2026-11-19, `screen_flow.rs`).
+    lines.extend(info.latency.flow.lines());
     lines.extend(super::screen_stats_chain::chain_lines(info));
     if unmapped_keys > 0 {
         lines.push(format!("Tasten ohne Abbildung {unmapped_keys}"));

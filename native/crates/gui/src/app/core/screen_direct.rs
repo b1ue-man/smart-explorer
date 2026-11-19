@@ -176,25 +176,31 @@ fn receipt(
     });
 }
 
-/// The presenter is attached but the decoder gave its picture as planes or
-/// BGRA (Media Foundation, DXVA2, software, tiles; fix 2026-11-19): the
-/// picture goes through the window's renderer. A chosen „Direct3D 11“ names
-/// that with the decoder once per decoder (user rule 2026-11-18); under
-/// „Automatisch“ it is the designed path and stays silent.
-pub(super) fn not_direct(shared: &Shared) {
+/// The presenter is attached but the decoder gave planes or BGRA: under
+/// „Automatisch“ the window's renderer shows it (`false`); a chosen
+/// „Direct3D 11“ shows it no other way (Codex 16, user rule 2026-11-18):
+/// `true`, the picture is left out, the error names the decoder once.
+pub(super) fn not_direct(shared: &Shared) -> bool {
     if super::screen_prefs::display_choice() != super::screen_prefs::DisplayChoice::Direct3d11 {
-        return;
+        return false;
     }
     let decoder = shared.info().decoder.clone().unwrap_or_default();
     {
         let mut noted = lock(&shared.direct.noted);
         if noted.as_deref() == Some(decoder.as_str()) {
-            return;
+            return true;
         }
         *noted = Some(decoder.clone());
     }
-    let reason = format!("der Dekodierer „{decoder}“ gibt keine Direct3D-11-Bilder aus");
-    report(shared, &reason);
+    let error = format!("der Dekodierer „{decoder}“ gibt keine Direct3D-11-Bilder aus");
+    *lock(&LAST_ERROR) = Some(error.clone());
+    let text = format!(
+        "Anzeige „Direct3D 11“: {error}; es wird kein Bild über das Fenster gezeigt. \
+         „Anzeige: Automatisch“ zeigt es über das Fenster, oder ein Dekodierer mit \
+         D3D11VA (FFmpeg)."
+    );
+    shared.update(|info| info.notice = Some(text));
+    true
 }
 
 /// The decode thread hands a GPU picture over; `false` when no presenter
@@ -212,14 +218,30 @@ pub(super) fn deliver(
         info.latency.on_put(false);
         info.latency.on_taken();
     });
+    // The presenter's held texture and its stamp change together under this
+    // lock, and `DirectView::show_held` reads both under it (Codex 9: it
+    // could draw a newer texture and confirm the older stamp).
+    let mut held = lock(&shared.direct.held);
     if !shared.can_present(&presented) || !shared.direct.target_visible.load(Ordering::Acquire) {
         presenter.hold(picture, owner(shared));
-        *lock(&shared.direct.held) = Some(presented);
+        let replaced = held.replace(presented).is_some();
+        drop(held);
+        if replaced {
+            // A held picture replaced before it was shown (statistics).
+            let overwritten = super::screen_chain_window::flow::Dropped::Overwritten;
+            shared.update(|info| info.latency.flow.dropped(overwritten));
+        }
         return true;
     }
-    match presenter.present(picture, owner(shared)) {
+    let shown = presenter.present(picture, owner(shared));
+    if matches!(shown, Ok(false)) {
+        *held = Some(presented);
+        return true;
+    }
+    drop(held);
+    match shown {
         Ok(true) => receipt(shared, send, presented),
-        Ok(false) => *lock(&shared.direct.held) = Some(presented),
+        Ok(false) => {}
         Err(error) => {
             shared.direct.set(None);
             report(shared, &error.to_string());
@@ -401,20 +423,35 @@ impl DirectView {
 
     fn show_held(&self, session: &ViewerSession, presenter: &dyn DirectPresenter) {
         let direct = &session.shared.direct;
-        let Some(stamp) = lock(&direct.held).take() else {
+        // Stamp and held texture are read together (`deliver`, Codex 9).
+        let mut held = lock(&direct.held);
+        let Some(stamp) = held.take() else {
             return;
         };
         if !direct.target_visible.load(Ordering::Acquire) {
             // Drawn into a child nobody sees, it would give a false receipt.
-            *lock(&direct.held) = Some(stamp);
+            *held = Some(stamp);
         } else if session.can_present(stamp.clone()) {
             match presenter.show_held(owner(&session.shared)) {
-                Ok(true) => (session.presented_callback(stamp))(),
-                Ok(false) => *lock(&session.shared.direct.held) = Some(stamp),
-                Err(error) => report(&session.shared, &error.to_string()),
+                Ok(true) => {
+                    drop(held);
+                    (session.presented_callback(stamp))();
+                }
+                Ok(false) => *held = Some(stamp),
+                Err(error) => {
+                    drop(held);
+                    report(&session.shared, &error.to_string());
+                }
             }
         } else if session.shared.awaiting_floor(&stamp) {
-            *lock(&session.shared.direct.held) = Some(stamp);
+            *held = Some(stamp);
+        } else {
+            drop(held);
+            // Not presentable under the host's visibility floor (statistics).
+            let floor = super::screen_chain_window::flow::Dropped::Floor;
+            session
+                .shared
+                .update(|info| info.latency.flow.dropped(floor));
         }
     }
 

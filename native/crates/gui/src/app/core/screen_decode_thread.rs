@@ -141,6 +141,37 @@ impl DecodeState {
                 gop_id: Some(gop_id),
             };
             let _ = (self.send)(&ViewerFrame::KeyframeRequest(request));
+            self.flow(|flow| flow.keyframe(reason));
+        }
+    }
+
+    /// Counts in the session's picture flow (statistics only).
+    fn flow(&self, count: impl FnOnce(&mut super::screen_chain_window::flow::PictureFlow)) {
+        self.shared.update(|info| count(&mut info.latency.flow));
+    }
+
+    /// A record was waiting when this thread read it (`screen_decode_run`).
+    pub(super) fn count_queued(&self) {
+        self.flow(|flow| flow.queued());
+    }
+
+    /// The session's picture flow as one line of the viewer log at its end.
+    pub(super) fn log_flow(&self) {
+        let line = {
+            let info = self.shared.info();
+            let decode = info.latency.decode.percentiles_ms();
+            info.latency.flow.summary(decode)
+        };
+        // Task tests with fake decoders write no log file.
+        if !cfg!(test) {
+            crate::screen::os::host_worker_client::host_log::viewer_note(&line);
+        }
+    }
+
+    /// Counts a left-out picture once, at its last record.
+    fn left_out(&self, record: &FrameRecord, why: super::screen_chain_window::flow::Dropped) {
+        if !record.has_more() {
+            self.flow(|flow| flow.dropped(why));
         }
     }
 
@@ -179,6 +210,11 @@ impl DecodeState {
     }
 
     fn record(&mut self, header: GopHeader, record: FrameRecord) {
+        use super::screen_chain_window::flow::Dropped;
+        if !record.has_more() {
+            // A picture is complete at the decode thread with its last record.
+            self.flow(|flow| flow.received());
+        }
         let admitted = self.shared.info().hello.as_ref().is_some_and(|hello| {
             crate::screen::core::frame_budget::contract_matches(
                 header.frame_contract,
@@ -211,6 +247,7 @@ impl DecodeState {
         {
             // Every record not decoded breaks the chain (B-36).
             self.chain.continuity.broken();
+            self.left_out(&record, Dropped::NotDecoded);
             return;
         }
         if let Some(family) = &self.shared.info().family {
@@ -218,6 +255,7 @@ impl DecodeState {
                 header.family_layout_revision != Some(snapshot.layout_revision)
             }) {
                 self.chain.continuity.broken();
+                self.left_out(&record, Dropped::NotDecoded);
                 return;
             }
         }
@@ -229,6 +267,7 @@ impl DecodeState {
             {
                 self.chain.continuity.broken();
             }
+            self.left_out(&record, Dropped::Stale);
             return;
         }
         let fresh = header.gop_id > self.latest_gop || self.last_record.is_none();
@@ -236,6 +275,7 @@ impl DecodeState {
         self.last_record = Some((header.gop_id, record.frame_id));
         let keyframe = record.flags & FLAG_KEYFRAME != 0;
         if fresh && !self.stream_start(&header, &record) {
+            self.left_out(&record, Dropped::AwaitingKeyframe);
             return;
         }
         if !fresh && keyframe && first_of_frame {
@@ -253,6 +293,7 @@ impl DecodeState {
                 // had opened this one as a continuation) is asked again, at
                 // most once per `KEYFRAME_RETRY_US` (`KeyframeRequester`).
                 self.request_keyframe(KeyframeReason::Reset, header.gop_id);
+                self.left_out(&record, Dropped::AwaitingKeyframe);
                 return;
             }
             self.broken = None;
@@ -275,6 +316,7 @@ impl DecodeState {
                 None => {
                     self.broken_frame = Some(record.frame_id);
                     self.chain.continuity.broken();
+                    self.flow(|flow| flow.dropped(Dropped::DecodeError));
                     return;
                 }
             },
@@ -335,12 +377,15 @@ impl DecodeState {
                     if output.keyframe {
                         self.keyframes.on_keyframe();
                     }
+                    self.flow(|flow| flow.decoded());
                     self.guard_picture(header.codec, lag);
                     self.show(&mut gop, header.size, output.capture_ts_us, receipt);
                 }
                 self.gop = Some(gop);
             }
             Err(error) => {
+                let decode_error = super::screen_chain_window::flow::Dropped::DecodeError;
+                self.flow(|flow| flow.dropped(decode_error));
                 self.guard_failure(header.codec);
                 // The failed picture was never shown; the shown one stays
                 // without receipts until the requested key frame.
@@ -389,6 +434,10 @@ impl DecodeState {
             info.pictures += 1;
             // Left out by the preview's shortest gap (BK0: dropped pictures).
             info.latency.dropped += u64::from(!due);
+            if !due {
+                let gap = super::screen_chain_window::flow::Dropped::Gap;
+                info.latency.flow.dropped(gap);
+            }
         });
         if !due {
             return;
@@ -402,9 +451,12 @@ impl DecodeState {
             }
             return;
         }
-        if gop.gpu {
-            // The presenter waits but this picture came as planes or BGRA.
-            super::screen_direct::not_direct(&self.shared);
+        // The presenter waits but this picture came as planes or BGRA: a
+        // chosen „Direct3D 11“ shows it no other way (Codex 16).
+        if gop.gpu && super::screen_direct::not_direct(&self.shared) {
+            let display = super::screen_chain_window::flow::Dropped::Display;
+            self.flow(|flow| flow.dropped(display));
+            return;
         }
         // Handed over, not copied (V1, BK9 U1); the storage comes back.
         let planes = if gop.yuv {
