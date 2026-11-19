@@ -127,7 +127,10 @@ impl TileBudget {
 /// keeps „Höchste Datenrate“). `rate` is the budget's rate as the pipeline
 /// last set it; `None` without a user ceiling (nothing waits then).
 #[derive(Clone, Debug, Default)]
-pub struct SharedBudget(std::sync::Arc<std::sync::Mutex<(TileBudget, Option<u64>)>>);
+pub struct SharedBudget(
+    std::sync::Arc<std::sync::Mutex<(TileBudget, Option<u64>)>>,
+    std::sync::Arc<std::sync::atomic::AtomicU64>,
+);
 
 impl SharedBudget {
     fn with<R>(&self, f: impl FnOnce(&mut (TileBudget, Option<u64>)) -> R) -> R {
@@ -164,6 +167,16 @@ impl SharedBudget {
     }
     pub fn rate(&self) -> Option<u64> {
         self.with(|(_, rate)| *rate)
+    }
+    /// A held-back control frame of `bytes` went at `at_us`: booked like a
+    /// picture and counted for the statistics' sent rate (`take_held_bytes`).
+    pub fn on_held_sent(&self, at_us: u64, bytes: u64, rate_bps: u64) {
+        self.on_sent(at_us, bytes, rate_bps);
+        self.1.fetch_add(bytes, std::sync::atomic::Ordering::AcqRel);
+    }
+    /// The bytes of held-back control frames sent since the last call.
+    pub fn take_held_bytes(&self) -> u64 {
+        self.1.swap(0, std::sync::atomic::Ordering::AcqRel)
     }
 }
 

@@ -186,7 +186,7 @@ impl Session<'_> {
             }
         };
         match self.outbox.budget.rate().filter(|_| large) {
-            Some(rate) => self.outbox.budget.on_sent(now_us(), sent, rate),
+            Some(rate) => self.outbox.budget.on_held_sent(now_us(), sent, rate),
             // The control stream counts against „Höchste Datenrate“.
             None => self.pipeline.book_control_bytes(sent),
         }

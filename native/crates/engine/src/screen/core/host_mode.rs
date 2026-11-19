@@ -241,6 +241,11 @@ impl Pipeline {
             self.rate.on_congestion_events(events, now_us());
         }
         self.rate.remember();
+        // Held-back control frames booked in the shared budget count in the
+        // sent rate as well (once: not in the control rate).
+        self.second_bytes = self
+            .second_bytes
+            .saturating_add(self.rate.shared_budget().take_held_bytes());
         // The sound of the session counts with the control stream (Codex
         // 5/4): the pictures get the ceiling less both.
         if let Some(link) = self.backend.audio() {
