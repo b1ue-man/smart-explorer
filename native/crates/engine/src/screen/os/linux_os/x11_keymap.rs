@@ -22,12 +22,27 @@ const NO_SYMBOL: Keysym = 0;
 /// everything else as Unicode keysym).
 pub(super) fn keysym_of(character: char) -> Keysym {
     match character {
-        '\n' => 0xFF0D,    // Return
-        '\t' => 0xFF09,    // Tab
-        '\u{8}' => 0xFF08, // BackSpace
+        '\n' | '\r' => 0xFF0D, // Return
+        '\t' => 0xFF09,        // Tab
+        '\u{8}' => 0xFF08,     // BackSpace
         ' '..='~' | '\u{A0}'..='\u{FF}' => character as u32,
         other => 0x0100_0000 + other as u32,
     }
+}
+
+/// The characters of `text` as they are typed: a Windows line end
+/// (`\r\n`) is one Return, not two (review 2026-11-19, Gemini 12.3: the
+/// `\r` went out as the Unicode keysym U+000D, which the RemoteDesktop
+/// portal may refuse).
+pub(super) fn typed_chars(text: &str) -> impl Iterator<Item = char> + '_ {
+    let mut chars = text.chars().peekable();
+    std::iter::from_fn(move || loop {
+        let character = chars.next()?;
+        if character == '\r' && chars.peek() == Some(&'\n') {
+            continue;
+        }
+        return Some(character);
+    })
 }
 
 /// The keyboard mapping as the server holds it now.
@@ -123,7 +138,7 @@ fn sync<C: Connection>(conn: &C) -> io::Result<()> {
 pub(super) fn type_text<C: Connection>(conn: &C, root: Window, text: &str) -> io::Result<usize> {
     let mut map = KeyMap::read(conn)?;
     let mut skipped = 0;
-    for character in text.chars() {
+    for character in typed_chars(text) {
         let sym = keysym_of(character);
         if let Some((code, shift)) = map.find(sym) {
             tap(conn, root, code, shift)?;
@@ -161,6 +176,8 @@ mod tests {
         assert_eq!(keysym_of('ä'), 0xE4);
         assert_eq!(keysym_of('€'), 0x0100_20AC);
         assert_eq!(keysym_of('\n'), 0xFF0D);
+        assert_eq!(keysym_of('\r'), 0xFF0D);
+        assert_eq!(typed_chars("a\r\nb\rc").collect::<String>(), "a\nb\rc");
         let map = KeyMap {
             min: 8,
             per_code: 2,

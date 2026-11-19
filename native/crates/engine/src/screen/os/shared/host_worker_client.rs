@@ -365,8 +365,12 @@ impl WorkerLink {
             return Err(self.lost(error));
         }
         // P9: only input keeps a limit on the answer itself; every other
-        // request waits while the process shows signs of work.
-        match self.reader.receive(limit, limit <= INPUT_TIMEOUT) {
+        // request waits while the process shows signs of work. Input stays
+        // strict with a longer limit too (a batch with text, review
+        // 2026-11-19 Gemini 11.3, `send_bound_input`).
+        let strict = limit <= INPUT_TIMEOUT
+            || matches!(request, WorkerRequest::Input(_) | WorkerRequest::Release(_));
+        match self.reader.receive(limit, strict) {
             Ok(Ok(Some(reply))) => self.accept(reply),
             Ok(Ok(None)) | Err(RecvTimeoutError::Disconnected) => {
                 Err(self.lost(io::Error::from(io::ErrorKind::UnexpectedEof)))

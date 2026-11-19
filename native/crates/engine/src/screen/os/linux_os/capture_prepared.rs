@@ -249,7 +249,7 @@ pub(in crate::screen::os) async fn apply_portal_input(
             },
             InputEvent::Text { text } => {
                 let mut result = Ok(());
-                for character in text.chars() {
+                for character in crate::screen::os::x11_keymap::typed_chars(text) {
                     let sym = keysym_of(character) as i32;
                     for down in [true, false] {
                         if result.is_ok() {

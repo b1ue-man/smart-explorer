@@ -471,7 +471,24 @@ pub(super) fn send_bound_input(
         }),
         presented,
     };
-    match guard.ask(&WorkerRequest::Input(input), INPUT_TIMEOUT) {
+    // Text may take the host process longer than other input: X11 types a
+    // character without a key of its own on a remapped spare key code and
+    // waits 20 ms for clients to read the press before the mapping goes
+    // (`x11_keymap::type_text`). A batch with text gets 40 ms more per
+    // character; the answer stays bound to that limit (`WorkerLink::ask`
+    // keeps input strict), so a lost answer still ends the process
+    // (review 2026-11-19, Gemini 11.3).
+    let characters = events
+        .iter()
+        .map(|event| match event {
+            InputEvent::Text { text } => text.chars().count(),
+            _ => 0,
+        })
+        .fold(0usize, usize::saturating_add);
+    let limit = INPUT_TIMEOUT
+        + std::time::Duration::from_millis(40)
+            .saturating_mul(u32::try_from(characters).unwrap_or(u32::MAX));
+    match guard.ask(&WorkerRequest::Input(input), limit) {
         Ok(WorkerReply::InputDone { blocked: None, .. }) => Ok(()),
         Ok(WorkerReply::InputDone {
             blocked: Some(blocked),

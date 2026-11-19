@@ -2,7 +2,7 @@
 use super::family_protocol::{
     selector, token, FamilyInput, FamilyListEntry, FamilyOperation, FamilyOperationResult,
 };
-use super::input_model::{InputEvent, MAX_INPUT_EVENTS};
+use super::input_model::{InputEvent, PointerButton, MAX_INPUT_EVENTS};
 use super::window_list::SourceId;
 use super::wire_control::ViewerFrame;
 use crate::remote_window::{
@@ -26,6 +26,10 @@ pub struct FamilyViewer {
     pub last_operation: Option<FamilyOperationResult>,
     armed: Option<WindowIdentity>,
     pointer: Option<WindowIdentity>,
+    /// The window each held button went down in: its release goes there,
+    /// also when the pointer left every window meanwhile (review
+    /// 2026-11-19, Gemini 12.4; it was dropped and the button stayed down).
+    buttons: Vec<(PointerButton, WindowIdentity)>,
     pending: Option<PendingFocus>,
 }
 
@@ -41,6 +45,7 @@ impl FamilyViewer {
             last_operation: None,
             armed: None,
             pointer: None,
+            buttons: Vec::new(),
             pending: None,
         })
     }
@@ -89,6 +94,8 @@ impl FamilyViewer {
             self.pending = None;
             self.pointer = None;
             self.armed = None;
+            // The host lets go of everything held on a new layout.
+            self.buttons.clear();
         }
         if self.armed.as_ref().is_some_and(|id| {
             !snapshot.members.iter().any(|m| {
@@ -228,7 +235,21 @@ impl FamilyViewer {
                     self.pointer = Some(target.identity.clone());
                     (target.identity, InputEvent::Touch { id, phase, x, y })
                 }
-                InputEvent::Button { .. } | InputEvent::Wheel { .. } => {
+                InputEvent::Button { button, down } => {
+                    let held = self.buttons.iter().position(|(b, _)| *b == button);
+                    let target = match (down, held) {
+                        (false, Some(index)) => Some(self.buttons.remove(index).1),
+                        _ => self.pointer.clone(),
+                    };
+                    let Some(identity) = target else {
+                        continue;
+                    };
+                    if down && held.is_none() {
+                        self.buttons.push((button, identity.clone()));
+                    }
+                    (identity, event)
+                }
+                InputEvent::Wheel { .. } => {
                     let Some(identity) = self.pointer.clone() else {
                         continue;
                     };

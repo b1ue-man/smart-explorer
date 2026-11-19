@@ -61,10 +61,6 @@ pub fn windows_key(usage: u16) -> Option<WinKey> {
     let code = evdev_code(usage)?;
     let scan = |code: u16, extended: bool| Some(WinKey::Scan { code, extended });
     match code {
-        // Num Lock: set-1 make code 45, which Windows takes as Pause
-        // without the extended flag and as Num Lock with it (AutoHotkey key
-        // list: NumLock sc145, Pause sc045; review 2026-11-19, Gemini 12.2).
-        69 => scan(0x45, true),
         // Below 89 the Linux code is the set-1 scan code.
         1..=88 => scan(code, false),
         96 => scan(0x1C, true),                      // keypad Enter
