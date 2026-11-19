@@ -439,7 +439,7 @@ impl VendorSession for NvencSession {
         let lowered = self.core.rate.lowered_by(rate);
         let retune = (self.core.rate.differs(rate) || lowered) && self.core.refused != Some(*rate);
         if let Some(Err(error)) = retune.then(|| self.core.retune(rate)) {
-            rate.refused_lowering(lowered, "nvenc", &error)?; // review 2026-11-19 C10
+            rate.refused_lowering(lowered && self.core.rate.differs(rate), "nvenc", &error)?;
             eprintln!("screen encoder nvenc: keeps its rate: {error}");
         }
         let handle = self.registration(picture.texture)?;

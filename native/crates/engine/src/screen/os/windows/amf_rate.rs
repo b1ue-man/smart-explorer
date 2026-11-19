@@ -31,9 +31,18 @@ impl AmfSession {
             self.rate_refusal = None;
             return Ok(());
         };
+        // Codex round 5, finding 18: the properties set before the refused
+        // one stay on the component; the rate before goes back on all of
+        // them, so the component runs what `rate` says it runs.
+        self.apply(rate_settings(names, &previous));
+        if let Some(ltr) = self.ltr.as_mut() {
+            ltr.set_fps(previous.fps);
+        }
         self.rate = previous;
         self.rate_refusal = Some(*rate);
         let error = io::Error::other(format!("AMF refused {name}"));
-        rate.refused_lowering(lowered, AMF_NAME, &error)
+        // Codex round 5, finding 11: a refused lowering within 2 % of the rate
+        // it runs stays with it; the stream's byte budget keeps the ceiling.
+        rate.refused_lowering(lowered && previous.differs(rate), AMF_NAME, &error)
     }
 }

@@ -397,8 +397,8 @@ impl HwH264Session for NvencSession {
         let lowered = self.rate.lowered_by(rate); // C10 of review 2026-11-19
         if (self.rate.differs(rate) || lowered) && self.refused != Some(*rate) {
             if let Err(error) = self.retune(rate) {
-                if lowered {
-                    return Err(error); // never above a lowered rate
+                if lowered && self.rate.differs(rate) {
+                    return Err(error); // never 2 % above a lowered rate
                 }
                 eprintln!(
                     "screen encoder nvenc: rate {} bit/s refused, keeps {} bit/s: {error}",

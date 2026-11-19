@@ -208,7 +208,9 @@ pub(in crate::screen::os) fn refused_lowering(
     limit: u32,
 ) -> io::Result<()> {
     let target = bounded_bitrate(target_bps, limit);
-    if target < running {
+    // Codex round 5, finding 11: within 2 % above the target it stays (the
+    // stream's byte budget keeps the ceiling); the 2 % of `retune_bounded`.
+    if u64::from(running) * 50 > u64::from(target) * 51 {
         return Err(io::Error::other(format!(
             "the encoder refused to lower its bit rate from {running} to {target} bit/s"
         )));

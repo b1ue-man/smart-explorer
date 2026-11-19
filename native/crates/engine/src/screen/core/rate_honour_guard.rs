@@ -102,7 +102,12 @@ impl RateGuard {
         // X1: a refused rate gives the encoder up only while it runs above
         // the commanded one; a refused rise leaves it below and keeps the
         // ceiling (it was given up for the session before).
-        if state.is_some_and(|state| state.refused && state.applied_bps > commanded_bps) {
+        // Codex round 5, finding 11: within 2 % above it the byte budget
+        // keeps the ceiling (the band of the encoders' refused lowerings).
+        let above = |state: &super::EncoderRateState| {
+            u128::from(state.applied_bps) * 50 > u128::from(commanded_bps) * 51
+        };
+        if state.is_some_and(|state| state.refused && above(&state)) {
             self.meter.on_refused();
         }
         if self.can_demote && self.meter.verdict() == HonourVerdict::Ignores {

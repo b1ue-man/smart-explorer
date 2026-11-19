@@ -103,7 +103,9 @@ impl RateParams {
         other.bits_per_second < self.bits_per_second
     }
 
-    /// A refused retune to this rate when it `lowered` the running one: the
+    /// A refused retune to this rate when it `lowered` the running one by
+    /// 2 % or more (Codex round 5, finding 11: a smaller one stays with the
+    /// running rate, the stream's byte budget keeps the ceiling): the
     /// encoder fails its picture instead of running above it, so the stage
     /// opens a fresh one at this rate or the next encoder of the codec.
     pub(super) fn refused_lowering(

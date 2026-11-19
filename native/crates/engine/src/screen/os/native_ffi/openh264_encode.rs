@@ -206,7 +206,7 @@ impl OpenH264Encoder {
         }
         if accepted {
             self.bitrate = target;
-        } else if lowered {
+        } else if lowered && (i64::from(current) - i64::from(target)) * 50 >= i64::from(current) {
             return Err(io::Error::other(format!(
                 "OpenH264 refused to lower its bit rate from {current} to {target} bit/s"
             )));

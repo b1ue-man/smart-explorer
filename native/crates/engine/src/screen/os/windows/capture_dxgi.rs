@@ -80,7 +80,16 @@ pub(super) struct DxgiCapture {
     tried: Option<Instant>,
     /// Measurement of 2026-11-18: rebuilds that keep failing are spaced.
     backoff: crate::screen::core::capture_lock::RebuildBackoff,
+    /// Codex round 5, finding 10: since when the pointer switched while a
+    /// picture shows it in the mode before (`SWITCH_WAIT`).
+    switched_at: Option<Instant>,
 }
+
+/// How long a pointer switch waits for the next frame of the duplication
+/// (any, also one where only the pointer moved), which reads the pointer's
+/// area anew in the new mode with the running encoder; on a screen and a
+/// pointer that both stand still the duplication is opened anew after it.
+const SWITCH_WAIT: Duration = Duration::from_millis(500);
 impl DxgiCapture {
     pub(super) fn open(prepared: PreparedDxgi, budget: CaptureBudget) -> io::Result<Self> {
         Self::open_stepped(prepared, budget).map_err(io::Error::from)
@@ -109,6 +118,7 @@ impl DxgiCapture {
             reattached: false,
             tried: None,
             backoff: Default::default(),
+            switched_at: None,
         })
     }
     /// A user session's capture follows the input desktop (P9); the login
@@ -178,6 +188,7 @@ impl DxgiCapture {
             .map(Some)
     }
     fn stop(&mut self) {
+        self.switched_at = None;
         drop(self.live.take());
         self.readback.reset();
         self.last = None;
@@ -252,17 +263,15 @@ impl Grabber for DxgiCapture {
             Ok(false) => return Ok(SourcePicture::Unchanged),
             Err(error) => return paused(error),
         }
-        // The overlay switched: a new duplication starts with a whole picture
-        // in the new state (with or without the blended pointer).
+        // The overlay switched: the next frame reads the pointer's area anew
+        // in the new state (with or without the blended pointer) and keeps
+        // the duplication and the encoder (Codex round 5, finding 10); only
+        // without a frame for `SWITCH_WAIT` a new duplication follows.
         // Codex round 4, finding 8: without a picture none was made in the
-        // mode before; the next one is read in the current mode, so a switch
-        // that came before it needs no new duplication.
+        // mode before, so a switch that came before it needs nothing.
         let switched = self.pointer.as_ref().is_some_and(|p| p.take_switched());
         if switched && self.last.is_some() {
-            return match self.reopen() {
-                Ok(()) => Ok(SourcePicture::Unchanged),
-                Err(error) => paused(error),
-            };
+            self.switched_at.get_or_insert_with(Instant::now);
         }
         let duplication = self.live_duplication()?.clone();
         let mut info = DXGI_OUTDUPL_FRAME_INFO::default();
@@ -276,7 +285,11 @@ impl Grabber for DxgiCapture {
             Err(error) if error.code() == DXGI_ERROR_WAIT_TIMEOUT => {
                 // No picture yet on a still screen: a new duplication's
                 // first frame carries the whole desktop.
-                if self.last.is_none() && self.first.rebuild() {
+                let still = self
+                    .switched_at
+                    .is_some_and(|at| at.elapsed() >= SWITCH_WAIT);
+                if (self.last.is_none() && self.first.rebuild()) || still {
+                    self.switched_at = None;
                     return match self.reopen() {
                         Ok(()) => Ok(SourcePicture::Unchanged),
                         Err(error) => paused(error),
@@ -307,6 +320,9 @@ impl Grabber for DxgiCapture {
             Some(pointer) => pointer.update(&duplication, &info, geometry.native_displayed()),
             None => false,
         };
+        // A pointer switch: its area is read anew from this frame (finding 10).
+        let pointer_moved =
+            pointer_moved || (resource.is_some() && self.switched_at.take().is_some());
         let (verdict, mut regions) = if had_reference && info.AccumulatedFrames > 0 {
             regions::read(
                 &duplication,
