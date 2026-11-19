@@ -155,6 +155,7 @@ impl AsyncEncoder {
             })
             .ok();
         let bitrate = bounded_bitrate(bps, u32::MAX);
+        let bitrate = super::mf_media::opening_rate(&transform, bitrate); // X2
         let (api, settings) = configure_hardware(&transform, bitrate, setup.fps);
         // P9: sharp mode of an admitted session, where the MFT takes it, as
         // peak-constrained VBR under the session rate (review 2026-11-19 B2:

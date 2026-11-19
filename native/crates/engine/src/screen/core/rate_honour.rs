@@ -130,7 +130,9 @@ impl HonourVerdict {
 pub struct EncoderRateState {
     /// The bit rate it runs at, as it reads it back where it tells.
     pub applied_bps: u64,
-    /// It refused the last rate, or reads back another one.
+    /// It refused the last rate, or reads back another one. The watch gives
+    /// it up only while `applied_bps` lies above the commanded rate (review
+    /// 2026-11-19, X1).
     pub refused: bool,
 }
 

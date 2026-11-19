@@ -89,9 +89,20 @@ impl RateGuard {
         let now_us = u64::try_from(self.opened.elapsed().as_micros()).unwrap_or(u64::MAX);
         self.interval.on_frame(now_us);
         let fps = self.interval.budget_fps(fps);
+        let state = self.inner.rate_state();
+        // Review 2026-11-19 (X3): an encoder that took a rate above the one
+        // commanded (the smallest its device runs, `mf_rate::floored`) is
+        // measured against the rate it runs; the stream's byte budget keeps
+        // the ceiling.
+        let measured = state
+            .filter(|state| !state.refused && state.applied_bps > commanded_bps)
+            .map_or(commanded_bps, |state| state.applied_bps);
         self.meter
-            .on_frame(bytes, keyframe, commanded_bps, commanded_bps, fps);
-        if self.inner.rate_state().is_some_and(|state| state.refused) {
+            .on_frame(bytes, keyframe, measured, measured, fps);
+        // X1: a refused rate gives the encoder up only while it runs above
+        // the commanded one; a refused rise leaves it below and keeps the
+        // ceiling (it was given up for the session before).
+        if state.is_some_and(|state| state.refused && state.applied_bps > commanded_bps) {
             self.meter.on_refused();
         }
         if self.can_demote && self.meter.verdict() == HonourVerdict::Ignores {

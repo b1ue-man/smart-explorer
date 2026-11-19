@@ -243,6 +243,8 @@ pub(super) struct AmfSession {
     ltr: Option<LtrSlots>,
     frames: u64,
     refused: Vec<&'static str>,
+    /// The last rate the component refused (`amf_rate.rs`, X1/X4).
+    rate_refusal: Option<RateParams>,
     /// Level and encoder report of the bit-rate ceiling (r1, `amf_caps.rs`).
     ceiling: Option<u64>,
     _device: ID3D11Device,
@@ -280,11 +282,13 @@ impl AmfSession {
             ltr: None,
             frames: 0,
             refused: Vec::new(),
+            rate_refusal: None,
             ceiling: None,
             _device: device.clone(),
         };
         let refused = session.apply(static_settings(names, size, &rate));
         sharp_taken(names, &rate, &refused)?;
+        session.rate_refusal = refused.contains(&names.target).then_some(rate);
         let this = session.component.object;
         // SAFETY: a live component; the size was checked by the factory.
         let result = unsafe {
@@ -372,22 +376,7 @@ impl VendorSession for AmfSession {
         deliver: &mut dyn FnMut(&[u8]) -> io::Result<()>,
     ) -> io::Result<bool> {
         let names = self.names;
-        // C10 (review 2026-11-19): every lowering is set; a refused one fails.
-        let (lowered, previous) = (self.rate.lowered_by(rate), self.rate);
-        if self.rate.differs(rate) || lowered {
-            self.rate = *rate;
-            let refused = self.apply(rate_settings(names, rate));
-            if let Some(ltr) = self.ltr.as_mut() {
-                ltr.set_fps(rate.fps);
-            }
-            // The peak counts in quality VBR (sharp mode) only; CBR may refuse it.
-            let rated = [Some(names.target), rate.quality.map(|_| names.peak)];
-            if let Some(name) = refused.iter().find(|name| rated.contains(&Some(**name))) {
-                self.rate = previous; // T1: the rate it runs at stays the reference
-                let error = io::Error::other(format!("AMF refused {name}"));
-                rate.refused_lowering(lowered, AMF_NAME, &error)?;
-            }
-        }
+        self.retune(rate)?;
         let context = self.context.object;
         let mut raw = std::ptr::null_mut();
         // SAFETY: a live context and a live texture of its device; one new
@@ -486,12 +475,15 @@ impl VendorSession for AmfSession {
         self.ceiling
     }
 
-    /// The component refused its target bit rate, at the start or since
-    /// (`apply`, plan 2026-11-17): it runs at its own default.
+    /// The component refused the last rate asked of it (X1, `amf_rate.rs`):
+    /// it runs at the one before, or at its default after a refused start.
     fn rate_refused(&self) -> bool {
-        self.refused.contains(&self.names.target)
+        self.rate_refusal.is_some()
     }
 }
+
+#[path = "amf_rate.rs"]
+mod rate;
 
 // `probe`, `refused_settings` and the session's rate ceiling (r1).
 #[path = "amf_caps.rs"]

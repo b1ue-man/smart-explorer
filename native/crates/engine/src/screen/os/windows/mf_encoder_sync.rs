@@ -202,6 +202,7 @@ impl SyncEncoder {
         bps: u64,
     ) -> io::Result<Self> {
         let bitrate = bounded_bitrate(bps, u32::MAX);
+        let bitrate = super::mf_media::opening_rate(&transform, bitrate); // X2
         let api = configure_encoder(&transform, bitrate);
         start(&transform, &setup, bitrate)?;
         let limit = opened_limit(&transform, api.as_ref(), &setup);

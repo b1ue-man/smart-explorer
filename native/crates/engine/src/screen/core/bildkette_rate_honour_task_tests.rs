@@ -33,8 +33,9 @@ impl ScreenEncoder for Overshooting {
         FrameSize::new(SIDE, SIDE)
     }
     fn rate_state(&self) -> Option<EncoderRateState> {
+        // A refused rate counts while it runs above it (review 2026-11-19 X1).
         Some(EncoderRateState {
-            applied_bps: 0,
+            applied_bps: if self.refused { u64::MAX } else { 0 },
             refused: self.refused,
         })
     }
@@ -219,7 +220,11 @@ fn bildkette_task_rate_encoders_open_at_session_target() {
         assert!(text.contains("keeps") && text.contains("self.refused"));
         assert!(!text.contains("retune(rate)?;"));
     }
-    assert!(amf.contains("self.refused.contains(&self.names.target)"));
+    // Review 2026-11-19 (X1/X4): AMF tells the state of the last rate asked
+    // and asks a refused one again only for another target.
+    assert!(amf.contains("self.rate_refusal.is_some()"));
+    let amf_rate = include_str!("../os/windows/amf_rate.rs");
+    assert!(amf_rate.contains("self.rate_refusal == Some(*rate)"));
 }
 
 #[test]

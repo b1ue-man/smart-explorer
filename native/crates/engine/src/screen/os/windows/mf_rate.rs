@@ -91,6 +91,17 @@ pub(in crate::screen::os) fn set_mean_bitrate(api: &ICodecAPI, bitrate: u32) -> 
         .is_some_and(|read| u64::from(read.saturating_sub(bitrate)) * 50 > u64::from(bitrate))
 }
 
+/// Review 2026-11-19 (X2): the opening rate `bitrate` at least the smallest
+/// mean bit rate the MFT reports, as `floored` does for a lowering: a start
+/// below it was refused (`SETTINGS[3]`) and counted as a rate the encoder
+/// ignores. An MFT that reports no range keeps `bitrate`.
+pub(in crate::screen::os) fn opening_rate(transform: &IMFTransform, bitrate: u32) -> u32 {
+    use windows::core::Interface;
+    let api = transform.cast::<ICodecAPI>().ok();
+    let floored = floored(api.as_ref(), u64::from(bitrate), u32::MAX);
+    u32::try_from(floored).unwrap_or(u32::MAX)
+}
+
 /// Review 2026-11-19 (T5 b): a lowered `target_bps` below the smallest mean
 /// bit rate the MFT reports (`GetParameterRange`) is that smallest rate; the
 /// MFT cannot go below it, so asking for less would only count as refused
