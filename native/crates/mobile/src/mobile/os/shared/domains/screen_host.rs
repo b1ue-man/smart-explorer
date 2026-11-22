@@ -14,7 +14,7 @@
 //! - `screen.hostNotice {session, epoch, rateFloor}` (the lowest bit rate of
 //!   the encoder of `epoch`), `{session, parameter, detail?}` (a parameter
 //!   the encoder refused) or `{session, inputRefused}` (`gesture`, `text`,
-//!   `action`, `timeout`: an input Android did not perform): a notice for
+//!   `action`, `timeout`, `button`: an input Android did not perform): a notice for
 //!   the viewer while encoder and session keep running
 //!   (`HostStage::take_notice`, review 2026-11-19).
 //!
@@ -361,9 +361,10 @@ fn notice(args: &Value) -> Result<Value, ApiError> {
             "text" => "the device refused a text of the input (no focused field)",
             "action" => "the device refused a system action of the input",
             "timeout" => "the device did not answer an input in time",
+            "button" => "the device has no counterpart for this mouse button (only left and back)",
             _ => {
                 return Err(invalid(
-                    "„inputRefused“ ist gesture, text, action oder timeout.",
+                    "„inputRefused“ ist gesture, text, action, timeout oder button.",
                 ))
             }
         };

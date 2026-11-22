@@ -32,6 +32,8 @@ object ScreenCodecNotices {
             "Das Gerät hat einen Text der Eingabe abgelehnt (kein Eingabefeld im Fokus)",
         "the device refused a system action of the input" to "Das Gerät hat eine Systemaktion der Eingabe abgelehnt",
         "the device did not answer an input in time" to "Das Gerät hat auf eine Eingabe nicht rechtzeitig geantwortet",
+        "the device has no counterpart for this mouse button (only left and back)" to
+            "Das Gerät kennt diese Maustaste nicht (nur links und „Zurück“)",
     )
 
     /** The label of a codec key of the viewer or the host (`tiles` is „Verlustfrei“). */

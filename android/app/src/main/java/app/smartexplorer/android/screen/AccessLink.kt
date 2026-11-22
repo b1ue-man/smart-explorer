@@ -128,6 +128,7 @@ internal object AccessLink {
             }
             is PhoneAction.Text -> done(call(AccessProtocol.TEXT, { it.writeString(action.text) }) { _, reply -> reply.readInt() == 1 } ?: false)
             is PhoneAction.Global -> done(global(action.action))
+            is PhoneAction.Refused -> done(false)
         }
     }
 

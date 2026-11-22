@@ -67,14 +67,29 @@ class ScreenControlService : AccessibilityService() {
         if (!dispatchGesture(gesture, callback, null)) done(false)
     }
 
-    /** Appends [text] to the focused input field (`ACTION_SET_TEXT`); `false` without one. */
+    /**
+     * Types [text] into the focused input field (`ACTION_SET_TEXT`) where its cursor is: a selection is replaced and
+     * the cursor goes behind the typed text (Codex 9/13: the text was always appended at the end). A field without a
+     * reported cursor gets it at the end as before. `false` without a field.
+     */
     fun appendText(text: String): Boolean {
         val node = focusedInput() ?: return false
         val current = if (node.isShowingHintText) "" else node.text?.toString().orEmpty()
+        val (from, to) = node.textSelectionStart to node.textSelectionEnd
+        val valid = from in 0..current.length && to in 0..current.length
+        val start = if (valid) minOf(from, to) else current.length
+        val end = if (valid) maxOf(from, to) else current.length
         val arguments = Bundle().apply {
-            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, current + text)
+            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
+                current.substring(0, start) + text + current.substring(end))
         }
-        return node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments)
+        if (!node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments)) return false
+        val cursor = start + text.length
+        node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, Bundle().apply {
+            putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, cursor)
+            putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, cursor)
+        })
+        return true
     }
 
     /** „Enter“ in the focused input field (`ACTION_IME_ENTER`, API 30). */

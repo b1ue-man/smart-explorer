@@ -24,6 +24,9 @@ internal sealed interface PhoneAction {
 
     /** `AccessibilityService.GLOBAL_ACTION_*`. */
     data class Global(val action: Int) : PhoneAction
+
+    /** An input Android has no counterpart for ([kind] for the viewer's notice): nothing is performed (Codex 9/14). */
+    data class Refused(val kind: String) : PhoneAction
 }
 
 /**
@@ -68,14 +71,19 @@ internal class GestureMapper(private val width: () -> Int, private val height: (
                     positioned = true
                     pressed?.add(x to y)
                 }
-                "button" -> if (event.text("button") == "left") {
-                    if (event.bool("down")) {
+                "button" -> when (event.text("button")) {
+                    "left" -> if (event.bool("down")) {
                         pressed = mutableListOf(x to y)
                         pressedAt = now
                     } else {
                         pressed?.let { add(PhoneAction.Stroke(it, duration(now - pressedAt))) }
                         pressed = null
                     }
+                    // The mouse's back button is Android's Back, as with a mouse on the phone itself (Codex 9/14).
+                    "back" -> if (!event.bool("down")) add(PhoneAction.Global(AccessibilityService.GLOBAL_ACTION_BACK))
+                    // Right, middle and forward have no counterpart an accessibility service can perform: said, not
+                    // dropped in silence (once, at the press).
+                    else -> if (event.bool("down")) add(PhoneAction.Refused("button"))
                 }
                 "wheel" -> {
                     // A touchpad sends parts of a notch; each would become a stroke of its own (150 ms, performed one

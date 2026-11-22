@@ -714,6 +714,7 @@ internal object ScreenHostControl {
                     val answered = done.await(wait + STROKE_GRACE_MS, TimeUnit.MILLISECONDS)
                     if (refused == null && (!answered || !performed.get())) refused = when {
                         !answered -> "timeout"
+                        action is PhoneAction.Refused -> action.kind
                         action is PhoneAction.Stroke || action is PhoneAction.Gesture -> "gesture"
                         action is PhoneAction.Text -> "text"
                         else -> "action"

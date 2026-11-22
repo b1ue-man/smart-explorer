@@ -489,7 +489,12 @@ class ScreenSession(private val target: ScreenTarget, private val backend: Scree
             rejectedGop = null
             keepOnAck = false
             visibilitySentModern = false
-            mutable.value = old.copy(inputReady = false, ackedMinFrame = null, held = null, blocked = null)
+            // The automatic fallback to the tiles and the first codec belonged to the host session before: the new one
+            // negotiates afresh (Codex 9/8). The user's own choice (`chosenCodec`, `choice`) stays.
+            forceLossless = false
+            codecFallbackGop = null
+            mutable.value = old.copy(inputReady = false, ackedMinFrame = null, held = null, blocked = null,
+                firstCodec = null, codecFallback = null)
         }
         // The host fell back to the tiles: the viewer keeps them only where the choice allows it („Automatisch“,
         // „Verlustfrei“); under a named codec the fallback is an error ([ScreenCodecNotices]) and changes nothing here.

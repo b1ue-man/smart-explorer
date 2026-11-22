@@ -88,6 +88,10 @@ class ScreenDecoder(
     private var activeCodec=ScreenEncoderCodecs.H264
     /** Whether the running MediaCodec decoder is a hardware one, and the „Dekodierer“ choice the decoders were opened under. */
     private var codecHardware=false
+    /** The MediaCodec component that runs, and how often each one failed on pictures while it ran (codec key and
+     * „Dekodierer“ choice with it): one that failed twice goes behind the others of the same choice (Codex 9/11). */
+    private var codecName: String?=null
+    private val runtimeFailures=HashMap<String,Int>()
     private var openedUnder: String?=null
     private val avcChecked get()=activeCodec==ScreenEncoderCodecs.H264
     private var heldIndex = -1
@@ -211,7 +215,8 @@ class ScreenDecoder(
         if(openedUnder!=null && wanted!=openedUnder) {
             openedUnder=wanted
             val stale=(codec!=null && !ScreenDecoderPolicy.stageAllowed(wanted,codecHardware)) || hybrid!=null
-            if(stale) { fail(); return }
+            // A change of the choice is no failure of the component.
+            if(stale) { codecName=null; fail(); return }
         }
         if (flags and FLAG_HYBRID != 0) {
             // After a local decoder failure (`fail()`: no hybrid decoder) the host answers the key frame request
@@ -417,7 +422,10 @@ class ScreenDecoder(
         val hardwareExists=everyDecoder.any { it.isHardwareAccelerated }
         val wanted=choice()
         val choices=everyDecoder.filter { ScreenDecoderPolicy.allows(wanted,codecKey,it.isHardwareAccelerated,hardwareExists) }
-            .sortedByDescending { it.isHardwareAccelerated }
+            // A component that failed twice on pictures under this codec and choice is tried last; with none left
+            // it is tried again, and the view names the failure after several (`onDecodeFailure`).
+            .sortedWith(compareBy<android.media.MediaCodecInfo> { (runtimeFailures[failureKey(it.name,codecKey,wanted.decoder)] ?: 0) >= 2 }
+                .thenByDescending { it.isHardwareAccelerated })
         val mainProfile=when(codecKey) {
             ScreenEncoderCodecs.HEVC -> CodecProfileLevel.HEVCProfileMain
             ScreenEncoderCodecs.AV1 -> CodecProfileLevel.AV1ProfileMain8
@@ -447,7 +455,7 @@ class ScreenDecoder(
                     }, Handler(Looper.getMainLooper()))
                     created.start()
                     codec=created; codecGop=gop; awaitingKeyframe=true; activeCodec=codecKey; codecSurface=target
-                    codecHardware=candidate.isHardwareAccelerated; openedUnder=wanted.decoder
+                    codecHardware=candidate.isHardwareAccelerated; openedUnder=wanted.decoder; codecName=candidate.name
                     listener.onDecoderStage(codecKey,candidate.name,candidate.isHardwareAccelerated)
                     return true
                 } catch(e: RuntimeException) {
@@ -517,7 +525,15 @@ class ScreenDecoder(
 
     }
 
+    private fun failureKey(name: String, codecKey: String, decoder: String) = "$name|$codecKey|$decoder"
+
     private fun fail() {
+        // A configured component that fails on pictures counts against itself for the next choice (Codex 9/11).
+        val running=codecName
+        if (codec!=null && running!=null) {
+            val key=failureKey(running,activeCodec,openedUnder ?: choice().decoder)
+            runtimeFailures[key]=(runtimeFailures[key] ?: 0)+1
+        }
         awaitingKeyframe=true
         hybrid?.close(); hybrid=null; hybridGop=-1L
         failures++
@@ -530,6 +546,7 @@ class ScreenDecoder(
         codecGop = -1L
         submitted.clear(); rendering.clear(); keyQueued=false
         codecSurface = null
+        codecName = null
         val old = codec ?: return
         codec = null
         try {
