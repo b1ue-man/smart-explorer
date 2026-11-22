@@ -383,7 +383,7 @@ fn type_unlatched<C: Connection>(
         }
         let restored = empty_spare(conn, spare, per);
         if restored.is_err() {
-            pending_spares().push((spare, sym));
+            owe_spare(spare, sym);
         }
         typed?;
         restored?;
@@ -392,44 +392,10 @@ fn type_unlatched<C: Connection>(
     Ok(skipped)
 }
 
-/// Spare keys whose emptying failed (a lost connection): emptied with the
-/// next text on this X server (`restore_pending`).
-fn pending_spares() -> std::sync::MutexGuard<'static, Vec<(Keycode, Keysym)>> {
-    static PENDING: std::sync::Mutex<Vec<(Keycode, Keysym)>> = std::sync::Mutex::new(Vec::new());
-    PENDING
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-}
-
-/// Gives `spare` its empty mapping back.
-fn empty_spare<C: Connection>(conn: &C, spare: Keycode, per: u8) -> io::Result<()> {
-    let empty = vec![NO_SYMBOL; usize::from(per)];
-    conn.change_keyboard_mapping(1, spare, per, &empty)
-        .map_err(io::Error::other)?;
-    sync(conn)
-}
-
-/// Empties the spare keys an earlier text could not, each only while it
-/// still carries the keysym se gave it (another X server, or a client that
-/// took the key since, keeps its mapping); those that fail again wait for
-/// the next text.
-fn restore_pending<C: Connection>(conn: &C) {
-    let pending = std::mem::take(&mut *pending_spares());
-    if pending.is_empty() {
-        return;
-    }
-    let Ok(map) = KeyMap::read(conn) else {
-        pending_spares().extend(pending);
-        return;
-    };
-    for (spare, sym) in pending {
-        let index = usize::from(spare.saturating_sub(map.min));
-        let ours = index < map.codes() && map.row(index).iter().all(|carried| *carried == sym);
-        if ours && empty_spare(conn, spare, map.per_code.max(1)).is_err() {
-            pending_spares().push((spare, sym));
-        }
-    }
-}
+#[path = "x11_keymap_spares.rs"]
+mod spares;
+pub(super) use spares::restore_pending;
+use spares::{empty_spare, owe_spare};
 
 #[cfg(test)]
 mod tests {

@@ -230,6 +230,8 @@ pub fn inject(events: &[InputEvent]) -> Result<(), ControlBlock> {
             return Err(ControlBlock::UnsupportedOnHost);
         }
         let root = conn.setup().roots[screen].root;
+        // Codex 10/16: spare keys a text before could not empty again.
+        crate::screen::os::x11_keymap::restore_pending(&conn);
         state.conn = Some((conn, root));
     }
     let State {
@@ -274,6 +276,8 @@ pub(super) fn area_now(source: &SourceId) -> Result<Area, ControlBlock> {
             return Err(ControlBlock::UnsupportedOnHost);
         }
         let root = conn.setup().roots[screen].root;
+        // Codex 10/16: spare keys a text before could not empty again.
+        crate::screen::os::x11_keymap::restore_pending(&conn);
         state.conn = Some((conn, root));
     }
     let Some((conn, root)) = state.conn.as_ref() else {
@@ -309,6 +313,8 @@ pub fn inject_bound(
             return Err(ControlBlock::UnsupportedOnHost);
         }
         let root = conn.setup().roots[screen].root;
+        // Codex 10/16: spare keys a text before could not empty again.
+        crate::screen::os::x11_keymap::restore_pending(&conn);
         state.conn = Some((conn, root));
     }
     let State {
@@ -409,6 +415,8 @@ pub fn release(events: &[InputEvent]) -> Result<(), ControlBlock> {
             return Err(ControlBlock::UnsupportedOnHost);
         }
         let root = conn.setup().roots[screen].root;
+        // Codex 10/16: spare keys a text before could not empty again.
+        crate::screen::os::x11_keymap::restore_pending(&conn);
         state.conn = Some((conn, root));
     }
     let State { sas, conn, .. } = &mut *state;
