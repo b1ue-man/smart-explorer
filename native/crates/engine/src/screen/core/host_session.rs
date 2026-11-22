@@ -161,8 +161,9 @@ impl<'a> Session<'a> {
         let mut capture = clock::SessionClock::start(max_fps);
         let mut second = tokio::time::interval(Duration::from_secs(1));
         let mut heard = crate::share::route_protocol::active_now();
-        // A tick that found the previous operation still running is made up
-        // as soon as it ends (one tick later halved long operations' rate).
+        // A capture tick that found the previous picture operation still
+        // running is made up as soon as it ends, not one tick later (that
+        // halved the rate of every operation longer than one tick).
         let mut missed_tick = false;
         let ending: Ending = loop {
             tokio::select! {
@@ -208,7 +209,6 @@ impl<'a> Session<'a> {
                     }
                     let after = self.pipeline.work_started();
                     missed_tick = clock::tick_missed(started, after, self.pipeline.working());
-                    capture.follow(self.pipeline.cadence_fps());
                 }
                 // Held-back control frames go as the byte budget allows (Codex 6/8).
                 _ = self.outbox.ready(), if self.outbox.waiting() => {

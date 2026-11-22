@@ -196,7 +196,6 @@ impl Pipeline {
         let mode = self.quality_policy.mode;
         let mut policy = QualityPolicy::new(chosen, self.pairing.viewer_fps);
         policy.mode = mode;
-        policy.preview_hello = self.quality_policy.preview_hello;
         policy.encoder_failed = failed && refused.is_none();
         // W4: the pairing's fallbacks without the codecs that failed here.
         policy.fallbacks = fallbacks;

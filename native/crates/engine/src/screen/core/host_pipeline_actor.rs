@@ -49,7 +49,6 @@ struct Pending {
     receipts: VecDeque<Receipt>,
 }
 struct Facts {
-    cadence: u32, // the pipeline's cadence (`SessionClock::follow`)
     next: u64,
     /// The newest picture group opened (`Pipeline::newest_gop`).
     gop: u64,
@@ -110,7 +109,6 @@ impl PipelineActor {
             .and_then(|stage| stage.source.input_sink());
         let mode = pipeline.quality_policy.mode;
         let facts = Facts {
-            cadence: pipeline.quality.fps,
             next: pipeline.next_frame_id(),
             gop: pipeline.newest_gop(),
             floor: pipeline.reference_floor(),
@@ -161,7 +159,6 @@ impl PipelineActor {
             self.fallback_notice = Some(notice);
         }
         if let Some(p) = self.pipeline.as_ref() {
-            self.facts.cadence = p.quality.fps;
             self.facts.next = p.next_frame_id();
             self.facts.gop = p.newest_gop();
             self.facts.floor = p.reference_floor();

@@ -29,6 +29,7 @@ use super::negotiate::{negotiate_for_contract, CodecPreference};
 use super::registry::{NewSession, ScreenRegistry, SessionHandle};
 use super::session_state::{EndReason, SessionState};
 use super::window_list::SourceId;
+use super::wire_binary::StreamKind;
 use super::wire_hello::{
     send_hello_reply, ApprovalKind, HelloReply, ScreenApprovalPending, ScreenAuthorization,
     ScreenClientHello, ScreenErrorCode, ScreenHelloError, ScreenHelloOk, SessionMode,
@@ -469,7 +470,7 @@ pub async fn serve(context: HostContext, viewer: ProvenViewer) -> io::Result<()>
         pipeline.set_tile_limit(tiles.max_size);
     }
     if mode == SessionMode::Preview {
-        pipeline.open_as_preview();
+        pipeline.set_mode(StreamKind::Preview, None, None);
     }
     let mut session = Session::new(
         &context,

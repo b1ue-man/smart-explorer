@@ -87,36 +87,3 @@ fn batches_task_b6_coalesced_modes_keep_each_requested_rate() {
         .update(StreamKind::Video, None, Some(0), false, false);
     assert_eq!(quality.max_fps(), 1);
 }
-
-/// Review 2026-11-19 (round 11, Android adoption): a session opened as a
-/// preview (its hello names the preview's rate) and taken over by the full
-/// view runs the full view at the rate it asks, else unbounded by the
-/// preview's rate; the preview stays bound by the hello; an ordinary
-/// session stays bound by its hello in both kinds.
-#[test]
-fn review1119_task_preview_hello_bounds_the_preview_only() {
-    let viewer = |fps| {
-        let mut quality = policy();
-        quality.viewer_fps = fps;
-        quality
-    };
-    let mut adopted = viewer(2);
-    adopted.set_preview_hello();
-    adopted.mode = adopted
-        .mode
-        .update(StreamKind::Preview, None, Some(5), false, false);
-    assert_eq!(adopted.max_fps(), 2, "the preview keeps the hello's rate");
-    adopted.mode = adopted
-        .mode
-        .update(StreamKind::Video, None, None, false, false);
-    assert_eq!(adopted.max_fps(), crate::screen::core::pacing::MAX_FPS);
-    adopted.mode = adopted
-        .mode
-        .update(StreamKind::Video, None, Some(60), false, false);
-    assert_eq!(adopted.max_fps(), 60, "the full view's own rate");
-    let mut plain = viewer(2);
-    plain.mode = plain
-        .mode
-        .update(StreamKind::Video, None, Some(60), false, false);
-    assert_eq!(plain.max_fps(), 2, "an ordinary hello bounds the full view");
-}

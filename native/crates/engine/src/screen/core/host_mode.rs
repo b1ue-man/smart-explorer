@@ -34,12 +34,6 @@ impl Pipeline {
                     .is_some_and(|host| !host.pictures_a_moved_view())
             })
     }
-    /// A session whose hello asked for a preview (`SessionMode::Preview`):
-    /// its `max_fps` bounds the preview only (`set_preview_hello`).
-    pub fn open_as_preview(&mut self) {
-        self.quality_policy.set_preview_hello();
-        self.set_mode(StreamKind::Preview, None, None);
-    }
     /// `SET_MODE`: the stream kind, the size the viewer wants and the rate.
     pub fn set_mode(&mut self, kind: StreamKind, size: Option<FrameSize>, fps: Option<u16>) {
         let current = self.quality_policy.mode;
