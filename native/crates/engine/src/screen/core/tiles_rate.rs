@@ -130,6 +130,10 @@ impl TileBudget {
 pub struct SharedBudget(
     std::sync::Arc<std::sync::Mutex<(TileBudget, Option<u64>)>>,
     std::sync::Arc<std::sync::atomic::AtomicU64>,
+    /// A picture is being written; it is booked when its write ends, so
+    /// held control frames wait meanwhile (round 9 F4: they took the credit
+    /// the picture was about to use, briefly up to twice the ceiling).
+    std::sync::Arc<std::sync::atomic::AtomicBool>,
 );
 
 impl SharedBudget {
@@ -174,9 +178,31 @@ impl SharedBudget {
         self.on_sent(at_us, bytes, rate_bps);
         self.1.fetch_add(bytes, std::sync::atomic::Ordering::AcqRel);
     }
+    pub fn set_picture_writing(&self, writing: bool) {
+        self.2.store(writing, std::sync::atomic::Ordering::Release);
+    }
+    pub fn picture_writing(&self) -> bool {
+        self.2.load(std::sync::atomic::Ordering::Acquire)
+    }
     /// The bytes of held-back control frames sent since the last call.
     pub fn take_held_bytes(&self) -> u64 {
         self.1.swap(0, std::sync::atomic::Ordering::AcqRel)
+    }
+}
+
+/// A picture's write in the shared budget (`RateController::picture_write`).
+pub struct PictureWrite(SharedBudget);
+
+impl PictureWrite {
+    pub fn start(budget: SharedBudget) -> Self {
+        budget.set_picture_writing(true);
+        Self(budget)
+    }
+}
+
+impl Drop for PictureWrite {
+    fn drop(&mut self) {
+        self.0.set_picture_writing(false);
     }
 }
 

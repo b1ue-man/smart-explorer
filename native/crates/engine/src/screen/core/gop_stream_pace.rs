@@ -82,11 +82,9 @@ impl Pace {
     /// Whether the rest of the picture after a lowered ceiling takes longer
     /// than `LOWERED_REST_US` at `rate_bps` (round 8 R1).
     pub(super) fn too_slow(&self, rate_bps: u64) -> bool {
-        let live = self
-            .limit
-            .as_ref()
-            .map_or(0, |cell| cell.load(std::sync::atomic::Ordering::Acquire));
-        if !self.lowered(live) || self.total == 0 {
+        // Round 9 F7: only a ceiling that lowers the picture's own rate; a
+        // first ceiling above it (from „Automatisch“) changes nothing.
+        if rate_bps >= self.rate_bps || self.total == 0 {
             return false;
         }
         let rest = u128::from(self.total.saturating_sub(self.written));

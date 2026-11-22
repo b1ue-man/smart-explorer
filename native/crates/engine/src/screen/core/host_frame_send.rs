@@ -107,10 +107,12 @@ impl Pipeline {
             active_budget,
             gop.write_frame_admitted(frame_id, capture_ts_us, frame.keyframe, frame.records),
         );
+        let picture_write = self.rate.picture_write();
         let written = tokio::select! {biased;
             _=work.cancelled(work_epoch)=>Err(io::Error::from(io::ErrorKind::Interrupted)),
             result=writing=>result,
         };
+        drop(picture_write);
         // A write cut off books what it handed to the stream (Codex 6/9).
         let booked = written
             .as_ref()

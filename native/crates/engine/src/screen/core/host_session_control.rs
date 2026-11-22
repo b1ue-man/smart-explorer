@@ -43,11 +43,8 @@ impl Session<'_> {
                         "family_contract_not_negotiated",
                     ));
                 }
-                self.metadata.push(
-                    self.context,
-                    self.principal,
-                    crate::screen::core::host_metadata::Request::Families,
-                )
+                self.push_metadata(crate::screen::core::host_metadata::Request::Families)
+                    .await
             }
             ViewerFrame::FamilySnapshot => self.family_snapshot(true).await,
             ViewerFrame::FamilyOperation(request) => self.family_operation(request).await,
@@ -91,11 +88,10 @@ impl Session<'_> {
                 self.frame(HostFrame::Pong(pong)).await
             }
             ViewerFrame::SetMode(set) => self.set_mode(set).await,
-            ViewerFrame::ListWindows => self.metadata.push(
-                self.context,
-                self.principal,
-                crate::screen::core::host_metadata::Request::Windows,
-            ),
+            ViewerFrame::ListWindows => {
+                self.push_metadata(crate::screen::core::host_metadata::Request::Windows)
+                    .await
+            }
             ViewerFrame::IconRequest(request) => {
                 if !self.icons_supported {
                     return Err(io::Error::new(
@@ -104,11 +100,8 @@ impl Session<'_> {
                     ));
                 }
                 request.validate()?;
-                self.metadata.push(
-                    self.context,
-                    self.principal,
-                    crate::screen::core::host_metadata::Request::Icon(request),
-                )
+                self.push_metadata(crate::screen::core::host_metadata::Request::Icon(request))
+                    .await
             }
             ViewerFrame::Snapshot(request) => {
                 // The source is the session's own (hello or `SET_MODE`); the
@@ -431,6 +424,40 @@ impl Session<'_> {
                 None,
                 None,
             );
+        }
+    }
+}
+
+impl Session<'_> {
+    /// A metadata request into the queue. A full queue (its answers wait
+    /// for the outbox, round 9 F9) answers at once instead of holding the
+    /// viewer's frames back, which held its input back too: an icon is
+    /// omitted, as when its lookup fails; a list ends in an `ERROR` and the
+    /// session goes on.
+    async fn push_metadata(
+        &mut self,
+        request: crate::screen::core::host_metadata::Request,
+    ) -> io::Result<()> {
+        use crate::screen::core::host_metadata::Request;
+        if self.metadata.can_accept() {
+            return self.metadata.push(self.context, self.principal, request);
+        }
+        match request {
+            Request::Icon(request) => {
+                let reply = crate::screen::core::app_icon::IconResponse {
+                    request,
+                    content: None,
+                };
+                self.frame(HostFrame::IconReply(reply)).await
+            }
+            Request::Windows | Request::Families => {
+                self.error(
+                    ScreenErrorCode::CaptureFailed,
+                    "metadata_queue_full: the viewer asked faster than the highest data rate carries"
+                        .to_string(),
+                )
+                .await
+            }
         }
     }
 }

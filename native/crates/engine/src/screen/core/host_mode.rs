@@ -24,7 +24,10 @@ impl Pipeline {
     pub fn visible_needs_keyframe(&mut self) -> bool {
         !self.choice.codec.is_video()
             || self.frame_contract.is_some_and(|c| c.hybrid_regions)
-            || self.stage.as_mut().is_some_and(|stage| {
+            // Without a stage (a capture switch) it is not known whether the
+            // next one takes a picture of a still screen: a key frame, as
+            // before (round 9).
+            || self.stage.as_mut().is_none_or(|stage| {
                 stage
                     .source
                     .host_stage()
@@ -239,6 +242,10 @@ impl Pipeline {
             // well. Only a frame this host sent and still awaits counts: an
             // acknowledgement that names any other id confirms nothing.
             self.confirmed.acked(ack.gop_id, ack.frame_id);
+            // Gemini 8/3.1: the encoder keeps a confirmed long-term reference.
+            if let (Some(stage), Some(good)) = (self.stage.as_mut(), self.confirmed.last_good()) {
+                super::capture::confirm_reference(stage, good);
+            }
             // Station `network` (BK0), in raw clocks; the viewer applies its offset.
             super::super::chain_meter::lock(&self.chain).on_network(sent.sent_us, ack.received_us);
             let sample = AckSample {

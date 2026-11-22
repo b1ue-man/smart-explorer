@@ -140,8 +140,10 @@ pub struct Pacer {
     received_floor: u64,
     presented: Option<(u64, u64)>,
     present_credit: bool,
-    /// The time between the viewer's last two `PRESENTED` (`viewer_behind`).
+    /// The time between the viewer's last two `PRESENTED` while pictures
+    /// waited for it (`viewer_behind`), and whether some still wait.
     presented_gap_us: u64,
+    waiting_at_presented: bool,
 }
 
 impl Default for Pacer {
@@ -164,6 +166,7 @@ impl Default for Pacer {
             presented: None,
             present_credit: false,
             presented_gap_us: 0,
+            waiting_at_presented: false,
         }
     }
 }

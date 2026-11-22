@@ -149,6 +149,13 @@ impl RateController {
         self.tiles.clone()
     }
 
+    /// A picture's write runs until the returned guard drops (round 9 F4):
+    /// the session's held control frames wait for it (`Outbox::ready`), also
+    /// when the write is dropped half way.
+    pub fn picture_write(&self) -> crate::screen::core::tiles_rate::PictureWrite {
+        crate::screen::core::tiles_rate::PictureWrite::start(self.tiles.clone())
+    }
+
     /// A picture of the stream of `bytes` started its send at `at_us`.
     pub fn on_stream_sent(&mut self, at_us: u64, bytes: u64, video: bool) {
         if let Some(rate) = self.stream_budget_bps(at_us, video) {

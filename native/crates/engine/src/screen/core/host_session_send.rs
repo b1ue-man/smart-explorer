@@ -156,13 +156,22 @@ impl Outbox {
         self.held.len() >= HELD_FRAMES
     }
 
-    /// Waits until the byte budget has credit for the next piece.
+    /// Waits until the byte budget has credit for the next piece and no
+    /// picture is being written (round 9 F4: a picture is booked when its
+    /// write ends).
     pub(super) async fn ready(&self) {
-        let Some(rate) = self.budget.rate() else {
-            return;
-        };
-        let wait = self.budget.wait_us(now_us(), rate);
-        if wait > 0 {
+        loop {
+            let Some(rate) = self.budget.rate() else {
+                return;
+            };
+            if self.budget.picture_writing() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+                continue;
+            }
+            let wait = self.budget.wait_us(now_us(), rate);
+            if wait == 0 {
+                return;
+            }
             tokio::time::sleep(Duration::from_micros(wait)).await;
         }
     }

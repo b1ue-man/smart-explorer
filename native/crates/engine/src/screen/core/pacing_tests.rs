@@ -252,12 +252,25 @@ fn review1119_task_pictures_follow_what_the_viewer_shows() {
     // A slow viewer (4K software decoding) is held for 3 of its gaps, at most
     // `PRESENTED_HOLD_MAX_US`.
     let mut slow = Pacer::default();
-    slow.on_presented(1, 0);
-    slow.on_presented(2, 2_000_000);
-    slow.on_frame_sent(frame(3));
-    slow.on_received(3, 2_000_000);
-    assert!(slow.viewer_behind(2_000_000 + 4_000_000));
-    assert!(!slow.viewer_behind(2_000_000 + PRESENTED_HOLD_MAX_US + 1));
+    slow.on_received(1, 0);
+    slow.on_received(2, 0);
+    slow.on_presented(1, 100_000);
+    slow.on_received(3, 100_000);
+    slow.on_presented(2, 2_100_000);
+    slow.on_frame_sent(frame(4));
+    assert!(slow.viewer_behind(2_100_000 + 4_000_000));
+    assert!(!slow.viewer_behind(2_100_000 + PRESENTED_HOLD_MAX_US + 1));
+    // Round 9 F6: a still screen between two `PRESENTED` (nothing waited)
+    // is no slow viewer: the hold stays `PRESENTED_FRESH_US`.
+    let mut idle = Pacer::default();
+    idle.on_received(1, 0);
+    idle.on_presented(1, 16_000);
+    idle.on_received(2, 10_000_000);
+    idle.on_presented(2, 10_016_000);
+    idle.on_received(3, 10_020_000);
+    idle.on_frame_sent(frame(4));
+    assert!(idle.viewer_behind(10_016_000 + PRESENTED_FRESH_US));
+    assert!(!idle.viewer_behind(10_016_000 + PRESENTED_FRESH_US + 1));
     // It never resets a stream: the decision stays.
     assert_eq!(
         pacer.decide(late, 6_000_000, PathKind::Direct, 1_000),

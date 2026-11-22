@@ -44,9 +44,13 @@ impl Pacer {
     /// earlier picture is done with (shown or skipped). One picture may
     /// follow at once (`viewer_behind`).
     pub fn on_presented(&mut self, frame_id: u64, now_us: u64) {
-        if let Some((_, before)) = self.presented {
-            self.presented_gap_us = now_us.saturating_sub(before);
-        }
+        // Round 9 F6: a gap counts only when received pictures still waited
+        // at the `PRESENTED` before (a still screen between two pictures is
+        // no slow viewer).
+        self.presented_gap_us = match self.presented {
+            Some((_, before)) if self.waiting_at_presented => now_us.saturating_sub(before),
+            _ => 0,
+        };
         let newest = self
             .presented
             .map_or(frame_id, |(frame, _)| frame.max(frame_id));
@@ -58,6 +62,7 @@ impl Pacer {
         {
             self.received.pop_front();
         }
+        self.waiting_at_presented = !self.received.is_empty();
         self.present_credit = true;
     }
 

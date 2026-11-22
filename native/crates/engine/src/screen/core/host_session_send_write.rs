@@ -142,6 +142,39 @@ impl Session<'_> {
         Ok(())
     }
 
+    /// The session ends (round 9 F3): the large frame being written goes out
+    /// whole without the budget, then the small frames behind it, so the
+    /// `ERROR` and the last `STATE` that follow reach the viewer; held frames
+    /// not yet begun are dropped. A metadata reply whose rights are gone is
+    /// not finished (its error ends the farewell, as before).
+    pub(in super::super) async fn end_outbox(&mut self) -> io::Result<()> {
+        self.outbox.held.clear();
+        self.outbox.shape = None;
+        self.outbox.position = None;
+        if let Some(writing) = self.outbox.writing.take() {
+            let rest = &writing.bytes[writing.offset..];
+            if writing.metadata {
+                host_metadata::send_piece(
+                    self.context,
+                    self.principal,
+                    self.mode,
+                    self.connection,
+                    &mut self.send,
+                    rest,
+                    self.handle.stop_signal(),
+                )
+                .await?;
+            } else {
+                let peer = self.connection.remote_id().to_string();
+                control_sender::write_piece(&peer, &mut self.send, rest).await?;
+            }
+        }
+        while let Some(frame) = self.outbox.behind.pop_front() {
+            self.write(Held::Frame(frame)).await?;
+        }
+        Ok(())
+    }
+
     /// Writes `held` whole and books it as the control stream's rate (a
     /// small frame, or a large one without a user ceiling).
     async fn write(&mut self, held: Held) -> io::Result<()> {

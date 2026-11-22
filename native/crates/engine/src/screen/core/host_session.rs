@@ -174,7 +174,9 @@ impl<'a> Session<'a> {
                     }
                 }
                 _ = self.connection.closed() => break (closed_reason(self.connection), None),
-                frame = frames.recv(), if self.metadata.can_accept() => match frame {
+                // A full metadata queue answers new requests itself
+                // (`push_metadata`, round 9 F9): the frames are always read.
+                frame = frames.recv() => match frame {
                     None => break (EndReason::ViewerClosed, None),
                     Some(Err(_)) => break (closed_reason(self.connection), None),
                     Some(Ok(frame)) => {
@@ -435,6 +437,7 @@ impl<'a> Session<'a> {
         self.pipeline.cancel();
         self.end_control().await;
         let last = async {
+            self.end_outbox().await?;
             if let Some(error) = error {
                 self.frame(HostFrame::Error(error)).await?;
             }

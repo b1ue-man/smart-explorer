@@ -327,7 +327,9 @@ fn netzrate_task_static_screen_is_no_encoder_failure() {
     let worker = include_str!("../os/shared/host_worker_produce.rs");
     assert!(worker.contains("let refresh = request.keyframe"));
     let capture = include_str!("host_capture.rs").replace("\r\n", "\n");
-    assert!(capture.contains("request.keyframe\n            || recover.is_some()"));
+    // Robust against further reasons inserted between them (9b7a9a43).
+    assert!(capture.contains("request.keyframe\n"));
+    assert!(capture.contains("|| recover.is_some()"));
 }
 
 /// Review 2026-11-19 (R1–R3): „Höchste Datenrate“ is a hard ceiling for the
@@ -420,8 +422,13 @@ fn review1119_task_video_keeps_the_user_ceiling() {
     rate.set_ceiling(Some(rate.control_bps() / 2));
     assert!(rate.control_over_ceiling().is_some());
     assert_eq!(rate.control_over_ceiling(), None, "once");
-    let session = include_str!("host_session_send.rs");
-    assert!(session.contains("None => self.pipeline.book_control_bytes(sent),"));
+    // Small frames and large ones without a ceiling book the control
+    // stream's rate; a piece of a large frame under a ceiling the shared
+    // budget, before it goes (round 8, Codex 8/5).
+    let session = include_str!("host_session_send_write.rs");
+    assert!(session.contains("self.pipeline.book_control_bytes(sent);"));
+    assert!(session.contains("None => self.pipeline.book_control_bytes(len as u64),"));
+    assert!(session.contains(".on_held_sent(now_us(), len as u64, rate)"));
     // Codex 5/4, round 6 L3: the session's sound counts with the control
     // stream as the rate between two readings of the link's running total.
     let mut sound = RateController::new(PathKind::Direct, 0);
