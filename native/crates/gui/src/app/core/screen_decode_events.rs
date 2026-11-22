@@ -108,11 +108,11 @@ impl DecodeState {
                 }
                 // The overlay pointer (P6): a new connection starts without it.
                 self.shared.update(|info| info.cursor = Default::default());
-                if self.shared.wants_cursor() {
-                    // P8: off while the host draws it into the picture; the
-                    // same stable wish the view sends (`DirectView::frame`),
-                    // so the first picture brings no switch of the capture.
-                    let wish = self.shared.direct.cursor_overlay();
+                // P8: off while the host draws it into the picture; the same
+                // stable wish the view sends (`DirectView::frame`), and none
+                // before the view decided it (Gemini 8/1: on, then off).
+                let wish = self.shared.direct.cursor_overlay();
+                if let Some(wish) = wish.filter(|_| self.shared.wants_cursor()) {
                     let _ = (self.send)(&ViewerFrame::CursorOverlay(wish));
                 }
             }

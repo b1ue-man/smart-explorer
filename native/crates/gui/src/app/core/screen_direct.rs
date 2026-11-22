@@ -16,9 +16,8 @@
 //! cut out of its region (`screen_direct_layout`). The child stays while
 //! the session does not stream (egui's dimming cannot lie over it; the
 //! status names the state), so the picture never turns black for it.
-//! egui cannot draw the host's pointer over the child: while the presenter
-//! is attached and the view only watches, the host draws it into every
-//! picture (`CURSOR_OVERLAY` off); while it steers, the local pointer shows.
+//! egui cannot draw the host's pointer over the child: while the view shows
+//! with it and only watches, the host draws it (`CURSOR_OVERLAY` off).
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -84,9 +83,8 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// The last error of the Direct3D 11 display in this process; cleared when a
-/// presenter is made again (user rule 2026-11-18: the toolbar and the status
-/// line name it instead of a log line only).
+/// The last error of the Direct3D 11 display in this process, for the
+/// toolbar and the status line; cleared when a presenter is made again.
 static LAST_ERROR: Mutex<Option<String>> = Mutex::new(None);
 
 /// The Direct3D 11 display's last error (`screen_toolbar_state::display_state`).
@@ -115,9 +113,10 @@ fn report(shared: &Shared, error: &str) {
 pub struct DirectSlot {
     presenter: Mutex<Option<Arc<dyn DirectPresenter>>>,
     held: Mutex<Option<PresentedFrame>>,
-    /// The host draws its pointer into the picture (this view has the
-    /// Direct3D 11 presenter attached and does not steer).
+    /// The host draws its pointer into the picture (`DirectView::frame`);
+    /// `decided` once the view set it.
     pointer_in_picture: AtomicBool,
+    decided: AtomicBool,
     /// The decoder whose planes a chosen „Direct3D 11“ named last.
     noted: Mutex<Option<String>>,
     /// The child was placed on screen last frame (window shown, area
@@ -153,10 +152,11 @@ impl DirectSlot {
         self.get().is_some()
     }
 
-    /// `CURSOR_OVERLAY` as the session asks for it now (P6; the events of
-    /// a new connection send it, `screen_decode_events.rs`).
-    pub fn cursor_overlay(&self) -> bool {
-        !self.pointer_in_picture.load(Ordering::Acquire)
+    /// `CURSOR_OVERLAY` as the session asks for it now (P6, sent again on a
+    /// new connection); `None` before the view decided (Gemini 8/1).
+    pub fn cursor_overlay(&self) -> Option<bool> {
+        let decided = self.decided.load(Ordering::Acquire);
+        decided.then(|| !self.pointer_in_picture.load(Ordering::Acquire))
     }
 
     /// A new choice: a decoder that still gives no D3D11 picture is named
@@ -408,16 +408,16 @@ impl DirectView {
         }
         let showing = self.showing();
         ctx.data_mut(|data| data.insert_temp(egui::Id::new("screen_direct_showing"), showing));
-        // The pointer: drawn by the host while the presenter is attached and
-        // this view only watches. Stable facts only, never the path of the
-        // last picture (fix 2026-11-19: each change cost the host a new
-        // capture and encoder); the hello sends this same value.
-        let attached = self.presenter().is_some_and(|p| !p.failed());
-        let in_picture = attached && !steering;
+        // The pointer: in the picture while this view shows with the
+        // presenter and only watches; the presenter wanted, not attached
+        // (Gemini 8/1: the start sent the overlay on and off again).
+        let wanted = cfg!(windows) && choice.direct() && !self.unavailable;
+        let in_picture = wanted && !steering;
         let direct = &session.shared.direct;
         direct
             .pointer_in_picture
             .store(in_picture, Ordering::Release);
+        direct.decided.store(true, Ordering::Release);
         if session.shared.wants_cursor() && self.overlay != Some(!in_picture) {
             session.send(ViewerFrame::CursorOverlay(!in_picture));
             self.overlay = Some(!in_picture);
