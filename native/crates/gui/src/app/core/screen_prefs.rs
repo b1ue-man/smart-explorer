@@ -158,8 +158,7 @@ pub fn update_stored(change: impl FnOnce(&mut ViewerPrefs)) -> io::Result<()> {
     store::update(&prefs_path(), change)
 }
 
-/// The settings this process loaded at its start, or saved last
-/// (`ViewerPrefs::save`).
+/// The settings this process loaded at its start, or saved last.
 static LOADED: Mutex<Option<ViewerPrefs>> = Mutex::new(None);
 
 /// „Höchste Datenrate“ of this process: unread (`None`) or the value.
@@ -168,7 +167,7 @@ static MAX_RATE: Mutex<Option<Option<u64>>> = Mutex::new(None);
 /// The stored „Höchste Datenrate“ (`None`: automatic), read once.
 pub fn max_rate_bps() -> Option<u64> {
     let mut known = MAX_RATE.lock().unwrap_or_else(PoisonError::into_inner);
-    *known.get_or_insert_with(|| ViewerPrefs::load_from(&prefs_path()).max_rate_bps)
+    *known.get_or_insert_with(|| current().max_rate_bps)
 }
 
 /// Stores „Höchste Datenrate“ (`None`: automatic) at once.
@@ -184,7 +183,7 @@ static CODEC: Mutex<Option<CodecChoice>> = Mutex::new(None);
 fn codec_choice() -> CodecChoice {
     let mut known = CODEC.lock().unwrap_or_else(PoisonError::into_inner);
     *known.get_or_insert_with(|| {
-        let prefs = ViewerPrefs::load_from(&prefs_path());
+        let prefs = current();
         (Some(prefs.codec_setting()), prefs.decoder)
     })
 }
@@ -199,10 +198,9 @@ pub fn decoder_choice() -> DecoderPreference {
     codec_choice().1.unwrap_or_default()
 }
 
-/// Stores „Codec“ and „Dekodierer“ at once (`None` keeps that value) and
-/// makes the decoder choice the one of this process's decoders. The file
-/// keeps its own value of a field left out (Codex 8/12: this process's older
-/// copy undid a choice another process, `se screen view`, stored since).
+/// Stores „Codec“ and „Dekodierer“ at once (`None` keeps that value, the
+/// file's own for the file, Codex 8/12) and makes the decoder choice the
+/// one of this process's decoders.
 pub fn set_codec_choice(
     codec: Option<CodecSetting>,
     decoder: Option<DecoderPreference>,
@@ -225,7 +223,7 @@ static OUTPUT: Mutex<Option<OutputChoice>> = Mutex::new(None);
 fn output_choice() -> OutputChoice {
     let mut known = OUTPUT.lock().unwrap_or_else(PoisonError::into_inner);
     *known.get_or_insert_with(|| {
-        let prefs = ViewerPrefs::load_from(&prefs_path());
+        let prefs = current();
         (prefs.decoder_library, prefs.display)
     })
 }
@@ -266,8 +264,7 @@ pub fn virtual_display_choice() -> VirtualDisplayChoice {
     let mut known = VIRTUAL_DISPLAY
         .lock()
         .unwrap_or_else(PoisonError::into_inner);
-    let stored =
-        *known.get_or_insert_with(|| ViewerPrefs::load_from(&prefs_path()).virtual_display);
+    let stored = *known.get_or_insert_with(|| current().virtual_display);
     stored.unwrap_or_default()
 }
 
@@ -328,7 +325,7 @@ impl ViewerPrefs {
     /// The stored settings, or the defaults; they are what this process
     /// started from (`save` writes only what it changed since).
     pub fn load() -> Self {
-        let prefs = Self::load_from(&prefs_path());
+        let prefs = current();
         *LOADED.lock().unwrap_or_else(PoisonError::into_inner) = Some(prefs.clone());
         prefs
     }
@@ -491,8 +488,11 @@ mod bildkette_codec_tests {
     }
 }
 
+#[path = "screen_prefs_start.rs"]
+mod start;
 #[path = "screen_prefs_store.rs"]
 mod store;
+pub use start::{current, hold_start_choices, start_choices};
 #[cfg(test)]
 #[path = "wahlgilt_prefs_task_tests.rs"]
 mod wahlgilt_prefs_task_tests;

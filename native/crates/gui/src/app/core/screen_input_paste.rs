@@ -22,11 +22,7 @@ mod platform;
 mod platform;
 #[cfg(not(any(windows, target_os = "linux")))]
 mod platform {
-    pub fn insert_held() -> bool {
-        false
-    }
-
-    pub fn delete_held() -> bool {
+    pub fn held(_key: super::Key) -> bool {
         false
     }
 
@@ -66,32 +62,53 @@ pub(super) struct PasteWatch {
     /// The shortcut went out for this press: a `Paste` egui makes late
     /// sends nothing more (round 9 D9).
     pub(super) substituted: bool,
-    /// Einfg or Entf let go in this frame (round 9 D8: one pressed and let
-    /// go within a frame reads as up in `GetKeyState`).
+    /// Einfg, Entf, C, X or V let go in this frame (round 9 D8: one pressed
+    /// and let go within a frame reads as up in `GetKeyState`).
     released: Vec<Key>,
+    /// The modifiers at each `Copy`, `Cut` and `Paste` of this frame, in
+    /// order (`clip_mods`).
+    clip: std::collections::VecDeque<Modifiers>,
+}
+
+/// The modifiers an event of egui carries.
+fn mods_of(event: &Event) -> Option<Modifiers> {
+    match event {
+        Event::Key { modifiers, .. }
+        | Event::PointerButton { modifiers, .. }
+        | Event::MouseWheel { modifiers, .. } => Some(*modifiers),
+        _ => None,
+    }
 }
 
 impl InputMapper {
-    /// Whether Einfg or Entf (`key`) made this frame's `Copy`, `Cut` or
-    /// `Paste` (Windows only: egui-winit makes them of these keys there).
-    pub(super) fn struck(&self, key: Key) -> bool {
-        let held = match key {
-            Key::Insert => platform::insert_held(),
-            Key::Delete => platform::delete_held(),
-            _ => false,
-        };
-        cfg!(windows) && (held || self.paste.released.contains(&key))
+    /// Whether `key` is down or was let go in this frame (Windows only:
+    /// egui-winit makes `Copy`, `Cut` and `Paste` of Einfg and Entf there).
+    fn struck(&self, key: Key) -> bool {
+        cfg!(windows) && (platform::held(key) || self.paste.released.contains(&key))
+    }
+
+    /// Whether this frame's `Copy`, `Cut` or `Paste` came from `special`
+    /// (Einfg, Entf) rather than `letter` (C, X, V): the letter decides when
+    /// both are down (round 10: an Einfg held by chance made Strg+V Einfg).
+    pub(super) fn variant(&self, special: Key, letter: Key) -> bool {
+        self.struck(special) && !self.struck(letter)
+    }
+
+    /// The modifiers at the next `Copy`, `Cut` or `Paste` of this frame
+    /// (round 10: those of the frame's end added one let go after it).
+    pub(super) fn clip_mods(&mut self) -> Modifiers {
+        self.paste.clip.pop_front().unwrap_or(self.paste.mods)
     }
 
     /// `Copy`: Strg+Einfg as itself where egui-winit made it `Copy` (Codex
     /// 8/11: a terminal copies on Strg+Einfg and interrupts on Strg+C),
     /// else Strg+C; each with the other modifiers held (round 10 B5).
     pub(super) fn copy(&mut self) {
-        if self.struck(Key::Insert) {
-            let held = self.held_now();
+        let held = self.clip_mods();
+        if self.variant(Key::Insert, Key::C) {
             self.tap_with("insert", Modifiers { ctrl: true, ..held });
         } else {
-            self.chord("c");
+            self.chord("c", held);
         }
     }
 
@@ -100,8 +117,8 @@ impl InputMapper {
     fn paste_shortcut(&mut self, insert: bool) {
         self.paste.handled = true;
         self.paste.substituted = true;
+        let held = self.paste.mods;
         if insert {
-            let held = self.held_now();
             self.tap_with(
                 "insert",
                 Modifiers {
@@ -110,7 +127,7 @@ impl InputMapper {
                 },
             );
         } else {
-            self.chord("v");
+            self.chord("v", held);
         }
     }
 
@@ -126,13 +143,23 @@ impl InputMapper {
             .iter()
             .filter_map(|event| match event {
                 Event::Key {
-                    key: key @ (Key::Insert | Key::Delete),
+                    key: key @ (Key::Insert | Key::Delete | Key::C | Key::X | Key::V),
                     pressed: false,
                     ..
                 } => Some(*key),
                 _ => None,
             })
             .collect();
+        // The modifiers at each clipboard event: those of the event before
+        // it in this frame, else of the one after it, else the frame's.
+        self.paste.clip.clear();
+        for (index, event) in events.iter().enumerate() {
+            if matches!(event, Event::Copy | Event::Cut | Event::Paste(_)) {
+                let before = events[..index].iter().rev().find_map(mods_of);
+                let after = events[index + 1..].iter().find_map(mods_of);
+                self.paste.clip.push_back(before.or(after).unwrap_or(mods));
+            }
+        }
         let held = platform::paste_keys_held(mods.ctrl, mods.shift);
         let now = Instant::now();
         match self.paste.press.as_mut() {

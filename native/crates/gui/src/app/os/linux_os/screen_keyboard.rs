@@ -50,14 +50,9 @@ fn open() -> Option<Keys> {
     Some(keys)
 }
 
-/// egui-winit turns Strg+Einfg into `Copy` on Windows only: here it comes
-/// as the key itself.
-pub fn insert_held() -> bool {
-    false
-}
-
-/// Umschalt+Entf is no `Cut` of egui-winit here either.
-pub fn delete_held() -> bool {
+/// egui-winit makes `Copy`/`Cut` of Einfg and Entf on Windows only: no key
+/// decides here.
+pub fn held(_key: eframe::egui::Key) -> bool {
     false
 }
 

@@ -303,6 +303,14 @@ pub(crate) fn open_family(device: &str, source: &str, control: bool) -> Result<u
 pub(super) fn run_view(args: ViewArgs) -> Result<i32, String> {
     check_windows_only(args.decoder_library, args.display, cfg!(windows))?;
     let choice = super::select_device(&args.device)?;
+    // The whole call is checked before anything is stored (Codex 10/14: an
+    // invalid `--source` failed after its settings were saved).
+    let mut target = target_json(
+        &choice,
+        args.source.as_deref(),
+        args.control,
+        args.fullscreen,
+    )?;
     if let Some(rate) = args.max_rate {
         crate::app::screen_prefs::set_max_rate_bps(rate.bps())
             .map_err(|error| format!("cannot store the maximum rate: {error}"))?;
@@ -327,12 +335,9 @@ pub(super) fn run_view(args: ViewArgs) -> Result<i32, String> {
         crate::app::screen_audio::set_audio(on)
             .map_err(|error| format!("cannot store the audio choice: {error}"))?;
     }
-    let target = target_json(
-        &choice,
-        args.source.as_deref(),
-        args.control,
-        args.fullscreen,
-    )?;
+    // This call's settings go to its own window too: a second call that
+    // stores others before the window reads the file does not decide for it.
+    target["choices"] = crate::app::screen_prefs::start_choices();
     let request = StartRequest::ScreenView {
         target_json: target.to_string(),
     };

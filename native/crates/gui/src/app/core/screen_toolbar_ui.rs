@@ -151,20 +151,19 @@ pub fn whole_screen(hello: &ScreenHelloOk) -> Option<SourceId> {
         .map(|monitor| SourceId::Monitor(monitor.id.clone()))
 }
 
+const SYSTEM_SOURCE: &str = "android_system_selected_source";
+
 fn source_text(input: &ToolbarInput) -> String {
-    let (Some(hello), Some(source)) = (
-        input.info.and_then(|info| info.hello.as_ref()),
-        input.source,
-    ) else {
-        return "Ganzer Bildschirm".into();
-    };
-    if hello
-        .limits
-        .iter()
-        .any(|limit| limit == "android_system_selected_source")
-    {
+    // The host's mark first (Codex 10/17: no source id read „Ganzer
+    // Bildschirm“ where Android's dialog chose).
+    let hello = input.info.and_then(|info| info.hello.as_ref());
+    let mark = |hello: &ScreenHelloOk| hello.limits.iter().any(|l| l == SYSTEM_SOURCE);
+    if hello.is_some_and(mark) {
         return "Android-Systemauswahl".into();
     }
+    let (Some(hello), Some(source)) = (hello, input.source) else {
+        return "Ganzer Bildschirm".into();
+    };
     if whole_screen(hello).as_ref() == Some(source) {
         return "Ganzer Bildschirm".into();
     }

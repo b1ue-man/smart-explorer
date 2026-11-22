@@ -15,7 +15,6 @@ use std::time::{Duration, Instant};
 
 use eframe::egui;
 
-use super::screen_prefs::{prefs_path, ViewerPrefs};
 use super::screen_session::{SessionInfo, ViewerSession};
 use super::screen_toolbar_ui::ToolbarAction;
 use crate::screen::core::wire_control::ViewerFrame;
@@ -33,7 +32,7 @@ const REPORT_INTERVAL: Duration = Duration::from_secs(1);
 /// The stored „Ton“ as the file holds it (`None`: never chosen).
 pub fn stored() -> Option<bool> {
     let mut known = AUDIO.lock().unwrap_or_else(PoisonError::into_inner);
-    *known.get_or_insert_with(|| ViewerPrefs::load_from(&prefs_path()).audio)
+    *known.get_or_insert_with(|| super::screen_prefs::current().audio)
 }
 
 /// Whether the host's sound plays; never chosen is on.

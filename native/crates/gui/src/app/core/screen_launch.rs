@@ -105,6 +105,9 @@ pub fn wgpu_refused_text(error: &str) -> String {
 /// `--screen-view <ziel-json>`.
 pub fn run_screen_view(target_json: &str) -> i32 {
     crate::app::update_stop_ui::arm_window();
+    // The settings of the `se screen view` call that started this window
+    // (Codex 10/14), before any setting is read.
+    super::screen_prefs::hold_start_choices(target_json);
     match ScreenTarget::parse(target_json) {
         Ok(target)
             if target

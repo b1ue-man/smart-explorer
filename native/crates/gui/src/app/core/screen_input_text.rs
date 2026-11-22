@@ -4,13 +4,12 @@ use super::*;
 
 impl InputMapper {
     /// Ctrl+C, X and V arrive as their own events without a key event;
-    /// Umschalt and Alt go along as held now (round 10 B8: Strg+Umschalt+V
-    /// pressed within one frame came as Strg+V).
-    pub(super) fn chord(&mut self, name: &str) {
+    /// Umschalt and Alt go along as `held` at that event (round 10 B8,
+    /// `clip_mods`).
+    pub(super) fn chord(&mut self, name: &str, held: Modifiers) {
         let Some(hid_usage) = key_usage(name).filter(|_| self.caps.keyboard) else {
             return;
         };
-        let held = self.held_now();
         self.sync_modifiers(Modifiers { ctrl: true, ..held });
         self.emit(InputEvent::Key {
             hid_usage,
@@ -28,53 +27,36 @@ impl InputMapper {
     /// itself instead of Strg+Umschalt+V; a host that takes text only
     /// (Android) gets the text, where the chord did nothing.
     pub(super) fn paste(&mut self, text: &str) {
+        let held = self.clip_mods();
         if !self.caps.keyboard {
             if self.caps.text {
                 self.text(text);
             }
         } else if self.paste.substituted {
             // Round 9 D9: the shortcut went out already for this press.
-        } else if self.struck(Key::Insert) {
-            let held = self.held_now();
-            self.tap_with(
-                "insert",
-                Modifiers {
-                    shift: true,
-                    ..held
-                },
-            );
+        } else if self.variant(Key::Insert, Key::V) {
+            let shifted = Modifiers {
+                shift: true,
+                ..held
+            };
+            self.tap_with("insert", shifted);
         } else {
-            self.chord("v");
-        }
-    }
-
-    /// The modifiers held around a `Copy`, `Cut` or `Paste`: those sent
-    /// before this frame and the frame's own (Gemini 8/12: these events come
-    /// before the frame's modifiers are sent).
-    pub(super) fn held_now(&self) -> Modifiers {
-        let frame = self.paste.mods;
-        Modifiers {
-            ctrl: self.mods.ctrl || frame.ctrl,
-            shift: self.mods.shift || frame.shift,
-            alt: self.mods.alt || frame.alt,
-            ..self.mods
+            self.chord("v", held);
         }
     }
 
     /// `Cut`: (Windows) Umschalt+Entf as itself, with Strg when held (round
     /// 10 B5: egui-winit makes Strg+Umschalt+Entf a `Cut` too), else Strg+X.
     pub(super) fn cut(&mut self) {
-        if self.struck(Key::Delete) {
-            let held = self.held_now();
-            self.tap_with(
-                "delete",
-                Modifiers {
-                    shift: true,
-                    ..held
-                },
-            );
+        let held = self.clip_mods();
+        if self.variant(Key::Delete, Key::X) {
+            let shifted = Modifiers {
+                shift: true,
+                ..held
+            };
+            self.tap_with("delete", shifted);
         } else {
-            self.chord("x");
+            self.chord("x", held);
         }
     }
 
