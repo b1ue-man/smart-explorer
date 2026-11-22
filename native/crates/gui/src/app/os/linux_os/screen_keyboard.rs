@@ -1,5 +1,5 @@
 //! Keyboard facts of the Linux viewer for the remote input (Gemini 5/9):
-//! whether Ctrl+V or Umschalt+Einfg is held (`screen_input_paste.rs`). On
+//! whether Ctrl+V is held (`screen_input_paste.rs`). On
 //! X11 the server tells which keys are down (`QueryKeymap`); a Wayland
 //! client learns keys only through its own focused surface, so there the
 //! release decides alone.
@@ -11,15 +11,13 @@ use x11rb::connection::Connection as _;
 use x11rb::protocol::xproto::ConnectionExt as _;
 use x11rb::rust_connection::RustConnection;
 
-/// `XK_v`, `XK_V` and `XK_Insert` (X11 `keysymdef.h`).
+/// `XK_v` and `XK_V` (X11 `keysymdef.h`).
 const KEYSYM_V: [u32; 2] = [0x0076, 0x0056];
-const KEYSYM_INSERT: u32 = 0xFF63;
 
-/// The X11 connection and the keycodes that carry V and Einfg.
+/// The X11 connection and the keycodes that carry V.
 struct Keys {
     connection: RustConnection,
     v: Vec<u8>,
-    insert: Vec<u8>,
 }
 
 fn wayland() -> bool {
@@ -42,15 +40,11 @@ fn open() -> Option<Keys> {
     let mut keys = Keys {
         connection,
         v: Vec::new(),
-        insert: Vec::new(),
     };
     for (index, syms) in mapping.keysyms.chunks(per).enumerate() {
         let code = u8::try_from(usize::from(first) + index).ok()?;
         if syms.iter().any(|sym| KEYSYM_V.contains(sym)) {
             keys.v.push(code);
-        }
-        if syms.contains(&KEYSYM_INSERT) {
-            keys.insert.push(code);
         }
     }
     Some(keys)
@@ -71,27 +65,27 @@ pub fn ctrl_alt_text(_physical: eframe::egui::Key, _shift: bool) -> Option<Strin
 /// 8/12: once per frame was a round trip per frame); within `PASTE_WAIT`.
 const QUERY_GAP: std::time::Duration = std::time::Duration::from_millis(25);
 
-/// Ctrl+V, or Umschalt+Einfg without Ctrl, is held now (X11 only).
-pub fn paste_keys_held(ctrl: bool, shift: bool) -> bool {
-    if !(ctrl || shift) || wayland() {
+/// Ctrl+V is held now (X11 only). Umschalt+Einfg is no paste of
+/// egui-winit here (`lib.rs` 1035-1039, Windows only): Einfg reaches the
+/// host as its key, and a substitute pasted twice (round 9 D1).
+pub fn paste_keys_held(ctrl: bool, _shift: bool) -> bool {
+    if !ctrl || wayland() {
         return false;
     }
     // The last answer and when the server gave it.
-    static LAST: Mutex<Option<(std::time::Instant, bool, bool, bool)>> = Mutex::new(None);
+    static LAST: Mutex<Option<(std::time::Instant, bool)>> = Mutex::new(None);
     let now = std::time::Instant::now();
-    if let Some((at, was_ctrl, was_shift, held)) =
-        *LAST.lock().unwrap_or_else(PoisonError::into_inner)
-    {
-        if was_ctrl == ctrl && was_shift == shift && now.duration_since(at) < QUERY_GAP {
+    if let Some((at, held)) = *LAST.lock().unwrap_or_else(PoisonError::into_inner) {
+        if now.duration_since(at) < QUERY_GAP {
             return held;
         }
     }
-    let held = query(ctrl, shift);
-    *LAST.lock().unwrap_or_else(PoisonError::into_inner) = Some((now, ctrl, shift, held));
+    let held = query();
+    *LAST.lock().unwrap_or_else(PoisonError::into_inner) = Some((now, held));
     held
 }
 
-fn query(ctrl: bool, shift: bool) -> bool {
+fn query() -> bool {
     // One connection for the process (`None`: no X server, asked once).
     static KEYS: Mutex<Option<Option<Keys>>> = Mutex::new(None);
     let mut keys = KEYS.lock().unwrap_or_else(PoisonError::into_inner);
@@ -111,5 +105,5 @@ fn query(ctrl: bool, shift: bool) -> bool {
             .iter()
             .any(|code| map.keys[usize::from(*code / 8)] & (1 << (code % 8)) != 0)
     };
-    (ctrl && down(&keys.v)) || (shift && !ctrl && down(&keys.insert))
+    down(&keys.v)
 }

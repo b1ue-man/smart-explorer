@@ -32,8 +32,10 @@ impl InputMapper {
             if self.caps.text {
                 self.text(text);
             }
+        } else if self.paste.substituted {
+            // Round 9 D9: the shortcut went out already for this press.
         } else if self.shift_only() {
-            self.tap("insert");
+            self.shift_tap("insert");
         } else {
             self.chord("v");
         }
@@ -50,10 +52,23 @@ impl InputMapper {
     /// the chord made it Strg+Umschalt+X).
     pub(super) fn cut(&mut self) {
         if self.shift_only() {
-            self.tap("delete");
+            self.shift_tap("delete");
         } else {
             self.chord("x");
         }
+    }
+
+    /// `name` with Umschalt and without Ctrl on the host (round 9 D2:
+    /// `Cut`/`Paste` come before the frame's modifiers go out, so Entf
+    /// went without Umschalt and deleted instead of cutting).
+    pub(super) fn shift_tap(&mut self, name: &str) {
+        let shifted = Modifiers {
+            shift: true,
+            ctrl: false,
+            ..self.mods
+        };
+        self.sync_modifiers(shifted);
+        self.tap(name);
     }
 
     /// One press and release of the key `name` under the held modifiers.

@@ -322,10 +322,11 @@ impl InputMapper {
             (now.shift, self.mods.shift, "shift_left"),
             (now.alt, self.mods.alt, "alt_left"),
         ];
-        for (down, was, name) in changes {
-            if down == was {
-                continue;
-            }
+        // Releases first and Alt before Ctrl, presses Ctrl before Alt (round
+        // 9 D7: an Alt let go alone after Ctrl can open a Windows menu).
+        let releases = changes.iter().rev().filter(|(down, was, _)| !down && *was);
+        let presses = changes.iter().filter(|(down, was, _)| *down && !was);
+        for (down, _, name) in releases.chain(presses).copied() {
             if let (true, Some(hid_usage)) = (self.caps.keyboard, key_usage(name)) {
                 self.emit(InputEvent::Key { hid_usage, down });
             }

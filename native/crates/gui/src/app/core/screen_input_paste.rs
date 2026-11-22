@@ -59,6 +59,12 @@ pub(super) struct PasteWatch {
     /// Keys typed as their Ctrl+left-Alt character (`key_event`): their
     /// release is no key for the host.
     typed: Vec<Key>,
+    /// The shortcut went out for this press: a `Paste` egui makes late
+    /// sends nothing more (round 9 D9).
+    pub(super) substituted: bool,
+    /// This frame let Einfg go (round 9 D8: a Strg+Einfg pressed and let go
+    /// within one frame reads as up in `GetKeyState`).
+    insert_released: bool,
 }
 
 impl InputMapper {
@@ -66,7 +72,8 @@ impl InputMapper {
     /// 8/11: a terminal copies on Strg+Einfg and interrupts on Strg+C),
     /// else Strg+C.
     pub(super) fn copy(&mut self) {
-        if !platform::insert_held() {
+        let insert = platform::insert_held() || (cfg!(windows) && self.paste.insert_released);
+        if !insert {
             self.chord("c");
             return;
         }
@@ -82,14 +89,9 @@ impl InputMapper {
     /// its own clipboard.
     fn paste_shortcut(&mut self, insert: bool) {
         self.paste.handled = true;
+        self.paste.substituted = true;
         if insert {
-            let shifted = Modifiers {
-                shift: true,
-                ctrl: false,
-                ..self.mods
-            };
-            self.sync_modifiers(shifted);
-            self.tap("insert");
+            self.shift_tap("insert");
         } else {
             self.chord("v");
         }
@@ -103,6 +105,16 @@ impl InputMapper {
         if events.iter().any(|event| matches!(event, Event::Paste(_))) {
             self.paste.handled = true;
         }
+        self.paste.insert_released = events.iter().any(|event| {
+            matches!(
+                event,
+                Event::Key {
+                    key: Key::Insert,
+                    pressed: false,
+                    ..
+                }
+            )
+        });
         let held = platform::paste_keys_held(mods.ctrl, mods.shift);
         let now = Instant::now();
         match self.paste.press.as_mut() {
@@ -120,13 +132,24 @@ impl InputMapper {
             return;
         };
         let insert = press.insert;
-        let due = !held || (press.frames >= 2 && now >= press.since + PASTE_WAIT);
-        if !held {
-            self.paste.press = None;
+        // Round 9 D9: also a press already let go waits the two frames and
+        // `PASTE_WAIT` (X11 may report the keys before winit's events, so
+        // egui's `Paste` came a frame after them); its release ends it.
+        if press.frames < 2 || now < press.since + PASTE_WAIT {
+            return;
         }
-        if due && !self.paste.handled {
+        self.paste.press = None;
+        // Round 9 D1: a key the host got itself is no swallowed paste.
+        let usage = key_usage(if insert { "insert" } else { "v" });
+        let sent = usage.is_some_and(|usage| self.keys_down.contains(&usage));
+        if !self.paste.handled && !sent {
             self.paste_shortcut(insert);
         }
+    }
+
+    /// A press waits for its decision (`missed_paste`): the view repaints.
+    pub fn paste_pending(&self) -> bool {
+        self.paste.press.is_some()
     }
 
     /// One key of the viewer. Gemini 8/12: on Windows, Ctrl with the left
@@ -193,6 +216,7 @@ impl InputMapper {
             self.paste_shortcut(insert);
         }
         self.paste.handled = false;
+        self.paste.substituted = false;
         self.paste.press = None;
     }
 }

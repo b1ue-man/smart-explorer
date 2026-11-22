@@ -472,7 +472,9 @@ impl ViewWidget {
             let (keys, modifiers) = render(ui, response, mapper, &mut self.keys_owned);
             let owned = super::screen_view_widget_render::owned_events(ui, response, &events, keys);
             mapper.process(&owned, modifiers, geometry);
-            // The IME needs the area to place its candidate window.
+            if mapper.paste_pending() {
+                ui.ctx().request_repaint(); // a held paste is decided in time
+            }
             ui.ctx().output_mut(|output| {
                 output.ime = Some(egui::output::IMEOutput {
                     rect: geometry.rect,
