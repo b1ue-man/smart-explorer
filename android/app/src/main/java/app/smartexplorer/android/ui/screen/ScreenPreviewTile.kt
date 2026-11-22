@@ -25,6 +25,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
@@ -58,6 +59,21 @@ private const val PREVIEW_EDGE = 320
 
 /** A tile without a picture this long after the device accepted shows „Keine Antwort“ (twice the longest interval of 5 s). */
 private const val NO_ANSWER_MS = 10_000L
+
+/** The highest preview rate of the tiles' intervals (500 ms): the hello names it, `SET_MODE` sets the chosen one. */
+private const val PREVIEW_MAX_FPS = 2
+
+/**
+ * Why a preview cannot run under [stored]; `null` when it can. A preview draws bitmaps without a Surface for
+ * MediaCodec: only the tiles, decoded in software, run there (Codex 11/9).
+ */
+internal fun previewRefusal(stored: ViewerCodecChoice): String? = when {
+    stored.codec in ViewerCodecChoice.VIDEO_CODECS ->
+        "Keine Vorschau: Codec „${ScreenCodecNotices.label(stored.codec)}“ gewählt; die Vorschau zeigt nur verlustfreie Kacheln. Der Codec gilt in der Vollansicht."
+    stored.decoder == ViewerCodecChoice.DECODER_HARDWARE ->
+        "Keine Vorschau: „Dekodierer: Hardware“ gewählt; die Kacheln der Vorschau werden in Software dekodiert. Die Wahl gilt in der Vollansicht."
+    else -> null
+}
 
 /** What a tile shows before and instead of a picture, from the probe. */
 private enum class TileGate { Probing, Offline, Unsupported, Off, Ask, Allow, Failed }
@@ -95,7 +111,14 @@ fun ScreenPreviewTile(
     val target = remember(device) { device.toTarget() }
     // The stored „Codec“, „Dekodierer“ and „Höchste Datenrate“ (Codex 2/15): the rate binds the preview too.
     val stored = remember { ScreenViewPrefs.load(context) }
-    val skip = (intervalMs / 1000).coerceAtLeast(1)
+    // A preview draws bitmaps only (no Surface for MediaCodec): it can run the lossless tiles, decoded in software.
+    // A named video codec or „Dekodierer: Hardware“ cannot hold there; the tile says so and opens no session instead
+    // of showing the tiles against the choice (Codex 11/9). The full view keeps the choice.
+    val previewRefused = previewRefusal(stored)
+    // The decoder reads the interval in force, not the one of its start (Codex 11/13).
+    val skip by rememberUpdatedState((intervalMs / 1000).coerceAtLeast(1))
+    // A dead decoding thread is started again a few times, its cause shown (Codex 11/11, as the full view).
+    var decoderRestarts by remember { mutableIntStateOf(0) }
 
     LaunchedEffect(device.online) {
         gate = TileGate.Probing
@@ -127,7 +150,7 @@ fun ScreenPreviewTile(
             }
             return@LaunchedEffect
         }
-        if (gate != TileGate.Allow) return@LaunchedEffect
+        if (gate != TileGate.Allow || previewRefused != null) return@LaunchedEffect
         // One connection per tile: a probe that answers `allow` again (the device list follows the
         // Share status) keeps the running session; only an ended one is closed and replaced.
         val running = session
@@ -137,10 +160,11 @@ fun ScreenPreviewTile(
         repeat(2) { withFrameNanos { } }
         val opened = ScreenSession(target, backend)
         try {
-            // A preview draws bitmaps only (no Surface for MediaCodec), so it offers the tiles; „Höchste Datenrate“
-            // applies as stored. A named video codec is shown below as the full view's choice, not silently replaced.
-            opened.open("preview", null, PREVIEW_EDGE, PREVIEW_EDGE, if (intervalMs <= 500) 2 else 1, listOf(DecoderOffer(codec = "tiles")),
-                ViewerCodecChoice(maxRateBps = stored.maxRateBps))
+            // A preview offers the tiles only, under the stored choice („Automatisch“ or „Verlustfrei“, decoder
+            // „Automatisch“ or „Software“; `previewRefusal`) and „Höchste Datenrate“. The hello names the highest
+            // preview rate (two pictures a second, 500 ms): the host keeps every later `SET_MODE` below it, so the
+            // interval chosen below acts whichever one the tile opened with (Codex 11/13).
+            opened.open("preview", null, PREVIEW_EDGE, PREVIEW_EDGE, PREVIEW_MAX_FPS, listOf(DecoderOffer(codec = "tiles")), stored)
             session = opened
         } catch (e: CoreException) {
             failure = e.message
@@ -148,7 +172,7 @@ fun ScreenPreviewTile(
         }
     }
     DisposableEffect(Unit) { onDispose { session?.close() } }
-    LaunchedEffect(session) { bitmap = null; bitmapFrame = null; pictures = 0 }
+    LaunchedEffect(session) { bitmap = null; bitmapFrame = null; pictures = 0; decoderRestarts = 0 }
     LaunchedEffect(nativePixels, bitmap?.width, bitmap?.height) { transform.nativePixels(if (nativePixels) bitmap?.width else null, if (nativePixels) bitmap?.height else null) }
     LaunchedEffect(intervalMs, session) {
         session?.setMode("preview",fps=if(intervalMs<=500) 2 else 1)
@@ -162,7 +186,7 @@ fun ScreenPreviewTile(
             silent = true
         }
     }
-    DisposableEffect(session, adoptedBy === session) {
+    DisposableEffect(session, adoptedBy === session, decoderRestarts) {
         val active = session
         if (active == null || adoptedBy === active) return@DisposableEffect onDispose { }
         var received = 0
@@ -180,20 +204,23 @@ fun ScreenPreviewTile(
                 override fun onSize(width: Int, height: Int) = Unit
                 override fun onBitmap(picture: Bitmap) = Unit
                 override fun onBitmapFrame(picture: Bitmap, frame: ScreenPresentedFrame) {
-                    // Every picture is decoded; only selected immutable snapshots can be acknowledged.
-                    if (!activeDecoder.get() || !active.isDisplayable(frame) || received++ % skip != 0) return
+                    // Every picture is decoded; only selected immutable snapshots can be acknowledged. A picture that
+                    // came before the host's visibility answer is kept (`awaitsAck`): of a static desktop it is the
+                    // only one, and the answer decides by its first frame whether it is shown (Codex 11/10).
+                    if (!activeDecoder.get() || !(active.isDisplayable(frame) || active.awaitsAck(frame)) ||
+                        received++ % skip != 0) return
                     if(!active.beginBitmapSnapshot()) return
                     val snapshot = try {ScreenScaling.snapshot(picture,active.state.value.bufferBudget)} catch(error:Throwable) {
                         active.endBitmapSnapshot();throw error
                     }
                     main.post {
                         try {
-                        if (!activeDecoder.get() || !active.isDisplayable(frame)) return@post
+                        if (!activeDecoder.get() || !(active.isDisplayable(frame) || active.awaitsAck(frame))) return@post
                         if (snapshot == null) {
                             failure = ScreenScaling.COPY_ERROR; bitmap = null; bitmapFrame = null
                             active.invalidateDisplay(false)
                         } else {
-                            if (failure == ScreenScaling.COPY_ERROR) failure = null
+                            if (failure == ScreenScaling.COPY_ERROR || failure?.startsWith(DECODER_ENDED) == true) failure = null
                             bitmapFrame = frame
                             bitmap = snapshot
                             hiddenSinceFrame = false
@@ -207,12 +234,21 @@ fun ScreenPreviewTile(
                     if (activeDecoder.get()) active.hybridUnavailable(gopId, reason, "preview")
                 }
                 override fun onDecodeFailure(consecutive: Int) { active.invalidateDisplay(false); active.call { keyframe(it) } }
+                override fun onAborted(reason: String) {
+                    main.post {
+                        if (!activeDecoder.get()) return@post
+                        failure = "$DECODER_ENDED: $reason"
+                        if (decoderRestarts < MAX_DECODER_RESTARTS) decoderRestarts++
+                    }
+                }
                 override fun onEnded() {
                     main.post { if (activeDecoder.get()) active.invalidateDisplay(false) }
                 }
             },
         )
         decoder.start()
+        // A decoder started in the middle of a picture group (a restart) needs a key frame.
+        if (decoderRestarts > 0 && active.state.value.stream != null) active.call { keyframe(it) }
         onDispose { activeDecoder.set(false); decoder.stop(); active.invalidateDisplay(false) }
     }
 
@@ -222,8 +258,10 @@ fun ScreenPreviewTile(
         gate == TileGate.Unsupported -> stringResource(R.string.screen_tile_unsupported)
         gate == TileGate.Off -> stringResource(R.string.screen_tile_off)
         gate == TileGate.Failed -> failure.orEmpty()
+        gate == TileGate.Allow && previewRefused != null -> previewRefused
         ended != null -> ScreenTexts.endText(context, ended.code, ended.detail)
         ui.errorCode != null -> ScreenTexts.errorText(context, ui.errorCode.orEmpty(), ui.errorDetail)
+        failure?.startsWith(DECODER_ENDED) == true -> failure.orEmpty()
         failure == ScreenScaling.COPY_ERROR -> failure.orEmpty()
         ui.codecFallback != null -> ui.codecFallback.orEmpty()
         hiddenSinceFrame && bitmapFrame?.let { session?.isDisplayable(it) } != true -> "Warte auf ein vollständiges aktuelles Bild …"
@@ -232,6 +270,7 @@ fun ScreenPreviewTile(
         else -> ""
     }
     val dot = when {
+        failure?.startsWith(DECODER_ENDED) == true || gate == TileGate.Allow && previewRefused != null -> Color(0xFFC62828)
         bitmap != null && ended == null -> Color(0xFF2E7D32)
         gate == TileGate.Probing || gate == TileGate.Allow && ended == null && ui.errorCode == null -> Color(0xFFF9A825)
         else -> Color(0xFFC62828)
@@ -242,6 +281,9 @@ fun ScreenPreviewTile(
         Column {
             BoxWithConstraints(Modifier.fillMaxWidth().aspectRatio(16f / 9f).background(Color.Black).clipToBounds().drawWithContent { ScreenScaling.observeRenderer(drawContext.canvas.nativeCanvas); drawContent() }, contentAlignment = Alignment.Center) {
                 @Suppress("UNUSED_VARIABLE") val drawnFor = transformTick
+                // The host's visibility answer decides about a picture held before it (Codex 11/10): read here so
+                // the box draws again when it comes.
+                @Suppress("UNUSED_VARIABLE") val ackedFor = ui.ackedMinFrame
                 val vw = constraints.maxWidth.toFloat()
                 val vh = constraints.maxHeight.toFloat()
                 val shownSize = bitmap
@@ -259,7 +301,11 @@ fun ScreenPreviewTile(
                 })
                 val shown = bitmap
                 val renderingSession=session
-                if (shown != null && renderingSession != null && text.isEmpty() && (!hiddenSinceFrame || bitmapFrame?.let { session?.isDisplayable(it) } == true)) {
+                // A picture held before the host's visibility answer shows once the answer names it (`isDisplayable`).
+                val frameNow = bitmapFrame
+                val displayable = frameNow != null && session?.isDisplayable(frameNow) == true
+                val waitsForAck = frameNow != null && !displayable && session?.awaitsAck(frameNow) == true
+                if (shown != null && renderingSession != null && text.isEmpty() && !waitsForAck && (!hiddenSinceFrame || displayable)) {
                     val placed = Modifier.align(Alignment.TopStart)
                         .pointerInput(nativePixels) { if (nativePixels) detectTransformGestures { _,pan,_,_ -> transform.panBy(pan.x,pan.y,vw,vh,aspect) } }
                     ScreenBitmap(shown,pictures,w.roundToInt(),h.roundToInt(),placed,vw.roundToInt(),vh.roundToInt(),left.roundToInt(),top.roundToInt(),
@@ -279,10 +325,6 @@ fun ScreenPreviewTile(
                 TextButton(onClick = { nativePixels = !nativePixels }) { Text(if (nativePixels) "Einpassen" else "1:1") }
                 Text(device.name, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                 Box(Modifier.size(10.dp).clip(CircleShape).background(dot))
-            }
-            if (!ViewerCodecChoice.tilesFallbackAllowed(stored.codec)) {
-                Text("Vorschau verlustfrei (Kacheln); „${ScreenCodecNotices.label(stored.codec)}“ gilt in der Vollansicht.",
-                    style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp))
             }
         }
     }

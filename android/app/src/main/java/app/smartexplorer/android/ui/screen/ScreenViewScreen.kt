@@ -101,10 +101,10 @@ private const val TILES_SESSION_REASON = "the session was opened for the tiles; 
 
 /** „Ganzer Bildschirm“ chosen while the host named no monitor: a missing source means „no change“ to the host. */
 /** The start of the notice of a decoding thread that died; a new picture clears it. */
-private const val DECODER_ENDED = "Dekodierer beendet"
+internal const val DECODER_ENDED = "Dekodierer beendet"
 
 /** Restarts of a dead decoding thread per view; after them its cause stays shown. */
-private const val MAX_DECODER_RESTARTS = 3
+internal const val MAX_DECODER_RESTARTS = 3
 
 private const val WHOLE_SCREEN_UNNAMED = "„Ganzer Bildschirm“ nicht möglich: Der Gastgeber nennt keinen Bildschirm. Die bisherige Quelle bleibt."
 
@@ -700,7 +700,7 @@ fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, a
             }
             // The field stays while the keyboard is on; short input pauses
             // (new picture, visibility) must not close and reopen the IME.
-            if (keyboardOn && controlOn && mode == "control") ScreenKeyboardField(mapper, flush)
+            if (keyboardOn && controlOn && mode == "control") ScreenKeyboardField(mapper, flush) { sendingNow }
         }
     }
     autoLogin?.let { paired ->
@@ -735,7 +735,7 @@ private fun surfaceView(context: android.content.Context, onSurface: (Surface?) 
  * lets deleting work on an empty field.
  */
 @Composable
-private fun ScreenKeyboardField(mapper: ScreenInputMapper, flush: Channel<Unit>) {
+private fun ScreenKeyboardField(mapper: ScreenInputMapper, flush: Channel<Unit>, sending: () -> Boolean) {
     val pad = "\u200B".repeat(FIELD_PAD)
     // The cursor starts and stays behind the padding: a field from a plain
     // String puts it at index 0, so every typed character landed in front of
@@ -752,9 +752,13 @@ private fun ScreenKeyboardField(mapper: ScreenInputMapper, flush: Channel<Unit>)
         value = field,
         onValueChange = { next ->
             val (removed, inserted) = keyboardEdit(field.text, next.text)
-            repeat(removed) { mapper.tapKey("backspace") }
-            if (inserted.isNotEmpty()) mapper.onText(inserted)
-            if (removed > 0 || inserted.isNotEmpty()) flush.trySend(Unit)
+            // The field stays through short input pauses, but what is typed while the view blocks input (no
+            // control, no picture shown yet, a local menu open) goes nowhere (Codex 11/8).
+            if (sending()) {
+                repeat(removed) { mapper.tapKey("backspace") }
+                if (inserted.isNotEmpty()) mapper.onText(inserted)
+                if (removed > 0 || inserted.isNotEmpty()) flush.trySend(Unit)
+            }
             val length = next.text.length
             field = if (next.composition == null && (length < FIELD_PAD / 2 || length > FIELD_PAD * 8)) {
                 TextFieldValue(pad, TextRange(pad.length))
@@ -766,8 +770,10 @@ private fun ScreenKeyboardField(mapper: ScreenInputMapper, flush: Channel<Unit>)
         singleLine = true,
         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
         keyboardActions = KeyboardActions(onSend = {
-            mapper.enter()
-            flush.trySend(Unit)
+            if (sending()) {
+                mapper.enter()
+                flush.trySend(Unit)
+            }
         }),
     )
 }

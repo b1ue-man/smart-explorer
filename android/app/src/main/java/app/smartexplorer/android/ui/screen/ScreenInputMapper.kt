@@ -257,27 +257,64 @@ class ScreenInputMapper(
     private fun JsonObject.text(name: String) = (this[name] as? JsonPrimitive)?.content
 
     private fun add(event: JsonObject) {
-        val isMove = event.text("type") == "touch" && event.text("phase") == "move"
-        val at = if (isMove) queue.indexOfLast { it.text("type") == "touch" && it["id"] == event["id"] } else -1
-        when {
-            event.text("type") == "pointer_abs" && queue.lastOrNull()?.text("type") == "pointer_abs" ->
-                queue[queue.lastIndex] = event
-            isMove && at >= 0 && queue[at].text("phase") == "move" -> queue[at] = event
-            else -> queue.add(event)
+        // Only a free pointer move gives way to the next one (and a repeat of the same position). With a button held
+        // (a drag, a drawing) and for a touch contact every position goes out in order, so no turn of the path is
+        // lost (Codex 11/17).
+        val last = queue.lastOrNull()
+        if (event.text("type") == "pointer_abs" && last?.text("type") == "pointer_abs" && (heldButtons.isEmpty() || last == event)) {
+            queue[queue.lastIndex] = event
+        } else {
+            queue.add(event)
         }
     }
 
     fun drain(): List<JsonObject> = ArrayList(queue).also { queue.clear() }
 
-    /** What waits plus the counterpart of all that is pressed (button up, key up, touch cancel). */
+    /**
+     * Input stops (the view blocked it, the session ended): what waits unsent is dropped, only the counterpart of
+     * what the host already got goes out — button up, key up, touch cancel (Codex 11/8). A release that waits for a
+     * press already sent stays; a press that never left takes its release with it.
+     */
     fun releaseAll(): List<JsonObject> {
+        val kept = ArrayList<JsonObject>()
+        val unsentButtons = HashSet<String>()
+        val unsentKeys = HashSet<String>()
+        val unsentTouches = HashSet<String>()
+        for (event in queue) {
+            val down = (event["down"] as? JsonPrimitive)?.content == "true"
+            when (event.text("type")) {
+                "button" -> event.text("button")?.let { name ->
+                    if (down) unsentButtons.add(name) else if (!unsentButtons.remove(name)) kept.add(event)
+                }
+                "key" -> event.text("key")?.let { name ->
+                    if (down) unsentKeys.add(name) else if (!unsentKeys.remove(name)) kept.add(event)
+                }
+                "touch" -> {
+                    val id = event["id"].toString()
+                    when (event.text("phase")) {
+                        "start" -> unsentTouches.add(id)
+                        "end", "cancel" -> if (!unsentTouches.remove(id)) kept.add(event)
+                    }
+                }
+            }
+        }
+        queue.clear()
+        queue.addAll(kept)
+        heldButtons.removeAll(unsentButtons)
+        heldKeys.removeAll(unsentKeys)
         // `toList().asReversed()`, not `reversed()`: compiled against JDK 21, `reversed()` on a
         // LinkedHashSet binds to SequencedSet.reversed(), which Android has only from API 35.
-        heldButtons.toList().asReversed().forEach { add(ev("button", "button" to it, "down" to false)) }
+        heldButtons.toList().asReversed().forEach { queue.add(ev("button", "button" to it, "down" to false)) }
         heldButtons.clear()
-        heldKeys.toList().asReversed().forEach { add(ev("key", "key" to it, "down" to false)) }
+        heldKeys.toList().asReversed().forEach { queue.add(ev("key", "key" to it, "down" to false)) }
         heldKeys.clear()
-        cancelTouches()
+        slots.values.sorted().forEach { slot ->
+            if (slot.toString() in unsentTouches) return@forEach
+            val (x, y) = slotPositions[slot] ?: (0 to 0)
+            queue.add(ev("touch", "id" to slot, "phase" to "cancel", "x" to x, "y" to y))
+        }
+        slots.clear()
+        slotPositions.clear()
         mode = Mode.IDLE
         return drain()
     }

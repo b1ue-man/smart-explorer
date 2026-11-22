@@ -62,14 +62,15 @@ class ScreenInputMapperTest {
         still.onTouch(TouchKind.UP, 100, listOf(finger(0, 104f, 103f)))
         assertEquals(listOf(pointer(1000, 1000), button("left", true), button("left", false)), still.events())
 
-        // Drag: past the slop the left button goes down at the start, the pointer follows, the lift releases.
+        // Drag: past the slop the left button goes down at the start, the pointer follows through every position
+        // in order (no turn of the path is merged away, Codex 11/17), the lift releases.
         val drag = mapper(InputHost.DESKTOP)
         drag.onTouch(TouchKind.DOWN, 0, listOf(finger(0, 100f, 100f)))
         drag.onTouch(TouchKind.MOVE, 20, listOf(finger(0, 120f, 100f)))
         drag.onTouch(TouchKind.MOVE, 40, listOf(finger(0, 150f, 110f)))
         drag.onTouch(TouchKind.UP, 60, listOf(finger(0, 150f, 110f)))
         assertEquals(
-            listOf(pointer(1000, 1000), button("left", true), pointer(1500, 1100), button("left", false)),
+            listOf(pointer(1000, 1000), button("left", true), pointer(1200, 1000), pointer(1500, 1100), button("left", false)),
             drag.events(),
         )
         // The lift point counts, not the last move: the button goes up where the finger left (Codex 8/14).
@@ -113,7 +114,7 @@ class ScreenInputMapperTest {
         val m = mapper(InputHost.ANDROID)
         m.onTouch(TouchKind.DOWN, 0, listOf(finger(5, 10f, 20f)), changedId = 5)
         m.onTouch(TouchKind.POINTER_DOWN, 5, listOf(finger(5, 10f, 20f), finger(9, 30f, 40f)), changedId = 9)
-        // Two moves in one frame shrink to the last position of each finger.
+        // Every position of a finger goes out in order (Codex 11/17).
         m.onTouch(TouchKind.MOVE, 10, listOf(finger(5, 11f, 20f), finger(9, 30f, 41f)))
         m.onTouch(TouchKind.MOVE, 12, listOf(finger(5, 12f, 20f), finger(9, 30f, 42f)))
         m.onTouch(TouchKind.POINTER_UP, 20, listOf(finger(5, 12f, 20f), finger(9, 30f, 42f)), changedId = 9)
@@ -123,6 +124,8 @@ class ScreenInputMapperTest {
             listOf(
                 touch(0, "start", 100, 200),
                 touch(1, "start", 300, 400),
+                touch(0, "move", 110, 200),
+                touch(1, "move", 300, 410),
                 touch(0, "move", 120, 200),
                 touch(1, "move", 300, 420),
                 touch(1, "end", 300, 420),
@@ -139,24 +142,33 @@ class ScreenInputMapperTest {
 
     @Test
     fun screen_task_android_input_releases_on_pause() {
-        // A drag with the left button and a held key: pausing answers both, once.
+        // A drag with the left button and a held key, both sent: pausing answers both, once. Text typed after them
+        // and not sent yet is dropped (Codex 11/8).
         val m = mapper(InputHost.DESKTOP)
         m.onTouch(TouchKind.DOWN, 0, listOf(finger(0, 100f, 100f)))
         m.onTouch(TouchKind.MOVE, 20, listOf(finger(0, 150f, 100f)))
         m.onKey(KeyEvent.KEYCODE_A, true)
+        m.drain()
+        m.onText("x")
+        m.tapKey("enter")
         val released = m.releaseAll().map { it.toString() }
         assertEquals(
-            listOf(
-                pointer(1000, 1000),
-                button("left", true),
-                pointer(1500, 1000),
-                """{"type":"key","key":"a","down":true}""",
-                button("left", false),
-                """{"type":"key","key":"a","down":false}""",
-            ),
+            listOf(button("left", false), """{"type":"key","key":"a","down":false}"""),
             released,
         )
         assertTrue(m.releaseAll().isEmpty())
+        // A press that never left takes its release with it: nothing goes out.
+        val unsent = mapper(InputHost.DESKTOP)
+        unsent.onTouch(TouchKind.DOWN, 0, listOf(finger(0, 100f, 100f)))
+        unsent.onTouch(TouchKind.MOVE, 20, listOf(finger(0, 150f, 100f)))
+        unsent.onKey(KeyEvent.KEYCODE_B, true)
+        assertTrue(unsent.releaseAll().isEmpty())
+        // A release waiting for a press already sent stays.
+        val waiting = mapper(InputHost.DESKTOP)
+        waiting.onKey(KeyEvent.KEYCODE_C, true)
+        waiting.drain()
+        waiting.onKey(KeyEvent.KEYCODE_C, false)
+        assertEquals(listOf("""{"type":"key","key":"c","down":false}"""), waiting.releaseAll().map { it.toString() })
         // The lift that follows the pause is not a click.
         m.onTouch(TouchKind.UP, 100, listOf(finger(0, 150f, 100f)))
         assertTrue(m.events().isEmpty())
