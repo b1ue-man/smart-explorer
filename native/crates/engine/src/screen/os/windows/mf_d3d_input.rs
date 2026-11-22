@@ -39,6 +39,8 @@ use windows::Win32::Media::MediaFoundation::{
     IMFDXGIDeviceManager, IMFSample, IMFTransform, MF_SA_D3D11_AWARE,
 };
 
+#[path = "mf_d3d_linger.rs"]
+mod linger;
 #[path = "mf_d3d_own.rs"]
 mod own;
 #[path = "mf_d3d_route.rs"]
@@ -78,6 +80,8 @@ struct Bridge {
     capture: Option<Capture>,
     /// Device pointer and token of the encoder that takes textures.
     armed: Option<(usize, u64)>,
+    /// When the armed encoder went (`mf_d3d_linger.rs`, Gemini round 8, 1.2).
+    released: Option<Instant>,
     disabled: GpuSwitch,
     ring: Option<Arc<Ring>>,
     tag: u16,
@@ -90,6 +94,7 @@ struct Bridge {
 static BRIDGE: Mutex<Bridge> = Mutex::new(Bridge {
     capture: None,
     armed: None,
+    released: None,
     disabled: GpuSwitch::new(),
     ring: None,
     tag: 0,
@@ -115,6 +120,7 @@ pub(in crate::screen::os) fn disable(reason: &str) {
     let current = state.capture.as_ref().map(|capture| capture.raw);
     let failed = state.armed.map(|(device, _)| device).or(current);
     state.armed = None;
+    state.released = None;
     match state.disabled.fail(failed, current, reason) {
         Switched::Off => eprintln!(
             "screen GPU path off for this capture device, CPU path until the capture \
@@ -179,6 +185,7 @@ pub(in crate::screen::os) fn route_capture(
         });
     }
     let video = state.capture.as_ref().is_some_and(|capture| capture.video);
+    linger::lingered(&mut state);
     let decided = capture_route(facts(
         state.armed.map(|(device, _)| device),
         state.disabled.is_off(),
@@ -346,6 +353,7 @@ fn arm(
     state.token = state.token.wrapping_add(1);
     let token = state.token;
     state.armed = Some((raw, token));
+    state.released = None;
     Ok(GpuInput {
         device,
         context,
@@ -480,18 +488,5 @@ impl GpuInput {
         ring.with_slot(index, tag, |slot| converter.convert(slot, view))?
             .ok_or_else(gone)?;
         Ok(target)
-    }
-}
-
-impl Drop for GpuInput {
-    fn drop(&mut self) {
-        self.finish();
-        let Some(own) = self.token else {
-            return;
-        };
-        let mut state = bridge();
-        if state.armed.map(|(_, token)| token) == Some(own) {
-            state.armed = None;
-        }
     }
 }
