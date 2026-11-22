@@ -1,10 +1,11 @@
 //! The session's control writes (review 2026-11-19, Codex 6/8, 7/6, round 8
 //! Codex 8/5). Small, time-critical frames (`STATE`, `CONTROL_STATE`, the
-//! pointer's position, `STATS`, errors, acknowledgements, family snapshots
-//! and operations) go at once and count against „Höchste Datenrate“ as the
-//! control stream's rate, which the pictures' share loses. Large frames
-//! that nothing waits for at once (window lists, icons, family lists, the
-//! pointer's shape up to 64 KiB) go, under a user ceiling, piece by piece:
+//! pointer's position, `STATS`, errors, acknowledgements, family operation
+//! results without a state) go at once and count against „Höchste
+//! Datenrate“ as the control stream's rate, which the pictures' share loses.
+//! Large frames (window lists, icons, family lists, the pointer's shape up
+//! to 64 KiB, a family's state up to 1 MiB and an operation result carrying
+//! one, Codex 9/9) go, under a user ceiling, piece by piece:
 //! each piece takes the stream's byte budget the pictures use
 //! (`tiles_rate::SharedBudget`) before it is written, so pictures and these
 //! frames together keep the ceiling also over short spans. The session loop
@@ -55,13 +56,28 @@ struct Writing {
     shape: Option<u32>,
 }
 
+/// A frame that goes piece by piece under a user ceiling: the lists, icons
+/// and pointer shapes, a family's state (up to 1 MiB, Codex 9/9) and an
+/// operation result that carries one.
 fn large(frame: &HostFrame) -> bool {
+    match frame {
+        HostFrame::Windows(_)
+        | HostFrame::IconReply(_)
+        | HostFrame::Families(_)
+        | HostFrame::CursorShape(_)
+        | HostFrame::FamilySnapshot(_) => true,
+        HostFrame::FamilyOperation(result) => result.snapshot.is_some(),
+        _ => false,
+    }
+}
+
+/// A family's state or an operation result about it: they reach the viewer
+/// in their order (Codex 9/9: a focus result checks the focus in the newest
+/// state the viewer holds, `FamilyViewer::result`).
+fn family(frame: &HostFrame) -> bool {
     matches!(
         frame,
-        HostFrame::Windows(_)
-            | HostFrame::IconReply(_)
-            | HostFrame::Families(_)
-            | HostFrame::CursorShape(_)
+        HostFrame::FamilySnapshot(_) | HostFrame::FamilyOperation(_)
     )
 }
 
@@ -177,9 +193,15 @@ impl Outbox {
     }
 
     /// Whether a large `frame` waits: under a user ceiling always (it goes
-    /// piece by piece), without one behind held ones (Codex 7/6).
+    /// piece by piece), without one behind held ones (Codex 7/6). A family
+    /// frame waits behind a family state still held (Codex 9/9).
     fn holds(&self, frame: &HostFrame) -> bool {
-        large(frame) && (self.waiting() || self.budget.rate().is_some())
+        (large(frame) && (self.waiting() || self.budget.rate().is_some()))
+            || (family(frame)
+                && self
+                    .held
+                    .iter()
+                    .any(|held| matches!(held.frame(), HostFrame::FamilySnapshot(_))))
     }
 
     /// The held frame a newer `frame` takes the place of: the window list
@@ -192,6 +214,7 @@ impl Outbox {
             .position(|held| match (held.frame(), frame) {
                 (HostFrame::Windows(_), HostFrame::Windows(_))
                 | (HostFrame::Families(_), HostFrame::Families(_))
+                | (HostFrame::FamilySnapshot(_), HostFrame::FamilySnapshot(_))
                 | (HostFrame::CursorShape(_), HostFrame::CursorShape(_)) => true,
                 (HostFrame::IconReply(old), HostFrame::IconReply(new)) => old.icon == new.icon,
                 _ => false,
