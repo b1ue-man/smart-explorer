@@ -175,6 +175,8 @@ pub(super) struct WgcCapture {
     /// When the overlay switched this session's pointer capture, until a
     /// picture taken after the switch was read.
     pointer_switched: Option<Instant>,
+    /// Gemini round 8, 1: whether `last` was taken with the pointer drawn.
+    last_drawn: bool,
     /// The pipeline's frame interval, set again on every new session.
     interval: Option<Duration>,
 }
@@ -197,6 +199,7 @@ impl WgcCapture {
             budget,
             recovery: CaptureRecovery::active(),
             pointer_switched: None,
+            last_drawn: false,
             interval: None,
         })
     }
@@ -374,7 +377,18 @@ impl Grabber for WgcCapture {
                 // handed out changes nothing here.
                 let _ = release();
                 self.last = None;
-                let image = self.read(&frame);
+                // Gemini round 8, 1: a read refused for want of a free picture
+                // (the encoder still holds one) waits for it a little, as the
+                // duplication does (`capture_dxgi::READ_WAIT`), instead of
+                // losing the frame on a screen that may then stand still.
+                let until = Instant::now() + Duration::from_millis(50);
+                let mut image = self.read(&frame);
+                while matches!(&image, Err(e) if e.kind() == io::ErrorKind::WouldBlock)
+                    && Instant::now() < until
+                {
+                    std::thread::sleep(Duration::from_millis(1));
+                    image = self.read(&frame);
+                }
                 let closed = frame.Close();
                 drop(frame);
                 closed.map_err(io::Error::other)?;
@@ -398,7 +412,14 @@ impl Grabber for WgcCapture {
                 };
                 self.size = image.size();
                 self.last = Some(image.clone());
+                self.last_drawn = !crate::screen::core::cursor_overlay::worker().separated();
                 return Ok(SourcePicture::Frame(image));
+            }
+            // Gemini round 8, 1: a switch back to the mode the picture was
+            // taken in (the viewer's start toggles it twice) needs nothing.
+            let drawn = !crate::screen::core::cursor_overlay::worker().separated();
+            if drawn == self.last_drawn {
+                self.pointer_switched = None;
             }
             // No picture since the switch: the screen stands still and the
             // viewer keeps the pointer of before in its picture (or misses

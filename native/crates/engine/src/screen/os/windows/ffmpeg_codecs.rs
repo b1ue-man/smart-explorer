@@ -85,6 +85,20 @@ fn open_stages(
     }
 }
 
+/// Whether the viewer's D3D11 device decodes `header`'s stream, and whether
+/// the GPU may (Gemini round 8, 8.1): DXVA2 decodes on the same video block,
+/// so a device that answers that it does not decode the stream rules DXVA2
+/// out too (it opened, then failed at the first key frame and lost the
+/// group); without a device DXVA2 stays a try. The result goes to
+/// `ffmpeg_plan::stages` as `d3d11_fits` and as its hardware switch.
+fn gpu_fits(header: &GopHeader) -> (bool, bool) {
+    let device = super::viewer_d3d11::shared();
+    let fits = device
+        .as_ref()
+        .is_ok_and(|device| device.decodes(header.codec, Some(header.size)));
+    (fits, fits || device.is_err())
+}
+
 /// Whether `library` may decode under this process's choice.
 fn gate(library: DecoderLibrary, media_foundation_present: bool) -> bool {
     let choice = decoder_library();
@@ -191,13 +205,25 @@ impl DecoderFactory for FfmpegFactory {
             note_chosen_presence(DecoderLibrary::Ffmpeg, false);
         })?;
         note_chosen_presence(DecoderLibrary::Ffmpeg, true);
-        let fits = super::viewer_d3d11::shared()
-            .is_ok_and(|device| device.decodes(header.codec, Some(header.size)));
+        let (fits, gpu) = gpu_fits(header);
         let stages = open_stages(
-            plan::stages(decoder_preference(), header.codec, fits, true),
+            plan::stages(decoder_preference(), header.codec, fits, gpu),
             chosen_decoder_preference(),
             |stage| hardware_allowed(header.codec, stage),
         );
+        if stages.is_empty() {
+            // Gemini round 8, 8.3: the reason, not an empty list.
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                format!(
+                    "{}: the GPU has no decoder of {} at {}x{}",
+                    self.name(),
+                    header.codec.key(),
+                    header.size.width,
+                    header.size.height
+                ),
+            ));
+        }
         let mut refusals = Vec::new();
         for stage in stages {
             match FfmpegDecoder::open(ffmpeg.clone(), header, stage) {
@@ -219,9 +245,8 @@ impl DecoderFactory for FfmpegFactory {
         {
             return false;
         }
-        let fits = super::viewer_d3d11::shared()
-            .is_ok_and(|device| device.decodes(header.codec, Some(header.size)));
-        let stages = plan::stages(decoder_preference(), header.codec, fits, true);
+        let (fits, gpu) = gpu_fits(header);
+        let stages = plan::stages(decoder_preference(), header.codec, fits, gpu);
         stages.iter().any(|stage| stage.hardware())
             && !stages
                 .iter()

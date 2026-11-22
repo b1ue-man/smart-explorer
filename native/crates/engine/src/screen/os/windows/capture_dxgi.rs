@@ -83,7 +83,16 @@ pub(super) struct DxgiCapture {
     /// Codex round 5, finding 10: since when the pointer switched while a
     /// picture shows it in the mode before (`SWITCH_WAIT`).
     switched_at: Option<Instant>,
+    /// Gemini round 8, 1: whether `last` carries the blended pointer.
+    last_blends: bool,
 }
+
+/// Gemini round 8, 1: how long a read refused for want of a free picture of
+/// the capture plan (`WouldBlock`: the encoder still holds one) waits for it
+/// while the frame stays acquired. Before, the missed read left no reference
+/// picture and the next timeout rebuilt the duplication with a new
+/// generation: a new encoder about once a second on a loaded host.
+const READ_WAIT: Duration = Duration::from_millis(50);
 
 /// How long a pointer switch waits for the next frame of the duplication
 /// (any, also one where only the pointer moved), which reads the pointer's
@@ -119,6 +128,7 @@ impl DxgiCapture {
             tried: None,
             backoff: Default::default(),
             switched_at: None,
+            last_blends: false,
         })
     }
     /// A user session's capture follows the input desktop (P9); the login
@@ -186,6 +196,20 @@ impl DxgiCapture {
                 self.pointer.as_ref().and_then(|p| p.on_picture()),
             )
             .map(Some)
+    }
+    /// `read`, waiting up to `READ_WAIT` while it is refused for memory.
+    fn read_waiting(&mut self, resource: &IDXGIResource) -> io::Result<Option<Read>> {
+        let until = Instant::now() + READ_WAIT;
+        loop {
+            match self.read(resource) {
+                Err(error)
+                    if error.kind() == io::ErrorKind::WouldBlock && Instant::now() < until =>
+                {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                result => return result,
+            }
+        }
     }
     fn stop(&mut self) {
         self.switched_at = None;
@@ -270,8 +294,13 @@ impl Grabber for DxgiCapture {
         // Codex round 4, finding 8: without a picture none was made in the
         // mode before, so a switch that came before it needs nothing.
         let switched = self.pointer.as_ref().is_some_and(|p| p.take_switched());
-        if switched && self.last.is_some() {
+        // Gemini round 8, 1: a switch back to the mode the picture shows
+        // (the viewer's start toggles it twice) asks for nothing.
+        let blends = self.pointer.as_ref().is_some_and(|p| p.blends());
+        if switched && self.last.is_some() && blends != self.last_blends {
             self.switched_at.get_or_insert_with(Instant::now);
+        } else if blends == self.last_blends {
+            self.switched_at = None;
         }
         let duplication = self.live_duplication()?.clone();
         let mut info = DXGI_OUTDUPL_FRAME_INFO::default();
@@ -348,7 +377,7 @@ impl Grabber for DxgiCapture {
                     regions = None;
                 }
                 self.last = None;
-                Some(self.read(resource))
+                Some(self.read_waiting(resource))
             }
             _ => None,
         };
@@ -376,6 +405,7 @@ impl Grabber for DxgiCapture {
                 let picture = Picture::Gpu(picture);
                 self.size = picture.size();
                 self.last = Some(picture.clone());
+                self.last_blends = self.pointer.as_ref().is_some_and(|p| p.blends());
                 self.first.delivered();
                 Ok(SourcePicture::Frame(picture))
             }
@@ -407,6 +437,7 @@ impl Grabber for DxgiCapture {
                 self.size = image.size();
                 let picture = Picture::Cpu(image);
                 self.last = Some(picture.clone());
+                self.last_blends = self.pointer.as_ref().is_some_and(|p| p.blends());
                 self.first.delivered();
                 Ok(SourcePicture::Frame(picture))
             }
