@@ -264,11 +264,11 @@ impl<A: NvTable> Core<A> {
         params.completion_event = self.event;
         params.buffer_fmt = mapped.mapped_buffer_fmt;
         params.picture_struct = NV_ENC_PIC_STRUCT_FRAME;
+        let idr = self.plan_long_term(&mut params, frame_id, idr);
         if idr {
             params.encode_pic_flags = NV_ENC_PIC_FLAG_FORCEIDR | NV_ENC_PIC_FLAG_OUTPUT_SPSPPS;
             params.picture_type = NV_ENC_PIC_TYPE_IDR;
         }
-        self.plan_long_term(&mut params, frame_id, idr);
         // Codex 10/2: the table only after the mutable borrow above.
         let encode = self.api.table().encode_picture.ok_or_else(missing)?;
         // SAFETY: valid async session, mapped input, output buffer and event.

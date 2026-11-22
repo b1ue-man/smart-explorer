@@ -17,10 +17,10 @@
 //! The header calls `ltrNumFrames` a guidance "not necessarily honored"
 //! (faster presets keep fewer). So the picture after a reset is checked
 //! (`used`): `NV_ENC_LOCK_BITSTREAM::ltrFrameBitmap` names the long-term
-//! references it used; one that used none and is no intra picture fails
-//! (its bytes are not sent, the stage opens a fresh encoder with a key
-//! frame) and turns the long-term references off for the process
-//! (`IGNORED`).
+//! references it used; one that used none and is no intra picture is not
+//! sent (`WouldBlock`), the session's next picture is an IDR (round 11: no
+//! new encoder) and the long-term references are off for the session and,
+//! for sessions opened later, for the process (`IGNORED`).
 //!
 //! The long-term references take two places of the DPB of `RFI_DPB`: the
 //! short-term pictures `RefHistory` counts are three (`short_term_dpb`). An
@@ -35,7 +35,6 @@ use super::api::{ltr_frames, NvTable, NV_ENC_PIC_TYPE_IDR};
 use super::codecs::{apply_ltr, ltr_pic_offsets, rfi_dpb};
 use crate::screen::core::negotiate::CodecKind;
 use crate::screen::core::ref_recovery::{LtrSlots, RefHistory};
-use crate::screen::core::wire::invalid;
 
 /// The long-term references NVENC keeps (`LtrSlots` has two).
 const FRAMES: u32 = 2;
@@ -52,6 +51,10 @@ pub(in crate::screen::os) struct LongTerm {
     forced: Option<u32>,
     /// That picture was asked to be an IDR.
     asked_idr: bool,
+    /// Round 11: a forced picture used no long-term reference; they are off
+    /// for the session and its next picture is an IDR (`idr_owed`).
+    off: bool,
+    key_next: bool,
 }
 
 /// Writes `value` at byte `offset` of the picture's codec union (both
@@ -89,6 +92,8 @@ impl LongTerm {
             slots: LtrSlots::new(fps),
             forced: None,
             asked_idr: false,
+            off: false,
+            key_next: false,
         })
     }
 
@@ -107,7 +112,7 @@ impl LongTerm {
     ) {
         self.asked_idr = idr;
         self.forced = None;
-        if idr {
+        if idr || self.off {
             self.slots.key_frame();
             return;
         }
@@ -138,10 +143,22 @@ impl LongTerm {
         if used & forced != 0 || intra {
             return Ok(());
         }
+        // Round 11: no new encoder (the rule against restarts): this picture
+        // is skipped (`WouldBlock`, asked again) and the next one is an IDR of
+        // this session, as AMF's `key_next` and Media Foundation do.
         IGNORED.store(true, Ordering::Relaxed);
-        Err(invalid(
+        self.off = true;
+        self.key_next = true;
+        self.slots.key_frame();
+        Err(io::Error::new(
+            io::ErrorKind::WouldBlock,
             "NVENC did not reference the confirmed long-term picture; long-term references off",
         ))
+    }
+
+    /// Whether the next picture must be an IDR (see `used`).
+    pub(in crate::screen::os) fn idr_owed(&mut self) -> bool {
+        std::mem::take(&mut self.key_next)
     }
 
     /// Gemini 8/3.2: the picture was a key frame by the driver's picture

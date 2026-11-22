@@ -378,11 +378,11 @@ impl HwH264Session for NvencSession {
         picture.output_bitstream = self.output;
         picture.buffer_fmt = NV_ENC_BUFFER_FORMAT_NV12;
         picture.picture_struct = NV_ENC_PIC_STRUCT_FRAME;
+        let idr = self.plan_long_term(&mut picture, idr);
         if idr {
             picture.encode_pic_flags = NV_ENC_PIC_FLAG_FORCEIDR | NV_ENC_PIC_FLAG_OUTPUT_SPSPPS;
             picture.picture_type = NV_ENC_PIC_TYPE_IDR;
         }
-        self.plan_long_term(&mut picture, idr);
         let encode = f.encode_picture.ok_or_else(missing)?;
         // SAFETY: valid session, input and output buffers.
         let result = unsafe { encode(self.encoder, &mut *picture) };

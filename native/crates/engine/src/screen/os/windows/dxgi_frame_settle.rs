@@ -48,8 +48,18 @@ impl DxgiCapture {
     ) -> io::Result<SourcePicture> {
         let geometry = self.budget.geometry();
         // Codex 10/5: blended and rotated while the frame is still acquired.
+        // Round 11: an error of `made` (regions, grant, rotation) is no lost
+        // read: the reference stays, so no timed-out wait rebuilds the
+        // duplication with a new generation (`capture_slots::replace`).
+        let mut made_failed = false;
         let picture = match picture {
-            Some(Ok(Some(read))) => Some(self.made(read, regions, geometry).map(Some)),
+            Some(Ok(Some(read))) => {
+                let made = self.made(read, regions, geometry);
+                made_failed = made
+                    .as_ref()
+                    .is_err_and(|e| e.kind() != io::ErrorKind::WouldBlock);
+                Some(made.map(Some))
+            }
             Some(Ok(None)) => Some(Ok(None)),
             Some(Err(error)) => Some(Err(error)),
             None => None,
@@ -90,7 +100,9 @@ impl DxgiCapture {
                 Ok(SourcePicture::Paused(SessionState::Starting))
             }
             Some(Err(error)) => {
-                self.last = None;
+                if !made_failed {
+                    self.last = None;
+                }
                 Err(error)
             }
             None => Ok(self.again(keyframe)),

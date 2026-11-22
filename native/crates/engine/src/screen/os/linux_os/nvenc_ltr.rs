@@ -24,12 +24,16 @@ impl NvencSession {
         }
     }
 
-    /// The long-term part of the picture now encoded.
-    pub(super) fn plan_long_term(&mut self, params: &mut NvEncPicParams, idr: bool) {
+    /// The long-term part of the picture now encoded; whether it is an IDR
+    /// (asked, or owed after a failed check, round 11).
+    pub(super) fn plan_long_term(&mut self, params: &mut NvEncPicParams, idr: bool) -> bool {
         let frame_id = self.frame_id;
-        if let Some(long_term) = self.long_term.as_mut() {
-            long_term.plan(params, frame_id, idr);
-        }
+        let Some(long_term) = self.long_term.as_mut() else {
+            return idr;
+        };
+        let idr = long_term.idr_owed() || idr;
+        long_term.plan(params, frame_id, idr);
+        idr
     }
 
     /// After the bitstream: the check of a forced picture and an IDR the
@@ -39,11 +43,7 @@ impl NvencSession {
             return Ok(());
         };
         long_term.coded(lock.picture_type == NV_ENC_PIC_TYPE_IDR);
-        let checked = long_term.used(lock.picture_type, lock.ltr_frame_bitmap);
-        if checked.is_err() {
-            self.long_term = None;
-        }
-        checked
+        long_term.used(lock.picture_type, lock.ltr_frame_bitmap)
     }
 
     /// The viewer confirmed `frame_id` (`ScreenEncoder::confirm_reference`).

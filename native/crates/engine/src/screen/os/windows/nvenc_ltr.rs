@@ -23,23 +23,27 @@ impl<A: NvTable> Core<A> {
         }
     }
 
-    /// The long-term part of the picture `frame_id` (`submit`).
-    pub(super) fn plan_long_term(&mut self, params: &mut NvEncPicParams, frame_id: u64, idr: bool) {
-        if let Some(long_term) = self.long_term.as_mut() {
-            long_term.plan(params, frame_id, idr);
-        }
+    /// The long-term part of the picture `frame_id` (`submit`); whether it
+    /// is an IDR (asked, or owed after a failed check, round 11).
+    pub(super) fn plan_long_term(
+        &mut self,
+        params: &mut NvEncPicParams,
+        frame_id: u64,
+        idr: bool,
+    ) -> bool {
+        let Some(long_term) = self.long_term.as_mut() else {
+            return idr;
+        };
+        let idr = long_term.idr_owed() || idr;
+        long_term.plan(params, frame_id, idr);
+        idr
     }
 
     /// The check of a forced picture (`LongTerm::used`).
     pub(super) fn long_term_used(&mut self, picture_type: u32, used: u32) -> io::Result<()> {
-        let checked = self
-            .long_term
+        self.long_term
             .as_mut()
-            .map_or(Ok(()), |long_term| long_term.used(picture_type, used));
-        if checked.is_err() {
-            self.long_term = None;
-        }
-        checked
+            .map_or(Ok(()), |long_term| long_term.used(picture_type, used))
     }
 
     /// Gemini 8/3.2: `keyframe` by the driver's picture type or by the
