@@ -9,6 +9,7 @@
 //! Desktop Duplication picture is drawn into the slot as a small patch
 //! (`Ring::overlay`), so the picture keeps the GPU route.
 use std::io;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use windows::core::Interface;
@@ -53,6 +54,9 @@ pub(in crate::screen::os) struct Ring {
     pub native: FrameSize,
     pub size: FrameSize,
     gpu: Mutex<RingGpu>,
+    /// Codex round 9, 2: a slot was abandoned to a driver that may still
+    /// read it (`GpuInput::abandon`); the capture takes a new ring.
+    spoiled: AtomicBool,
 }
 
 impl Ring {
@@ -93,6 +97,7 @@ impl Ring {
                 slots,
                 next: 0,
             }),
+            spoiled: AtomicBool::new(false),
         })
     }
 
@@ -118,6 +123,14 @@ impl Ring {
         } else {
             gpu.next
         };
+        // Codex round 9, 2: never into a slot an encoder still reads; the
+        // picture is refused for memory (`WouldBlock`) and read again.
+        if gpu.slots[index].busy {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "both ring slots are with an encoder",
+            ));
+        }
         // The slot loses its old picture before the conversion can fail.
         gpu.slots[index].tag = 0;
         gpu.convert.convert(source, &gpu.slots[index].view)?;
@@ -152,6 +165,15 @@ impl Ring {
         let slot = gpu.slots.get_mut(index).filter(|slot| slot.tag == tag)?;
         slot.busy = true;
         Some(slot.texture.clone())
+    }
+
+    /// See `spoiled`; the abandoned slot stays busy for the ring's life.
+    pub(in crate::screen::os) fn spoil(&self) {
+        self.spoiled.store(true, Ordering::Release);
+    }
+
+    pub(in crate::screen::os) fn spoiled(&self) -> bool {
+        self.spoiled.load(Ordering::Acquire)
     }
 
     pub(in crate::screen::os) fn release(&self, index: usize) {

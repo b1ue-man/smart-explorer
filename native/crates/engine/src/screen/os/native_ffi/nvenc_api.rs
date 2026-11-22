@@ -194,6 +194,7 @@ pub(in crate::screen::os) const NV_ENC_CAPS_WIDTH_MAX: u32 = 16;
 pub(in crate::screen::os) const NV_ENC_CAPS_HEIGHT_MAX: u32 = 17;
 pub(in crate::screen::os) const NV_ENC_CAPS_SUPPORT_REF_PIC_INVALIDATION: u32 = 28;
 pub(in crate::screen::os) const NV_ENC_CAPS_ASYNC_ENCODE_SUPPORT: u32 = 30;
+pub(in crate::screen::os) const NV_ENC_CAPS_NUM_MAX_LTR_FRAMES: u32 = 40;
 pub(in crate::screen::os) const NV_ENC_CAPS_SUPPORT_MULTIPLE_REF_FRAMES: u32 = 47;
 /// `NV_ENC_LOCK_BITSTREAM` bit `doNotWait` (bit 0, line 2465).
 pub(in crate::screen::os) const LOCK_DO_NOT_WAIT: u32 = 1;
@@ -418,6 +419,16 @@ pub(in crate::screen::os) fn invalidation<A: NvTable + ?Sized>(
 ) -> bool {
     let has = |which| capability(api, encoder, guid, which).is_some_and(|value| value > 0);
     has(NV_ENC_CAPS_SUPPORT_REF_PIC_INVALIDATION) && has(NV_ENC_CAPS_SUPPORT_MULTIPLE_REF_FRAMES)
+}
+
+/// The most long-term references of the session for the codec `guid`
+/// (`NV_ENC_CAPS_NUM_MAX_LTR_FRAMES`); 0 when it does not tell.
+pub(in crate::screen::os) fn ltr_frames<A: NvTable + ?Sized>(
+    api: &A,
+    encoder: Ptr,
+    guid: Guid,
+) -> u32 {
+    capability(api, encoder, guid, NV_ENC_CAPS_NUM_MAX_LTR_FRAMES).unwrap_or(0)
 }
 
 /// The largest picture of the session for the codec `guid`

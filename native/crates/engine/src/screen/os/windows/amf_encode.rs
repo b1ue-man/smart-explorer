@@ -12,9 +12,9 @@
 //! A-AMF-IDR), SPS and PPS with every IDR, HRD enforced, no filler data, no
 //! skipped frames, BT.709 limited range. Bit rate and frame rate change at
 //! run time through the dynamic properties (`VideoEncoderVCE.h:230-254`).
-//! B-36 through two long-term references (`vendor_encode::LtrSlots`). A
-//! value the encoder refuses stays at its default and is named once on the
-//! host process's error output, as BK2a does for the MFT.
+//! B-36 through two long-term references (`vendor_encode::LtrSlots`, one of
+//! them confirmed by the viewer, Gemini 8/3.1). A refused value stays at its
+//! default and is named once on the error output, as BK2a does for the MFT.
 use std::ffi::c_void;
 use std::io;
 use std::sync::OnceLock;
@@ -55,9 +55,8 @@ struct Runtime {
     _library: Library,
 }
 
-// SAFETY: the factory is the runtime's process-wide object (`AMFInit`);
-// it is only used to create contexts and components (assumption
-// A-AMF-THREADS: the factory is thread-safe).
+// SAFETY: the factory is the runtime's process-wide object (`AMFInit`), used
+// only to create contexts and components (A-AMF-THREADS: thread-safe).
 unsafe impl Send for Runtime {}
 // SAFETY: as above.
 unsafe impl Sync for Runtime {}
@@ -312,9 +311,8 @@ impl AmfSession {
     }
 
     /// Sets `settings` on the component; refused ones stay at the default
-    /// and are named once (`refused` keeps every name ever refused, for the
-    /// log and `rate_refused`). Review 2026-11-19 C10: the names refused by
-    /// this call, so a refusal of the current rate is seen.
+    /// and are named once (`refused` keeps every name ever refused). C10:
+    /// returns the names refused by this call (a refused current rate).
     fn apply(&mut self, settings: Vec<Setting>) -> Vec<&'static str> {
         let this = self.component.object;
         // SAFETY: a live component.
@@ -414,10 +412,8 @@ impl VendorSession for AmfSession {
                 per_picture.push((names.force_ltr, AmfVariant::int64(i64::from(bits))));
             }
         }
-        // Only the key frame request is required; the parameter sets of a
-        // key frame are checked by `vendor_encode` (and taken from the last
-        // ones when missing), a refused LTR property ends B-36 for this
-        // session (key frames after a reset, as today).
+        // Only the key frame request is required (`vendor_encode` checks
+        // the parameter sets); a refused LTR property ends B-36 here.
         for (name, value) in per_picture {
             if set(&data.storage, surface.0, name, value) {
                 continue;
@@ -465,13 +461,16 @@ impl VendorSession for AmfSession {
     }
 
     fn recover_references(&mut self, last_good: u64) -> Recovery {
-        // `recover` changes the slots, so it runs outside a match guard
-        // (a guard borrows immutably).
         if self.ltr.as_mut().is_some_and(|ltr| ltr.recover(last_good)) {
             Recovery::Continued
         } else {
             Recovery::KeyframeNeeded
         }
+    }
+
+    /// Gemini 8/3.1: a confirmed long-term reference stays (`LtrSlots`).
+    fn confirm_reference(&mut self, frame_id: u64) {
+        self.ltr.iter_mut().for_each(|ltr| ltr.confirm(frame_id));
     }
 
     fn rate_ceiling(&self, _fps: u32) -> Option<u64> {

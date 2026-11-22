@@ -233,6 +233,53 @@ pub(in crate::screen::os) fn apply_union_references(config: &mut NvEncConfig, co
     }
 }
 
+/// `enableLTR` of `NV_ENC_CONFIG_H264` (bit 14) and `NV_ENC_CONFIG_HEVC`
+/// (bit 5); `NV_ENC_CONFIG_AV1` of API 12.1 has no long-term references.
+const H264_ENABLE_LTR: u32 = 1 << 14;
+const HEVC_ENABLE_LTR: u32 = 1 << 5;
+
+/// B-36 long-term references (Gemini 8/3.1) in "LTR Per Picture" mode
+/// (`nvEncodeAPI.h` 12.1 at `enableLTR`: `ltrTrustMode` 0, the client marks
+/// with `ltrMarkFrame`; `ltrNumFrames` the most LTR pictures in the DPB);
+/// `false` for a codec without them (AV1).
+pub(in crate::screen::os) fn apply_ltr(
+    config: &mut NvEncConfig,
+    codec: CodecKind,
+    frames: u32,
+) -> bool {
+    match codec {
+        CodecKind::H264 => {
+            config.h264.flags |= H264_ENABLE_LTR;
+            config.h264.ltr_num_frames = frames;
+            config.h264.ltr_trust_mode = 0;
+            true
+        }
+        CodecKind::Hevc => {
+            let hevc = hevc(config);
+            hevc.flags |= HEVC_ENABLE_LTR;
+            hevc.ltr_num_frames = frames;
+            hevc.ltr_trust_mode = 0;
+            true
+        }
+        CodecKind::Av1 | CodecKind::Tiles => false,
+    }
+}
+
+/// Byte offsets in the codec union of `NV_ENC_PIC_PARAMS` (`nvEncodeAPI.h`
+/// 12.1): the bit field word with `ltrMarkFrame` (bit 2) and `ltrUseFrames`
+/// (bit 3), `ltrMarkFrameIdx` and `ltrUseFrameBitmap`; H.264 after
+/// `displayPOCSyntax`, `reserved3`, `refPicFlag`, `colourPlaneId`,
+/// `forceIntraRefreshWithFrameCnt` and, past the pointers, `sliceMode`,
+/// `sliceModeData`; HEVC without `reserved3` and `colourPlaneId` and with
+/// `sliceTypeArrayCnt` before `sliceMode`.
+pub(in crate::screen::os) fn ltr_pic_offsets(codec: CodecKind) -> Option<(usize, usize, usize)> {
+    match codec {
+        CodecKind::H264 => Some((20, 56, 60)),
+        CodecKind::Hevc => Some((16, 44, 48)),
+        CodecKind::Av1 | CodecKind::Tiles => None,
+    }
+}
+
 /// The view of the HEVC member (task tests).
 #[cfg(test)]
 pub(in crate::screen::os) fn hevc_view(config: &mut NvEncConfig) -> &mut NvEncConfigHevc {

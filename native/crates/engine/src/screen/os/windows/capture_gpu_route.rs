@@ -199,6 +199,7 @@ impl Readback {
         let written = ring.write(source, tag, patch.as_ref().map(|(t, at)| (t, *at)));
         match written {
             Ok(Ok(())) => {}
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Err(error),
             Ok(Err(error)) => return Ok(Err(self.pointer_failed(ring, &error))),
             Err(error) => {
                 d3d_input::disable(&format!("video processor: {error}"));

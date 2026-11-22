@@ -105,6 +105,7 @@ impl<S: VendorSession> VendorEncoder<S> {
         });
         self.gpu.finish();
         let keyframe = coded? || marked;
+        self.session.coded(self.frames.saturating_add(1), keyframe);
         if bytes.is_empty() {
             return Err(invalid("vendor encoder gave no picture for the frame"));
         }
@@ -125,7 +126,9 @@ impl<S: VendorSession> VendorEncoder<S> {
 /// never writes into a texture the driver may still read.
 impl<S: VendorSession> Drop for VendorEncoder<S> {
     fn drop(&mut self) {
-        if !self.session.end_late() {
+        if self.session.end_late() {
+            self.gpu.late_done();
+        } else {
             self.gpu.abandon();
         }
     }

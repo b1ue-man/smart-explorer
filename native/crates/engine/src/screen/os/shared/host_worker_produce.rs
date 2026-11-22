@@ -22,7 +22,19 @@ pub(super) fn report_floor(output: &dispatch::Output) -> io::Result<()> {
     crate::screen::core::worker_wire::send_encoder_floor(&mut *output, floor)
 }
 impl Worker {
+    /// One picture as `request` says. Review 2026-11-19 round 9 H5: a new
+    /// visible area counts as pictured only once a picture was encoded for
+    /// it; any other answer keeps it due (`visible_moved` asks again).
     pub(super) fn produce(&mut self, request: &StageRequest) -> WorkerReply {
+        let visible = self.visible.clone();
+        let reply = self.produce_once(request);
+        if !matches!(reply, WorkerReply::Frame(StageFrame::Encoded { .. })) {
+            self.visible = visible;
+        }
+        reply
+    }
+
+    fn produce_once(&mut self, request: &StageRequest) -> WorkerReply {
         if let Err(error) = self.admit(request.frame_contract) {
             return failed(ScreenErrorCode::CaptureFailed, error);
         }

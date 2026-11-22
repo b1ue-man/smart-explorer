@@ -181,6 +181,10 @@ impl ScreenEncoder for RateGuard {
         self.inner.recover_references(last_good)
     }
 
+    fn confirm_reference(&mut self, frame_id: u64) {
+        self.inner.confirm_reference(frame_id);
+    }
+
     fn rate_state(&self) -> Option<super::EncoderRateState> {
         self.inner.rate_state()
     }

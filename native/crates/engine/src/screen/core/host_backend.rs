@@ -270,6 +270,10 @@ pub trait ScreenEncoder: Send {
     fn recover_references(&mut self, _last_good: u64) -> super::ref_recovery::Recovery {
         super::ref_recovery::Recovery::KeyframeNeeded
     }
+    /// B-36 (Gemini 8/3.1): the viewer acknowledged `frame_id` and every
+    /// earlier picture; an encoder with long-term references keeps one of
+    /// them confirmed (`ref_recovery::LtrSlots::confirm`).
+    fn confirm_reference(&mut self, _frame_id: u64) {}
     /// What the encoder made of the last rate it was given (plan
     /// 2026-11-17, `rate_control::honour`); `None`: it does not tell.
     fn rate_state(&self) -> Option<super::rate_control::honour::EncoderRateState> {

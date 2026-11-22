@@ -68,6 +68,8 @@ pub(super) use crate::screen::os::nvenc_shared::settings::{
 pub(super) use super::nvenc_device::async_timeout_ms;
 #[path = "nvenc_late.rs"]
 mod late;
+#[path = "nvenc_ltr.rs"]
+mod ltr;
 use super::nvenc_device::create_completion_event;
 
 /// Device-independent asynchronous NVENC session over an `NvTable`.
@@ -86,6 +88,7 @@ pub(super) struct Core<A: NvTable> {
     pub(super) refused: Option<RateParams>,
     invalidation: bool,
     pub(super) history: RefHistory,
+    long_term: Option<ltr::LongTerm>, // Gemini 8/3.1, `nvenc_ltr.rs`
     frames: u64,
 }
 
@@ -136,6 +139,7 @@ impl<A: NvTable> Core<A> {
             refused: None,
             invalidation,
             history: RefHistory::new(if invalidation { rfi_dpb(codec) } else { 1 }),
+            long_term: None,
             frames: 0,
         };
         if !async_encode(&core.api, encoder, guid) {
@@ -166,6 +170,7 @@ impl<A: NvTable> Core<A> {
         *core.config = preset.preset_cfg;
         apply_codec_settings(&mut core.config, &core.rate, codec);
         apply_codec_references(&mut core.config, codec, invalidation);
+        core.open_long_term(guid);
         core.fill_init();
         let initialize = core.api.table().initialize_encoder.ok_or_else(missing)?;
         // SAFETY: versioned parameters whose config pointer is `core.config`.
@@ -217,6 +222,7 @@ impl<A: NvTable> Core<A> {
         self.rate = *rate;
         apply_codec_settings(&mut self.config, rate, self.codec);
         apply_codec_references(&mut self.config, self.codec, self.invalidation);
+        self.keep_long_term();
         self.fill_init();
     }
 
@@ -265,6 +271,7 @@ impl<A: NvTable> Core<A> {
             params.encode_pic_flags = NV_ENC_PIC_FLAG_FORCEIDR | NV_ENC_PIC_FLAG_OUTPUT_SPSPPS;
             params.picture_type = NV_ENC_PIC_TYPE_IDR;
         }
+        self.plan_long_term(&mut params, frame_id, idr);
         let encode = f.encode_picture.ok_or_else(missing)?;
         // SAFETY: valid async session, mapped input, output buffer and event.
         let result = unsafe { encode(self.encoder, &mut *params) };
@@ -297,25 +304,8 @@ impl<A: NvTable> Core<A> {
         let result = unsafe { unlock(self.encoder, self.output) };
         delivered?;
         status(&self.api, self.encoder, result, "nvEncUnlockBitstream")?;
+        self.long_term_used(lock.picture_type, lock.ltr_frame_bitmap)?;
         Ok(lock.picture_type == NV_ENC_PIC_TYPE_IDR)
-    }
-
-    pub(super) fn recover_references(&mut self, last_good: u64) -> Recovery {
-        let invalidate = self.api.table().invalidate_ref_frames;
-        let (Some(invalidate), true) = (invalidate, self.invalidation) else {
-            return Recovery::KeyframeNeeded;
-        };
-        let Some(lost) = self.history.invalidate_after(last_good) else {
-            return Recovery::KeyframeNeeded;
-        };
-        for frame in lost {
-            // SAFETY: valid session; `frame` is the timestamp of a picture
-            // it encoded (`input_time_stamp`).
-            if unsafe { invalidate(self.encoder, frame) } != NV_ENC_SUCCESS {
-                return Recovery::KeyframeNeeded;
-            }
-        }
-        Recovery::Continued
     }
 
     /// Destroys the bitstream buffer and unregisters the completion event
@@ -482,6 +472,15 @@ impl VendorSession for NvencSession {
 
     fn recover_references(&mut self, last_good: u64) -> Recovery {
         self.core.recover_references(last_good)
+    }
+
+    fn confirm_reference(&mut self, frame_id: u64) {
+        self.core.confirm(frame_id);
+    }
+
+    /// Gemini 8/3.2: an IDR by the stream's marks counts as well.
+    fn coded(&mut self, frame_id: u64, keyframe: bool) {
+        self.core.coded(frame_id, keyframe);
     }
 
     fn rate_refused(&self) -> bool {

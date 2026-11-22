@@ -301,9 +301,10 @@ impl DxgiPointer {
     }
 
     /// The pointer a picture on the GPU route carries (plan 2026-11-17 P9,
-    /// `capture_pointer_gpu.rs`): the same condition as `blend_into`.
-    pub(super) fn on_picture(&self) -> Option<(&PointerImage, i32, i32)> {
-        if !self.blends() || !self.visible {
+    /// `capture_pointer_gpu.rs`): the same condition as `blend_into`, in the
+    /// mode `blends` the capture took once for the picture (round 9 H4).
+    pub(super) fn on_picture(&self, blends: bool) -> Option<(&PointerImage, i32, i32)> {
+        if !blends || !self.visible {
             return None;
         }
         let (left, top) = self.position?;
@@ -317,8 +318,9 @@ impl DxgiPointer {
         delivered: FrameSize,
         native: FrameSize,
         rotation: BgraRotation,
+        blends: bool,
     ) {
-        if !self.blends() || !self.visible {
+        if !blends || !self.visible {
             return;
         }
         if let (Some((left, top)), Some(shape)) = (self.position, &self.shape) {

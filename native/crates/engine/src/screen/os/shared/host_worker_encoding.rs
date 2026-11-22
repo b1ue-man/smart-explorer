@@ -14,6 +14,17 @@ impl Encoding {
             opener,
             floor_sent: 0,
             sharp: false,
+            confirmed: 0,
+            owed: false,
+        }
+    }
+
+    /// B-36 (Gemini 8/3.1): the running encoder learns the newest frame the
+    /// viewer confirmed (`ScreenEncoder::confirm_reference`) before it
+    /// encodes, so a recovery finds a confirmed long-term reference.
+    pub(super) fn confirm(&mut self) {
+        if let Some(running) = self.running.as_mut().filter(|_| self.confirmed != 0) {
+            running.encoder.confirm_reference(self.confirmed);
         }
     }
 
@@ -123,10 +134,15 @@ impl Encoding {
         }
     }
 
+    /// Round 9 H5: also after a captured picture that was not encoded (a
+    /// refused scaling, an unchanged answer): its change, a new visible
+    /// area among them, is captured again instead of being lost.
     pub(super) fn needs_refresh(&self) -> bool {
-        self.running
-            .as_ref()
-            .is_some_and(|running| running.encoder.needs_refresh())
+        self.owed
+            || self
+                .running
+                .as_ref()
+                .is_some_and(|running| running.encoder.needs_refresh())
     }
 
     /// Once a second: a running OpenH264 encoder goes when the user

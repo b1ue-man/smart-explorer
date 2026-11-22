@@ -37,6 +37,9 @@ pub enum WorkerRequest {
 /// `ScreenEncoder::recover_references` and encodes without a key frame when
 /// the encoder continued, else a key frame of a new encoder; pictures
 /// encoded before the wish are dropped. Both are 0 from a daemon without it.
+/// Between wishes `last_good` carries the newest frame the viewer confirmed
+/// (Gemini 8/3.1), which the encoding stage hands to the encoder's
+/// long-term references (`ScreenEncoder::confirm_reference`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StreamOrder {
     pub request: StageRequest,

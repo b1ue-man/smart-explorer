@@ -41,6 +41,7 @@ use windows::Win32::Media::MediaFoundation::{
 
 #[path = "mf_d3d_linger.rs"]
 mod linger;
+pub(in crate::screen::os) use linger::not_taken;
 #[path = "mf_d3d_own.rs"]
 mod own;
 #[path = "mf_d3d_route.rs"]
@@ -215,7 +216,7 @@ pub(in crate::screen::os) fn ring_for(
     let mut state = bridge();
     state.tag = next_tag(state.tag);
     let tag = state.tag;
-    if let Some(ring) = state.ring.clone().filter(|ring| matches(ring)) {
+    if let Some(ring) = state.ring.clone().filter(|r| matches(r) && !r.spoiled()) {
         return Ok((ring, tag));
     }
     let old = state.ring.take();
@@ -277,7 +278,8 @@ pub(in crate::screen::os) struct GpuInput {
     plain: Option<(ID3D11Texture2D, ID3D11Texture2D)>,
     scale: Option<(VideoConverter, ID3D11VideoProcessorOutputView)>,
     /// Ring slot the MFT reads until its output arrived.
-    in_flight: Option<(Arc<Ring>, usize)>,
+    in_flight: Option<(Arc<Ring>, usize, ID3D11Texture2D)>,
+    late: bool, // its picture timed out (`keep_late`, Codex round 9, 2)
 }
 
 /// Hands the capture's device manager to `transform` (before its media
@@ -366,19 +368,15 @@ fn arm(
         plain: None,
         scale: None,
         in_flight: None,
+        late: false,
     })
 }
 
 impl GpuInput {
-    /// The encoder gave the output of the last input: its slot is free again.
-    /// Codex round 6, finding 3: the ring slot in flight stays taken for good
-    /// (an encoder whose driver may still read it); the capture uses the others.
-    pub(in crate::screen::os) fn abandon(&mut self) {
-        std::mem::forget(self.in_flight.take());
-    }
-
+    /// The encoder gave the output of the last input: its slot is free again
+    /// (`abandon` in `mf_d3d_linger.rs` keeps it taken).
     pub(in crate::screen::os) fn finish(&mut self) {
-        if let Some((ring, index)) = self.in_flight.take() {
+        if let Some((ring, index, _)) = self.in_flight.take_if(|_| !self.late) {
             ring.release(index);
         }
     }
@@ -410,6 +408,9 @@ impl GpuInput {
         grant: &CaptureGrant,
         picture: &Picture,
     ) -> io::Result<ID3D11Texture2D> {
+        if self.late {
+            return Err(io::Error::other("the last picture is with the driver"));
+        }
         self.finish();
         // Fix of 2026-11-18: the grant of a capture that changed its path
         // retired; this encoder ends with it (the pipeline opens the next).
@@ -420,9 +421,17 @@ impl GpuInput {
         if picture.size() != self.size {
             return Err(io::Error::other("picture size differs from the encoder"));
         }
-        let texture = match picture {
-            Picture::Gpu(gpu) => self.from_ring(grant, ring_picture(gpu)?)?,
-            Picture::Cpu(image) => {
+        // Round 9 H1: a ring of another device (an encoder on a device of its
+        // own) is read back and uploaded, not skipped as gone.
+        let foreign = match picture {
+            Picture::Gpu(gpu) => (ring_picture(gpu)?.find()?.0.device != self.raw)
+                .then(|| picture.to_cpu())
+                .transpose()?,
+            Picture::Cpu(_) => None,
+        };
+        let texture = match (picture, &foreign) {
+            (Picture::Gpu(gpu), None) => self.from_ring(grant, ring_picture(gpu)?)?,
+            (Picture::Cpu(image), _) | (_, Some(image)) => {
                 let target = self.target(grant)?;
                 if self.upload.is_none() {
                     let write = Some(windows::Win32::Graphics::Direct3D11::D3D11_CPU_ACCESS_WRITE);
@@ -457,9 +466,6 @@ impl GpuInput {
         picture: &RingPicture,
     ) -> io::Result<ID3D11Texture2D> {
         let (ring, index, tag) = picture.find()?;
-        if ring.device != self.raw {
-            return Err(gone());
-        }
         // Gemini round 3, 14: the CPU upload of a first picture (and the
         // target the ring does not need) go back to the grant; they held
         // its codec input for as long as the encoder ran.
@@ -468,7 +474,7 @@ impl GpuInput {
             self.target = None;
             self.scale = None;
             let texture = ring.take(index, tag).ok_or_else(gone)?;
-            self.in_flight = Some((ring, index));
+            self.in_flight = Some((ring, index, texture.clone()));
             return Ok(texture);
         }
         let target = self.target(grant)?;

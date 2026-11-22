@@ -177,6 +177,9 @@ pub(super) struct WgcCapture {
     pointer_switched: Option<Instant>,
     /// Gemini round 8, 1: whether `last` was taken with the pointer drawn.
     last_drawn: bool,
+    /// Round 9 H2: a frame whose read was refused for memory, kept open and
+    /// read again by the next call unless a newer one arrived.
+    held: Option<Direct3D11CaptureFrame>,
     /// The pipeline's frame interval, set again on every new session.
     interval: Option<Duration>,
 }
@@ -200,6 +203,7 @@ impl WgcCapture {
             recovery: CaptureRecovery::active(),
             pointer_switched: None,
             last_drawn: false,
+            held: None,
             interval: None,
         })
     }
@@ -255,6 +259,9 @@ impl WgcCapture {
         Ok(())
     }
     fn stop(&mut self) -> io::Result<()> {
+        if let Some(held) = self.held.take() {
+            let _ = held.Close();
+        }
         if let Some(live) = self.live.take() {
             if let Err(error) = live.close() {
                 self.target.closed.store(true, Ordering::Release);
@@ -266,36 +273,9 @@ impl WgcCapture {
         self.budget.suspend();
         Ok(())
     }
-    /// The picture of `frame`, or `Err(size)` with its `ContentSize` when
-    /// that differs from the pool.
-    fn read(&mut self, frame: &Direct3D11CaptureFrame) -> io::Result<Result<Picture, FrameSize>> {
-        let content = frame.ContentSize().map_err(io::Error::other)?;
-        if content.Width <= 0 || content.Height <= 0 {
-            return Err(io::Error::other("capture frame has no content"));
-        }
-        let size = FrameSize::new(content.Width as u32, content.Height as u32);
-        if self.live.as_ref().map(|live| live.size) != Some(size) {
-            return Ok(Err(size));
-        }
-        let surface = frame.Surface().map_err(io::Error::other)?;
-        let access: IDirect3DDxgiInterfaceAccess = surface.cast().map_err(io::Error::other)?;
-        // SAFETY: a WGC surface is a D3D11 texture of this frame's device.
-        let texture: ID3D11Texture2D =
-            unsafe { access.GetInterface() }.map_err(io::Error::other)?;
-        // `texture` is a BGRA texture on `self.target.devices.device`, the
-        // device the texture encoder shares (`MFT_MESSAGE_SET_D3D_MANAGER`);
-        // it stays valid until `frame.Close()` in `capture_waiting`. While a
-        // texture encoder is armed the picture stays on the GPU (BK2a, BK3b).
-        let devices = &self.target.devices;
-        let read = self
-            .readback
-            .read(devices, &texture, size.width, size.height, &self.budget)?;
-        Ok(Ok(match read {
-            Read::Cpu(image) => Picture::Cpu(image.freeze()),
-            Read::Gpu(picture) => Picture::Gpu(picture),
-        }))
-    }
 }
+#[path = "wgc_frame_read.rs"]
+mod frame_read;
 impl Grabber for WgcCapture {
     fn frame_limits(&self) -> crate::screen::core::frame_budget::FrameLimits {
         self.budget.geometry().limits
@@ -367,7 +347,17 @@ impl Grabber for WgcCapture {
                 .as_ref()
                 .map(|live| live.resources.arrivals().clone());
             let seen = arrivals.as_ref().map_or(0, |arrivals| arrivals.seen());
-            if let Some(frame) = self.newest()? {
+            // Round 9 H2: the held frame unless a newer one replaces it.
+            let frame = match self.newest()? {
+                Some(frame) => {
+                    if let Some(held) = self.held.take() {
+                        let _ = held.Close();
+                    }
+                    Some(frame)
+                }
+                None => self.held.take(),
+            };
+            if let Some(frame) = frame {
                 if !switched_now {
                     self.pointer_switched = None;
                 }
@@ -376,7 +366,6 @@ impl Grabber for WgcCapture {
                 // WGC has no regions, so whether the previous picture was
                 // handed out changes nothing here.
                 let _ = release();
-                self.last = None;
                 // Gemini round 8, 1: a read refused for want of a free picture
                 // (the encoder still holds one) waits for it a little, as the
                 // duplication does (`capture_dxgi::READ_WAIT`), instead of
@@ -389,17 +378,21 @@ impl Grabber for WgcCapture {
                     std::thread::sleep(Duration::from_millis(1));
                     image = self.read(&frame);
                 }
+                // Round 9 H2: still refused, the frame stays open and the
+                // reference stays (before, a lost frame and no reference).
+                if matches!(&image, Err(e) if e.kind() == io::ErrorKind::WouldBlock) {
+                    self.held = Some(frame);
+                    return Ok(match self.last {
+                        Some(_) => self.again(keyframe),
+                        None => SourcePicture::Unchanged, // as before
+                    });
+                }
                 let closed = frame.Close();
                 drop(frame);
                 closed.map_err(io::Error::other)?;
                 // Pool replacement occurs only after returning the acquired
                 // frame, closing the old pool and obtaining the next grant.
-                let image = match image {
-                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                        return Ok(SourcePicture::Unchanged)
-                    }
-                    result => result?,
-                };
+                let image = image.inspect_err(|_| self.last = None)?;
                 let image = match image {
                     Ok(image) => image,
                     Err(content) => {
@@ -412,7 +405,11 @@ impl Grabber for WgcCapture {
                 };
                 self.size = image.size();
                 self.last = Some(image.clone());
-                self.last_drawn = !crate::screen::core::cursor_overlay::worker().separated();
+                // Round 9 H3: a frame of the call that saw the switch may
+                // be from before it; only a later one proves the new mode.
+                if !switched_now {
+                    self.last_drawn = !crate::screen::core::cursor_overlay::worker().separated();
+                }
                 return Ok(SourcePicture::Frame(image));
             }
             // Gemini round 8, 1: a switch back to the mode the picture was
@@ -435,11 +432,7 @@ impl Grabber for WgcCapture {
             }
             let now = Instant::now();
             if now >= deadline {
-                return Ok(match &self.last {
-                    Some(last) if keyframe => SourcePicture::Frame(last.clone()),
-                    Some(_) => SourcePicture::Unchanged,
-                    None => SourcePicture::Paused(SessionState::Starting),
-                });
+                return Ok(self.again(keyframe));
             }
             // Until the compositor delivers (`FrameArrived`), the deadline,
             // or the moment a pointer switch needs a new session.

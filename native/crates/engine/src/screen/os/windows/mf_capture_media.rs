@@ -128,6 +128,7 @@ impl GpuSurface for RingPicture {
         owner: CaptureOwner,
     ) -> io::Result<CapturedImage> {
         let (ring, index, tag) = self.find()?;
+        super::mf_encoder::d3d_input::not_taken();
         let fits = size.width <= ring.size.width && size.height <= ring.size.height;
         let staged_size = if size == size.even() && fits {
             size
@@ -320,6 +321,7 @@ pub(super) fn input_sample(
     let staged = match picture {
         Picture::Gpu(gpu) => {
             let (ring, index, tag) = ring_picture(gpu)?.find()?;
+            super::mf_encoder::d3d_input::not_taken(); // round 9 H1
             Some(stage(&ring, index, tag, grant, size)?)
         }
         Picture::Cpu(_) => None,

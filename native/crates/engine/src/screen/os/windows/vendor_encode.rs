@@ -1,28 +1,26 @@
 //! The encoder hull around one vendor session (BK12, B-22: NVENC and AMF on
 //! the capture's D3D11 device). What the hull owns:
 //!
-//! - Input: the pipeline's `capture_picture::Picture` (BK3b; merge W1: the
-//!   hull implements `encode_picture`) as the texture from
-//!   `GpuInput::texture` (BK2a): the NV12 ring slot the video processor
-//!   wrote before the capture released its frame, scaled on the GPU where
-//!   the sizes differ, or a CPU picture converted on all cores and copied
-//!   up. No CPU copy of a GPU picture.
+//! - Input: the pipeline's `capture_picture::Picture` (BK3b, merge W1) as
+//!   the texture from `GpuInput::texture` (BK2a): the NV12 ring slot the
+//!   video processor wrote, scaled on the GPU where the sizes differ, or a
+//!   CPU picture converted on all cores and copied up. No CPU copy of a GPU
+//!   picture.
 //! - Codecs: H.264, and HEVC/AV1 (merge W1, B-23); a HEVC or AV1 key frame
 //!   without its parameter sets gets the last ones in front (`append_unit`).
 //! - Admission: the textures are claimed by `GpuInput` (ring: `Readback`,
 //!   encoder textures: `CodecInput`); the access unit is one copy into
-//!   `AdmittedBytes` claimed as `CodecOutput` with the record budget of the
-//!   frame contract (`mf_capture_output::capture_limit`), as the MF path.
+//!   `AdmittedBytes` (`CodecOutput`, record budget `capture_limit`).
 //! - Rate (B-21): `RateParams` of BK4 (CBR, a buffer of one frame, full at
-//!   the start), from the request's target and frame rate; a session retunes
-//!   bit rate and frame rate without a restart.
+//!   the start); a session retunes bit rate and frame rate without restart.
 //! - Failure: a picture that is no longer held skips the frame
 //!   (`WouldBlock`, `needs_refresh`); any other GPU-path failure switches the
 //!   capture to the CPU path for the session (`d3d_input::disable`) and ends
 //!   this encoder with an error, so the host process puts it on its
 //!   `refused` list and opens the next encoder (plan 4.10a).
 //! - B-36: `recover_references` asks the session for a reference to the last
-//!   confirmed picture instead of a key frame.
+//!   confirmed picture instead of a key frame; `confirm_reference` and
+//!   `coded` keep its long-term references (Gemini 8/3.1, 8/3.2).
 //! - Plan 2026-11-17 P3 (b): on a device of its own (`GpuInput::is_own`) a
 //!   GPU failure does not switch the capture's route; without admission
 //!   (`plain`: the run-time check, `bench --local`) a BGRA picture is
@@ -50,9 +48,8 @@ use crate::screen::os::mf_capture_output::capture_limit;
 use crate::screen::os::mf_encoder::d3d_input::{self, GpuInput};
 
 /// Rate control of a hardware encoder: constant bit rate, buffer of one
-/// frame (bit rate / frame rate), buffer full at the start (B-21; R01
-/// `nvenc_base.cpp:276-277` sets VBV = bitrate / fps). Identical to BK4's
-/// `linux_os/hw_encode_common.rs`.
+/// frame, full at the start (B-21; R01 `nvenc_base.cpp:276-277` sets VBV =
+/// bitrate / fps). Identical to BK4's `linux_os/hw_encode_common.rs`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct RateParams {
     pub bits_per_second: u32,
@@ -179,6 +176,10 @@ pub(super) trait VendorSession {
     ) -> io::Result<bool>;
     /// B-36 (see `Recovery`).
     fn recover_references(&mut self, last_good: u64) -> Recovery;
+    /// See `ScreenEncoder::confirm_reference`.
+    fn confirm_reference(&mut self, _frame_id: u64) {}
+    /// Picture `frame_id` was coded, a key frame by report or stream marks.
+    fn coded(&mut self, _frame_id: u64, _keyframe: bool) {}
     /// The bit-rate ceiling of the level the session writes and of the
     /// encoder's own report at `fps` (r1); `None`: neither is known (NVENC
     /// selects its level itself and reports no bit-rate limit).
@@ -227,9 +228,8 @@ pub(super) struct VendorEncoder<S: VendorSession> {
 }
 
 // SAFETY: as `AsyncEncoder`: one thread at a time uses the encoder; the
-// D3D11 objects of `gpu` and the session's driver objects live on the
-// capture device, which runs under multithread protection
-// (`d3d_device::create_on`).
+// D3D11 objects of `gpu` and the session's live on the capture device,
+// under multithread protection (`d3d_device::create_on`).
 unsafe impl<S: VendorSession> Send for VendorEncoder<S> {}
 
 impl<S: VendorSession> VendorEncoder<S> {
@@ -288,10 +288,7 @@ impl<S: VendorSession> VendorEncoder<S> {
     }
 
     /// B-36: after a stream reset, a reference to `last_good` (a
-    /// `frame_id` the viewer confirmed) instead of a key frame. Hand-over:
-    /// the host process calls it before `encode_captured` when the request
-    /// carries the last confirmed frame (see the BK12 report); until then
-    /// nothing calls it.
+    /// `frame_id` the viewer confirmed) instead of a key frame.
     pub(super) fn recover_references(&mut self, last_good: u64) -> Recovery {
         if self.frames == 0 {
             return Recovery::KeyframeNeeded;
@@ -384,6 +381,10 @@ impl<S: VendorSession> ScreenEncoder for VendorEncoder<S> {
         VendorEncoder::recover_references(self, last_good)
     }
 
+    fn confirm_reference(&mut self, frame_id: u64) {
+        self.session.confirm_reference(frame_id);
+    }
+
     fn encode_captured(
         &mut self,
         image: &CapturedImage,
@@ -412,9 +413,8 @@ impl<S: VendorSession> ScreenEncoder for VendorEncoder<S> {
                 return Err(error);
             }
             // Review 2026-11-19 (Gemini 12.5): the capture changed its path
-            // and its grant retired; turnover, never a GPU failure (as the
-            // Media Foundation encoder, `mf_encoder.rs`). The pipeline opens
-            // the encoder of the new grant.
+            // and its grant retired; turnover, never a GPU failure (as
+            // `mf_encoder.rs`). The pipeline opens the new grant's encoder.
             Err(error)
                 if CaptureGrant::is_retired_claim(&error)
                     || grant.is_retired().unwrap_or(false) =>
@@ -445,14 +445,14 @@ impl<S: VendorSession> ScreenEncoder for VendorEncoder<S> {
             marked |= append_unit(&mut bytes, maximum, codec, kept, unit)?;
             Ok(())
         });
-        // The session has read the texture once its output is there. A
-        // picture that timed out keeps the ring slot until the session went
-        // (`nvenc_late.rs`; `gpu` drops after `session`).
-        let timed_out = matches!(&coded, Err(e) if e.kind() == io::ErrorKind::TimedOut);
-        if !timed_out {
-            self.gpu.finish();
+        // The session has read the texture once its output is there; a timed
+        // out picture keeps the ring slot until the session went (`nvenc_late`).
+        match &coded {
+            Err(e) if e.kind() == io::ErrorKind::TimedOut => self.gpu.keep_late(),
+            _ => self.gpu.finish(),
         }
         let keyframe = coded? || marked;
+        self.session.coded(request.frame_id, keyframe);
         let frame = finish(bytes, self.codec, self.size, keyframe, idr)?;
         self.frames = self.frames.saturating_add(1);
         self.refresh = false;

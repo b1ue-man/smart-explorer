@@ -55,6 +55,19 @@ pub(super) enum Captured {
     Paused(SessionState),
 }
 
+/// B-36 (Gemini 8/3.1): the viewer acknowledged `frame_id` and every
+/// earlier picture of the stream (`ConfirmedReference::last_good`); the
+/// encoder of the host process or of this process keeps a long-term
+/// reference among the confirmed pictures. A stage on the blocking pool
+/// misses this one; the next acknowledgement carries a newer id.
+pub(super) fn confirm_reference(stage: &mut Stage, frame_id: u64) {
+    if let Some(host) = stage.source.host_stage() {
+        host.confirm_reference(frame_id);
+    } else if let Some(opened) = stage.encoder.as_mut() {
+        opened.encoder.confirm_reference(frame_id);
+    }
+}
+
 /// One frame as `request` says: in the host process when the source runs
 /// there, else here with the backend's encoder, opened on first use.
 /// `recover` (B-36): the frame continues a reset stream and may reference
@@ -114,8 +127,25 @@ pub(super) fn produce(
 }
 
 /// Captures the picture of the request's frame, scales it to the request's
-/// size and encodes it with the stage's encoder.
+/// size and encodes it with the stage's encoder. Review 2026-11-19 round 9
+/// H5: a new visible area counts as pictured only once a picture was
+/// encoded for it; an unchanged, paused, refused or failed capture or
+/// encoding keeps it due (`visible_moved` asks again with the next frame).
 fn capture_and_encode(
+    stage: &mut Stage,
+    backend: &dyn ScreenHostBackend,
+    request: &StageRequest,
+    recover: Option<u64>,
+) -> Result<Captured, PipelineError> {
+    let visible = stage.visible.clone();
+    let result = capture_and_encode_once(stage, backend, request, recover);
+    if !matches!(result, Ok(Captured::Encoded { .. })) {
+        stage.visible = visible;
+    }
+    result
+}
+
+fn capture_and_encode_once(
     stage: &mut Stage,
     backend: &dyn ScreenHostBackend,
     request: &StageRequest,

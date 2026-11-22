@@ -59,7 +59,13 @@ pub(super) fn capture_loop(shared: Arc<Shared>) {
         drop(waiting);
         let tick = {
             let mut worker = shared.worker.lock().unwrap_or_else(PoisonError::into_inner);
-            capture_once(&mut worker, &job, frame_id, refresh)
+            // Round 9 H5: a new visible area stays due until a picture of it.
+            let visible = worker.visible.clone();
+            let tick = capture_once(&mut worker, &job, frame_id, refresh);
+            if !matches!(tick, Tick::Picture(_)) {
+                worker.visible = visible;
+            }
+            tick
         };
         let gone = {
             let mut state = shared.lock();

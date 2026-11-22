@@ -396,4 +396,8 @@ impl HostStage for WorkerSource {
     fn recover_references(&mut self, last_good: u64) {
         self.keep_recovery(last_good);
     }
+
+    fn confirm_reference(&mut self, frame_id: u64) {
+        self.keep_confirmed(frame_id);
+    }
 }

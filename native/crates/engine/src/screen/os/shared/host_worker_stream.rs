@@ -32,10 +32,13 @@ pub(super) struct StreamClient {
     dropped_seen: u64,
     hint: Option<StreamHint>,
     report: Option<StreamReport>,
-    /// B-36: wishes to continue from a confirmed frame, and the last one.
+    /// B-36: wishes to continue from a confirmed frame, and the last one;
+    /// between wishes `last_good` carries the newest confirmed frame
+    /// (`confirmed`, Gemini 8/3.1) to the encoder's long-term references.
     recover_serial: u64,
     last_good: u64,
     recover: Option<u64>,
+    confirmed: u64,
     /// Station samples of the answers since the meter took them, and the
     /// latest capture facts with the read-back count (BK0).
     chain: Vec<(Station, u64)>,
@@ -119,6 +122,12 @@ impl WorkerSource {
         self.facts.client().recover = Some(last_good);
     }
 
+    /// Gemini 8/3.1: the viewer confirmed `frame_id`; the next order says so.
+    pub(super) fn keep_confirmed(&self, frame_id: u64) {
+        let mut client = self.facts.client();
+        client.confirmed = client.confirmed.max(frame_id);
+    }
+
     /// One frame of the picture stream: one credit, one answer.
     pub(super) fn produce_streamed(
         &mut self,
@@ -147,6 +156,8 @@ impl WorkerSource {
             if let Some(last_good) = client.recover.take() {
                 client.recover_serial += 1;
                 client.last_good = last_good;
+            } else {
+                client.last_good = client.last_good.max(client.confirmed);
             }
             StreamOrder {
                 request: request.clone(),

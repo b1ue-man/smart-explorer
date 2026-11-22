@@ -163,6 +163,9 @@ pub trait HostStage: Send {
     /// only `last_good` or older; the encoder answers with a key frame when
     /// it cannot. Only called when `continues_references` holds.
     fn recover_references(&mut self, _last_good: u64) {}
+    /// B-36 (Gemini 8/3.1): the newest frame the viewer confirmed, for the
+    /// encoder's long-term references (`ScreenEncoder::confirm_reference`).
+    fn confirm_reference(&mut self, _frame_id: u64) {}
 }
 
 /// Review 2026-11-19 (X3): the sentence of an encoder whose lowest bit rate

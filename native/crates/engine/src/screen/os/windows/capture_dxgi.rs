@@ -38,6 +38,8 @@ mod binding;
 mod desktop;
 #[path = "dxgi_first_picture.rs"]
 mod first_picture;
+#[path = "dxgi_frame_settle.rs"]
+mod frame_settle;
 #[path = "dxgi_output.rs"]
 mod output;
 #[path = "dxgi_pointer.rs"]
@@ -85,6 +87,11 @@ pub(super) struct DxgiCapture {
     switched_at: Option<Instant>,
     /// Gemini round 8, 1: whether `last` carries the blended pointer.
     last_blends: bool,
+    /// Round 9 H4: the pointer mode of the picture being read, taken once.
+    blends_now: bool,
+    /// Round 9 H2: a frame whose read was refused for memory, still
+    /// acquired (`dxgi_frame_settle.rs`).
+    held: Option<IDXGIResource>,
 }
 
 /// Gemini round 8, 1: how long a read refused for want of a free picture of
@@ -129,6 +136,8 @@ impl DxgiCapture {
             backoff: Default::default(),
             switched_at: None,
             last_blends: false,
+            blends_now: false,
+            held: None,
         })
     }
     /// A user session's capture follows the input desktop (P9); the login
@@ -193,7 +202,9 @@ impl DxgiCapture {
                 desc.Width,
                 desc.Height,
                 &self.budget,
-                self.pointer.as_ref().and_then(|p| p.on_picture()),
+                self.pointer
+                    .as_ref()
+                    .and_then(|p| p.on_picture(self.blends_now)),
             )
             .map(Some)
     }
@@ -213,6 +224,7 @@ impl DxgiCapture {
     }
     fn stop(&mut self) {
         self.switched_at = None;
+        self.held = None; // its surface goes before the duplication
         drop(self.live.take());
         self.readback.reset();
         self.last = None;
@@ -297,12 +309,16 @@ impl Grabber for DxgiCapture {
         // Gemini round 8, 1: a switch back to the mode the picture shows
         // (the viewer's start toggles it twice) asks for nothing.
         let blends = self.pointer.as_ref().is_some_and(|p| p.blends());
+        self.blends_now = blends;
         if switched && self.last.is_some() && blends != self.last_blends {
             self.switched_at.get_or_insert_with(Instant::now);
         } else if blends == self.last_blends {
             self.switched_at = None;
         }
         let duplication = self.live_duplication()?.clone();
+        if let Some(resource) = self.held.take() {
+            return self.read_held(&duplication, resource, release, keyframe);
+        }
         let mut info = DXGI_OUTDUPL_FRAME_INFO::default();
         let mut resource = None;
         // SAFETY: a live duplication; the out pointers address locals.
@@ -376,82 +392,11 @@ impl Grabber for DxgiCapture {
                 if !release() {
                     regions = None;
                 }
-                self.last = None;
                 Some(self.read_waiting(resource))
             }
             _ => None,
         };
-        drop(resource);
-        // SAFETY: the frame acquired above, released once.
-        let released = unsafe { duplication.ReleaseFrame() };
-        if let Err(error) = released {
-            drop(picture);
-            drop(regions);
-            if error.code() == DXGI_ERROR_ACCESS_LOST {
-                eprintln!(
-                    "screen capture: ReleaseFrame: duplication lost (mode or desktop change)"
-                );
-                self.lost = true;
-                self.stop();
-                return Ok(SourcePicture::Paused(SessionState::Starting));
-            }
-            return Ok(self.frame_failed(FallbackStep::ReleaseFrame, error));
-        }
-        match picture {
-            // The GPU route has the overlay and no rotation: the regions and
-            // the pointer belong to CPU pixels only (BK3b).
-            Some(Ok(Some(Read::Gpu(picture)))) => {
-                drop(regions);
-                let picture = Picture::Gpu(picture);
-                self.size = picture.size();
-                self.last = Some(picture.clone());
-                self.last_blends = self.pointer.as_ref().is_some_and(|p| p.blends());
-                self.first.delivered();
-                Ok(SourcePicture::Frame(picture))
-            }
-            Some(Ok(Some(Read::Cpu(mut builder)))) => {
-                if let Some(regions) = regions {
-                    builder.set_regions(regions)?;
-                }
-                let rotation = match geometry.kind {
-                    CaptureKind::Dxgi(r) => r,
-                    _ => BgraRotation::Identity,
-                };
-                if let Some(pointer) = &self.pointer {
-                    let delivered = builder.size();
-                    pointer.blend_into(builder.pixels_mut(), delivered, geometry.native, rotation);
-                }
-                let image = builder.freeze();
-                let image = match image.rotate(
-                    rotation,
-                    geometry.limits,
-                    self.budget.grant()?,
-                    CaptureOwner::SourcePixels,
-                ) {
-                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                        self.first.missed();
-                        return Ok(SourcePicture::Unchanged);
-                    }
-                    result => result?,
-                };
-                self.size = image.size();
-                let picture = Picture::Cpu(image);
-                self.last = Some(picture.clone());
-                self.last_blends = self.pointer.as_ref().is_some_and(|p| p.blends());
-                self.first.delivered();
-                Ok(SourcePicture::Frame(picture))
-            }
-            Some(Ok(None)) => {
-                self.stop();
-                Ok(SourcePicture::Paused(SessionState::Starting))
-            }
-            Some(Err(error)) if error.kind() == io::ErrorKind::WouldBlock => {
-                self.first.missed();
-                Ok(SourcePicture::Unchanged)
-            }
-            Some(Err(error)) => Err(error),
-            None => Ok(self.again(keyframe)),
-        }
+        self.settle_frame(&duplication, resource, picture, regions, keyframe)
     }
     fn reopen(&mut self) -> io::Result<()> {
         self.reopen_settling()

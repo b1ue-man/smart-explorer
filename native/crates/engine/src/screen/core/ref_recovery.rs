@@ -75,12 +75,28 @@ impl RefHistory {
         self.frames.retain(|frame| *frame <= last_good);
         Some(lost)
     }
+
+    /// Every picture it counts, which leave it (to invalidate them when a
+    /// long-term reference takes over, `LtrSlots::recover`).
+    pub fn drain(&mut self) -> Vec<u64> {
+        self.frames.drain(..).collect()
+    }
 }
 
-/// AMF (B-36): two long-term references (AMF `MaxOfLTRFrames` 2), marked in
-/// turn every quarter second and on every IDR; after a reset the newest one
-/// not newer than the last confirmed picture becomes the only reference of
-/// the next picture (`ForceLTRReferenceBitfield`).
+/// AMF and NVENC (B-36): two long-term references (AMF `MaxOfLTRFrames` 2,
+/// NVENC `ltrNumFrames` 2), marked every quarter second and on every IDR;
+/// after a reset the newest one not newer than the last confirmed picture
+/// becomes the only reference of the next picture (AMF
+/// `ForceLTRReferenceBitfield`, NVENC `ltrUseFrames`).
+///
+/// Gemini 8/3.1: once the viewer's acknowledgements reach the encoder
+/// (`confirm`), the slot that holds the newest confirmed picture is kept and
+/// only the other slot is marked anew, and only once its picture was
+/// confirmed as well (or it is empty). So a confirmed long-term reference
+/// exists whatever the round trip and the time a stale stream needs to be
+/// noticed, where the DPB of short-term pictures (`RefHistory`) holds only
+/// a few frame intervals. Without acknowledgements the slots alternate as
+/// before.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LtrSlots {
     interval: u64,
@@ -88,6 +104,8 @@ pub struct LtrSlots {
     next: usize,
     since: u64,
     forced: Option<usize>,
+    /// The newest picture the viewer confirmed (`confirm`).
+    confirmed: Option<u64>,
 }
 
 /// What one picture does with the long-term references.
@@ -107,6 +125,7 @@ impl LtrSlots {
             next: 0,
             since: 0,
             forced: None,
+            confirmed: None,
         }
     }
 
@@ -120,10 +139,7 @@ impl LtrSlots {
 
     pub fn plan(&mut self, frame_id: u64, idr: bool) -> LtrPlan {
         if idr {
-            self.slots = [None; 2];
-            self.next = 0;
-            self.since = self.interval;
-            self.forced = None;
+            self.key_frame();
         }
         let force = self.forced.take();
         self.since += 1;
@@ -131,23 +147,61 @@ impl LtrSlots {
             mark: None,
             force: force.map(|slot| 1 << slot),
         };
-        if self.since >= self.interval && Some(self.next) != force {
-            self.slots[self.next] = Some(frame_id);
-            plan.mark = Some(self.next as u32);
-            self.next ^= 1;
+        let target = self.target().filter(|slot| Some(*slot) != force);
+        if let Some(slot) = target.filter(|_| self.since >= self.interval) {
+            self.slots[slot] = Some(frame_id);
+            plan.mark = Some(slot as u32);
+            self.next = slot ^ 1;
             self.since = 0;
         }
         plan
     }
 
-    /// Chooses the reference for the next picture; `false` when no marked
-    /// picture is old enough.
-    pub fn recover(&mut self, last_good: u64) -> bool {
+    /// Marked pictures newer than `last_good` were lost with a reset
+    /// stream: never a reference, never confirmed later.
+    pub fn drop_after(&mut self, last_good: u64) {
         for slot in &mut self.slots {
             if slot.is_some_and(|frame| frame > last_good) {
                 *slot = None;
             }
         }
+    }
+
+    /// An IDR (asked for or the encoder's own, Gemini 8/3.2): the encoder
+    /// dropped every long-term reference.
+    pub fn key_frame(&mut self) {
+        self.slots = [None; 2];
+        self.next = 0;
+        self.since = self.interval;
+        self.forced = None;
+    }
+
+    /// The viewer acknowledged `frame_id` and every earlier picture of the
+    /// stream (`ConfirmedReference::last_good`).
+    pub fn confirm(&mut self, frame_id: u64) {
+        self.confirmed = Some(self.confirmed.map_or(frame_id, |c| c.max(frame_id)));
+    }
+
+    /// The slot the next mark may take (see the type's text); `None` while
+    /// the only other slot waits for its acknowledgement.
+    fn target(&self) -> Option<usize> {
+        let Some(confirmed) = self.confirmed else {
+            return Some(self.next);
+        };
+        let kept = (0..2)
+            .filter_map(|index| self.slots[index].map(|frame| (frame, index)))
+            .filter(|(frame, _)| *frame <= confirmed)
+            .max()
+            .map(|(_, index)| index);
+        (0..2).find(|index| {
+            Some(*index) != kept && self.slots[*index].is_none_or(|frame| frame <= confirmed)
+        })
+    }
+
+    /// Chooses the reference for the next picture; `false` when no marked
+    /// picture is old enough.
+    pub fn recover(&mut self, last_good: u64) -> bool {
+        self.drop_after(last_good);
         let newest = (0..2)
             .filter_map(|index| self.slots[index].map(|frame| (frame, index)))
             .max();
@@ -200,3 +254,7 @@ impl ConfirmedReference {
         self.last_good
     }
 }
+
+#[cfg(test)]
+#[path = "review1119_ltr_task_tests.rs"]
+mod review1119_ltr_task_tests;

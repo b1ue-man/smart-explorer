@@ -286,6 +286,7 @@ pub(super) fn encode_loop(shared: Arc<Shared>) {
                 encoding.sharp = state
                     .identity
                     .is_some_and(|identity| identity.quality.is_some());
+                encoding.confirmed = state.order.as_ref().map_or(0, |o| o.last_good);
                 if let Some(work) = state.next_work() {
                     // Gemini 13.3: the slot is free, the capture stage captures now.
                     shared.changed.notify_all();
@@ -304,6 +305,7 @@ pub(super) fn encode_loop(shared: Arc<Shared>) {
                 let serial = captured.serial;
                 let last_good = recover.map(|(_, last_good)| last_good);
                 let result = encoding.encode(&shared, &request, captured, last_good);
+                encoding.owed = result.is_err();
                 let mut state = shared.lock();
                 let wish = recover.map(|(wish, _)| wish);
                 let (work, gone) = state.settle(result, serial, request.keyframe, wish);
@@ -333,6 +335,8 @@ pub(in crate::screen::os) struct Encoding {
     floor_sent: u64, // the last `ENCODER_FLOOR` sent (X3, `report_floor`)
     /// Sharp mode, „Scharf (GPU)“: only a GPU encoder serves it (C16).
     sharp: bool,
+    confirmed: u64, // the newest frame the viewer confirmed (Gemini 8/3.1)
+    owed: bool,     // a captured picture was not encoded (round 9 H5)
 }
 
 #[path = "host_worker_encoding.rs"]
@@ -401,18 +405,14 @@ impl Encoding {
             request.to_mut().frame_id = frame_id;
         }
         let mut forced_key = false;
+        self.confirm();
         if let Some(last_good) = recover.filter(|_| !request.keyframe) {
             let continued = self.running.as_mut().is_some_and(|running| {
                 running.encoder.recover_references(last_good) == Recovery::Continued
             });
-            // An encoder that cannot continue (every Media Foundation and
-            // AMF encoder: `ScreenEncoder::recover_references` defaults to
-            // `KeyframeNeeded`) answers with a key frame of its own. Fix of
-            // 2026-11-19: it was replaced instead, so every stale stream on
-            // a session that negotiated continuation opened a new encoder
-            // (about one a second on the measured NVIDIA host). An answer
-            // that is no key frame gives way to a new encoder below: a delta
-            // picture would count as the continuation it is not.
+            // An encoder that cannot continue answers with a key frame of its
+            // own (fix of 2026-11-19: a new encoder per stale stream before).
+            // An answer that is no key frame gives way to a new encoder below.
             if !continued {
                 forced_key = true;
                 eprintln!(
