@@ -77,6 +77,24 @@ const NOTICE_INPUT: [(&str, &str); 6] = [
 /// (`encoder_notice: <sentence>`); `None` when `reason` holds none. The
 /// encoder keeps running: the viewer shows a notice, no error.
 pub fn encoder_notice_text(reason: &str) -> Option<String> {
+    encoder_notice_german(reason)
+}
+
+/// The host's sentence when `reason` (a `STATE` reason) is the notice of an
+/// input the device did not perform (an Android host's `inputRefused`: a
+/// mouse button without counterpart, a hidden field, a refused text or
+/// action); `None` for every other reason. `se screen input` and MCP report
+/// it as not applied (round 11, M3).
+pub fn input_refusal(reason: &str) -> Option<&'static str> {
+    let at = reason.find(ENCODER_NOTICE)?;
+    let text = reason[at + ENCODER_NOTICE.len()..].trim();
+    NOTICE_INPUT
+        .iter()
+        .find(|(english, _)| text == *english)
+        .map(|(english, _)| *english)
+}
+
+fn encoder_notice_german(reason: &str) -> Option<String> {
     let at = reason.find(ENCODER_NOTICE)?;
     let text = reason[at + ENCODER_NOTICE.len()..].trim();
     Some(format!("Hinweis vom Gerät: {}", notice_sentence(text)))

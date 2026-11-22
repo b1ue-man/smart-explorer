@@ -11,7 +11,7 @@
 //! `ctrl_left+c`: pressed in order, released backwards). Ctrl+Alt+Delete is
 //! never sent. The input goes out once the session has received a complete
 //! picture (the host takes input only after the viewer acknowledged a picture
-//! of its current reference). JSON `{"sent","blocked","held"}`: `sent` says
+//! of its current reference). JSON `{"sent","blocked","held","refused"}`: `sent` says
 //! the input left this device and the device neither blocked nor held it
 //! back; the host does not confirm that it applied it, so it is no delivery
 //! receipt. `blocked` is `elevated_window`, `secure_desktop`,
@@ -19,8 +19,10 @@
 //! the input back without applying it (`viewer_hidden`,
 //! `waiting_for_picture`, `release_pending`, `backlog_full`, `other`), or that no complete
 //! picture came within five seconds, so the input was not sent
-//! (`waiting_for_picture`). With either the exit
-//! code is 1. No input is ever logged.
+//! (`waiting_for_picture`); `refused` is the device's sentence for an input
+//! it took but did not perform (an Android host: a mouse button without
+//! counterpart, a field whose content it cannot see). With any of them the
+//! exit code is 1. No input is ever logged.
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
@@ -93,6 +95,10 @@ pub(crate) struct InputOutcome {
     pub sent: bool,
     pub blocked: Option<ControlBlock>,
     pub held: Option<InputHeld>,
+    /// The device took the input but did not perform it (its reason, an
+    /// Android host's notice: a mouse button without counterpart, a field
+    /// whose content it cannot see, a refused text or action).
+    pub refused: Option<&'static str>,
 }
 
 /// Opens a control session to `target`, sends `action` and ends it.
@@ -179,6 +185,7 @@ pub(crate) fn deliver(
                 sent: false,
                 blocked: Some(ControlBlock::UnsupportedOnHost),
                 held: None,
+                refused: None,
             });
         }
         let mut size = hello_size(&hello, &source);
@@ -241,6 +248,7 @@ pub(crate) fn deliver(
                 sent: false,
                 blocked: None,
                 held: Some(InputHeld::WaitingForPicture),
+                refused: None,
             });
         }
         // A pixel position needs the size of the running stream's source: the
@@ -271,6 +279,22 @@ pub(crate) fn deliver(
                 // Rebuilt while the input went out: the relay drops control
                 // frames during the rebuild, so whether it was applied is
                 // unknown; it is not sent twice (a second click).
+                // The device answered that it did not perform the input (an
+                // Android host's notice, no block: round 11, M3).
+                Some(StreamEvent::Host(HostFrame::State(report))) => {
+                    if let Some(refused) = report
+                        .reason
+                        .as_deref()
+                        .and_then(crate::screen::core::codec_reason_text::input_refusal)
+                    {
+                        return Ok(InputOutcome {
+                            sent: false,
+                            blocked: None,
+                            held: None,
+                            refused: Some(refused),
+                        });
+                    }
+                }
                 Some(StreamEvent::Accepted { .. }) => {
                     return Err(
                         "the device rebuilt the screen session while the input went out; \
@@ -285,6 +309,7 @@ pub(crate) fn deliver(
                         sent: false,
                         blocked: None,
                         held: state.held,
+                        refused: None,
                     })
                 }
                 Some(StreamEvent::Host(HostFrame::ControlState(state)))
@@ -294,6 +319,7 @@ pub(crate) fn deliver(
                         sent: false,
                         blocked: state.blocked,
                         held: None,
+                        refused: None,
                     })
                 }
                 Some(StreamEvent::Host(HostFrame::Error(error))) => {
@@ -311,6 +337,7 @@ pub(crate) fn deliver(
             sent: true,
             blocked: None,
             held: None,
+            refused: None,
         })
     })();
     let _ = control.close();
@@ -346,11 +373,21 @@ pub(super) fn run(args: InputArgs) -> Result<i32, String> {
     let held = outcome
         .held
         .map(|held| serde_json::to_value(held).unwrap_or_default());
-    let value = json!({ "sent": outcome.sent, "blocked": blocked, "held": held });
-    super::output::print(args.json, &value, || match (&held, &blocked) {
-        (Some(reason), _) => format!("held\t{}\n", reason.as_str().unwrap_or_default()),
-        (None, Some(reason)) => format!("blocked\t{}\n", reason.as_str().unwrap_or_default()),
-        (None, None) => "sent\n".to_string(),
+    let value = json!({
+        "sent": outcome.sent,
+        "blocked": blocked,
+        "held": held,
+        "refused": outcome.refused,
+    });
+    super::output::print(args.json, &value, || {
+        match (&held, &blocked, outcome.refused) {
+            (Some(reason), _, _) => format!("held\t{}\n", reason.as_str().unwrap_or_default()),
+            (None, Some(reason), _) => {
+                format!("blocked\t{}\n", reason.as_str().unwrap_or_default())
+            }
+            (None, None, Some(reason)) => format!("refused\t{reason}\n"),
+            (None, None, None) => "sent\n".to_string(),
+        }
     });
     Ok(if outcome.sent { 0 } else { 1 })
 }
