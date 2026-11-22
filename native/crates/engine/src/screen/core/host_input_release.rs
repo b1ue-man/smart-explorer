@@ -367,27 +367,22 @@ impl Session<'_> {
     }
     pub(super) fn hand_releases_over(&mut self) {
         // An injection that outlasted its grace goes first (round 8, I8).
-        // Round 11 (M2): with their own limits: a release job within a host
-        // process's link wait (`FRAME_TIMEOUT`, 10 s) and answer time
-        // (`INPUT_TIMEOUT`, 2 s), an injection with 40 ms per character of
-        // its text more (`input_limit`, `host_worker_input_limit.rs`).
-        const JOB_LIMIT: std::time::Duration = std::time::Duration::from_secs(12);
-        let injecting = self.health.injecting.take().map(|job| {
-            let characters: usize = job
-                .events
-                .iter()
-                .map(|event| match event {
-                    InputEvent::Text { text } => text.chars().count(),
-                    _ => 0,
-                })
-                .sum();
-            let per = std::time::Duration::from_millis(40);
-            let text = per.saturating_mul(u32::try_from(characters).unwrap_or(u32::MAX));
-            (job.handle, JOB_LIMIT + text)
-        });
+        // Round 11 (M2): with their own limits from the core's worker times
+        // (`worker_limits`): a release job within a host process's link wait
+        // and answer time, an injection with its text time more.
+        use crate::screen::core::worker_limits::{injection_job_limit, RELEASE_JOB_LIMIT};
+        let injecting = self
+            .health
+            .injecting
+            .take()
+            .map(|job| (job.handle, injection_job_limit(&job.events)));
         let jobs: Vec<_> = injecting
             .into_iter()
-            .chain(self.input_release.take().map(|job| (job, JOB_LIMIT)))
+            .chain(
+                self.input_release
+                    .take()
+                    .map(|job| (job, RELEASE_JOB_LIMIT)),
+            )
             .collect();
         let queued = std::mem::take(&mut self.health.queued);
         if jobs.is_empty() && queued.is_empty() && failed_list(&self.health.failed).is_empty() {

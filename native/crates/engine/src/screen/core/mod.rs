@@ -162,6 +162,7 @@ pub mod wire_binary;
 pub mod wire_control;
 pub mod wire_hello;
 pub mod worker_capture_wire;
+pub mod worker_limits;
 pub mod worker_wire;
 
 pub mod family_listing;

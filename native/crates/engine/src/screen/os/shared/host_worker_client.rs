@@ -89,11 +89,10 @@ pub const SCREEN_HOST_WORKER_SWITCH: &str = "--screen-host-worker";
 pub const PARENT_ENV: &str = "SE_SCREEN_WORKER_PARENT";
 /// Time to open a source; a portal dialog on the host may take a while.
 const OPEN_TIMEOUT: Duration = Duration::from_secs(120);
-/// Time for one picture (the first one starts the encoder).
-const FRAME_TIMEOUT: Duration = Duration::from_secs(10);
-/// Time for one input batch (SCR-M6), the wait for a running picture
-/// request included.
-pub(super) const INPUT_TIMEOUT: Duration = Duration::from_secs(2);
+// Picture and input times live in the core (`worker_limits`), which the
+// session's release keeper reads too.
+use crate::screen::core::worker_limits::FRAME_TIMEOUT;
+pub(super) use crate::screen::core::worker_limits::INPUT_TIMEOUT;
 /// Time a closed host process gets to exit before it is killed.
 const EXIT_WAIT: Duration = Duration::from_secs(2);
 

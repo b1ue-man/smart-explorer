@@ -20,11 +20,10 @@ fn outstanding() -> std::sync::MutexGuard<'static, Option<HashMap<String, usize>
     OUTSTANDING.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// How long the keeper tries, from `FRAME_TIMEOUT` + 2 × `INPUT_TIMEOUT`
-/// (10 s + 2 × 2 s, `host_worker_client.rs`): a host process's release
-/// waits for the link a picture request holds, then for its answer; a
-/// second try after a refusal gets its own answer time.
-const GATE_LIMIT: Duration = Duration::from_secs(10 + 2 * 2);
+/// How long the keeper tries (`worker_limits::GATE_LIMIT`): a host
+/// process's release waits for the link a picture request holds, then for
+/// its answer; a second try after a refusal gets its own answer time.
+use crate::screen::core::worker_limits::GATE_LIMIT;
 /// The pause between two tries of releases the sink refused.
 const RETRY: Duration = Duration::from_secs(1);
 
