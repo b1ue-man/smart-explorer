@@ -62,11 +62,36 @@ pub fn insert_held() -> bool {
     false
 }
 
+/// X11 leaves Ctrl and Alt to the layout: an AltGr character comes as text.
+pub fn ctrl_alt_text(_physical: eframe::egui::Key, _shift: bool) -> Option<String> {
+    None
+}
+
+/// How often the server is asked while Ctrl or Umschalt is held (Gemini
+/// 8/12: once per frame was a round trip per frame); within `PASTE_WAIT`.
+const QUERY_GAP: std::time::Duration = std::time::Duration::from_millis(25);
+
 /// Ctrl+V, or Umschalt+Einfg without Ctrl, is held now (X11 only).
 pub fn paste_keys_held(ctrl: bool, shift: bool) -> bool {
     if !(ctrl || shift) || wayland() {
         return false;
     }
+    // The last answer and when the server gave it.
+    static LAST: Mutex<Option<(std::time::Instant, bool, bool, bool)>> = Mutex::new(None);
+    let now = std::time::Instant::now();
+    if let Some((at, was_ctrl, was_shift, held)) =
+        *LAST.lock().unwrap_or_else(PoisonError::into_inner)
+    {
+        if was_ctrl == ctrl && was_shift == shift && now.duration_since(at) < QUERY_GAP {
+            return held;
+        }
+    }
+    let held = query(ctrl, shift);
+    *LAST.lock().unwrap_or_else(PoisonError::into_inner) = Some((now, ctrl, shift, held));
+    held
+}
+
+fn query(ctrl: bool, shift: bool) -> bool {
     // One connection for the process (`None`: no X server, asked once).
     static KEYS: Mutex<Option<Option<Keys>>> = Mutex::new(None);
     let mut keys = KEYS.lock().unwrap_or_else(PoisonError::into_inner);

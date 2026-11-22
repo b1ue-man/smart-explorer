@@ -177,7 +177,6 @@ impl InputMapper {
 
     /// Maps the events of one frame; `frame_mods` are the modifiers at its end.
     pub fn process(&mut self, events: &[Event], frame_mods: Modifiers, geometry: &Geometry) {
-        self.missed_paste(events, frame_mods);
         if events.iter().any(|event| matches!(event, Event::Key {
             key, modifiers, pressed: true, ..
         } if matches!(local_key(*key, *modifiers), Some(super::screen_input_keys::LocalKey::Fullscreen | super::screen_input_keys::LocalKey::ExitFullscreen)))) {
@@ -249,6 +248,9 @@ impl InputMapper {
         if touching {
             self.touch_active = true;
         }
+        // Gemini 8/12: behind the focus and held-modifier gates, so a paste
+        // pressed in another window is no input here.
+        self.missed_paste(events, frame_mods);
         for event in events {
             self.event(event, geometry);
         }
@@ -278,17 +280,11 @@ impl InputMapper {
             }
             Event::Key {
                 key,
+                physical_key,
                 pressed,
                 repeat,
                 modifiers,
-                ..
-            } => {
-                if !*pressed {
-                    self.paste_released(*key, *modifiers);
-                }
-                self.sync_modifiers(*modifiers);
-                self.key(*key, *pressed, *repeat, *modifiers);
-            }
+            } => self.key_event(*key, *physical_key, *pressed, *repeat, *modifiers),
             Event::Text(text) => {
                 if self.caps.text && !self.mods.ctrl && !self.mods.alt {
                     self.text(text);

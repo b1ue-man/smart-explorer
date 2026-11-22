@@ -297,6 +297,9 @@ fn sample_x11(
                     .is_none_or(|a| a.map_state != MapState::VIEWABLE)
         })
     {
+        // Gemini 8/15: the tree changed between the reads, as on Windows: a
+        // raced sample keeps the proven state (`VisibilityTracker::report`).
+        result.raced = true;
         return result;
     }
     result.rects = visible

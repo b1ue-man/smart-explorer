@@ -29,6 +29,10 @@ mod platform {
     pub fn paste_keys_held(_ctrl: bool, _shift: bool) -> bool {
         false
     }
+
+    pub fn ctrl_alt_text(_physical: super::Key, _shift: bool) -> Option<String> {
+        None
+    }
 }
 
 /// How long a swallowed paste is waited for before the key state decides.
@@ -49,6 +53,12 @@ pub(super) struct PasteWatch {
     press: Option<Press>,
     /// This press is decided: egui's `Paste` came, or the shortcut went out.
     handled: bool,
+    /// The modifiers of this frame (Gemini 8/12: `Cut`/`Paste` arrive
+    /// before the frame's modifiers are sent, `cut`/`paste` read them here).
+    pub(super) mods: Modifiers,
+    /// Keys typed as their Ctrl+left-Alt character (`key_event`): their
+    /// release is no key for the host.
+    typed: Vec<Key>,
 }
 
 impl InputMapper {
@@ -89,6 +99,7 @@ impl InputMapper {
     /// state is known, sends a swallowed shortcut before its release.
     /// `frame_mods` are `NONE` while a toolbar field holds the keyboard.
     pub(super) fn missed_paste(&mut self, events: &[Event], mods: Modifiers) {
+        self.paste.mods = mods;
         if events.iter().any(|event| matches!(event, Event::Paste(_))) {
             self.paste.handled = true;
         }
@@ -116,6 +127,51 @@ impl InputMapper {
         if due && !self.paste.handled {
             self.paste_shortcut(insert);
         }
+    }
+
+    /// One key of the viewer. Gemini 8/12: on Windows, Ctrl with the left
+    /// Alt is the layout's AltGr where it has one (`Strg+Alt+Q` is `@` on a
+    /// German layout), but winit filters only the right Alt (`VK_RMENU`,
+    /// winit 0.30.13 `keyboard_layout.rs` `get_agnostic_mods`) and
+    /// egui-winit drops text while Ctrl is held (`lib.rs` 794-800): such a
+    /// key goes as the character the layout types, without the Ctrl and Alt
+    /// the host holds, which are pressed again after it.
+    pub(super) fn key_event(
+        &mut self,
+        key: Key,
+        physical: Option<Key>,
+        pressed: bool,
+        repeat: bool,
+        modifiers: Modifiers,
+    ) {
+        if pressed && modifiers.ctrl && modifiers.alt && self.caps.text {
+            let text = physical
+                .or(Some(key))
+                .and_then(|place| platform::ctrl_alt_text(place, modifiers.shift));
+            if let Some(text) = text {
+                let plain = Modifiers {
+                    ctrl: false,
+                    alt: false,
+                    ..modifiers
+                };
+                self.sync_modifiers(plain);
+                self.text(&text);
+                self.sync_modifiers(modifiers);
+                if !repeat && !self.paste.typed.contains(&key) {
+                    self.paste.typed.push(key);
+                }
+                return;
+            }
+        }
+        if !pressed {
+            if let Some(index) = self.paste.typed.iter().position(|typed| *typed == key) {
+                self.paste.typed.remove(index);
+                return;
+            }
+            self.paste_released(key, modifiers);
+        }
+        self.sync_modifiers(modifiers);
+        self.key(key, pressed, repeat, modifiers);
     }
 
     /// The release of `key`: V with Ctrl, or Einfg with Umschalt and without

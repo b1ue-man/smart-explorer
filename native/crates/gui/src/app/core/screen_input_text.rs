@@ -32,17 +32,24 @@ impl InputMapper {
             if self.caps.text {
                 self.text(text);
             }
-        } else if self.mods.shift && !self.mods.ctrl {
+        } else if self.shift_only() {
             self.tap("insert");
         } else {
             self.chord("v");
         }
     }
 
+    /// Umschalt without Ctrl, held before this frame or in it (Gemini 8/12:
+    /// `Cut`/`Paste` come before the frame's modifiers are sent).
+    fn shift_only(&self) -> bool {
+        let frame = self.paste.mods;
+        (self.mods.shift || frame.shift) && !(self.mods.ctrl || frame.ctrl)
+    }
+
     /// `Cut`: Strg+X, or (Windows) Umschalt+Entf as itself (Gemini 5/9:
     /// the chord made it Strg+Umschalt+X).
     pub(super) fn cut(&mut self) {
-        if self.mods.shift && !self.mods.ctrl {
+        if self.shift_only() {
             self.tap("delete");
         } else {
             self.chord("x");
