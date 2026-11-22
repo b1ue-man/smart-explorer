@@ -88,7 +88,7 @@ pub(super) struct Core<A: NvTable> {
     pub(super) refused: Option<RateParams>,
     invalidation: bool,
     pub(super) history: RefHistory,
-    long_term: Option<ltr::LongTerm>, // Gemini 8/3.1, `nvenc_ltr.rs`
+    long_term: Option<crate::screen::os::nvenc_shared::ltr::LongTerm>, // Gemini 8/3.1
     frames: u64,
 }
 

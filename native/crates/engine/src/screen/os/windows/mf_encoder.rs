@@ -46,6 +46,7 @@ use crate::screen::core::host_stage::StageRequest;
 use crate::screen::core::pixel_convert::{BgraImage, FrameSize};
 use crate::screen::core::rate_control::honour::EncoderRateState;
 use crate::screen::core::rate_control::START_DIRECT_BPS;
+use crate::screen::core::ref_recovery::Recovery;
 use d3d_input::InputRoute;
 
 #[cfg(test)]
@@ -85,6 +86,8 @@ pub(super) struct AsyncEncoder {
     limit: u32,
     /// The encoder controls long-term references (key frames are LTR 0).
     ltr: bool,
+    /// B-36 through two of them (`mf_ltr.rs`, Gemini 8/3.1).
+    long_term: Option<ltr::MfLtr>,
     /// A frame was skipped: the next request repeats the newest picture.
     refresh: bool,
     /// Streaming restarted: the next frame must be a key frame.
@@ -198,6 +201,7 @@ impl AsyncEncoder {
                 refused.join(", ")
             );
         }
+        let long_term = ltr::MfLtr::open(&setup, settings.ltr_frames);
         Ok(Self {
             transform,
             events,
@@ -210,6 +214,7 @@ impl AsyncEncoder {
             gpu,
             limit,
             ltr: settings.ltr_frames > 0,
+            long_term,
             refresh: false,
             restarted: false,
             rate_refused,
@@ -319,6 +324,7 @@ impl AsyncEncoder {
                             gpu.finish();
                         }
                         let keyframe = is_keyframe(&sample);
+                        self.long_term_output(&sample, keyframe, request.frame_id)?;
                         mf_capture_output::append_unit_sample(
                             &mut bytes,
                             &sample,
@@ -339,50 +345,12 @@ impl AsyncEncoder {
             }
         }
     }
-
-    /// The GPU path failed: CPU path for the session, this encoder on NV12
-    /// in system memory; else the original error (the next encoder follows).
-    fn gpu_failed(&mut self, error: io::Error) -> io::Result<CapturedEncodedFrame> {
-        // A device of its own is not the capture's (P3).
-        if self.gpu.as_ref().is_some_and(|gpu| !gpu.is_own()) {
-            d3d_input::disable(&format!("{}: {error}", self.setup.name));
-        }
-        self.gpu = None;
-        if self.restart_system().is_err() {
-            return Err(error);
-        }
-        self.refresh = true;
-        self.restarted = true;
-        Err(io::Error::new(
-            io::ErrorKind::WouldBlock,
-            "the hardware encoder takes system memory from the next picture",
-        ))
-    }
-
-    /// Ends the stream, takes the device manager back and starts anew.
-    fn restart_system(&mut self) -> io::Result<()> {
-        stop(&self.transform);
-        // SAFETY: messages and type resets on the activated transform; the
-        // types are set again by `start`.
-        unsafe {
-            let _ = self.transform.ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0);
-            let _ = self.transform.SetInputType(0, None::<&IMFMediaType>, 0);
-            let _ = self.transform.SetOutputType(0, None::<&IMFMediaType>, 0);
-        }
-        d3d_input::detach(&self.transform);
-        // Events of the old stream give no credit for the new one.
-        for _ in 0..64 {
-            // SAFETY: a non-blocking poll of the transform's event queue.
-            if unsafe { self.events.GetEvent(MF_EVENT_FLAG_NO_WAIT) }.is_err() {
-                break;
-            }
-        }
-        self.credits = 0;
-        start(&self.transform, &self.setup, self.bitrate)?;
-        self.sequence_header = mf_capture_output::sequence_header(&self.transform);
-        Ok(())
-    }
 }
+
+#[path = "mf_ltr.rs"]
+mod ltr;
+#[path = "mf_encoder_restart.rs"]
+mod restart;
 
 impl ScreenEncoder for AsyncEncoder {
     fn encode_captured(
@@ -420,8 +388,11 @@ impl ScreenEncoder for AsyncEncoder {
         if key && (self.frames > 0 || self.restarted) {
             force_keyframe(self.api.as_ref());
         }
-        if self.ltr && (key || self.frames == 0) {
-            mark_ltr(self.api.as_ref());
+        let first = key || self.frames == 0;
+        match self.long_term.as_mut() {
+            Some(long_term) => long_term.plan(self.api.as_ref(), request.frame_id, first),
+            None if self.ltr && first => mark_ltr(self.api.as_ref()),
+            None => {}
         }
         match self.encode_once(&grant, image, request, maximum) {
             Ok(frame) => {
@@ -465,6 +436,16 @@ impl ScreenEncoder for AsyncEncoder {
 
     fn needs_refresh(&self) -> bool {
         self.refresh
+    }
+
+    fn recover_references(&mut self, last_good: u64) -> Recovery {
+        self.recover(last_good)
+    }
+
+    fn confirm_reference(&mut self, frame_id: u64) {
+        if let Some(long_term) = self.long_term.as_mut() {
+            long_term.confirm(frame_id);
+        }
     }
 
     fn rate_state(&self) -> Option<EncoderRateState> {

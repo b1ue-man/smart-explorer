@@ -407,11 +407,17 @@ fn bildkette_task_linux_w2_nvenc_recovers_without_a_key_frame() {
         "picture.input_time_stamp = self.frame_id;",
         "self.history.encoded(self.frame_id, idr_coded || idr);",
         "fn recover_references(&mut self, last_good: u64) -> Recovery {",
-        "self.history.invalidate_after(last_good)",
         "apply_codec_references(&mut session.config, codec, invalidation);",
     ] {
         assert!(linux.contains(needle), "{needle}");
     }
+    // Review 2026-11-19 round 9: the recovery of both platforms is the
+    // shared one, with the long-term references (Gemini 8/3.1).
+    let recovery = "recover(&mut self.history, self.long_term.as_mut(), last_good)";
+    assert!(include_str!("nvenc_ltr.rs").contains(recovery));
+    assert!(include_str!("../windows/nvenc_ltr.rs").contains(recovery));
+    let shared = include_str!("../native_ffi/nvenc_ltr.rs");
+    assert!(shared.contains("history.invalidate_after(last_good)"));
     let worker = include_str!("../shared/host_worker_encode.rs");
     assert!(worker.contains("request.to_mut().frame_id = frame_id;"));
     // Both platforms use the one shared module.

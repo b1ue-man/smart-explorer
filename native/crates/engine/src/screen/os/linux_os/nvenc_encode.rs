@@ -169,6 +169,7 @@ pub(super) struct NvencSession {
     /// B-36: the GPU can invalidate references (merge W2).
     invalidation: bool,
     history: RefHistory,
+    long_term: Option<crate::screen::os::nvenc_shared::ltr::LongTerm>, // Gemini 8/3.1
     /// Frame id of the next picture (`set_frame_id`), its `inputTimeStamp`.
     frame_id: u64,
     // Dropped last: the session lives on this context.
@@ -221,6 +222,7 @@ impl NvencSession {
             } else {
                 1
             }),
+            long_term: None,
             frame_id: 0,
             context,
         };
@@ -245,6 +247,7 @@ impl NvencSession {
         let rate = SessionRate(&session.rate, session.quality);
         apply_codec_settings(&mut session.config, &rate, codec);
         apply_codec_references(&mut session.config, codec, invalidation);
+        session.open_long_term(guid);
         session.fill_init();
         let initialize = f.initialize_encoder.ok_or_else(missing)?;
         // SAFETY: versioned parameters whose config pointer is `session.config`.
@@ -304,6 +307,7 @@ impl NvencSession {
             self.codec,
         );
         apply_codec_references(&mut self.config, self.codec, self.invalidation);
+        self.keep_long_term();
         self.fill_init();
         let mut params = Box::new(NvEncReconfigureParams::zeroed());
         params.version = NV_ENC_RECONFIGURE_PARAMS_VER;
@@ -316,6 +320,7 @@ impl NvencSession {
             let restored = SessionRate(&previous, self.quality);
             apply_codec_settings(&mut self.config, &restored, self.codec);
             apply_codec_references(&mut self.config, self.codec, self.invalidation);
+            self.keep_long_term();
             self.fill_init();
             self.refused = Some(*rate);
         } else {
@@ -323,59 +328,12 @@ impl NvencSession {
         }
         checked
     }
-
-    /// Writes I420 planes as NV12 into the input buffer.
-    fn upload(&mut self, yuv: &crate::screen::core::pixel_convert::I420Image) -> io::Result<u32> {
-        let f = &self.api.functions;
-        let mut lock = NvEncLockInputBuffer::zeroed();
-        lock.version = NV_ENC_LOCK_INPUT_BUFFER_VER;
-        lock.input_buffer = self.input;
-        let lock_input = f.lock_input_buffer.ok_or_else(missing)?;
-        // SAFETY: valid session and input buffer.
-        let result = unsafe { lock_input(self.encoder, &mut lock) };
-        status(&self.api, self.encoder, result, "nvEncLockInputBuffer")?;
-        let pitch = lock.pitch as usize;
-        let (width, height) = (self.size.width as usize, self.size.height as usize);
-        let chroma = self.size.chroma();
-        let (chroma_width, rows) = (chroma.width as usize, chroma.height as usize);
-        let fits = pitch >= chroma_width * 2
-            && pitch >= width
-            && yuv.y.len() >= width * height
-            && yuv.u.len() >= chroma_width * rows
-            && yuv.v.len() >= chroma_width * rows;
-        if fits && !lock.buffer_data_ptr.is_null() {
-            // SAFETY: the locked NV12 buffer of `pitch` × (height × 3 / 2)
-            // bytes (luma rows, then the interleaved chroma rows at
-            // `pitch × height`, the NVENC NV12 layout) is ours until unlocked.
-            let target = unsafe {
-                std::slice::from_raw_parts_mut(
-                    lock.buffer_data_ptr.cast::<u8>(),
-                    pitch * (height + rows),
-                )
-            };
-            for row in 0..height {
-                target[row * pitch..][..width].copy_from_slice(&yuv.y[row * width..][..width]);
-            }
-            for row in 0..rows {
-                let line = &mut target[(height + row) * pitch..][..chroma_width * 2];
-                let u = &yuv.u[row * chroma_width..][..chroma_width];
-                let v = &yuv.v[row * chroma_width..][..chroma_width];
-                for (pair, (u, v)) in line.chunks_exact_mut(2).zip(u.iter().zip(v)) {
-                    pair[0] = *u;
-                    pair[1] = *v;
-                }
-            }
-        }
-        let unlock = f.unlock_input_buffer.ok_or_else(missing)?;
-        // SAFETY: the buffer was locked above.
-        let result = unsafe { unlock(self.encoder, self.input) };
-        status(&self.api, self.encoder, result, "nvEncUnlockInputBuffer")?;
-        if !fits || lock.buffer_data_ptr.is_null() {
-            return Err(invalid("NVENC input buffer smaller than the picture"));
-        }
-        Ok(lock.pitch)
-    }
 }
+
+#[path = "nvenc_ltr.rs"]
+mod ltr;
+#[path = "nvenc_upload.rs"]
+mod upload;
 
 impl HwH264Session for NvencSession {
     fn wants_bgra(&self) -> bool {
@@ -424,6 +382,7 @@ impl HwH264Session for NvencSession {
             picture.encode_pic_flags = NV_ENC_PIC_FLAG_FORCEIDR | NV_ENC_PIC_FLAG_OUTPUT_SPSPPS;
             picture.picture_type = NV_ENC_PIC_TYPE_IDR;
         }
+        self.plan_long_term(&mut picture, idr);
         let encode = f.encode_picture.ok_or_else(missing)?;
         // SAFETY: valid session, input and output buffers.
         let result = unsafe { encode(self.encoder, &mut *picture) };
@@ -452,32 +411,20 @@ impl HwH264Session for NvencSession {
         delivered?;
         status(&api, self.encoder, result, "nvEncUnlockBitstream")?;
         self.history.encoded(self.frame_id, idr_coded || idr);
-        Ok(())
+        self.long_term_coded(&lock)
+    }
+
+    fn confirm_reference(&mut self, frame_id: u64) {
+        self.confirm(frame_id);
     }
 
     fn set_frame_id(&mut self, frame_id: u64) {
         self.frame_id = frame_id;
     }
 
-    /// B-36 as Windows' NVENC session: every picture after `last_good` is
-    /// invalidated, the next one references `last_good` or older.
+    /// B-36 as Windows' NVENC session (`nvenc_ltr.rs`).
     fn recover_references(&mut self, last_good: u64) -> Recovery {
-        let invalidate = self.api.functions.invalidate_ref_frames;
-        let (Some(invalidate), true) = (invalidate, self.invalidation) else {
-            return Recovery::KeyframeNeeded;
-        };
-        let Some(lost) = self.history.invalidate_after(last_good) else {
-            return Recovery::KeyframeNeeded;
-        };
-        let _current = self.context.push();
-        for frame in lost {
-            // SAFETY: valid session; `frame` is the timestamp of a picture
-            // it encoded (`input_time_stamp`).
-            if unsafe { invalidate(self.encoder, frame) } != NV_ENC_SUCCESS {
-                return Recovery::KeyframeNeeded;
-            }
-        }
-        Recovery::Continued
+        self.recover(last_good)
     }
 }
 

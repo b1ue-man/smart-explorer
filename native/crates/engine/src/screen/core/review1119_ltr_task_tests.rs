@@ -38,6 +38,11 @@ fn review1119_task_ltr_keeps_a_confirmed_reference() {
     // An IDR of the encoder's own drops every long-term reference.
     ltr.key_frame();
     assert!(!ltr.recover(140));
+    // Media Foundation reports each mark on the output, its own included.
+    assert!(ltr.marked(1, 150));
+    assert!(!ltr.marked(2, 151), "two slots only");
+    assert!(ltr.recover(150));
+    assert_eq!(ltr.plan(152, false).force, Some(1 << 1));
     let mut history = RefHistory::new(3);
     for frame in 1..=4 {
         history.encoded(frame, frame == 1);

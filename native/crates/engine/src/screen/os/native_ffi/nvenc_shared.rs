@@ -1,8 +1,9 @@
 //! NVENC as both desktop platforms use it (merge W2, plan 2026-11-14
 //! „Bildkette“): the structure layouts (`abi`), the interface without a
 //! device (`api`: versions, constants, function list, error text, capability
-//! queries), the HEVC and AV1 views of the codec union (`codecs`) and the
-//! encoder settings of B-21 and B-36 (`settings`). Platform code keeps only
+//! queries), the HEVC and AV1 views of the codec union (`codecs`), the
+//! encoder settings of B-21 and B-36 (`settings`) and the B-36 long-term
+//! references (`ltr`). Platform code keeps only
 //! what differs: loading the driver library and the device of a session
 //! (Linux: `libnvidia-encode.so.1` with a CUDA context and NV12 input
 //! buffers, `linux_os/nvenc_*`; Windows: `nvEncodeAPI64.dll` with the D3D11
@@ -14,5 +15,7 @@ pub(in crate::screen::os) mod abi;
 pub(in crate::screen::os) mod api;
 #[path = "nvenc_codecs.rs"]
 pub(in crate::screen::os) mod codecs;
+#[path = "nvenc_ltr.rs"]
+pub(in crate::screen::os) mod ltr;
 #[path = "nvenc_settings.rs"]
 pub(in crate::screen::os) mod settings;

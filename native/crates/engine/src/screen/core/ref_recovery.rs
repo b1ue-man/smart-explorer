@@ -157,6 +157,18 @@ impl LtrSlots {
         plan
     }
 
+    /// The encoder reports that it marked `frame_id` as long-term reference
+    /// `index` (Media Foundation `MFSampleExtension_LongTermReferenceFrameInfo`,
+    /// its own marks after an IDR among them); `false` for an index beyond
+    /// the two slots.
+    pub fn marked(&mut self, index: usize, frame_id: u64) -> bool {
+        let Some(slot) = self.slots.get_mut(index) else {
+            return false;
+        };
+        *slot = Some(frame_id);
+        true
+    }
+
     /// Marked pictures newer than `last_good` were lost with a reset
     /// stream: never a reference, never confirmed later.
     pub fn drop_after(&mut self, last_good: u64) {

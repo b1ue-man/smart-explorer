@@ -34,9 +34,8 @@ use crate::screen::core::ref_recovery::Recovery;
 use crate::screen::core::wire::invalid;
 use crate::screen::core::wire_binary::MAX_RECORD_BYTES;
 
-/// Rate control of a hardware encoder: constant bit rate, buffer of one
-/// frame (bit rate / frame rate), buffer full at the start (B-21; R01
-/// `nvenc_base.cpp:260-283` sets VBV = bitrate / fps).
+/// Rate control of a hardware encoder: constant bit rate, buffer of one frame
+/// full at the start (B-21; R01 `nvenc_base.cpp:260-283`: VBV = rate / fps).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct RateParams {
     pub bits_per_second: u32,
@@ -144,6 +143,8 @@ pub(super) trait HwH264Session: Send {
     fn recover_references(&mut self, _last_good: u64) -> Recovery {
         Recovery::KeyframeNeeded
     }
+    /// See `ScreenEncoder::confirm_reference` (NVENC, Gemini 8/3.1).
+    fn confirm_reference(&mut self, _frame_id: u64) {}
     /// The MaxBR of the level the session writes for its size at `fps`
     /// (merge W2, as the Media Foundation encoder's `opened_limit`): a VA
     /// session names its level itself; NVENC chooses it (`AUTOSELECT`).
@@ -441,6 +442,10 @@ impl<S: HwH264Session> ScreenEncoder for HwH264Encoder<S> {
 
     fn recover_references(&mut self, last_good: u64) -> Recovery {
         self.session.recover_references(last_good)
+    }
+
+    fn confirm_reference(&mut self, frame_id: u64) {
+        self.session.confirm_reference(frame_id);
     }
 
     fn name(&self) -> String {
