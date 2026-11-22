@@ -491,8 +491,18 @@ class ScreenSession(private val target: ScreenTarget, private val backend: Scree
             visibilitySentModern = false
             // The automatic fallback to the tiles and the first codec belonged to the host session before: the new one
             // negotiates afresh (Codex 9/8). The user's own choice (`chosenCodec`, `choice`) stays.
+            val wasForced = forceLossless
             forceLossless = false
             codecFallbackGop = null
+            // The daemon replays the last `SET_MODE` into the rebuilt host session (`ModeMemory`), with the forced
+            // `lossless` of that fallback: the mode the user wants goes after it once, so the new session is no tiles
+            // session nobody sees a reason for (round 10, B1). Only after a forced fallback, so a rebuild without one
+            // sends nothing.
+            if (wasForced) inputs.trySend(ScreenSessionCommand.Call { session ->
+                val wanted = synchronized(lock) { wantedMode }
+                backend.setMode(session, wanted.mode, source = null, width = null, height = null, fps = null,
+                    sharpness = wanted.sharpness, lossless = wanted.lossless)
+            })
             mutable.value = old.copy(inputReady = false, ackedMinFrame = null, held = null, blocked = null,
                 firstCodec = null, codecFallback = null)
         }

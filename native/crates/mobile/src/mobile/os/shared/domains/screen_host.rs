@@ -376,13 +376,17 @@ fn notice(args: &Value) -> Result<Value, ApiError> {
         // The session reports it as a block too (CONTROL_STATE): a text or a
         // system action the device cannot take is not supported there, a
         // cancelled gesture or a late answer leaves the control unavailable.
+        // A mouse button without counterpart or a field whose content is
+        // hidden blocks nothing (the control works on): the notice alone
+        // says it (round 10, B2).
         let block = match kind {
-            // Round 10: a mouse button or a hidden field the device cannot serve is
-            // not supported there either; the control itself stays available.
-            "text" | "action" | "button" | "secret" => ControlBlock::UnsupportedOnHost,
-            _ => ControlBlock::ControlUnavailable,
+            "button" | "secret" => None,
+            "text" | "action" => Some(ControlBlock::UnsupportedOnHost),
+            _ => Some(ControlBlock::ControlUnavailable),
         };
-        channels::input_refused(id, block).map_err(not_found)?;
+        if let Some(block) = block {
+            channels::input_refused(id, block).map_err(not_found)?;
+        }
         return Ok(json!({}));
     }
     let name = str_arg(args, "parameter")?;

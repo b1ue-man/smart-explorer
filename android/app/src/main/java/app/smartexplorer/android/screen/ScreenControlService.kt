@@ -74,6 +74,9 @@ class ScreenControlService : AccessibilityService() {
      */
     fun appendText(text: String): Int {
         val node = focusedInput() ?: return TEXT_NO_FIELD
+        // The node may come from the service's cache of window content; text and selection are read fresh, so a
+        // quick second input builds on the first one (round 10, B7). A node that no longer exists is no field.
+        if (!node.refresh()) return TEXT_NO_FIELD
         // `ACTION_SET_TEXT` replaces the whole content: it is built from the content the node reports. A password
         // field reports it masked (`isPassword`), a field without any text report (some web or custom fields) none at
         // all; writing there would replace what the user cannot see. Refused with its reason (round 10, 8).

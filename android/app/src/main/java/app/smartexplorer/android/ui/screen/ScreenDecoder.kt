@@ -159,8 +159,8 @@ class ScreenDecoder(
             if (active != null) {
                 drain(active)
                 if (codec !== active) continue
-                if(awaitingKeyframe && keyQueued && System.nanoTime()-referenceWaitNs>2_000_000_000L) { fail(); continue }
-                if (heldIndex < 0) heldIndex = try { active.dequeueInputBuffer(INPUT_WAIT_US) } catch (e: IllegalStateException) { fail(); continue }
+                if(awaitingKeyframe && keyQueued && System.nanoTime()-referenceWaitNs>2_000_000_000L) { fail(component = true); continue }
+                if (heldIndex < 0) heldIndex = try { active.dequeueInputBuffer(INPUT_WAIT_US) } catch (e: IllegalStateException) { fail(component = true); continue }
                 val buffer = if (heldIndex >= 0) active.getInputBuffer(heldIndex) else null
                 if (buffer == null) {
                     heldIndex = -1
@@ -321,9 +321,9 @@ class ScreenDecoder(
         } catch (e: IllegalArgumentException) {
             fail()
         } catch (e: MediaCodec.CodecException) {
-            fail()
+            fail(component = true)
         } catch (e: IllegalStateException) {
-            fail()
+            fail(component = true)
         }
     }
 
@@ -351,9 +351,9 @@ class ScreenDecoder(
         } catch (e: IllegalArgumentException) {
             fail()
         } catch (e: MediaCodec.CodecException) {
-            fail()
+            fail(component = true)
         } catch (e: IllegalStateException) {
-            fail()
+            fail(component = true)
         }
     }
 
@@ -474,7 +474,7 @@ class ScreenDecoder(
                 when {
                     index >= 0 -> {
                         val completed=submitted.remove(info.presentationTimeUs)
-                        if(awaitingKeyframe && completed?.keyframe != true) { c.releaseOutputBuffer(index,false); fail(); return }
+                        if(awaitingKeyframe && completed?.keyframe != true) { c.releaseOutputBuffer(index,false); fail(component = true); return }
                         listener.onFrameSource(codecGop)
                         if (running && completed != null && info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG == 0) {
                             // Exact PTS binding; absent/delayed platform callbacks leave input blocked.
@@ -501,9 +501,9 @@ class ScreenDecoder(
         } catch (e: IllegalArgumentException) {
             fail()
         } catch (e: MediaCodec.CodecException) {
-            fail()
+            fail(component = true)
         } catch (e: IllegalStateException) {
-            fail()
+            fail(component = true)
         }
     }
 
@@ -527,10 +527,14 @@ class ScreenDecoder(
 
     private fun failureKey(name: String, codecKey: String, decoder: String) = "$name|$codecKey|$decoder"
 
-    private fun fail() {
-        // A configured component that fails on pictures counts against itself for the next choice (Codex 9/11).
+    /**
+     * [component]: MediaCodec itself failed (its exception, no output for a queued key frame); only that counts against
+     * the running component for the next choice (Codex 9/11). A transfer or data error (a short record, a size the
+     * budget refuses, a missing `stream` event) is no fault of the decoder (round 10, B4).
+     */
+    private fun fail(component: Boolean = false) {
         val running=codecName
-        if (codec!=null && running!=null) {
+        if (component && codec!=null && running!=null) {
             val key=failureKey(running,activeCodec,openedUnder ?: choice().decoder)
             runtimeFailures[key]=(runtimeFailures[key] ?: 0)+1
         }
