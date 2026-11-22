@@ -32,6 +32,10 @@ pub const PREVIEW_STEP: u32 = 160;
 pub const PREVIEW_MIN_EDGE: u32 = 320;
 /// „Aktualisierung“ of the group view at the start, in ms.
 pub const DEFAULT_PREVIEW_INTERVAL_MS: u64 = 1000;
+/// The shortest „Aktualisierung“ the group view offers, in ms: a preview's
+/// hello allows its rate, so a later choice of it is not capped at the
+/// opening's (the host caps at the hello's rate, Codex 11/13).
+pub const FASTEST_PREVIEW_INTERVAL_MS: u64 = 500;
 
 /// Frames per second of the full view: the refresh rate of the monitor the
 /// viewer's window is on (plan 2026-11-14 „Bildkette“ B-01).
@@ -75,7 +79,7 @@ fn preview_base(offers: &[CodecOffer], edge: u32, interval_ms: u64) -> StreamReq
         source: None,
         decoders: offers.to_vec(),
         display_size: Some(FrameSize::new(edge, edge)),
-        max_fps: preview_fps(interval_ms),
+        max_fps: preview_fps(interval_ms.min(FASTEST_PREVIEW_INTERVAL_MS)),
         frame_capabilities: None,
         max_rate_bps: super::screen_prefs::max_rate_bps(),
         codec: Some(super::screen_prefs::codec_setting()),
@@ -218,6 +222,16 @@ pub fn full_set_mode(source: Option<SourceId>, display: FrameSize, prefs: &Viewe
 }
 
 /// `SET_MODE` back to a preview.
+/// The rate of `interval_ms` alone, size and codec unchanged: a new rate
+/// keeps the encoder (host `same_but_rate`). A preview opens at the host's
+/// own rate (one picture a second) until it hears another.
+pub fn preview_rate_mode(interval_ms: u64) -> SetMode {
+    SetMode {
+        size: None,
+        ..preview_set_mode(PREVIEW_MIN_EDGE, interval_ms)
+    }
+}
+
 pub fn preview_set_mode(edge: u32, interval_ms: u64) -> SetMode {
     SetMode {
         mode: StreamMode::Preview,

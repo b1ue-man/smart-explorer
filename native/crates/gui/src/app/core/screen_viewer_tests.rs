@@ -170,7 +170,9 @@ fn screen_task_viewer_ask_tile_has_no_preview() {
     });
     let request = allow.inner.requests.lock().unwrap()[0].clone();
     assert_eq!(request.mode, SessionMode::Preview);
-    assert_eq!(request.max_fps, 1);
+    // The hello allows the fastest „Aktualisierung“ (Codex 11/13); the
+    // chosen one goes out as `SET_MODE` (the default 1 s is the host's own).
+    assert_eq!(request.max_fps, 2);
 
     // A device that is not online is not connected to.
     let gone = Fake::new(CapabilityDecision::Allow);

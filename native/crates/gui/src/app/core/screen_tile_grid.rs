@@ -14,7 +14,8 @@ use eframe::egui::{self, Vec2};
 
 use super::screen_devices::{entries, DeviceEntry, Devices, GridScope};
 use super::screen_pool::{
-    preview_edge, preview_gap_ms, preview_request, preview_set_mode, DEFAULT_PREVIEW_INTERVAL_MS,
+    preview_edge, preview_fps, preview_gap_ms, preview_rate_mode, preview_request,
+    preview_set_mode, DEFAULT_PREVIEW_INTERVAL_MS,
 };
 use super::screen_prefs::Fit;
 use super::screen_session::{Backend, ProbeInfo, ViewerSession};
@@ -278,6 +279,11 @@ impl ScreenTileGrid {
         };
         if accepted && tile.accepted_at.is_none() {
             tile.accepted_at = Some(Instant::now());
+            // The chosen „Aktualisierung“ when it is not the host's own one
+            // picture a second (Codex 11/13: it stayed at the opening's).
+            if preview_fps(self.interval_ms) != 1 {
+                session.send(ViewerFrame::SetMode(preview_rate_mode(self.interval_ms)));
+            }
         }
         if let Some(end) = ended {
             if end.code.as_deref() == Some("session_limit") {
