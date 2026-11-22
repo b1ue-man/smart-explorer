@@ -183,7 +183,7 @@ pub fn open_grid(room: Option<&str>) -> Result<(), String> {
 
 /// An error window with `message`, „Schließen“ and a button `choice`;
 /// `true` when the user clicked `choice`.
-fn error_window_with_choice(message: &str, choice: &'static str) -> bool {
+pub(super) fn error_window_with_choice(message: &str, choice: &'static str) -> bool {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
     struct ChoiceWindow(String, &'static str, Arc<AtomicBool>);

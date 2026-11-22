@@ -322,7 +322,9 @@ fn rate_field(ui: &mut egui::Ui, mbit: f64) -> Option<f64> {
     // the focus away and the typed text with it.
     let field = egui::TextEdit::singleline(&mut text)
         .id(egui::Id::new("screen_max_rate_field"))
-        .desired_width(RATE_FIELD_WIDTH)
+        // Never wider than the rest of its row (Gemini 8/11: a bar
+        // narrower than the field ran it past the edge).
+        .desired_width(RATE_FIELD_WIDTH.min((super::wrap::rest(ui) - 8.0).max(24.0)))
         .clip_text(true);
     let edited = ui.add(field);
     super::wrap::note_editing(ui, &edited);

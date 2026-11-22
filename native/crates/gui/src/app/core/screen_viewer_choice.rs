@@ -77,10 +77,41 @@ impl ScreenViewerApp {
             }
             _ => None,
         };
+        let prefs = super::super::screen_prefs::ViewerPrefs::clone(&self.common.prefs);
+        let before = (
+            super::super::screen_prefs::codec_setting(),
+            super::super::screen_prefs::decoder_choice(),
+            super::super::screen_prefs::decoder_library_choice(),
+        );
         let again = screen_toolbar_ui::apply_codec(action, &mut self.common.prefs);
         let Mode::View(view) = &mut self.mode else {
             return false;
         };
+        let refused = (again && named.is_some())
+            .then(|| {
+                refusal(
+                    &self.common.backend.offers,
+                    self.common.prefs.codec_setting(),
+                )
+            })
+            .flatten();
+        if let (Some(text), Some(session)) = (refused, view.session.as_ref()) {
+            // An impossible pair is neither stored nor taken over by the
+            // decode thread or the host (Gemini 8/7: it stayed in
+            // `viewer.json` and in the process's decoder choice); the reason
+            // is shown, `true` keeps `ViewState::apply` from clearing it.
+            self.common.prefs = prefs;
+            use super::super::screen_prefs::{set_codec_choice, set_output_choice};
+            let restored = match action {
+                ToolbarAction::Codec(_) => set_codec_choice(Some(before.0), None),
+                ToolbarAction::Decoder(_) => set_codec_choice(None, Some(before.1)),
+                ToolbarAction::DecoderLibrary(_) => set_output_choice(Some(before.2), None),
+                _ => Ok(()),
+            };
+            super::super::screen_toolbar_ui::note_save(restored);
+            session.info().notice = Some(text);
+            return true;
+        }
         // A session that began with the tiles takes no video codec by
         // `SET_DECODERS`: it opens again with the choice.
         if let Some(codec) = named {
@@ -92,33 +123,6 @@ impl ScreenViewerApp {
         if again {
             let request = super::super::screen_pool::announced_request(&self.common.backend.offers);
             let frame = request.decoders_frame();
-            let codec = self.common.prefs.codec_setting();
-            let decoder = super::super::screen_prefs::decoder_choice();
-            // The library looks at the offers before „Codec“/„Dekodierer“
-            // narrow them, as at the opening (round 8 B3: the narrowed list
-            // named a missing video decoder where only the pair did not fit).
-            let library =
-                super::super::screen_session::library_refusal_for(&request.decoders, codec);
-            let refused = library
-                // Nothing left to offer (Gemini 5/7: „Hardware“ under
-                // „Verlustfrei“).
-                .or_else(|| {
-                    frame.decoders.is_empty().then(|| {
-                        format!(
-                            "Codec „{}“ mit Dekodierer „{}“: kein passender Dekodierer auf \
-                             diesem Gerät.",
-                            codec.label(),
-                            decoder.label()
-                        )
-                    })
-                });
-            if let (Some(text), Some(session)) = (refused, view.session.as_ref()) {
-                // No tiles in silence (N5): neither the decode thread nor the
-                // host switch, the reason is shown; `true` keeps
-                // `ViewState::apply` from clearing it.
-                session.info().notice = Some(text);
-                return true;
-            }
             // Codex 8/7: the decode thread's codec watch starts afresh.
             if let Some(session) = view.session.as_ref() {
                 session.choice_made();
@@ -152,4 +156,26 @@ impl ScreenViewerApp {
         }
         false
     }
+}
+
+/// Why the stored „Codec“, „Dekodierer“ and „Bibliothek“ cannot work here:
+/// the library looks at the offers before „Codec“/„Dekodierer“ narrow them,
+/// as at the opening (round 8 B3); nothing left to offer names the pair
+/// (Gemini 5/7: „Hardware“ under „Verlustfrei“).
+fn refusal(
+    offers: &[crate::screen::core::negotiate::CodecOffer],
+    codec: crate::screen::core::negotiate::CodecSetting,
+) -> Option<String> {
+    let request = super::super::screen_pool::announced_request(offers);
+    let library = super::super::screen_session::library_refusal_for(&request.decoders, codec);
+    library.or_else(|| {
+        let decoder = super::super::screen_prefs::decoder_choice();
+        request.decoders_frame().decoders.is_empty().then(|| {
+            format!(
+                "Codec „{}“ mit Dekodierer „{}“: kein passender Dekodierer auf diesem Gerät.",
+                codec.label(),
+                decoder.label()
+            )
+        })
+    })
 }

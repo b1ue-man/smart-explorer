@@ -138,6 +138,12 @@ impl DecodeState {
     pub(super) fn poll_switch(&mut self) {
         let switches = self.shared.local.switches.load(Ordering::Acquire);
         if switches == self.chain.switches {
+            // Gemini 8/13: a request the 1 s pause held back is asked again
+            // until the key frame came (`reopens_at` ends the wait); the
+            // encoders run without a key frame interval of their own.
+            if self.chain.reopen && self.latest_gop != 0 {
+                self.request_keyframe(KeyframeReason::DecodeError, self.latest_gop);
+            }
             return;
         }
         self.chain.switches = switches;

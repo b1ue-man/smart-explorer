@@ -352,21 +352,33 @@ impl ScreenTileGrid {
 
     /// „Aktualisierung“ and „Größe“.
     fn controls(&mut self, ui: &mut egui::Ui, tiles: &mut [Tile]) {
+        // The row break of the viewer's toolbar (Gemini 8/11): egui breaks
+        // no row before a list, which ran past the window's edge here.
+        use super::screen_toolbar_ui::wrap;
         ui.horizontal_wrapped(|ui| {
-            ui.label("Aktualisierung:");
+            wrap::begin(ui);
             let current = INTERVALS
                 .iter()
                 .find(|(ms, _)| *ms == self.interval_ms)
                 .map_or("1 s", |(_, label)| *label);
-            egui::ComboBox::from_id_salt("screen_grid_interval")
-                .selected_text(current)
-                .show_ui(ui, |ui| {
-                    for (ms, label) in INTERVALS {
-                        ui.selectable_value(&mut self.interval_ms, ms, label);
-                    }
-                });
-            ui.selectable_value(&mut self.fit, Fit::Fit, "Einpassen");
-            ui.selectable_value(&mut self.fit, Fit::Actual, "1:1 · Ziehen zum Verschieben");
+            wrap::reserve_pair(ui, "Aktualisierung:", current);
+            ui.label("Aktualisierung:");
+            let list = egui::ComboBox::from_id_salt("screen_grid_interval");
+            wrap::fitted_after_label(ui, list, current).show_ui(ui, |ui| {
+                for (ms, label) in INTERVALS {
+                    ui.selectable_value(&mut self.interval_ms, ms, label);
+                }
+            });
+            for (fit, text) in [
+                (Fit::Fit, "Einpassen"),
+                (Fit::Actual, "1:1 · Ziehen zum Verschieben"),
+            ] {
+                wrap::reserve(ui, wrap::button_width(ui, text));
+                ui.selectable_value(&mut self.fit, fit, text);
+            }
+            let gap = ui.spacing().item_spacing.x;
+            let slider = ui.spacing().slider_width;
+            wrap::reserve(ui, wrap::label_width(ui, "Größe:") + gap + slider);
             ui.label("Größe:");
             ui.add(egui::Slider::new(&mut self.width, MIN_WIDTH..=MAX_WIDTH).show_value(false));
         });

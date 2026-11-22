@@ -296,7 +296,7 @@ impl ScreenViewerApp {
                 })
                 .is_some_and(|window| window.hidden());
             if !hidden {
-                view.follow_size(result.display, &common.prefs);
+                view.follow_window(result.display, ctx.screen_rect().size(), &common.prefs);
             }
             for local in result.locals {
                 match local {
@@ -439,7 +439,7 @@ impl eframe::App for ScreenViewerApp {
             self.fullscreen_hint_until = Some(Instant::now() + Duration::from_secs(4));
             ctx.send_viewport_cmd(ViewportCommand::Fullscreen(true));
         }
-        if self.fullscreen {
+        if self.fullscreen && !self.toolbar_open {
             let overlay = egui::Area::new(egui::Id::new("screen_fullscreen_exit"))
                 .order(egui::Order::Foreground)
                 .anchor(egui::Align2::RIGHT_TOP, [-8.0, 8.0])

@@ -55,6 +55,10 @@ pub struct ViewState {
     measured: Option<FrameSize>,
     /// The opening waited one frame for `measured`.
     waited: bool,
+    /// The window's size now and when the size last went out
+    /// (`follow_window`); `None` until the window is known.
+    window: Option<eframe::egui::Vec2>,
+    sent_window: Option<eframe::egui::Vec2>,
 }
 
 impl ViewState {
@@ -71,6 +75,8 @@ impl ViewState {
             resized_at: Instant::now(),
             measured: None,
             waited: false,
+            window: None,
+            sent_window: None,
         }
     }
 
@@ -237,6 +243,21 @@ impl ViewState {
         }
     }
 
+    /// `follow_size` for a window of `window` points. Only a window that
+    /// changed its size passes a new picture area on (Gemini 8/5: the
+    /// toolbar growing to more rows once the session's facts arrived shrank
+    /// the area, and 400 ms after the start a second encoder began).
+    pub fn follow_window(
+        &mut self,
+        display: FrameSize,
+        window: eframe::egui::Vec2,
+        prefs: &ViewerPrefs,
+    ) {
+        self.window = Some(window);
+        self.sent_window.get_or_insert(window);
+        self.follow_size(display, prefs);
+    }
+
     /// Passes a resized window on to the host, once the size rests.
     pub fn follow_size(&mut self, display: FrameSize, prefs: &ViewerPrefs) {
         self.measured = Some(display);
@@ -252,11 +273,14 @@ impl ViewState {
             return;
         }
         let moved = |old: u32, new: u32| old.abs_diff(new) >= (old / 8).max(64);
-        let changed = moved(self.sent_display.width, display.width)
-            || moved(self.sent_display.height, display.height);
+        let window = self.window.is_none() || self.window != self.sent_window;
+        let changed = window
+            && (moved(self.sent_display.width, display.width)
+                || moved(self.sent_display.height, display.height));
         if changed && self.resized_at.elapsed() >= RESIZE_PAUSE && session.info().accepted > 0 {
             session.send(ViewerFrame::SetMode(full_set_mode(None, display, prefs)));
             self.sent_display = display;
+            self.sent_window = self.window;
         }
     }
 

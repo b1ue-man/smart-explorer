@@ -37,7 +37,7 @@ fn bounds_id() -> egui::Id {
 }
 
 /// Notes the bar's left and right edge before its first item.
-pub(super) fn begin(ui: &egui::Ui) {
+pub(crate) fn begin(ui: &egui::Ui) {
     let rect = ui.max_rect();
     let bounds = (rect.left(), rect.right());
     ui.ctx()
@@ -52,7 +52,7 @@ fn bounds(ui: &egui::Ui) -> (f32, f32) {
 }
 
 /// The rest of the current row up to the bar's right edge.
-fn rest(ui: &egui::Ui) -> f32 {
+pub(crate) fn rest(ui: &egui::Ui) -> f32 {
     (bounds(ui).1 - ui.cursor().left()).max(0.0)
 }
 
@@ -121,7 +121,7 @@ pub(super) fn fitted(
 /// `fitted` for the list of a label placed just before it („Gerät:“,
 /// „Quelle:“): `reserve_pair` broke the row before the label already, so
 /// the list never breaks away from it (U3); it is shortened to the rest.
-pub(super) fn fitted_after_label(
+pub(crate) fn fitted_after_label(
     ui: &mut egui::Ui,
     list: egui::ComboBox,
     text: impl Into<WidgetText>,
@@ -176,7 +176,7 @@ fn fitted_in(
 /// rest of the row is `available_size_before_wrap` (egui 0.29.1 `ui.rs`
 /// 996): in a wrapping layout `available_width` is the width of a whole row
 /// (`layout.rs` 439-445), so the check never broke a row (fix 2026-11-19).
-pub(super) fn reserve(ui: &mut egui::Ui, width: f32) {
+pub(crate) fn reserve(ui: &mut egui::Ui, width: f32) {
     let at_row_start = ui.cursor().left() <= bounds(ui).0 + ROW_START_SLACK;
     if breaks_before(Some(width), rest(ui), at_row_start) {
         ui.end_row();
@@ -223,7 +223,7 @@ fn note_label(ui: &mut egui::Ui, text: WidgetText, sense: Option<egui::Sense>) -
 /// The outer width of a button showing `text`. A button inside a child `Ui`
 /// (`add_enabled_ui`, `scope`) needs it reserved: the child starts at the
 /// cursor, and egui breaks a row only after its start (`layout.rs` 534).
-pub(super) fn button_width(ui: &egui::Ui, text: &str) -> f32 {
+pub(crate) fn button_width(ui: &egui::Ui, text: &str) -> f32 {
     text_width(ui, text, TextStyle::Button) + 2.0 * ui.spacing().button_padding.x
 }
 
@@ -288,7 +288,7 @@ pub(super) fn checkbox(ui: &mut egui::Ui, on: &mut bool, text: &str) -> egui::Re
 }
 
 /// The outer width of a label showing `text` (body text, unwrapped).
-pub(super) fn label_width(ui: &egui::Ui, text: &str) -> f32 {
+pub(crate) fn label_width(ui: &egui::Ui, text: &str) -> f32 {
     text_width(ui, text, TextStyle::Body)
 }
 
@@ -301,7 +301,7 @@ pub(super) fn text_edit_width(desired: f32) -> f32 {
 
 /// A label and the list that belongs to it stay in one row: the row breaks
 /// before the label when both do not fit the rest of it.
-pub(super) fn reserve_pair(ui: &mut egui::Ui, label: &str, list_text: &str) {
+pub(crate) fn reserve_pair(ui: &mut egui::Ui, label: &str, list_text: &str) {
     let width = text_width(ui, label, TextStyle::Body)
         + ui.spacing().item_spacing.x
         + list_width(ui, list_text);

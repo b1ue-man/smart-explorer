@@ -37,13 +37,27 @@ pub fn run(target: ScreenTarget) -> i32 {
         },
         Box::new(move |cc| Ok(Box::new(FamilyViewerApp::new(cc, first, first_prefs)))),
     );
-    if result.is_ok() {
-        return 0;
+    let error = match result {
+        Ok(()) => return 0,
+        Err(error) => error.to_string(),
+    };
+    // A chosen „wgpu“ is not replaced by glow in silence, as in the full
+    // viewer (Gemini 8/14, `screen_launch.rs`).
+    if !super::screen_launch::glow_allowed(super::screen_prefs::display_choice()) {
+        let message = super::screen_launch::wgpu_refused_text(&error);
+        let automatic = "Mit „Anzeige: Automatisch“ öffnen";
+        if !super::screen_launch::error_window_with_choice(&message, automatic) {
+            return 1;
+        }
+        let automatic = super::screen_prefs::DisplayChoice::Automatic;
+        let _ = super::screen_prefs::set_output_choice(None, Some(automatic));
     }
     let result = super::screen_render_app::run_native(
         "app.smartexplorer.family",
         eframe::NativeOptions {
             renderer: eframe::Renderer::Glow,
+            // „Niedrigste Latenz“ under glow: no VSync asked of the driver.
+            vsync: !prefs.low_latency,
             viewport: viewport(),
             ..Default::default()
         },
@@ -91,8 +105,10 @@ impl FamilyViewerApp {
             )
         });
         let gpu = super::screen_render_owner::get(ctx).is_some_and(|owner| owner.yuv());
-        // The symbols of its lines (`symbol_fonts`, Gemini 3/8).
-        super::screen_present::symbol_fonts(ctx);
+        // The symbols of its lines (Gemini 3/8) and the window's renderer
+        // and latency for „Anzeige“ (Gemini 8/14, as the full viewer).
+        let glow = cc.wgpu_render_state.is_none();
+        super::screen_present::set_window(ctx, glow, prefs.low_latency);
         let device = target
             .device_id
             .clone()

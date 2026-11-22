@@ -101,7 +101,7 @@ pub(super) fn display_rows(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Ve
         let field = egui::TextEdit::singleline(text)
             .id(egui::Id::new("screen_custom_size_field"))
             .hint_text("2560x1440")
-            .desired_width(90.0);
+            .desired_width(90.0_f32.min((super::wrap::rest(ui) - 8.0).max(24.0)));
         let edited = ui.add(field);
         super::wrap::note_editing(ui, &edited);
         let parsed = parse_size(text);

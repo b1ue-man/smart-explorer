@@ -478,7 +478,7 @@ mod display_rows;
 #[path = "screen_toolbar_view.rs"]
 mod view_rows;
 #[path = "screen_toolbar_wrap.rs"]
-mod wrap;
+pub(crate) mod wrap;
 pub use display_rows::{apply_virtual_display, send_live};
 pub use wrap::toolbar_editing;
 
