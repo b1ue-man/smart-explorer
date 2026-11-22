@@ -130,6 +130,7 @@ internal object AccessLink {
             is PhoneAction.Text -> {
                 val result = call(AccessProtocol.TEXT, { it.writeString(action.text) }) { _, reply -> reply.readInt() } ?: 0
                 if (result == ScreenControlService.TEXT_HIDDEN) refusal("secret")
+                if (result == ScreenControlService.TEXT_REFUSED) refusal("field")
                 done(result == ScreenControlService.TEXT_DONE)
             }
             is PhoneAction.Global -> done(global(action.action))

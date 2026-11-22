@@ -107,7 +107,7 @@ class ScreenDecoder(
     private var hybridFrameEpoch=0L
     private var rejectedHybridGop:Long?=null
     private var rejectedTilesGop:Long?=null
-    /** The format (codec, size, „Dekodierer“) no allowed component opened; it is not tried again (Codex 10/12). */
+    /** The format (codec, size, „Dekodierer“, group) no allowed component opened; its reason went out once (Codex 10/12). */
     private var refusedFormat:String?=null
     private var payloadOffset=HEADER_BYTES
     private var frameId: Long?=null
@@ -440,7 +440,9 @@ class ScreenDecoder(
         }
         // Why each allowed component did not open, for the reason the view shows (Codex 10/12).
         val refusals=mutableListOf<String>()
-        val format="$codecKey ${info.width}x${info.height}|${wanted.decoder}"
+        // Per picture group too: a new group (a rebuilt host session, another choice, a new negotiation) hears the
+        // reason again; the session shows each group's once (`codecFallbackGop`, round 11, M1).
+        val format="$codecKey ${info.width}x${info.height}|${wanted.decoder}|$gop"
         for(candidate in choices) {
             val caps=candidate.getCapabilitiesForType(mime)
             if(caps.videoCapabilities?.isSizeSupported(info.width,info.height)!=true) { refusals+="${candidate.name}: Größe nicht unterstützt"; continue }

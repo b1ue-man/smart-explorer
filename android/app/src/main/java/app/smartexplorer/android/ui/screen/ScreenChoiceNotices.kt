@@ -34,6 +34,8 @@ object ScreenCodecNotices {
         "the device did not answer an input in time" to "Das Gerät hat auf eine Eingabe nicht rechtzeitig geantwortet",
         "the device has no counterpart for this mouse button (only left and back)" to
             "Das Gerät kennt diese Maustaste nicht (nur links und „Zurück“)",
+        "the focused field did not take the text (it is read-only or refuses text)" to
+            "Das Feld mit dem Fokus hat den Text nicht angenommen (schreibgeschützt oder es nimmt keinen Text an)",
         "the device cannot see the content of this field (a password or web field); typing would replace it, so the text was not typed" to
             "Das Gerät kann den Inhalt dieses Felds nicht sehen (Passwort- oder Webfeld); Tippen würde ihn ersetzen, der Text wurde daher nicht eingegeben",
     )

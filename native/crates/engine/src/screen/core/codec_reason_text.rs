@@ -44,7 +44,7 @@ pub fn sound_over_ceiling(needed_bps: u64, ceiling_bps: u64) -> String {
 /// An input the Android host's accessibility service did not perform
 /// (`screen.hostNotice {inputRefused}`, `mobile/…/screen_host.rs`) and its
 /// German text.
-const NOTICE_INPUT: [(&str, &str); 6] = [
+const NOTICE_INPUT: [(&str, &str); 7] = [
     (
         "the device cancelled a gesture of the input",
         "Das Gerät hat eine Geste der Eingabe abgebrochen",
@@ -70,6 +70,10 @@ const NOTICE_INPUT: [(&str, &str); 6] = [
          replace it, so the text was not typed",
         "Das Gerät kann den Inhalt dieses Felds nicht sehen (Passwort- oder Webfeld); Tippen würde ihn \
          ersetzen, der Text wurde daher nicht eingegeben",
+    ),
+    (
+        "the focused field did not take the text (it is read-only or refuses text)",
+        "Das Feld mit dem Fokus hat den Text nicht angenommen (schreibgeschützt oder es nimmt keinen Text an)",
     ),
 ];
 

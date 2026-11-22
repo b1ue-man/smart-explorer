@@ -14,7 +14,7 @@
 //! - `screen.hostNotice {session, epoch, rateFloor}` (the lowest bit rate of
 //!   the encoder of `epoch`), `{session, parameter, detail?}` (a parameter
 //!   the encoder refused) or `{session, inputRefused}` (`gesture`, `text`,
-//!   `action`, `timeout`, `button`, `secret`: an input Android did not perform): a notice for
+//!   `action`, `timeout`, `button`, `secret`, `field`: an input Android did not perform): a notice for
 //!   the viewer while encoder and session keep running
 //!   (`HostStage::take_notice`, review 2026-11-19).
 //!
@@ -362,13 +362,14 @@ fn notice(args: &Value) -> Result<Value, ApiError> {
             "action" => "the device refused a system action of the input",
             "timeout" => "the device did not answer an input in time",
             "button" => "the device has no counterpart for this mouse button (only left and back)",
+            "field" => "the focused field did not take the text (it is read-only or refuses text)",
             "secret" => {
                 "the device cannot see the content of this field (a password or web field); \
                  typing would replace it, so the text was not typed"
             }
             _ => {
                 return Err(invalid(
-                    "„inputRefused“ ist gesture, text, action, timeout, button oder secret.",
+                    "„inputRefused“ ist gesture, text, action, timeout, button, secret oder field.",
                 ))
             }
         };
@@ -380,7 +381,7 @@ fn notice(args: &Value) -> Result<Value, ApiError> {
         // hidden blocks nothing (the control works on): the notice alone
         // says it (round 10, B2).
         let block = match kind {
-            "button" | "secret" => None,
+            "button" | "secret" | "field" => None,
             "text" | "action" => Some(ControlBlock::UnsupportedOnHost),
             _ => Some(ControlBlock::ControlUnavailable),
         };
