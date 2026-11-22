@@ -288,6 +288,10 @@ pub enum InputHeld {
     WaitingForPicture,
     /// The host lets go of held keys and buttons first.
     ReleasePending,
+    /// Too much input waits behind a running injection; only releases
+    /// queue until it drained (review 2026-11-19, round 10). An older viewer
+    /// reads it as `Other`.
+    BacklogFull,
     /// A reason of a newer host.
     #[serde(other)]
     Other,

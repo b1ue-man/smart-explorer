@@ -17,7 +17,7 @@
 //! receipt. `blocked` is `elevated_window`, `secure_desktop`,
 //! `control_unavailable` or `unsupported_on_host`; `held` says the host held
 //! the input back without applying it (`viewer_hidden`,
-//! `waiting_for_picture`, `release_pending`, `other`), or that no complete
+//! `waiting_for_picture`, `release_pending`, `backlog_full`, `other`), or that no complete
 //! picture came within five seconds, so the input was not sent
 //! (`waiting_for_picture`). With either the exit
 //! code is 1. No input is ever logged.

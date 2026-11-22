@@ -81,7 +81,8 @@ impl Session<'_> {
     /// S4: the viewer heard of a hold whose reason ended: it hears that it
     /// ended (the block it heard last stays named).
     pub(super) async fn end_hold(&mut self) -> io::Result<()> {
-        if !self.health.held_reported || self.hold_reason().is_some() {
+        // Round 10: an overflowed backlog stays reported until it drained.
+        if !self.health.held_reported || self.hold_reason().is_some() || self.health.overflow {
             return Ok(());
         }
         self.health.held_reported = false;

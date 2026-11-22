@@ -55,6 +55,8 @@ pub(super) struct InputHealth {
     /// Codex 7/10: the batch being injected off the session loop, and the
     /// batches that wait behind it in their order.
     pub(super) injecting: Option<Injection>,
+    /// Round 10: the backlog overflowed; only releases queue until it drained.
+    pub(super) overflow: bool,
     /// Round 8 (I5): counts every release of all held keys; a batch whose
     /// injection began before one is let go again when it ends.
     pub(super) release_epoch: u64,

@@ -167,6 +167,7 @@ pub fn held_text(held: InputHeld) -> &'static str {
         InputHeld::ViewerHidden => "Eingabe verworfen: das Bild ist verdeckt oder minimiert",
         InputHeld::WaitingForPicture => "Eingabe verworfen: noch kein aktuelles Bild angezeigt",
         InputHeld::ReleasePending => "Eingabe verworfen: gehaltene Tasten werden erst gelöst",
+        InputHeld::BacklogFull => "Eingabe verworfen: zu viele Eingaben warten noch auf das Gerät",
         InputHeld::Other => "Eingabe vom Gerät verworfen",
     }
 }

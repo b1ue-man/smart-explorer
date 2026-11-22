@@ -249,11 +249,14 @@ impl Session<'_> {
     /// `settle_input` takes the result and starts the next one.
     pub(super) async fn input(&mut self, events: &[InputEvent]) -> io::Result<()> {
         if self.health.injecting.is_some() || !self.health.backlog.is_empty() {
-            // Round 8 (I2): keys, buttons and touches are never dropped; a
-            // batch of only moves and wheel steps joins one waiting before
-            // it (the newest position, the steps added), which bounds them.
+            // Round 8 (I2): a batch of only moves and wheel steps joins one
+            // waiting before it, while nothing is pressed (round 10: a drag
+            // keeps its exact path).
+            let free = self.pressed.is_empty() && !self.presses_pending();
             let merged = match self.health.backlog.back_mut() {
-                Some(waiting) if inject::motion_only(waiting) && inject::motion_only(events) => {
+                Some(waiting)
+                    if free && inject::motion_only(waiting) && inject::motion_only(events) =>
+                {
                     inject::merge_motion(waiting, events)
                 }
                 _ => false,
@@ -262,11 +265,14 @@ impl Session<'_> {
                 return Ok(());
             }
             let waiting: usize = self.health.backlog.iter().map(Vec::len).sum();
-            if waiting + events.len() <= inject::BACKLOG_EVENTS {
+            if !self.health.overflow && waiting + events.len() <= inject::BACKLOG_EVENTS {
                 self.health.backlog.push_back(events.to_vec());
                 return Ok(());
             }
-            // Round 9 (E6): beyond the bound only the releases wait.
+            // Round 9 (E6), round 10: beyond the bound only releases wait,
+            // from this batch and every next one until the backlog drained
+            // (`overflow`), so no later press meets the dropped ones.
+            self.health.overflow = true;
             let releases: Vec<InputEvent> = events
                 .iter()
                 .filter(|event| super::input_release::releases(event))
@@ -275,8 +281,9 @@ impl Session<'_> {
             if !releases.is_empty() {
                 self.health.backlog.push_back(releases);
             }
-            return self.report_held(InputHeld::ReleasePending).await;
+            return self.report_held(InputHeld::BacklogFull).await;
         }
+        self.health.overflow = false;
         self.start_batch(events).await
     }
 

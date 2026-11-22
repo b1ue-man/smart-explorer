@@ -46,7 +46,7 @@ pub(super) fn merge_motion(waiting: &mut Vec<InputEvent>, events: &[InputEvent])
                 *dx = dx.saturating_add(*x);
                 *dy = dy.saturating_add(*y);
             }
-            (Some(last @ InputEvent::Touch { .. }), InputEvent::Touch { id, .. }) if matches!(last, InputEvent::Touch { id: held, .. } if held == id) => {
+            (Some(last @ InputEvent::Touch { .. }), InputEvent::Touch { id, .. }) if matches!(&*last, InputEvent::Touch { id: held, .. } if held == id) => {
                 *last = event.clone()
             }
             _ => merged.push(event.clone()),
@@ -60,6 +60,28 @@ pub(super) fn merge_motion(waiting: &mut Vec<InputEvent>, events: &[InputEvent])
 }
 
 impl Session<'_> {
+    /// A press waits behind the injection or is in it (round 10: moves are
+    /// then not merged, a drag keeps its path).
+    pub(super) fn presses_pending(&self) -> bool {
+        let press = |event: &InputEvent| {
+            matches!(
+                event,
+                InputEvent::Key { down: true, .. }
+                    | InputEvent::Button { down: true, .. }
+                    | InputEvent::Touch {
+                        phase: crate::screen::core::input_model::TouchPhase::Start,
+                        ..
+                    }
+            )
+        };
+        self.health.backlog.iter().flatten().any(press)
+            || self
+                .health
+                .injecting
+                .as_ref()
+                .is_some_and(|job| job.events.iter().any(press))
+    }
+
     /// Takes the result of a finished injection and starts the batches that
     /// waited, in their order (on every viewer frame and capture tick).
     pub(in super::super) async fn settle_input(&mut self) -> io::Result<()> {
@@ -81,6 +103,8 @@ impl Session<'_> {
                 self.flush_releases();
             }
             let Some(next) = self.health.backlog.pop_front() else {
+                // Drained: input queues in full again (round 10).
+                self.health.overflow = false;
                 return Ok(());
             };
             self.start_batch(&next).await?;

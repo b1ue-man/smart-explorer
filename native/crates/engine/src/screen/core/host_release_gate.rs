@@ -78,8 +78,16 @@ pub(super) fn take_over(
     let outstanding = Outstanding(key);
     runtime.spawn(async move {
         let _outstanding = outstanding;
+        // Round 10: a job that never ends does not keep everyone's input
+        // waiting. Its releases still follow: they go through the same sink,
+        // which serialises them behind it (the host process's link lock,
+        // Android's queue, the portal thread), so they cannot overtake it.
         for job in jobs {
-            let _ = job.await;
+            if tokio::time::timeout(GATE_LIMIT, job).await.is_err() {
+                super::super::visibility::note_viewer(
+                    "a handed-over input job outlasted its limit; its releases follow it",
+                );
+            }
         }
         // Round 9 (E4): the limit counts from here, after the handed jobs.
         let started = Instant::now();
@@ -91,9 +99,14 @@ pub(super) fn take_over(
                 return;
             }
             let target = target.clone();
-            let left = tokio::task::spawn_blocking(move || deliver(&target, events))
-                .await
-                .unwrap_or_default();
+            let delivery = tokio::task::spawn_blocking(move || deliver(&target, events));
+            let Ok(joined) = tokio::time::timeout(GATE_LIMIT, delivery).await else {
+                super::super::visibility::note_viewer(
+                    "releases of a former holder did not finish; given up",
+                );
+                return;
+            };
+            let left = joined.unwrap_or_default();
             if left.is_empty() {
                 continue;
             }

@@ -124,6 +124,7 @@ object ScreenTexts {
         "viewer_hidden" -> "Eingabe verworfen: das Bild ist verdeckt oder minimiert"
         "waiting_for_picture" -> "Eingabe verworfen: noch kein aktuelles Bild angezeigt"
         "release_pending" -> "Eingabe verworfen: gehaltene Tasten werden erst gelöst"
+        "backlog_full" -> "Eingabe verworfen: zu viele Eingaben warten noch auf das Gerät"
         else -> "Eingabe vom Gerät verworfen"
     }
 }
