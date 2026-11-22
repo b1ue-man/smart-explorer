@@ -442,18 +442,9 @@ pub(super) fn max_rate_row(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Ve
             super::wrap::note(ui, RichText::new(error).color(warning));
         }
     }
-    // P9: what the session does with the ceiling.
-    if limited
-        && input.info.is_some_and(|info| {
-            info.rate_ceiling == crate::daemon::RateCeilingState::UnsupportedByHost
-        })
-    {
-        let warning = crate::app::theme::warning(ui);
-        super::wrap::note(
-            ui,
-            RichText::new("vom Gerät nicht unterstützt").color(warning),
-        );
-    } else if limited && confirmed(input, stored) {
+    // P9: what the session does with the ceiling. A host that cannot keep
+    // it ends the session with its reason (Codex 10/7, round 11 N1).
+    if limited && confirmed(input, stored) {
         // The host's own statistics name this ceiling (Codex 3/22): only
         // then is it „übernommen“, not when `RATE_CEILING` was merely sent.
         super::wrap::note(ui, RichText::new("vom Gerät übernommen").small());

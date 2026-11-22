@@ -99,9 +99,6 @@ pub fn stats_lines(info: &SessionInfo, unmapped_keys: u64) -> Vec<String> {
     if unmapped_keys > 0 {
         lines.push(format!("Tasten ohne Abbildung {unmapped_keys}"));
     }
-    if info.rate_ceiling == crate::daemon::RateCeilingState::UnsupportedByHost {
-        lines.push("Höchste Datenrate: vom Gerät nicht unterstützt (ältere Version)".into());
-    }
     lines
 }
 

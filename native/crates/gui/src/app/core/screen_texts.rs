@@ -161,12 +161,6 @@ pub fn blocked_text(block: ControlBlock) -> &'static str {
     }
 }
 
-/// A „Höchste Datenrate“ the host cannot take, in the status line beside
-/// any other notice (U2: as the notice it pushed out and was pushed out by
-/// the errors of other chosen settings); `ViewState::status_text`.
-pub const CEILING_UNSUPPORTED: &str =
-    "Höchste Datenrate: vom Gerät nicht unterstützt (ältere Version); das Bild läuft ohne diese Grenze.";
-
 /// Why the host dropped the input batch (E2): it is not carried out later
 /// (U5: „wartet“ promised that), the input itself is not blocked.
 pub fn held_text(held: InputHeld) -> &'static str {

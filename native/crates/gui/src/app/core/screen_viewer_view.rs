@@ -209,10 +209,6 @@ impl ViewState {
                 false => format!("{status} – {line}"),
             };
         };
-        // Its own line beside the notice (U2).
-        if info.rate_ceiling == crate::daemon::RateCeilingState::UnsupportedByHost {
-            add(super::screen_texts::CEILING_UNSUPPORTED);
-        }
         // E2: input the host holds back, else a block, while it steers; a
         // block repeated in the held state is the one named before.
         if self.control_on {
