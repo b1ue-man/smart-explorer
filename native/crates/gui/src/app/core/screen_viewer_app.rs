@@ -184,9 +184,8 @@ impl ScreenViewerApp {
             status.push_str(notice);
         }
         // Painted over the picture: as a status panel it changed the picture
-        // area, every change sent a visibility report, the report invalidated
-        // the picture and input — an endless black/picture loop while
-        // steering in a window.
+        // area, and each change cost a visibility report and the picture (an
+        // endless black/picture loop while steering in a window).
         let waiting = (status.is_empty()
             && view.control_on
             && view
@@ -296,7 +295,8 @@ impl ScreenViewerApp {
                 })
                 .is_some_and(|window| window.hidden());
             if !hidden {
-                view.follow_window(result.display, ctx.screen_rect().size(), &common.prefs);
+                let window = ctx.screen_rect().size() * ctx.pixels_per_point();
+                view.follow_window(result.display, window, &common.prefs);
             }
             for local in result.locals {
                 match local {

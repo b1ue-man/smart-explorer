@@ -243,7 +243,9 @@ impl ViewState {
         }
     }
 
-    /// `follow_size` for a window of `window` points. Only a window that
+    /// `follow_size` for a window of `window` pixels (points times
+    /// `pixels_per_point`: a scale change alone counts, Codex 9/15). Only a
+    /// window that
     /// changed its size passes a new picture area on (Gemini 8/5: the
     /// toolbar growing to more rows once the session's facts arrived shrank
     /// the area, and 400 ms after the start a second encoder began).
