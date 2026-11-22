@@ -294,9 +294,17 @@ pub(crate) fn label_width(ui: &egui::Ui, text: &str) -> f32 {
 
 /// The outer width of a single-line `TextEdit` of `desired` points (egui
 /// 0.29.1 `text_edit/builder.rs` 127, 492-522: the clipped single line is
-/// as wide as asked, plus the default margin of 4 points on each side).
+/// as wide as asked, plus the default margin of 4 points on each side),
+/// with the same reserve as a measured text (`TEXT_SLACK`: pixel rounding
+/// under a display scale such as 125 %).
 pub(super) fn text_edit_width(desired: f32) -> f32 {
-    desired + 8.0
+    desired + 8.0 + TEXT_SLACK
+}
+
+/// The widest `desired` a single-line `TextEdit` may ask for in the rest of
+/// this row (`text_edit_width` of it fits), at least 24 points.
+pub(super) fn text_edit_room(ui: &egui::Ui, desired: f32) -> f32 {
+    desired.min((rest(ui) - 8.0 - TEXT_SLACK).max(24.0))
 }
 
 /// A label and the list that belongs to it stay in one row: the row breaks
