@@ -146,6 +146,11 @@ impl Pipeline {
         self.rate.on_control_bytes(now_us(), bytes);
     }
 
+    /// The viewer's „Höchste Datenrate“; `None` is automatic.
+    pub fn user_ceiling_bps(&self) -> Option<u64> {
+        self.rate.user_ceiling_bps()
+    }
+
     /// „Höchste Datenrate“ of the viewer (B-09); `None` is automatic.
     pub fn set_rate_ceiling(&mut self, ceiling_bps: Option<u64>) {
         self.work.set_live_ceiling(ceiling_bps);

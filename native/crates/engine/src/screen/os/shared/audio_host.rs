@@ -20,7 +20,7 @@ use bytes::Bytes;
 use iroh::endpoint::Connection;
 use tokio::sync::{mpsc, watch};
 
-use crate::screen::core::audio_codec::opus_bitrate_for;
+use crate::screen::core::audio_codec::{opus_bitrate_for, sound_fits};
 use crate::screen::core::audio_wire::read_piped;
 
 /// Environment variable that makes `--screen-host-worker` the capture
@@ -129,12 +129,16 @@ async fn run(
             }
             Err(_) => return,
         };
-        // The capture process codes at the rate the ceiling leaves the sound.
+        // The capture process codes at the rate the ceiling leaves the sound;
+        // under a ceiling the sound does not fit, none is sent (round 8
+        // Gemini 8/10: the session tells the viewer why).
+        let mut fits = sound_fits(*ceiling.borrow());
         capture.set_rate(*ceiling.borrow_and_update());
         loop {
             tokio::select! {
                 packet = capture.packets.recv() => match packet {
                     // Dropped when the connection cannot take it now.
+                    Some(_) if !fits => failures = 0,
                     Some(packet) => {
                         failures = 0;
                         let bytes = packet.len() as u64;
@@ -160,6 +164,7 @@ async fn run(
                     if changed.is_err() {
                         return;
                     }
+                    fits = sound_fits(*ceiling.borrow());
                     capture.set_rate(*ceiling.borrow_and_update());
                 }
                 _ = connection.closed() => return,

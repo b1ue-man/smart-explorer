@@ -102,12 +102,28 @@ impl Pace {
             // The first stretch runs from the pace's start. What a stretch
             // earned and the line did not use ends with it (a stretch without
             // a ceiling earned without bound); the saved credit stays.
-            if let Some(before) = self.anchor_rate {
-                let cap = u128::from(self.written).max(self.banked);
-                self.banked = self
-                    .banked
-                    .saturating_add(earned(before, self.anchor))
-                    .min(cap);
+            let before = self.anchor_rate.unwrap_or(self.rate_bps);
+            let earned_before = match self.anchor_rate {
+                Some(before) => earned(before, self.anchor),
+                None => 0,
+            };
+            // Gemini 8/10: a lowered rate keeps of the saved credit at most
+            // its own burst window, so the old rate's credit does not go on
+            // the line at once after a lowered ceiling.
+            let saved = if rate < before {
+                let window = u128::from(rate)
+                    * u128::from(crate::screen::core::tiles_rate::TILE_BURST_US)
+                    / 8
+                    / 1_000_000;
+                self.banked.min(window)
+            } else {
+                self.banked
+            };
+            if self.anchor_rate.is_some() || rate < before {
+                let cap = u128::from(self.written).max(saved);
+                self.banked = self.banked.saturating_add(earned_before).min(cap);
+            }
+            if self.anchor_rate.is_some() {
                 self.anchor = tokio::time::Instant::now();
             }
             self.anchor_rate = Some(rate);

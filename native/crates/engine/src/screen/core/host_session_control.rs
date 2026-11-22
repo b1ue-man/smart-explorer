@@ -165,7 +165,7 @@ impl Session<'_> {
                 if let Some(link) = self.context.backend.audio() {
                     link.set_ceiling(self.connection, ceiling);
                 }
-                Ok(())
+                self.sound_notice(Some(ceiling), None).await
             }
             // New decoders after „Codec“/„Dekodierer“ (`set_decoders_v1`):
             // a changed pairing starts a group in the new codec.
@@ -189,6 +189,7 @@ impl Session<'_> {
             ViewerFrame::Audio(on) => {
                 if let Some(link) = self.context.backend.audio() {
                     link.set_wanted(self.connection, on);
+                    return self.sound_notice(None, Some(on)).await;
                 }
                 Ok(())
             }
@@ -445,6 +446,21 @@ impl Session<'_> {
                 None,
                 None,
             );
+        }
+    }
+}
+
+impl Session<'_> {
+    /// Sound that does not fit under the viewer's ceiling is not sent; the
+    /// viewer hears why once (round 8 Gemini 8/10).
+    async fn sound_notice(
+        &mut self,
+        ceiling: Option<Option<u64>>,
+        on: Option<bool>,
+    ) -> io::Result<()> {
+        match self.outbox.sound.update(ceiling, on) {
+            Some(text) => self.report(self.state, Some(&text)).await,
+            None => Ok(()),
         }
     }
 }

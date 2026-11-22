@@ -116,7 +116,7 @@ impl<'a> Session<'a> {
         families_supported: bool,
         family_source: Option<String>,
     ) -> Self {
-        let outbox = send::Outbox::new(pipeline.shared_budget());
+        let outbox = send::Outbox::new(pipeline.shared_budget(), pipeline.user_ceiling_bps());
         let pipeline = PipelineActor::new(pipeline, connection.clone());
         let observed_reference_floor = pipeline.reference_floor();
         Self {

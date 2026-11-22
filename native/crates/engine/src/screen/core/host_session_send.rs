@@ -29,8 +29,6 @@ use crate::screen::core::tiles_rate::SharedBudget;
 
 /// Large frames held at most before the metadata answers wait (`full`).
 const HELD_FRAMES: usize = 32;
-/// Replaced shapes remembered (their ids only rise; a few cover a burst).
-const REPLACED_SHAPES: usize = 8;
 /// A piece of a large frame: a tenth of a second of the budget's rate,
 /// within these bounds.
 const PIECE_MIN: usize = 1024;
@@ -74,23 +72,68 @@ pub(super) struct Outbox {
     /// The pointer shape still held, and the newest position that needs it.
     shape: Option<u32>,
     position: Option<HostFrame>,
-    /// Shapes replaced before they went (round 7 P8): their positions are
-    /// dropped, since a viewer draws a position only with its own shape
-    /// (`CursorView::visible`) and would hide the pointer.
-    replaced: Vec<u32>,
+    /// The newest pointer shape the feed gave (held, being written or
+    /// sent): a viewer keeps only its newest shape and draws a position only
+    /// with it (`CursorView::visible`), so a position of any other shape
+    /// would hide the pointer and is dropped (round 7 P8; Gemini 8/16: a
+    /// list of 8 replaced shapes let positions of older ones through).
+    latest_shape: Option<u32>,
     writing: Option<Writing>,
     /// Small frames that came while a large frame was being written.
     behind: VecDeque<HostFrame>,
+    /// The sound under the viewer's ceiling (`SoundCeiling`).
+    pub(super) sound: SoundCeiling,
+}
+
+/// Whether the viewer's sound fits under its „Höchste Datenrate“ (round 8
+/// Gemini 8/10): the capture link sends none that does not
+/// (`audio_codec::sound_fits`), and the viewer hears why once.
+#[derive(Default)]
+pub(super) struct SoundCeiling {
+    ceiling: Option<u64>,
+    on: bool,
+    noticed: bool,
+}
+
+impl SoundCeiling {
+    /// A new ceiling or sound wish; the notice once while the wanted sound
+    /// does not fit, again after it fitted in between.
+    pub(super) fn update(
+        &mut self,
+        ceiling: Option<Option<u64>>,
+        on: Option<bool>,
+    ) -> Option<String> {
+        if let Some(ceiling) = ceiling {
+            self.ceiling = ceiling;
+        }
+        if let Some(on) = on {
+            self.on = on;
+        }
+        let unfit = self.on && !crate::screen::core::audio_codec::sound_fits(self.ceiling);
+        let fresh = unfit && !self.noticed;
+        self.noticed = unfit;
+        let ceiling = self.ceiling?;
+        fresh.then(|| {
+            crate::screen::core::codec_reason_text::sound_over_ceiling(
+                crate::screen::core::audio_codec::sound_min_bps(),
+                ceiling,
+            )
+        })
+    }
 }
 
 impl Outbox {
-    pub(super) fn new(budget: SharedBudget) -> Self {
+    pub(super) fn new(budget: SharedBudget, ceiling: Option<u64>) -> Self {
         Self {
+            sound: SoundCeiling {
+                ceiling,
+                ..SoundCeiling::default()
+            },
             budget,
             held: VecDeque::new(),
             shape: None,
             position: None,
-            replaced: Vec::new(),
+            latest_shape: None,
             writing: None,
             behind: VecDeque::new(),
         }
@@ -157,7 +200,7 @@ impl Outbox {
             .retain(|held| !matches!(held.frame(), HostFrame::CursorShape(_)));
         self.shape = None;
         self.position = None;
-        self.replaced.clear();
+        self.latest_shape = None;
     }
 
     fn hold(&mut self, held: Held) {
@@ -166,11 +209,7 @@ impl Outbox {
             // positions wait for it, a window list does not.
             self.held
                 .retain(|other| !matches!(other.frame(), HostFrame::CursorShape(_)));
-            if let Some(old) = self.shape.replace(shape.id) {
-                if self.replaced.len() == REPLACED_SHAPES {
-                    self.replaced.remove(0);
-                }
-                self.replaced.push(old);
+            if self.shape.replace(shape.id).is_some() {
                 // Its position goes neither now nor with the new shape.
                 self.position = None;
             }

@@ -169,4 +169,13 @@ fn review1119_task_new_reasons_read_german() {
     assert!(include_str!("host_pipeline_admit.rs").contains(
         "\"chosen_codec_unavailable: {}: the picture of {}x{} pixels is smaller than \\\n"
     ));
+    // Round 8 Gemini 8/10: sound that does not fit under the ceiling.
+    assert_eq!(
+        encoder_notice_text(&sound_over_ceiling(28_400, 20_000)).as_deref(),
+        Some(
+            "Hinweis vom Gerät: Ton passt nicht unter die Höchste Datenrate: er braucht \
+             mindestens 28400 bit/s, die Höchste Datenrate ist 20000 bit/s; es wird kein Ton \
+             gesendet"
+        )
+    );
 }

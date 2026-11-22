@@ -292,6 +292,14 @@ impl Pipeline {
             self.pacer.on_budget_drop();
         }
         if !self.work.current(work_epoch) {
+            // Gemini 8/3: a picture the stage encoded keeps its id, so the
+            // encoder's reference history never sees one id twice.
+            if matches!(produced, Ok(Captured::Encoded { .. })) {
+                let used = report
+                    .and_then(|report| report.frame_id)
+                    .map_or(request.frame_id, |id| id.max(request.frame_id));
+                self.next_frame_id = self.next_frame_id.max(used.saturating_add(1));
+            }
             self.reset_stream();
             return Ok(Produced::Reset);
         }

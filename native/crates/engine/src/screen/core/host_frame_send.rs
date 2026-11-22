@@ -14,6 +14,8 @@ impl Pipeline {
     ) -> Result<Produced, PipelineError> {
         let work = self.work.clone();
         if !work.current(work_epoch) {
+            // Gemini 8/3: the encoded picture keeps its id (no id twice).
+            self.next_frame_id = self.next_frame_id.max(frame_id.saturating_add(1));
             self.reset_stream();
             return Ok(Produced::Reset);
         }

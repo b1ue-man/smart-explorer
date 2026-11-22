@@ -11,10 +11,17 @@ use super::Pacer;
 /// pictures are 20 ms of relay, decoding and vsync. [Assumption: a viewer
 /// that keeps up shows a picture within 250 ms of its arrival.]
 pub const VIEWER_LAG_US: u64 = 250_000;
-/// How long the last `PRESENTED` counts: a viewer that shows nothing (a
-/// gate after a visibility change, a viewer without the frame) does not
-/// hold the pictures back.
+/// How long the last `PRESENTED` counts at least: a viewer that shows
+/// nothing (a gate after a visibility change, a display path without
+/// `PRESENTED`) does not hold the pictures back after it.
 pub const PRESENTED_FRESH_US: u64 = 1_000_000;
+/// A viewer that shows slowly (a software decoder at 4K) keeps counting for
+/// `PRESENTED_GAPS` of its own time between two `PRESENTED`, at most
+/// `PRESENTED_HOLD_MAX_US` (round 8 Gemini 8/2: after one second without a
+/// `PRESENTED` such a viewer was no longer held, the pictures piled up in
+/// the relay and its reader, and the stream broke off as stale).
+pub const PRESENTED_GAPS: u64 = 3;
+pub const PRESENTED_HOLD_MAX_US: u64 = 5_000_000;
 /// Received pictures kept for `viewer_behind` at most (a memory bound).
 pub(super) const MAX_RECEIVED: usize = 256;
 
@@ -37,6 +44,9 @@ impl Pacer {
     /// earlier picture is done with (shown or skipped). One picture may
     /// follow at once (`viewer_behind`).
     pub fn on_presented(&mut self, frame_id: u64, now_us: u64) {
+        if let Some((_, before)) = self.presented {
+            self.presented_gap_us = now_us.saturating_sub(before);
+        }
         let newest = self
             .presented
             .map_or(frame_id, |(frame, _)| frame.max(frame_id));
@@ -65,17 +75,26 @@ impl Pacer {
     }
 
     /// Whether the next picture waits for the viewer: it shows pictures
-    /// (a `PRESENTED` within `PRESENTED_FRESH_US`), the oldest picture it
-    /// received and did not show came more than `VIEWER_LAG_US` ago, and no
-    /// picture went out since its last `PRESENTED`. A viewer that keeps up
-    /// is never held; one that falls behind gets one picture per picture it
-    /// shows, and never waits past its next `PRESENTED`. No stream is reset
-    /// for it and the line's rate stays; a viewer without `PRESENTED`
-    /// (older ones, `se screen bench`) is never held.
+    /// (its last `PRESENTED` came within `PRESENTED_FRESH_US`, or within
+    /// `PRESENTED_GAPS` of its own time between two of them, at most
+    /// `PRESENTED_HOLD_MAX_US`), the oldest picture it received and did not
+    /// show came more than `VIEWER_LAG_US` ago, and no picture went out
+    /// since its last `PRESENTED`. A viewer that keeps up is never held; one
+    /// that falls behind gets one picture per picture it shows, and never
+    /// waits past its next `PRESENTED`. A viewer that stops sending
+    /// `PRESENTED` is no longer held after that time (a display path without
+    /// it never becomes one picture a second). No stream is reset for it and
+    /// the line's rate stays; a viewer without `PRESENTED` (older ones,
+    /// `se screen bench`) is never held.
     pub fn viewer_behind(&self, now_us: u64) -> bool {
+        let fresh = PRESENTED_FRESH_US.max(
+            self.presented_gap_us
+                .saturating_mul(PRESENTED_GAPS)
+                .min(PRESENTED_HOLD_MAX_US),
+        );
         let showing = self
             .presented
-            .is_some_and(|(_, at)| now_us.saturating_sub(at) <= PRESENTED_FRESH_US);
+            .is_some_and(|(_, at)| now_us.saturating_sub(at) <= fresh);
         let lagging = self
             .received
             .front()

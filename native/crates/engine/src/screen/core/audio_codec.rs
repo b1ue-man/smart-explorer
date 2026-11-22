@@ -59,6 +59,21 @@ pub fn opus_bitrate_for(ceiling_bps: Option<u64>) -> i32 {
         .clamp(OPUS_MIN_BITRATE, OPUS_BITRATE)
 }
 
+/// The least the sound takes on the line: `OPUS_MIN_BITRATE` and its
+/// packet heads.
+pub fn sound_min_bps() -> u64 {
+    let packets_per_second = 1_000_000 / u64::from(super::audio_wire::FRAME_US);
+    let head_bps = super::audio_wire::PACKET_HEAD as u64 * 8 * packets_per_second;
+    u64::try_from(OPUS_MIN_BITRATE).unwrap_or(0) + head_bps
+}
+
+/// Whether the sound fits under the viewer's „Höchste Datenrate“ (round 8
+/// Gemini 8/10): below `sound_min_bps` no sound is sent and the viewer is
+/// told why (`codec_reason_text::sound_over_ceiling`).
+pub fn sound_fits(ceiling_bps: Option<u64>) -> bool {
+    ceiling_bps.is_none_or(|ceiling| ceiling >= sound_min_bps())
+}
+
 fn codec_error(message: &'static str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)
 }

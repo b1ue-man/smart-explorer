@@ -33,6 +33,14 @@ const NOTICE_ABOVE: &str = " bit/s is above the highest data rate ";
 const NOTICE_PARAMETER: &str = "the encoder refused the parameter ";
 const NOTICE_CONTROL: &str = "the control stream's ";
 const NOTICE_CONTROL_ABOVE: &str = " bit/s leave the pictures too little of the highest data rate ";
+const NOTICE_SOUND: &str = "the sound needs at least ";
+const NOTICE_SOUND_ABOVE: &str = " bit/s, more than the highest data rate ";
+
+/// The notice of sound that does not fit under „Höchste Datenrate“ (round 8
+/// Gemini 8/10): no sound is sent (`audio_codec::sound_fits`).
+pub fn sound_over_ceiling(needed_bps: u64, ceiling_bps: u64) -> String {
+    format!("{ENCODER_NOTICE}{NOTICE_SOUND}{needed_bps}{NOTICE_SOUND_ABOVE}{ceiling_bps} bit/s; no sound is sent")
+}
 /// An input the Android host's accessibility service did not perform
 /// (`screen.hostNotice {inputRefused}`, `mobile/…/screen_host.rs`) and its
 /// German text.
@@ -103,6 +111,16 @@ fn notice_sentence(text: &str) -> String {
             "Steuerkanal und Ton (Zeiger, Status, Fensterlisten, Bildschirmton) brauchen {control} bit/s \
              der Höchsten Datenrate ({ceiling} bit/s); für Bilder bleibt zu wenig, neue Bilder \
              werden zurückgehalten, bis sie weniger brauchen"
+        );
+    }
+    if let Some((needed, ceiling)) = text
+        .strip_prefix(NOTICE_SOUND)
+        .and_then(|rest| rest.split_once(NOTICE_SOUND_ABOVE))
+    {
+        let ceiling = ceiling.split_once(" bit/s").map_or(ceiling, |(n, _)| n);
+        return format!(
+            "Ton passt nicht unter die Höchste Datenrate: er braucht mindestens {needed} bit/s, \
+             die Höchste Datenrate ist {ceiling} bit/s; es wird kein Ton gesendet"
         );
     }
     if let Some(rest) = text.strip_prefix(NOTICE_PARAMETER) {

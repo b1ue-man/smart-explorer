@@ -6,11 +6,18 @@ use crate::screen::core::cursor_overlay::CursorPosition;
 
 impl Session<'_> {
     pub(in super::super) async fn frame(&mut self, frame: HostFrame) -> io::Result<()> {
+        if let HostFrame::CursorShape(shape) = &frame {
+            self.outbox.latest_shape = Some(shape.id);
+        }
         if let HostFrame::CursorPosition(position) = &frame {
             if *position == CursorPosition::hidden() {
                 self.outbox.forget_pointer();
             } else {
-                if self.outbox.replaced.contains(&position.shape_id) {
+                if self
+                    .outbox
+                    .latest_shape
+                    .is_some_and(|latest| latest != position.shape_id)
+                {
                     return Ok(());
                 }
                 if self.outbox.shape == Some(position.shape_id) {

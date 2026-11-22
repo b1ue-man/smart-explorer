@@ -43,7 +43,7 @@ pub const STALE_FRAME_INTERVALS: u64 = 3;
 pub const MAX_FPS: u32 = 240;
 #[path = "pacing_viewer.rs"]
 mod viewer;
-pub use viewer::{PRESENTED_FRESH_US, VIEWER_LAG_US};
+pub use viewer::{PRESENTED_FRESH_US, PRESENTED_HOLD_MAX_US, VIEWER_LAG_US};
 
 /// Unacknowledged bytes the guard allows: the target rate over one round
 /// trip plus `QUEUE_ALLOWANCE_US`, on the relay path at most
@@ -140,6 +140,8 @@ pub struct Pacer {
     received_floor: u64,
     presented: Option<(u64, u64)>,
     present_credit: bool,
+    /// The time between the viewer's last two `PRESENTED` (`viewer_behind`).
+    presented_gap_us: u64,
 }
 
 impl Default for Pacer {
@@ -161,6 +163,7 @@ impl Default for Pacer {
             received_floor: 0,
             presented: None,
             present_credit: false,
+            presented_gap_us: 0,
         }
     }
 }

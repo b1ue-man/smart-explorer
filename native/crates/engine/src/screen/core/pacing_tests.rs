@@ -208,7 +208,7 @@ fn screen_task_pacing_frame_clock_cadence() {
 /// keeps up is never held, and no stream is reset for it.
 #[test]
 fn review1119_task_pictures_follow_what_the_viewer_shows() {
-    use super::{PRESENTED_FRESH_US, VIEWER_LAG_US};
+    use super::{PRESENTED_FRESH_US, PRESENTED_HOLD_MAX_US, VIEWER_LAG_US};
     let mut pacer = Pacer::default();
     let frame = |frame_id: u64| SentFrame {
         gop_id: 1,
@@ -244,8 +244,20 @@ fn review1119_task_pictures_follow_what_the_viewer_shows() {
     assert!(!pacer.viewer_behind(late));
     pacer.on_frame_sent(frame(22));
     assert!(pacer.viewer_behind(late));
-    // A viewer that stopped showing (a gate, a hidden view) is not waited for.
+    // Three of its own gaps between two `PRESENTED` (0.25 s) are less than
+    // `PRESENTED_FRESH_US`: after that it is not waited for (a gate, a path
+    // without `PRESENTED`), never one picture a second.
+    assert!(pacer.viewer_behind(late + PRESENTED_FRESH_US));
     assert!(!pacer.viewer_behind(late + PRESENTED_FRESH_US + 1));
+    // A slow viewer (4K software decoding) is held for 3 of its gaps, at most
+    // `PRESENTED_HOLD_MAX_US`.
+    let mut slow = Pacer::default();
+    slow.on_presented(1, 0);
+    slow.on_presented(2, 2_000_000);
+    slow.on_frame_sent(frame(3));
+    slow.on_received(3, 2_000_000);
+    assert!(slow.viewer_behind(2_000_000 + 4_000_000));
+    assert!(!slow.viewer_behind(2_000_000 + PRESENTED_HOLD_MAX_US + 1));
     // It never resets a stream: the decision stays.
     assert_eq!(
         pacer.decide(late, 6_000_000, PathKind::Direct, 1_000),
