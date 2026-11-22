@@ -76,6 +76,20 @@ pub(super) struct Injection {
 /// desktop, costs no attempt per picture).
 const RELEASE_RETRY: std::time::Duration = std::time::Duration::from_secs(1);
 
+/// `event` lets go of a key, button or touch.
+pub(super) fn releases(event: &InputEvent) -> bool {
+    matches!(
+        event,
+        InputEvent::Key { down: false, .. }
+            | InputEvent::Button { down: false, .. }
+            | InputEvent::Touch {
+                phase: crate::screen::core::input_model::TouchPhase::End
+                    | crate::screen::core::input_model::TouchPhase::Cancel,
+                ..
+            }
+    )
+}
+
 fn failed_list(failed: &Mutex<Vec<InputEvent>>) -> MutexGuard<'_, Vec<InputEvent>> {
     failed.lock().unwrap_or_else(PoisonError::into_inner)
 }
@@ -277,7 +291,10 @@ impl Session<'_> {
                 super::visibility::note_viewer("an input injection outlasted the close grace");
                 // Round 8 (I8): it stays the session's, so no release runs
                 // beside it; `hand_releases_over` gives it to the keeper.
-                for event in &job.events {
+                // Round 9 (E5): only its presses count as held; a release in
+                // it may not have gone, so what it releases stays held and is
+                // let go again (a second release is harmless).
+                for event in job.events.iter().filter(|event| !releases(event)) {
                     self.pressed.observe(event);
                 }
                 self.health.injecting = Some(job);

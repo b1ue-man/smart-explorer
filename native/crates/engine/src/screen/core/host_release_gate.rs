@@ -78,10 +78,11 @@ pub(super) fn take_over(
     let outstanding = Outstanding(key);
     runtime.spawn(async move {
         let _outstanding = outstanding;
-        let started = Instant::now();
         for job in jobs {
             let _ = job.await;
         }
+        // Round 9 (E4): the limit counts from here, after the handed jobs.
+        let started = Instant::now();
         loop {
             let mut events =
                 std::mem::take(&mut *failed.lock().unwrap_or_else(PoisonError::into_inner));

@@ -33,7 +33,7 @@ const NOTICE_ABOVE: &str = " bit/s is above the highest data rate ";
 const NOTICE_PARAMETER: &str = "the encoder refused the parameter ";
 const NOTICE_CONTROL: &str = "the control stream's ";
 const NOTICE_CONTROL_ABOVE: &str = " bit/s leave the pictures too little of the highest data rate ";
-const NOTICE_SOUND: &str = "the sound needs at least ";
+const NOTICE_SOUND: &str = "the sound and the pictures' least share need ";
 const NOTICE_SOUND_ABOVE: &str = " bit/s, more than the highest data rate ";
 
 /// The notice of sound that does not fit under „Höchste Datenrate“ (round 8
@@ -119,8 +119,9 @@ fn notice_sentence(text: &str) -> String {
     {
         let ceiling = ceiling.split_once(" bit/s").map_or(ceiling, |(n, _)| n);
         return format!(
-            "Ton passt nicht unter die Höchste Datenrate: er braucht mindestens {needed} bit/s, \
-             die Höchste Datenrate ist {ceiling} bit/s; es wird kein Ton gesendet"
+            "Ton passt neben dem Bild nicht unter die Höchste Datenrate: Ton und Mindestanteil \
+             der Bilder brauchen {needed} bit/s, die Höchste Datenrate ist {ceiling} bit/s; es \
+             wird kein Ton gesendet"
         );
     }
     if let Some(rest) = text.strip_prefix(NOTICE_PARAMETER) {

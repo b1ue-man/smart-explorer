@@ -4,38 +4,6 @@ use super::*;
 use crate::screen::core::cursor_overlay::{CursorFeed, CursorPosition, CursorSeen, CursorUpdate};
 use crate::screen::core::wire_control::{ControlBlock, InputHeld};
 
-/// A batch of pointer moves and wheel steps only (round 8, I2).
-fn motion_only(events: &[InputEvent]) -> bool {
-    events.iter().all(|event| {
-        matches!(
-            event,
-            InputEvent::PointerAbs { .. } | InputEvent::Wheel { .. }
-        )
-    })
-}
-
-/// `events` joins `waiting` (both `motion_only`): the newest position, then
-/// the wheel steps of both added (saturating at the wire's range).
-fn merge_motion(waiting: &mut Vec<InputEvent>, events: &[InputEvent]) {
-    let (mut dx, mut dy) = (0i16, 0i16);
-    let mut position = None;
-    for event in waiting.iter().chain(events) {
-        match event {
-            InputEvent::PointerAbs { .. } => position = Some(event.clone()),
-            InputEvent::Wheel { dx: x, dy: y } => {
-                dx = dx.saturating_add(*x);
-                dy = dy.saturating_add(*y);
-            }
-            _ => {}
-        }
-    }
-    waiting.clear();
-    waiting.extend(position);
-    if dx != 0 || dy != 0 {
-        waiting.push(InputEvent::Wheel { dx, dy });
-    }
-}
-
 /// The pointer overlay of one session (plan 2026-11-14 P6).
 #[derive(Default)]
 pub(super) struct CursorLink {
@@ -291,13 +259,30 @@ impl Session<'_> {
             // Round 8 (I2): keys, buttons and touches are never dropped; a
             // batch of only moves and wheel steps joins one waiting before
             // it (the newest position, the steps added), which bounds them.
-            match self.health.backlog.back_mut() {
-                Some(waiting) if motion_only(waiting) && motion_only(events) => {
-                    merge_motion(waiting, events)
+            let merged = match self.health.backlog.back_mut() {
+                Some(waiting) if inject::motion_only(waiting) && inject::motion_only(events) => {
+                    inject::merge_motion(waiting, events)
                 }
-                _ => self.health.backlog.push_back(events.to_vec()),
+                _ => false,
+            };
+            if merged {
+                return Ok(());
             }
-            return Ok(());
+            let waiting: usize = self.health.backlog.iter().map(Vec::len).sum();
+            if waiting + events.len() <= inject::BACKLOG_EVENTS {
+                self.health.backlog.push_back(events.to_vec());
+                return Ok(());
+            }
+            // Round 9 (E6): beyond the bound only the releases wait.
+            let releases: Vec<InputEvent> = events
+                .iter()
+                .filter(|event| super::input_release::releases(event))
+                .cloned()
+                .collect();
+            if !releases.is_empty() {
+                self.health.backlog.push_back(releases);
+            }
+            return self.report_held(InputHeld::ReleasePending).await;
         }
         self.start_batch(events).await
     }

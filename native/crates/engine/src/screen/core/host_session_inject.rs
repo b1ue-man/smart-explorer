@@ -3,6 +3,62 @@
 //! capture tick, applies it and starts the batches that waited, in order.
 use super::*;
 
+/// Events a waiting batch may absorb (round 8, I2; round 9, E6): pointer
+/// positions, wheel steps and touch moves.
+fn mergeable(event: &InputEvent) -> bool {
+    matches!(
+        event,
+        InputEvent::PointerAbs { .. }
+            | InputEvent::Wheel { .. }
+            | InputEvent::Touch {
+                phase: crate::screen::core::input_model::TouchPhase::Move,
+                ..
+            }
+    )
+}
+
+pub(super) fn motion_only(events: &[InputEvent]) -> bool {
+    events.iter().all(mergeable)
+}
+
+/// A merged batch holds at most this many events; beyond, the next batch
+/// waits on its own.
+const MERGED_MAX: usize = 16;
+/// Events waiting behind an injection at most (round 9, E6); beyond, only
+/// the releases of a batch wait (they never go lost), the rest is dropped
+/// and the viewer hears `ReleasePending`.
+pub(super) const BACKLOG_EVENTS: usize = 1024;
+
+/// `events` joins `waiting` (both `motion_only`) in order: a position
+/// replaces the position just before it, wheel steps add to the steps just
+/// before them, a touch move replaces the same touch's move just before it
+/// (round 9, E3: a wheel step stays at the position it was made at).
+/// `false` (and `waiting` unchanged) when the result would exceed
+/// `MERGED_MAX`.
+pub(super) fn merge_motion(waiting: &mut Vec<InputEvent>, events: &[InputEvent]) -> bool {
+    let mut merged = waiting.clone();
+    for event in events {
+        match (merged.last_mut(), event) {
+            (Some(last @ InputEvent::PointerAbs { .. }), InputEvent::PointerAbs { .. }) => {
+                *last = event.clone()
+            }
+            (Some(InputEvent::Wheel { dx, dy }), InputEvent::Wheel { dx: x, dy: y }) => {
+                *dx = dx.saturating_add(*x);
+                *dy = dy.saturating_add(*y);
+            }
+            (Some(last @ InputEvent::Touch { .. }), InputEvent::Touch { id, .. }) if matches!(last, InputEvent::Touch { id: held, .. } if held == id) => {
+                *last = event.clone()
+            }
+            _ => merged.push(event.clone()),
+        }
+    }
+    if merged.len() > MERGED_MAX {
+        return false;
+    }
+    *waiting = merged;
+    true
+}
+
 impl Session<'_> {
     /// Takes the result of a finished injection and starts the batches that
     /// waited, in their order (on every viewer frame and capture tick).

@@ -127,7 +127,7 @@ object ScreenCodecNotices {
         val control = "the control stream's "
         val controlAbove = " bit/s leave the pictures too little of the highest data rate "
         // `codec_reason_text.rs` NOTICE_SOUND / NOTICE_SOUND_ABOVE (sound that does not fit, none is sent).
-        val sound = "the sound needs at least "
+        val sound = "the sound and the pictures' least share need "
         val soundAbove = " bit/s, more than the highest data rate "
         val german = when {
             sentence.startsWith(lowest) && sentence.contains(above) -> {
@@ -151,7 +151,7 @@ object ScreenCodecNotices {
             }
             sentence.startsWith(sound) && sentence.contains(soundAbove) -> {
                 val rest = sentence.removePrefix(sound)
-                "Ton passt nicht unter die Höchste Datenrate: er braucht mindestens " +
+                "Ton passt neben dem Bild nicht unter die Höchste Datenrate: Ton und Mindestanteil der Bilder brauchen " +
                     "${rest.substringBefore(soundAbove)} bit/s, die Höchste Datenrate ist " +
                     "${rest.substringAfter(soundAbove).substringBefore(" bit/s")} bit/s; es wird kein Ton gesendet"
             }

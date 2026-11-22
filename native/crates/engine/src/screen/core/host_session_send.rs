@@ -24,7 +24,6 @@
 use std::collections::VecDeque;
 
 use super::*;
-use crate::screen::core::cursor_overlay::CursorPosition;
 use crate::screen::core::tiles_rate::SharedBudget;
 
 /// Large frames held at most before the metadata answers wait (`full`).
@@ -115,7 +114,7 @@ impl SoundCeiling {
         let ceiling = self.ceiling?;
         fresh.then(|| {
             crate::screen::core::codec_reason_text::sound_over_ceiling(
-                crate::screen::core::audio_codec::sound_min_bps(),
+                crate::screen::core::audio_codec::sound_needs_bps(ceiling),
                 ceiling,
             )
         })

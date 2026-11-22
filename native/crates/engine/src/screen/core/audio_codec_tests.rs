@@ -90,6 +90,23 @@ fn review1119_task_sound_follows_the_ceiling() {
         );
     }
     assert_eq!(opus_bitrate_for(Some(1)), OPUS_MIN_BITRATE);
+    // Round 9: the picture goes first. Sound goes only where it leaves the
+    // pictures their floor (28.4 kbit/s of sound and heads, 56.8 kbit/s in
+    // all); below, none is sent.
+    assert_eq!(sound_min_bps(), 28_400);
+    assert!(sound_fits(None));
+    assert!(sound_fits(Some(56_800)));
+    assert!(!sound_fits(Some(56_798)));
+    assert!(!sound_fits(Some(40_000)));
+    for ceiling in [56_800u64, 80_000, 150_000, 300_000, 1_000_000] {
+        let sound = u64::try_from(opus_bitrate_for(Some(ceiling))).unwrap() + head_bps;
+        let floor = super::super::rate_control::picture_floor_bps(ceiling);
+        assert!(sound_fits(Some(ceiling)));
+        assert!(
+            ceiling - sound >= floor,
+            "{ceiling}: sound {sound}, floor {floor}"
+        );
+    }
     let mut encoder = AudioEncoder::new(AudioCodec::Opus).unwrap();
     encoder.set_bitrate(opus_bitrate_for(Some(150_000)));
     let mut payload = Vec::new();

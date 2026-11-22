@@ -67,11 +67,20 @@ pub fn sound_min_bps() -> u64 {
     u64::try_from(OPUS_MIN_BITRATE).unwrap_or(0) + head_bps
 }
 
-/// Whether the sound fits under the viewer's „Höchste Datenrate“ (round 8
-/// Gemini 8/10): below `sound_min_bps` no sound is sent and the viewer is
-/// told why (`codec_reason_text::sound_over_ceiling`).
+/// What the sound needs beside the pictures under `ceiling_bps`: its least
+/// rate and the pictures' floor (`picture_floor_bps`). The control stream's
+/// own load is no part of it: it varies, and a control stream above its
+/// share stops the pictures with its own notice (`control_over_ceiling`).
+pub fn sound_needs_bps(ceiling_bps: u64) -> u64 {
+    sound_min_bps() + super::rate_control::picture_floor_bps(ceiling_bps)
+}
+
+/// Whether the sound fits under the viewer's „Höchste Datenrate“ beside the
+/// pictures (round 8 Gemini 8/10, round 9: the picture goes first): under a
+/// lower ceiling no sound is sent and the viewer is told why
+/// (`codec_reason_text::sound_over_ceiling`).
 pub fn sound_fits(ceiling_bps: Option<u64>) -> bool {
-    ceiling_bps.is_none_or(|ceiling| ceiling >= sound_min_bps())
+    ceiling_bps.is_none_or(|ceiling| ceiling >= sound_needs_bps(ceiling))
 }
 
 fn codec_error(message: &'static str) -> io::Error {
