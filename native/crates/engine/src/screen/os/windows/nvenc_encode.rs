@@ -1,8 +1,7 @@
 //! NVENC session of Windows hosts with an NVIDIA GPU (BK12, B-22; HEVC and
 //! AV1 by merge W1 through `nvenc_codecs.rs`, as BK6's Linux session does
 //! with `apply_codec_settings`) on the capture's D3D11 device. Settings as
-//! B-21 and R01
-//! (`nvenc_base.cpp:258-283`, `:351-381`, `:641-643`), identical to BK4's
+//! B-21 and R01 (`nvenc_base.cpp:258-283`, `:351-381`, `:641-643`), as
 //! `linux_os/nvenc_encode.rs` (`apply_settings`): preset P1 with tuning
 //! "ultra low latency", CBR, VBV buffer of one frame, no B pictures
 //! (`frameIntervalP` 1, `zeroReorderDelay`), no look-ahead, infinite GOP with
@@ -54,8 +53,7 @@ use crate::screen::core::pixel_convert::FrameSize;
 use crate::screen::core::rate_control::START_DIRECT_BPS;
 use crate::screen::core::wire::invalid;
 
-// Merge W2: names and settings shared with Linux
-// (`native_ffi/nvenc_settings.rs`); every `nvenc_encode::` path stays.
+// Merge W2: names and settings shared with Linux (`nvenc_settings.rs`).
 pub(super) use crate::screen::os::nvenc_shared::settings::{
     apply_codec_references, apply_codec_settings, NvRate,
 };
@@ -255,7 +253,6 @@ impl<A: NvTable> Core<A> {
         idr: bool,
         deliver: &mut dyn FnMut(&[u8]) -> io::Result<()>,
     ) -> io::Result<bool> {
-        let f = self.api.table();
         let mut params = Box::new(NvEncPicParams::zeroed());
         params.version = NV_ENC_PIC_PARAMS_VER;
         params.input_width = self.size.width;
@@ -272,7 +269,8 @@ impl<A: NvTable> Core<A> {
             params.picture_type = NV_ENC_PIC_TYPE_IDR;
         }
         self.plan_long_term(&mut params, frame_id, idr);
-        let encode = f.encode_picture.ok_or_else(missing)?;
+        // Codex 10/2: the table only after the mutable borrow above.
+        let encode = self.api.table().encode_picture.ok_or_else(missing)?;
         // SAFETY: valid async session, mapped input, output buffer and event.
         let result = unsafe { encode(self.encoder, &mut *params) };
         status(&self.api, self.encoder, result, "nvEncEncodePicture")?;
@@ -493,5 +491,9 @@ impl VendorSession for NvencSession {
 
     fn end_late(&mut self) -> bool {
         self.drain_late()
+    }
+
+    fn holds_input(&self) -> bool {
+        self.late.is_some()
     }
 }

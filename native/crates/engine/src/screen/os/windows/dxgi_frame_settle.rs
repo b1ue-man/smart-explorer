@@ -10,9 +10,9 @@
 //! the reference was dropped before the read: the next timed-out wait
 //! rebuilt the duplication, with a new capture generation and so a new
 //! encoder, however long the encoding took. A held frame goes with the
-//! duplication (`stop`). The only frame still lost is one whose rotation on
-//! the CPU is refused for memory after its release (a rotated display on the
-//! CPU route): its reference goes, as before.
+//! duplication (`stop`). Codex 10/5: a rotation on the CPU (a rotated
+//! display on the CPU route) happens before the release, so its refusal
+//! holds the frame as well and no longer rebuilds the duplication.
 //!
 //! H4: the picture records the pointer mode it was read in
 //! (`DxgiCapture::blends_now`, taken once before the read), not the mode a
@@ -41,26 +41,32 @@ impl DxgiCapture {
     pub(super) fn settle_frame(
         &mut self,
         duplication: &IDXGIOutputDuplication,
-        resource: Option<IDXGIResource>,
+        mut resource: Option<IDXGIResource>,
         picture: Option<io::Result<Option<Read>>>,
         regions: Option<AdmittedRegions>,
         keyframe: bool,
     ) -> io::Result<SourcePicture> {
+        let geometry = self.budget.geometry();
+        // Codex 10/5: blended and rotated while the frame is still acquired.
+        let picture = match picture {
+            Some(Ok(Some(read))) => Some(self.made(read, regions, geometry).map(Some)),
+            Some(Ok(None)) => Some(Ok(None)),
+            Some(Err(error)) => Some(Err(error)),
+            None => None,
+        };
         let refused = matches!(&picture, Some(Err(e)) if e.kind() == io::ErrorKind::WouldBlock);
-        if let Some(resource) = resource.filter(|_| refused) {
-            self.held = Some(resource);
+        // Codex 10/1: the handle is taken only to be held.
+        if let Some(held) = resource.take().filter(|_| refused) {
+            self.held = Some(held);
             return Ok(match self.last {
                 Some(_) => self.again(keyframe),
                 None => SourcePicture::Unchanged, // as before
             });
         }
-        let geometry = self.budget.geometry();
-        drop(resource);
-        // SAFETY: the frame acquired before, released once.
+        // SAFETY: the frame acquired before, released once (`resource` went).
         let released = unsafe { duplication.ReleaseFrame() };
         if let Err(error) = released {
             drop(picture);
-            drop(regions);
             if error.code() == DXGI_ERROR_ACCESS_LOST {
                 eprintln!(
                     "screen capture: ReleaseFrame: duplication lost (mode or desktop change)"
@@ -72,49 +78,8 @@ impl DxgiCapture {
             return Ok(self.frame_failed(FallbackStep::ReleaseFrame, error));
         }
         match picture {
-            // The GPU route has the overlay and no rotation: the regions and
-            // the pointer belong to CPU pixels only (BK3b).
-            Some(Ok(Some(Read::Gpu(picture)))) => {
-                drop(regions);
-                let picture = Picture::Gpu(picture);
+            Some(Ok(Some(picture))) => {
                 self.size = picture.size();
-                self.last = Some(picture.clone());
-                self.last_blends = self.blends_now;
-                self.first.delivered();
-                Ok(SourcePicture::Frame(picture))
-            }
-            Some(Ok(Some(Read::Cpu(mut builder)))) => {
-                if let Some(regions) = regions {
-                    builder.set_regions(regions)?;
-                }
-                let rotation = match geometry.kind {
-                    CaptureKind::Dxgi(r) => r,
-                    _ => BgraRotation::Identity,
-                };
-                if let Some(pointer) = &self.pointer {
-                    let delivered = builder.size();
-                    let pixels = builder.pixels_mut();
-                    let blends = self.blends_now;
-                    pointer.blend_into(pixels, delivered, geometry.native, rotation, blends);
-                }
-                let image = builder.freeze();
-                let image = match image.rotate(
-                    rotation,
-                    geometry.limits,
-                    self.budget.grant()?,
-                    CaptureOwner::SourcePixels,
-                ) {
-                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                        // The frame is released: a whole picture only from
-                        // a new duplication (see the module text).
-                        self.last = None;
-                        self.first.missed();
-                        return Ok(SourcePicture::Unchanged);
-                    }
-                    result => result?,
-                };
-                self.size = image.size();
-                let picture = Picture::Cpu(image);
                 self.last = Some(picture.clone());
                 self.last_blends = self.blends_now;
                 self.first.delivered();
@@ -130,5 +95,43 @@ impl DxgiCapture {
             }
             None => Ok(self.again(keyframe)),
         }
+    }
+
+    /// The picture of `read`: the GPU route has the overlay and no rotation
+    /// (the regions and the pointer belong to CPU pixels only, BK3b); CPU
+    /// pixels get their regions, the blended pointer and the rotation. A
+    /// rotation refused for memory is `WouldBlock`, so the frame is held and
+    /// read again (Codex 10/5).
+    fn made(
+        &mut self,
+        read: Read,
+        regions: Option<AdmittedRegions>,
+        geometry: super::super::capture_slots::CaptureGeometry,
+    ) -> io::Result<Picture> {
+        let mut builder = match read {
+            Read::Gpu(picture) => return Ok(Picture::Gpu(picture)),
+            Read::Cpu(builder) => builder,
+        };
+        if let Some(regions) = regions {
+            builder.set_regions(regions)?;
+        }
+        let rotation = match geometry.kind {
+            CaptureKind::Dxgi(r) => r,
+            _ => BgraRotation::Identity,
+        };
+        if let Some(pointer) = &self.pointer {
+            let delivered = builder.size();
+            let pixels = builder.pixels_mut();
+            let blends = self.blends_now;
+            pointer.blend_into(pixels, delivered, geometry.native, rotation, blends);
+        }
+        let grant = self.budget.grant()?;
+        let image = builder.freeze().rotate(
+            rotation,
+            geometry.limits,
+            grant,
+            CaptureOwner::SourcePixels,
+        )?;
+        Ok(Picture::Cpu(image))
     }
 }

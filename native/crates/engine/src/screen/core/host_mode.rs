@@ -86,12 +86,29 @@ impl Pipeline {
             )
             .is_none_or(|fps| fps < self.codec_fps)
         });
-        if !mode.same_but_rate(&previous)
+        // Codex 10/6: the stream kind (full view or preview) is in the GOP
+        // header, not in what the encoder is asked: a new kind alone opens a
+        // group of that kind with a key frame of the running encoder (its
+        // preview receipts reset, `new_group`); `resize` replaces it when
+        // its size no longer fits.
+        let same_kind = QualityMode {
+            kind: mode.kind,
+            ..previous
+        };
+        if !mode.same_but_rate(&same_kind)
             || encoder(&self.choice) != encoder(&previous_choice)
             || beyond
         {
             self.note_restart("mode or codec pairing changed (SET_MODE/SET_DECODERS)");
             self.invalidate_reference();
+        } else if mode.kind != previous.kind {
+            if self.gop.is_none() && self.pacer.frames_in_flight() == 0 {
+                self.sender.reset();
+                self.new_group();
+                self.kept_encoder = self.running.is_some();
+            } else {
+                self.reset_stream();
+            }
         }
         self.resize();
     }

@@ -47,9 +47,8 @@ use crate::screen::core::wire::invalid;
 use crate::screen::os::mf_capture_output::capture_limit;
 use crate::screen::os::mf_encoder::d3d_input::{self, GpuInput};
 
-/// Rate control of a hardware encoder: constant bit rate, buffer of one
-/// frame, full at the start (B-21; R01 `nvenc_base.cpp:276-277` sets VBV =
-/// bitrate / fps). Identical to BK4's `linux_os/hw_encode_common.rs`.
+/// Rate control of a hardware encoder: CBR, a buffer of one frame full at the
+/// start (B-21; R01 `nvenc_base.cpp:276-277`), as `hw_encode_common.rs`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct RateParams {
     pub bits_per_second: u32,
@@ -92,19 +91,15 @@ impl RateParams {
         (a - b).abs() * 50 >= a || self.fps != other.fps || self.quality != other.quality
     }
 
-    /// Whether `other` lowers this rate at all (review 2026-11-19 C10): a
-    /// lowered rate is set however small the step, so the encoder never keeps
-    /// running above the rate the session (and the user's ceiling) allows;
-    /// the 2 % band of `differs` holds back rises only.
+    /// Whether `other` lowers this rate at all (C10): set however small the
+    /// step, never above the allowed rate; `differs` holds back rises only.
     pub(super) fn lowered_by(&self, other: &Self) -> bool {
         other.bits_per_second < self.bits_per_second
     }
 
-    /// A refused retune to this rate when it `lowered` the running one by
-    /// 2 % or more (Codex round 5, finding 11: a smaller one stays with the
-    /// running rate, the stream's byte budget keeps the ceiling): the
-    /// encoder fails its picture instead of running above it, so the stage
-    /// opens a fresh one at this rate or the next encoder of the codec.
+    /// A refused retune to this rate that `lowered` the running one by 2 % or
+    /// more (Codex 5/11; a smaller one keeps the running rate under the byte
+    /// budget) fails the picture: a fresh encoder or the codec's next.
     pub(super) fn refused_lowering(
         &self,
         lowered: bool,
@@ -121,8 +116,7 @@ impl RateParams {
     }
 }
 
-/// The NVENC rate settings take these parameters (`nvenc_settings.rs`;
-/// here since plan 2026-11-17 P9 kept `nvenc_encode.rs` below 500 lines).
+/// The NVENC rate settings take these parameters (`nvenc_settings.rs`).
 impl super::nvenc_encode::NvRate for RateParams {
     fn cbr(&self) -> (u32, u32, u32) {
         (
@@ -196,6 +190,10 @@ pub(super) trait VendorSession {
     /// may go back to the capture; `false` while the driver may still read it.
     fn end_late(&mut self) -> bool {
         true
+    }
+    /// A failed picture's input is still the driver's (Codex 10/3).
+    fn holds_input(&self) -> bool {
+        false
     }
     /// The driver refused the last rate it was given (plan 2026-11-17).
     fn rate_refused(&self) -> bool {
@@ -445,10 +443,12 @@ impl<S: VendorSession> ScreenEncoder for VendorEncoder<S> {
             marked |= append_unit(&mut bytes, maximum, codec, kept, unit)?;
             Ok(())
         });
-        // The session has read the texture once its output is there; a timed
-        // out picture keeps the ring slot until the session went (`nvenc_late`).
+        // A picture that timed out or is still mapped (Codex 10/3) keeps the
+        // ring slot until the session went (`nvenc_late`).
         match &coded {
-            Err(e) if e.kind() == io::ErrorKind::TimedOut => self.gpu.keep_late(),
+            Err(e) if e.kind() == io::ErrorKind::TimedOut || self.session.holds_input() => {
+                self.gpu.keep_late()
+            }
             _ => self.gpu.finish(),
         }
         let keyframe = coded? || marked;
