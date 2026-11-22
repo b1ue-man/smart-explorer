@@ -32,7 +32,7 @@ class BatchesScreenStateTest {
             flow.emit(ScreenViewEvent.Stream(7, "tiles", null, 64, 64, gop, "fixture", false))
             return 7
         }
-        override suspend fun setMode(session: Long, mode: String, source: String?, width: Int?, height: Int?, fps: Int?, sharpness: Boolean, lossless: Boolean) = Unit
+        override suspend fun setMode(session: Long, mode: String, source: String?, width: Int?, height: Int?, fps: Int?, sharpness: Boolean, lossless: Boolean, fallback: Boolean) = Unit
         override suspend fun input(session: Long, events: List<JsonObject>) = events.size
         override suspend fun control(session: Long, action: String) = Unit
         override suspend fun listWindows(session: Long) = Unit

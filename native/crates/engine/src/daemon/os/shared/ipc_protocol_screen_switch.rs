@@ -21,6 +21,12 @@ pub const RELAY_RATE_CEILING: u8 = 7;
 /// on, so a client without sound never sees it.
 pub const RELAY_AUDIO: u8 = 8;
 
+/// A viewer control frame like `RELAY_VIEWER` that carries only the viewer's
+/// automatic fallback (round 11, N2): the worker sends it to the host but
+/// does not keep it as the viewer's choice for a rebuilt session. Client and
+/// worker are the same build (the desktop's worker, the app's own worker).
+pub const RELAY_VIEWER_FALLBACK: u8 = 18;
+
 /// What became of „Höchste Datenrate“ in a relayed session (B-09, BK6):
 /// the viewer says when the host cannot take it instead of doing nothing.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

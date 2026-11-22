@@ -74,7 +74,7 @@ const PIN_CLOSE: u32 = 0x5345;
 
 #[path = "screen_ipc_mode_memory.rs"]
 mod mode_memory;
-pub(super) use mode_memory::ModeMemory;
+pub(super) use mode_memory::{ModeMemory, RelayedFrame};
 #[path = "screen_ipc_retry_plan.rs"]
 mod retry_plan;
 use retry_plan::retryable;
@@ -294,7 +294,7 @@ pub(super) async fn relay_session(
     redial: Redial,
     request: ViewerRequest,
     out: mpsc::Sender<(u8, Vec<u8>)>,
-    mut input: mpsc::Receiver<Option<ViewerFrame>>,
+    mut input: mpsc::Receiver<Option<RelayedFrame>>,
     metadata: bool,
     memory: Arc<Mutex<MemoryHold>>,
     max_rate_bps: Option<u64>,

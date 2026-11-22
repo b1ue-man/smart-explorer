@@ -27,6 +27,18 @@ impl Choice {
     }
 }
 
+/// One control frame of the viewer as the relay reads it (`relay_input`).
+/// `fallback`: a `SET_MODE` that carries only an automatic fallback of the
+/// viewer (`RELAY_VIEWER_FALLBACK`: the tiles after a decoder failure under
+/// „Automatisch“). The host gets it as every frame; the memory keeps the
+/// viewer's own `lossless`, so a session built again opens with the choice
+/// instead of the fallback (round 11, N2).
+#[derive(Clone, Debug)]
+pub(crate) struct RelayedFrame {
+    pub(crate) frame: ViewerFrame,
+    pub(crate) fallback: bool,
+}
+
 /// The folded `SET_MODE` frames of one relayed session; empty until the
 /// viewer sent one.
 #[derive(Clone, Debug, Default)]
@@ -61,6 +73,18 @@ struct Folded {
 }
 
 impl ModeMemory {
+    /// Takes `relayed` in: as `note`, but a fallback leaves `lossless` as the
+    /// viewer chose it last.
+    pub(crate) fn note_relayed(&mut self, relayed: &RelayedFrame) {
+        let kept = self.last.as_ref().map(|folded| folded.lossless);
+        self.note(&relayed.frame);
+        if relayed.fallback && matches!(relayed.frame, ViewerFrame::SetMode(_)) {
+            if let Some(folded) = self.last.as_mut() {
+                folded.lossless = kept.unwrap_or(false);
+            }
+        }
+    }
+
     /// Takes `frame` in when it is a `SET_MODE`.
     pub(crate) fn note(&mut self, frame: &ViewerFrame) {
         if let ViewerFrame::RateCeiling(ceiling) = frame {

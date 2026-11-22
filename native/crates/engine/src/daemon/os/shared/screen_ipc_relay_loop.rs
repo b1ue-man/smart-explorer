@@ -69,7 +69,7 @@ impl Pending {
 pub(super) async fn relay_loop(
     session: &mut ViewerSession,
     out: &mpsc::Sender<Item>,
-    input: &mut mpsc::Receiver<Option<ViewerFrame>>,
+    input: &mut mpsc::Receiver<Option<reconnect::RelayedFrame>>,
     modes: &mut reconnect::ModeMemory,
 ) -> (String, Option<String>) {
     let mut clock = ClockSync::default();
@@ -145,7 +145,11 @@ pub(super) async fn relay_loop(
                 }
             },
             frame = input.recv() => match frame {
-                Some(Some(frame)) => {
+                Some(Some(relayed)) => {
+                    // A fallback of the viewer is sent as every frame; the
+                    // memory keeps the viewer's own choice (round 11, N2).
+                    modes.note_relayed(&relayed);
+                    let frame = relayed.frame;
                     // Codex 10/7: a ceiling chosen during the session that
                     // the host cannot keep ends the pictures with its reason.
                     if matches!(frame, ViewerFrame::RateCeiling(Some(_))) && !session.rate_ceiling {
@@ -153,7 +157,6 @@ pub(super) async fn relay_loop(
                         let detail = crate::daemon::ipc_protocol::screen::RATE_CEILING_UNSUPPORTED;
                         return (EndReason::Failed.key().into(), Some(detail.into()));
                     }
-                    modes.note(&frame);
                     // What became of „Höchste Datenrate“ changed during the
                     // session (P1): applied, or dropped for an old host.
                     let state = reconnect::rate_state(&frame, session.rate_ceiling);

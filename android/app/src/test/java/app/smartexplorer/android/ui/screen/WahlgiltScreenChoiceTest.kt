@@ -230,7 +230,7 @@ class WahlgiltScreenChoiceTest {
             flow.emit(ScreenViewEvent.Stream(7, "h264", "high", 64, 64, 5, "fixture", true))
             return 7
         }
-        override suspend fun setMode(session: Long, mode: String, source: String?, width: Int?, height: Int?, fps: Int?, sharpness: Boolean, lossless: Boolean) {
+        override suspend fun setMode(session: Long, mode: String, source: String?, width: Int?, height: Int?, fps: Int?, sharpness: Boolean, lossless: Boolean, fallback: Boolean) {
             this.lossless += lossless
         }
         override suspend fun input(session: Long, events: List<JsonObject>) = events.size

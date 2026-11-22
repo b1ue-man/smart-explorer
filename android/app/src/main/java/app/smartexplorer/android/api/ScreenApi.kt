@@ -332,6 +332,7 @@ object ScreenApi {
         sharpness: Boolean = false,
         lossless: Boolean = false,
         maxRate: Long? = null,
+        fallback: Boolean = false,
     ) {
         Core.call(
             "screen.viewSetMode",
@@ -346,6 +347,8 @@ object ScreenApi {
                 if (fps != null) put("fps", fps)
                 put("sharpness", sharpness)
                 put("lossless", lossless)
+                // The `lossless` is only the app's automatic fallback (round 11, N2).
+                if (fallback) put("fallback", true)
                 maxRate?.let { put("maxRate", it) }
             },
         )

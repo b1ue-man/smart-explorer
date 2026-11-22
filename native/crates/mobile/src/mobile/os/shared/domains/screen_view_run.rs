@@ -42,6 +42,9 @@ pub(super) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 
 struct Link {
     send: SendFrame,
+    /// A frame of the viewer's automatic fallback (`StreamControl::send_fallback`,
+    /// round 11, N2); `None` sends it as every frame (tests).
+    fallback: Option<SendFrame>,
     close: CloseFn,
 }
 
@@ -184,6 +187,7 @@ pub(super) fn open_for_tests(mode: SessionMode, send: Option<SendFrame>) -> Arc<
     if let Some(send) = send {
         *lock(&session.link) = Some(Link {
             send,
+            fallback: None,
             close: Arc::new(|| Ok(())),
         });
     }
@@ -214,9 +218,12 @@ fn run(session: &Arc<ViewSession>, peer: PeerOpenTarget, request: StreamRequest,
         }
     };
     let control = stream.control();
-    let (sender, closer) = (control.clone(), control);
+    let (sender, fallback, closer) = (control.clone(), control.clone(), control);
     *lock(&session.link) = Some(Link {
         send: Arc::new(move |frame: &ViewerFrame| sender.send(frame)),
+        fallback: Some(Arc::new(move |frame: &ViewerFrame| {
+            fallback.send_fallback(frame)
+        })),
         close: Arc::new(move || closer.close()),
     });
     if session.closed.load(Ordering::SeqCst) {

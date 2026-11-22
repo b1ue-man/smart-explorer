@@ -35,7 +35,7 @@ pub use bench::{bench_source, monitor_missing, BenchRequest, BENCH_SOURCE_NOT_FO
 #[path = "ipc_protocol_screen_relay.rs"]
 mod relay;
 #[path = "ipc_protocol_screen_switch.rs"]
-mod switch;
+pub(crate) mod switch;
 pub use relay::{
     decode_relay_record, encode_relay_record, read_relay, read_relay_budgeted, write_relay,
 };

@@ -345,14 +345,21 @@ fn set_mode(args: &Value) -> Result<Value, ApiError> {
     // „Höchste Datenrate“ changed live (BK7b): 0 is automatic. The frame leaves only for a
     // host that announced `rate_ceiling_v1` (`viewer_client_tasks.rs`).
     let ceiling = codecs::max_rate_arg(args, true)?;
-    session.send(&ViewerFrame::SetMode(SetMode {
+    let frame = ViewerFrame::SetMode(SetMode {
         mode,
         source: source_arg(args)?,
         size: size_args(args, "width", "height"),
         fps: fps_arg(args, "fps")?,
         sharpness: opt_bool(args, "sharpness", false),
         lossless: opt_bool(args, "lossless", false),
-    }))?;
+    });
+    // `fallback`: the `lossless` is the app's automatic fallback, not the
+    // user's choice (round 11, N2).
+    if opt_bool(args, "fallback", false) {
+        session.send_fallback(&frame)?;
+    } else {
+        session.send(&frame)?;
+    }
     if let Some(ceiling) = ceiling {
         session.send(&ViewerFrame::RateCeiling(ceiling))?;
     }

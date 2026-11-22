@@ -397,16 +397,10 @@ pub struct StreamControl {
     input: Arc<Mutex<TcpStream>>,
 }
 
-impl StreamControl {
-    pub fn send(&self, frame: &ViewerFrame) -> io::Result<()> {
-        let (tag, payload) = encode_viewer_frame(frame)?;
-        let mut body = Vec::with_capacity(payload.len() + 1);
-        body.push(tag);
-        body.extend_from_slice(&payload);
-        let mut input = self.input.lock().unwrap_or_else(PoisonError::into_inner);
-        write_relay(&mut *input, RELAY_VIEWER, &body)
-    }
+#[path = "screen_ipc_client_send.rs"]
+mod send;
 
+impl StreamControl {
     pub fn close(&self) -> io::Result<()> {
         let mut input = self.input.lock().unwrap_or_else(PoisonError::into_inner);
         write_relay(&mut *input, RELAY_CLOSE, &[])

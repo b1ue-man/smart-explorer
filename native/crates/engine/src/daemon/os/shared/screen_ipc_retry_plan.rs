@@ -11,7 +11,6 @@ use tokio::sync::mpsc;
 
 use super::{NOT_READY, RECONNECT_EVERY, RECONNECT_FOR};
 use crate::screen::core::viewer_client::ViewerError;
-use crate::screen::core::wire_control::ViewerFrame;
 
 /// What the reconnection does next.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -148,7 +147,7 @@ pub(super) fn retryable(error: &ViewerError) -> bool {
 /// go into `modes`, which the next session gets (`ModeMemory::note`).
 async fn unless_closed<T>(
     mut wait: Pending<T>,
-    input: &mut mpsc::Receiver<Option<ViewerFrame>>,
+    input: &mut mpsc::Receiver<Option<super::RelayedFrame>>,
     modes: &mut super::ModeMemory,
 ) -> Option<T> {
     loop {
@@ -160,7 +159,7 @@ async fn unless_closed<T>(
                 };
                 // Review 2026-11-19 (Gemini 3/9): a choice the viewer made
                 // meanwhile reaches the next session with the others.
-                modes.note(&frame);
+                modes.note_relayed(&frame);
             }
             value = &mut wait => return Some(value),
         }
@@ -173,7 +172,7 @@ pub(in super::super) async fn again<D: Dial, C: Clock>(
     dialer: D,
     clock: C,
     schedule: &mut Schedule,
-    input: &mut mpsc::Receiver<Option<ViewerFrame>>,
+    input: &mut mpsc::Receiver<Option<super::RelayedFrame>>,
     modes: &mut super::ModeMemory,
 ) -> Outcome<D::Session> {
     loop {

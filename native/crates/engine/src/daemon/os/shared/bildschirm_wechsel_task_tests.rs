@@ -67,7 +67,7 @@ fn unreachable_host() -> ViewerError {
 
 fn run(
     answers: Vec<Result<u32, ViewerError>>,
-    input: &mut mpsc::Receiver<Option<ViewerFrame>>,
+    input: &mut mpsc::Receiver<Option<super::RelayedFrame>>,
     check: impl FnOnce(Outcome<u32>, Vec<Instant>, Instant),
 ) {
     let start = Instant::now();
@@ -276,4 +276,34 @@ fn verbindungen_task_relay_replays_the_set_mode_choices_after_session_changed() 
     assert_eq!(frames.len(), 1);
     assert_eq!(frames[0].mode, StreamMode::Full);
     assert_eq!(frames[0].source, Some(SourceId::Window("42".into())));
+}
+
+#[test]
+fn review1119_task_relay_keeps_the_choice_under_a_marked_fallback() {
+    use super::RelayedFrame;
+    let lossless = |on: bool| {
+        let ViewerFrame::SetMode(mut set) = mode(StreamMode::Full, None, None, None) else {
+            unreachable!("mode() builds a SET_MODE");
+        };
+        set.lossless = on;
+        ViewerFrame::SetMode(set)
+    };
+    let relayed = |frame, fallback| RelayedFrame { frame, fallback };
+    // The automatic fallback to the tiles (round 11, N2): the host gets it,
+    // the rebuilt session opens with the viewer's own choice.
+    let mut memory = ModeMemory::default();
+    memory.note_relayed(&relayed(lossless(false), false));
+    memory.note_relayed(&relayed(lossless(true), true));
+    let frames = replayed(&memory);
+    assert_eq!(frames.len(), 1);
+    assert!(!frames[0].lossless, "the fallback is no choice");
+    // A fallback before any choice keeps the default, not the tiles.
+    let mut first = ModeMemory::default();
+    first.note_relayed(&relayed(lossless(true), true));
+    assert!(!replayed(&first)[0].lossless);
+    // „Verlustfrei“ chosen by the user stays chosen.
+    let mut chosen = ModeMemory::default();
+    chosen.note_relayed(&relayed(lossless(true), false));
+    chosen.note_relayed(&relayed(lossless(true), true));
+    assert!(replayed(&chosen)[0].lossless);
 }

@@ -52,6 +52,20 @@ impl ViewSession {
         })
     }
 
+    /// `frame` (a `SET_MODE`) carries only the app's automatic fallback to the
+    /// tiles: the relay sends it but keeps the viewer's own choice for a
+    /// rebuilt session (round 11, N2).
+    pub(in super::super) fn send_fallback(&self, frame: &ViewerFrame) -> Result<(), ApiError> {
+        let send = lock(&self.link)
+            .as_ref()
+            .map(|link| link.fallback.clone().unwrap_or_else(|| link.send.clone()))
+            .ok_or_else(|| ApiError::new("busy", "Die Sitzung ist noch nicht verbunden."))?;
+        let Some(outgoing) = self.to_host(frame) else {
+            return Ok(());
+        };
+        send(&outgoing).map_err(|error| ApiError::new("network", error.to_string()))
+    }
+
     pub(in super::super) fn send(&self, frame: &ViewerFrame) -> Result<(), ApiError> {
         if lock(&self.family).is_some() && matches!(frame, ViewerFrame::Input(_)) {
             return Err(ApiError::new(

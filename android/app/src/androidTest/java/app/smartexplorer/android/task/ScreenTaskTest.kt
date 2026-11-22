@@ -685,7 +685,7 @@ class ScreenTaskTest {
             return 7
         }
 
-        override suspend fun setMode(session: Long, mode: String, source: String?, width: Int?, height: Int?, fps: Int?, sharpness: Boolean, lossless: Boolean) {
+        override suspend fun setMode(session: Long, mode: String, source: String?, width: Int?, height: Int?, fps: Int?, sharpness: Boolean, lossless: Boolean, fallback: Boolean) {
             calls += "setMode:$session:$mode"
         }
 

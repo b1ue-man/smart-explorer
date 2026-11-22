@@ -201,14 +201,16 @@ interface ScreenBackend {
         decoders: List<DecoderOffer>,
     ): Long
 
-    suspend fun setMode(session: Long, mode: String, source: String? = null, width: Int? = null, height: Int? = null, fps: Int? = null, sharpness: Boolean = false, lossless: Boolean = false)
+    /** [fallback]: `lossless` is only the automatic fallback to the tiles, not the user's choice; the daemon sends
+     *  it to the host but keeps the choice for a rebuilt session (round 11, N2). */
+    suspend fun setMode(session: Long, mode: String, source: String? = null, width: Int? = null, height: Int? = null, fps: Int? = null, sharpness: Boolean = false, lossless: Boolean = false, fallback: Boolean = false)
 
     /** [open] with the viewer's choice „Codec“, „Dekodierer“ and „Höchste Datenrate“; a backend that does not know them opens without. */
     suspend fun openWith(target: ScreenTarget, mode: String, source: String?, displayWidth: Int, displayHeight: Int, maxFps: Int, decoders: List<DecoderOffer>, choice: ViewerCodecChoice): Long =
         open(target, mode, source, displayWidth, displayHeight, maxFps, decoders)
 
     /** „Höchste Datenrate“ changed during the session ([maxRate] in bit/s, 0 automatic); the mode and switches stay as given. */
-    suspend fun setRateCeiling(session: Long, mode: String, sharpness: Boolean, lossless: Boolean, maxRate: Long) = Unit
+    suspend fun setRateCeiling(session: Long, mode: String, sharpness: Boolean, lossless: Boolean, maxRate: Long, fallback: Boolean = false) = Unit
 
     suspend fun input(session: Long, events: List<JsonObject>): Int
 
@@ -244,8 +246,8 @@ object CoreScreenBackend : ScreenBackend {
     override suspend fun open(target: ScreenTarget, mode: String, source: String?, displayWidth: Int, displayHeight: Int, maxFps: Int, decoders: List<DecoderOffer>) =
         ScreenApi.viewOpen(target.relation, target.relationId, target.deviceId, mode, source, decoders, displayWidth, displayHeight, maxFps, ScreenScaling.awaitRendererLimit(), target.expectedNodeId)
 
-    override suspend fun setMode(session: Long, mode: String, source: String?, width: Int?, height: Int?, fps: Int?, sharpness: Boolean, lossless: Boolean) =
-        ScreenApi.viewSetMode(session, mode, source, width, height, fps, sharpness, lossless)
+    override suspend fun setMode(session: Long, mode: String, source: String?, width: Int?, height: Int?, fps: Int?, sharpness: Boolean, lossless: Boolean, fallback: Boolean) =
+        ScreenApi.viewSetMode(session, mode, source, width, height, fps, sharpness, lossless, fallback = fallback)
 
     override suspend fun openWith(target: ScreenTarget, mode: String, source: String?, displayWidth: Int, displayHeight: Int, maxFps: Int, decoders: List<DecoderOffer>, choice: ViewerCodecChoice) =
         ScreenApi.viewOpen(target.relation, target.relationId, target.deviceId, mode, source, decoders, displayWidth, displayHeight, maxFps, ScreenScaling.awaitRendererLimit(), target.expectedNodeId,
@@ -254,8 +256,8 @@ object CoreScreenBackend : ScreenBackend {
             maxRate = choice.maxRateBps, codec = choice.codec, decoder = choice.decoder,
             display = ScreenDisplayPrefs.current.takeIf { mode != "preview" })
 
-    override suspend fun setRateCeiling(session: Long, mode: String, sharpness: Boolean, lossless: Boolean, maxRate: Long) =
-        ScreenApi.viewSetMode(session, mode, sharpness = sharpness, lossless = lossless, maxRate = maxRate)
+    override suspend fun setRateCeiling(session: Long, mode: String, sharpness: Boolean, lossless: Boolean, maxRate: Long, fallback: Boolean) =
+        ScreenApi.viewSetMode(session, mode, sharpness = sharpness, lossless = lossless, maxRate = maxRate, fallback = fallback)
 
     override suspend fun input(session: Long, events: List<JsonObject>) = ScreenApi.viewInput(session, events)
 
@@ -331,9 +333,11 @@ class ScreenSession(private val target: ScreenTarget, private val backend: Scree
     internal val scaleWorker=ScreenScaleWorker {mutable.value.bufferBudget}
     private var wantedMode=ScreenModeRequest()
     private val commands=object:ScreenBackend by backend {
-        override suspend fun setMode(session:Long,mode:String,source:String?,width:Int?,height:Int?,fps:Int?,sharpness:Boolean,lossless:Boolean) {
+        override suspend fun setMode(session:Long,mode:String,source:String?,width:Int?,height:Int?,fps:Int?,sharpness:Boolean,lossless:Boolean,fallback:Boolean) {
             val forced=synchronized(lock) {forceLossless}
-            backend.setMode(session,mode,source,width,height,fps,sharpness,lossless || forced)
+            // A `lossless` that only the forced fallback sets is marked as such (round 11, N2).
+            backend.setMode(session,mode,source,width,height,fps,sharpness,lossless || forced,
+                fallback = fallback || (forced && !lossless))
             synchronized(lock) {
                 wantedMode=ScreenModeRequest(mode,sharpness,lossless)
             }
@@ -491,18 +495,11 @@ class ScreenSession(private val target: ScreenTarget, private val backend: Scree
             visibilitySentModern = false
             // The automatic fallback to the tiles and the first codec belonged to the host session before: the new one
             // negotiates afresh (Codex 9/8). The user's own choice (`chosenCodec`, `choice`) stays.
-            val wasForced = forceLossless
             forceLossless = false
             codecFallbackGop = null
-            // The daemon replays the last `SET_MODE` into the rebuilt host session (`ModeMemory`), with the forced
-            // `lossless` of that fallback: the mode the user wants goes after it once, so the new session is no tiles
-            // session nobody sees a reason for (round 10, B1). Only after a forced fallback, so a rebuild without one
-            // sends nothing.
-            if (wasForced) inputs.trySend(ScreenSessionCommand.Call { session ->
-                val wanted = synchronized(lock) { wantedMode }
-                backend.setMode(session, wanted.mode, source = null, width = null, height = null, fps = null,
-                    sharpness = wanted.sharpness, lossless = wanted.lossless)
-            })
+            // The daemon replays the user's own choice into the rebuilt host session: every `SET_MODE` whose
+            // `lossless` only the fallback set left marked as such (`fallback`), and `ModeMemory` keeps the choice
+            // (round 11, N2). The new session therefore opens as chosen; nothing has to follow it.
             mutable.value = old.copy(inputReady = false, ackedMinFrame = null, held = null, blocked = null,
                 firstCodec = null, codecFallback = null)
         }
@@ -678,7 +675,7 @@ class ScreenSession(private val target: ScreenTarget, private val backend: Scree
             // The host owns the separate full/preview size and rate choices.
             // A codec fallback changes none of those choices.
             backend.setMode(session,wanted.mode,source=null,width=null,height=null,
-                fps=null,sharpness=wanted.sharpness,lossless=true)
+                fps=null,sharpness=wanted.sharpness,lossless=true,fallback=!wanted.lossless)
         })
     }
 
@@ -703,7 +700,8 @@ class ScreenSession(private val target: ScreenTarget, private val backend: Scree
             val wanted = synchronized(lock) {wantedMode}
             val forced = synchronized(lock) {forceLossless}
             try {
-                setRateCeiling(session, wanted.mode, wanted.sharpness, wanted.lossless || forced, bps ?: 0L)
+                setRateCeiling(session, wanted.mode, wanted.sharpness, wanted.lossless || forced, bps ?: 0L,
+                    fallback = forced && !wanted.lossless)
             } catch (e: CoreException) {
                 // No frame left the core, so no `rateCeiling` answer follows: this send does not count.
                 synchronized(lock) { mutable.value = mutable.value.copy(rateSends = (mutable.value.rateSends - 1).coerceAtLeast(0)) }

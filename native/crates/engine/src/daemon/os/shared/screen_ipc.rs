@@ -318,7 +318,7 @@ impl ShareHost {
             &IpcResponse::Screen(ScreenIpcReply::StreamOpened),
         )?;
         let (out_tx, mut out_rx) = mpsc::channel::<(u8, Vec<u8>)>(RELAY_QUEUE);
-        let (in_tx, in_rx) = mpsc::channel::<Option<ViewerFrame>>(64);
+        let (in_tx, in_rx) = mpsc::channel::<Option<reconnect::RelayedFrame>>(64);
         let memory = std::sync::Arc::new(std::sync::Mutex::new(None));
         let expected_node = request.expected_node.clone();
         // „Codec“ and „Dekodierer“ of the viewer (BK6) narrow the offers;
@@ -407,9 +407,12 @@ fn viewer_request(
 
 /// Reads the client's relay frames: viewer control frames for the session,
 /// `None` when the client closes (`RELAY_CLOSE`, end of stream, bad frame).
-fn relay_input(input: &mut TcpStream, frames: &mpsc::Sender<Option<ViewerFrame>>) {
+fn relay_input(input: &mut TcpStream, frames: &mpsc::Sender<Option<reconnect::RelayedFrame>>) {
     while let Ok((tag, payload)) = read_relay(input, MAX_RELAY_VIEWER_BYTES) {
-        if tag != RELAY_VIEWER {
+        // `RELAY_VIEWER_FALLBACK`: a frame of the viewer's automatic fallback
+        // (round 11, N2), sent to the host like every frame.
+        let fallback = tag == crate::daemon::ipc_protocol::screen::switch::RELAY_VIEWER_FALLBACK;
+        if tag != RELAY_VIEWER && !fallback {
             break;
         }
         let Some((wire_tag, body)) = payload.split_first() else {
@@ -423,7 +426,11 @@ fn relay_input(input: &mut TcpStream, frames: &mpsc::Sender<Option<ViewerFrame>>
             frame,
             ViewerFrame::FrameAck(_) | ViewerFrame::PreviewAck(_) | ViewerFrame::Ping(_)
         );
-        if !own && frames.blocking_send(Some(frame)).is_err() {
+        if !own
+            && frames
+                .blocking_send(Some(reconnect::RelayedFrame { frame, fallback }))
+                .is_err()
+        {
             return;
         }
     }
