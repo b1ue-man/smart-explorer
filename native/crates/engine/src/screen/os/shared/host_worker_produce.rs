@@ -192,6 +192,7 @@ impl Worker {
                 Err(error) => {
                     let factory = running.factory.clone();
                     let refuses = running.failure_refuses() || gave_up(&error);
+                    eprintln!("screen encoder: ends ({factory} failed: {error})");
                     self.encoder = None;
                     if factory == crate::screen::core::codec_registry::TILES_NAME {
                         return failed(ScreenErrorCode::EncoderFailed, error);
