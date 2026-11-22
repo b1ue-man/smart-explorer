@@ -349,6 +349,7 @@ fn type_unlatched<C: Connection>(
     text: &str,
     mut map: KeyMap,
 ) -> io::Result<usize> {
+    restore_pending(conn);
     let held = held_keys(conn)?;
     let mut skipped = 0;
     for character in typed_chars(text) {
@@ -366,18 +367,68 @@ fn type_unlatched<C: Connection>(
         let column = vec![sym; usize::from(per)];
         conn.change_keyboard_mapping(1, spare, per, &column)
             .map_err(io::Error::other)?;
-        sync(conn)?;
-        tap(conn, root, spare, None, (None, &[]), &held)?;
-        sync(conn)?;
-        // Clients read the mapping lazily: give them the press first.
-        std::thread::sleep(std::time::Duration::from_millis(20));
-        let empty = vec![NO_SYMBOL; usize::from(per)];
-        conn.change_keyboard_mapping(1, spare, per, &empty)
-            .map_err(io::Error::other)?;
-        sync(conn)?;
+        // Round 10 (Codex 10/16): from here the spare key carries the
+        // keysym; it is emptied again on every way out, and a failed
+        // emptying is retried with the next text (`restore_pending`).
+        let typed = sync(conn)
+            .and_then(|()| tap(conn, root, spare, None, (None, &[]), &held))
+            .and_then(|()| sync(conn));
+        match &typed {
+            // Clients read the mapping lazily: give them the press first.
+            Ok(()) => std::thread::sleep(std::time::Duration::from_millis(20)),
+            // A press that went out without its release is let go.
+            Err(_) => {
+                let _ = press(conn, root, spare, false);
+            }
+        }
+        let restored = empty_spare(conn, spare, per);
+        if restored.is_err() {
+            pending_spares().push((spare, sym));
+        }
+        typed?;
+        restored?;
         map = KeyMap::read(conn)?;
     }
     Ok(skipped)
+}
+
+/// Spare keys whose emptying failed (a lost connection): emptied with the
+/// next text on this X server (`restore_pending`).
+fn pending_spares() -> std::sync::MutexGuard<'static, Vec<(Keycode, Keysym)>> {
+    static PENDING: std::sync::Mutex<Vec<(Keycode, Keysym)>> = std::sync::Mutex::new(Vec::new());
+    PENDING
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Gives `spare` its empty mapping back.
+fn empty_spare<C: Connection>(conn: &C, spare: Keycode, per: u8) -> io::Result<()> {
+    let empty = vec![NO_SYMBOL; usize::from(per)];
+    conn.change_keyboard_mapping(1, spare, per, &empty)
+        .map_err(io::Error::other)?;
+    sync(conn)
+}
+
+/// Empties the spare keys an earlier text could not, each only while it
+/// still carries the keysym se gave it (another X server, or a client that
+/// took the key since, keeps its mapping); those that fail again wait for
+/// the next text.
+fn restore_pending<C: Connection>(conn: &C) {
+    let pending = std::mem::take(&mut *pending_spares());
+    if pending.is_empty() {
+        return;
+    }
+    let Ok(map) = KeyMap::read(conn) else {
+        pending_spares().extend(pending);
+        return;
+    };
+    for (spare, sym) in pending {
+        let index = usize::from(spare.saturating_sub(map.min));
+        let ours = index < map.codes() && map.row(index).iter().all(|carried| *carried == sym);
+        if ours && empty_spare(conn, spare, map.per_code.max(1)).is_err() {
+            pending_spares().push((spare, sym));
+        }
+    }
 }
 
 #[cfg(test)]
