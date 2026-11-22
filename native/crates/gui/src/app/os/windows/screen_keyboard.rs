@@ -6,7 +6,7 @@
 use eframe::egui::Key;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     GetKeyState, GetKeyboardLayout, MapVirtualKeyExW, ToUnicodeEx, MAPVK_VSC_TO_VK_EX, VK_CAPITAL,
-    VK_CONTROL, VK_INSERT, VK_LCONTROL, VK_LMENU, VK_MENU, VK_RMENU, VK_SHIFT, VK_V,
+    VK_CONTROL, VK_DELETE, VK_INSERT, VK_LCONTROL, VK_LMENU, VK_MENU, VK_RMENU, VK_SHIFT, VK_V,
 };
 
 /// `ToUnicodeEx` flag: leave the kernel's keyboard state (a pending dead
@@ -23,6 +23,12 @@ fn down(key: u16) -> bool {
 /// Strg+C (`lib.rs` 1029), and the host gets the keys that were pressed.
 pub fn insert_held() -> bool {
     down(VK_INSERT)
+}
+
+/// Entf is held now: egui-winit makes Umschalt+Entf (also with Strg) a
+/// `Cut` like Strg+X (`lib.rs` 1025-1027, round 10 B5).
+pub fn delete_held() -> bool {
+    down(VK_DELETE)
 }
 
 /// Ctrl+V, or Umschalt+Einfg without Ctrl, is held now.

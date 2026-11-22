@@ -3,15 +3,15 @@
 use super::*;
 
 impl InputMapper {
-    /// Ctrl+C, X and V arrive as their own events without a key event.
+    /// Ctrl+C, X and V arrive as their own events without a key event;
+    /// Umschalt and Alt go along as held now (round 10 B8: Strg+Umschalt+V
+    /// pressed within one frame came as Strg+V).
     pub(super) fn chord(&mut self, name: &str) {
         let Some(hid_usage) = key_usage(name).filter(|_| self.caps.keyboard) else {
             return;
         };
-        self.sync_modifiers(Modifiers {
-            ctrl: true,
-            ..self.mods
-        });
+        let held = self.held_now();
+        self.sync_modifiers(Modifiers { ctrl: true, ..held });
         self.emit(InputEvent::Key {
             hid_usage,
             down: true,
@@ -34,40 +34,54 @@ impl InputMapper {
             }
         } else if self.paste.substituted {
             // Round 9 D9: the shortcut went out already for this press.
-        } else if self.shift_only() {
-            self.shift_tap("insert");
+        } else if self.struck(Key::Insert) {
+            let held = self.held_now();
+            self.tap_with(
+                "insert",
+                Modifiers {
+                    shift: true,
+                    ..held
+                },
+            );
         } else {
             self.chord("v");
         }
     }
 
-    /// Umschalt without Ctrl, held before this frame or in it (Gemini 8/12:
-    /// `Cut`/`Paste` come before the frame's modifiers are sent).
-    fn shift_only(&self) -> bool {
+    /// The modifiers held around a `Copy`, `Cut` or `Paste`: those sent
+    /// before this frame and the frame's own (Gemini 8/12: these events come
+    /// before the frame's modifiers are sent).
+    pub(super) fn held_now(&self) -> Modifiers {
         let frame = self.paste.mods;
-        (self.mods.shift || frame.shift) && !(self.mods.ctrl || frame.ctrl)
+        Modifiers {
+            ctrl: self.mods.ctrl || frame.ctrl,
+            shift: self.mods.shift || frame.shift,
+            alt: self.mods.alt || frame.alt,
+            ..self.mods
+        }
     }
 
-    /// `Cut`: Strg+X, or (Windows) Umschalt+Entf as itself (Gemini 5/9:
-    /// the chord made it Strg+Umschalt+X).
+    /// `Cut`: (Windows) Umschalt+Entf as itself, with Strg when held (round
+    /// 10 B5: egui-winit makes Strg+Umschalt+Entf a `Cut` too), else Strg+X.
     pub(super) fn cut(&mut self) {
-        if self.shift_only() {
-            self.shift_tap("delete");
+        if self.struck(Key::Delete) {
+            let held = self.held_now();
+            self.tap_with(
+                "delete",
+                Modifiers {
+                    shift: true,
+                    ..held
+                },
+            );
         } else {
             self.chord("x");
         }
     }
 
-    /// `name` with Umschalt and without Ctrl on the host (round 9 D2:
-    /// `Cut`/`Paste` come before the frame's modifiers go out, so Entf
-    /// went without Umschalt and deleted instead of cutting).
-    pub(super) fn shift_tap(&mut self, name: &str) {
-        let shifted = Modifiers {
-            shift: true,
-            ctrl: false,
-            ..self.mods
-        };
-        self.sync_modifiers(shifted);
+    /// `name` under `mods` on the host (round 9 D2: Entf went without the
+    /// Umschalt of the frame and deleted instead of cutting).
+    pub(super) fn tap_with(&mut self, name: &str, mods: Modifiers) {
+        self.sync_modifiers(mods);
         self.tap(name);
     }
 

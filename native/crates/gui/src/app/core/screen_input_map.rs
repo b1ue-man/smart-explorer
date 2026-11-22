@@ -153,6 +153,7 @@ impl InputMapper {
         self.suppress_modifiers = self.mods.ctrl || self.mods.alt || self.mods.shift;
         self.mods = Modifiers::NONE;
         self.touch_active = false;
+        self.paste = paste::PasteWatch::default(); // round 10 B6
     }
 
     /// The next batch for one `INPUT` frame: at most `MAX_INPUT_EVENTS`

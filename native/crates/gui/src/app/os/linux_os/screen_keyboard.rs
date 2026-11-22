@@ -56,6 +56,11 @@ pub fn insert_held() -> bool {
     false
 }
 
+/// Umschalt+Entf is no `Cut` of egui-winit here either.
+pub fn delete_held() -> bool {
+    false
+}
+
 /// X11 leaves Ctrl and Alt to the layout: an AltGr character comes as text.
 pub fn ctrl_alt_text(_physical: eframe::egui::Key, _shift: bool) -> Option<String> {
     None

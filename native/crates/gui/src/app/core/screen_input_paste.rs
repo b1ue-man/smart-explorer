@@ -26,6 +26,10 @@ mod platform {
         false
     }
 
+    pub fn delete_held() -> bool {
+        false
+    }
+
     pub fn paste_keys_held(_ctrl: bool, _shift: bool) -> bool {
         false
     }
@@ -62,27 +66,33 @@ pub(super) struct PasteWatch {
     /// The shortcut went out for this press: a `Paste` egui makes late
     /// sends nothing more (round 9 D9).
     pub(super) substituted: bool,
-    /// This frame let Einfg go (round 9 D8: a Strg+Einfg pressed and let go
-    /// within one frame reads as up in `GetKeyState`).
-    insert_released: bool,
+    /// Einfg or Entf let go in this frame (round 9 D8: one pressed and let
+    /// go within a frame reads as up in `GetKeyState`).
+    released: Vec<Key>,
 }
 
 impl InputMapper {
+    /// Whether Einfg or Entf (`key`) made this frame's `Copy`, `Cut` or
+    /// `Paste` (Windows only: egui-winit makes them of these keys there).
+    pub(super) fn struck(&self, key: Key) -> bool {
+        let held = match key {
+            Key::Insert => platform::insert_held(),
+            Key::Delete => platform::delete_held(),
+            _ => false,
+        };
+        cfg!(windows) && (held || self.paste.released.contains(&key))
+    }
+
     /// `Copy`: Strg+Einfg as itself where egui-winit made it `Copy` (Codex
     /// 8/11: a terminal copies on Strg+Einfg and interrupts on Strg+C),
-    /// else Strg+C.
+    /// else Strg+C; each with the other modifiers held (round 10 B5).
     pub(super) fn copy(&mut self) {
-        let insert = platform::insert_held() || (cfg!(windows) && self.paste.insert_released);
-        if !insert {
+        if self.struck(Key::Insert) {
+            let held = self.held_now();
+            self.tap_with("insert", Modifiers { ctrl: true, ..held });
+        } else {
             self.chord("c");
-            return;
         }
-        let held = Modifiers {
-            ctrl: true,
-            ..self.mods
-        };
-        self.sync_modifiers(held);
-        self.tap("insert");
     }
 
     /// Ctrl+V (`v`) or Umschalt+Einfg (`insert`) to the host, which pastes
@@ -91,7 +101,14 @@ impl InputMapper {
         self.paste.handled = true;
         self.paste.substituted = true;
         if insert {
-            self.shift_tap("insert");
+            let held = self.held_now();
+            self.tap_with(
+                "insert",
+                Modifiers {
+                    shift: true,
+                    ..held
+                },
+            );
         } else {
             self.chord("v");
         }
@@ -105,16 +122,17 @@ impl InputMapper {
         if events.iter().any(|event| matches!(event, Event::Paste(_))) {
             self.paste.handled = true;
         }
-        self.paste.insert_released = events.iter().any(|event| {
-            matches!(
-                event,
+        self.paste.released = events
+            .iter()
+            .filter_map(|event| match event {
                 Event::Key {
-                    key: Key::Insert,
+                    key: key @ (Key::Insert | Key::Delete),
                     pressed: false,
                     ..
-                }
-            )
-        });
+                } => Some(*key),
+                _ => None,
+            })
+            .collect();
         let held = platform::paste_keys_held(mods.ctrl, mods.shift);
         let now = Instant::now();
         match self.paste.press.as_mut() {
