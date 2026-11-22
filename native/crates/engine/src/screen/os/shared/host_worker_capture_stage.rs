@@ -59,10 +59,12 @@ pub(super) fn capture_loop(shared: Arc<Shared>) {
         drop(waiting);
         let tick = {
             let mut worker = shared.worker.lock().unwrap_or_else(PoisonError::into_inner);
-            // Round 9 H5: a new visible area stays due until a picture of it.
+            // Round 9 H5: a new visible area stays due after a failed, paused
+            // or turned-over capture (a refused one: `capture_once`); round
+            // 10: not after one without change, else every tick captures.
             let visible = worker.visible.clone();
             let tick = capture_once(&mut worker, &job, frame_id, refresh);
-            if !matches!(tick, Tick::Picture(_)) {
+            if matches!(tick, Tick::Event(..) | Tick::Turnover(_)) {
                 worker.visible = visible;
             }
             tick
@@ -139,6 +141,7 @@ fn capture_once(worker: &mut Worker, job: &CaptureJob, frame_id: u64, refresh: b
     let capture_ts_us = now_us();
     let started = Instant::now();
     // A new visible area needs a picture too (round 8, Codex 8/9).
+    let visible = worker.visible.clone();
     let refresh = refresh
         | crate::screen::core::visibility::visible_moved(
             &mut worker.visible,
@@ -194,6 +197,7 @@ fn capture_once(worker: &mut Worker, job: &CaptureJob, frame_id: u64, refresh: b
             false,
         ),
         Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+            worker.visible = visible; // refused for now: still due (round 9 H5)
             Tick::Unchanged(reference.wrap(unchanged(source_size)))
         }
         Err(error) => Tick::Event(reference.wrap(capture_failed(&error)), true),

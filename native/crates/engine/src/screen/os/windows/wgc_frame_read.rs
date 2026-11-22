@@ -43,4 +43,31 @@ impl WgcCapture {
             Read::Gpu(picture) => Picture::Gpu(picture),
         }))
     }
+
+    /// Round 10, 3: a pointer switch that no later frame proved gets a new
+    /// capture session on the same grant and generation (its first frame is
+    /// the whole picture in the new mode), so the encoder stays; only when
+    /// that fails the session is rebuilt with a new generation (`restart`).
+    pub(super) fn renew_session(&mut self) -> io::Result<()> {
+        if let Some(held) = self.held.take() {
+            let _ = held.Close();
+        }
+        let renewed = match self.live.take() {
+            Some(live) => live
+                .close()
+                .and_then(|()| create(&self.target, &self.budget)),
+            None => create(&self.target, &self.budget),
+        };
+        match renewed {
+            Ok(live) => {
+                self.live = Some(live);
+                let _ = self.apply_interval();
+                Ok(())
+            }
+            Err(error) => {
+                eprintln!("screen capture: Graphics Capture session not renewed: {error}");
+                self.restart(None)
+            }
+        }
+    }
 }

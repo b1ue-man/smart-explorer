@@ -62,6 +62,11 @@ pub(super) struct Names {
     pub insert_headers: &'static [&'static str],
     pub output_type: &'static str,
     pub output_key: i64,
+    /// Output properties (round 10, AMF SDK `master`, read 2026-11-22): the
+    /// LTR index the picture was marked with (-1: none) and the bit field
+    /// of the LTR pictures it referenced.
+    pub marked_ltr: &'static str,
+    pub referenced_ltr: &'static str,
     pub in_color_profile: &'static str,
     pub out_color_profile: &'static str,
     pub out_transfer: &'static str,
@@ -105,6 +110,8 @@ pub(super) const AVC: Names = Names {
     insert_headers: &[prop::INSERT_SPS, prop::INSERT_PPS],
     output_type: prop::OUTPUT_DATA_TYPE,
     output_key: prop::OUTPUT_IDR,
+    marked_ltr: "MarkedLTRIndex",
+    referenced_ltr: "ReferencedLTRIndexBitfield",
     in_color_profile: prop::INPUT_COLOR_PROFILE,
     out_color_profile: prop::OUTPUT_COLOR_PROFILE,
     out_transfer: prop::OUTPUT_TRANSFER,
@@ -148,6 +155,8 @@ pub(super) const HEVC: Names = Names {
     insert_headers: &["HevcInsertHeader"],
     output_type: "HevcOutputDataType",
     output_key: 0,
+    marked_ltr: "HevcMarkedLTRIndex",
+    referenced_ltr: "HevcReferencedLTRIndexBitfield",
     in_color_profile: "HevcInColorProfile",
     out_color_profile: "HevcOutColorProfile",
     out_transfer: "HevcOutColorTransferChar",
@@ -191,6 +200,8 @@ pub(super) const AV1: Names = Names {
     insert_headers: &["Av1ForceInsertSequenceHeader"],
     output_type: "Av1OutputFrameType",
     output_key: 0,
+    marked_ltr: "Av1MarkedLTRIndex",
+    referenced_ltr: "Av1ReferencedLTRIndexBitfield",
     in_color_profile: "Av1InputColorProfile",
     out_color_profile: "Av1OutputColorProfile",
     out_transfer: "Av1OutputColorTransferChar",

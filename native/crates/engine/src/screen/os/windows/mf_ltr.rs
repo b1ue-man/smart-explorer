@@ -48,6 +48,8 @@ pub(super) struct MfLtr {
     slots: LtrSlots,
     /// The bits the picture now encoded was forced to.
     forced: Option<u32>,
+    /// The slot the picture now encoded was asked to be marked in.
+    marking: Option<u32>,
 }
 
 impl MfLtr {
@@ -56,26 +58,38 @@ impl MfLtr {
         (setup.codec == CodecKind::H264 && ltr_frames == FRAMES).then(|| Self {
             slots: LtrSlots::new(setup.fps),
             forced: None,
+            marking: None,
         })
     }
 
     /// The marks and the forced reference of the picture `frame_id`, set on
     /// the encoder before its input; `key`: it is a key frame (marked as
-    /// LTR 0, as before).
-    pub(super) fn plan(&mut self, api: Option<&ICodecAPI>, frame_id: u64, key: bool) {
+    /// LTR 0, as before). `false`: a forced reference was refused, so the
+    /// picture must be a key frame (round 10).
+    pub(super) fn plan(&mut self, api: Option<&ICodecAPI>, frame_id: u64, key: bool) -> bool {
         let plan = self.slots.plan(frame_id, key);
-        let Some(api) = api else { return };
-        let set =
-            |name, value: u32| super::super::mf_media::set_value(api, name, VARIANT::from(value));
+        let set = |name, value: u32| {
+            api.is_some_and(|api| {
+                super::super::mf_media::set_value(api, name, VARIANT::from(value))
+            })
+        };
         if let Some(index) = plan.mark {
-            set(&CODECAPI_AVEncVideoMarkLTRFrame, index);
+            // Round 10, 4: a refused request leaves the slot unknown.
+            if set(&CODECAPI_AVEncVideoMarkLTRFrame, index) {
+                self.marking = Some(index);
+            } else {
+                self.slots.unmark(index as usize);
+            }
         }
         // A forced picture without output stays pending in the encoder (no
         // queued request) and is checked at the next output.
-        if let Some(bits) = plan.force {
-            if set(&CODECAPI_AVEncVideoUseLTRFrame, (1 << 16) | bits) {
+        match plan.force {
+            Some(bits) if set(&CODECAPI_AVEncVideoUseLTRFrame, (1 << 16) | bits) => {
                 self.forced = Some(bits);
+                true
             }
+            Some(_) => false,
+            None => true,
         }
     }
 
@@ -111,14 +125,22 @@ impl AsyncEncoder {
             return Ok(());
         };
         let index = info & 0xffff;
+        // Round 10, 4: a planned mark the output does not report is no mark.
+        if let Some(asked) = long_term.marking.take().filter(|asked| *asked != index) {
+            long_term.slots.unmark(asked as usize);
+        }
         if index != NOT_MARKED && !long_term.slots.marked(index as usize, frame_id) {
             self.long_term = None;
             return Ok(());
         }
         match forced {
+            // Round 10, 1: the picture is skipped and the running encoder
+            // gives a key frame next; no GPU-path failure, no restart.
             Some(bits) if (info >> 16) & bits == 0 && !keyframe => {
                 self.long_term = None;
-                Err(io::Error::other(
+                self.restarted = true;
+                Err(io::Error::new(
+                    io::ErrorKind::WouldBlock,
                     "the encoder did not reference the confirmed long-term picture",
                 ))
             }

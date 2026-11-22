@@ -420,14 +420,15 @@ impl Grabber for WgcCapture {
             }
             // No picture since the switch: the screen stands still and the
             // viewer keeps the pointer of before in its picture (or misses
-            // it). A new session starts with a complete picture.
+            // it). A new session starts with a complete picture (round 10:
+            // on the same generation, `renew_session`).
             if self.last.is_some()
                 && self
                     .pointer_switched
                     .is_some_and(|at| at.elapsed() >= POINTER_SWITCH_WAIT)
             {
                 self.pointer_switched = None;
-                self.restart(None)?;
+                self.renew_session()?;
                 return Ok(SourcePicture::Unchanged);
             }
             let now = Instant::now();

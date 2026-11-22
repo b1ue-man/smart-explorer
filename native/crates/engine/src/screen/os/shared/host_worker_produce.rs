@@ -1,7 +1,7 @@
 //! Captured frame production and admitted codec replacement.
 use super::*;
 use crate::screen::core::capture_picture::SourcePicture;
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicBool, AtomicU64};
 
 /// Review 2026-11-19 (F3): the lowest bit rate the `PRODUCE` encoder runs
 /// at above the rate asked (as `Encoding::report_floor` reports it for the
@@ -9,6 +9,15 @@ use std::sync::atomic::AtomicU64;
 /// The request loop sends a change ahead of its answer (`report_floor`).
 static PRODUCE_FLOOR: AtomicU64 = AtomicU64::new(0);
 static PRODUCE_FLOOR_SENT: AtomicU64 = AtomicU64::new(0);
+/// Round 10: the last `PRODUCE` took no picture for want of memory or a new
+/// encoder (`refused`), so a new visible area stays due.
+static PRODUCE_REFUSED: AtomicBool = AtomicBool::new(false);
+
+/// The answer of a picture refused for now (`PRODUCE_REFUSED`).
+fn refused(source_size: crate::screen::core::pixel_convert::FrameSize) -> WorkerReply {
+    PRODUCE_REFUSED.store(true, Ordering::Release);
+    WorkerReply::Frame(StageFrame::Unchanged { source_size })
+}
 
 /// Sends a changed `PRODUCE_FLOOR` as `ENCODER_FLOOR` (0: none again).
 pub(super) fn report_floor(output: &dispatch::Output) -> io::Result<()> {
@@ -23,12 +32,19 @@ pub(super) fn report_floor(output: &dispatch::Output) -> io::Result<()> {
 }
 impl Worker {
     /// One picture as `request` says. Review 2026-11-19 round 9 H5: a new
-    /// visible area counts as pictured only once a picture was encoded for
-    /// it; any other answer keeps it due (`visible_moved` asks again).
+    /// visible area counts as pictured only once its picture was taken; a
+    /// paused, refused (`refused`) or failed one keeps it due
+    /// (`visible_moved` asks again). Round 10: an answer without change is
+    /// no failure, else every request would capture again.
     pub(super) fn produce(&mut self, request: &StageRequest) -> WorkerReply {
         let visible = self.visible.clone();
+        PRODUCE_REFUSED.store(false, Ordering::Release);
         let reply = self.produce_once(request);
-        if !matches!(reply, WorkerReply::Frame(StageFrame::Encoded { .. })) {
+        let failed = matches!(
+            reply,
+            WorkerReply::Failed { .. } | WorkerReply::Frame(StageFrame::Paused(_))
+        );
+        if failed || PRODUCE_REFUSED.load(Ordering::Acquire) {
             self.visible = visible;
         }
         reply
@@ -105,11 +121,8 @@ impl Worker {
             self.encoder = None;
             return match captured {
                 Ok(SourcePicture::Paused(state)) => WorkerReply::Frame(StageFrame::Paused(state)),
-                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                    WorkerReply::Frame(StageFrame::Unchanged { source_size })
-                }
-                Err(error) => capture_failed(&error),
-                _ => WorkerReply::Frame(StageFrame::Unchanged { source_size }),
+                Err(error) if error.kind() != io::ErrorKind::WouldBlock => capture_failed(&error),
+                _ => refused(source_size), // the new encoder's first picture follows
             };
         }
         let image = match captured {
@@ -121,9 +134,7 @@ impl Worker {
             Ok(SourcePicture::Paused(state)) => {
                 return WorkerReply::Frame(StageFrame::Paused(state))
             }
-            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                return WorkerReply::Frame(StageFrame::Unchanged { source_size })
-            }
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => return refused(source_size),
             Err(error) => return capture_failed(&error),
         };
         let source_size = image.size();
@@ -140,7 +151,7 @@ impl Worker {
             ) {
                 Ok(image) => image,
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                    return WorkerReply::Frame(StageFrame::Unchanged { source_size })
+                    return refused(source_size)
                 }
                 Err(error) => return failed(ScreenErrorCode::CaptureFailed, error),
             }
@@ -158,7 +169,7 @@ impl Worker {
             let running = match self.encoder_for(&request) {
                 Ok(running) => running,
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                    return WorkerReply::Frame(StageFrame::Unchanged { source_size })
+                    return refused(source_size)
                 }
                 Err(error) => return failed(ScreenErrorCode::EncoderFailed, error),
             };
@@ -176,7 +187,7 @@ impl Worker {
                     break (frame, running);
                 }
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                    return WorkerReply::Frame(StageFrame::Unchanged { source_size })
+                    return refused(source_size)
                 }
                 Err(error) => {
                     let factory = running.factory.clone();

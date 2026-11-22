@@ -43,6 +43,9 @@ fn review1119_task_ltr_keeps_a_confirmed_reference() {
     assert!(!ltr.marked(2, 151), "two slots only");
     assert!(ltr.recover(150));
     assert_eq!(ltr.plan(152, false).force, Some(1 << 1));
+    // Round 10: a planned mark the encoder did not take is no reference.
+    ltr.unmark(1);
+    assert!(!ltr.recover(151), "152 is newer, 150 was not taken");
     let mut history = RefHistory::new(3);
     for frame in 1..=4 {
         history.encoded(frame, frame == 1);

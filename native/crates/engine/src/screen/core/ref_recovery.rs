@@ -169,6 +169,14 @@ impl LtrSlots {
         true
     }
 
+    /// A planned mark the encoder did not take (Media Foundation reports no
+    /// mark for the picture, or refused the request): the slot is unknown.
+    pub fn unmark(&mut self, index: usize) {
+        if let Some(slot) = self.slots.get_mut(index) {
+            *slot = None;
+        }
+    }
+
     /// Marked pictures newer than `last_good` were lost with a reset
     /// stream: never a reference, never confirmed later.
     pub fn drop_after(&mut self, last_good: u64) {

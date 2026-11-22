@@ -240,6 +240,10 @@ pub(super) struct AmfSession {
     names: &'static Names,
     rate: RateParams,
     ltr: Option<LtrSlots>,
+    /// The picture now encoded: asked to be an IDR, its planned mark and
+    /// forced references (`amf_output.rs`, round 10); a key frame owed.
+    asked: (bool, Option<u32>, Option<u32>),
+    key_next: bool,
     frames: u64,
     refused: Vec<&'static str>,
     /// The last rate refused (X1/X4); whether it took any rate yet (J2).
@@ -280,6 +284,8 @@ impl AmfSession {
             names,
             rate,
             ltr: None,
+            asked: (false, None, None),
+            key_next: false,
             frames: 0,
             refused: Vec::new(),
             rate_refusal: None,
@@ -337,36 +343,6 @@ impl AmfSession {
         }
         now
     }
-
-    /// The access unit of `data` to `deliver`; whether it is a key frame.
-    fn take_output(
-        &self,
-        data: This,
-        deliver: &mut dyn FnMut(&[u8]) -> io::Result<()>,
-    ) -> io::Result<bool> {
-        let mut raw = std::ptr::null_mut();
-        // SAFETY: a live data object; one new buffer reference.
-        let result = unsafe {
-            (vtable::<InterfaceVtbl>(data).query_interface)(data, &IID_AMF_BUFFER, &mut raw)
-        };
-        let buffer = Owned(created(result, raw, "QueryInterface(AMFBuffer)")?);
-        // SAFETY: a live buffer.
-        let calls = unsafe { vtable::<BufferVtbl>(buffer.0) };
-        // SAFETY: plain queries of the live buffer.
-        let (native, length) =
-            unsafe { ((calls.get_native)(buffer.0), (calls.get_size)(buffer.0)) };
-        if native.is_null() || length == 0 {
-            return Err(io::Error::other("AMF gave an empty access unit"));
-        }
-        // SAFETY: the buffer holds `length` bytes while it is referenced.
-        deliver(unsafe { std::slice::from_raw_parts(native.cast::<u8>(), length) })?;
-        let mut kind = AmfVariant::empty();
-        let name = wide(self.names.output_type);
-        // SAFETY: a live buffer; an integer property needs no clearing.
-        let result =
-            unsafe { (calls.data.storage.get_property)(buffer.0, name.as_ptr(), &mut kind) };
-        Ok(result == AMF_OK && kind.as_int64() == Some(self.names.output_key))
-    }
 }
 
 impl VendorSession for AmfSession {
@@ -400,11 +376,14 @@ impl VendorSession for AmfSession {
             (data.set_duration)(surface.0, duration);
         }
         let mut per_picture = Vec::new();
-        if picture.idr {
+        let idr = picture.idr || std::mem::take(&mut self.key_next);
+        if idr {
             per_picture.extend(key_settings(names));
         }
+        self.asked = (idr, None, None);
         if let Some(ltr) = self.ltr.as_mut() {
-            let plan = ltr.plan(picture.frame_id, picture.idr);
+            let plan = ltr.plan(picture.frame_id, idr);
+            self.asked = (idr, plan.mark, plan.force);
             if let Some(index) = plan.mark {
                 per_picture.push((names.mark_ltr, AmfVariant::int64(i64::from(index))));
             }
@@ -423,6 +402,15 @@ impl VendorSession for AmfSession {
             }
             if name == names.mark_ltr || name == names.force_ltr {
                 self.ltr = None;
+            }
+            // Round 10: unforced it would reference lost pictures: an IDR.
+            if name == names.force_ltr {
+                self.asked.0 = true;
+                for (key, value) in key_settings(names) {
+                    if !set(&data.storage, surface.0, key, value) && key == names.force_type {
+                        return Err(io::Error::other("AMF refused the key frame request"));
+                    }
+                }
             }
         }
         let component = self.component.object;
@@ -443,7 +431,7 @@ impl VendorSession for AmfSession {
             let result = unsafe { (calls.query_output)(component, &mut raw) };
             if !raw.is_null() {
                 let output = Owned(raw);
-                return self.take_output(output.0, deliver);
+                return self.take_output(output.0, picture.frame_id, deliver);
             }
             if ![AMF_OK, AMF_REPEAT, AMF_NEED_MORE_INPUT].contains(&result) {
                 return Err(io::Error::other(format!(
@@ -468,6 +456,13 @@ impl VendorSession for AmfSession {
         }
     }
 
+    /// Round 10, 5: an IDR the encoder made on its own drops the slots.
+    fn coded(&mut self, _frame_id: u64, keyframe: bool) {
+        if let Some(ltr) = self.ltr.as_mut().filter(|_| keyframe && !self.asked.0) {
+            ltr.key_frame();
+        }
+    }
+
     /// Gemini 8/3.1: a confirmed long-term reference stays (`LtrSlots`).
     fn confirm_reference(&mut self, frame_id: u64) {
         self.ltr.iter_mut().for_each(|ltr| ltr.confirm(frame_id));
@@ -489,6 +484,8 @@ impl VendorSession for AmfSession {
     }
 }
 
+#[path = "amf_output.rs"]
+mod output;
 #[path = "amf_rate.rs"]
 mod rate;
 

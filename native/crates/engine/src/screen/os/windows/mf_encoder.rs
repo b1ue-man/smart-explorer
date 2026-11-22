@@ -389,10 +389,19 @@ impl ScreenEncoder for AsyncEncoder {
             force_keyframe(self.api.as_ref());
         }
         let first = key || self.frames == 0;
-        match self.long_term.as_mut() {
+        let planned = match self.long_term.as_mut() {
             Some(long_term) => long_term.plan(self.api.as_ref(), request.frame_id, first),
-            None if self.ltr && first => mark_ltr(self.api.as_ref()),
-            None => {}
+            None if self.ltr && first => {
+                mark_ltr(self.api.as_ref());
+                true
+            }
+            None => true,
+        };
+        if !planned {
+            // The forced reference was refused: a key frame of this encoder.
+            self.long_term = None;
+            force_keyframe(self.api.as_ref());
+            self.restarted = true;
         }
         match self.encode_once(&grant, image, request, maximum) {
             Ok(frame) => {

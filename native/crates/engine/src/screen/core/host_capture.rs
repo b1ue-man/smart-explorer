@@ -128,9 +128,11 @@ pub(super) fn produce(
 
 /// Captures the picture of the request's frame, scales it to the request's
 /// size and encodes it with the stage's encoder. Review 2026-11-19 round 9
-/// H5: a new visible area counts as pictured only once a picture was
-/// encoded for it; an unchanged, paused, refused or failed capture or
-/// encoding keeps it due (`visible_moved` asks again with the next frame).
+/// H5: a new visible area counts as pictured only once its picture was
+/// taken; a paused, refused (`WouldBlock`) or failed capture or encoding
+/// keeps it due (`visible_moved` asks again with the next frame). Round 10:
+/// an answer without change (no records, a source that has nothing new) is
+/// no failure: the area stays taken, else every frame would capture again.
 fn capture_and_encode(
     stage: &mut Stage,
     backend: &dyn ScreenHostBackend,
@@ -138,8 +140,9 @@ fn capture_and_encode(
     recover: Option<u64>,
 ) -> Result<Captured, PipelineError> {
     let visible = stage.visible.clone();
-    let result = capture_and_encode_once(stage, backend, request, recover);
-    if !matches!(result, Ok(Captured::Encoded { .. })) {
+    let mut refused = false;
+    let result = capture_and_encode_once(stage, backend, request, (recover, &mut refused));
+    if refused || matches!(result, Err(_) | Ok(Captured::Paused(_))) {
         stage.visible = visible;
     }
     result
@@ -149,7 +152,7 @@ fn capture_and_encode_once(
     stage: &mut Stage,
     backend: &dyn ScreenHostBackend,
     request: &StageRequest,
-    recover: Option<u64>,
+    (recover, refused): (Option<u64>, &mut bool),
 ) -> Result<Captured, PipelineError> {
     let capture_ts_us = now_us();
     let capture_started = std::time::Instant::now();
@@ -173,6 +176,7 @@ fn capture_and_encode_once(
     );
     if stage.source.reference_generation() != generation {
         stage.encoder = None;
+        *refused = true; // the new encoder's first picture follows
         return match captured {
             Ok(SourceFrame::Paused(state)) => Ok(Captured::Paused(state)),
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => Ok(Captured::Unchanged),
@@ -182,7 +186,10 @@ fn capture_and_encode_once(
     }
     let captured = match captured {
         Ok(frame) => frame,
-        Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Ok(Captured::Unchanged),
+        Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+            *refused = true;
+            return Ok(Captured::Unchanged);
+        }
         Err(error) => return Err(PipelineError::capture(error)),
     };
     let image = match captured {
@@ -217,7 +224,8 @@ fn capture_and_encode_once(
         ) {
             Ok(image) => image,
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                return Ok(Captured::Unchanged)
+                *refused = true;
+                return Ok(Captured::Unchanged);
             }
             Err(error) => return Err(PipelineError::capture(error)),
         }
@@ -243,7 +251,8 @@ fn capture_and_encode_once(
         match encode_stage_frame(stage, backend, &image, request.clone()) {
             Ok(encoded) => encoded,
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                return Ok(Captured::Unchanged)
+                *refused = true;
+                return Ok(Captured::Unchanged);
             }
             Err(error) => return Err(PipelineError::encoder(error)),
         };
@@ -260,6 +269,7 @@ fn capture_and_encode_once(
         )
     {
         stage.encoder = None;
+        *refused = true;
         return Ok(Captured::Unchanged);
     }
     super::super::frame_size_caps::validate_encoded_budget(

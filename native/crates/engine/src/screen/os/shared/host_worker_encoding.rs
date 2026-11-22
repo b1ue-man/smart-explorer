@@ -134,9 +134,10 @@ impl Encoding {
         }
     }
 
-    /// Round 9 H5: also after a captured picture that was not encoded (a
-    /// refused scaling, an unchanged answer): its change, a new visible
-    /// area among them, is captured again instead of being lost.
+    /// Round 9 H5: also after a captured picture refused for now (scaling
+    /// or encoder without memory, a failure): its change, a new visible area
+    /// among them, is captured again instead of being lost; round 10: not
+    /// after a picture without change (no records), which would loop.
     pub(super) fn needs_refresh(&self) -> bool {
         self.owed
             || self

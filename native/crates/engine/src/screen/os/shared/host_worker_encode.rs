@@ -305,7 +305,6 @@ pub(super) fn encode_loop(shared: Arc<Shared>) {
                 let serial = captured.serial;
                 let last_good = recover.map(|(_, last_good)| last_good);
                 let result = encoding.encode(&shared, &request, captured, last_good);
-                encoding.owed = result.is_err();
                 let mut state = shared.lock();
                 let wish = recover.map(|(wish, _)| wish);
                 let (work, gone) = state.settle(result, serial, request.keyframe, wish);
@@ -336,7 +335,7 @@ pub(in crate::screen::os) struct Encoding {
     /// Sharp mode, „Scharf (GPU)“: only a GPU encoder serves it (C16).
     sharp: bool,
     confirmed: u64, // the newest frame the viewer confirmed (Gemini 8/3.1)
-    owed: bool,     // a captured picture was not encoded (round 9 H5)
+    owed: bool,     // a captured picture was refused for now (round 9 H5)
 }
 
 #[path = "host_worker_encoding.rs"]
@@ -355,6 +354,7 @@ impl Encoding {
     ) -> Result<Held, WorkerReply> {
         self.crash_hook();
         self.check_openh264();
+        self.owed = true; // until it is encoded or has nothing new (round 10)
         let started = Instant::now();
         let Captured {
             image,
@@ -373,13 +373,13 @@ impl Encoding {
         let unchanged =
             || reference.wrap(WorkerReply::Frame(StageFrame::Unchanged { source_size }));
         if request.size.width > source_size.width || request.size.height > source_size.height {
+            self.owed = false;
             return Err(unchanged());
         }
         let image = if image.size() == request.size {
             image
         } else {
-            // A CPU picture is scaled on the CPU; a GPU picture only gets the
-            // size the encoder's GPU scales it to (BK3b).
+            // A CPU picture is scaled on the CPU, a GPU one only relabelled.
             let scaled = image.scaled(request.size, limits, CaptureOwner::ScaledPixels);
             // The captured pixels go before encoding: room for the next capture.
             drop(image);
@@ -399,8 +399,7 @@ impl Encoding {
         // cannot gives way to a new encoder whose first picture is a key frame.
         let mut request = std::borrow::Cow::Borrowed(request);
         // Merge W2: the encoder stamps the picture with the id the viewer
-        // acknowledges (`StreamMark::frame_id` = the captured one), not with
-        // the order's; NVENC's B-36 bookkeeping (`RefHistory`) keys on it.
+        // acknowledges (`StreamMark::frame_id`), which `RefHistory` keys on.
         if request.frame_id != frame_id {
             request.to_mut().frame_id = frame_id;
         }
@@ -440,6 +439,7 @@ impl Encoding {
         };
         self.report_floor(shared, request.target_bps);
         drop(image);
+        self.owed = false;
         if frame.records.is_empty() {
             return Err(unchanged());
         }
