@@ -85,7 +85,10 @@ pub fn error_text(code: &str, detail: Option<&str>) -> String {
         }
         ScreenErrorCode::ApprovalDenied => "Der Nutzer am Gerät hat abgelehnt".into(),
         ScreenErrorCode::ApprovalCancelled => "Die Anfrage wurde abgebrochen".into(),
-        ScreenErrorCode::NoDisplay => "Das Gerät hat keinen Bildschirm für die Anzeige".into(),
+        // Codex 11/16: the host's reason (a source that is gone) follows.
+        ScreenErrorCode::NoDisplay => {
+            with_detail("Das Gerät hat keinen Bildschirm für die Anzeige", detail)
+        }
         ScreenErrorCode::IndicatorUnavailable => {
             "Bildschirmfreigabe braucht die Desktop-App auf dem Gerät".into()
         }

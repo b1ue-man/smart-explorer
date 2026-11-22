@@ -112,15 +112,15 @@ pub(super) async fn relay_loop(
                     pending.flush(out).await;
                     // The host's reason when it closed the connection before
                     // its last `STATE` (round 10).
-                    if let Some(reason) = EndReason::from_close(&session.connection) {
-                        return (reason.key().into(), None);
+                    if let Some((reason, detail)) = EndReason::from_close_detail(&session.connection) {
+                        return (reason.key().into(), detail);
                     }
                     return ("connection_lost".into(), Some(error.to_string()));
                 }
                 None => {
                     pending.flush(out).await;
-                    if let Some(reason) = EndReason::from_close(&session.connection) {
-                        return (reason.key().into(), None);
+                    if let Some((reason, detail)) = EndReason::from_close_detail(&session.connection) {
+                        return (reason.key().into(), detail);
                     }
                     return ("ended".into(), None);
                 }
@@ -134,15 +134,7 @@ pub(super) async fn relay_loop(
                 Some(PictureEvent::Broken { gop_id }) => {
                     pending.picture = Some((RELAY_BROKEN, gop_id.to_be_bytes().to_vec()));
                 }
-                None => {
-                    pending.flush(out).await;
-                    // Round 11: the host's close reason, as on the control
-                    // stream (`EndReason::from_close`).
-                    if let Some(reason) = EndReason::from_close(&session.connection) {
-                        return (reason.key().into(), None);
-                    }
-                    return ("ended".into(), None);
-                }
+                None => return pictures_ended(session, out, &mut pending).await,
             },
             frame = input.recv() => match frame {
                 Some(Some(relayed)) => {
@@ -172,4 +164,46 @@ pub(super) async fn relay_loop(
             },
         }
     }
+}
+
+/// How long the relay reads the host's control frames after the pictures
+/// ended (`pictures_ended`).
+const PICTURES_ENDED_WAIT: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// The pictures ended (Codex 11/5): which end it is does not depend on
+/// which stream the relay saw end first. The host's control frames still on
+/// their way are read for a moment (a changed session builds the session
+/// again) and forwarded; then the connection's close reason counts
+/// (`EndReason::from_close_detail`), else `ended`.
+async fn pictures_ended(
+    session: &mut ViewerSession,
+    out: &mpsc::Sender<Item>,
+    pending: &mut Pending,
+) -> (String, Option<String>) {
+    let deadline = tokio::time::sleep(PICTURES_ENDED_WAIT);
+    tokio::pin!(deadline);
+    loop {
+        tokio::select! {
+            () = &mut deadline => break,
+            frame = session.host.recv() => match frame {
+                Some(Ok(frame)) => {
+                    if reconnect::changed_session(&frame) {
+                        return (EndReason::SessionChanged.key().into(), None);
+                    }
+                    if let Ok((tag, payload)) = encode_host_frame(&frame) {
+                        let mut body = Vec::with_capacity(payload.len() + 1);
+                        body.push(tag);
+                        body.extend_from_slice(&payload);
+                        pending.control.push_back((RELAY_HOST, body));
+                    }
+                }
+                _ => break,
+            },
+        }
+    }
+    pending.flush(out).await;
+    if let Some((reason, detail)) = EndReason::from_close_detail(&session.connection) {
+        return (reason.key().into(), detail);
+    }
+    ("ended".into(), None)
 }

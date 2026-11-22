@@ -208,16 +208,53 @@ impl EndReason {
     /// (`host_session.rs` closes with its key, round 10): the end a viewer
     /// shows when the control stream broke before the last `STATE`.
     pub fn from_close(connection: &iroh::endpoint::Connection) -> Option<Self> {
-        match connection.close_reason()? {
-            iroh::endpoint::ConnectionError::ApplicationClosed(close) => {
-                std::str::from_utf8(&close.reason)
-                    .ok()
-                    .and_then(Self::from_key)
+        Self::from_close_detail(connection).map(|(reason, _)| reason)
+    }
+
+    /// `from_close` and the detail the host put after the key (`key: code:
+    /// detail`, Codex 11/15: the `ERROR` that did not reach the viewer).
+    pub fn from_close_detail(
+        connection: &iroh::endpoint::Connection,
+    ) -> Option<(Self, Option<String>)> {
+        let iroh::endpoint::ConnectionError::ApplicationClosed(close) =
+            connection.close_reason()?
+        else {
+            return None;
+        };
+        let text = std::str::from_utf8(&close.reason).ok()?;
+        let (key, detail) = match text.split_once(": ") {
+            Some((key, detail)) => (key, Some(detail.to_string())),
+            None => (text, None),
+        };
+        Some((Self::from_key(key)?, detail))
+    }
+
+    /// The close reason a host sends: the key and, when the session ended
+    /// with an error, `code: detail` after it, cut to `MAX_CLOSE_REASON`
+    /// bytes (a close frame fits one packet).
+    pub fn close_text(self, error: Option<(&str, Option<&str>)>) -> String {
+        let mut text = self.key().to_string();
+        if let Some((code, detail)) = error {
+            text.push_str(": ");
+            text.push_str(code);
+            if let Some(detail) = detail.filter(|detail| !detail.is_empty()) {
+                text.push_str(": ");
+                text.push_str(detail);
             }
-            _ => None,
         }
+        if text.len() > MAX_CLOSE_REASON {
+            let mut end = MAX_CLOSE_REASON;
+            while !text.is_char_boundary(end) {
+                end -= 1;
+            }
+            text.truncate(end);
+        }
+        text
     }
 }
+
+/// The longest close reason a host sends (`EndReason::close_text`).
+pub const MAX_CLOSE_REASON: usize = 512;
 
 /// The error a host process link gives once the active graphical session
 /// changed (E48): the session then ends as `EndReason::SessionChanged`.

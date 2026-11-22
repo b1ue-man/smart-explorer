@@ -365,7 +365,13 @@ pub async fn serve(context: HostContext, viewer: ProvenViewer) -> io::Result<()>
                 None,
                 Some(&error.to_string()),
             );
-            return start.refuse(ScreenErrorCode::CaptureFailed, true).await;
+            return start
+                .refuse_with(
+                    ScreenErrorCode::CaptureFailed,
+                    true,
+                    Some(error.to_string()),
+                )
+                .await;
         }
         Err(startup::Failure::Source(refusal)) => {
             log_event(
@@ -376,7 +382,9 @@ pub async fn serve(context: HostContext, viewer: ProvenViewer) -> io::Result<()>
                 None,
                 Some(refusal.reason.as_str()),
             );
-            return start.refuse(ScreenErrorCode::NoDisplay, true).await;
+            return start
+                .refuse_with(ScreenErrorCode::NoDisplay, true, Some(refusal.reason))
+                .await;
         }
     };
     if handle.stop_signal().borrow().is_some()

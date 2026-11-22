@@ -436,6 +436,13 @@ impl<'a> Session<'a> {
         self.metadata.cancel();
         self.pipeline.cancel();
         self.end_control().await;
+        // Codex 11/15: the close reason (key, error code and detail) reaches
+        // a viewer the last frames did not (`EndReason::from_close_detail`).
+        let close = reason.close_text(
+            error
+                .as_ref()
+                .map(|error| (error.code.as_str(), error.detail.as_deref())),
+        );
         let last = async {
             // Round 11: a viewer that takes parts hears the reason first,
             // between the parts of a large frame still running; the rest of
@@ -475,10 +482,7 @@ impl<'a> Session<'a> {
         if said && reason != EndReason::ViewerClosed {
             let _ = tokio::time::timeout(CLOSE_GRACE, self.connection.closed()).await;
         }
-        // The reason's key, which viewers read when the last `STATE` did not
-        // reach them (`EndReason::from_close`).
-        self.connection
-            .close(SESSION_CLOSE, reason.key().as_bytes());
+        self.connection.close(SESSION_CLOSE, close.as_bytes());
     }
 }
 

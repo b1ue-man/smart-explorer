@@ -110,7 +110,12 @@ object ScreenTexts {
         }
         val res = errorRes(code) ?: return context.getString(R.string.screen_error_unknown, code)
         val base = context.getString(res)
-        return if (code == "capture_failed" || code == "encoder_failed") withDetail(base, detail) else base
+        // Codex 11/16: a refused source names its reason as well.
+        return if (code == "capture_failed" || code == "encoder_failed" || code == "no_display") {
+            withDetail(base, detail)
+        } else {
+            base
+        }
     }
 
     /** The text of the end of a session (`ended` event: a reason key or an error code). */

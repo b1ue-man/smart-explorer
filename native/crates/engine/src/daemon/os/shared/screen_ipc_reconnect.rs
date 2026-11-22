@@ -210,6 +210,12 @@ async fn end(out: &mpsc::Sender<(u8, Vec<u8>)>, code: String, detail: Option<Str
 /// again (the new one starts from the first request): its modes, ceiling,
 /// decoders, display, sound, and (Gemini 3/9) its control and visibility.
 async fn replay(modes: &ModeMemory, next: &ViewerSession) {
+    // Codex 11/4: a display choice older than the last source goes first,
+    // so it never undoes a later window choice.
+    let display = modes.display();
+    if let Some(choice) = display.filter(|_| !modes.display_last()) {
+        let _ = next.control.send(ViewerFrame::SetDisplay(choice)).await;
+    }
     for mode in modes.replay() {
         let _ = next.control.send(ViewerFrame::SetMode(mode)).await;
     }
@@ -223,7 +229,7 @@ async fn replay(modes: &ModeMemory, next: &ViewerSession) {
     }
     // „Monitor“/„Auflösung“ chosen in the session (P9); the viewer task drops
     // it for a host without `live`.
-    if let Some(choice) = modes.display() {
+    if let Some(choice) = display.filter(|_| modes.display_last()) {
         let _ = next.control.send(ViewerFrame::SetDisplay(choice)).await;
     }
     // The host's sound (P9), only to a host that answered it.
@@ -255,6 +261,14 @@ async fn replay(modes: &ModeMemory, next: &ViewerSession) {
 fn current(modes: &ModeMemory, first: &ViewerRequest, opening: Option<u64>) -> ViewerRequest {
     let mut request = first.clone();
     request.max_rate_bps = ceiling(modes, opening);
+    // Codex 11/4: the source and display in force, not the first ones (the
+    // first source may be gone; `replay` follows with the same choices).
+    if let Some(source) = modes.source() {
+        request.source = Some(source);
+    }
+    if let Some(choice) = modes.display().filter(|_| modes.display_last()) {
+        request.virtual_display = Some(choice);
+    }
     if let Some(set) = modes.decoders() {
         request.decoders = set.decoders;
         request.gop_continue = set.gop_continue;

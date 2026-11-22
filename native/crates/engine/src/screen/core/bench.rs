@@ -197,8 +197,9 @@ pub async fn run(
 /// The end a host named when it closed the connection
 /// (`EndReason::from_close`), else `error`.
 fn closed_by_host(connection: &iroh::endpoint::Connection, error: io::Error) -> ViewerError {
-    match super::session_state::EndReason::from_close(connection) {
-        Some(reason) => ViewerError::Refused(reason.key().into()),
+    match super::session_state::EndReason::from_close_detail(connection) {
+        Some((reason, Some(detail))) => ViewerError::Refused(format!("{}: {detail}", reason.key())),
+        Some((reason, None)) => ViewerError::Refused(reason.key().into()),
         None => ViewerError::Io(error),
     }
 }

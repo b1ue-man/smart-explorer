@@ -50,6 +50,9 @@ pub(crate) struct ModeMemory {
     decoders: Option<crate::screen::core::set_decoders::SetDecoders>,
     /// The last `SET_DISPLAY` of the viewer (P9), replayed like a mode.
     display: Option<crate::screen::core::virtual_display::VirtualDisplayChoice>,
+    /// Whether that `SET_DISPLAY` came after the last chosen source (Codex
+    /// 11/4: an older display choice must not undo a later window choice).
+    display_last: bool,
     /// The last `AUDIO` of the viewer (plan 2026-11-17 P9), replayed to a
     /// new session whose host answered `audio`.
     audio: Option<bool>,
@@ -97,6 +100,7 @@ impl ModeMemory {
         }
         if let ViewerFrame::SetDisplay(choice) = frame {
             self.display = Some(*choice);
+            self.display_last = true;
             return;
         }
         if let ViewerFrame::Audio(on) = frame {
@@ -125,6 +129,7 @@ impl ModeMemory {
         folded.mode = set.mode;
         if set.source.is_some() {
             folded.source = set.source.clone();
+            self.display_last = false;
         }
         let choice = match set.mode {
             StreamMode::Preview => &mut folded.preview,
@@ -150,6 +155,16 @@ impl ModeMemory {
         &self,
     ) -> Option<crate::screen::core::virtual_display::VirtualDisplayChoice> {
         self.display
+    }
+
+    /// Whether the last `SET_DISPLAY` came after the last chosen source.
+    pub(crate) fn display_last(&self) -> bool {
+        self.display_last
+    }
+
+    /// The source the viewer chose last; `None` when it chose none.
+    pub(crate) fn source(&self) -> Option<SourceId> {
+        self.last.as_ref().and_then(|folded| folded.source.clone())
     }
 
     /// The viewer's last control request; `None` when it sent none.
