@@ -17,6 +17,18 @@ fn mergeable(event: &InputEvent) -> bool {
     )
 }
 
+use super::super::input_release::releases;
+
+/// `a` and `b` concern the same key, button or touch.
+fn same_input(a: &InputEvent, b: &InputEvent) -> bool {
+    match (a, b) {
+        (InputEvent::Key { hid_usage: x, .. }, InputEvent::Key { hid_usage: y, .. }) => x == y,
+        (InputEvent::Button { button: x, .. }, InputEvent::Button { button: y, .. }) => x == y,
+        (InputEvent::Touch { id: x, .. }, InputEvent::Touch { id: y, .. }) => x == y,
+        _ => false,
+    }
+}
+
 pub(super) fn motion_only(events: &[InputEvent]) -> bool {
     events.iter().all(mergeable)
 }
@@ -25,8 +37,8 @@ pub(super) fn motion_only(events: &[InputEvent]) -> bool {
 /// waits on its own.
 const MERGED_MAX: usize = 16;
 /// Events waiting behind an injection at most (round 9, E6); beyond, only
-/// the releases of a batch wait (they never go lost), the rest is dropped
-/// and the viewer hears `ReleasePending`.
+/// the releases of what is held or waits wait (one per key, button or
+/// touch), the rest is dropped and the viewer hears `BacklogFull`.
 pub(super) const BACKLOG_EVENTS: usize = 1024;
 
 /// `events` joins `waiting` (both `motion_only`) in order: a position
@@ -60,6 +72,36 @@ pub(super) fn merge_motion(waiting: &mut Vec<InputEvent>, events: &[InputEvent])
 }
 
 impl Session<'_> {
+    /// Round 11 (M1, N7): of a batch beyond the backlog's bound, the
+    /// releases of what is held (`pressed`) or pressed in the injection or
+    /// the backlog, each once: a release whose press was dropped would let
+    /// go of a key the host's own user holds, and a repeated one adds
+    /// nothing but length.
+    pub(super) fn overflow_releases(&self, events: &[InputEvent]) -> Vec<InputEvent> {
+        let mut kept: Vec<InputEvent> = Vec::new();
+        for event in events.iter().filter(|event| releases(event)) {
+            let same = |other: &&InputEvent| same_input(other, event);
+            let waiting = self
+                .health
+                .injecting
+                .iter()
+                .flat_map(|job| job.events.iter());
+            let last = waiting
+                .chain(self.health.backlog.iter().flatten())
+                .chain(kept.iter())
+                .filter(same)
+                .last();
+            let keep = match last {
+                Some(last) => !releases(last),
+                None => self.pressed.clone().take_release(event),
+            };
+            if keep {
+                kept.push(event.clone());
+            }
+        }
+        kept
+    }
+
     /// A press waits behind the injection or is in it (round 10: moves are
     /// then not merged, a drag keeps its path).
     pub(super) fn presses_pending(&self) -> bool {
@@ -147,7 +189,8 @@ impl Session<'_> {
                 // D6/E2: a block or hold the viewer heard ends with the
                 // first batch that reached the host after it; a block the
                 // platform reported late stays shown its minimum time (Z2).
-                let held = std::mem::take(&mut self.health.held_reported);
+                // Round 11 (N1): an overflowed backlog stays reported.
+                let held = !self.health.overflow && self.health.held_reported.take().is_some();
                 let late = self
                     .health
                     .block_shown_until

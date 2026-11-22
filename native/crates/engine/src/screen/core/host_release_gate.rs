@@ -61,7 +61,7 @@ impl Drop for Outstanding {
 /// a release job; their failures land in `failed`), in their order, and
 /// the releases still `queued`.
 pub(super) fn take_over(
-    jobs: Vec<tokio::task::JoinHandle<Result<(), ControlBlock>>>,
+    jobs: Vec<(tokio::task::JoinHandle<Result<(), ControlBlock>>, Duration)>,
     failed: Arc<Mutex<Vec<InputEvent>>>,
     mut queued: Vec<InputEvent>,
     target: Target,
@@ -82,21 +82,33 @@ pub(super) fn take_over(
         // waiting. Its releases still follow: they go through the same sink,
         // which serialises them behind it (the host process's link lock,
         // Android's queue, the portal thread), so they cannot overtake it.
-        for job in jobs {
-            if tokio::time::timeout(GATE_LIMIT, job).await.is_err() {
+        // Round 11 (M2): each job gets its own limit (a text takes its
+        // characters' time); a job past it is awaited again before the
+        // keeper ends, as it may still put failed releases into `failed`.
+        let mut late = Vec::new();
+        for (mut job, limit) in jobs {
+            if tokio::time::timeout(limit, &mut job).await.is_err() {
                 super::super::visibility::note_viewer(
                     "a handed-over input job outlasted its limit; its releases follow it",
                 );
+                late.push(job);
             }
         }
         // Round 9 (E4): the limit counts from here, after the handed jobs.
-        let started = Instant::now();
+        let mut started = Instant::now();
         loop {
             let mut events =
                 std::mem::take(&mut *failed.lock().unwrap_or_else(PoisonError::into_inner));
             events.append(&mut queued);
             if events.is_empty() {
-                return;
+                if late.is_empty() {
+                    return;
+                }
+                for job in late.drain(..) {
+                    let _ = tokio::time::timeout(GATE_LIMIT, job).await;
+                }
+                started = Instant::now();
+                continue;
             }
             let target = target.clone();
             let delivery = tokio::task::spawn_blocking(move || deliver(&target, events));

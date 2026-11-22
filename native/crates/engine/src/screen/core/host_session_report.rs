@@ -28,7 +28,7 @@ impl Session<'_> {
         self.health.block_reported = Some(blocked);
         self.health.block_shown_until = None;
         // This state names no hold: the next hold is reported again (N4).
-        self.health.held_reported = false;
+        self.health.held_reported = None;
         let state = ControlState {
             holder: self.handle.controller(),
             blocked: Some(blocked),
@@ -82,10 +82,13 @@ impl Session<'_> {
     /// ended (the block it heard last stays named).
     pub(super) async fn end_hold(&mut self) -> io::Result<()> {
         // Round 10: an overflowed backlog stays reported until it drained.
-        if !self.health.held_reported || self.hold_reason().is_some() || self.health.overflow {
+        if self.health.held_reported.is_none()
+            || self.hold_reason().is_some()
+            || self.health.overflow
+        {
             return Ok(());
         }
-        self.health.held_reported = false;
+        self.health.held_reported = None;
         let state = ControlState {
             holder: self.handle.controller(),
             blocked: self.health.block_reported,
@@ -95,10 +98,11 @@ impl Session<'_> {
     }
 
     pub(super) async fn report_held(&mut self, held: InputHeld) -> io::Result<()> {
-        if self.health.held_reported || !self.handle.holds_control() {
+        // Round 11 (N2): a hold with another reason is reported anew.
+        if self.health.held_reported == Some(held) || !self.handle.holds_control() {
             return Ok(());
         }
-        self.health.held_reported = true;
+        self.health.held_reported = Some(held);
         let state = ControlState {
             holder: self.handle.controller(),
             blocked: self.health.block_reported,

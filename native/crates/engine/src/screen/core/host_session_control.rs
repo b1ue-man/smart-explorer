@@ -273,11 +273,7 @@ impl Session<'_> {
             // from this batch and every next one until the backlog drained
             // (`overflow`), so no later press meets the dropped ones.
             self.health.overflow = true;
-            let releases: Vec<InputEvent> = events
-                .iter()
-                .filter(|event| super::input_release::releases(event))
-                .cloned()
-                .collect();
+            let releases = self.overflow_releases(events);
             if !releases.is_empty() {
                 self.health.backlog.push_back(releases);
             }
@@ -390,7 +386,7 @@ impl Session<'_> {
             held: None,
         };
         self.health.block_reported = None;
-        self.health.held_reported = false;
+        self.health.held_reported = None;
         self.frame(HostFrame::ControlState(state)).await
     }
 

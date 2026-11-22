@@ -44,7 +44,7 @@ pub(super) struct InputHealth {
     /// D6: the block the viewer's last `CONTROL_STATE` named.
     pub(super) block_reported: Option<ControlBlock>,
     /// E2: the viewer heard that input is held back, once per hold.
-    pub(super) held_reported: bool,
+    pub(super) held_reported: Option<crate::screen::core::wire_control::InputHeld>,
     /// Z2: a block the platform reported late (`take_refusal`) stays shown
     /// until then, also when the next batch goes through.
     pub(super) block_shown_until: Option<Instant>,
@@ -367,9 +367,27 @@ impl Session<'_> {
     }
     pub(super) fn hand_releases_over(&mut self) {
         // An injection that outlasted its grace goes first (round 8, I8).
-        let jobs: Vec<_> = (self.health.injecting.take().map(|job| job.handle))
+        // Round 11 (M2): with their own limits: a release job within a host
+        // process's link wait (`FRAME_TIMEOUT`, 10 s) and answer time
+        // (`INPUT_TIMEOUT`, 2 s), an injection with 40 ms per character of
+        // its text more (`input_limit`, `host_worker_input_limit.rs`).
+        const JOB_LIMIT: std::time::Duration = std::time::Duration::from_secs(12);
+        let injecting = self.health.injecting.take().map(|job| {
+            let characters: usize = job
+                .events
+                .iter()
+                .map(|event| match event {
+                    InputEvent::Text { text } => text.chars().count(),
+                    _ => 0,
+                })
+                .sum();
+            let per = std::time::Duration::from_millis(40);
+            let text = per.saturating_mul(u32::try_from(characters).unwrap_or(u32::MAX));
+            (job.handle, JOB_LIMIT + text)
+        });
+        let jobs: Vec<_> = injecting
             .into_iter()
-            .chain(self.input_release.take())
+            .chain(self.input_release.take().map(|job| (job, JOB_LIMIT)))
             .collect();
         let queued = std::mem::take(&mut self.health.queued);
         if jobs.is_empty() && queued.is_empty() && failed_list(&self.health.failed).is_empty() {

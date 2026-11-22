@@ -347,31 +347,55 @@ fn type_unlatched<C: Connection>(
     conn: &C,
     root: Window,
     text: &str,
-    mut map: KeyMap,
+    map: KeyMap,
 ) -> io::Result<usize> {
     restore_pending(conn);
     let held = held_keys(conn)?;
+    // Round 11 (N4): a spare key is owed in the file before its first
+    // remapping (one write per key and text, not per character: the text
+    // remaps the same highest free key for every character), and cleared
+    // after the text unless its emptying failed.
+    let mut claimed = Vec::new();
+    let mut owed = Vec::new();
+    let typed = type_chars(conn, root, text, map, &held, &mut claimed, &mut owed);
+    spares::settle(&claimed, &owed);
+    typed
+}
+
+fn type_chars<C: Connection>(
+    conn: &C,
+    root: Window,
+    text: &str,
+    mut map: KeyMap,
+    held: &[Keycode],
+    claimed: &mut Vec<Keycode>,
+    owed: &mut Vec<Keycode>,
+) -> io::Result<usize> {
     let mut skipped = 0;
     for character in typed_chars(text) {
         let sym = keysym_of(character);
         if let Some((code, shift, level3)) = map.find(sym) {
             let keys = (map.level3, &map.shifts[..]);
-            tap(conn, root, code, Some((shift, level3)), keys, &held)?;
+            tap(conn, root, code, Some((shift, level3)), keys, held)?;
             continue;
         }
         let Some(spare) = map.spare() else {
             skipped += 1;
             continue;
         };
+        if !claimed.contains(&spare) {
+            spares::claim(spare);
+            claimed.push(spare);
+        }
         let per = map.per_code.max(1);
         let column = vec![sym; usize::from(per)];
         conn.change_keyboard_mapping(1, spare, per, &column)
             .map_err(io::Error::other)?;
         // Round 10 (Codex 10/16): from here the spare key carries the
         // keysym; it is emptied again on every way out, and a failed
-        // emptying is retried with the next text (`restore_pending`).
+        // emptying is retried with the next connection (`restore_pending`).
         let typed = sync(conn)
-            .and_then(|()| tap(conn, root, spare, None, (None, &[]), &held))
+            .and_then(|()| tap(conn, root, spare, None, (None, &[]), held))
             .and_then(|()| sync(conn));
         match &typed {
             // Clients read the mapping lazily: give them the press first.
@@ -383,7 +407,8 @@ fn type_unlatched<C: Connection>(
         }
         let restored = empty_spare(conn, spare, per);
         if restored.is_err() {
-            owe_spare(spare, sym);
+            spares::owe(spare, sym);
+            owed.push(spare);
         }
         typed?;
         restored?;
@@ -394,8 +419,8 @@ fn type_unlatched<C: Connection>(
 
 #[path = "x11_keymap_spares.rs"]
 mod spares;
+use spares::empty_spare;
 pub(super) use spares::restore_pending;
-use spares::{empty_spare, owe_spare};
 
 #[cfg(test)]
 mod tests {
