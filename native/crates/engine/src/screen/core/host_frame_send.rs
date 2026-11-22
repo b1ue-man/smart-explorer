@@ -101,6 +101,7 @@ impl Pipeline {
             self.rate.control_bps(),
             self.rate.sustained_bps(),
         );
+        gop.pace_absorbs(self.rate.shared_budget());
         // Codex 6/9, round 7 P3: a stalled stream ends the write piece by
         // piece (`GopWriter::piece`, at the rate the line was measured to
         // carry, the pace's own waits never count); the whole write's limit

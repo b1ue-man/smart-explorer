@@ -144,6 +144,7 @@ impl Pipeline {
             self.rate.control_bps(),
             self.rate.sustained_bps(),
         );
+        gop.pace_absorbs(self.rate.shared_budget());
         // Round 7 P4: as a live picture (`host_frame_send.rs`): a stall ends
         // the write piece by piece, the whole write's limit is a safety net.
         let budget = crate::screen::core::gop_stream::WRITE_SAFETY_LIMIT;

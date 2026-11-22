@@ -34,6 +34,12 @@ pub(super) struct Pace {
     pub(super) anchor: tokio::time::Instant,
     pub(super) anchor_rate: Option<u64>,
     pub(super) written: u64,
+    /// Bytes of small control frames that went beyond their share while
+    /// this picture was written (Codex 11/7, round 12): the picture's pace
+    /// counts them as its own, so picture and frames together keep the
+    /// rate over short spans; `shared` is where they come from.
+    pub(super) absorbed: u64,
+    pub(super) shared: Option<crate::screen::core::tiles_rate::SharedBudget>,
     /// The bytes of the whole frame (`write_records_admitted`; 0: unknown).
     pub(super) total: u64,
     /// The ceiling as it is now (0: none, Codex 5/12), the user ceiling the
@@ -79,6 +85,19 @@ impl Pace {
         live != 0 && (self.ceiling_at_start == 0 || live < self.ceiling_at_start)
     }
 
+    /// The bytes on the line under this pace: the picture's own and the
+    /// small frames' absorbed ones (`absorb`).
+    pub(super) fn used(&self) -> u64 {
+        self.written.saturating_add(self.absorbed)
+    }
+
+    /// Takes in the small frames' bytes sent since the last call.
+    pub(super) fn absorb(&mut self) {
+        if let Some(shared) = &self.shared {
+            self.absorbed = self.absorbed.saturating_add(shared.take_absorbed());
+        }
+    }
+
     /// Whether the rest of the picture after a lowered ceiling takes longer
     /// than `LOWERED_REST_US` at `rate_bps` (round 8 R1).
     pub(super) fn too_slow(&self, rate_bps: u64) -> bool {
@@ -118,7 +137,7 @@ impl Pace {
                 self.banked
             };
             if self.anchor_rate.is_some() || rate < before {
-                let cap = u128::from(self.written).max(saved);
+                let cap = u128::from(self.used()).max(saved);
                 self.banked = self.banked.saturating_add(earned_before).min(cap);
             }
             if self.anchor_rate.is_some() {

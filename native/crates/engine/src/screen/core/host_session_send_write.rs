@@ -246,6 +246,13 @@ impl Session<'_> {
         if excess == 0 {
             return true;
         }
+        // A picture being written takes the excess into its pace (round 12):
+        // the frame goes now, and picture and frame keep the rate together.
+        if self.outbox.budget.picture_writing() {
+            self.outbox.budget.on_sent(now_us(), excess, rate);
+            self.outbox.budget.absorb_small(excess);
+            return true;
+        }
         if !self.outbox.budget.admits(now_us(), rate) {
             let droppable = match frame {
                 HostFrame::CursorPosition(position) => {

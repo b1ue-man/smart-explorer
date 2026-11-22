@@ -143,6 +143,8 @@ pub struct SharedBudget(
 pub struct Turns {
     /// The control rate the pictures leave free (`set_reserved`).
     reserved: std::sync::atomic::AtomicU64,
+    /// Small frames' excess sent while a picture is written (`absorb_small`).
+    absorbed: std::sync::atomic::AtomicU64,
     writing: std::sync::atomic::AtomicBool,
     owed: std::sync::atomic::AtomicBool,
     changed: tokio::sync::Notify,
@@ -228,6 +230,17 @@ impl SharedBudget {
             .reserved
             .store(bps, std::sync::atomic::Ordering::Release);
     }
+    /// A small frame's `bytes` beyond its share went while a picture is
+    /// written (Codex 11/7, round 12): its pace counts them (`take_absorbed`).
+    pub fn absorb_small(&self, bytes: u64) {
+        self.2
+            .absorbed
+            .fetch_add(bytes, std::sync::atomic::Ordering::AcqRel);
+    }
+    /// The absorbed bytes since the last call.
+    pub fn take_absorbed(&self) -> u64 {
+        self.2.absorbed.swap(0, std::sync::atomic::Ordering::AcqRel)
+    }
     pub fn reserved(&self) -> u64 {
         self.2.reserved.load(std::sync::atomic::Ordering::Acquire)
     }
@@ -273,6 +286,8 @@ pub struct PictureWrite(SharedBudget);
 impl PictureWrite {
     pub fn start(budget: SharedBudget) -> Self {
         budget.set_picture_writing(true);
+        // Bytes absorbed by an earlier picture's end are booked already.
+        let _ = budget.take_absorbed();
         Self(budget)
     }
 }

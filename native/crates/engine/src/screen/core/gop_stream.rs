@@ -203,6 +203,8 @@ impl GopWriter {
             anchor: tokio::time::Instant::now(),
             anchor_rate: None,
             written: 0,
+            absorbed: 0,
+            shared: None,
             total: 0,
             limit,
             ceiling_at_start: rate_ceiling.unwrap_or(0),
@@ -211,12 +213,21 @@ impl GopWriter {
         });
     }
 
+    /// The small control frames' excess sent while this picture is written
+    /// counts in its pace (`SharedBudget::absorb_small`, Codex 11/7).
+    pub fn pace_absorbs(&mut self, shared: crate::screen::core::tiles_rate::SharedBudget) {
+        if let Some(pace) = self.pace.as_mut() {
+            pace.shared = Some(shared);
+        }
+    }
+
     /// Waits until `bytes` more may go on the line under the pace.
     async fn paced(&mut self, bytes: usize) -> io::Result<()> {
         let Some(pace) = self.pace.as_mut() else {
             return Ok(());
         };
         pace.written = pace.written.saturating_add(bytes as u64);
+        pace.absorb();
         // Waits of at most `PACE_MAX_WAIT_US`, each with the rate as it is
         // then (round 6 L2: one wait of the whole remainder at the rate of
         // its start slept for hours after a ceiling change).
@@ -226,7 +237,8 @@ impl GopWriter {
             };
             // Codex 7/5: each stretch of time earns at the rate valid in it.
             let (rate, allowed) = pace.allowed();
-            let ahead = u128::from(pace.written).saturating_sub(allowed);
+            pace.absorb();
+            let ahead = u128::from(pace.used()).saturating_sub(allowed);
             let wait_us = ahead * 8 * 1_000_000 / u128::from(rate);
             if wait_us < u128::from(PACE_MIN_WAIT_US) {
                 return Ok(());
