@@ -390,6 +390,14 @@ fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, a
     }
 
     fun applySettings(wanted: ViewSettings) {
+        // „Verlustfrei“ decodes only in software: with „Dekodierer: Hardware“ the two choices cannot both hold. The
+        // combination is refused with its reason before it is stored or sent, the running choice stays (Gemini 8/9;
+        // the core refuses to open it as well, `StreamRequest::unavailable_choice`).
+        if (wanted.choice.codec == ViewerCodecChoice.CODEC_LOSSLESS && wanted.choice.decoder == ViewerCodecChoice.DECODER_HARDWARE) {
+            failure = ScreenCodecNotices.losslessNeedsSoftware()
+            return
+        }
+        if (failure == ScreenCodecNotices.losslessNeedsSoftware()) failure = null
         // A source can only be changed to a named one (no source on the wire means „no change“); without a monitor list
         // „Ganzer Bildschirm“ has no name, so the source stays and the picture is not dropped.
         val unnamed = wanted.source == null && settings.source != null
