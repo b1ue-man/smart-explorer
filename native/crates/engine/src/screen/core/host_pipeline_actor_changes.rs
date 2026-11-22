@@ -94,8 +94,16 @@ impl PipelineActor {
         self.pending.visible = Some(rects);
         self.poll();
     }
-    /// A new encoder and a new input reference (a family's new layout, a
-    /// view shown again).
+    /// Codex 11/21: a family's new layout moves the input reference and
+    /// takes a key frame; the encoder stays (a new size or capture
+    /// generation of the source replaces it in `sync_source_reference`).
+    pub fn rebind_reference(&mut self) {
+        self.interrupt();
+        self.pending.rebind = true;
+        self.pending.keyframe = true;
+        self.poll();
+    }
+    /// A new encoder and a new input reference (a view shown again).
     pub fn invalidate_reference(&mut self) {
         self.interrupt();
         self.pending.invalidate = true;

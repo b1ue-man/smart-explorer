@@ -13,6 +13,8 @@ impl Pipeline {
             return Ok(());
         }
         self.capture_active = false;
+        // The capture stops or starts anew (a new capture generation).
+        self.note_restart("the capture pauses or resumes: new encoder");
         self.invalidate_reference();
         self.rebind_input();
         if self.capture_transition.is_some() {
@@ -96,6 +98,8 @@ impl Pipeline {
         }
         self.capture_applied = None;
         self.capture_active = false;
+        // The capture stops or starts anew (a new capture generation).
+        self.note_restart("the capture pauses or resumes: new encoder");
         self.invalidate_reference();
         self.rebind_input();
         let stage = self.stage.as_mut().ok_or_else(|| {

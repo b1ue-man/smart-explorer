@@ -68,6 +68,13 @@ pub(super) fn confirm_reference(stage: &mut Stage, frame_id: u64) {
     }
 }
 
+/// Codex 11/21: every end of the in-process encoder names its reason.
+fn end_encoder(stage: &mut Stage, why: &str) {
+    if stage.encoder.take().is_some() {
+        eprintln!("screen encoder: ends ({why})");
+    }
+}
+
 /// One frame as `request` says: in the host process when the source runs
 /// there, else here with the backend's encoder, opened on first use.
 /// `recover` (B-36): the frame continues a reset stream and may reference
@@ -175,7 +182,7 @@ fn capture_and_encode_once(
                 .is_some_and(|opened| opened.encoder.needs_refresh()),
     );
     if stage.source.reference_generation() != generation {
-        stage.encoder = None;
+        end_encoder(stage, "the capture generation changed");
         *refused = true; // the new encoder's first picture follows
         return match captured {
             Ok(SourceFrame::Paused(state)) => Ok(Captured::Paused(state)),
@@ -268,7 +275,7 @@ fn capture_and_encode_once(
             frame.records.iter(),
         )
     {
-        stage.encoder = None;
+        end_encoder(stage, "no key frame on request after a reset");
         *refused = true;
         return Ok(Captured::Unchanged);
     }
@@ -321,7 +328,7 @@ pub(in crate::screen) fn encode_stage_frame(
             .as_ref()
             .is_some_and(|opened| opened.encoder.size() != request.size)
     {
-        stage.encoder = None;
+        end_encoder(stage, "another capture book or picture size");
     }
     // Counted only after a failure (plan 2026-11-17 P3).
     let mut max_attempts: Option<usize> = None;
@@ -351,6 +358,7 @@ pub(in crate::screen) fn encode_stage_frame(
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Err(error),
             Err(error) => {
                 let factory = opened.factory.clone();
+                eprintln!("screen encoder: ends ({factory} failed: {error})");
                 stage.encoder = None;
                 if factory == TILES_NAME {
                     return Err(error);

@@ -415,6 +415,7 @@ impl Pipeline {
         }
         self.choice = next;
         self.quality.size = self.fitted_size();
+        self.note_restart("the encoder failed: next encoder of the rank");
         self.invalidate_reference();
         Some(next)
     }
@@ -423,6 +424,7 @@ impl Pipeline {
     pub(super) fn fall_back_to_tiles(&mut self) {
         self.choice = self.tile_choice();
         self.quality.size = self.fitted_size();
+        self.note_restart("„Automatisch“ falls back to the tiles: new encoder");
         self.invalidate_reference();
     }
 }

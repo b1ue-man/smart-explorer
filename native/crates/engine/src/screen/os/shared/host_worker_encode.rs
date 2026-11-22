@@ -450,7 +450,7 @@ impl Encoding {
         ) {
             // The encoder references this picture, the viewer never gets it:
             // the next picture comes from a new encoder as a key frame.
-            self.running = None;
+            self.end_encoder("a picture beyond its byte budget");
             return Err(reference.wrap(failed(ScreenErrorCode::EncoderFailed, error)));
         }
         let keyframe = frame.keyframe;
@@ -487,11 +487,11 @@ impl Encoding {
             }),
             // The source retired its grant: the next picture opens anew.
             Ok(None) => {
-                self.running = None;
+                self.end_encoder("the source retired its grant");
                 Err(unchanged())
             }
             Err(error) => {
-                self.running = None;
+                self.end_encoder("the picture's transport failed");
                 Err(reference.wrap(failed(ScreenErrorCode::CaptureFailed, error)))
             }
         }

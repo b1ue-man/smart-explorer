@@ -158,7 +158,14 @@ impl Encoding {
             .as_ref()
             .is_some_and(|running| running.encoder.name() == OPENH264);
         if openh264 && !openh264_switched_on() {
-            self.running = None;
+            self.end_encoder("OpenH264 was switched off");
+        }
+    }
+
+    /// Codex 11/21: every end of the running encoder names its reason.
+    pub(super) fn end_encoder(&mut self, why: &str) {
+        if self.running.take().is_some() {
+            eprintln!("screen encoder: ends ({why})");
         }
     }
 

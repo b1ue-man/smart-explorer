@@ -95,15 +95,22 @@ impl Worker {
         let mut reply = self.handle(request);
         let after = Reference::of(self);
         if after.generation != self.reference_generation {
+            if self.encoder.take().is_some() {
+                eprintln!(
+                    "screen encoder: ends (capture generation {} -> {})",
+                    self.reference_generation, after.generation
+                );
+            }
             self.reference_generation = after.generation;
-            self.encoder = None;
         }
         if matches!(&reply, WorkerReply::CaptureControl(_)) {
             return Ok(PreparedReply { reply, bytes: None });
         }
         let mut grant = capture_transport::picture_grant(&reply)?;
         if picture_request && before.generation != after.generation {
-            self.encoder = None;
+            if self.encoder.take().is_some() {
+                eprintln!("screen encoder: ends (the capture generation moved during the picture)");
+            }
             reply = match reply {
                 // A source can concurrently report a concrete pause or deny
                 // permission; retain those existing user-visible reasons.
@@ -141,7 +148,9 @@ impl Worker {
                 None => {
                     // The last transport claim lost to source retirement.
                     // No bytes were allocated or written. Keep this worker.
-                    self.encoder = None;
+                    if self.encoder.take().is_some() {
+                        eprintln!("screen encoder: ends (the source retired its grant)");
+                    }
                     let reference = Reference::of(self);
                     self.reference_generation = reference.generation;
                     reply = reference.wrap(self.waiting_picture(raw));

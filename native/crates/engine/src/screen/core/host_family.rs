@@ -107,7 +107,7 @@ impl Session<'_> {
             self.family.focused = focused;
         }
         if snapshot.layout_revision != self.family.layout_revision {
-            self.pipeline.invalidate_reference();
+            self.pipeline.rebind_reference();
             self.input_floor = Some(self.pipeline.next_frame_id());
             self.release_pressed();
             self.family.layout_revision = snapshot.layout_revision;

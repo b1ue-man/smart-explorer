@@ -114,6 +114,11 @@ impl Pipeline {
             self.fall_back_to_tiles();
             return Ok(Produced::Reset);
         };
+        // Codex 11/12: the tiles take no frame rate when they open (size and
+        // memory only): a higher one is only the capture's new cadence.
+        if self.running.is_some() && open_fps > self.codec_fps && !video {
+            self.codec_fps = open_fps;
+        }
         if self.running.is_some() && open_fps > self.codec_fps {
             self.note_restart("a higher frame rate is allowed: new encoder");
             self.drop_encoder();

@@ -138,6 +138,7 @@ impl Pipeline {
                 && codec_cap(self.max_fps, size, candidate.max_macroblocks_per_second).is_some()
             {
                 self.quality.size = fitted;
+                self.note_restart("another pairing carries the picture size: new encoder");
                 self.invalidate_reference();
                 return true;
             }

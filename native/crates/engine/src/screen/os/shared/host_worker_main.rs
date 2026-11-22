@@ -279,7 +279,9 @@ impl Worker {
             WorkerRequest::Release(events) => self.release(events),
             WorkerRequest::SetCaptureActive(active) => {
                 self.capture_active = false;
-                self.encoder = None;
+                if self.encoder.take().is_some() {
+                    eprintln!("screen encoder: ends (the capture pauses or resumes)");
+                }
                 match self
                     .source
                     .as_mut()
@@ -429,6 +431,7 @@ impl Worker {
             .as_ref()
             .is_some_and(|running| running.encoder.name() == OPENH264);
         if openh264 && !openh264_switched_on() {
+            eprintln!("screen encoder: ends (OpenH264 was switched off)");
             self.encoder = None;
         }
     }

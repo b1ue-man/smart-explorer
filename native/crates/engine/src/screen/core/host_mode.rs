@@ -210,6 +210,7 @@ impl Pipeline {
             visible: None,
         });
         self.quality.size = self.fitted_size();
+        self.note_restart("another source: new encoder");
         self.invalidate_reference();
         if let Err(error) = self.start_capture_transition(self.capture_requested) {
             self.capture_ready = Some(Err(error));

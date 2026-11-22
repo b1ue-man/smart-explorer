@@ -129,6 +129,7 @@ impl Pipeline {
             c
         });
         self.quality.size = self.fitted_size();
+        self.note_restart("frame contract set: new encoder");
         self.invalidate_reference();
         Ok(())
     }
