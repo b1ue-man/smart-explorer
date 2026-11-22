@@ -44,6 +44,8 @@ internal class GestureMapper(private val width: () -> Int, private val height: (
     /** The parts of a wheel notch (1/120) per axis not turned into a stroke yet: one stroke per whole notch. */
     private var wheelRestX = 0
     private var wheelRestY = 0
+    /** The mouse's back button is down: its release is Android's Back once (round 10, 3). */
+    private var backDown = false
     private var pressed: MutableList<Pair<Float, Float>>? = null
     private var pressedAt = 0L
     private val touches = HashMap<Int, Pair<MutableList<Pair<Float, Float>>, Long>>()
@@ -80,7 +82,12 @@ internal class GestureMapper(private val width: () -> Int, private val height: (
                         pressed = null
                     }
                     // The mouse's back button is Android's Back, as with a mouse on the phone itself (Codex 9/14).
-                    "back" -> if (!event.bool("down")) add(PhoneAction.Global(AccessibilityService.GLOBAL_ACTION_BACK))
+                    // Only the release of a press seen here is Back, once: a release the host adds when it lets go of
+                    // held input (or a second one) performs nothing.
+                    "back" -> if (event.bool("down")) backDown = true else if (backDown) {
+                        backDown = false
+                        add(PhoneAction.Global(AccessibilityService.GLOBAL_ACTION_BACK))
+                    }
                     // Right, middle and forward have no counterpart an accessibility service can perform: said, not
                     // dropped in silence (once, at the press).
                     else -> if (event.bool("down")) add(PhoneAction.Refused("button"))

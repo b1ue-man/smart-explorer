@@ -34,6 +34,8 @@ object ScreenCodecNotices {
         "the device did not answer an input in time" to "Das Gerät hat auf eine Eingabe nicht rechtzeitig geantwortet",
         "the device has no counterpart for this mouse button (only left and back)" to
             "Das Gerät kennt diese Maustaste nicht (nur links und „Zurück“)",
+        "the device cannot see the content of this field (a password or web field); typing would replace it, so the text was not typed" to
+            "Das Gerät kann den Inhalt dieses Felds nicht sehen (Passwort- oder Webfeld); Tippen würde ihn ersetzen, der Text wurde daher nicht eingegeben",
     )
 
     /** The label of a codec key of the viewer or the host (`tiles` is „Verlustfrei“). */

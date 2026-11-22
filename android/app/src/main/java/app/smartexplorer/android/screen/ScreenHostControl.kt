@@ -705,7 +705,8 @@ internal object ScreenHostControl {
                     if (sessions.isEmpty() || (owner != 0L && !sessions.containsKey(owner))) break
                     val done = CountDownLatch(1)
                     val performed = java.util.concurrent.atomic.AtomicBoolean(false)
-                    AccessLink.perform(action) { ok -> performed.set(ok); done.countDown() }
+                    val reason = java.util.concurrent.atomic.AtomicReference<String?>(null)
+                    AccessLink.perform(action, { kind -> reason.set(kind) }) { ok -> performed.set(ok); done.countDown() }
                     val wait = when (action) {
                         is PhoneAction.Stroke -> action.durationMs
                         is PhoneAction.Gesture -> action.strokes.maxOfOrNull { it.startMs + it.durationMs } ?: 0L
@@ -714,6 +715,7 @@ internal object ScreenHostControl {
                     val answered = done.await(wait + STROKE_GRACE_MS, TimeUnit.MILLISECONDS)
                     if (refused == null && (!answered || !performed.get())) refused = when {
                         !answered -> "timeout"
+                        reason.get() != null -> reason.get()
                         action is PhoneAction.Refused -> action.kind
                         action is PhoneAction.Stroke || action is PhoneAction.Gesture -> "gesture"
                         action is PhoneAction.Text -> "text"

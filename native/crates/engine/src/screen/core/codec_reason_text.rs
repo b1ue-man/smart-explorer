@@ -44,7 +44,7 @@ pub fn sound_over_ceiling(needed_bps: u64, ceiling_bps: u64) -> String {
 /// An input the Android host's accessibility service did not perform
 /// (`screen.hostNotice {inputRefused}`, `mobile/…/screen_host.rs`) and its
 /// German text.
-const NOTICE_INPUT: [(&str, &str); 5] = [
+const NOTICE_INPUT: [(&str, &str); 6] = [
     (
         "the device cancelled a gesture of the input",
         "Das Gerät hat eine Geste der Eingabe abgebrochen",
@@ -64,6 +64,12 @@ const NOTICE_INPUT: [(&str, &str); 5] = [
     (
         "the device has no counterpart for this mouse button (only left and back)",
         "Das Gerät kennt diese Maustaste nicht (nur links und „Zurück“)",
+    ),
+    (
+        "the device cannot see the content of this field (a password or web field); typing would \
+         replace it, so the text was not typed",
+        "Das Gerät kann den Inhalt dieses Felds nicht sehen (Passwort- oder Webfeld); Tippen würde ihn \
+         ersetzen, der Text wurde daher nicht eingegeben",
     ),
 ];
 

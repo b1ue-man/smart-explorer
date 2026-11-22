@@ -14,7 +14,7 @@
 //! - `screen.hostNotice {session, epoch, rateFloor}` (the lowest bit rate of
 //!   the encoder of `epoch`), `{session, parameter, detail?}` (a parameter
 //!   the encoder refused) or `{session, inputRefused}` (`gesture`, `text`,
-//!   `action`, `timeout`, `button`: an input Android did not perform): a notice for
+//!   `action`, `timeout`, `button`, `secret`: an input Android did not perform): a notice for
 //!   the viewer while encoder and session keep running
 //!   (`HostStage::take_notice`, review 2026-11-19).
 //!
@@ -362,9 +362,13 @@ fn notice(args: &Value) -> Result<Value, ApiError> {
             "action" => "the device refused a system action of the input",
             "timeout" => "the device did not answer an input in time",
             "button" => "the device has no counterpart for this mouse button (only left and back)",
+            "secret" => {
+                "the device cannot see the content of this field (a password or web field); \
+                 typing would replace it, so the text was not typed"
+            }
             _ => {
                 return Err(invalid(
-                    "„inputRefused“ ist gesture, text, action, timeout oder button.",
+                    "„inputRefused“ ist gesture, text, action, timeout, button oder secret.",
                 ))
             }
         };
@@ -373,7 +377,9 @@ fn notice(args: &Value) -> Result<Value, ApiError> {
         // system action the device cannot take is not supported there, a
         // cancelled gesture or a late answer leaves the control unavailable.
         let block = match kind {
-            "text" | "action" => ControlBlock::UnsupportedOnHost,
+            // Round 10: a mouse button or a hidden field the device cannot serve is
+            // not supported there either; the control itself stays available.
+            "text" | "action" | "button" | "secret" => ControlBlock::UnsupportedOnHost,
             _ => ControlBlock::ControlUnavailable,
         };
         channels::input_refused(id, block).map_err(not_found)?;

@@ -45,8 +45,12 @@ class AccessLinkService : Service() {
                 }
                 AccessProtocol.TEXT -> {
                     val text = data.readString()
-                    val done = service != null && text != null && (if (text == "\n") service.imeEnter() else service.appendText(text))
-                    reply?.writeInt(if (done) 1 else 0)
+                    val result = when {
+                        service == null || text == null -> ScreenControlService.TEXT_NO_FIELD
+                        text == "\n" -> if (service.imeEnter()) ScreenControlService.TEXT_DONE else ScreenControlService.TEXT_NO_FIELD
+                        else -> service.appendText(text)
+                    }
+                    reply?.writeInt(result)
                 }
                 AccessProtocol.GLOBAL -> {
                     val action = data.readInt()

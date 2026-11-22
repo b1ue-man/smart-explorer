@@ -95,7 +95,8 @@ internal object AccessLink {
     } ?: emptyList()
 
     /** Runs [action] in the service; [done] gets whether Android carried it out (`false` without the service). */
-    fun perform(action: PhoneAction, done: (Boolean) -> Unit) {
+    /** [refusal] hears the kind of a refusal that has its own reason (`secret`: a field whose content is hidden). */
+    fun perform(action: PhoneAction, refusal: (String) -> Unit = {}, done: (Boolean) -> Unit) {
         when (action) {
             is PhoneAction.Stroke -> {
                 val points = action.points.take(AccessProtocol.MAX_POINTS)
@@ -126,7 +127,11 @@ internal object AccessLink {
                 }) { _, _ -> true }
                 if (sent != true) done(false)
             }
-            is PhoneAction.Text -> done(call(AccessProtocol.TEXT, { it.writeString(action.text) }) { _, reply -> reply.readInt() == 1 } ?: false)
+            is PhoneAction.Text -> {
+                val result = call(AccessProtocol.TEXT, { it.writeString(action.text) }) { _, reply -> reply.readInt() } ?: 0
+                if (result == ScreenControlService.TEXT_HIDDEN) refusal("secret")
+                done(result == ScreenControlService.TEXT_DONE)
+            }
             is PhoneAction.Global -> done(global(action.action))
             is PhoneAction.Refused -> done(false)
         }

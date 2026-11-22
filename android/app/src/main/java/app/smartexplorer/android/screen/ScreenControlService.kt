@@ -72,8 +72,12 @@ class ScreenControlService : AccessibilityService() {
      * the cursor goes behind the typed text (Codex 9/13: the text was always appended at the end). A field without a
      * reported cursor gets it at the end as before. `false` without a field.
      */
-    fun appendText(text: String): Boolean {
-        val node = focusedInput() ?: return false
+    fun appendText(text: String): Int {
+        val node = focusedInput() ?: return TEXT_NO_FIELD
+        // `ACTION_SET_TEXT` replaces the whole content: it is built from the content the node reports. A password
+        // field reports it masked (`isPassword`), a field without any text report (some web or custom fields) none at
+        // all; writing there would replace what the user cannot see. Refused with its reason (round 10, 8).
+        if (node.isPassword || (node.text == null && !node.isShowingHintText)) return TEXT_HIDDEN
         val current = if (node.isShowingHintText) "" else node.text?.toString().orEmpty()
         val (from, to) = node.textSelectionStart to node.textSelectionEnd
         val valid = from in 0..current.length && to in 0..current.length
@@ -83,13 +87,13 @@ class ScreenControlService : AccessibilityService() {
             putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
                 current.substring(0, start) + text + current.substring(end))
         }
-        if (!node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments)) return false
+        if (!node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments)) return TEXT_NO_FIELD
         val cursor = start + text.length
         node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, Bundle().apply {
             putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, cursor)
             putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, cursor)
         })
-        return true
+        return TEXT_DONE
     }
 
     /** „Enter“ in the focused input field (`ACTION_IME_ENTER`, API 30). */
@@ -159,6 +163,11 @@ class ScreenControlService : AccessibilityService() {
         .distinctBy { it.first }
 
     companion object {
+        /** The answers of [appendText]: typed, no field to type into, a field whose content is hidden. */
+        const val TEXT_NO_FIELD = 0
+        const val TEXT_DONE = 1
+        const val TEXT_HIDDEN = 2
+
         /** Nodes the search for the focused field looks at, at most (a window rarely has more). */
         private const val MAX_FOCUS_SEARCH_NODES = 2_000
 
