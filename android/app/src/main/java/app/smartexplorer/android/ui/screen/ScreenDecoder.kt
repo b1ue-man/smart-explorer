@@ -73,6 +73,8 @@ class ScreenDecoder(
         /** A valid stream needs another codec mode; retrying its keyframe cannot admit it. */
         fun onHybridUnavailable(gopId: Long, reason: String) {onDecodeFailure(1)}
         fun onEnded()
+        /** The decoding thread ended on an error it could not recover from ([reason]: component and cause). */
+        fun onAborted(reason: String) {}
     }
 
     @Volatile private var running = false
@@ -105,6 +107,8 @@ class ScreenDecoder(
     private var hybridFrameEpoch=0L
     private var rejectedHybridGop:Long?=null
     private var rejectedTilesGop:Long?=null
+    /** The format (codec, size, „Dekodierer“) no allowed component opened; it is not tried again (Codex 10/12). */
+    private var refusedFormat:String?=null
     private var payloadOffset=HEADER_BYTES
     private var frameId: Long?=null
     private var frameEpoch=0L
@@ -138,6 +142,8 @@ class ScreenDecoder(
             loop()
         } catch (e: RuntimeException) {
             Log.w(TAG, "decode loop ended: ${e.javaClass.simpleName}")
+            // Said to the view with the component and the cause, never only in the log (Codex 10/11).
+            if (running) listener.onAborted("${codecName ?: "kein Dekodierer"}: ${e.javaClass.simpleName}${e.message?.let { ": $it" }.orEmpty()}")
         } finally {
             releaseCodec()
             hybrid?.close();hybrid=null;bitmap=null
@@ -161,7 +167,8 @@ class ScreenDecoder(
                 if (codec !== active) continue
                 if(awaitingKeyframe && keyQueued && System.nanoTime()-referenceWaitNs>2_000_000_000L) { fail(component = true); continue }
                 if (heldIndex < 0) heldIndex = try { active.dequeueInputBuffer(INPUT_WAIT_US) } catch (e: IllegalStateException) { fail(component = true); continue }
-                val buffer = if (heldIndex >= 0) active.getInputBuffer(heldIndex) else null
+                // `getInputBuffer` fails like `dequeueInputBuffer` when the codec broke: the same recovery (Codex 10/11).
+                val buffer = try { if (heldIndex >= 0) active.getInputBuffer(heldIndex) else null } catch (e: IllegalStateException) { fail(component = true); continue }
                 if (buffer == null) {
                     heldIndex = -1
                     continue
@@ -431,12 +438,15 @@ class ScreenDecoder(
             ScreenEncoderCodecs.AV1 -> CodecProfileLevel.AV1ProfileMain8
             else -> null
         }
+        // Why each allowed component did not open, for the reason the view shows (Codex 10/12).
+        val refusals=mutableListOf<String>()
+        val format="$codecKey ${info.width}x${info.height}|${wanted.decoder}"
         for(candidate in choices) {
             val caps=candidate.getCapabilitiesForType(mime)
-            if(caps.videoCapabilities?.isSizeSupported(info.width,info.height)!=true) continue
+            if(caps.videoCapabilities?.isSizeSupported(info.width,info.height)!=true) { refusals+="${candidate.name}: Größe nicht unterstützt"; continue }
             val profiles=caps.profileLevels.map { it.profile }
-            if(avcProfile==100 && CodecProfileLevel.AVCProfileHigh !in profiles) continue
-            if(mainProfile!=null && mainProfile !in profiles) continue
+            if(avcProfile==100 && CodecProfileLevel.AVCProfileHigh !in profiles) { refusals+="${candidate.name}: Profil High fehlt"; continue }
+            if(mainProfile!=null && mainProfile !in profiles) { refusals+="${candidate.name}: Profil Main fehlt"; continue }
             for(hints in listOf(true,false)) {
                 val format=MediaFormat.createVideoFormat(mime,info.width,info.height).apply {
                     setInteger(MediaFormat.KEY_MAX_INPUT_SIZE,minOf((checked.toLong()*3/4).coerceAtLeast(64*1024L),pulls.budget.recordBytes.toLong()).toInt())
@@ -460,10 +470,22 @@ class ScreenDecoder(
                     return true
                 } catch(e: RuntimeException) {
                     created?.release(); Log.w(TAG,"Decoder ${candidate.name} abgelehnt: ${e.javaClass.simpleName}")
+                    if(!hints) refusals+="${candidate.name}: ${e.javaClass.simpleName}"
                 }
             }
         }
-        fail(); return false
+        // No allowed component takes this format: a key frame of the same format cannot change that, so none is
+        // asked for again (Codex 10/12: a loop of key frames). The view hears the reason once: under „Automatisch“ it
+        // falls back as for an unavailable hybrid decoder, under a named choice it shows the reason as an error.
+        if (refusedFormat != format) {
+            refusedFormat=format
+            val reason="$codecKey ${info.width}x${info.height}: " +
+                (refusals.takeIf { it.isNotEmpty() }?.joinToString("; ") ?: "kein zugelassener Dekodierer")
+            Log.w(TAG,"Format abgelehnt: $reason")
+            listener.onHybridUnavailable(gop, reason.take(512))
+        }
+        awaitingKeyframe=true
+        return false
     }
 
     private fun drain(c: MediaCodec) {

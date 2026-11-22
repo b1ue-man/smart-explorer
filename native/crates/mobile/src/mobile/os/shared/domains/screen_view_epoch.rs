@@ -36,10 +36,16 @@ impl ViewSession {
                 gop_id: host(*gop_id)?,
                 frame_id: *frame_id,
             },
+            // A request that names a group of a connection before is dropped
+            // whole: unbound it would reset the running stream (Codex 10/13).
+            // A request bound to no group stays unbound.
             ViewerFrame::KeyframeRequest(request) => {
                 ViewerFrame::KeyframeRequest(KeyframeRequest {
                     reason: request.reason,
-                    gop_id: request.gop_id.and_then(host),
+                    gop_id: match request.gop_id {
+                        Some(gop) => Some(host(gop)?),
+                        None => None,
+                    },
                 })
             }
             other => other.clone(),

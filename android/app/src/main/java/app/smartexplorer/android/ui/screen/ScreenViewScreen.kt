@@ -100,6 +100,12 @@ private val autoLoginKeys = AtomicLong(0)
 private const val TILES_SESSION_REASON = "the session was opened for the tiles; reopen it for this codec"
 
 /** „Ganzer Bildschirm“ chosen while the host named no monitor: a missing source means „no change“ to the host. */
+/** The start of the notice of a decoding thread that died; a new picture clears it. */
+private const val DECODER_ENDED = "Dekodierer beendet"
+
+/** Restarts of a dead decoding thread per view; after them its cause stays shown. */
+private const val MAX_DECODER_RESTARTS = 3
+
 private const val WHOLE_SCREEN_UNNAMED = "„Ganzer Bildschirm“ nicht möglich: Der Gastgeber nennt keinen Bildschirm. Die bisherige Quelle bleibt."
 
 /**
@@ -148,6 +154,8 @@ fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, a
     var renderReady by remember { mutableStateOf(false) }
     var pictures by remember { mutableIntStateOf(0) }
     var failures by remember { mutableIntStateOf(0) }
+    /** Restarts of a decoding thread that died (`onAborted`); a key of the decoder's effect. */
+    var decoderRestarts by remember { mutableIntStateOf(0) }
     var transformTick by remember { mutableIntStateOf(0) }
     val transform = remember { ViewTransform { transformTick++ } }
     val flush = remember { Channel<Unit>(Channel.CONFLATED) }
@@ -300,7 +308,7 @@ fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, a
     // decoder asks for a key frame below.
     val lifecycleState by LocalLifecycleOwner.current.lifecycle.currentStateAsState()
     val decoding = lifecycleState.isAtLeast(Lifecycle.State.STARTED)
-    DisposableEffect(session, surface, decoding) {
+    DisposableEffect(session, surface, decoding, decoderRestarts) {
         val active = session
         if (active == null || active.id == 0L || !decoding) return@DisposableEffect onDispose { }
         val activeDecoder = java.util.concurrent.atomic.AtomicBoolean(true)
@@ -335,7 +343,7 @@ fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, a
                             failure = ScreenScaling.COPY_ERROR; bitmap = null; bitmapFrame = null; renderReady = false
                             active.invalidateDisplay(false)
                         } else {
-                            if (failure == ScreenScaling.COPY_ERROR) failure = null
+                            if (failure == ScreenScaling.COPY_ERROR || failure?.startsWith(DECODER_ENDED) == true) failure = null
                             sourceAfterGop = null
                             hiddenSinceFrame = false
                             bitmapGop = frame.gopId
@@ -354,6 +362,7 @@ fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, a
                     bitmap = null; bitmapGop = null; bitmapFrame = null
                     sourceAfterGop = null; hiddenSinceFrame = false
                     surfaceFrame = frame
+                    if (failure?.startsWith(DECODER_ENDED) == true) failure = null
                     // Only a new picture group, display epoch or decoder family waits for its first
                     // drawn frame. Resetting on every frame turned `sending` off and on per frame:
                     // each time all held input was released, control re-taken and the touch
@@ -376,6 +385,14 @@ fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, a
                     active.invalidateDisplay(false)
                     main.post { if (activeDecoder.get()) { failures = consecutive; renderReady = false } }
                     active.call { keyframe(it) }
+                }
+                override fun onAborted(reason: String) {
+                    // A decoding thread that died is started again (a few times per view), its cause shown (Codex 10/11).
+                    main.post {
+                        if (!activeDecoder.get()) return@post
+                        failure = "$DECODER_ENDED: $reason"
+                        if (decoderRestarts < MAX_DECODER_RESTARTS) decoderRestarts++
+                    }
                 }
                 override fun onEnded() {
                     main.post { if (activeDecoder.get()) { active.invalidateDisplay(false); renderReady = false } }
