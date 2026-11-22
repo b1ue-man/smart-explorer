@@ -232,7 +232,7 @@ impl Outbox {
                 | (HostFrame::Families(_), HostFrame::Families(_))
                 | (HostFrame::FamilySnapshot(_), HostFrame::FamilySnapshot(_))
                 | (HostFrame::CursorShape(_), HostFrame::CursorShape(_)) => true,
-                (HostFrame::IconReply(old), HostFrame::IconReply(new)) => old.icon == new.icon,
+                (HostFrame::IconReply(old), HostFrame::IconReply(new)) => old.request == new.request,
                 _ => false,
             })
     }
