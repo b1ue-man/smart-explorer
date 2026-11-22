@@ -106,6 +106,9 @@ pub(super) struct QualityPolicy {
     /// „Bildkette“ B-32), used under „Schärfe vor Flüssigkeit“.
     sharp: Option<CodecChoice>,
     viewer_fps: u32,
+    /// The hello was a preview's (`preview_hello`): its `max_fps` is the
+    /// preview's rate and bounds only the preview.
+    pub(super) preview_hello: bool,
     /// A UI toggle cannot revive a codec that really failed to encode.
     pub encoder_failed: bool,
     /// The negotiated pairings of the other video codecs, best first
@@ -257,6 +260,7 @@ impl QualityPolicy {
             original,
             sharp: None,
             viewer_fps,
+            preview_hello: false,
             encoder_failed: false,
             fallbacks: Vec::new(),
             failed_codecs: Vec::new(),
@@ -286,7 +290,20 @@ impl QualityPolicy {
         };
         // P9: sharpness (lossless) no longer caps the rate at 15 frames/s;
         // the hardware is the limit (encoding capacity, line, viewer).
-        requested.clamp(1, self.viewer_fps)
+        let cap = if self.preview_hello && self.mode.kind != StreamKind::Preview {
+            super::super::pacing::MAX_FPS
+        } else {
+            self.viewer_fps
+        };
+        requested.clamp(1, cap)
+    }
+    /// Android's full view takes over the session of its preview tile; the
+    /// preview's hello named the preview's rate only. The full view then
+    /// runs at the rate its `SET_MODE` asks, else as fast as the encoder
+    /// and the line allow (`cadence_fps`), not at the preview's rate.
+    pub(super) fn set_preview_hello(&mut self) {
+        self.preview_hello = true;
+        self.mode.full_fps = super::super::pacing::MAX_FPS;
     }
     /// Whether the tiles may take over: „Automatisch“ and a viewer that
     /// offers them.

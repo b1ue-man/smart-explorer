@@ -186,6 +186,11 @@ impl PipelineActor {
         self.begin_tick()
     }
 
+    /// The pipeline's cadence in pictures a second (`SessionClock::follow`).
+    pub fn cadence_fps(&self) -> u32 {
+        self.facts.cadence
+    }
+
     /// Picture operations started so far.
     pub fn work_started(&self) -> u64 {
         self.started

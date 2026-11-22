@@ -17,6 +17,9 @@ enum Ticks {
 
 pub(super) struct SessionClock {
     ticks: Ticks,
+    fps: u32,
+    /// The hello's rate: the tick never goes below it (`follow`).
+    floor: u32,
 }
 
 /// One frame interval at `max_fps` (at least one frame per second).
@@ -36,7 +39,25 @@ impl SessionClock {
                 Ticks::Runtime(interval)
             }
         };
-        Self { ticks }
+        Self {
+            ticks,
+            fps: max_fps,
+            floor: max_fps,
+        }
+    }
+
+    /// The tick follows a cadence above the hello's rate: the full view
+    /// that took over a preview's session (its hello named the preview's
+    /// rate). It never goes below the hello's rate (input releases and
+    /// acknowledgements ride on it); a lower cadence lowers it only by a
+    /// fifth or more, so small cadence steps keep the timer.
+    pub(super) fn follow(&mut self, cadence: u32) {
+        let target = cadence.max(self.floor);
+        if target > self.fps || target.saturating_mul(5) < self.fps.saturating_mul(4) {
+            let floor = self.floor;
+            *self = Self::start(target);
+            self.floor = floor;
+        }
     }
 
     /// Whether the platform's precise timer drives the tick.
