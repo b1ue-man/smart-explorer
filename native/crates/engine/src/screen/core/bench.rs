@@ -194,6 +194,15 @@ pub async fn run(
     run_source(session, options, codecs, None).await
 }
 
+/// The end a host named when it closed the connection
+/// (`EndReason::from_close`), else `error`.
+fn closed_by_host(connection: &iroh::endpoint::Connection, error: io::Error) -> ViewerError {
+    match super::session_state::EndReason::from_close(connection) {
+        Some(reason) => ViewerError::Refused(reason.key().into()),
+        None => ViewerError::Io(error),
+    }
+}
+
 /// `run` for a session of the host's `source` (`--source`, BK0); `None`
 /// is the test picture.
 pub async fn run_source(
@@ -234,12 +243,18 @@ pub async fn run_source(
                     }
                 }
                 Some(Ok(_)) => {}
-                Some(Err(error)) => return Err(ViewerError::Io(error)),
-                None => return Err(ViewerError::Io(io::Error::other("the host ended the session"))),
+                // The host's reason when it closed the connection before its
+                // last `STATE`, as the other viewers read it (round 10).
+                Some(Err(error)) => return Err(closed_by_host(&session.connection, error)),
+                None => {
+                    let error = io::Error::other("the host ended the session");
+                    return Err(closed_by_host(&session.connection, error));
+                }
             },
             event = session.pictures.recv() => {
                 let Some(event) = event else {
-                    return Err(ViewerError::Io(io::Error::other("the picture streams ended")));
+                    let error = io::Error::other("the picture streams ended");
+                    return Err(closed_by_host(&session.connection, error));
                 };
                 let wanted = picture(&mut measure, &mut decoding, codecs, event);
                 if std::mem::take(&mut measure.fresh_keyframe) {

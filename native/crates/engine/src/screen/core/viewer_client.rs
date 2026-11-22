@@ -108,6 +108,14 @@ impl ViewerError {
     pub fn detail(&self) -> String {
         match self {
             Self::Refused(code) => match code.split_once(": ") {
+                // A full metadata queue of the host is no failed capture
+                // (round 10, `host_session_control.rs`): it may be asked
+                // again; its key stays for scripts (CLI `--json`, MCP).
+                Some((_, reason)) if reason.starts_with("metadata_queue_full") => {
+                    "Zu viele Anfragen warten auf das Gerät; bitte erneut versuchen \
+                     (metadata_queue_full)"
+                        .into()
+                }
                 Some((key, reason)) => super::codec_reason_text::chosen_codec_text(reason)
                     .unwrap_or_else(|| format!("{}: {reason}", refusal_text(key))),
                 None => refusal_text(code),
