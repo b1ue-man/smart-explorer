@@ -90,8 +90,6 @@ pub struct SessionInfo {
     pub pictures: u64,
     /// The host's pointer for the overlay (plan 2026-11-14 P6).
     pub cursor: crate::screen::core::cursor_overlay::CursorView,
-    /// „Höchste Datenrate“ of this session (BK6, B-09).
-    pub rate_ceiling: crate::daemon::RateCeilingState,
     /// The decoder of the running picture group with its stage (BK6).
     pub decoder: Option<String>,
 }
@@ -122,7 +120,6 @@ impl SessionInfo {
             accepted: 0,
             pictures: 0,
             cursor: Default::default(),
-            rate_ceiling: Default::default(),
             decoder: None,
         }
     }

@@ -24,7 +24,9 @@ impl DecodeState {
             StreamEvent::Accepted {
                 hello,
                 path,
-                rate_ceiling,
+                // A ceiling the host cannot keep ends the session with its
+                // reason before this (round 11 N1): nothing to show of it.
+                rate_ceiling: _,
                 set_decoders,
             } => {
                 let exceeds = self
@@ -80,7 +82,6 @@ impl DecodeState {
                 self.shared.update(|info| {
                     info.hello = Some(hello);
                     info.path = Some(path);
-                    info.rate_ceiling = rate_ceiling;
                     info.accepted += 1;
                     if matches!(
                         info.state,
@@ -168,8 +169,9 @@ impl DecodeState {
             }
             StreamEvent::Clock(offset) => self.shared.update(|info| info.clock_offset_us = offset),
             // A „Höchste Datenrate“ changed during the session (P1): the
-            // statistics say whether the host took it.
-            StreamEvent::RateCeiling(state) => self.shared.update(|info| info.rate_ceiling = state),
+            // host's statistics name what it applies (`ChainReport`); one it
+            // cannot keep ends the session with its reason (round 11 N1).
+            StreamEvent::RateCeiling(_) => {}
             StreamEvent::End(end) => {
                 self.gop = None;
                 self.shared.stop_presentation();
