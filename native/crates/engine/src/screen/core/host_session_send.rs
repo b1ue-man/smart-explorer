@@ -101,8 +101,51 @@ pub(super) struct Outbox {
     behind: VecDeque<HostFrame>,
     /// The sound under the viewer's ceiling (`SoundCeiling`).
     pub(super) sound: SoundCeiling,
+    /// The small frames' share under a ceiling (`SmallLane`).
+    lane: SmallLane,
     /// The viewer takes large frames in parts (`control_parts.rs`).
     parts: bool,
+}
+
+/// The longest a small frame waits for the budget when its share and the
+/// budget are spent (Codex 11/7): it then goes, its excess as a debt the
+/// pictures pay off, so no `PONG`, `ERROR`, `STATE` or `CONTROL_STATE`
+/// starves.
+pub(super) const SMALL_WAIT: Duration = Duration::from_millis(20);
+/// The burst of the small frames' share: 200 ms of it.
+const LANE_BURST_US: u64 = 200_000;
+
+/// The small control frames under a user ceiling (Codex 11/7). The pictures
+/// leave the control stream's measured rate free (`SharedBudget::reserved`);
+/// small frames take that share as a token bucket, and only what goes beyond
+/// it is booked in the pictures' budget before it is sent. Every small
+/// frame is still measured as control bytes, so a lasting rise moves into
+/// the reserved share with the next reading: the excess is counted twice
+/// only while the share catches up, never in a steady state.
+#[derive(Default)]
+pub(super) struct SmallLane {
+    /// The last booking: its time and the share's balance in bits.
+    booked: Option<(u64, i128)>,
+}
+
+impl SmallLane {
+    /// Takes `bytes` at `now_us` from the share at `reserved_bps`; the bytes
+    /// beyond it.
+    pub(super) fn excess(&mut self, now_us: u64, reserved_bps: u64, bytes: u64) -> u64 {
+        let rate = i128::from(reserved_bps);
+        let cap = rate * i128::from(LANE_BURST_US) / 1_000_000;
+        let balance = match self.booked {
+            None => cap,
+            Some((at, balance)) => {
+                let earned = rate * i128::from(now_us.saturating_sub(at)) / 1_000_000;
+                balance.saturating_add(earned).min(cap)
+            }
+        };
+        let need = i128::from(bytes) * 8;
+        let covered = need.min(balance.max(0));
+        self.booked = Some((now_us, balance - covered));
+        u64::try_from((need - covered + 7) / 8).unwrap_or(u64::MAX)
+    }
 }
 
 /// Whether the viewer's sound fits under its „Höchste Datenrate“ (round 8
@@ -146,6 +189,7 @@ impl Outbox {
     pub(super) fn new(budget: SharedBudget, ceiling: Option<u64>) -> Self {
         Self {
             parts: false,
+            lane: SmallLane::default(),
             sound: SoundCeiling {
                 ceiling,
                 ..SoundCeiling::default()
@@ -315,3 +359,7 @@ impl Session<'_> {
 
 #[path = "host_session_send_write.rs"]
 mod write;
+
+#[cfg(test)]
+#[path = "host_session_send_tests.rs"]
+mod tests;

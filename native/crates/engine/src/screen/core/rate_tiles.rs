@@ -51,6 +51,9 @@ impl RateController {
     pub fn update_control(&mut self, now_us: u64) {
         self.control.prune(now_us);
         self.control_bps = self.control.window_bps().saturating_add(self.audio_bps);
+        // The share the pictures leave the session's small control frames
+        // (round 11, Codex 11/7: what goes beyond it takes the budget).
+        self.tiles.set_reserved(self.control.window_bps());
     }
 
     pub fn control_bps(&self) -> u64 {

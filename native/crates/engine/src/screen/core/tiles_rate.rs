@@ -141,6 +141,8 @@ pub struct SharedBudget(
 /// frame held back by a picture gets one piece before the next picture.
 #[derive(Debug, Default)]
 pub struct Turns {
+    /// The control rate the pictures leave free (`set_reserved`).
+    reserved: std::sync::atomic::AtomicU64,
     writing: std::sync::atomic::AtomicBool,
     owed: std::sync::atomic::AtomicBool,
     changed: tokio::sync::Notify,
@@ -217,6 +219,17 @@ impl SharedBudget {
             self.1.fetch_add(bytes, std::sync::atomic::Ordering::AcqRel);
         }
         taken
+    }
+    /// The control stream's measured rate, which the pictures leave free
+    /// (`RateController::user_picture_bps`); small control frames beyond it
+    /// take this budget (Codex 11/7).
+    pub fn set_reserved(&self, bps: u64) {
+        self.2
+            .reserved
+            .store(bps, std::sync::atomic::Ordering::Release);
+    }
+    pub fn reserved(&self) -> u64 {
+        self.2.reserved.load(std::sync::atomic::Ordering::Acquire)
     }
     pub fn picture_writing(&self) -> bool {
         self.2.writing.load(std::sync::atomic::Ordering::Acquire)

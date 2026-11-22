@@ -206,6 +206,11 @@ impl Session<'_> {
     /// Writes `held` whole and books it as the control stream's rate (a
     /// small frame, or a large one without a user ceiling).
     async fn write(&mut self, held: Held) -> io::Result<()> {
+        if let (Some(rate), Held::Frame(frame)) = (self.outbox.budget.rate(), &held) {
+            if !self.take_small_share(rate, frame).await {
+                return Ok(());
+            }
+        }
         let sent = match &held {
             Held::Frame(frame) => {
                 let peer = self.connection.remote_id().to_string();
@@ -227,5 +232,35 @@ impl Session<'_> {
         };
         self.pipeline.book_control_bytes(sent);
         Ok(())
+    }
+
+    /// A small frame under a ceiling (Codex 11/7): what goes beyond the
+    /// share the pictures leave the control stream is booked in their budget
+    /// before it is sent. With the budget spent, a position or statistics
+    /// frame is dropped (a newer one follows), every other frame waits at
+    /// most `SMALL_WAIT` and then goes, its excess as a debt. `false`: drop.
+    async fn take_small_share(&mut self, rate: u64, frame: &HostFrame) -> bool {
+        let bytes = control_sender::wire_bytes(frame);
+        let reserved = self.outbox.budget.reserved();
+        let excess = self.outbox.lane.excess(now_us(), reserved, bytes);
+        if excess == 0 {
+            return true;
+        }
+        if !self.outbox.budget.admits(now_us(), rate) {
+            let droppable = match frame {
+                HostFrame::CursorPosition(position) => {
+                    *position != crate::screen::core::cursor_overlay::CursorPosition::hidden()
+                }
+                HostFrame::Stats(_) => true,
+                _ => false,
+            };
+            if droppable {
+                return false;
+            }
+            let wait = Duration::from_micros(self.outbox.budget.wait_us(now_us(), rate));
+            tokio::time::sleep(wait.min(super::SMALL_WAIT)).await;
+        }
+        self.outbox.budget.on_sent(now_us(), excess, rate);
+        true
     }
 }
