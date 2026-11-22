@@ -135,7 +135,8 @@ impl InputMapper {
     /// state is known, sends a swallowed shortcut before its release.
     /// `frame_mods` are `NONE` while a toolbar field holds the keyboard.
     pub(super) fn missed_paste(&mut self, events: &[Event], mods: Modifiers) {
-        self.paste.mods = mods;
+        // The modifiers at the end of the frame before (this frame's start).
+        let start = std::mem::replace(&mut self.paste.mods, mods);
         if events.iter().any(|event| matches!(event, Event::Paste(_))) {
             self.paste.handled = true;
         }
@@ -150,14 +151,26 @@ impl InputMapper {
                 _ => None,
             })
             .collect();
-        // The modifiers at each clipboard event: those of the event before
-        // it in this frame, else of the one after it, else the frame's.
+        // The modifiers at each clipboard event: egui's `Copy`, `Cut` and
+        // `Paste` carry none (egui 0.29.1 `input.rs` 382-388). A modifier
+        // counts when it was down both at the last sample before (the event
+        // before it in this frame, else the frame's start) and at the first
+        // after (the event after it, else the frame's end): one let go or
+        // pressed without an event between can only be missing, never one
+        // that was not down at the press (unless let go and pressed again
+        // within the frame around it).
         self.paste.clip.clear();
         for (index, event) in events.iter().enumerate() {
             if matches!(event, Event::Copy | Event::Cut | Event::Paste(_)) {
                 let before = events[..index].iter().rev().find_map(mods_of);
                 let after = events[index + 1..].iter().find_map(mods_of);
-                self.paste.clip.push_back(before.or(after).unwrap_or(mods));
+                let (before, after) = (before.unwrap_or(start), after.unwrap_or(mods));
+                self.paste.clip.push_back(Modifiers {
+                    ctrl: before.ctrl && after.ctrl,
+                    shift: before.shift && after.shift,
+                    alt: before.alt && after.alt,
+                    ..after
+                });
             }
         }
         let held = platform::paste_keys_held(mods.ctrl, mods.shift);
