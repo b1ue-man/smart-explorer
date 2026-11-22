@@ -437,11 +437,21 @@ impl<'a> Session<'a> {
         self.pipeline.cancel();
         self.end_control().await;
         let last = async {
-            self.end_outbox().await?;
+            // Round 11: a viewer that takes parts hears the reason first,
+            // between the parts of a large frame still running; the rest of
+            // that frame follows within the grace or is dropped.
+            let parts = self.control_parts();
+            if !parts {
+                self.end_outbox().await?;
+            }
             if let Some(error) = error {
                 self.frame(HostFrame::Error(error)).await?;
             }
-            self.report(SessionState::Ended, Some(reason.key())).await
+            self.report(SessionState::Ended, Some(reason.key())).await?;
+            if parts {
+                self.end_outbox().await?;
+            }
+            Ok::<(), io::Error>(())
         };
         // Round 10: a farewell that did not go whole (a half large frame, a
         // stop during a metadata reply, the grace ran out) leaves the stream

@@ -32,7 +32,7 @@ const HELD_FRAMES: usize = 32;
 /// A piece of a large frame: a tenth of a second of the budget's rate,
 /// within these bounds.
 const PIECE_MIN: usize = 1024;
-const PIECE_MAX: usize = 16 * 1024;
+const PIECE_MAX: usize = crate::screen::core::control_parts::MAX_PART_BYTES;
 
 /// One held-back frame; a metadata reply goes through its authorized writer.
 enum Held {
@@ -287,8 +287,11 @@ impl Outbox {
     }
 
     /// The bytes of the next piece at the budget's rate (all without one).
-    fn piece_len(&self, rest: usize) -> usize {
-        self.budget.rate().map_or(rest, |rate| {
+    /// In parts never above `PIECE_MAX` (round 11: after a switch to
+    /// „Automatisch“ the whole rest was one part above its tag's limit).
+    fn piece_len(&self, rest: usize, parts: bool) -> usize {
+        let unbounded = if parts { rest.min(PIECE_MAX) } else { rest };
+        self.budget.rate().map_or(unbounded, |rate| {
             usize::try_from(rate / 8 / 10)
                 .unwrap_or(PIECE_MAX)
                 .clamp(PIECE_MIN, PIECE_MAX)
@@ -301,6 +304,10 @@ impl Session<'_> {
     /// The viewer offered `control_parts` (`ScreenClientHello`).
     pub(in super::super) fn set_control_parts(&mut self, parts: bool) {
         self.outbox.parts = parts;
+    }
+
+    pub(in super::super) fn control_parts(&self) -> bool {
+        self.outbox.parts
     }
 }
 

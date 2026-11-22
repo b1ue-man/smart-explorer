@@ -42,6 +42,14 @@ fn review1119_task_control_parts_reassemble() {
             10
         ))
         .is_err());
+    // Round 11: a part of `MAX_PART_BYTES` is exactly the limit of its tag.
+    let big: Vec<u8> = vec![7; 3 * MAX_PART_BYTES];
+    let full = encode_part(WINDOWS, &big, 0, MAX_PART_BYTES);
+    assert_eq!(
+        full.len(),
+        crate::screen::core::wire::tag_limit(CONTROL_PART)
+    );
+    assert!(PartAssembler::default().push(&full).unwrap().is_none());
     // Too short, and a part of a part.
     assert!(PartAssembler::default().push(&[WINDOWS, 0, 0]).is_err());
     assert!(PartAssembler::default()

@@ -348,7 +348,10 @@ pub(super) async fn relay_session(
     hold(&memory, &session);
     // „Höchste Datenrate“ (B-09): `RATE_CEILING` only to a host that
     // announced `rate_ceiling_v1`; the viewer hears what became of it.
-    if max_rate_bps.is_some() && !metadata {
+    // Round 11: the ceiling as last chosen, also while the first opening
+    // was tried again (`again` notes the viewer's frames in `modes`).
+    let chosen = ceiling(&modes, max_rate_bps);
+    if chosen.is_some() && !metadata {
         // Codex 10/7: a host that cannot keep the chosen ceiling shows no
         // picture without it; the viewer reads why.
         if !session.rate_ceiling {
@@ -357,7 +360,7 @@ pub(super) async fn relay_session(
             end(&out, EndReason::Failed.key().into(), Some(detail.into())).await;
             return;
         }
-        let frame = ViewerFrame::RateCeiling(max_rate_bps);
+        let frame = ViewerFrame::RateCeiling(chosen);
         modes.note(&frame);
         if session.rate_ceiling {
             let _ = session.control.send(frame).await;
@@ -369,7 +372,7 @@ pub(super) async fn relay_session(
         hello: session.hello.clone(),
         path,
         local_limits: session.local_limits,
-        rate_ceiling: RateCeilingState::of(max_rate_bps, session.rate_ceiling),
+        rate_ceiling: RateCeilingState::of(chosen, session.rate_ceiling),
         set_decoders: session.set_decoders,
     };
     if let Ok(json) = wire::to_json(&accepted) {
@@ -412,6 +415,16 @@ pub(super) async fn relay_session(
             Outcome::Opened(next) if !reads(contract, next.hello.frame_contract) => {
                 next.close();
                 end(&out, code, None).await;
+                return;
+            }
+            // Round 11: a session built again on a host that cannot keep the
+            // chosen ceiling ends as at the opening (Codex 10/7).
+            Outcome::Opened(next)
+                if ceiling(&modes, max_rate_bps).is_some() && !metadata && !next.rate_ceiling =>
+            {
+                next.close();
+                let detail = crate::daemon::ipc_protocol::screen::RATE_CEILING_UNSUPPORTED;
+                end(&out, EndReason::Failed.key().into(), Some(detail.into())).await;
                 return;
             }
             Outcome::Opened(next) => {

@@ -21,6 +21,9 @@ pub const CONTROL_PART: u8 = 56;
 pub const CONTROL_PARTS_V1: u16 = 1;
 /// The head of a part's payload.
 pub const PART_HEAD: usize = 9;
+/// The most bytes of the inner frame one part carries (round 11: also
+/// without a ceiling, so a part never exceeds `tag_limit(CONTROL_PART)`).
+pub const MAX_PART_BYTES: usize = 16 * 1024;
 
 /// The payload of the part of `inner_payload` (of `inner_tag`) at `offset`.
 pub fn encode_part(inner_tag: u8, inner_payload: &[u8], offset: usize, len: usize) -> Vec<u8> {

@@ -86,6 +86,9 @@ pub fn tag_limit(tag: u8) -> usize {
             MAX_WINDOWS_BYTES
         }
         ICON_REQUEST => super::app_icon::MAX_ICON_REQUEST_BYTES,
+        super::control_parts::CONTROL_PART => {
+            super::control_parts::PART_HEAD + super::control_parts::MAX_PART_BYTES
+        }
         ICON_REPLY => super::app_icon::MAX_ICON_REPLY_BYTES,
         PRESENTED => 16,
         super::wire_control::RATE_CEILING => 8,

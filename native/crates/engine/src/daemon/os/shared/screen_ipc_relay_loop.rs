@@ -136,6 +136,11 @@ pub(super) async fn relay_loop(
                 }
                 None => {
                     pending.flush(out).await;
+                    // Round 11: the host's close reason, as on the control
+                    // stream (`EndReason::from_close`).
+                    if let Some(reason) = EndReason::from_close(&session.connection) {
+                        return (reason.key().into(), None);
+                    }
                     return ("ended".into(), None);
                 }
             },

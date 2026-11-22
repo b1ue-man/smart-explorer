@@ -113,7 +113,10 @@ impl Session<'_> {
                 }
             }
         };
-        let len = self.outbox.piece_len(writing.bytes.len() - writing.offset);
+        let len = self.outbox.piece_len(
+            writing.bytes.len() - writing.offset,
+            writing.part_tag.is_some(),
+        );
         let end = writing.offset + len;
         let framed = writing.part_tag.map(|tag| {
             let part = crate::screen::core::control_parts::encode_part(
