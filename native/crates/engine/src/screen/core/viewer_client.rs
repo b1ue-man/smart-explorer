@@ -293,6 +293,8 @@ async fn handshake_for(
             caps.hybrid_regions = false;
             caps
         });
+    // Large control frames in parts (round 10, `control_parts.rs`).
+    hello.control_parts = Some(super::control_parts::CONTROL_PARTS_V1);
     hello.family_version = server
         .family_version
         .filter(|version| *version == super::family_protocol::FAMILY_PROTOCOL);

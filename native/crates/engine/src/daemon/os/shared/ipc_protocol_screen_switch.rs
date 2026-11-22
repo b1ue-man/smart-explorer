@@ -39,6 +39,13 @@ pub enum RateCeilingState {
     UnsupportedByHost,
 }
 
+/// The end of a session whose chosen „Höchste Datenrate“ the host cannot
+/// keep (Codex 10/7: the choice holds as chosen; the impossible is shown
+/// with its reason): code `failed` with this detail.
+pub const RATE_CEILING_UNSUPPORTED: &str = "Das Gerät kann die gewählte „Höchste Datenrate“ \
+     nicht einhalten (ältere Version ohne rate_ceiling_v1); mit „Automatisch“ läuft die Ansicht \
+     ohne Grenze";
+
 impl RateCeilingState {
     pub fn of(requested: Option<u64>, host_takes_it: bool) -> Self {
         match (requested, host_takes_it) {

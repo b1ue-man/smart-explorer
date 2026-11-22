@@ -124,6 +124,9 @@ impl Pipeline {
         // (`rate_tiles.rs`), of a write cut off what it handed on.
         // Round 10: as a live picture (`host_frame_send.rs`).
         self.rate.shared_budget().control_turn().await;
+        // Codex 10/9: the picture holds the line from before it reads its
+        // credit until its bytes are booked.
+        let picture_write = self.rate.picture_write();
         let started_us = now_us();
         // Codex 7/12: the snapshot's records are tiles whatever the live
         // stream's codec is; their pace and booking follow the tiles' rule.
@@ -149,12 +152,10 @@ impl Pipeline {
             budget,
             gop.write_frame_admitted(frame_id, capture_ts_us, true, records),
         );
-        let picture_write = self.rate.picture_write();
         let written = tokio::select! {biased;
             _=work.cancelled(work_epoch)=>Err(io::Error::from(io::ErrorKind::Interrupted)),
             result=writing=>result,
         };
-        drop(picture_write);
         // Its stream's header as the writer wrote it (`host_frame_send.rs`).
         let header_bytes = gop.header_bytes();
         let booked = written
@@ -162,6 +163,7 @@ impl Pipeline {
             .map_or_else(|_| gop.handed_bytes(), |bytes| *bytes)
             + header_bytes;
         self.rate.on_stream_sent(started_us, booked, video);
+        drop(picture_write);
         // The statistics' sent rate counts the snapshot (Gemini 3/6).
         self.second_bytes += booked;
         if !work.current(work_epoch) {

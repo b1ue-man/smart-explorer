@@ -83,6 +83,9 @@ impl Pipeline {
         // Round 10: a control frame the last picture held back gets its
         // piece first (at most `TURN_WAIT`), before this picture's pace.
         self.rate.shared_budget().control_turn().await;
+        // Codex 10/9: the picture holds the line from before it reads its
+        // credit until its bytes are booked.
+        let picture_write = self.rate.picture_write();
         let send_started_us = now_us();
         // Codex 4/5: the records reach the stream within the byte budget,
         // after its saved credit at its rate (`GopWriter::pace_next_frame`).
@@ -110,18 +113,17 @@ impl Pipeline {
             active_budget,
             gop.write_frame_admitted(frame_id, capture_ts_us, frame.keyframe, frame.records),
         );
-        let picture_write = self.rate.picture_write();
         let written = tokio::select! {biased;
             _=work.cancelled(work_epoch)=>Err(io::Error::from(io::ErrorKind::Interrupted)),
             result=writing=>result,
         };
-        drop(picture_write);
         // A write cut off books what it handed to the stream (Codex 6/9).
         let booked = written
             .as_ref()
             .map_or_else(|_| gop.handed_bytes(), |bytes| *bytes)
             + header_bytes;
         self.rate.on_stream_sent(send_started_us, booked, video);
+        drop(picture_write);
         let bytes = match written {
             Ok(bytes) => {
                 // Station `send` (BK0): all records handed to the stream.

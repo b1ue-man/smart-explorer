@@ -192,11 +192,31 @@ impl SharedBudget {
         self.on_sent(at_us, bytes, rate_bps);
         self.1.fetch_add(bytes, std::sync::atomic::Ordering::AcqRel);
     }
+    /// Under the budget's lock (Codex 10/9): a held piece books and checks
+    /// the flag in one step (`take_held_piece`), so no piece takes credit a
+    /// picture has started on.
     pub fn set_picture_writing(&self, writing: bool) {
-        self.2
-            .writing
-            .store(writing, std::sync::atomic::Ordering::Release);
+        self.with(|_| {
+            self.2
+                .writing
+                .store(writing, std::sync::atomic::Ordering::Release);
+        });
         self.2.changed.notify_waiters();
+    }
+    /// A held control piece of `bytes` takes its credit at `at_us` unless a
+    /// picture is being written (then `false`, nothing booked; Codex 10/9).
+    pub fn take_held_piece(&self, at_us: u64, bytes: u64, rate_bps: u64) -> bool {
+        let taken = self.with(|(budget, _)| {
+            if self.2.writing.load(std::sync::atomic::Ordering::Acquire) {
+                return false;
+            }
+            budget.on_sent(at_us, bytes, rate_bps);
+            true
+        });
+        if taken {
+            self.1.fetch_add(bytes, std::sync::atomic::Ordering::AcqRel);
+        }
+        taken
     }
     pub fn picture_writing(&self) -> bool {
         self.2.writing.load(std::sync::atomic::Ordering::Acquire)

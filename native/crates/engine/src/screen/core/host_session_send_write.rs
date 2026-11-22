@@ -1,7 +1,7 @@
 //! The session's side of the outbox (`host_session_send.rs`): frames in,
 //! pieces out.
 use super::super::*;
-use super::{large, Held, Writing};
+use super::{family, large, Held, Writing};
 use crate::screen::core::cursor_overlay::CursorPosition;
 
 impl Session<'_> {
@@ -40,6 +40,11 @@ impl Session<'_> {
         }
         if self.outbox.writing.is_some() {
             match held {
+                // A viewer that takes parts gets small frames between them
+                // (round 10, Codex 10/10); a family's frames keep their order.
+                Held::Frame(frame) if !large(&frame) && self.outbox.parts && !family(&frame) => {
+                    return self.write(Held::Frame(frame)).await;
+                }
                 Held::Frame(frame) if !large(&frame) => {
                     self.outbox.queue_behind(frame);
                     return Ok(());
@@ -89,9 +94,17 @@ impl Session<'_> {
                     Held::Frame(frame) => (frame, false),
                     Held::Metadata(frame) => (frame, true),
                 };
+                let bytes = control_sender::encode_wire(&frame)?;
+                // In parts: the inner payload, each piece framed on its own.
+                let (bytes, part_tag) = if self.outbox.parts {
+                    (bytes[5..].to_vec(), Some(bytes[0]))
+                } else {
+                    (bytes, None)
+                };
                 Writing {
-                    bytes: control_sender::encode_wire(&frame)?,
+                    bytes,
                     offset: 0,
+                    part_tag,
                     metadata,
                     shape: match &frame {
                         HostFrame::CursorShape(shape) => Some(shape.id),
@@ -102,14 +115,36 @@ impl Session<'_> {
         };
         let len = self.outbox.piece_len(writing.bytes.len() - writing.offset);
         let end = writing.offset + len;
+        let framed = writing.part_tag.map(|tag| {
+            let part = crate::screen::core::control_parts::encode_part(
+                tag,
+                &writing.bytes,
+                writing.offset,
+                len,
+            );
+            let mut frame = Vec::with_capacity(5 + part.len());
+            frame.push(crate::screen::core::control_parts::CONTROL_PART);
+            frame.extend_from_slice(&u32::try_from(part.len()).unwrap_or(u32::MAX).to_be_bytes());
+            frame.extend_from_slice(&part);
+            frame
+        });
+        let piece = framed
+            .as_deref()
+            .unwrap_or(&writing.bytes[writing.offset..end]);
         // The budget is taken before the piece goes: under a ceiling the
         // line never carries more than its credit plus one piece.
+        let booked = piece.len() as u64;
         match self.outbox.budget.rate() {
-            Some(rate) => self.outbox.budget.on_held_sent(now_us(), len as u64, rate),
+            // Codex 10/9: no piece while a picture holds the line; it waits
+            // again (`Outbox::ready`).
+            Some(rate) if !self.outbox.budget.take_held_piece(now_us(), booked, rate) => {
+                self.outbox.writing = Some(writing);
+                return Ok(());
+            }
+            Some(_) => {}
             // The control stream counts against „Höchste Datenrate“.
-            None => self.pipeline.book_control_bytes(len as u64),
+            None => self.pipeline.book_control_bytes(booked),
         }
-        let piece = &writing.bytes[writing.offset..end];
         if writing.metadata {
             host_metadata::send_piece(
                 self.context,

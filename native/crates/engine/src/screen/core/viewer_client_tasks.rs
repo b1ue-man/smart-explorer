@@ -14,8 +14,9 @@ use tokio::task::JoinHandle;
 use super::super::gop_stream::{
     accept_picture_streams_admitted, now_us, picture_channel, PictureEvent, PicturePresence,
 };
+use super::super::wire::MAX_WINDOWS_BYTES;
 use super::super::wire_control::{
-    recv_host_frame, send_viewer_frame, HostFrame, Ping, StreamMode, ViewerFrame,
+    decode_host_frame, send_viewer_frame, HostFrame, Ping, StreamMode, ViewerFrame,
 };
 use super::super::wire_hello::ScreenHelloOk;
 use super::{CONTROL_QUEUE, HIDDEN_PING_INTERVAL, PING_INTERVAL};
@@ -137,8 +138,18 @@ pub(super) fn spawn(start: Start, accepted: &ScreenHelloOk) -> Running {
         let _ = send.finish();
     });
     let reader = tokio::spawn(async move {
+        // Large frames in parts (round 10, `control_parts.rs`).
+        let mut parts = super::super::control_parts::PartAssembler::default();
         loop {
-            let frame = recv_host_frame(&mut recv).await;
+            let frame = match super::super::wire::read_frame(&mut recv, MAX_WINDOWS_BYTES).await {
+                Ok((super::super::control_parts::CONTROL_PART, part)) => match parts.push(&part) {
+                    Ok(None) => continue,
+                    Ok(Some((tag, payload))) => decode_host_frame(tag, &payload),
+                    Err(error) => Err(error),
+                },
+                Ok((tag, payload)) => decode_host_frame(tag, &payload),
+                Err(error) => Err(error),
+            };
             if let Ok(HostFrame::Stats(stats)) = &frame {
                 if stats.frame_timing == Some(super::super::frame_timing::FRAME_TIMING_VERSION) {
                     frame_timing.store(true, std::sync::atomic::Ordering::Release);

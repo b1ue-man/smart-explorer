@@ -52,6 +52,9 @@ impl Held {
 struct Writing {
     bytes: Vec<u8>,
     offset: usize,
+    /// The inner frame's tag when it goes in `CONTROL_PART`s (`bytes` is
+    /// then its payload); `None`: `bytes` is the whole frame.
+    part_tag: Option<u8>,
     metadata: bool,
     shape: Option<u32>,
 }
@@ -98,6 +101,8 @@ pub(super) struct Outbox {
     behind: VecDeque<HostFrame>,
     /// The sound under the viewer's ceiling (`SoundCeiling`).
     pub(super) sound: SoundCeiling,
+    /// The viewer takes large frames in parts (`control_parts.rs`).
+    parts: bool,
 }
 
 /// Whether the viewer's sound fits under its „Höchste Datenrate“ (round 8
@@ -140,6 +145,7 @@ impl SoundCeiling {
 impl Outbox {
     pub(super) fn new(budget: SharedBudget, ceiling: Option<u64>) -> Self {
         Self {
+            parts: false,
             sound: SoundCeiling {
                 ceiling,
                 ..SoundCeiling::default()
@@ -199,18 +205,26 @@ impl Outbox {
     /// frame waits behind a family state still held (Codex 9/9).
     fn holds(&self, frame: &HostFrame) -> bool {
         (large(frame) && (self.waiting() || self.budget.rate().is_some()))
-            || (family(frame)
-                && self
-                    .held
-                    .iter()
-                    .any(|held| matches!(held.frame(), HostFrame::FamilySnapshot(_))))
+            // Codex 10/15: behind any held family frame, a state or an
+            // operation result, so results reach the viewer in their order.
+            || (family(frame) && self.held.iter().any(|held| family(held.frame())))
     }
 
     /// The held frame a newer `frame` takes the place of: the window list
     /// and the family list are complete states without a request id, a
     /// pointer shape is the newest one (`hold`), an icon reply answers the
     /// same icon.
+    /// A family state replaces only the newest held family frame when that
+    /// is a state: an operation result after it is an order boundary (Codex
+    /// 10/15).
     fn replaced_in_place(&self, frame: &HostFrame) -> Option<usize> {
+        if matches!(frame, HostFrame::FamilySnapshot(_)) {
+            return self
+                .held
+                .iter()
+                .rposition(|held| family(held.frame()))
+                .filter(|&index| matches!(self.held[index].frame(), HostFrame::FamilySnapshot(_)));
+        }
         self.held
             .iter()
             .position(|held| match (held.frame(), frame) {
@@ -280,6 +294,13 @@ impl Outbox {
                 .clamp(PIECE_MIN, PIECE_MAX)
                 .min(rest)
         })
+    }
+}
+
+impl Session<'_> {
+    /// The viewer offered `control_parts` (`ScreenClientHello`).
+    pub(in super::super) fn set_control_parts(&mut self, parts: bool) {
+        self.outbox.parts = parts;
     }
 }
 

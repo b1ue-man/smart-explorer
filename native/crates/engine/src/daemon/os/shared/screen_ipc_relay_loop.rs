@@ -141,6 +141,13 @@ pub(super) async fn relay_loop(
             },
             frame = input.recv() => match frame {
                 Some(Some(frame)) => {
+                    // Codex 10/7: a ceiling chosen during the session that
+                    // the host cannot keep ends the pictures with its reason.
+                    if matches!(frame, ViewerFrame::RateCeiling(Some(_))) && !session.rate_ceiling {
+                        pending.flush(out).await;
+                        let detail = crate::daemon::ipc_protocol::screen::RATE_CEILING_UNSUPPORTED;
+                        return (EndReason::Failed.key().into(), Some(detail.into()));
+                    }
                     modes.note(&frame);
                     // What became of „Höchste Datenrate“ changed during the
                     // session (P1): applied, or dropped for an old host.

@@ -349,6 +349,14 @@ pub(super) async fn relay_session(
     // „Höchste Datenrate“ (B-09): `RATE_CEILING` only to a host that
     // announced `rate_ceiling_v1`; the viewer hears what became of it.
     if max_rate_bps.is_some() && !metadata {
+        // Codex 10/7: a host that cannot keep the chosen ceiling shows no
+        // picture without it; the viewer reads why.
+        if !session.rate_ceiling {
+            session.close();
+            let detail = crate::daemon::ipc_protocol::screen::RATE_CEILING_UNSUPPORTED;
+            end(&out, EndReason::Failed.key().into(), Some(detail.into())).await;
+            return;
+        }
         let frame = ViewerFrame::RateCeiling(max_rate_bps);
         modes.note(&frame);
         if session.rate_ceiling {

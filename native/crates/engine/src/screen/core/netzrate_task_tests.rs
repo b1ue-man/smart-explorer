@@ -427,8 +427,10 @@ fn review1119_task_video_keeps_the_user_ceiling() {
     // budget, before it goes (round 8, Codex 8/5).
     let session = include_str!("host_session_send_write.rs");
     assert!(session.contains("self.pipeline.book_control_bytes(sent);"));
-    assert!(session.contains("None => self.pipeline.book_control_bytes(len as u64),"));
-    assert!(session.contains(".on_held_sent(now_us(), len as u64, rate)"));
+    assert!(session.contains("None => self.pipeline.book_control_bytes(booked),"));
+    // Round 10 (Codex 10/9): booked and checked against a running picture
+    // in one step.
+    assert!(session.contains(".take_held_piece(now_us(), booked, rate)"));
     // Codex 5/4, round 6 L3: the session's sound counts with the control
     // stream as the rate between two readings of the link's running total.
     let mut sound = RateController::new(PathKind::Direct, 0);

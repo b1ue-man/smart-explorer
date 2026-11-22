@@ -128,12 +128,10 @@ pub struct Backend {
 }
 impl Backend {
     fn touch(&self, name: &'static str) {
-        // The original fault: platform work inside the shared authorization.
         assert!(
             !ADMITTING.with(Cell::get),
             "platform query inside share authorization: {name}"
         );
-        // Same runtime nesting contract as zbus::blocking with its Tokio feature.
         let inner = tokio::runtime::Builder::new_current_thread()
             .build()
             .unwrap();
@@ -422,6 +420,7 @@ pub fn hello(mode: SessionMode, metadata: bool) -> ScreenClientHello {
         codec_choice: None,
         max_rate_bps: None,
         audio: None,
+        control_parts: None,
     }
 }
 

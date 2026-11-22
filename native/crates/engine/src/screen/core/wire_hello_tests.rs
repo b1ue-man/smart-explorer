@@ -27,6 +27,7 @@ pub(crate) fn client_hello() -> ScreenClientHello {
         codec_choice: None,
         max_rate_bps: None,
         audio: None,
+        control_parts: None,
         frame_capabilities: None,
         protocol_version: SCREEN_PROTOCOL_VERSION,
         relation_kind: "direct".into(),

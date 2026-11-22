@@ -240,6 +240,11 @@ pub struct ScreenClientHello {
     /// when this viewer plays it; an older host ignores it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audio: Option<u16>,
+    /// `Some(1)` (`control_parts::CONTROL_PARTS_V1`): this viewer takes a
+    /// large control frame as `CONTROL_PART`s, between which small frames
+    /// go (review round 10, Codex 10/10); an older host ignores it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub control_parts: Option<u16>,
 }
 
 impl ScreenClientHello {

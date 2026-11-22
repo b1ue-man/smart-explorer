@@ -39,7 +39,7 @@ mod switch;
 pub use relay::{
     decode_relay_record, encode_relay_record, read_relay, read_relay_budgeted, write_relay,
 };
-pub use switch::{RateCeilingState, RELAY_AUDIO, RELAY_RATE_CEILING};
+pub use switch::{RateCeilingState, RATE_CEILING_UNSUPPORTED, RELAY_AUDIO, RELAY_RATE_CEILING};
 
 /// Longest a `HostWatch` waits for a change before it answers anyway.
 pub const WATCH_WAIT_SECS: u64 = 25;

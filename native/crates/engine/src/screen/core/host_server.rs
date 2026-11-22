@@ -464,7 +464,7 @@ pub async fn serve(context: HostContext, viewer: ProvenViewer) -> io::Result<()>
     if mode == SessionMode::Preview {
         pipeline.set_mode(StreamKind::Preview, None, None);
     }
-    let session = Session::new(
+    let mut session = Session::new(
         &context,
         &connection,
         send,
@@ -477,6 +477,7 @@ pub async fn serve(context: HostContext, viewer: ProvenViewer) -> io::Result<()>
         hello.family_version == Some(super::family_protocol::FAMILY_PROTOCOL),
         super::family_protocol::selector(&source_id).map(str::to_owned),
     );
+    session.set_control_parts(hello.control_parts == Some(super::control_parts::CONTROL_PARTS_V1));
     session.run(recv, max_fps).await;
     Ok(())
 }
