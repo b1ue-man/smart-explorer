@@ -202,3 +202,38 @@ fn bildkette_task_proto_continuation_follows_the_running_pairing() {
         assert!(!pipeline.continuation_offered());
     });
 }
+
+/// Review 2026-11-19 (Codex 10/6): a change from the full view to the
+/// preview at the same picture size keeps the running encoder and starts a
+/// group of the new kind with its key frame; a new size replaces it.
+#[test]
+fn review1119_task_preview_switch_keeps_a_fitting_encoder() {
+    run(|pipeline| {
+        // The preview's picture size of this source, then the full view at it.
+        pipeline.set_mode(StreamKind::Preview, Some(FrameSize::new(320, 180)), None);
+        let size = pipeline.target_size();
+        pipeline.set_mode(StreamKind::Video, Some(size), None);
+        assert_eq!(pipeline.target_size(), size, "the full view at that size");
+        let encoder = crate::screen::core::host_stage::StageEncoder {
+            name: "fixture".into(),
+            hardware: false,
+        };
+        pipeline.running = Some((encoder, size));
+        let epoch = pipeline.encoder_epoch;
+        pipeline.set_mode(StreamKind::Preview, Some(size), None);
+        assert_eq!(pipeline.encoder_epoch, epoch, "no invalidate_reference");
+        assert!(pipeline.running.is_some(), "the encoder stays");
+        assert!(
+            pipeline.kept_encoder,
+            "its next picture must be a key frame"
+        );
+        assert!(pipeline.pacer.keyframe_due(), "a group of the new kind");
+        // Another size: `resize` replaces the encoder.
+        pipeline.set_mode(StreamKind::Preview, Some(FrameSize::new(160, 90)), None);
+        assert!(
+            pipeline.encoder_epoch > epoch,
+            "a new encoder for the new size"
+        );
+        assert!(pipeline.running.is_none());
+    });
+}
