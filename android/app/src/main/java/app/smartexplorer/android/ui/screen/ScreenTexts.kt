@@ -103,6 +103,11 @@ object ScreenTexts {
 
     /** The text of an error code of the host (`HELLO_ERROR`, `ERROR`). */
     fun errorText(context: Context, code: String, detail: String? = null): String {
+        // A full metadata queue of the host (`host_session_control.rs`, METADATA_QUEUE_FULL)
+        // is no failed capture: the request may be asked again.
+        if (code == "capture_failed" && detail?.startsWith("metadata_queue_full") == true) {
+            return context.getString(R.string.screen_error_metadata_queue_full)
+        }
         val res = errorRes(code) ?: return context.getString(R.string.screen_error_unknown, code)
         val base = context.getString(res)
         return if (code == "capture_failed" || code == "encoder_failed") withDetail(base, detail) else base

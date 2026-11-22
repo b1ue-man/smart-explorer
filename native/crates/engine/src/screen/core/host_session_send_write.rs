@@ -125,6 +125,8 @@ impl Session<'_> {
             let peer = self.connection.remote_id().to_string();
             control_sender::write_piece(&peer, &mut self.send, piece).await?;
         }
+        // The picture that waited for this piece may go (`control_turn`).
+        self.outbox.budget.control_went();
         writing.offset = end;
         if writing.offset < writing.bytes.len() {
             self.outbox.writing = Some(writing);
@@ -142,32 +144,20 @@ impl Session<'_> {
         Ok(())
     }
 
-    /// The session ends (round 9 F3): the large frame being written goes out
-    /// whole without the budget, then the small frames behind it, so the
-    /// `ERROR` and the last `STATE` that follow reach the viewer; held frames
-    /// not yet begun are dropped. A metadata reply whose rights are gone is
-    /// not finished (its error ends the farewell, as before).
+    /// The session ends (round 9 F3, round 10): the large frame being
+    /// written goes out piece by piece within the byte budget (the ceiling
+    /// stays hard), then the small frames behind it, so the `ERROR` and the
+    /// last `STATE` that follow reach the viewer; held frames not yet begun
+    /// are dropped. What does not fit into `CLOSE_GRACE`, and a metadata
+    /// reply whose rights are gone, ends the farewell: the connection then
+    /// closes with the reason as its close reason (`finish`).
     pub(in super::super) async fn end_outbox(&mut self) -> io::Result<()> {
         self.outbox.held.clear();
         self.outbox.shape = None;
         self.outbox.position = None;
-        if let Some(writing) = self.outbox.writing.take() {
-            let rest = &writing.bytes[writing.offset..];
-            if writing.metadata {
-                host_metadata::send_piece(
-                    self.context,
-                    self.principal,
-                    self.mode,
-                    self.connection,
-                    &mut self.send,
-                    rest,
-                    self.handle.stop_signal(),
-                )
-                .await?;
-            } else {
-                let peer = self.connection.remote_id().to_string();
-                control_sender::write_piece(&peer, &mut self.send, rest).await?;
-            }
+        while self.outbox.writing.is_some() {
+            self.outbox.ready().await;
+            self.flush_outbox().await?;
         }
         while let Some(frame) = self.outbox.behind.pop_front() {
             self.write(Held::Frame(frame)).await?;

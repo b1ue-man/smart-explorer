@@ -203,6 +203,20 @@ impl EndReason {
     pub fn from_key(key: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|reason| reason.key() == key)
     }
+
+    /// The reason a host named when it closed the session's connection
+    /// (`host_session.rs` closes with its key, round 10): the end a viewer
+    /// shows when the control stream broke before the last `STATE`.
+    pub fn from_close(connection: &iroh::endpoint::Connection) -> Option<Self> {
+        match connection.close_reason()? {
+            iroh::endpoint::ConnectionError::ApplicationClosed(close) => {
+                std::str::from_utf8(&close.reason)
+                    .ok()
+                    .and_then(Self::from_key)
+            }
+            _ => None,
+        }
+    }
 }
 
 /// The error a host process link gives once the active graphical session

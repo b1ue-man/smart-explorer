@@ -72,6 +72,7 @@
     <string name="screen_error_screen_unsupported">Das Gerät kennt die Bildschirmfreigabe nicht (ältere Version)</string>
     <string name="screen_error_approval_unavailable">Am Gerät kann niemand gefragt werden</string>
     <string name="screen_error_capture_failed">Die Aufnahme am Gerät ist fehlgeschlagen</string>
+    <string name="screen_error_metadata_queue_full">Zu viele Anfragen warten auf das Gerät; bitte erneut versuchen</string>
     <string name="screen_error_encoder_failed">Die Kodierung am Gerät ist fehlgeschlagen</string>
     <string name="screen_error_session_limit">Das Gerät bedient schon die höchstmögliche Zahl von Ansichten</string>
     <string name="screen_error_unknown">Fehler des Geräts: %1$s</string>

@@ -181,7 +181,9 @@ impl Outbox {
                 return;
             };
             if self.budget.picture_writing() {
-                tokio::time::sleep(Duration::from_millis(5)).await;
+                // Woken when the picture ends; the next picture leaves this
+                // frame one piece first (round 10: no polling, no starving).
+                self.budget.wait_picture().await;
                 continue;
             }
             let wait = self.budget.wait_us(now_us(), rate);

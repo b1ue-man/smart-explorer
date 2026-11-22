@@ -110,10 +110,18 @@ pub(super) async fn relay_loop(
                 }
                 Some(Err(error)) => {
                     pending.flush(out).await;
+                    // The host's reason when it closed the connection before
+                    // its last `STATE` (round 10).
+                    if let Some(reason) = EndReason::from_close(&session.connection) {
+                        return (reason.key().into(), None);
+                    }
                     return ("connection_lost".into(), Some(error.to_string()));
                 }
                 None => {
                     pending.flush(out).await;
+                    if let Some(reason) = EndReason::from_close(&session.connection) {
+                        return (reason.key().into(), None);
+                    }
                     return ("ended".into(), None);
                 }
             },

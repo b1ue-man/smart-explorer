@@ -122,6 +122,8 @@ impl Pipeline {
         // Review 2026-11-19 (Codex 13, 6/9): the snapshot's bytes count
         // against the stream's byte budget as every picture's
         // (`rate_tiles.rs`), of a write cut off what it handed on.
+        // Round 10: as a live picture (`host_frame_send.rs`).
+        self.rate.shared_budget().control_turn().await;
         let started_us = now_us();
         // Codex 7/12: the snapshot's records are tiles whatever the live
         // stream's codec is; their pace and booking follow the tiles' rule.

@@ -443,8 +443,13 @@ impl<'a> Session<'a> {
             }
             self.report(SessionState::Ended, Some(reason.key())).await
         };
-        let _ = tokio::time::timeout(CLOSE_GRACE, last).await;
-        let _ = self.send.finish();
+        // Round 10: a farewell that did not go whole (a half large frame, a
+        // stop during a metadata reply, the grace ran out) leaves the stream
+        // unfinished; the connection's close reason names the end instead.
+        let said = matches!(tokio::time::timeout(CLOSE_GRACE, last).await, Ok(Ok(())));
+        if said {
+            let _ = self.send.finish();
+        }
         let bytes = self.pipeline.totals().bytes;
         let seconds = self.started.elapsed().as_secs();
         let text = format!("{}; {seconds} s; {bytes} bytes", reason.key());
@@ -457,11 +462,13 @@ impl<'a> Session<'a> {
             None,
             Some(&text),
         );
-        if reason != EndReason::ViewerClosed {
+        if said && reason != EndReason::ViewerClosed {
             let _ = tokio::time::timeout(CLOSE_GRACE, self.connection.closed()).await;
         }
+        // The reason's key, which viewers read when the last `STATE` did not
+        // reach them (`EndReason::from_close`).
         self.connection
-            .close(SESSION_CLOSE, b"screen session ended");
+            .close(SESSION_CLOSE, reason.key().as_bytes());
     }
 }
 

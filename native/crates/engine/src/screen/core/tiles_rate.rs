@@ -133,8 +133,22 @@ pub struct SharedBudget(
     /// A picture is being written; it is booked when its write ends, so
     /// held control frames wait meanwhile (round 9 F4: they took the credit
     /// the picture was about to use, briefly up to twice the ceiling).
-    std::sync::Arc<std::sync::atomic::AtomicBool>,
+    std::sync::Arc<Turns>,
 );
+
+/// Whose turn the line is between pictures and held control frames (round
+/// 9 F4, round 10): a picture being written holds the frames back, and a
+/// frame held back by a picture gets one piece before the next picture.
+#[derive(Debug, Default)]
+pub struct Turns {
+    writing: std::sync::atomic::AtomicBool,
+    owed: std::sync::atomic::AtomicBool,
+    changed: tokio::sync::Notify,
+}
+
+/// The longest wait for the other side's turn: a missed wake-up never
+/// stalls either side, and a picture never waits longer for control.
+const TURN_WAIT: std::time::Duration = std::time::Duration::from_millis(20);
 
 impl SharedBudget {
     fn with<R>(&self, f: impl FnOnce(&mut (TileBudget, Option<u64>)) -> R) -> R {
@@ -179,10 +193,40 @@ impl SharedBudget {
         self.1.fetch_add(bytes, std::sync::atomic::Ordering::AcqRel);
     }
     pub fn set_picture_writing(&self, writing: bool) {
-        self.2.store(writing, std::sync::atomic::Ordering::Release);
+        self.2
+            .writing
+            .store(writing, std::sync::atomic::Ordering::Release);
+        self.2.changed.notify_waiters();
     }
     pub fn picture_writing(&self) -> bool {
-        self.2.load(std::sync::atomic::Ordering::Acquire)
+        self.2.writing.load(std::sync::atomic::Ordering::Acquire)
+    }
+    /// Held control frames wait for the picture being written; the next
+    /// picture leaves them one piece first (`control_turn`).
+    pub async fn wait_picture(&self) {
+        self.2
+            .owed
+            .store(true, std::sync::atomic::Ordering::Release);
+        while self.picture_writing() {
+            let _ = tokio::time::timeout(TURN_WAIT, self.2.changed.notified()).await;
+        }
+    }
+    /// A held control piece went: the picture may go.
+    pub fn control_went(&self) {
+        if self.2.owed.swap(false, std::sync::atomic::Ordering::AcqRel) {
+            self.2.changed.notify_waiters();
+        }
+    }
+    /// Before a picture's write: a control frame the last picture held back
+    /// gets its piece first, for at most `TURN_WAIT` (no frame starves, and
+    /// no picture waits long for control).
+    pub async fn control_turn(&self) {
+        if self.2.owed.load(std::sync::atomic::Ordering::Acquire) {
+            let _ = tokio::time::timeout(TURN_WAIT, self.2.changed.notified()).await;
+            self.2
+                .owed
+                .store(false, std::sync::atomic::Ordering::Release);
+        }
     }
     /// The bytes of held-back control frames sent since the last call.
     pub fn take_held_bytes(&self) -> u64 {

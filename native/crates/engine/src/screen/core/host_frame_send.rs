@@ -80,6 +80,9 @@ impl Pipeline {
         // writer handed to the stream, the record headers included, at the
         // start of the send (`rate_tiles.rs`), also of a write cut off.
         let video = self.choice.codec.is_video();
+        // Round 10: a control frame the last picture held back gets its
+        // piece first (at most `TURN_WAIT`), before this picture's pace.
+        self.rate.shared_budget().control_turn().await;
         let send_started_us = now_us();
         // Codex 4/5: the records reach the stream within the byte budget,
         // after its saved credit at its rate (`GopWriter::pace_next_frame`).

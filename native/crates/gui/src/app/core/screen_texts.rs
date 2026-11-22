@@ -98,6 +98,13 @@ pub fn error_text(code: &str, detail: Option<&str>) -> String {
             "Das Gerät kennt die Bildschirmfreigabe nicht (ältere Version)".into()
         }
         ScreenErrorCode::ApprovalUnavailable => "Am Gerät kann niemand gefragt werden".into(),
+        // A full metadata queue of the host is no failed capture (round 10,
+        // `host_session_control.rs`): the request may be asked again.
+        ScreenErrorCode::CaptureFailed
+            if detail.is_some_and(|detail| detail.starts_with("metadata_queue_full")) =>
+        {
+            "Zu viele Anfragen warten auf das Gerät; bitte erneut versuchen".into()
+        }
         ScreenErrorCode::CaptureFailed => {
             with_detail("Die Aufnahme am Gerät ist fehlgeschlagen", detail)
         }
