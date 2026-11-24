@@ -96,9 +96,11 @@ pub fn release(events: &[InputEvent]) -> Result<(), ControlBlock> {
     Ok(())
 }
 
-/// The releases of what `events` leaves pressed, in the order of the
-/// presses: keys and buttons pressed and not released after, the left button
-/// of a first finger that started and did not end.
+/// The releases of everything `events` presses, in the order of the first
+/// presses: every key and button pressed in it, the left button of a first
+/// finger that started. A release later in the batch does not count: the
+/// sending may have failed before it went out (round 14, B2), and letting go
+/// of a key that is up has no effect.
 pub(super) fn left_pressed(events: &[InputEvent]) -> Vec<InputEvent> {
     let mut held: Vec<InputEvent> = Vec::new();
     for event in events {
@@ -131,8 +133,7 @@ pub(super) fn left_pressed(events: &[InputEvent]) -> Vec<InputEvent> {
             ),
             _ => continue,
         };
-        held.retain(|known| *known != release);
-        if down {
+        if down && !held.contains(&release) {
             held.push(release);
         }
     }

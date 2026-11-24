@@ -702,8 +702,11 @@ internal object ScreenHostControl {
                 // The first action of the batch Android did not perform (Codex 2/19): its kind goes to the
                 // session's viewer as a notice, once per batch.
                 var refused: String? = null
+                // The session went while its batch ran (round 14, B1): the batch is not reported as finished; the
+                // core ends the channel and names it stopped.
+                var gone = false
                 for (action in actions) {
-                    if (sessions.isEmpty() || (owner != 0L && !sessions.containsKey(owner))) break
+                    if (sessions.isEmpty() || (owner != 0L && !sessions.containsKey(owner))) { gone = true; break }
                     val done = CountDownLatch(1)
                     val performed = java.util.concurrent.atomic.AtomicBoolean(false)
                     val reason = java.util.concurrent.atomic.AtomicReference<String?>(null)
@@ -731,7 +734,7 @@ internal object ScreenHostControl {
                 // earlier refusal.
                 val kind = refused
                 val batch = message.long("batch")
-                if (owner != 0L && (kind != null || batch > 0L)) {
+                if (!gone && owner != 0L && (kind != null || batch > 0L)) {
                     try {
                         runBlocking { ScreenApi.inputSettled(owner, batch, kind) }
                     } catch (e: CoreException) {

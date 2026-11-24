@@ -53,12 +53,17 @@ fn screen_task_x11_failed_batch_lets_go_of_its_presses() {
         letgo::left_pressed(&events),
         vec![
             key(0xE1, false),
+            key(0x04, false),
             button(PointerButton::Right, false),
             button(PointerButton::Left, false),
         ]
     );
     assert!(letgo::left_pressed(&[key(0x04, false)]).is_empty());
-    assert!(letgo::left_pressed(&[touch(TouchPhase::Start), touch(TouchPhase::Cancel)]).is_empty());
+    // A release in the batch may not have gone out before the failure.
+    assert_eq!(
+        letgo::left_pressed(&[touch(TouchPhase::Start), touch(TouchPhase::Cancel)]),
+        vec![button(PointerButton::Left, false)]
+    );
     // A press repeated before its release is let go once.
     assert_eq!(
         letgo::left_pressed(&[key(0xE0, true), key(0xE0, true)]),
