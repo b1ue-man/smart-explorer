@@ -98,6 +98,7 @@ impl GpuInput {
             plain: None,
             scale: None,
             in_flight: None,
+            late: false,
         }
     }
 
