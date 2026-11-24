@@ -424,6 +424,10 @@ fn r13_task_rebuild_falls_back_only_for_a_refused_source() {
     assert!(!refused("no_display:  "));
     assert!(!refused("no_display: session_inactive"));
     assert!(!refused("no_display: host_process: connection reset"));
+    assert!(!refused("no_display: capture_unavailable"));
+    assert!(refused("no_display: x11: X11 error")); // round 14, B1
+    assert!(refused("no_display: portal_selects_source"));
+    assert!(refused("no_display: stale_or_foreign_family_selection"));
     assert!(!refused("capture_failed: window_not_found"));
     assert!(!source_refused(&ViewerError::Unsupported));
 }

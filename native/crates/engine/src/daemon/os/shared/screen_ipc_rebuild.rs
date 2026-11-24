@@ -47,36 +47,44 @@ fn chosen_source(modes: &ModeMemory, first: &ViewerRequest) -> Option<SourceId> 
     modes.source().or_else(|| first.source.clone())
 }
 
-/// The reasons of a `no_display` that refuse the chosen source itself, not
-/// the session (`SourceRefusal`: Windows `capture_source.rs`, X11
-/// `x11_capture_target.rs`, Android `bridge_backend.rs`, the admission
-/// `host_admission.rs`). Every other reason (`session_inactive`,
-/// `capture_unavailable`, a host process not reached, …) holds for the
-/// host's own source as well.
-const SOURCE_GONE: [&str; 6] = [
-    "window_not_found",
-    "monitor_not_found",
-    "unknown_monitor",
-    "source_identity_unavailable",
-    "window_capture_unsupported",
-    "source_permission_revoked",
+/// The reasons of a `no_display` that hold for the host's own source as
+/// well, not only for the chosen one: no graphical session, capture not
+/// ready or not reached, a host process that did not answer. Every other
+/// reason names the chosen source (`window_not_found`, an X11 error for a
+/// window gone with its X server, `portal_selects_source`,
+/// `stale_or_foreign_family_selection`, `ambiguous_monitor_id`, …;
+/// round 14, B1: a list of the source reasons missed several).
+const SESSION_WIDE: [&str; 6] = [
+    "no_display",
+    "capture_unavailable",
+    "session_inactive",
+    "android_host_app_not_running",
+    "capture_metadata_pending",
+    "capture_session_mismatch",
 ];
 
 /// Whether the host refused the request's source itself: `no_display` with
-/// one of the `SOURCE_GONE` reasons (`host_server.rs`, `Failure::Source`).
+/// a reason that is not session-wide (`host_server.rs`, `Failure::Source`).
 /// A bare `no_display` names no graphical session or no monitor, and a
-/// transient reason holds for the host's own source too: the chosen source
-/// stays for the next attempt (round 13, H3a).
+/// session-wide reason holds for the host's own source too: the chosen
+/// source stays for the next attempt (round 13, H3a).
 pub(super) fn source_refused(error: &ViewerError) -> bool {
     let ViewerError::Refused(text) = error else {
         return false;
     };
-    error.code() == ScreenErrorCode::NoDisplay.key()
-        && text.split_once(": ").is_some_and(|(_, reason)| {
-            reason
-                .split(':')
-                .any(|part| SOURCE_GONE.contains(&part.trim()))
-        })
+    if error.code() != ScreenErrorCode::NoDisplay.key() {
+        return false;
+    }
+    let Some((_, reason)) = text.split_once(": ") else {
+        return false;
+    };
+    let reason = reason.trim();
+    !reason.is_empty()
+        && !reason.starts_with("host_process")
+        && !reason
+            .split(':')
+            .next()
+            .is_some_and(|first| SESSION_WIDE.contains(&first.trim()))
 }
 
 /// The request of a session built again: the ceiling (Gemini 5/10) and the
