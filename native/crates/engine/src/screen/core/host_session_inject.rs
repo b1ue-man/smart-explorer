@@ -133,8 +133,14 @@ impl Session<'_> {
         loop {
             if let Some(job) = self.health.injecting.as_mut() {
                 use std::future::Future;
-                let mut cx = std::task::Context::from_waker(futures_util::task::noop_waker_ref());
-                let applied = match std::pin::Pin::new(&mut job.handle).poll(&mut cx) {
+                // The poll context is not `Send`; it ends before the next
+                // `await`, so the session future stays `Send`.
+                let polled = {
+                    let mut cx =
+                        std::task::Context::from_waker(futures_util::task::noop_waker_ref());
+                    std::pin::Pin::new(&mut job.handle).poll(&mut cx)
+                };
+                let applied = match polled {
                     std::task::Poll::Pending => return Ok(()),
                     std::task::Poll::Ready(result) => {
                         result.unwrap_or(Err(ControlBlock::ControlUnavailable))

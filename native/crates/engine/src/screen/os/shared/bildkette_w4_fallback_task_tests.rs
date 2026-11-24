@@ -408,6 +408,7 @@ fn bildkette_task_win_w4_daemon_stage_and_pipeline_complete_rank_to_tiles() {
         refused: Vec::new(),
         memory: None,
         chain: Default::default(),
+        visible: None,
     };
     let (frame, info, _) =
         encode_stage_frame(&mut stage, &backend, &img, Cow::Borrowed(&req)).unwrap();
