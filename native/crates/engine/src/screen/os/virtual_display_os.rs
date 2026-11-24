@@ -3,9 +3,10 @@
 //! Xorg driver `dummy` with one elevation) and the Wayland portal's virtual
 //! source; Windows the indirect display driver of VirtualDrivers, signed on
 //! the device and installed by the elevated step of the installation or an
-//! update (`windows/virtual_display_*.rs`, user decision 2026-11-17: never a
-//! setup step during use), whose monitor joins the desktop as the primary
-//! one; other platforms have none. The share host's backend hands the driver to
+//! update and, since the user's rule of 2026-11-24 („wenn es nicht da ist
+//! wenn du es nutzen willst … INSTALLIER ES“), also when a viewer asks for
+//! the display (`windows/virtual_display_on_demand.rs`), whose monitor joins
+//! the desktop as the primary one; other platforms have none. The share host's backend hands the driver to
 //! the sessions (`WorkerBackend::virtual_display`). The host process of a
 //! Wayland session learns the size its portal offers with its preparation
 //! (`set_portal_request`); a worker that follows a session asks the

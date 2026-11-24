@@ -150,8 +150,9 @@ them into `$INSTDIR\ffmpeg\` (`SetOverwrite ifdiff`, so an unchanged pin is not 
 running viewer) and `NOTICE.txt`, `LICENSE-LGPL-3.0.txt`, `LICENSE-GPL-3.0.txt` into
 `$INSTDIR\licenses\FFmpeg\`; the uninstaller removes both folders. The DLLs are no release asset and
 no update-feed payload (the 28 assets stay): an installation updated by the auto-updater, or a
-portable copy, downloads the same pinned archive once in the background when the viewer starts and
-keeps the checked files in `<app data>\screen\ffmpeg\<release>\`; until then, or offline, Media
+portable copy, downloads the same pinned archive once in the background when the background service
+or a viewer starts (retried after a failure, state in `se screen codec`; the integration tests set
+`SE_CODEC_DOWNLOADS=off`) and keeps the checked files in `<app data>\screen\ffmpeg\<release>\`; until then, or offline, Media
 Foundation decodes. `SE_FFMPEG_DIR` loads a user's own interface-compatible build without the pins
 (LGPL v3 section 4 d 1, `third-party/ffmpeg/NOTICE.txt`). Moving the pin to another FFmpeg major
 version means new layout facts in `crates/engine/src/screen/core/ffmpeg_layout.rs` from that
