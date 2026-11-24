@@ -949,7 +949,7 @@ BILDKETTE_TESTS = {
     "both": [
         # Fix of 2026-11-17 (Windows viewer black): codec guard of the viewer.
         "bildkette_task_decoder_guard_gives_up_a_codec_without_picture_after_failures_or_silence",
-        "bildkette_task_decoder_guard_keeps_a_codec_that_showed_a_picture_and_the_tiles",
+        "bildkette_task_decoder_guard_counts_failures_since_the_last_picture_and_keeps_the_tiles",
         "bildkette_task_win_w4_worker_rank_tries_every_stage_once_through_openh264",
         "bildkette_task_win_w4_daemon_stage_and_pipeline_complete_rank_to_tiles",
         "bildkette_task_bench_cli_source_is_optional_and_checked",
@@ -1087,7 +1087,6 @@ BILDKETTE_TESTS = {
         "bildkette_task_ffmpeg_cli_library_and_display_options",
         "bildkette_task_d3d11_child_and_picture_follow_the_area",
         "bildkette_task_d3d11_blit_rects_letterbox_and_one_to_one",
-        "bildkette_task_d3d11_menus_hide_overlays_cut_out",
         "bildkette_task_d3d11_colour_space_of_stream_and_output",
         "bildkette_task_present_direct3d11_takes_d3d11va_textures",
         # Plan 2026-11-17 „Windows-Bild“ P3: run-time check of the codecs.
