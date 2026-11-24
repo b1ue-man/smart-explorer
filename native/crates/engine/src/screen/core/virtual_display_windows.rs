@@ -3,15 +3,18 @@
 //! `docs/plaene/2026-11-17-windows-bild-rdp/plan.md`): se ships the
 //! MIT-licensed indirect display driver of VirtualDrivers
 //! (`native/vdd-driver.nsh`), signs its catalog on the device with a
-//! certificate of its own and installs it only in the elevated step of an
-//! installation or update, never while a viewer uses it. At use time the
-//! host attaches the driver's monitor to the desktop in a mode of the
-//! driver's list, makes it the primary monitor (the source `None` of a
-//! session is the primary monitor) and gives the desktop its own layout back
-//! after the last session. This module holds the decisions: the mode list
-//! the driver gets, which listed mode serves a wish, the desktop layout with
-//! the virtual monitor, what tells se's adapter and a physical monitor, and
-//! when the elevated step must run. The Windows side is
+//! certificate of its own and installs it in the elevated step of an
+//! installation or update, and (user rule 2026-11-24: se installs what it
+//! uses at the latest when it is used) when a viewer asks for se's display
+//! on a host without a working driver (`installs_on_use`, `OnDemand`). At
+//! use time the host attaches the driver's monitor to the desktop in a mode
+//! of the driver's list, makes it the primary monitor (the source `None` of
+//! a session is the primary monitor) and gives the desktop its own layout
+//! back after the last session. This module holds the decisions: the mode
+//! list the driver gets, which listed mode serves a wish, the desktop layout
+//! with the virtual monitor, what tells se's adapter and a physical monitor,
+//! when the elevated step must run, and the install at use time with its
+//! reasons and German texts. The Windows side is
 //! `screen/os/windows/virtual_display_*.rs`.
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -37,6 +40,24 @@ pub const REFRESH_RATES: [u32; 5] = [60, 120, 144, 165, 240];
 pub const REASON_DRIVER_MISSING: &str = "windows_display_driver_missing";
 pub const REASON_DRIVER_BROKEN: &str = "windows_display_driver_not_working";
 pub const REASON_MONITOR_MISSING: &str = "windows_virtual_monitor_missing";
+/// `Setup`: the host installs the driver for a viewer that asked; Windows
+/// asks for an administrator's confirmation on the host (one UAC prompt).
+pub const REASON_DRIVER_INSTALL_PROMPT: &str = "windows_display_driver_install_prompt";
+/// `Setup`: the host installs the driver without a prompt (an elevated
+/// process or the privileged worker of the login broker service).
+pub const REASON_DRIVER_INSTALLING: &str = "windows_display_driver_installing";
+/// `Unsupported`: the administrator's confirmation on the host was declined.
+pub const REASON_DRIVER_DECLINED: &str = "windows_display_driver_declined";
+/// `Unsupported`: the install failed, `<this>: <message>` (the line of the
+/// step's `last-run.txt`).
+pub const REASON_DRIVER_FAILED: &str = "windows_display_driver_install_failed";
+/// Exit code of a declined UAC prompt (`ERROR_CANCELLED`).
+pub const EXIT_DECLINED: i32 = 1223;
+/// Exit code of a UAC prompt Windows could not start (`run_elevated`).
+pub const EXIT_PROMPT_FAILED: i32 = 1224;
+/// Longest message of a failed install in a report: the reason travels in
+/// every statistics frame (`HostStats.chain.virtual_display`).
+const MAX_FAILURE_CHARS: usize = 240;
 
 /// The sizes the driver lists (`vdd_settings.xml`); the driver reads them
 /// only when its device starts, so the list is written by the elevated step
@@ -334,4 +355,145 @@ pub fn update_offers_step(step: DriverStep, installed_before: bool, declined: bo
         DriverStep::Nothing => false,
         _ => installed_before || !declined,
     }
+}
+
+/// Whether a viewer's request at use time installs the driver (user rule
+/// 2026-11-24): the probe found it missing or its device not working. A
+/// declined update offer (`update_offers_step`) does not count here; the
+/// viewer asked now, and Windows asks the person at the host again.
+pub fn installs_on_use(problem: Option<&str>) -> bool {
+    matches!(problem, Some(REASON_DRIVER_MISSING | REASON_DRIVER_BROKEN))
+}
+
+/// The installs at use time of one host process: at most one runs; a
+/// request while it runs waits for it. A declined or failed one does not
+/// hold back a later request.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct OnDemand {
+    /// The running install: whether Windows asks for a confirmation.
+    running: Option<bool>,
+}
+
+impl OnDemand {
+    pub const fn new() -> Self {
+        Self { running: None }
+    }
+
+    /// A viewer asked (`prompt`: the install needs a UAC confirmation):
+    /// `true` when this request starts the install, `false` when it waits
+    /// for the running one.
+    pub fn request(&mut self, prompt: bool) -> bool {
+        let start = self.running.is_none();
+        self.running = self.running.or(Some(prompt));
+        start
+    }
+
+    /// The running install ended (done, declined or failed).
+    pub fn finished(&mut self) {
+        self.running = None;
+    }
+
+    /// The reason of a `Setup` report while an install runs.
+    pub fn reason(&self) -> Option<&'static str> {
+        self.running.map(|prompt| {
+            if prompt {
+                REASON_DRIVER_INSTALL_PROMPT
+            } else {
+                REASON_DRIVER_INSTALLING
+            }
+        })
+    }
+}
+
+/// How an install at use time ended.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum InstallEnd {
+    Done,
+    /// The UAC confirmation was declined.
+    Declined,
+    /// The step failed or could not start (its message).
+    Failed(String),
+}
+
+impl InstallEnd {
+    /// From the exit code of the step (`Err`: it could not start) and the
+    /// line the step wrote this time (`last-run.txt`; `None` when it wrote
+    /// none, e.g. a prompt that never came).
+    pub fn from_exit(code: Result<i32, String>, note: Option<&str>) -> Self {
+        let note = note
+            .map(|text| {
+                text.trim()
+                    .trim_start_matches("virtueller Bildschirm:")
+                    .trim()
+            })
+            .filter(|text| !text.is_empty());
+        match code {
+            Ok(0) => Self::Done,
+            Ok(EXIT_DECLINED) => Self::Declined,
+            Ok(EXIT_PROMPT_FAILED) => {
+                Self::Failed("Windows konnte die Administrator-Bestätigung nicht öffnen".into())
+            }
+            Ok(code) => Self::Failed(
+                note.map_or_else(|| format!("der Schritt endete mit {code}"), str::to_string),
+            ),
+            Err(error) => Self::Failed(error),
+        }
+    }
+
+    /// The reason of the `Unsupported` report; `None` after success. The
+    /// message keeps one line without `;` (the separator of the statistics
+    /// key) and at most `MAX_FAILURE_CHARS` characters.
+    pub fn reason(&self) -> Option<String> {
+        match self {
+            Self::Done => None,
+            Self::Declined => Some(REASON_DRIVER_DECLINED.into()),
+            Self::Failed(message) => {
+                let mut clean: String = message
+                    .chars()
+                    .map(|c| match c {
+                        ';' => ',',
+                        c if c.is_control() => ' ',
+                        c => c,
+                    })
+                    .take(MAX_FAILURE_CHARS)
+                    .collect();
+                if message.chars().count() > MAX_FAILURE_CHARS {
+                    clean.push('…');
+                }
+                Some(format!("{REASON_DRIVER_FAILED}: {}", clean.trim()))
+            }
+        }
+    }
+}
+
+/// The German text of a Windows reason of the virtual display (the viewers
+/// and `se screen probe`); `None` for a reason of another platform.
+pub fn reason_text(reason: &str) -> Option<String> {
+    let (key, detail) = reason
+        .split_once(':')
+        .map_or((reason, ""), |(key, detail)| (key, detail.trim()));
+    let text = match key {
+        REASON_DRIVER_MISSING => "der Treiber des virtuellen Bildschirms fehlt",
+        REASON_DRIVER_BROKEN => "der Treiber des virtuellen Bildschirms arbeitet nicht",
+        REASON_MONITOR_MISSING => "der Treiber meldet keinen virtuellen Monitor",
+        REASON_DRIVER_INSTALL_PROMPT => {
+            "Treiber wird installiert – Windows fragt auf dem Gastgeber nach \
+             Administrator-Bestätigung; bis dahin zeigt die Sitzung den bisherigen Monitor"
+        }
+        REASON_DRIVER_INSTALLING => {
+            "Treiber wird installiert; bis dahin zeigt die Sitzung den bisherigen Monitor"
+        }
+        REASON_DRIVER_DECLINED => {
+            "die Administrator-Bestätigung für den Treiber wurde auf dem Gastgeber abgelehnt; \
+             eine erneute Wahl fragt wieder"
+        }
+        REASON_DRIVER_FAILED => {
+            return Some(format!(
+                "die Installation des Treibers schlug fehl: {detail}; eine erneute Wahl \
+                 versucht es wieder"
+            ))
+        }
+        _ => return None,
+    };
+    Some(text.to_string())
 }

@@ -69,7 +69,14 @@ pub(super) fn pinned_msi() -> Result<PinnedMsi, String> {
     })
 }
 
-pub(super) fn acquire_msi(local: Option<&Path>, pinned: &PinnedMsi) -> Result<MsiArtifact, String> {
+/// The pinned MSI: `local` when given, else downloaded into `directory`
+/// (`runtime_install.rs` names it: the temp folder of a process with the
+/// account's environment, the app data folder for the drive host).
+pub(super) fn acquire_msi(
+    local: Option<&Path>,
+    pinned: &PinnedMsi,
+    directory: &Path,
+) -> Result<MsiArtifact, String> {
     if let Some(path) = local {
         return Ok(MsiArtifact {
             path: absolute_path(path)?,
@@ -77,15 +84,12 @@ pub(super) fn acquire_msi(local: Option<&Path>, pinned: &PinnedMsi) -> Result<Ms
         });
     }
 
-    let directory = std::env::temp_dir()
-        .join("smart-explorer")
-        .join("runtime-install");
-    fs::create_dir_all(&directory)
+    fs::create_dir_all(directory)
         .map_err(|error| format!("Dokany-Downloadordner anlegen: {error}"))?;
     let mut temporary = tempfile::Builder::new()
         .prefix("dokany-")
         .suffix(".msi")
-        .tempfile_in(&directory)
+        .tempfile_in(directory)
         .map_err(|error| format!("sichere Dokany-Temp-Datei anlegen: {error}"))?;
 
     // No limit on the whole transfer (user rule 2026-11-17): `http_resume`

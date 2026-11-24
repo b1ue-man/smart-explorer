@@ -12,6 +12,7 @@ use crate::share::ShareProfiles;
 use eframe::egui;
 use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex, PoisonError};
+use std::time::{Duration, Instant};
 #[path = "device_feed_cache.rs"]
 pub(super) mod feed;
 #[path = "share_rdp_login_ui.rs"]
@@ -35,6 +36,12 @@ struct State {
     error: Option<String>,
     info: Option<String>,
     clients: Option<Vec<ClientCapability>>,
+    /// Linux without FreeRDP 3: se installs it at the next start
+    /// (install-on-use); the note says so, or why the last install ended.
+    install_note: Option<String>,
+    /// While a start runs: the client's install progress, read at most
+    /// every 500 ms.
+    progress: Option<(Instant, Option<String>)>,
     clients_reading: bool,
     /// The start that waits for typed account credentials (Linux without
     /// `sdl-freerdp3`, design 2.8): its RemoteApp, `None` = whole desktop.
@@ -64,7 +71,7 @@ pub fn client_gap(clients: &[ClientCapability]) -> Option<String> {
         .map(|client| client.detail.as_str())
         .collect();
     Some(if details.is_empty() {
-        "Auf diesem Rechner ist kein RDP-Programm vorhanden (Windows: mstsc, Linux: sdl-freerdp3 aus dem Paket freerdp3-sdl).".into()
+        "Auf diesem Gerät gibt es kein RDP-Programm.".into()
     } else {
         format!("Kein startbares RDP-Programm: {}", details.join(" · "))
     })
@@ -122,9 +129,17 @@ pub(super) fn device(ui: &mut egui::Ui, profiles: &ShareProfiles, device: &str, 
     let entered;
     {
         let mut state = shared.lock().unwrap_or_else(PoisonError::into_inner);
-        let gap = state.clients.as_deref().and_then(client_gap);
+        // A client se installs at the start is no gap: the button stays.
+        let gap = state
+            .clients
+            .as_deref()
+            .and_then(client_gap)
+            .filter(|_| state.install_note.is_none());
         if let Some(note) = &note {
             ui.label(note);
+        }
+        if let Some(install) = &state.install_note {
+            ui.label(install);
         }
         if !present {
             ui.label(OFFLINE);
@@ -139,9 +154,17 @@ pub(super) fn device(ui: &mut egui::Ui, profiles: &ShareProfiles, device: &str, 
         typed = credentials_form(ui, &mut state);
         entered = login::entry_dialog(ui, &mut state.login, &name);
         if state.busy {
+            if state
+                .progress
+                .as_ref()
+                .is_none_or(|(read, _)| read.elapsed() >= Duration::from_millis(500))
+            {
+                state.progress = Some((Instant::now(), crate::rdp::client_install_progress()));
+            }
+            let installing = state.progress.as_ref().and_then(|(_, text)| text.clone());
             ui.horizontal(|ui| {
                 ui.spinner();
-                ui.label(OPENING);
+                ui.label(installing.as_deref().unwrap_or(OPENING));
             });
         }
         if let Some(info) = &state.info {
@@ -237,8 +260,10 @@ fn read_clients(ctx: &egui::Context, shared: &Shared) {
         .name("device-rdp-clients".into())
         .spawn(move || {
             let clients = crate::rdp::local_clients();
+            let install_note = crate::rdp::client_install_note();
             let mut state = state.lock().unwrap_or_else(PoisonError::into_inner);
             state.clients = Some(clients);
+            state.install_note = install_note;
             state.clients_reading = false;
             context.request_repaint();
         })
@@ -301,7 +326,7 @@ fn credentials_form(
 }
 
 /// Shown above the account form (design 2.8).
-const CREDENTIALS: &str = "Das RDP-Programm dieses Rechners fragt ohne Terminal nicht selbst nach der Anmeldung (mit dem Paket freerdp3-sdl schon). Benutzer und Kennwort des Kontos auf dem Gerät:";
+const CREDENTIALS: &str = "Das RDP-Programm dieses Rechners fragt ohne Terminal nicht selbst nach der Anmeldung. Benutzer und Kennwort des Kontos auf dem Gerät:";
 
 /// One start of the device page.
 struct Start {
@@ -372,6 +397,8 @@ fn open(ctx: &egui::Context, shared: &Shared, start: Start, owned_nodes: OwnedNo
             }
             let mut state = state.lock().unwrap_or_else(PoisonError::into_inner);
             state.busy = false;
+            // The start may have installed the client: read the clients again.
+            state.clients = None;
             match result {
                 Ok(session) => {
                     if let Some(login) = &session.login {

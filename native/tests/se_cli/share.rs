@@ -716,6 +716,7 @@ fn gated_identity_command(sandbox: &Sandbox, ready: &Path, gate: &Path) -> Comma
         .env("XDG_CONFIG_HOME", data.join("config"))
         .env("APPDATA", &data)
         .env("LOCALAPPDATA", &data)
+        .env("SE_CODEC_DOWNLOADS", "off")
         .args([
             "-c",
             r#": > "$1"

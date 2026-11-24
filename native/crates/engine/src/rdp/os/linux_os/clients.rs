@@ -5,6 +5,13 @@
 //! se supplies travel only through `/args-from:stdin`, never in argv. Since
 //! P4 (plan 2026-11-17) a host account without a password stands as `/u:`
 //! and `/d:` in argv, so the client's own dialog asks only for the password.
+//!
+//! Without any FreeRDP 3 client the start installs the distribution's
+//! package first (install-on-use, `login/os/linux_os/package_install.rs`:
+//! `freerdp3-sdl`, else `freerdp3-x11` on Debian and Ubuntu, `freerdp`
+//! elsewhere) behind the polkit dialog, then reads the clients again.
+use crate::login::os::platform::package_install::{self, Component};
+use crate::login::os::shared::install_gate::Attempt;
 use crate::rdp::core::{
     freerdp_account_args, freerdp_stdin_invocation, CertificatePolicy, ClientCapability,
     ClientKind, HostAccount, HostService, StartRequest,
@@ -237,3 +244,30 @@ pub fn watch_process_exit(
         .map_err(|error| format!("Prozessbeobachtung nicht gestartet: {error}"))
 }
 pub fn hide_probe_console(_: &mut Command) {}
+
+/// No FreeRDP 3 client is installed: every client binary found is trusted
+/// but not version 3, or none is found. Installing the package helps then;
+/// a client that only lacks a display or fails the trust check does not.
+pub fn client_missing() -> bool {
+    order()
+        .into_iter()
+        .filter_map(executable)
+        .all(|path| super::client_trust::verify(&path).is_ok() && version(&path).is_none())
+}
+
+/// Installs the distribution's FreeRDP 3 package (one install at a time).
+pub fn install_client() -> Attempt {
+    package_install::ensure(Component::FreeRdp, &|| !client_missing())
+}
+
+/// The desktop's note while no FreeRDP 3 client is installed: the running
+/// install, the last refusal, or that se installs it at the next start.
+pub fn install_note() -> Option<String> {
+    client_missing()
+        .then(|| package_install::missing_note(Component::FreeRdp, "beim nächsten Öffnen"))
+}
+
+/// „FreeRDP 3 wird installiert (…) …“ while an install runs.
+pub fn install_progress() -> Option<String> {
+    package_install::progress_text(Component::FreeRdp)
+}

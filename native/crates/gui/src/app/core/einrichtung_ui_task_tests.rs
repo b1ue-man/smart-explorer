@@ -246,10 +246,15 @@ fn einrichtung_task_ui_manual_forward_has_no_acknowledgement_or_lifetime() {
 }
 
 /// No local RDP program: the page says why instead of offering a dead
-/// button.
+/// button, and tells nobody to install a package by hand (Linux installs
+/// FreeRDP 3 itself at the start, install-on-use).
 #[test]
 fn einrichtung_task_ui_missing_client_is_reported() {
-    assert!(client_gap(&[]).is_some_and(|text| text.contains("freerdp3-sdl")));
+    assert!(
+        client_gap(&[]).is_some_and(|text| text.contains("kein RDP-Programm")
+            && !text.contains("Paket")
+            && !text.contains("install"))
+    );
 }
 
 fn receipt(state: LaunchState) -> LaunchReceipt {

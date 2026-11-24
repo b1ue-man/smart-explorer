@@ -85,7 +85,13 @@ impl Session<'_> {
             ViewerFrame::Ping(ping) => {
                 let received = now_us();
                 let pong = Pong::answer(&ping, received, now_us());
-                self.frame(HostFrame::Pong(pong)).await
+                self.frame(HostFrame::Pong(pong)).await?;
+                // The driver setup this session waited for ended (P5): its display again.
+                let id = self.handle.id();
+                match crate::screen::core::virtual_display_host::resume_due(&id) {
+                    Some(choice) => self.set_display(choice).await,
+                    None => Ok(()),
+                }
             }
             ViewerFrame::SetMode(set) => self.set_mode(set).await,
             ViewerFrame::ListWindows => {

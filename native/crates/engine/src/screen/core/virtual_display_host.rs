@@ -12,7 +12,10 @@
 //! Without a stage-1 path (no display modes, or a driver limit below the
 //! viewer's size) and without a physical monitor the driver setup with one
 //! elevation is started (stage 2), once per version and only for a viewer
-//! that may steer this screen. On Wayland the compositor makes the display:
+//! that may steer this screen; Windows installs its driver so for the wish
+//! `request` also beside a physical monitor, again on a later request after a
+//! decline, and the sessions that waited decide again after it
+//! (`setup_ended`, `resume_due`). On Wayland the compositor makes the display:
 //! the size reaches the host process with its preparation (`portal_size`).
 //! `SET_DISPLAY` (P9, `set_display.rs`) decides a session again with its new
 //! wish within the session (`virtual_display_switch.rs`); a fixed size at a
@@ -27,18 +30,22 @@ use super::set_display::physical_size;
 use super::virtual_display::{
     fit_mode, needs_virtual, setup_allowed, DriverLimit, Due, Planner, VirtualDisplayReport,
     VirtualDisplayState, VirtualDisplayWish, REASON_OFF, REASON_PHYSICAL,
+    REASON_SETUP_NEEDS_CONTROL,
 };
 use super::wire_hello::SessionMode;
 
 #[path = "virtual_display_platform.rs"]
 mod platform;
-use platform::unsupported;
 pub use platform::{capability, DisplayFacts, DisplayProbe, SetupProgress, VirtualDisplayDriver};
+use platform::{setup_report, unsupported};
 
 #[path = "virtual_display_switch.rs"]
 mod switch;
 use switch::physical;
-pub use switch::{rebind_capture, source_changed, switch, Switched, REASON_PHYSICAL_MODE_REFUSED};
+pub use switch::{
+    rebind_capture, resume_due, setup_ended, source_changed, switch, Switched,
+    REASON_PHYSICAL_MODE_REFUSED,
+};
 
 #[path = "virtual_display_annotate.rs"]
 mod annotate;
@@ -94,6 +101,7 @@ impl Drop for DisplayClaim {
         state.portal.remove(&capture);
         state.portal.remove(&self.capture);
         state.physical_holders.remove(&self.session);
+        state.setup.leave(&self.session);
         if state.give_back_due() {
             state.restore = true;
         }
@@ -143,6 +151,8 @@ struct HostState {
     physical_mode: bool,
     /// The sessions that asked for such a mode.
     physical_holders: HashSet<String>,
+    /// The sessions around a driver setup they started.
+    setup: switch::SetupWait,
 }
 
 impl HostState {
@@ -180,6 +190,7 @@ fn shared() -> &'static Shared {
             sessions: HashMap::new(),
             physical_mode: false,
             physical_holders: HashSet::new(),
+            setup: switch::SetupWait::default(),
         }),
         changed: Condvar::new(),
         turn: Mutex::new(()),
@@ -193,25 +204,6 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 fn now_ms() -> u64 {
     static EPOCH: OnceLock<Instant> = OnceLock::new();
     EPOCH.get_or_init(Instant::now).elapsed().as_millis() as u64
-}
-
-fn setup_report(
-    progress: &SetupProgress,
-    current: Option<FrameSize>,
-    driver: &str,
-) -> VirtualDisplayReport {
-    match progress {
-        SetupProgress::Running => {
-            VirtualDisplayReport::new(VirtualDisplayState::Setup, current, driver)
-        }
-        SetupProgress::AfterRestart | SetupProgress::Done => {
-            VirtualDisplayReport::new(VirtualDisplayState::AfterRestart, current, driver)
-        }
-        SetupProgress::Failed(reason) => {
-            VirtualDisplayReport::new(VirtualDisplayState::Unsupported, current, driver)
-                .with_reason(reason)
-        }
-    }
 }
 
 /// Starts the virtual display for a session (blocking: the caller runs it
@@ -261,6 +253,8 @@ fn decide(
     start: &SessionStart,
     immediate: bool,
 ) -> VirtualDisplayReport {
+    // A session deciding again after its setup ended starts no new one.
+    let resumed = switch::resumed(&start.session);
     let wish = start.wish.unwrap_or_default();
     if wish == VirtualDisplayWish::Off && start.fixed.is_none() {
         let report = VirtualDisplayReport::new(VirtualDisplayState::Inactive, None, "")
@@ -317,14 +311,18 @@ fn decide(
     }
     let beyond_limit = wanted
         .is_some_and(|wanted| fit_mode(wanted, probe.limit) != fit_mode(wanted, DriverLimit::NONE));
-    let setup = (setup_allowed(start.wish, probe.physical_monitor)
-        && start.may_setup
+    let monitor = probe.physical_monitor && !driver.setup_adds_display();
+    let wanted_setup = setup_allowed(start.wish, monitor)
         && probe.setup_possible
-        && (!probe.modes || beyond_limit))
-        .then(|| driver.request_setup());
+        && (!probe.modes || beyond_limit);
+    let setup = (wanted_setup && start.may_setup && !resumed)
+        .then(|| switch::request_setup(driver, &start.session));
     if !probe.modes {
         let report = match &setup {
-            Some(progress) => setup_report(progress, probe.current, &probe.driver),
+            Some(progress) => setup_report(progress, probe.current, &probe.driver, &**driver),
+            None if wanted_setup && !start.may_setup => {
+                unsupported(&probe, REASON_SETUP_NEEDS_CONTROL)
+            }
             None => unsupported(
                 &probe,
                 probe.unsupported.as_deref().unwrap_or("no_display_modes"),
@@ -362,7 +360,7 @@ fn decide(
     };
     let mut report = annotate::requested(report, start, probe.limit, matches!(due, Due::Later(_)));
     if let Some(progress) = &setup {
-        report = setup_report(progress, report.size(), &probe.driver);
+        report = setup_report(progress, report.size(), &probe.driver, &**driver);
         lock(&shared.state)
             .reports
             .insert(start.session.clone(), Entry::Own(report.clone()));

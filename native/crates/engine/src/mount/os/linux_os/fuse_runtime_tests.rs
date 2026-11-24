@@ -1,8 +1,10 @@
 //! Signals of the Linux runtime report (DRV-M4): a missing `fusermount3`
-//! is reported with the package command of the distribution, and the
+//! is reported and installed on use (package fuse3, 2026-11-24), and the
 //! sandbox and WSL markers are detected. Both run on a fixture root, never
-//! on the runner's own system files.
-use super::{install_outcome, package_command, report, FuseInstallOutcome, RuntimeProbe, Sandbox};
+//! on the runner's own system files; the package step is a stand-in.
+use super::{install_with, report, FuseInstallOutcome, RuntimeProbe, Sandbox};
+use crate::login::os::shared::install_gate::Attempt;
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::fs;
@@ -52,22 +54,35 @@ fn drive_task_fuse_runtime_report_missing_fusermount() {
     assert_eq!(report.kernel_request_timeout_s, Some(0));
     assert_eq!(report.kernel_max_request_timeout_s, None);
     assert_eq!(report.sandbox, Sandbox::None);
-    assert_eq!(
-        report.problems,
-        ["fusermount3 fehlt; installieren mit: sudo apt-get install fuse3"]
-    );
-    let outcome = install_outcome(&probe(root, &env));
+    assert_eq!(report.problems, ["fusermount3 fehlt (Paket fuse3)"]);
+    // Case "install on use": a missing helper runs the package step once;
+    // a declined dialog is the answer, exit 2.
+    let asked = Cell::new(0);
+    let declined = "Die Installation von FUSE (Paket fuse3) wurde in der Systemabfrage abgelehnt.";
+    let outcome = install_with(&probe(root, &env), || {
+        asked.set(asked.get() + 1);
+        Attempt::Declined(declined.into())
+    });
     assert_eq!(
         outcome,
-        FuseInstallOutcome::ManualRequired {
-            command: "sudo apt-get install fuse3".into(),
-            reason: "fusermount3 fehlt; installieren mit: sudo apt-get install fuse3".into(),
+        FuseInstallOutcome::Declined {
+            reason: declined.into()
         }
     );
-    assert_eq!(outcome.exit_code(), 2);
+    assert_eq!((outcome.exit_code(), asked.get()), (2, 1));
     let json = serde_json::to_value(&outcome).unwrap();
-    assert_eq!(json["status"], "manual_required");
-    assert_eq!(json["command"], "sudo apt-get install fuse3");
+    assert_eq!(json["status"], "declined");
+    assert_eq!(json["reason"], declined);
+    // An install that leaves FUSE unready reports why, exit 1.
+    let outcome = install_with(&probe(root, &env), || Attempt::Installed);
+    assert_eq!(
+        outcome,
+        FuseInstallOutcome::Failed {
+            reason: "FUSE ist nach der Installation nicht bereit: fusermount3 fehlt (Paket fuse3)"
+                .into()
+        }
+    );
+    assert_eq!(outcome.exit_code(), 1);
 
     // A helper that is not setuid root is no runtime either; it is found
     // through PATH below the fixture root.
@@ -83,6 +98,16 @@ fn drive_task_fuse_runtime_report_missing_fusermount() {
         report.problems[0].contains("nicht setuid root"),
         "{report:?}"
     );
+    // An installed helper without setuid is no case for the package step.
+    let outcome = install_with(&probe(root, &env), || {
+        asked.set(asked.get() + 1);
+        Attempt::Installed
+    });
+    assert!(
+        matches!(&outcome, FuseInstallOutcome::Failed { reason } if reason.contains("nicht setuid root")),
+        "{outcome:?}"
+    );
+    assert_eq!(asked.get(), 1, "no second package step");
 
     // Without /dev/fuse the device is the first problem.
     let bare = tempfile::tempdir().unwrap();
@@ -92,25 +117,7 @@ fn drive_task_fuse_runtime_report_missing_fusermount() {
         report.problems[0].starts_with("/dev/fuse fehlt"),
         "{report:?}"
     );
-    assert_eq!(
-        report.problems[1],
-        "fusermount3 fehlt; installieren mit: das Paket fuse3 mit der Paketverwaltung installieren"
-    );
-
-    // Package commands of the distributions the plan names.
-    for (release, command) in [
-        ("ID=fedora\n", "sudo dnf install fuse3"),
-        ("ID=arch\n", "sudo pacman -S fuse3"),
-        (
-            "ID=\"opensuse-tumbleweed\"\nID_LIKE=\"opensuse suse\"\n",
-            "sudo zypper install fuse3",
-        ),
-        ("ID=debian\n", "sudo apt-get install fuse3"),
-    ] {
-        let distribution = tempfile::tempdir().unwrap();
-        write(distribution.path(), "etc/os-release", release);
-        assert_eq!(package_command(distribution.path()), command, "{release}");
-    }
+    assert_eq!(report.problems[1], "fusermount3 fehlt (Paket fuse3)");
     // Case "sandbox and WSL markers": each marker names its sandbox, WSL is found by kernel, interop or environment.
     {
         let none = environment(&[]);
@@ -138,6 +145,14 @@ fn drive_task_fuse_runtime_report_missing_fusermount() {
                 .iter()
                 .any(|problem| problem.starts_with("Flatpak-Sandkasten")),
             "flatpak"
+        );
+        // A sandbox forbids drives: no package step there.
+        let outcome = install_with(&probe(flatpak.path(), &none), || {
+            panic!("no package step in a sandbox")
+        });
+        assert!(
+            matches!(&outcome, FuseInstallOutcome::Failed { reason } if reason.contains("Flatpak-Sandkasten")),
+            "flatpak install"
         );
 
         let snap_env = environment(&[("SNAP", "/snap/smart-explorer/1")]);

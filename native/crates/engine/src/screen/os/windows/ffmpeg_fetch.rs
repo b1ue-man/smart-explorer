@@ -9,7 +9,8 @@
 //! archive with a reader of the ZIP central directory and raw deflate
 //! (`flate2`, already a dependency), each checked against its pin, into a
 //! fresh directory beside the target that is renamed into place at the end,
-//! so a half-written copy is never loaded.
+//! so a half-written copy is never loaded. What an ended process left behind
+//! goes before the next installation (`remove_leftovers`).
 use std::fs;
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::Path;
@@ -205,6 +206,30 @@ impl Write for Tee<'_> {
 
     fn flush(&mut self) -> io::Result<()> {
         self.0.flush()
+    }
+}
+
+/// Deletes the archives (`ffmpeg-*.zip`) and staging folders
+/// (`ffmpeg-staging-*`) in `parent` that an installation of an ended process
+/// left behind; the caller holds the install lock, so none belongs to a
+/// running installation. A link of such a name is left alone.
+pub(super) fn remove_leftovers(parent: &Path) {
+    let Ok(entries) = fs::read_dir(parent) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let (Ok(kind), name) = (entry.file_type(), entry.file_name()) else {
+            continue;
+        };
+        let name = name.to_string_lossy();
+        if kind.is_symlink() {
+            continue;
+        }
+        if kind.is_dir() && name.starts_with("ffmpeg-staging-") {
+            let _ = fs::remove_dir_all(entry.path());
+        } else if kind.is_file() && name.starts_with("ffmpeg-") && name.ends_with(".zip") {
+            let _ = fs::remove_file(entry.path());
+        }
     }
 }
 

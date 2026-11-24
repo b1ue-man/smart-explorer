@@ -95,6 +95,7 @@ pub fn run_daemon_with(handoff: Option<Handoff>) {
             return;
         }
     };
+    crate::screen::os::codec_runtime_install::start_at_daemon();
     // Seal plaintext secrets of earlier versions before Share starts, even
     // when nothing reads a secret. A failure is logged and retried at the next
     // access; it never stops the worker.

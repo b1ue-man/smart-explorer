@@ -2,9 +2,18 @@ package app.smartexplorer.android.ui.screen
 
 import android.content.Context
 import app.smartexplorer.android.api.DecoderOffer
+import app.smartexplorer.android.core.Core
+import app.smartexplorer.android.core.CoreException
 import java.math.BigDecimal
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.put
 
 /**
  * What this viewer chooses for the picture chain (plan 2026-11-14 `bildkette.md` 4.10, package BK7b): the codec
@@ -17,6 +26,11 @@ data class ViewerCodecChoice(
     val codec: String = CODEC_AUTO,
     val decoder: String = DECODER_AUTO,
     val maxRateBps: Long? = null,
+    /**
+     * The stored choice this session's choice stands in for when its host cannot serve that one ([ScreenCodecOffer],
+     * user rule of 2026-11-24); `null` when the session runs the stored choice itself.
+     */
+    val replaces: ViewerCodecChoice? = null,
 ) {
     /** The old switch „Verlustfrei“: it is the codec choice `lossless`. */
     val lossless: Boolean get() = codec == CODEC_LOSSLESS
@@ -76,8 +90,12 @@ data class ViewerCodecChoice(
          * decoder are part of the negotiation (E6 of BK6). The switch to `lossless` is the live `SET_MODE` of the old
          * switch; the highest data rate is a live frame as well.
          */
-        fun needsReopen(opened: ViewerCodecChoice, next: ViewerCodecChoice): Boolean =
-            next.decoder != opened.decoder || (next.codec != CODEC_LOSSLESS && next.codec != opened.codec)
+        fun needsReopen(opened: ViewerCodecChoice, next: ViewerCodecChoice): Boolean {
+            // A session that runs „Automatisch“ in place of a stored choice its host cannot serve keeps running while the
+            // stored choice stays (a new data rate alone, user rule of 2026-11-24).
+            val stored = opened.replaces ?: opened
+            return next.decoder != stored.decoder || (next.codec != CODEC_LOSSLESS && next.codec != stored.codec)
+        }
 
         /** [bps] in Mbit/s as typed in German (`20`, `7,5`); empty for automatic. */
         fun mbitText(bps: Long?): String = bps?.let {
@@ -246,5 +264,169 @@ object ScreenChainInfo {
         // 1 000 100 and 1 000 900 bit/s would both read 1000).
         reportedKbps != null && chosenBps % 1000 == 0L && reportedKbps == chosenBps / 1000 -> RateNote.Applied(chosenBps)
         else -> RateNote.Sent(chosenBps)
+    }
+}
+
+/** One encoder of the host as `accepted` (`encoders`, `encodersV2`) and `screen.probe` (`codecs`) name it. */
+data class HostCodec(val codec: String, val profile: String? = null, val hardware: Boolean = false)
+
+/** How an entry of „Codec“ or „Dekodierer“ stands for this pair of devices: [reason] in German, `null` when it runs. */
+data class CodecVerdict(val reason: String?, val unknown: Boolean = false)
+
+/** What one session runs with ([choice]) and why it differs from the stored one ([notes], German). */
+data class SessionCodec(val choice: ViewerCodecChoice, val notes: List<String>)
+
+/**
+ * What the viewer offers in „Codec“ and „Dekodierer“ (user rule of 2026-11-24: „was du anzeigst MUSS funktionieren. end
+ * to fucking end, KEINE EINZIGE ausnahme“), as the desktop's `codec_offer.rs`: a codec runs when an encoder of the host
+ * pairs with a decoder this phone names for it in the hello (`StreamRequest::chosen_decoders`, `negotiate_chosen`);
+ * „Scharf (GPU)“ needs a GPU encoder of H.264 or HEVC, „Automatisch“ and „Verlustfrei“ keep the tiles every host has.
+ * Every other entry stays in the menu, disabled, with its German reason under it. A stored choice the host cannot serve
+ * runs as „Automatisch“ for that session only ([sessionChoice]); the stored one stays for hosts that serve it.
+ */
+object ScreenCodecOffer {
+    private const val UNKNOWN = "die Kodierer dieses Gastgebers sind noch nicht bekannt"
+    private val SHARP = setOf(ViewerCodecChoice.CODEC_H264, ViewerCodecChoice.CODEC_HEVC)
+    private val NAMED = setOf(ViewerCodecChoice.CODEC_H264, ViewerCodecChoice.CODEC_HEVC, ViewerCodecChoice.CODEC_AV1)
+
+    /** The encoders of the lists [keys] of [body]; `null` when it names none of them. */
+    fun hostCodecs(body: JsonObject, vararg keys: String): List<HostCodec>? {
+        val lists = keys.mapNotNull { body[it] as? JsonArray }
+        if (lists.isEmpty()) return null
+        return lists.flatten().mapNotNull { element ->
+            val entry = element as? JsonObject ?: return@mapNotNull null
+            val codec = (entry["codec"] as? JsonPrimitive)?.contentOrNull ?: return@mapNotNull null
+            val profile = (entry["profile"] as? JsonPrimitive)?.contentOrNull
+            HostCodec(codec, profile, (entry["hardware"] as? JsonPrimitive)?.booleanOrNull ?: false)
+        }
+    }
+
+    /** The decoders the hello names for [codec] and [decoder] out of [offers] (`StreamRequest::chosen_decoders`). */
+    fun namedDecoders(codec: String, decoder: String, offers: List<DecoderOffer>): List<DecoderOffer> {
+        val named = offers.filter { offer ->
+            when (codec) {
+                ViewerCodecChoice.CODEC_AUTO -> true
+                ViewerCodecChoice.CODEC_LOSSLESS -> offer.codec == "tiles"
+                ViewerCodecChoice.CODEC_SHARP -> offer.codec in SHARP
+                else -> offer.codec == codec
+            }
+        }.filter { it.codec == "tiles" || ScreenDecoderPolicy.stageAllowed(decoder, it.hardware) }
+        return if (decoder == ViewerCodecChoice.DECODER_HARDWARE) named.filter { it.hardware } else named
+    }
+
+    /** Whether [decoder] decodes the stream of [encoder] (`CodecOffer::decodes`; HEVC and AV1 `main` is 4:2:0). */
+    private fun decodes(decoder: DecoderOffer, encoder: HostCodec): Boolean =
+        decoder.codec == encoder.codec && when (encoder.codec) {
+            "tiles" -> true
+            ViewerCodecChoice.CODEC_H264 -> decoder.profile == "high" || decoder.profile == encoder.profile
+            else -> decoder.profile == "high" || (encoder.profile ?: "main") == (decoder.profile ?: "main")
+        }
+
+    /** Whether [encoder] may carry [codec] (`CodecPreference::admits`; „Scharf (GPU)“ on a GPU encoder only). */
+    private fun admits(codec: String, encoder: HostCodec): Boolean = when (codec) {
+        ViewerCodecChoice.CODEC_AUTO, ViewerCodecChoice.CODEC_LOSSLESS -> encoder.codec != "tiles"
+        ViewerCodecChoice.CODEC_SHARP -> encoder.hardware && encoder.codec in SHARP
+        else -> encoder.codec == codec
+    }
+
+    private fun stage(decoder: String): String = when (decoder) {
+        ViewerCodecChoice.DECODER_HARDWARE -> " der Art „Hardware“"
+        ViewerCodecChoice.DECODER_SOFTWARE -> " der Art „Software“"
+        else -> ""
+    }
+
+    private fun viewerMissing(codec: String, decoder: String): String = when (codec) {
+        ViewerCodecChoice.CODEC_LOSSLESS -> "die Kacheln dekodiert nur Software (Dekodierer „Hardware“)"
+        ViewerCodecChoice.CODEC_AUTO -> "dieses Gerät hat keinen Dekodierer${stage(decoder)}"
+        ViewerCodecChoice.CODEC_SHARP -> "dieses Gerät hat keinen H.264- oder HEVC-Dekodierer${stage(decoder)}"
+        else -> "dieses Gerät hat keinen ${ScreenCodecNotices.label(codec)}-Dekodierer${stage(decoder)}"
+    }
+
+    /**
+     * How [codec] under [decoder] stands between a host with the encoders [host] (`null`: not known yet) and this phone,
+     * whose offers for that choice are [offers] (`ScreenDecoder.offers(choice)`).
+     */
+    fun codecVerdict(codec: String, decoder: String, host: List<HostCodec>?, offers: List<DecoderOffer>): CodecVerdict {
+        val named = namedDecoders(codec, decoder, offers)
+        if (named.isEmpty()) return CodecVerdict(viewerMissing(codec, decoder))
+        val tiles = (codec == ViewerCodecChoice.CODEC_AUTO || codec == ViewerCodecChoice.CODEC_LOSSLESS) &&
+            named.any { it.codec == "tiles" }
+        if (tiles) return CodecVerdict(null)
+        if (host == null) return CodecVerdict(UNKNOWN, unknown = true)
+        val pairs = host.any { encoder -> admits(codec, encoder) && named.any { decodes(it, encoder) } }
+        if (pairs) return CodecVerdict(null)
+        return CodecVerdict(
+            when {
+                codec == ViewerCodecChoice.CODEC_SHARP && host.none { admits(codec, it) } ->
+                    "dieser Gastgeber hat keinen GPU-Kodierer für H.264 oder HEVC"
+                codec in NAMED && host.none { it.codec == codec } ->
+                    "dieser Gastgeber hat keinen ${ScreenCodecNotices.label(codec)}-Kodierer"
+                else -> "kein Kodierer dieses Gastgebers passt zu einem Dekodierer${stage(decoder)} dieses Geräts"
+            },
+        )
+    }
+
+    /** Each codec of „Codec“ with its reason under the stored decoder stage of [stored]. */
+    fun codecReasons(stored: ViewerCodecChoice, host: List<HostCodec>?, offersFor: (ViewerCodecChoice) -> List<DecoderOffer>): Map<String, String?> =
+        ViewerCodecChoice.CODECS.associateWith { codec ->
+            val choice = stored.copy(codec = codec, replaces = null)
+            codecVerdict(codec, choice.decoder, host, offersFor(choice)).reason
+        }
+
+    /** Each stage of „Dekodierer“ with its reason under the codec [running] of the session. */
+    fun decoderReasons(running: ViewerCodecChoice, host: List<HostCodec>?, offersFor: (ViewerCodecChoice) -> List<DecoderOffer>): Map<String, String?> =
+        ViewerCodecChoice.DECODERS.associateWith { decoder ->
+            val choice = running.copy(decoder = decoder, replaces = null)
+            codecVerdict(choice.codec, decoder, host, offersFor(choice)).reason
+        }
+
+    /**
+     * What a session with a host of [host] encoders runs with: [stored] while it runs, else „Automatisch“ in place of the
+     * codec, then of the decoder stage, each named in [SessionCodec.notes]; [offersFor] gives this phone's offers.
+     */
+    fun sessionChoice(stored: ViewerCodecChoice, host: List<HostCodec>?, offersFor: (ViewerCodecChoice) -> List<DecoderOffer>): SessionCodec {
+        var choice = stored.copy(replaces = null)
+        val notes = mutableListOf<String>()
+        val codec = codecVerdict(choice.codec, choice.decoder, host, offersFor(choice))
+        if (codec.reason != null && !codec.unknown && choice.codec != ViewerCodecChoice.CODEC_AUTO) {
+            notes += "${ScreenCodecNotices.label(choice.codec)}: ${codec.reason} – diese Sitzung: Automatisch"
+            choice = choice.copy(codec = ViewerCodecChoice.CODEC_AUTO)
+        }
+        if (choice.decoder != ViewerCodecChoice.DECODER_AUTO) {
+            val stage = codecVerdict(choice.codec, choice.decoder, host, offersFor(choice))
+            if (stage.reason != null && !stage.unknown) {
+                val name = if (choice.decoder == ViewerCodecChoice.DECODER_HARDWARE) "Hardware" else "Software"
+                notes += "Dekodierer „$name“: ${stage.reason} – diese Sitzung: Automatisch"
+                choice = choice.copy(decoder = ViewerCodecChoice.DECODER_AUTO)
+            }
+        }
+        val plain = stored.copy(replaces = null)
+        return SessionCodec(if (choice == plain) plain else choice.copy(replaces = plain), notes)
+    }
+
+    /**
+     * The encoders of [target] from its probe (`screen.probe` names them in `codecs`, as `se screen probe`); `null` when
+     * it does not answer or shows nothing to this phone.
+     */
+    suspend fun probe(target: ScreenTarget): List<HostCodec>? {
+        val args = buildJsonObject {
+            put("relation", target.relation)
+            put("relationId", target.relationId)
+            target.deviceId?.let { put("deviceId", it) }
+        }
+        val answer = try {
+            Core.call("screen.probe", args) as? JsonObject
+        } catch (e: CoreException) {
+            null
+        } ?: return null
+        val supported = (answer["supported"] as? JsonPrimitive)?.booleanOrNull == true
+        val view = (answer["view"] as? JsonPrimitive)?.contentOrNull
+        return if (supported && view != "off") hostCodecs(answer, "codecs") else null
+    }
+
+    /** Whether what a session of [stored] runs with depends on the host's encoders. */
+    fun hostMatters(stored: ViewerCodecChoice, offersFor: (ViewerCodecChoice) -> List<DecoderOffer>): Boolean {
+        val choice = sessionChoice(stored, null, offersFor).choice
+        return codecVerdict(choice.codec, choice.decoder, null, offersFor(choice.copy(replaces = null))).unknown
     }
 }

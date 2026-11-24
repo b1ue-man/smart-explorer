@@ -333,14 +333,37 @@ object ScreenDisplayReportText {
         return if (detail.isEmpty()) text else "$text: $detail"
     }
 
-    /** `VirtualDisplayReport::text` of the host's report, with the size wherever it names one. */
-    fun reportText(report: JsonObject): String {
-        val size = sizeOf(report)
+    private const val SETUP_NEEDS_CONTROL = "setup_needs_control"
+
+    /**
+     * `windows_driver::reason_text`: the German text of a Windows reason (the driver installed when a viewer asks, user
+     * rule 2026-11-24), `null` for a reason of another platform. `windows_display_driver_install_failed: <message>` keeps
+     * its message.
+     */
+    fun windowsReasonText(reason: String): String? {
+        val colon = reason.indexOf(':')
+        val key = if (colon < 0) reason else reason.substring(0, colon)
+        val detail = if (colon < 0) "" else reason.substring(colon + 1).trim()
+        return when (key) {
+            "windows_display_driver_missing" -> "der Treiber des virtuellen Bildschirms fehlt"
+            "windows_display_driver_not_working" -> "der Treiber des virtuellen Bildschirms arbeitet nicht"
+            "windows_virtual_monitor_missing" -> "der Treiber meldet keinen virtuellen Monitor"
+            "windows_display_driver_install_prompt" -> "Treiber wird installiert – Windows fragt auf dem Gastgeber nach " +
+                "Administrator-Bestätigung; bis dahin zeigt die Sitzung den bisherigen Monitor"
+            "windows_display_driver_installing" -> "Treiber wird installiert; bis dahin zeigt die Sitzung den bisherigen Monitor"
+            "windows_display_driver_declined" -> "die Administrator-Bestätigung für den Treiber wurde auf dem Gastgeber " +
+                "abgelehnt; eine erneute Wahl fragt wieder"
+            "windows_display_driver_install_failed" ->
+                "die Installation des Treibers schlug fehl: $detail; eine erneute Wahl versucht es wieder"
+            else -> null
+        }
+    }
+
+    /** The German state of `VirtualDisplayReport::text` (after „Virtueller Bildschirm: “). */
+    private fun stateText(state: String?, reason: String?, size: Pair<Int, Int>?, driver: String): String {
         val shown = size?.let(::sizeText) ?: "?"
         val at = size?.let { ", ${sizeText(it)}" } ?: ""
-        val driver = str(report, "driver").orEmpty()
-        val reason = str(report, "reason")
-        val text = when (str(report, "state")) {
+        return when (state) {
             "inactive" -> when (reason) {
                 "physical_monitor" -> "aus (Monitor am Gerät$at)"
                 "off" -> "aus (physischer Monitor gewählt$at)"
@@ -353,11 +376,21 @@ object ScreenDisplayReportText {
             }
             "active" -> "$shown ($driver)"
             "offered" -> "$shown am Portal angeboten, die Sitzung entscheidet"
-            "setup" -> "wird eingerichtet (Freigabe des Betriebssystems)"
+            "setup" -> reason?.let(::windowsReasonText) ?: "wird eingerichtet (Freigabe des Betriebssystems)"
             "after_restart" -> "eingerichtet, wirkt nach Abmeldung oder Neustart"
-            "unsupported" -> if (reason == SOURCE_NOT_MONITOR) "nicht möglich ($NOT_MONITOR_TEXT)" else "nicht möglich (${reason ?: "unbekannt"})"
+            "unsupported" -> "nicht möglich (" + when (reason) {
+                SOURCE_NOT_MONITOR -> NOT_MONITOR_TEXT
+                SETUP_NEEDS_CONTROL -> "die einmalige Einrichtung startet nur ein Betrachter mit dem Recht „Bildschirm steuern“"
+                else -> reason?.let { windowsReasonText(it) ?: it } ?: "unbekannt"
+            } + ")"
             else -> "unbekannter Zustand"
         }
+    }
+
+    /** `VirtualDisplayReport::text` of the host's report, with the size wherever it names one. */
+    fun reportText(report: JsonObject): String {
+        val size = sizeOf(report)
+        val text = stateText(str(report, "state"), str(report, "reason"), size, str(report, "driver").orEmpty())
         val line = StringBuilder("Virtueller Bildschirm: $text")
         sizeOf(report["requested"] as? JsonObject)?.let { requested ->
             val why = str(report, "adjusted")?.let(::adjustText).orEmpty()
@@ -377,7 +410,8 @@ object ScreenDisplayReportText {
         val key = StringBuilder(when (val state = str(report, "state")) {
             "active", "offered" -> "$state:$dims:${str(report, "driver").orEmpty()}"
             "unsupported", "inactive" -> "$state:$reason"
-            "setup", "after_restart" -> state
+            "setup" -> str(report, "reason")?.let { "setup:$it" } ?: "setup"
+            "after_restart" -> state
             else -> "other"
         })
         (report["requested"] as? JsonObject)?.let { requested ->
@@ -388,12 +422,28 @@ object ScreenDisplayReportText {
         return key.toString()
     }
 
+    /**
+     * `virtual_display::chain_text`: the German state of a statistics key that names the driver setup or why the host
+     * cannot (`setup`, `setup:<reason>`, `after_restart`, `unsupported:<reason>`); `null` for the other keys, which show
+     * as they are. The parts after `;` are left out.
+     */
+    fun chainText(key: String): String? {
+        val head = key.substringBefore(';')
+        val colon = head.indexOf(':')
+        val state = if (colon < 0) head else head.substring(0, colon)
+        val reason = if (colon < 0) null else head.substring(colon + 1)
+        return when (state) {
+            "setup", "after_restart", "unsupported" -> stateText(state, reason, null, "")
+            else -> null
+        }
+    }
+
     /** The whole line: chosen, actual (with the reason) and, when the statistics differ, the state now. */
     fun line(chosen: ViewerDisplayChoice, report: JsonObject?, now: String?): String {
         val wanted = "Gewählt: Monitor ${wishText(chosen.wish)}, Auflösung ${chosen.sizeText ?: "folgt der Ansicht"}"
         val actual = when {
             report == null -> "vom Gerät nicht unterstützt"
-            now != null && now != chainKey(report) -> "${reportText(report)} · jetzt $now"
+            now != null && now != chainKey(report) -> "${reportText(report)} · jetzt ${chainText(now) ?: now}"
             else -> reportText(report)
         }
         return "$wanted · Tatsächlich: $actual"

@@ -95,6 +95,10 @@ data class ScreenSessionState(
     val chosenCodec: String = ViewerCodecChoice.CODEC_AUTO,
     /** The chosen codec is not in force: the host or this phone cannot run it (a visible error with its reason). */
     val codecError: String? = null,
+    /** The host's encoders (`encoders`/`encodersV2` of `accepted`, or its probe before the opening); `null` before. */
+    val hostCodecs: List<HostCodec>? = null,
+    /** Why this session does not run a stored „Codec“ or „Dekodierer“ ([ScreenCodecOffer], user rule of 2026-11-24). */
+    val sessionNotes: List<String> = emptyList(),
     /** `virtualDisplay` of the `accepted` event: what the host did with „Monitor“/„Auflösung“; `null` = no report. */
     val virtualDisplay: JsonObject? = null,
     /** `chain.virtualDisplay` of the latest statistics: the host's display now (`VirtualDisplayReport::chain_key`). */
@@ -143,6 +147,7 @@ data class ScreenSessionState(
                 ?.map { screenJson.decodeFromJsonElement<ScreenMonitor>(it) }.orEmpty(),
             limits = (event.body["limits"] as? JsonArray)?.map { it.toString().trim('"') }.orEmpty(),
             virtualDisplay = event.body["virtualDisplay"] as? JsonObject,
+            hostCodecs = ScreenCodecOffer.hostCodecs(event.body, "encoders", "encodersV2") ?: hostCodecs,
             state = if (state == "connecting" || state == "waiting_for_approval") "starting" else state,
         )
         is ScreenViewEvent.VisibilityAck -> this
@@ -201,6 +206,9 @@ interface ScreenBackend {
 
     suspend fun probe(target: ScreenTarget): ScreenProbe
 
+    /** The encoders of [target] (its probe); `null` when unknown, then a session opens with the stored choice. */
+    suspend fun hostCodecs(target: ScreenTarget): List<HostCodec>? = null
+
     suspend fun open(
         target: ScreenTarget,
         mode: String,
@@ -252,6 +260,8 @@ object CoreScreenBackend : ScreenBackend {
     override suspend fun devices(roomId: String?) = ScreenApi.devices(roomId)
 
     override suspend fun probe(target: ScreenTarget) = ScreenApi.probe(target.relation, target.relationId, target.deviceId)
+
+    override suspend fun hostCodecs(target: ScreenTarget) = ScreenCodecOffer.probe(target)
 
     override suspend fun open(target: ScreenTarget, mode: String, source: String?, displayWidth: Int, displayHeight: Int, maxFps: Int, decoders: List<DecoderOffer>) =
         ScreenApi.viewOpen(target.relation, target.relationId, target.deviceId, mode, source, decoders, displayWidth, displayHeight, maxFps, ScreenScaling.awaitRendererLimit(), target.expectedNodeId)
@@ -380,6 +390,19 @@ class ScreenSession(private val target: ScreenTarget, private val backend: Scree
         private set
 
     /**
+     * What [stored] runs as with this session's host and this phone ([ScreenCodecOffer.sessionChoice]): the host's
+     * encoders are asked for only when the choice depends on them; a choice this phone cannot decode runs as
+     * „Automatisch“ without them. `null` from a backend without decoders (task tests): nothing is checked.
+     */
+    private suspend fun served(stored: ViewerCodecChoice): SessionCodec? {
+        val offersFor = { wanted: ViewerCodecChoice -> backend.offers(wanted) }
+        if (offersFor(stored).isEmpty()) return null
+        val host = if (ScreenCodecOffer.hostMatters(stored, offersFor)) backend.hostCodecs(target) else null
+        host?.let { found -> mutable.update { it.copy(hostCodecs = found) } }
+        return ScreenCodecOffer.sessionChoice(stored, host, offersFor)
+    }
+
+    /**
      * Publishes [next] before `screen.viewSetDecoders` goes out so the decoder thread sees the new choice as soon as the
      * host's next picture group arrives, and clears a prior automatic lossless fallback (`host_pairing.rs` lets another
      * encoder try). Returns the previous state for [restoreChoice] when the host does not switch.
@@ -428,7 +451,12 @@ class ScreenSession(private val target: ScreenTarget, private val backend: Scree
     val deviceTarget: ScreenTarget get() = target
 
     /** Opens the session; a failure arrives as [CoreException] and leaves the session closed. */
-    suspend fun open(mode: String, source: String?, displayWidth: Int, displayHeight: Int, maxFps: Int, decoders: List<DecoderOffer>, choice: ViewerCodecChoice = ViewerCodecChoice()) {
+    suspend fun open(mode: String, source: String?, displayWidth: Int, displayHeight: Int, maxFps: Int, decoders: List<DecoderOffer>, stored: ViewerCodecChoice = ViewerCodecChoice()) {
+        // User rule of 2026-11-24: a stored choice the host cannot serve runs as „Automatisch“ for this session only (a
+        // preview offers the tiles alone and keeps its own rule, `previewRefusal`).
+        val served = if (mode == "preview") null else served(stored)
+        val choice = served?.choice ?: stored
+        val offers = if (choice == stored) decoders else backend.offers(choice.copy(replaces = null))
         this.choice = choice
         this.openedSource = source
         this.openedCodec = choice.codec
@@ -438,7 +466,7 @@ class ScreenSession(private val target: ScreenTarget, private val backend: Scree
             // that names only another rate or source keeps it, so the host keeps its encoder (round 12, B3, as the
             // desktop's `preview_set_mode`); before, a preview's interval or the way back from the full view cleared it.
             wantedMode=ScreenModeRequest(if(mode=="preview") "preview" else "full", sharpness = choice.sharp, lossless = choice.lossless)
-            mutable.value = mutable.value.copy(chosenCodec = choice.codec)
+            mutable.value = mutable.value.copy(chosenCodec = choice.codec, sessionNotes = served?.notes.orEmpty())
         }
         val backlog = ArrayList<ScreenViewEvent>()
         collector = scope.launch(start = CoroutineStart.UNDISPATCHED) {
@@ -455,7 +483,7 @@ class ScreenSession(private val target: ScreenTarget, private val backend: Scree
         var answer: Long? = null
         val failed = try {
             withContext(NonCancellable) {
-                answer = backend.openWith(target, mode, source, displayWidth, displayHeight, maxFps, decoders, choice)
+                answer = backend.openWith(target, mode, source, displayWidth, displayHeight, maxFps, offers, choice)
             }
             null
         } catch (e: Throwable) {

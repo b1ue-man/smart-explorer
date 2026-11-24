@@ -10,6 +10,16 @@
 //! (`docs/RELEASING.md`). Until then, and wherever the download fails, Media
 //! Foundation decodes. Every directory is checked against the pins (size and
 //! SHA-256 of each DLL) before anything of it loads.
+//!
+//! Since 2026-11-24 the download also starts when the daemon starts
+//! (`ensure_at_daemon`) and in every process whose loader finds no copy that
+//! verifies (`verified_dir`: `se screen bench`, a session of the app, the
+//! daemon's own sessions), not only in the viewer window. A failed attempt
+//! is retried after 30 s, doubling up to one hour, and is recorded in
+//! `<app data>\screen\ffmpeg\install.json`; `status` gives the state to
+//! `se screen codec` and the codec page (`codec_runtime_install.rs`).
+//! `install.lock` beside it lets one installation run at a time; it removes
+//! what an installation of an ended process left behind.
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -17,6 +27,10 @@ use std::sync::OnceLock;
 
 use sha2::{Digest, Sha256};
 
+use super::codec_runtime_install::{
+    clear_record, held_elsewhere, next_record, read_record, run_background, unix_now, write_record,
+    InstallLock, RuntimeReport, RuntimeState, Seen,
+};
 use crate::screen::core::ffmpeg_plan::{DLLS, FFMPEG_RELEASE};
 
 const PINNED_MANIFEST: &str = include_str!("../../../../../../ffmpeg-runtime.nsh");
@@ -172,12 +186,16 @@ fn installed_dir() -> Option<PathBuf> {
     Some(exe.parent()?.join("ffmpeg"))
 }
 
-/// `<app data>\screen\ffmpeg\<release>\`, the copy of this user.
-pub(super) fn user_dir() -> PathBuf {
+/// `<app data>\screen\ffmpeg\`: the copies, the record and the lock.
+fn install_root() -> PathBuf {
     crate::support_dirs::app_data_dir()
         .join("screen")
         .join("ffmpeg")
-        .join(FFMPEG_RELEASE)
+}
+
+/// `<app data>\screen\ffmpeg\<release>\`, the copy of this user.
+pub(super) fn user_dir() -> PathBuf {
+    install_root().join(FFMPEG_RELEASE)
 }
 
 /// The directories the loader tries, in order.
@@ -209,30 +227,113 @@ pub(super) fn verified_dir() -> Result<PathBuf, String> {
             Err(error) => reasons.push(format!("{}: {error}", dir.display())),
         }
     }
+    // No copy verifies: this process fetches this user's copy.
+    fetch_on_demand();
     Err(reasons.join("; "))
 }
 
+/// Test builds start no download on their own (`codec_runtime_install.rs`).
+/// A process that only loads keeps the schedule of a failed attempt.
+#[cfg(not(any(test, feature = "test-support")))]
+fn fetch_on_demand() {
+    if super::codec_runtime_install::downloads_allowed() {
+        start(false, false);
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+fn fetch_on_demand() {}
+
 /// Loads FFmpeg in the background once per process and, where no
 /// directory verifies, downloads this user's copy; a finished download makes
-/// the loader try again (`ffmpeg_ffi::installed`).
+/// the loader try again (`ffmpeg_ffi::installed`). The viewer's start.
 pub(super) fn ensure_in_background() {
+    start(true, true);
+}
+
+/// The same at the start of the daemon, without loading the DLLs into it.
+/// Test builds start no download on their own, so nothing calls it there.
+#[cfg_attr(any(test, feature = "test-support"), allow(dead_code))]
+pub(super) fn ensure_at_daemon() {
+    start(false, true);
+}
+
+/// One background installer per process: `preload` loads an existing copy
+/// before the first hello asks (the viewer); `at_once` attempts at once
+/// even right after a failed attempt (a start).
+fn start(preload: bool, at_once: bool) {
     static STARTED: AtomicBool = AtomicBool::new(false);
     if STARTED.swap(true, Ordering::AcqRel) {
         return;
     }
     let _ = std::thread::Builder::new()
         .name("ffmpeg-runtime".into())
-        .spawn(|| {
-            // Loads (and checks) an existing copy before the first hello asks.
-            if super::ffmpeg_ffi::present() || verified_dir().is_ok() {
-                return;
+        .spawn(move || install_in_background(preload, at_once));
+}
+
+fn install_in_background(preload: bool, at_once: bool) {
+    let root = install_root();
+    let look = |first: bool| Seen {
+        opted_out: false,
+        // Later rounds find a copy another process installed in `attempt`.
+        installed: first
+            && if preload {
+                super::ffmpeg_ffi::present()
+            } else {
+                verified_dir().is_ok()
+            },
+        record: read_record(&root),
+    };
+    let attempt = || match install_now(&root) {
+        Ok(()) => {
+            super::ffmpeg_ffi::installed();
+            if preload {
+                let _ = super::ffmpeg_ffi::present();
             }
-            match pins().and_then(|pins| super::ffmpeg_fetch::install(pins, &user_dir())) {
-                Ok(()) => {
-                    super::ffmpeg_ffi::installed();
-                    let _ = super::ffmpeg_ffi::present();
-                }
-                Err(error) => eprintln!("FFmpeg-Laufzeit: {error}"),
-            }
-        });
+            Ok(())
+        }
+        Err(error) => {
+            let reason = error.to_string();
+            eprintln!("FFmpeg-Laufzeit: {reason}");
+            let next = next_record(read_record(&root).as_ref(), &reason, unix_now());
+            let _ = write_record(&root, &next);
+            Err(reason)
+        }
+    };
+    run_background(false, at_once, look, attempt);
+}
+
+/// One installation under the lock, after removing what an ended process
+/// left behind.
+fn install_now(root: &Path) -> io::Result<()> {
+    let _lock = InstallLock::acquire(root)?;
+    super::ffmpeg_fetch::remove_leftovers(root);
+    pins().and_then(|pins| super::ffmpeg_fetch::install(pins, &user_dir()))?;
+    let _ = clear_record(root);
+    Ok(())
+}
+
+/// The state of this user's FFmpeg for `se screen codec` and the codec page.
+pub(super) fn status() -> RuntimeReport {
+    let root = install_root();
+    let report = |state, reason, retry_at| RuntimeReport {
+        state,
+        version: FFMPEG_RELEASE.to_string(),
+        reason,
+        retry_at,
+    };
+    if super::ffmpeg_ffi::present() {
+        return report(RuntimeState::Installed, None, None);
+    }
+    if held_elsewhere(&root) {
+        return report(RuntimeState::Installing, None, None);
+    }
+    match read_record(&root) {
+        Some(record) => report(
+            RuntimeState::Failed,
+            Some(record.reason),
+            Some(record.retry_at),
+        ),
+        None => report(RuntimeState::Absent, None, None),
+    }
 }

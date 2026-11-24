@@ -249,10 +249,15 @@ pub fn ensure_mounted_for(location: &str) -> Result<PathBuf, String> {
         }
     };
     let id = started.config.id.clone();
-    let deadline = Instant::now() + MOUNT_WAIT;
+    let mut deadline = Instant::now() + MOUNT_WAIT;
     let mut current = started;
     while matches!(current.status, MountStatus::Mounting) && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(150));
+        // The host installs a missing runtime (install-on-use): its
+        // confirmation waits for the person, the mount waits with it.
+        if crate::mount::drive_runtime_installing() {
+            deadline = Instant::now() + MOUNT_WAIT;
+        }
         current = super::list_mounts()?
             .into_iter()
             .find(|mount| mount.config.id == id)

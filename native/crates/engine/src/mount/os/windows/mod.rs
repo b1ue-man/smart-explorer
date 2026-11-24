@@ -38,7 +38,7 @@ mod recovery_cache_task_tests;
 
 pub use cache_lease::{audit_pending, audit_pending_state, audit_recovery, CacheLease};
 pub use host::{preflight_runtime, run_mount_host};
-pub use runtime_install::install_runtime;
+pub use runtime_install::{install_runtime, runtime_installing, runtime_note};
 
 pub use dokany_abi::{
     DokanFileInfo, DokanIoSecurityContext, DokanOperations, DokanOptions, NtStatus,

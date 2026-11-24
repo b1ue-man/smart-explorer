@@ -1,7 +1,15 @@
 //! `UplinkAdapter` for Linux: NetworkManager's `shared` IPv4 method over
 //! D-Bus, with `dnsmasq` and polkit as probed prerequisites.
+//!
+//! A missing dnsmasq is installed on use (user order 2026-11-24,
+//! `login/os/linux_os/package_install.rs`): the one-time setup that
+//! switching sharing on starts installs it behind the polkit dialog, and a
+//! start that finds it missing installs it unless the person declined or the
+//! install failed before. After a refusal the probe reports a repair, whose
+//! button runs the setup (and so the install) again; nothing asks on its own.
 use std::time::{Duration, Instant};
 
+use crate::login::os::platform::package_install::{self, Component};
 use crate::net::{Facility, InterfaceFacts, UplinkAdapter, UplinkTarget};
 
 use super::{nm_shared, uplink_polkit};
@@ -36,10 +44,12 @@ impl NetworkManagerAdapter {
             }
             Err(error) => return Facility::Unavailable(format!("NetworkManager: {error}")),
         }
+        // A missing dnsmasq is installed by the setup or the start; only a
+        // refused install stops it, until the person repairs.
         if !dnsmasq_available() {
-            return Facility::Unavailable(
-                "dnsmasq fehlt (NetworkManager braucht es fuer geteilte Verbindungen)".into(),
-            );
+            if let Some(reason) = package_install::refusal(Component::Dnsmasq) {
+                return Facility::RepairRequired(reason);
+            }
         }
         Facility::Available
     }
@@ -66,6 +76,9 @@ impl UplinkAdapter for NetworkManagerAdapter {
 
     fn setup_once(&mut self) -> Result<String, String> {
         self.probed_at = None;
+        // The person switched sharing on or asked for a repair: dnsmasq is
+        // installed first, behind its own polkit dialog.
+        package_install::ensure(Component::Dnsmasq, &dnsmasq_available).result()?;
         let status = uplink_polkit::rule_status();
         if matches!(&status, Ok(true)) {
             return Ok("polkit-Regel ist bereits installiert".into());
@@ -104,6 +117,7 @@ impl UplinkAdapter for NetworkManagerAdapter {
 
     fn enable(&mut self, private: &UplinkTarget, _public: &UplinkTarget) -> Result<(), String> {
         uplink_polkit::rule_status().map_err(|error| error.to_string())?;
+        package_install::ensure_unless_refused(Component::Dnsmasq, &dnsmasq_available).result()?;
         let facts = crate::net::gather_interface_facts()?;
         crate::share::lan_uplink_evidence::authorize(private.index, &facts)?;
         let connection = nm_shared::connect().map_err(|error| error.to_string())?;

@@ -56,7 +56,9 @@ impl Sandbox {
             .env("XDG_DATA_HOME", &self.data)
             .env("XDG_CONFIG_HOME", self.data.join("config"))
             .env("APPDATA", &self.data)
-            .env("LOCALAPPDATA", &self.data);
+            .env("LOCALAPPDATA", &self.data)
+            // No codec runtime download from a sandboxed daemon.
+            .env("SE_CODEC_DOWNLOADS", "off");
 
         // A terminal command must not accidentally inherit a graphical login's
         // credential bus. These removals make every subprocess representative of

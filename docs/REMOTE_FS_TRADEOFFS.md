@@ -72,8 +72,9 @@ or `TESTSIGNING` is needed; installing the
 machine-wide runtime may still prompt for admin approval. The recommended NSIS
 installer embeds the pinned official x64 MSI offline as a standard-selected
 optional component; Smart Explorer remains per-user and only that MSI step uses
-UAC. Portable and auto-updated copies can invoke the same secure pin with the
-GUI or `se drive install-runtime`. Silent setup requires explicit
+UAC. Portable and auto-updated copies install the same secure pin when a drive
+first mounts (install-on-use), or ahead of time with the GUI or
+`se drive install-runtime`. Silent setup requires explicit
 `/S /INSTALLDOKANY=1`, and Smart Explorer never uninstalls the shared runtime.
 
 The automatic installer accepts only the [pinned official

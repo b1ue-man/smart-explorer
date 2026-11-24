@@ -31,6 +31,31 @@ pub fn drive_runtime_ready() -> bool {
     false
 }
 
+/// What the window shows about the filesystem runtime; `None` when it is
+/// ready. While se installs it (install-on-use, Dokany 2.3.1 on Windows,
+/// fuse3 on Linux) the progress, after a declined or failed install its
+/// reason, otherwise that se installs it at the next mount. Nothing is
+/// installed or asked for here.
+pub fn drive_runtime_note() -> Option<String> {
+    #[cfg(windows)]
+    return os::windows::runtime_note();
+    #[cfg(target_os = "linux")]
+    return os::linux_os::fuse_runtime_note();
+    #[cfg(not(any(windows, target_os = "linux")))]
+    None
+}
+
+/// Whether se installs the filesystem runtime now (install-on-use): a caller
+/// that waits for a mount waits for the install too.
+pub fn drive_runtime_installing() -> bool {
+    #[cfg(windows)]
+    return os::windows::runtime_installing();
+    #[cfg(target_os = "linux")]
+    return os::linux_os::fuse_installing();
+    #[cfg(not(any(windows, target_os = "linux")))]
+    false
+}
+
 pub fn drive_runtime_info() -> Result<DriveRuntimeInfo, String> {
     #[cfg(windows)]
     {

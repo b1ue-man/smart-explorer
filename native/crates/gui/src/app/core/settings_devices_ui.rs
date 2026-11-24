@@ -1,7 +1,7 @@
 //! Einstellungen → Integration → „Verbundene Geräte als Ordner“ (DRV-M6,
 //! V14: the section before „se Desktop“): switch, where it appears, state,
-//! „Im Dateimanager öffnen“, changes that wait for a device, and what is
-//! missing when the runtime is not ready.
+//! „Im Dateimanager öffnen“, changes that wait for a device, and the state
+//! of the runtime while it is not ready (its install on use, or the reason).
 //!
 //! The state is read from the worker every 2 s on a thread of its own, but
 //! only while this page is drawn; the switch runs on a thread too, so the
@@ -82,22 +82,11 @@ fn refresh(shared: &Shared, ctx: &egui::Context) {
 }
 
 /// What the runtime lacks, in the words of the page; `None` when it is ready.
+/// se installs a missing runtime when the tree mounts (install-on-use): the
+/// note shows that install's progress, a declined or failed install's
+/// reason, or that the next mount installs it. Reading it installs nothing.
 fn runtime_problem() -> Option<String> {
-    #[cfg(target_os = "linux")]
-    {
-        match crate::mount::fuse_install_outcome() {
-            crate::mount::FuseInstallOutcome::AlreadyReady => None,
-            crate::mount::FuseInstallOutcome::ManualRequired { command, reason } => Some(format!(
-                "Die Laufzeit fehlt: {}.",
-                if command.is_empty() { reason } else { command }
-            )),
-        }
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        (!crate::mount::drive_runtime_ready())
-            .then(|| "Dokany ist nicht installiert. Unter Laufwerke einrichten.".to_string())
-    }
+    crate::mount::drive_runtime_note()
 }
 
 /// Switches the tree on or off on a thread.

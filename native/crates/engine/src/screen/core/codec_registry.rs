@@ -160,16 +160,21 @@ pub struct CodecEntry {
     pub verdict: Option<VerdictView>,
 }
 
-/// State of the OpenH264 library of this user.
+/// State of the OpenH264 library of this user (installed automatically
+/// since 2026-11-24 unless the user switched it off).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OpenH264State {
-    /// Not downloaded.
+    /// Not installed yet, no attempt failed (or not offered here: `reason`).
     Absent,
+    /// An installation runs right now (this or another process).
+    Installing,
+    /// Installed and switched on.
     Enabled,
-    /// Downloaded and switched off by the user.
+    /// Switched off by the user; nothing installs it until `enable`.
     Disabled,
-    /// Present but not loadable: the file does not match its pin.
+    /// The last installation failed (`reason`, next attempt `retry_at`) or
+    /// the present file does not match its pin.
     Failed,
 }
 
@@ -179,9 +184,15 @@ pub struct OpenH264Report {
     pub state: OpenH264State,
     pub version: String,
     pub notice: String,
-    /// Why the state is `failed`.
+    /// Why the state is `failed`, or why OpenH264 is not offered.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// Unix seconds of the next attempt after a failed installation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_at: Option<i64>,
+    /// Whether the library file lies in the store (what „Entfernen“ deletes).
+    #[serde(default)]
+    pub library_present: bool,
 }
 
 impl OpenH264Report {
@@ -191,7 +202,21 @@ impl OpenH264Report {
             version: OPENH264_VERSION.into(),
             notice: OPENH264_NOTICE.into(),
             reason,
+            retry_at: None,
+            library_present: false,
         }
+    }
+
+    /// The same report with the next attempt of a failed installation.
+    pub fn with_retry_at(mut self, retry_at: Option<i64>) -> Self {
+        self.retry_at = retry_at;
+        self
+    }
+
+    /// The same report naming whether the library file is present.
+    pub fn with_library(mut self, present: bool) -> Self {
+        self.library_present = present;
+        self
     }
 }
 

@@ -9,19 +9,28 @@
 //! (`state.json`). What the step does follows `windows_driver::driver_step`:
 //! nothing for the installed driver, the signed package again for a broken
 //! device or a new mode list, a new signature only for other driver files.
+//! One step runs at a time on the device (`StepLock`): the installer, an
+//! update and an install at use time wait for each other and then decide
+//! again.
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::ptr::null_mut;
 
-use windows_sys::Win32::Foundation::{LocalFree, ERROR_SUCCESS};
+use windows_sys::Win32::Foundation::{
+    CloseHandle, GetLastError, LocalFree, ERROR_SUCCESS, HANDLE, WAIT_ABANDONED, WAIT_OBJECT_0,
+};
 use windows_sys::Win32::Security::Authorization::{GetNamedSecurityInfoW, SE_FILE_OBJECT};
 use windows_sys::Win32::Security::{
     IsWellKnownSid, WinBuiltinAdministratorsSid, WinLocalSystemSid, OWNER_SECURITY_INFORMATION,
     PSECURITY_DESCRIPTOR, PSID,
 };
 use windows_sys::Win32::System::Com::CoTaskMemFree;
+use windows_sys::Win32::System::Threading::{
+    CreateMutexExW, ReleaseMutex, WaitForSingleObject, INFINITE, MUTEX_MODIFY_STATE,
+    SYNCHRONIZATION_SYNCHRONIZE,
+};
 use windows_sys::Win32::UI::Shell::{FOLDERID_ProgramData, SHGetKnownFolderPath};
 
 use super::pins::{fetch_driver, sha256_hex, Pins};
@@ -244,11 +253,58 @@ fn is_driver_package(oem: &str) -> bool {
         .contains(&HARDWARE_ID.to_ascii_lowercase())
 }
 
+/// The one driver step of the device: a named mutex of the global
+/// namespace (the elevated processes of the installer, an update and se's
+/// elevated call, and the LocalSystem worker, may all open it), held while
+/// the step runs.
+struct StepLock(HANDLE);
+
+impl StepLock {
+    /// Waits for a step that runs (no time limit: it makes progress on its
+    /// own); `None` when Windows gave no lock (the step runs without it).
+    fn take() -> Option<Self> {
+        let name: Vec<u16> = r"Global\SmartExplorer-VirtualDisplay-Step"
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+        let access = SYNCHRONIZATION_SYNCHRONIZE | MUTEX_MODIFY_STATE;
+        // SAFETY: the name is NUL-terminated; the handle is closed below or on drop.
+        let handle = unsafe { CreateMutexExW(std::ptr::null(), name.as_ptr(), 0, access) };
+        if handle.is_null() {
+            // SAFETY: reads the calling thread's last error.
+            let code = unsafe { GetLastError() };
+            eprintln!("virtueller Bildschirm: Schrittsperre fehlt (Win32 {code})");
+            return None;
+        }
+        // SAFETY: a valid mutex handle of this process.
+        let waited = unsafe { WaitForSingleObject(handle, INFINITE) };
+        if waited == WAIT_OBJECT_0 || waited == WAIT_ABANDONED {
+            return Some(Self(handle));
+        }
+        eprintln!("virtueller Bildschirm: Schrittsperre nicht erhalten ({waited})");
+        // SAFETY: closed once.
+        unsafe { CloseHandle(handle) };
+        None
+    }
+}
+
+impl Drop for StepLock {
+    fn drop(&mut self) {
+        // SAFETY: this thread owns the mutex; the handle is closed once.
+        unsafe {
+            ReleaseMutex(self.0);
+            CloseHandle(self.0);
+        }
+    }
+}
+
 /// The elevated step; a line for the log on success.
 pub fn run(pins: &Pins) -> Result<String, String> {
     fn fail(what: &str, error: impl std::fmt::Display) -> String {
         format!("{what}: {error}")
     }
+    // A step that ran meanwhile may have left nothing to do.
+    let _lock = StepLock::take();
     let step = step(pins);
     if step == DriverStep::Nothing {
         return Ok("virtueller Bildschirm: Treiber unverändert".into());

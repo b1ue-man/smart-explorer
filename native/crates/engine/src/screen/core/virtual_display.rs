@@ -257,8 +257,10 @@ pub fn needs_virtual(
 }
 
 /// Whether the driver setup with an elevation (stage 2) may run: never at a
-/// physical monitor (it replaces the X server's driver), never against the
-/// wish `off`.
+/// physical monitor when it replaces the display driver (the X server's;
+/// a setup that adds a display beside the monitor passes `false` for it,
+/// `VirtualDisplayDriver::setup_adds_display`), never against the wish
+/// `off`.
 pub fn setup_allowed(wish: Option<VirtualDisplayWish>, physical_monitor: bool) -> bool {
     !physical_monitor
         && matches!(
@@ -293,9 +295,10 @@ pub use owner::{owner, Claim, Due, Planner};
 #[path = "virtual_display_report.rs"]
 mod report;
 pub use report::{
-    adjust_text, VirtualDisplayReport, VirtualDisplayState, ADJUST_DRIVER, ADJUST_DRIVER_LIMIT,
-    ADJUST_MODE_RULES, ADJUST_OTHER_SESSION, ADJUST_PENDING, ADJUST_PHYSICAL_MODE, ADJUST_REFUSED,
-    REASON_AVAILABLE, REASON_OFF, REASON_PHYSICAL, REASON_PHYSICAL_MODE_REFUSED, REASON_SETUP,
+    adjust_text, chain_text, VirtualDisplayReport, VirtualDisplayState, ADJUST_DRIVER,
+    ADJUST_DRIVER_LIMIT, ADJUST_MODE_RULES, ADJUST_OTHER_SESSION, ADJUST_PENDING,
+    ADJUST_PHYSICAL_MODE, ADJUST_REFUSED, REASON_AVAILABLE, REASON_OFF, REASON_PHYSICAL,
+    REASON_PHYSICAL_MODE_REFUSED, REASON_SETUP, REASON_SETUP_NEEDS_CONTROL,
     REASON_SOURCE_NOT_MONITOR,
 };
 

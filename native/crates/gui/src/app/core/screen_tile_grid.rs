@@ -14,9 +14,10 @@ use eframe::egui::{self, Vec2};
 
 use super::screen_devices::{entries, DeviceEntry, Devices, GridScope};
 use super::screen_pool::{
-    preview_edge, preview_fps, preview_gap_ms, preview_rate_mode, preview_request,
-    preview_set_mode, DEFAULT_PREVIEW_INTERVAL_MS,
+    host_pending, preview_edge, preview_fps, preview_gap_ms, preview_rate_mode, preview_request_to,
+    preview_set_mode_for, DEFAULT_PREVIEW_INTERVAL_MS,
 };
+use super::screen_prefs::codec_offer;
 use super::screen_prefs::Fit;
 use super::screen_session::{Backend, ProbeInfo, ViewerSession};
 use super::screen_target::ScreenTarget;
@@ -215,7 +216,11 @@ impl ScreenTileGrid {
     fn open_preview(&self, tile: &mut Tile, edge: u32) {
         tile.texture.reset();
         tile.visibility.invalidate();
-        let request = preview_request(&self.backend.offers, edge, self.interval_ms);
+        // The stored „Codec“ as this tile's host serves it (user rule
+        // 2026-11-24, `screen_pool::open_choice`).
+        let target = &tile.entry.target;
+        let request =
+            preview_request_to(Some(target), &self.backend.offers, edge, self.interval_ms);
         let session = ViewerSession::open(
             &self.backend,
             tile.entry.target.clone(),
@@ -255,7 +260,15 @@ impl ScreenTileGrid {
             }
             Probe::Done(info) => {
                 let live = info.supported && info.view == CapabilityDecision::Allow;
-                if live && tile.session.is_none() && tile.failed.is_none() && !tile.limit {
+                let closed = tile.session.is_none() && tile.failed.is_none() && !tile.limit;
+                // A preview whose stored choices depend on the host waits
+                // for its encoders; a tile that asks learns them for the
+                // full view a click opens.
+                let asks = info.supported && info.view == CapabilityDecision::Ask;
+                let (offers, wake) = (&self.backend.offers, self.backend.wake.clone());
+                let pending =
+                    ((live && closed) || asks) && host_pending(&tile.entry.target, offers, wake);
+                if live && closed && !pending {
                     self.open_preview(tile, edge);
                 }
             }
@@ -285,10 +298,17 @@ impl ScreenTileGrid {
         };
         if accepted && tile.accepted_at.is_none() {
             tile.accepted_at = Some(Instant::now());
+            if let Some(hello) = session.info().hello.as_ref() {
+                codec_offer::note_hello(&tile.entry.target, hello);
+            }
             // The chosen „Aktualisierung“ when it is not the host's own one
             // picture a second (Codex 11/13: it stayed at the opening's).
             if preview_fps(self.interval_ms) != 1 {
-                session.send(ViewerFrame::SetMode(preview_rate_mode(self.interval_ms)));
+                let codec = session.shared.codec_choice();
+                session.send(ViewerFrame::SetMode(preview_rate_mode(
+                    self.interval_ms,
+                    codec,
+                )));
             }
         }
         if let Some(end) = ended {
@@ -303,9 +323,11 @@ impl ScreenTileGrid {
             tile.visibility.invalidate();
             tile.wait_frame = false;
         } else if edge != tile.requested_edge && accepted {
-            session.send(ViewerFrame::SetMode(preview_set_mode(
+            let codec = session.shared.codec_choice();
+            session.send(ViewerFrame::SetMode(preview_set_mode_for(
                 edge,
                 self.interval_ms,
+                codec,
             )));
             tile.requested_edge = edge;
         }
@@ -345,6 +367,10 @@ impl ScreenTileGrid {
                 });
             });
         self.tiles = tiles;
+        // The full view opens for this device (`screen_pool::view_choice`).
+        if let Some(target) = &clicked {
+            codec_offer::set_view(target);
+        }
         let message = {
             let state = self.devices.lock();
             match state.profiles.as_ref() {
@@ -398,9 +424,11 @@ impl ScreenTileGrid {
             self.applied_interval = self.interval_ms;
             let edge = preview_edge(self.width, ui.ctx().pixels_per_point());
             for session in tiles.iter().filter_map(|tile| tile.session.as_ref()) {
-                session.send(ViewerFrame::SetMode(preview_set_mode(
+                let codec = session.shared.codec_choice();
+                session.send(ViewerFrame::SetMode(preview_set_mode_for(
                     edge,
                     self.interval_ms,
+                    codec,
                 )));
                 session.set_present_gap_ms(preview_gap_ms(self.interval_ms));
             }

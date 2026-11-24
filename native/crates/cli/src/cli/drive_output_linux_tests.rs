@@ -118,16 +118,30 @@ fn drive_task_cli_linux_shapes() {
     assert_eq!(json["fusermount3"]["setuid"], true);
     assert_eq!(json["sandbox"], "none");
 
-    // install-runtime: text and JSON of both answers.
-    let manual = FuseInstallOutcome::ManualRequired {
-        command: "sudo apt-get install fuse3".into(),
-        reason: "fusermount3 fehlt".into(),
+    // install-runtime: text and JSON of every answer (se installs fuse3).
+    let declined = FuseInstallOutcome::Declined {
+        reason: "abgelehnt".into(),
+    };
+    assert_eq!(install_text(&declined), "fuse\tdeclined\tabgelehnt");
+    assert_eq!(declined.exit_code(), 2);
+    let failed = FuseInstallOutcome::Failed {
+        reason: "E: Unable to locate package fuse3".into(),
     };
     assert_eq!(
-        install_text(&manual),
-        "fuse\tmanual-required\tsudo apt-get install fuse3\tfusermount3 fehlt"
+        install_text(&failed),
+        "fuse\tfailed\tE: Unable to locate package fuse3"
     );
-    assert_eq!(manual.exit_code(), 2);
+    assert_eq!(failed.exit_code(), 1);
+    assert_eq!(serde_json::to_value(&failed).unwrap()["status"], "failed");
+    assert_eq!(
+        install_text(&FuseInstallOutcome::Installed),
+        "fuse\tinstalled"
+    );
+    assert_eq!(FuseInstallOutcome::Installed.exit_code(), 0);
+    assert_eq!(
+        serde_json::to_value(FuseInstallOutcome::Installed).unwrap()["status"],
+        "installed"
+    );
     assert_eq!(
         install_text(&FuseInstallOutcome::AlreadyReady),
         "fuse\talready-ready"

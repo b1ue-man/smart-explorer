@@ -65,4 +65,18 @@ fn wahlgilt_task_display_line_names_what_the_host_did() {
         state_text(&shared.info().clone(), Some(&chosen)),
         Some(off.text())
     );
+    // A setup or why not (the driver installed at use time) in German.
+    let stats = HostStats {
+        chain: Some(ChainReport {
+            virtual_display: Some("unsupported:windows_display_driver_declined".into()),
+            ..ChainReport::default()
+        }),
+        ..HostStats::default()
+    };
+    shared.update(|info| info.stats = Some(stats));
+    let line = state_text(&shared.info().clone(), Some(&chosen)).unwrap();
+    assert!(
+        line.ends_with(" · jetzt nicht möglich (die Administrator-Bestätigung für den Treiber wurde auf dem Gastgeber abgelehnt; eine erneute Wahl fragt wieder)"),
+        "{line}"
+    );
 }

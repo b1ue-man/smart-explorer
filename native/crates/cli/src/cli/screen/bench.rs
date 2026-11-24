@@ -16,13 +16,17 @@
 //! `worker_handoff`, `send`, `network`, `tick_jitter`, `input`,
 //! `input_inject`); `host_timing` says `reported` or `unsupported_by_host`.
 //! A monitor the host does not have ends with the code `source_not_found`.
+//!
+//! User rule 2026-11-24: a `--codec` the device and this one cannot run
+//! together is refused before the measurement with the German reason and
+//! the codecs they can run (`view::served_reason`; exit code non-zero).
 use clap::Args;
 use clap_complete::ArgValueCandidates;
 
 use crate::screen::core::bench::{
     run_local, BenchOptions, DEFAULT_FPS, DEFAULT_SECONDS, DEFAULT_SIZE,
 };
-use crate::screen::core::negotiate::CodecPreference;
+use crate::screen::core::negotiate::{CodecPreference, CodecSetting};
 use crate::screen::core::pixel_convert::FrameSize;
 use crate::share::access_grant::Capability;
 
@@ -125,6 +129,7 @@ pub(super) fn run(args: BenchArgs) -> Result<i32, String> {
         Some(device) => {
             let choice = super::select_device(device)?;
             let name = choice.name.clone();
+            served_check(&args.codec, &choice)?;
             let pending = |capability: Capability| {
                 let what = match capability {
                     Capability::ScreenControl => "steuern",
@@ -141,6 +146,58 @@ pub(super) fn run(args: BenchArgs) -> Result<i32, String> {
         Some(failure) => Err(failure),
         None => Ok(0),
     }
+}
+
+/// The bench's codec as the viewer's „Codec“ (`tiles` is „Verlustfrei“).
+fn setting_of(codec: CodecPreference) -> CodecSetting {
+    match codec {
+        CodecPreference::Auto => CodecSetting::Auto,
+        CodecPreference::H264 => CodecSetting::H264,
+        CodecPreference::Hevc => CodecSetting::Hevc,
+        CodecPreference::Av1 => CodecSetting::Av1,
+        CodecPreference::Sharp => CodecSetting::Sharp,
+        CodecPreference::Tiles => CodecSetting::Lossless,
+    }
+}
+
+/// The bench's key of a viewer's „Codec“; `None` for one it does not take.
+fn bench_key(setting: CodecSetting) -> Option<&'static str> {
+    match setting {
+        CodecSetting::Sharp => None,
+        CodecSetting::Lossless => Some("tiles"),
+        other => Some(other.key()),
+    }
+}
+
+/// A named `--codec` the device cannot serve with this one: the German
+/// reason and the codecs it serves. The bench offers every decoder stage
+/// and no library choice (`BenchOptions::decoders`).
+fn served_check(codec: &str, choice: &super::DeviceChoice) -> Result<(), String> {
+    let Some(preference) = CodecPreference::parse(codec) else {
+        return Ok(());
+    };
+    let setting = setting_of(preference);
+    if matches!(setting, CodecSetting::Auto | CodecSetting::Lossless) {
+        return Ok(());
+    }
+    let Some(host) = super::view::probed_encoders(&choice.target) else {
+        return Ok(());
+    };
+    use crate::screen::core::decoder_library::DecoderLibrary;
+    use crate::screen::core::negotiate::DecoderPreference;
+    let decoder = DecoderPreference::Automatic;
+    let Some((reason, served)) =
+        super::view::served_reason(setting, &host, decoder, DecoderLibrary::Automatic)
+    else {
+        return Ok(());
+    };
+    let served: Vec<&str> = served.into_iter().filter_map(bench_key).collect();
+    Err(format!(
+        "Codec „{}“: {reason}\nMit {} möglich: {}",
+        setting.label(),
+        choice.name,
+        served.join(", ")
+    ))
 }
 
 #[cfg(test)]

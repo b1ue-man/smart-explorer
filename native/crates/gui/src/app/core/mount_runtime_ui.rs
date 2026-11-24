@@ -21,11 +21,13 @@ pub(super) fn install_controls(ui: &mut egui::Ui, enabled: bool, link_label: &st
     clicked
 }
 
-/// Linux (DRV-M4): se installs no system package; the window names what is
-/// missing and the package command, like `se drive runtime`. Never `true`.
+/// Linux (DRV-M4): a missing fuse3 is installed when a drive mounts
+/// (install-on-use); the window shows that install's progress, a declined or
+/// failed install's reason, or that the next mount installs it, and the
+/// problems like `se drive runtime`. Never `true`.
 #[cfg(target_os = "linux")]
 pub(super) fn install_controls(ui: &mut egui::Ui, _enabled: bool, _link_label: &str) -> bool {
-    let report = fuse_report();
+    let (report, note) = fuse_report();
     ui.vertical(|ui| {
         if report.ready {
             ui.label(format!(
@@ -37,6 +39,9 @@ pub(super) fn install_controls(ui: &mut egui::Ui, _enabled: bool, _link_label: &
                     .unwrap_or("fusermount3")
             ));
         } else {
+            if let Some(note) = &note {
+                ui.label(note);
+            }
             ui.label("FUSE ist nicht bereit:");
             for problem in &report.problems {
                 ui.label(format!("• {problem}"));
@@ -56,22 +61,27 @@ pub(super) fn install_controls(ui: &mut egui::Ui, _enabled: bool, _link_label: &
     false
 }
 
-/// The runtime report, read at most every 10 s (it reads system files).
+/// The runtime report and the install note, read at most every 2 s (they
+/// read system files and the install record).
 #[cfg(target_os = "linux")]
-fn fuse_report() -> crate::mount::FuseRuntimeReport {
+fn fuse_report() -> (crate::mount::FuseRuntimeReport, Option<String>) {
     use std::sync::Mutex;
     use std::time::Duration;
 
-    static CACHED: Mutex<Option<(Instant, crate::mount::FuseRuntimeReport)>> = Mutex::new(None);
+    type Cached = (Instant, crate::mount::FuseRuntimeReport, Option<String>);
+    static CACHED: Mutex<Option<Cached>> = Mutex::new(None);
     let mut cached = CACHED
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     match cached.as_ref() {
-        Some((read, report)) if read.elapsed() < Duration::from_secs(10) => report.clone(),
+        Some((read, report, note)) if read.elapsed() < Duration::from_secs(2) => {
+            (report.clone(), note.clone())
+        }
         _ => {
             let report = crate::mount::fuse_runtime_report(false);
-            *cached = Some((Instant::now(), report.clone()));
-            report
+            let note = crate::mount::drive_runtime_note();
+            *cached = Some((Instant::now(), report.clone(), note.clone()));
+            (report, note)
         }
     }
 }

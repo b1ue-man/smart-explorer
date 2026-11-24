@@ -120,7 +120,7 @@ internal fun ScreenTopBar(
                 }
                 TextButton(onClick = onNativePixels) { Text(if (nativePixels) "Einpassen" else "1:1") }
                 TextButton(onClick = onFullscreen) { Text(if (immersive) "Vollbild verlassen" else "Vollbild") }
-                SettingsMenu(settings, onSettings, displayLine)
+                SettingsMenu(settings, onSettings, displayLine, ui)
                 TextButton(onClick = onClose, modifier = Modifier.testTag("screen_view_close")) { Text(stringResource(R.string.screen_view_close)) }
             }
             if (immersive) Text("Zurück oder Randgeste · Strg+Alt+Pause · Strg+Alt+Umschalt+F · F11", style = MaterialTheme.typography.bodySmall)
@@ -225,7 +225,7 @@ private fun ActionsMenu(
 }
 
 @Composable
-private fun SettingsMenu(settings: ViewSettings, onSettings: (ViewSettings) -> Unit, displayLine: String) {
+private fun SettingsMenu(settings: ViewSettings, onSettings: (ViewSettings) -> Unit, displayLine: String, ui: ScreenSessionState) {
     var open by remember { mutableStateOf(false) }
     var rateDialog by remember { mutableStateOf(false) }
     var sizeDialog by remember { mutableStateOf(false) }
@@ -242,8 +242,8 @@ private fun SettingsMenu(settings: ViewSettings, onSettings: (ViewSettings) -> U
         TextButton(onClick = { open = true }) { Text("⋮") }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             // „Codec“ (with „Scharf (GPU)“ and „Verlustfrei“ in the place of the old switches), „Dekodierer“ and
-            // „Höchste Datenrate“ (BK7b, P9).
-            CodecMenuItems(settings, onSettings, onRate = { open = false; rateDialog = true })
+            // „Höchste Datenrate“ (BK7b, P9); what this pair cannot run is disabled with its reason (2026-11-24).
+            CodecMenuItems(settings, onSettings, onRate = { open = false; rateDialog = true }, ui = ui)
             // „Monitor“ and „Auflösung“ of the host's display (P5/P9).
             DisplayMenuItems(settings, onSettings, onCustom = { open = false; sizeDialog = true }, stateLine = displayLine)
         }

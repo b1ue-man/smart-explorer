@@ -129,12 +129,8 @@ impl HostPlatform for FuseHost {
         _spool_root: &Path,
         _config: &MountHostConfig,
     ) -> Result<(), String> {
-        let report = super::fuse_runtime::report(&RuntimeProbe::system(false));
-        if report.ready {
-            Ok(())
-        } else {
-            Err(report.problems.join("; "))
-        }
+        // Install-on-use: a missing fuse3 is installed here, then checked once more.
+        super::fuse_runtime::ensure_ready(&RuntimeProbe::system(false))
     }
 
     fn prepare_volume(

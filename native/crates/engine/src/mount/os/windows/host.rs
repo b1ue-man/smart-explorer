@@ -187,8 +187,12 @@ impl HostPlatform for DokanyHost {
         spool_root: &Path,
         config: &MountHostConfig,
     ) -> Result<(), String> {
-        let selection = RuntimeSelection::select(spool_root, &config.id, config.runtime_preference)
-            .map_err(|error| error.to_string())?;
+        // Install-on-use: an absent Dokany is installed here (UAC), then loaded once more.
+        let selection = super::runtime_install::select_installing(
+            spool_root,
+            &config.id,
+            config.runtime_preference,
+        )?;
         self.selection = Some(selection);
         Ok(())
     }

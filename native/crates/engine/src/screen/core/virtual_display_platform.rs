@@ -77,8 +77,22 @@ pub trait VirtualDisplayDriver: Send + Sync {
         None
     }
     /// Starts the driver setup in the background unless this version tried
-    /// already; its state now.
+    /// already (Linux) or one runs (Windows at use time, which a viewer's
+    /// later request starts again after a decline or a failure); its state
+    /// now. A Windows setup tells its end to `virtual_display_host::setup_ended`.
     fn request_setup(&self) -> SetupProgress;
+    /// The setup adds a display beside the physical ones and replaces no
+    /// driver (Windows' indirect display driver): it may run at a physical
+    /// monitor for the wish `request`. `false`: never there (Linux, where it
+    /// replaces the X server's driver).
+    fn setup_adds_display(&self) -> bool {
+        false
+    }
+    /// The reason of a `Setup` report while the setup runs (Windows: whether
+    /// the host shows a UAC prompt); `None`: none (Linux).
+    fn setup_reason(&self) -> Option<String> {
+        None
+    }
     /// Gives a physical monitor its own mode back after the last session
     /// that asked for se's display there.
     fn restore(&self) -> io::Result<()> {
@@ -96,6 +110,32 @@ pub trait VirtualDisplayDriver: Send + Sync {
                 size.width, size.height
             ),
         ))
+    }
+}
+
+/// The report of a session for the state of its driver setup; a running
+/// one names the driver's `setup_reason`.
+pub(super) fn setup_report(
+    progress: &SetupProgress,
+    current: Option<FrameSize>,
+    name: &str,
+    driver: &dyn VirtualDisplayDriver,
+) -> VirtualDisplayReport {
+    match progress {
+        SetupProgress::Running => {
+            let report = VirtualDisplayReport::new(VirtualDisplayState::Setup, current, name);
+            match driver.setup_reason() {
+                Some(reason) => report.with_reason(&reason),
+                None => report,
+            }
+        }
+        SetupProgress::AfterRestart | SetupProgress::Done => {
+            VirtualDisplayReport::new(VirtualDisplayState::AfterRestart, current, name)
+        }
+        SetupProgress::Failed(reason) => {
+            VirtualDisplayReport::new(VirtualDisplayState::Unsupported, current, name)
+                .with_reason(reason)
+        }
     }
 }
 
@@ -133,6 +173,15 @@ fn probe_answer(driver: Arc<dyn VirtualDisplayDriver>) -> Option<VirtualDisplayR
     };
     Some(match probe.unsupported.as_deref() {
         Some(reason) if !probe.setup_possible => unsupported(&probe, reason),
+        // The setup lifts it: it runs now, or the first viewer that asks
+        // starts it (also beside a physical monitor, Windows).
+        Some(_) => match driver.setup_reason() {
+            Some(reason) => {
+                VirtualDisplayReport::new(VirtualDisplayState::Setup, probe.current, &probe.driver)
+                    .with_reason(&reason)
+            }
+            None => inactive(REASON_SETUP),
+        },
         _ if probe.physical_monitor => inactive(REASON_PHYSICAL),
         _ if probe.modes || probe.portal => inactive(REASON_AVAILABLE),
         _ if probe.setup_possible => inactive(REASON_SETUP),

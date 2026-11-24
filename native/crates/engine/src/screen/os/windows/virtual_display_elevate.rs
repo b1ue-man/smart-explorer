@@ -21,7 +21,10 @@
 //! --system`), in-process when the worker is privileged itself. Only
 //! without such a component does the update ask with its own UAC prompt.
 //! The step itself is the same everywhere (`install::run`): it signs again
-//! only when the driver's files change.
+//! only when the driver's files change. A viewer that asks for se's display
+//! on a host without a working driver starts the same step at use time
+//! (`virtual_display_on_demand.rs`, user rule 2026-11-24) through
+//! `run_step`; the decline of an update offer does not hold that back.
 //!
 //! Exit codes: 0 done or nothing to do, 1223 the elevation was declined,
 //! 1 failed. The result line of the elevated step is in `last-run.txt` of
@@ -58,6 +61,9 @@ fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
+/// The result line of the last step in se's driver directory.
+pub(super) const LAST_RUN: &str = "last-run.txt";
+
 /// The user declined the offer of an update once.
 fn declined_marker() -> PathBuf {
     crate::support_dirs::app_data_dir()
@@ -65,9 +71,14 @@ fn declined_marker() -> PathBuf {
         .join("virtual-display-declined")
 }
 
+/// The driver is installed: a later update offers its step again.
+pub(super) fn forget_decline() {
+    let _ = std::fs::remove_file(declined_marker());
+}
+
 fn note(message: &str) {
     if let Ok(dir) = install::directory() {
-        let _ = std::fs::write(dir.join("last-run.txt"), message);
+        let _ = std::fs::write(dir.join(LAST_RUN), message);
     }
 }
 
@@ -160,37 +171,42 @@ pub fn after_update_start() {
     }
 }
 
-fn run_pending() {
-    let code = match crate::login::os::platform::elevation() {
-        Ok(Elevation::InProcess) => system_step().1,
+/// The driver step with se's one elevation: in this process when it is
+/// privileged, else in the elevated call of the bundle (party `Display`, one
+/// UAC prompt on this desktop; `announce` tells the person before it). The
+/// step's exit code (1 when an earlier step of the call failed first);
+/// `Err` when it could not start.
+pub(super) fn run_step(announce: fn()) -> Result<i32, String> {
+    match crate::login::os::platform::elevation() {
+        Ok(Elevation::InProcess) => Ok(system_step().1),
         Ok(Elevation::External(se)) => {
             let launcher: bundle::Launcher = Box::new(move |steps: &[String]| {
-                crate::rdp::host_setup::prompt_follows();
+                announce();
                 crate::login::os::platform::run_elevated(&se, steps).map(|code| Launched {
                     code: Some(code),
                     ..Launched::default()
                 })
             });
             let (call, result) = bundle::submit(Party::Display, SYSTEM_STEP.to_string(), launcher);
-            match result {
-                Ok(launched) => {
-                    bundle::step_code(&call, Party::Display, launched.code).unwrap_or(1)
-                }
-                Err(error) => {
-                    eprintln!("virtueller Bildschirm: {error}");
-                    return;
-                }
-            }
+            let launched = result?;
+            Ok(bundle::step_code(&call, Party::Display, launched.code).unwrap_or(1))
         }
+        Err(error) => Err(format!("keine Erhöhung: {error}")),
+    }
+}
+
+fn run_pending() {
+    let code = match run_step(crate::rdp::host_setup::prompt_follows) {
+        Ok(code) => code,
         Err(error) => {
-            eprintln!("virtueller Bildschirm: keine Erhöhung: {error}");
+            eprintln!("virtueller Bildschirm: {error}");
             return;
         }
     };
     let _ = std::fs::remove_file(pending_marker());
     match u32::try_from(code) {
         Ok(0) => {
-            let _ = std::fs::remove_file(declined_marker());
+            forget_decline();
             win_display::release_idle();
         }
         Ok(DECLINED) => write_marker(&declined_marker(), b"declined\n"),
@@ -305,7 +321,7 @@ fn unelevated(mode: &str) -> i32 {
             DECLINED as i32
         }
         Ok(0) => {
-            let _ = std::fs::remove_file(declined_marker());
+            forget_decline();
             win_display::release_idle();
             0
         }

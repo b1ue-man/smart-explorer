@@ -1,12 +1,18 @@
 //! Area „Kodierung“ of the tab „Bildschirm“ (SCR-M3): the encoders and
-//! decoders of this device, and OpenH264 by Cisco with the notice of
-//! condition 3 at its switch. Switching on the first time opens the full
-//! license text; only „Annehmen und herunterladen“ downloads from Cisco.
-//! Off, on again and „Entfernen“ follow the switch. Inventory and actions
-//! run on a background thread; the area shows their progress and errors.
+//! decoders of this device, and OpenH264 by Cisco with Cisco's notice at its
+//! switch and its license one click away („Lizenz anzeigen“, „Lizenzen“).
+//! Since 2026-11-24 OpenH264 installs on its own (daemon start, a session
+//! that needs H.264); the area shows „wird installiert“, „installiert“,
+//! „abgeschaltet“ or „Fehler: <Grund> – neuer Versuch um …“, and on Windows
+//! the state of the FFmpeg runtime the same way. „OpenH264 verwenden“
+//! switches it off (no automatic installation fetches it then) and on again
+//! (installed at once when missing); „Entfernen“ deletes the file and
+//! switches it off. Inventory and actions run on a background thread; while
+//! an installation is pending the area looks again every few seconds.
 //! Plan 2026-11-17 „Windows-Bild“ P3: every row names its run-time check
 //! (`CodecEntry::verdict`); `se screen codec verify` checks again.
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
+use std::time::{Duration, Instant};
 
 use eframe::egui::{self, RichText};
 
@@ -14,12 +20,26 @@ use crate::app::theme;
 use crate::screen::core::codec_registry::{
     CodecEntry, CodecReport, OpenH264State, OPENH264_NOTICE,
 };
+use crate::screen::os::codec_runtime_install::{
+    ffmpeg_status, openh264_report, openh264_state_text, runtime_state_text, unix_now,
+    RuntimeReport, RuntimeState,
+};
 use crate::screen::os::{codec_inventory, openh264_action, openh264_license, OpenH264Action};
+
+/// How often the area looks again while an installation runs, and while one
+/// is pending or failed.
+const POLL_INSTALLING: Duration = Duration::from_secs(2);
+const POLL_PENDING: Duration = Duration::from_secs(10);
 
 #[derive(Default)]
 struct CodecState {
     report: Option<CodecReport>,
+    /// The FFmpeg runtime of the Windows viewer; `None` elsewhere.
+    ffmpeg: Option<RuntimeReport>,
     loading: bool,
+    /// A look at the installations runs (`poll`).
+    polling: bool,
+    polled_at: Option<Instant>,
     busy: Option<&'static str>,
     error: Option<String>,
     license_open: bool,
@@ -43,9 +63,12 @@ fn refresh(shared: &Arc<Mutex<CodecState>>, ctx: &egui::Context) {
         .name("screen-codecs".into())
         .spawn(move || {
             let report = codec_inventory::report();
+            let ffmpeg = ffmpeg_status();
             let mut current = lock(&slot);
             current.report = Some(report);
+            current.ffmpeg = ffmpeg;
             current.loading = false;
+            current.polled_at = Some(Instant::now());
             ctx.request_repaint();
         });
     if started.is_err() {
@@ -53,12 +76,69 @@ fn refresh(shared: &Arc<Mutex<CodecState>>, ctx: &egui::Context) {
     }
 }
 
+/// How soon the area looks at the installations again (`openh264`: `None`
+/// where OpenH264 is not offered); `None` while nothing is pending.
+fn poll_interval(
+    openh264: Option<OpenH264State>,
+    ffmpeg: Option<RuntimeState>,
+) -> Option<Duration> {
+    let installing =
+        openh264 == Some(OpenH264State::Installing) || ffmpeg == Some(RuntimeState::Installing);
+    let pending = matches!(
+        openh264,
+        Some(OpenH264State::Absent | OpenH264State::Failed)
+    ) || matches!(ffmpeg, Some(RuntimeState::Absent | RuntimeState::Failed));
+    if installing {
+        Some(POLL_INSTALLING)
+    } else if pending {
+        Some(POLL_PENDING)
+    } else {
+        None
+    }
+}
+
+/// Looks at the OpenH264 and FFmpeg installations on a background thread;
+/// a changed state reads the whole inventory again (the rows of the coders).
+fn poll(shared: &Arc<Mutex<CodecState>>, ctx: &egui::Context) {
+    lock(shared).polling = true;
+    let (slot, ctx) = (shared.clone(), ctx.clone());
+    let started = std::thread::Builder::new()
+        .name("screen-codec-poll".into())
+        .spawn(move || {
+            let openh264 = openh264_report();
+            let ffmpeg = ffmpeg_status();
+            let known = {
+                let current = lock(&slot);
+                let openh264 = current.report.as_ref().map(|r| r.openh264.state);
+                (openh264, current.ffmpeg.as_ref().map(|f| f.state))
+            };
+            let report = if known == (Some(openh264.state), ffmpeg.as_ref().map(|f| f.state)) {
+                None
+            } else {
+                Some(codec_inventory::report())
+            };
+            let mut current = lock(&slot);
+            if let Some(report) = report {
+                current.report = Some(report);
+            } else if let Some(shown) = current.report.as_mut() {
+                shown.openh264 = openh264;
+            }
+            current.ffmpeg = ffmpeg;
+            current.polling = false;
+            current.polled_at = Some(Instant::now());
+            ctx.request_repaint();
+        });
+    if started.is_err() {
+        lock(shared).polling = false;
+    }
+}
+
 /// Runs `action` on a background thread, then reads the inventory again.
 fn run(shared: &Arc<Mutex<CodecState>>, ctx: &egui::Context, action: OpenH264Action) {
     let busy = match action {
-        OpenH264Action::Enable { .. } => "Lade OpenH264 von Cisco und schalte es ein …",
-        OpenH264Action::Disable => "Schalte OpenH264 aus …",
-        OpenH264Action::Remove => "Entferne OpenH264 …",
+        OpenH264Action::Enable { .. } => "Schalte OpenH264 ein und installiere es bei Bedarf …",
+        OpenH264Action::Disable => "Schalte OpenH264 ab …",
+        OpenH264Action::Remove => "Entferne OpenH264 und schalte es ab …",
     };
     {
         let mut current = lock(shared);
@@ -71,10 +151,13 @@ fn run(shared: &Arc<Mutex<CodecState>>, ctx: &egui::Context, action: OpenH264Act
         .spawn(move || {
             let result = openh264_action(&action);
             let report = codec_inventory::report();
+            let ffmpeg = ffmpeg_status();
             let mut current = lock(&slot);
             current.error = result.err().map(|error| format!("OpenH264: {error}"));
             current.report = Some(report);
+            current.ffmpeg = ffmpeg;
             current.busy = None;
+            current.polled_at = Some(Instant::now());
             ctx.request_repaint();
         });
     if started.is_err() {
@@ -141,19 +224,10 @@ pub fn entry_line(entry: &CodecEntry) -> String {
     }
 }
 
-fn state_text(state: OpenH264State) -> &'static str {
-    match state {
-        OpenH264State::Absent => "nicht heruntergeladen",
-        OpenH264State::Enabled => "eingeschaltet",
-        OpenH264State::Disabled => "ausgeschaltet",
-        OpenH264State::Failed => "Datei passt nicht zur geprüften Fassung",
-    }
-}
-
 /// Draws the area (called from `share_screen_tab_ui.rs`).
 pub fn ui(ui: &mut egui::Ui) {
     let shared = state().clone();
-    let (report, busy, error, license_open) = {
+    let (report, ffmpeg, busy, error, license_open) = {
         let mut current = lock(&shared);
         if current.report.is_none() && !current.loading {
             current.loading = true;
@@ -161,6 +235,7 @@ pub fn ui(ui: &mut egui::Ui) {
         }
         (
             current.report.clone(),
+            current.ffmpeg.clone(),
             current.busy,
             current.error.clone(),
             current.license_open,
@@ -198,35 +273,28 @@ pub fn ui(ui: &mut egui::Ui) {
             }
         });
     let openh264 = &report.openh264;
+    let now = unix_now();
     ui.horizontal_wrapped(|ui| {
-        let mut wanted = openh264.state == OpenH264State::Enabled;
+        let mut wanted = openh264.state != OpenH264State::Disabled;
         let toggle = ui.add_enabled(
             busy.is_none() && openh264_license().is_some(),
             egui::Checkbox::new(&mut wanted, "OpenH264 verwenden"),
         );
         if toggle.changed() {
-            match (wanted, openh264.state) {
-                (true, OpenH264State::Disabled) => {
-                    if let Some((_, accepted)) = openh264_license() {
-                        let accepted = accepted.to_string();
-                        run(&shared, ui.ctx(), OpenH264Action::Enable { accepted });
-                    }
+            match openh264_license() {
+                Some((_, accepted)) if wanted => {
+                    let accepted = accepted.to_string();
+                    run(&shared, ui.ctx(), OpenH264Action::Enable { accepted });
                 }
-                (true, _) => lock(&shared).license_open = true,
-                (false, _) => run(&shared, ui.ctx(), OpenH264Action::Disable),
+                _ => run(&shared, ui.ctx(), OpenH264Action::Disable),
             }
         }
         ui.label(OPENH264_NOTICE);
     });
     ui.horizontal_wrapped(|ui| {
-        let reason = openh264
-            .reason
-            .as_deref()
-            .map(|reason| format!(" ({reason})"));
         let text = format!(
-            "Kompatibilitätskodierer: {}{}",
-            state_text(openh264.state),
-            reason.unwrap_or_default()
+            "Kompatibilitätskodierer: {}",
+            openh264_state_text(openh264, now)
         );
         ui.label(RichText::new(text).small().color(theme::muted(ui)));
         if ui.button("Lizenz anzeigen").clicked() {
@@ -235,7 +303,7 @@ pub fn ui(ui: &mut egui::Ui) {
         if ui.button("Lizenzen").clicked() {
             lock(&shared).licenses_open = true;
         }
-        let removable = openh264.state != OpenH264State::Absent && busy.is_none();
+        let removable = openh264.library_present && busy.is_none();
         if ui
             .add_enabled(removable, egui::Button::new("Entfernen"))
             .clicked()
@@ -247,11 +315,29 @@ pub fn ui(ui: &mut egui::Ui) {
             ui.label(busy);
         }
     });
+    if let Some(ffmpeg) = &ffmpeg {
+        let text = format!(
+            "FFmpeg-Laufzeit {}: {}",
+            ffmpeg.version,
+            runtime_state_text(ffmpeg, now)
+        );
+        ui.label(RichText::new(text).small().color(theme::muted(ui)));
+    }
     if let Some(error) = error {
         ui.colored_label(theme::danger(ui), error);
     }
+    let offered = openh264_license().map(|_| openh264.state);
+    if let Some(interval) = poll_interval(offered, ffmpeg.as_ref().map(|f| f.state)) {
+        let current = lock(&shared);
+        let due = current.polled_at.is_none_or(|at| at.elapsed() >= interval);
+        if due && !current.polling && !current.loading && current.busy.is_none() {
+            drop(current);
+            poll(&shared, ui.ctx());
+        }
+        ui.ctx().request_repaint_after(interval);
+    }
     if license_open {
-        license_window(ui.ctx(), &shared, openh264.state, busy.is_none());
+        license_window(ui.ctx(), &shared);
     }
     if lock(&shared).licenses_open {
         licenses_window(ui.ctx(), &shared);
@@ -285,19 +371,13 @@ fn licenses_window(ctx: &egui::Context, shared: &Arc<Mutex<CodecState>>) {
     }
 }
 
-/// The Cisco license in full, with the download as the only way to accept.
-fn license_window(
-    ctx: &egui::Context,
-    shared: &Arc<Mutex<CodecState>>,
-    state: OpenH264State,
-    idle: bool,
-) {
-    let Some((license, accepted)) = openh264_license() else {
+/// Cisco's license of OpenH264 in full, with Cisco's notice.
+fn license_window(ctx: &egui::Context, shared: &Arc<Mutex<CodecState>>) {
+    let Some((license, _)) = openh264_license() else {
         lock(shared).license_open = false;
         return;
     };
     let mut open = true;
-    let mut accept = false;
     crate::app::dialog_geometry::window(
         ctx,
         "share_screen_codec_ui.1",
@@ -311,19 +391,11 @@ fn license_window(
         ui.label(OPENH264_NOTICE);
         egui::ScrollArea::vertical()
             .min_scrolled_height(0.0)
-            .max_height(crate::app::dialog_geometry::remaining_height(ui, 2.0))
+            .max_height(crate::app::dialog_geometry::remaining_height(ui, 1.0))
             .show(ui, |ui| {
                 ui.label(RichText::new(license).monospace().small())
             });
-        let downloadable = idle && state != OpenH264State::Enabled;
-        let button = egui::Button::new("Annehmen und herunterladen");
-        accept = ui.add_enabled(downloadable, button).clicked();
     });
-    if accept {
-        let accepted = accepted.to_string();
-        run(shared, ctx, OpenH264Action::Enable { accepted });
-        open = false;
-    }
     if !open {
         lock(shared).license_open = false;
     }

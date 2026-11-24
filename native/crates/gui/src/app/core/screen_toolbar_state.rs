@@ -6,10 +6,19 @@
 //! from the stored choice alone. A change is „wird angewendet“ until the
 //! facts change or the session answered without changing them; then the
 //! list names what runs. Pure decisions; the toolbar draws them.
+//!
+//! User rule 2026-11-24 („was du anzeigst MUSS funktionieren“): every entry
+//! carries the reason it cannot run for this pair of devices (`Pair`,
+//! `screen_prefs::codec_offer`), the toolbar shows it disabled with it.
 use std::time::{Duration, Instant};
 
+use eframe::egui;
+
+use super::super::screen_prefs::codec_offer::{
+    self, codec_verdict, SessionChoice, Verdict, Viewer,
+};
 use super::super::screen_prefs::{CodecSetting, DecoderLibrary, DecoderPreference, DisplayChoice};
-use crate::screen::core::negotiate::CodecKind;
+use crate::screen::core::negotiate::{CodecKind, CodecOffer};
 
 /// How long the session may go on showing pictures with unchanged facts
 /// before a change counts as answered: the host answers `SET_DECODERS` and
@@ -316,6 +325,166 @@ pub fn list_text(name: &str, chosen: &str, state: &Applied) -> String {
         Applied::Pending => format!("{name}: {chosen} (wird angewendet …)"),
         Applied::Other(running) => format!("{name}: {chosen} → läuft: {running}"),
     }
+}
+
+/// What the lists know of the full view's pair: the host's encoders from
+/// its hello or a probe, this device's offers and what the session runs
+/// with (`screen_pool::view_choice`).
+#[derive(Clone)]
+pub struct Pair {
+    pub session: SessionChoice,
+    pub host: Option<Vec<CodecOffer>>,
+    /// The register's offers; empty without a register (task tests): then
+    /// nothing is checked.
+    pub decoders: Vec<CodecOffer>,
+}
+
+impl Pair {
+    /// The pair of the full view's device now.
+    pub fn now() -> Self {
+        let decoders = super::super::screen_decode_local::current_offers(&[]);
+        let session = super::super::screen_pool::view_choice(&decoders, false);
+        let host = codec_offer::view()
+            .as_ref()
+            .and_then(codec_offer::host_encoders);
+        Self {
+            session,
+            host,
+            decoders,
+        }
+    }
+
+    fn viewer(&self, decoder: DecoderPreference, library: DecoderLibrary) -> Viewer<'_> {
+        Viewer {
+            decoders: &self.decoders,
+            decoder,
+            library,
+        }
+    }
+
+    fn reason(&self, verdict: Verdict) -> Option<String> {
+        let unchecked = self.decoders.is_empty();
+        verdict.reason().filter(|_| !unchecked).map(str::to_string)
+    }
+
+    /// „Codec“: each entry with the reason it cannot run.
+    pub fn codecs(&self) -> Vec<(CodecSetting, Option<String>)> {
+        let library = super::super::screen_prefs::decoder_library_choice();
+        let viewer = self.viewer(super::super::screen_prefs::decoder_choice(), library);
+        let host = self.host.as_deref();
+        CodecSetting::ALL
+            .map(|codec| (codec, self.reason(codec_verdict(codec, host, &viewer))))
+            .into()
+    }
+
+    /// „Dekodierer“ under the session's codec.
+    pub fn decoders(&self) -> Vec<(DecoderPreference, Option<String>)> {
+        let library = super::super::screen_prefs::decoder_library_choice();
+        let host = self.host.as_deref();
+        let verdict = |decoder| {
+            let viewer = self.viewer(decoder, library);
+            self.reason(codec_verdict(self.session.codec, host, &viewer))
+        };
+        DecoderPreference::ALL
+            .map(|decoder| (decoder, verdict(decoder)))
+            .into()
+    }
+
+    /// „Dekodier-Bibliothek“ under the session's codec and stage: the
+    /// register's offers are known for the library in force only, so
+    /// another named library is checked for its presence alone.
+    #[cfg(windows)]
+    pub fn libraries(&self) -> Vec<(DecoderLibrary, Option<String>)> {
+        let in_force = super::super::screen_prefs::decoder_library_choice();
+        let absent = codec_offer::absent_libraries();
+        let verdict = |library| {
+            let viewer = self.viewer(self.session.decoder, library);
+            if absent.contains(&library) {
+                Verdict::Blocked(codec_offer::ABSENT.into())
+            } else if library == in_force || library == DecoderLibrary::Automatic {
+                codec_verdict(self.session.codec, self.host.as_deref(), &viewer)
+            } else {
+                Verdict::Usable
+            }
+        };
+        DecoderLibrary::ALL
+            .map(|library| (library, self.reason(verdict(library))))
+            .into()
+    }
+
+    /// The library the session's offers follow.
+    #[cfg(windows)]
+    pub fn library_running(&self) -> DecoderLibrary {
+        match self.session.library {
+            DecoderLibrary::Automatic => DecoderLibrary::Automatic,
+            _ => super::super::screen_prefs::decoder_library_choice(),
+        }
+    }
+}
+
+/// How long the lists reuse what they learnt (the register's offers).
+const PAIR_FRESH: Duration = Duration::from_millis(500);
+
+/// The full view's pair (`applied::Pair`), learnt again when the device,
+/// the stored choice or the session changed, or after `PAIR_FRESH`.
+pub fn pair(ui: &egui::Ui, input: &super::ToolbarInput) -> Pair {
+    let target = input.current;
+    let info = input.info;
+    codec_offer::set_view(target);
+    if let Some(hello) = info.and_then(|info| info.hello.as_ref()) {
+        codec_offer::note_hello(target, hello);
+    }
+    codec_offer::note_running(info.and_then(|info| info.decoder.as_deref()));
+    let key = (
+        codec_offer::peer_key(target),
+        super::super::screen_prefs::codec_setting(),
+        super::super::screen_prefs::decoder_choice(),
+        info.map_or(0, |info| info.accepted),
+        info.is_some_and(|info| info.end.is_some()),
+    );
+    type Kept = (
+        Instant,
+        (String, CodecSetting, DecoderPreference, u32, bool),
+        Pair,
+    );
+    let id = egui::Id::new("screen_codec_pair");
+    let kept = ui.data(|data| data.get_temp::<Kept>(id));
+    if let Some((at, old, pair)) = kept {
+        if old == key && at.elapsed() < PAIR_FRESH {
+            return pair;
+        }
+    }
+    let pair = Pair::now();
+    ui.data_mut(|data| data.insert_temp::<Kept>(id, (Instant::now(), key, pair.clone())));
+    pair
+}
+
+/// „Anzeige“: each entry with the reason it shows no picture here.
+#[cfg(windows)]
+pub fn displays() -> Vec<(DisplayChoice, Option<String>)> {
+    codec_offer::with_display_facts(|facts| {
+        DisplayChoice::ALL
+            .map(|display| {
+                let verdict = codec_offer::display_verdict(display, facts);
+                (display, verdict.reason().map(str::to_string))
+            })
+            .into()
+    })
+}
+
+/// „<stored> → <in force>“ when the session does not run the stored one.
+pub fn chosen_text(stored: &str, running: &str) -> String {
+    match stored == running {
+        true => stored.to_string(),
+        false => format!("{stored} → {running}"),
+    }
+}
+
+/// Whether a session that ended with `code` was refused for the stored
+/// codec `stored` its host cannot serve (`encoder_failed:
+/// chosen_codec_unavailable`), now that the pair is known to run `session`.
+pub fn refused_for_choice(code: Option<&str>, stored: CodecSetting, session: CodecSetting) -> bool {
+    code == Some("encoder_failed") && session != stored
 }
 
 #[cfg(test)]

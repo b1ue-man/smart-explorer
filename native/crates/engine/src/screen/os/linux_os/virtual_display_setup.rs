@@ -203,44 +203,6 @@ fn display_manager() -> DisplayManager {
         .unwrap_or_else(|| DisplayManager::from_unit("none"))
 }
 
-/// The package manager command that installs `package` without questions.
-fn install_command(package: &str) -> Option<Command> {
-    let present = |path: &str| Path::new(path).is_file();
-    let mut command = if present("/usr/bin/apt-get") {
-        let mut command = Command::new("/usr/bin/apt-get");
-        // Waits for an unattended upgrade that holds the lock (apt 1.9.11+).
-        command.env("DEBIAN_FRONTEND", "noninteractive").args([
-            "-o",
-            "DPkg::Lock::Timeout=300",
-            "install",
-            "-y",
-            "--no-install-recommends",
-            package,
-        ]);
-        command
-    } else if present("/usr/bin/dnf") {
-        let mut command = Command::new("/usr/bin/dnf");
-        command.args(["install", "-y", package]);
-        command
-    } else if present("/usr/bin/pacman") {
-        let mut command = Command::new("/usr/bin/pacman");
-        command.args(["-S", "--noconfirm", "--needed", package]);
-        command
-    } else if present("/usr/bin/zypper") {
-        let mut command = Command::new("/usr/bin/zypper");
-        command.args(["--non-interactive", "install", package]);
-        command
-    } else {
-        return None;
-    };
-    command.stdin(Stdio::null()).stdout(Stdio::null());
-    Some(command)
-}
-
-fn succeeded(command: Option<Command>) -> bool {
-    command.is_some_and(|mut command| command.status().is_ok_and(|status| status.success()))
-}
-
 /// The package of the driver `dummy` for this distribution.
 fn package() -> Option<&'static str> {
     let text = OS_RELEASE
@@ -260,27 +222,23 @@ pub fn possible() -> bool {
         && display_manager().dropin().is_some()
 }
 
+/// The driver's package through the shared package step
+/// (`login/os/linux_os/package_install.rs`, which also refreshes stale apt
+/// lists once).
 fn install_package() -> Result<(), (&'static str, i32)> {
+    use crate::login::os::platform::package_install::{install_as_root, RootError};
     if super::probe::dummy_driver_installed() {
         return Ok(());
     }
     let package = package().ok_or(("distribution_unknown", exit::DISTRIBUTION))?;
-    if succeeded(install_command(package)) {
-        return Ok(());
-    }
-    // Stale package lists of Debian and Ubuntu: refresh once, then again.
-    if Path::new("/usr/bin/apt-get").is_file() {
-        let mut update = Command::new("/usr/bin/apt-get");
-        update
-            .env("DEBIAN_FRONTEND", "noninteractive")
-            .arg("update")
-            .stdin(Stdio::null())
-            .stdout(Stdio::null());
-        if succeeded(Some(update)) && succeeded(install_command(package)) {
-            return Ok(());
+    match install_as_root(&[package]) {
+        Ok(()) => Ok(()),
+        Err(RootError::NoManager) => Err(("distribution_unknown", exit::DISTRIBUTION)),
+        Err(RootError::Package(message)) => {
+            eprintln!("virtual display: package {package}: {message}");
+            Err(("package_install_failed", exit::PACKAGE))
         }
     }
-    Err(("package_install_failed", exit::PACKAGE))
 }
 
 /// Writes `text` to `path` (mode 0644) unless a file there is not se's.

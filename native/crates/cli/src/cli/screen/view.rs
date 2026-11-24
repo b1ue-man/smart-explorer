@@ -12,6 +12,11 @@
 //! „Monitor“ and „Auflösung“ changed later in the window's toolbar apply
 //! within the running session at a host that answers `live` (P9,
 //! `SET_DISPLAY`); an older host's session opens again with them.
+//!
+//! User rule 2026-11-24 („was du anzeigst MUSS funktionieren“): a `--codec`
+//! or `--decoder` that the device and this one cannot run together is
+//! refused before anything is stored, with the German reason and the codecs
+//! they can run (`served_check`; exit code non-zero).
 use clap::Args;
 use clap_complete::ArgValueCandidates;
 use serde_json::{json, Value};
@@ -311,6 +316,7 @@ pub(super) fn run_view(args: ViewArgs) -> Result<i32, String> {
         args.control,
         args.fullscreen,
     )?;
+    served_check(&args, &choice)?;
     if let Some(rate) = args.max_rate {
         crate::app::screen_prefs::set_max_rate_bps(rate.bps())
             .map_err(|error| format!("cannot store the maximum rate: {error}"))?;
@@ -343,6 +349,96 @@ pub(super) fn run_view(args: ViewArgs) -> Result<i32, String> {
     };
     report(args.json, launch(&request)?);
     Ok(0)
+}
+
+/// The device's encoders from its probe; `None` when it does not answer or
+/// shows nothing to this device (the window then decides per session).
+pub(super) fn probed_encoders(
+    target: &crate::share::PeerOpenTarget,
+) -> Option<Vec<crate::screen::core::negotiate::CodecOffer>> {
+    use crate::share::access_grant::CapabilityDecision;
+    match crate::daemon::screen_probe(target.clone()) {
+        Ok(report) if report.supported && report.view != CapabilityDecision::Off => {
+            Some(report.codecs)
+        }
+        _ => None,
+    }
+}
+
+/// `codec`'s reason against the device's `host` encoders and this device's
+/// decoders under `decoder` and `library`, and the codecs that run (keys
+/// and labels); `None` when `codec` runs.
+pub(super) fn served_reason(
+    codec: CodecSetting,
+    host: &[crate::screen::core::negotiate::CodecOffer],
+    decoder: DecoderPreference,
+    library: DecoderLibrary,
+) -> Option<(String, Vec<CodecSetting>)> {
+    use crate::app::screen_prefs::codec_offer::{codec_verdict, Viewer};
+    let offers = |library| {
+        crate::screen::core::decoder_library::set_decoder_library(library);
+        crate::screen::core::negotiate::set_decoder_preference(decoder);
+        crate::screen::os::codec_inventory::registry().decoder_offers()
+    };
+    // A chosen library without decoders here runs as „Automatisch“ in the
+    // window (`codec_offer::effective_library`), so it is checked as that.
+    let mut library = library;
+    let mut decoders = offers(library);
+    if !decoders.iter().any(|offer| offer.codec.is_video()) {
+        library = DecoderLibrary::Automatic;
+        decoders = offers(library);
+    }
+    let viewer = Viewer {
+        decoders: &decoders,
+        decoder,
+        library,
+    };
+    let reason = codec_verdict(codec, Some(host), &viewer)
+        .reason()?
+        .to_string();
+    let served = CodecSetting::ALL
+        .into_iter()
+        .filter(|other| {
+            codec_verdict(*other, Some(host), &viewer)
+                .reason()
+                .is_none()
+        })
+        .collect();
+    Some((reason, served))
+}
+
+/// A named `--codec` or `--decoder` the device cannot serve with this one:
+/// the German reason and the codecs it serves (`codec_offer`).
+fn served_check(args: &ViewArgs, choice: &DeviceChoice) -> Result<(), String> {
+    if args.codec.is_none() && args.decoder.is_none() {
+        return Ok(());
+    }
+    let Some(host) = probed_encoders(&choice.target) else {
+        return Ok(());
+    };
+    let codec = args
+        .codec
+        .unwrap_or_else(crate::app::screen_prefs::codec_setting);
+    let decoder = args
+        .decoder
+        .unwrap_or_else(crate::app::screen_prefs::decoder_choice);
+    let library = args
+        .decoder_library
+        .unwrap_or_else(|| crate::app::screen_prefs::stored_output().0);
+    let Some((reason, served)) = served_reason(codec, &host, decoder, library) else {
+        return Ok(());
+    };
+    let served: Vec<String> = served
+        .iter()
+        .map(|codec| format!("{} ({})", codec.key(), codec.label()))
+        .collect();
+    Err(format!(
+        "Codec „{}“ mit Dekodierer „{}“: {reason}\nMit {} möglich: {}",
+        codec.label(),
+        decoder.label(),
+        choice.name,
+        served.join(", ")
+    ))
 }
 
 /// The local profile ID of `room` (profile ID, room ID or name).

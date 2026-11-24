@@ -301,8 +301,8 @@ pub use runtime_types::{DriveRuntimeInfo, DriveRuntimeInstallOutcome};
 #[path = "os/shared/runtime_info.rs"]
 mod runtime_info;
 pub use runtime_info::{
-    devices_label, drive_mount_supported, drive_runtime_info, drive_runtime_ready,
-    install_drive_runtime,
+    devices_label, drive_mount_supported, drive_runtime_info, drive_runtime_installing,
+    drive_runtime_note, drive_runtime_ready, install_drive_runtime,
 };
 
 /// Recognizes the exact private invocation used by the daemon to start the

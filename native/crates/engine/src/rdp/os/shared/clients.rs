@@ -1,6 +1,9 @@
 //! The installed native RDP client of this OS (design 2.4): inventory, the
 //! derived choice, trust and launch. Windows and Linux have adapters; the
-//! remaining platforms (Android) have none, which every call reports.
+//! remaining platforms (Android) have none, which every call reports. Linux
+//! installs a missing FreeRDP 3 client when a start chooses its client
+//! (install-on-use, `rdp/os/linux_os/clients.rs`).
+use crate::login::os::shared::install_gate::{with_install, Attempt, Failure};
 use crate::rdp::core::{ClientCapability, HostAccount, HostService, StartRequest};
 use crate::rdp::os::platform::clients as platform;
 use crate::share::apps_wire::ManagedSecret;
@@ -10,8 +13,11 @@ use std::{
 };
 
 /// Shown where FreeRDP would need a terminal for its credential prompt
-/// and no credentials were handed over (MCP, Android bridge; design 2.8).
-pub const NEEDS_SDL: &str = "Für Remote Desktop ohne Terminal das Paket freerdp3-sdl installieren";
+/// and no credentials were handed over (MCP, Android bridge; design 2.8);
+/// the desktop GUI asks with its own form instead. It arises only where the
+/// distribution offers no SDL client (Ubuntu 24.04), since a start without
+/// any client installs `freerdp3-sdl` first.
+pub const NEEDS_SDL: &str = "Der FreeRDP-Client dieses Rechners fragt ohne Terminal nicht selbst nach der Anmeldung; Benutzer und Kennwort des Kontos auf dem Gerät mitgeben";
 
 const NO_CLIENT: &str =
     "Auf diesem Gerät gibt es keinen RDP-Client; Bildschirm ansehen/steuern bleibt verfügbar";
@@ -47,11 +53,26 @@ pub fn local_clients() -> Vec<ClientCapability> {
 }
 
 /// Design 2.4: the first available client in the platform's order, or the
-/// requested one (`--client` stays as an override).
+/// requested one (`--client` stays as an override). Without a wanted client
+/// a missing FreeRDP 3 is installed once and the clients are read again.
 pub fn choose_client(wanted: Option<&str>) -> Result<ClientCapability, String> {
+    if wanted.is_some() {
+        return pick(wanted).map_err(Failure::into_reason);
+    }
+    with_install(|| pick(None), install_client)
+}
+
+fn pick(wanted: Option<&str>) -> Result<ClientCapability, Failure> {
     let clients = local_clients();
+    let missing = |reason: String| {
+        if wanted.is_none() && client_missing() {
+            Failure::Missing(reason)
+        } else {
+            Failure::Other(reason)
+        }
+    };
     if clients.is_empty() {
-        return Err(NO_CLIENT.into());
+        return Err(missing(NO_CLIENT.into()));
     }
     let found = match wanted {
         Some(id) => clients.iter().find(|client| client.id == id),
@@ -59,17 +80,61 @@ pub fn choose_client(wanted: Option<&str>) -> Result<ClientCapability, String> {
     };
     match found {
         Some(client) if client.available => Ok(client.clone()),
-        Some(client) => Err(client.detail.clone()),
-        None if wanted.is_some() => Err(
+        Some(client) => Err(Failure::Other(client.detail.clone())),
+        None if wanted.is_some() => Err(Failure::Other(
             "The selected RDP client is not installed or has no supported verification adapter"
                 .into(),
-        ),
-        None => Err(clients
-            .iter()
-            .map(|client| format!("{}: {}", client.id, client.detail))
-            .collect::<Vec<_>>()
-            .join("; ")),
+        )),
+        None => Err(missing(
+            clients
+                .iter()
+                .map(|client| format!("{}: {}", client.id, client.detail))
+                .collect::<Vec<_>>()
+                .join("; "),
+        )),
     }
+}
+
+/// Whether installing the platform's client package would give a client.
+#[cfg(target_os = "linux")]
+fn client_missing() -> bool {
+    platform::client_missing()
+}
+#[cfg(not(target_os = "linux"))]
+fn client_missing() -> bool {
+    false
+}
+
+#[cfg(target_os = "linux")]
+fn install_client() -> Attempt {
+    platform::install_client()
+}
+#[cfg(not(target_os = "linux"))]
+fn install_client() -> Attempt {
+    Attempt::Failed(NO_CLIENT.into())
+}
+
+/// The page's note while the client is missing and se installs it at the
+/// next start (its progress, the last refusal, or the coming install);
+/// `None` when a client is installed or the platform installs none. Runs the
+/// clients' version checks: call it off the UI thread.
+#[cfg(target_os = "linux")]
+pub fn client_install_note() -> Option<String> {
+    platform::install_note()
+}
+#[cfg(not(target_os = "linux"))]
+pub fn client_install_note() -> Option<String> {
+    None
+}
+
+/// „FreeRDP 3 wird installiert …“ while se installs the client; cheap.
+#[cfg(target_os = "linux")]
+pub fn client_install_progress() -> Option<String> {
+    platform::install_progress()
+}
+#[cfg(not(target_os = "linux"))]
+pub fn client_install_progress() -> Option<String> {
+    None
 }
 
 pub fn check_client(request: &StartRequest) -> Result<ClientCapability, String> {

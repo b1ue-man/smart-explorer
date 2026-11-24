@@ -57,12 +57,15 @@ pub(super) fn mount_status_alert(
 /// 2026-10-27: „bestehende gecachete änderungen sind kein grund beim öffnen
 /// von se immer das laufwerksfenster zu öffnen“); the start notice names them.
 pub(super) fn has_mount_attention(mounts: &[crate::mount::MountSnapshot]) -> bool {
-    mounts.iter().filter(|mount| !mount.recovery.requires_retention()).any(|mount| match &mount.status {
-        crate::mount::MountStatus::Failed { detail } => !waits_for_vault(detail),
-        crate::mount::MountStatus::Conflict { .. }
-        | crate::mount::MountStatus::RuntimeUnavailable { .. } => true,
-        _ => false,
-    })
+    mounts
+        .iter()
+        .filter(|mount| !mount.recovery.requires_retention())
+        .any(|mount| match &mount.status {
+            crate::mount::MountStatus::Failed { detail } => !waits_for_vault(detail),
+            crate::mount::MountStatus::Conflict { .. }
+            | crate::mount::MountStatus::RuntimeUnavailable { .. } => true,
+            _ => false,
+        })
 }
 
 /// DRV-M7: the status of a vault drive whose vault is locked carries the
@@ -128,8 +131,10 @@ pub(super) fn status_label(status: &crate::mount::MountStatus) -> String {
         crate::mount::MountStatus::RuntimeUnavailable { detail } if cfg!(target_os = "linux") => {
             format!("FUSE nicht bereit: {detail}")
         }
+        // The detail is the install's reason (install-on-use) or the
+        // preflight error of a runtime se does not replace.
         crate::mount::MountStatus::RuntimeUnavailable { detail } => {
-            format!("Dokany fehlt: {detail}")
+            format!("Dokany nicht bereit: {detail}")
         }
         crate::mount::MountStatus::Conflict { path, detail, .. } => {
             format!("Pruefung offen bei {path}: {detail}")

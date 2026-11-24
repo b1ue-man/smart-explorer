@@ -8,9 +8,16 @@
 //! 0 lets the kernel abort a drive whose request takes longer, se does not
 //! work around it), a sandbox (Flatpak, Snap: not supported, assumption A9;
 //! container), WSL (the Windows Explorer sees FUSE mounts only below
-//! `/mnt/wsl`, assumption A7) and the package command of the distribution.
+//! `/mnt/wsl`, assumption A7).
 //! Every path is read below an exchangeable root and the environment comes
 //! from a function, so the detection is testable without the real system.
+//!
+//! A missing `fusermount3` or `/dev/fuse` is installed on use (user order
+//! 2026-11-24): the drive host, `se drive install-runtime` and the window's
+//! state go through `login/os/linux_os/package_install.rs` (package fuse3,
+//! the kernel module `fuse`), behind the polkit dialog, and then check once
+//! more. A sandbox (Flatpak, Snap) and a helper without setuid are no case
+//! for an install; their problem is reported as it is.
 use std::ffi::OsString;
 use std::fs;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
@@ -18,6 +25,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use serde::Serialize;
+
+use crate::login::os::platform::package_install::{self, Component};
+use crate::login::os::shared::install_gate::{with_install, Attempt, Failure};
 
 const STANDARD_DIRS: [&str; 5] = ["/usr/bin", "/bin", "/usr/local/bin", "/usr/sbin", "/sbin"];
 const HELPER: &str = "fusermount3";
@@ -81,19 +91,30 @@ pub struct FuseRuntimeReport {
     pub problems: Vec<String>,
 }
 
-/// `se drive install-runtime` under Linux: se installs no system package.
+/// `se drive install-runtime` under Linux: se installs fuse3 (and loads the
+/// kernel module) behind the polkit dialog.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum FuseInstallOutcome {
     AlreadyReady,
-    ManualRequired { command: String, reason: String },
+    Installed,
+    /// The polkit dialog was dismissed or refused.
+    Declined {
+        reason: String,
+    },
+    /// The install failed, or FUSE is not ready for a reason an install
+    /// cannot change; the exact reason.
+    Failed {
+        reason: String,
+    },
 }
 
 impl FuseInstallOutcome {
     pub fn exit_code(&self) -> i32 {
         match self {
-            Self::AlreadyReady => 0,
-            Self::ManualRequired { .. } => 2,
+            Self::AlreadyReady | Self::Installed => 0,
+            Self::Failed { .. } => 1,
+            Self::Declined { .. } => 2,
         }
     }
 }
@@ -114,7 +135,6 @@ pub fn report(probe: &RuntimeProbe<'_>) -> FuseRuntimeReport {
         _ => None,
     };
     let sandbox = sandbox(probe);
-    let package = package_command(probe.root);
     let mut problems = Vec::new();
     if !device_exists {
         problems.push(
@@ -125,9 +145,9 @@ pub fn report(probe: &RuntimeProbe<'_>) -> FuseRuntimeReport {
         problems.push("/dev/fuse ist für diesen Nutzer nicht les- und schreibbar".to_string());
     }
     match &helper {
-        None => problems.push(format!("fusermount3 fehlt; installieren mit: {package}")),
+        None => problems.push("fusermount3 fehlt (Paket fuse3)".to_string()),
         Some(path) if !setuid => problems.push(format!(
-            "{} ist nicht setuid root; Laufwerke brauchen den Setuid-Helfer ({package})",
+            "{} ist nicht setuid root; Laufwerke brauchen den Setuid-Helfer aus dem Paket fuse3",
             path.display()
         )),
         Some(_) => {}
@@ -159,21 +179,82 @@ pub fn report(probe: &RuntimeProbe<'_>) -> FuseRuntimeReport {
     }
 }
 
-pub fn install_outcome(probe: &RuntimeProbe<'_>) -> FuseInstallOutcome {
+/// Whether installing fuse3 (and loading the module) can make FUSE ready:
+/// the helper or the device is missing and no sandbox forbids drives.
+pub fn install_helps(report: &FuseRuntimeReport, device_present: bool) -> bool {
+    !matches!(report.sandbox, Sandbox::Flatpak | Sandbox::Snap)
+        && (report.fusermount3.path.is_none() || !device_present)
+}
+
+fn device_present(probe: &RuntimeProbe<'_>) -> bool {
+    probe.root.join("dev/fuse").exists()
+}
+
+/// FUSE ready, `Missing` when an install helps, else the problems.
+fn readiness(probe: &RuntimeProbe<'_>) -> Result<(), Failure> {
     let report = report(probe);
     if report.ready {
-        return FuseInstallOutcome::AlreadyReady;
-    }
-    let command = if report.fusermount3.path.is_none() || !report.fusermount3.setuid {
-        package_command(probe.root)
-    } else if !report.device.accessible {
-        "sudo modprobe fuse".to_string()
+        Ok(())
+    } else if install_helps(&report, device_present(probe)) {
+        Err(Failure::Missing(report.problems.join("; ")))
     } else {
-        String::new()
-    };
-    FuseInstallOutcome::ManualRequired {
-        command,
-        reason: report.problems.join("; "),
+        Err(Failure::Other(report.problems.join("; ")))
+    }
+}
+
+/// `se drive install-runtime` with `install` as the package step (the
+/// tests pass their own).
+pub fn install_with(
+    probe: &RuntimeProbe<'_>,
+    install: impl FnOnce() -> Attempt,
+) -> FuseInstallOutcome {
+    match readiness(probe) {
+        Ok(()) => return FuseInstallOutcome::AlreadyReady,
+        Err(Failure::Other(reason)) => return FuseInstallOutcome::Failed { reason },
+        Err(Failure::Missing(_)) => {}
+    }
+    match install() {
+        Attempt::Installed => match readiness(probe) {
+            Ok(()) => FuseInstallOutcome::Installed,
+            Err(failure) => FuseInstallOutcome::Failed {
+                reason: format!(
+                    "FUSE ist nach der Installation nicht bereit: {}",
+                    failure.into_reason()
+                ),
+            },
+        },
+        Attempt::Declined(reason) => FuseInstallOutcome::Declined { reason },
+        Attempt::Failed(reason) => FuseInstallOutcome::Failed { reason },
+    }
+}
+
+/// The package step of FUSE for this system.
+fn install_fuse(probe: &RuntimeProbe<'_>) -> Attempt {
+    package_install::ensure(Component::Fuse, &|| readiness(probe).is_ok())
+}
+
+/// `se drive install-runtime` under Linux.
+pub fn install_outcome(probe: &RuntimeProbe<'_>) -> FuseInstallOutcome {
+    install_with(probe, || install_fuse(probe))
+}
+
+/// The drive host's runtime check: FUSE ready, else installed once and
+/// checked once more; the error is the reason the drive shows.
+pub fn ensure_ready(probe: &RuntimeProbe<'_>) -> Result<(), String> {
+    with_install(|| readiness(probe), || install_fuse(probe))
+}
+
+/// The window's note: `None` when FUSE is ready, else the running install,
+/// the last refusal, that se installs it at the next mount, or the problem
+/// an install cannot change.
+pub fn runtime_note(probe: &RuntimeProbe<'_>) -> Option<String> {
+    match readiness(probe) {
+        Ok(()) => None,
+        Err(Failure::Missing(_)) => Some(package_install::missing_note(
+            Component::Fuse,
+            "beim nächsten Einbinden",
+        )),
+        Err(Failure::Other(problems)) => Some(format!("FUSE ist nicht bereit: {problems}")),
     }
 }
 
@@ -201,38 +282,6 @@ pub fn helper_program() -> PathBuf {
 /// The kernel request timeout in seconds when it is set (> 0).
 pub fn kernel_request_timeout() -> Option<u64> {
     sysctl(Path::new("/"), "default_request_timeout").filter(|seconds| *seconds > 0)
-}
-
-/// The command that installs the helper on this distribution.
-pub fn package_command(root: &Path) -> String {
-    let release = fs::read_to_string(root.join("etc/os-release")).unwrap_or_default();
-    let mut names = Vec::new();
-    for line in release.lines() {
-        if let Some((key, value)) = line.split_once('=') {
-            if key == "ID" || key == "ID_LIKE" {
-                let value = value.trim().trim_matches('"').trim_matches('\'');
-                names.extend(value.split_whitespace().map(str::to_ascii_lowercase));
-            }
-        }
-    }
-    let has = |wanted: &[&str]| names.iter().any(|name| wanted.contains(&name.as_str()));
-    if has(&["debian", "ubuntu"]) {
-        "sudo apt-get install fuse3".into()
-    } else if has(&["fedora", "rhel", "centos"]) {
-        "sudo dnf install fuse3".into()
-    } else if has(&["arch", "manjaro"]) {
-        "sudo pacman -S fuse3".into()
-    } else if has(&[
-        "opensuse",
-        "suse",
-        "sles",
-        "opensuse-leap",
-        "opensuse-tumbleweed",
-    ]) {
-        "sudo zypper install fuse3".into()
-    } else {
-        "das Paket fuse3 mit der Paketverwaltung installieren".into()
-    }
 }
 
 fn sandbox(probe: &RuntimeProbe<'_>) -> Sandbox {

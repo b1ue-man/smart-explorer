@@ -52,7 +52,7 @@ enum DriveCommand {
     #[command(about = "Check the drive runtime (Windows: Dokany, Linux: FUSE)")]
     Runtime(OutputArgs),
     #[command(
-        about = "Install the pinned official Dokany runtime (Windows); name the FUSE package (Linux)"
+        about = "Install the pinned official Dokany runtime (Windows) or the FUSE package fuse3 (Linux)"
     )]
     InstallRuntime(InstallRuntimeArgs),
     #[command(
@@ -119,7 +119,7 @@ pub(super) fn run(args: DriveArgs) -> Result<i32, String> {
 
 #[cfg(target_os = "linux")]
 fn install_runtime(args: InstallRuntimeArgs) -> Result<i32, String> {
-    // se installs no system package under Linux; `--msi` is Windows only.
+    // se installs fuse3 behind the polkit dialog; `--msi` is Windows only.
     let _ = args.msi;
     drive_output_linux::install_runtime(args.json)
 }
@@ -300,9 +300,14 @@ fn retry(args: SelectArgs) -> Result<i32, String> {
 
 fn wait_until_started(mut snapshot: MountSnapshot) -> Result<MountSnapshot, String> {
     let id = snapshot.config.id.clone();
-    let deadline = Instant::now() + START_TIMEOUT;
+    let mut deadline = Instant::now() + START_TIMEOUT;
     while matches!(&snapshot.status, MountStatus::Mounting) && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(150));
+        // The host installs a missing runtime (install-on-use): its
+        // confirmation waits for the person, the mount waits with it.
+        if crate::mount::drive_runtime_installing() {
+            deadline = Instant::now() + START_TIMEOUT;
+        }
         snapshot = crate::daemon::list_mounts()?
             .into_iter()
             .find(|mount| mount.config.id == id)

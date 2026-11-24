@@ -1,20 +1,14 @@
-//! Settings of the desktop viewer (SCR-M7, U25-6): „Niedrigste Latenz“,
-//! „Schärfe vor Flüssigkeit“, „Verlustfrei“, the fit (Einpassen/1:1) and
-//! „Höchste Datenrate“ (plan 2026-11-14 „Bildkette“ B-09) in
-//! `<app data>/screen/viewer.json`. Read at the start (a missing or
-//! unreadable file means the defaults, without a message), written
-//! atomically at every change by the user. Full screen is not stored.
-//!
-//! „Höchste Datenrate“ is changed by the toolbar and by `se screen view
-//! --max-rate` directly (`set_max_rate_bps`); a save of the other settings
-//! writes only what this process changed (`ViewerPrefs::save`), so it never
-//! takes a value back that another process stored meanwhile. „Codec“ and „Dekodierer“ (BK6)
-//! work the same way (`set_codec_choice`, `se screen view --codec
-//! --decoder`); „Codec: Verlustfrei“ replaces the switch „Verlustfrei“ with
-//! its meaning, and a stored `lossless` of an older viewer becomes it.
-//! „Monitor“ and „Auflösung“ (plan 2026-11-17 P5, `se screen view
-//! --virtual-display --display-size`) as well (`set_virtual_display_choice`);
-//! never chosen means „Automatisch“, following the window.
+//! Settings of the desktop viewer (SCR-M7, U25-6) in
+//! `<app data>/screen/viewer.json`: „Niedrigste Latenz“, the fit, „Höchste
+//! Datenrate“ (plan 2026-11-14 „Bildkette“ B-09), „Codec“ and „Dekodierer“
+//! (BK6: „Codec: Verlustfrei“ replaces the switch „Verlustfrei“ with its
+//! meaning and takes over an older file's `lossless`), „Dekodierer-
+//! Bibliothek“, „Anzeige“, „Monitor“ and „Auflösung“ (plan 2026-11-17 P5;
+//! never chosen: „Automatisch“, following the window). Read at the start (a
+//! missing or unreadable file means the defaults, without a message); the
+//! setters (`set_max_rate_bps`, `set_codec_choice`, also `se screen view`)
+//! store at once, `ViewerPrefs::save` writes only what this process changed.
+//! Full screen is not stored. What the lists offer: `codec_offer`.
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
@@ -39,10 +33,9 @@ pub enum Fit {
     Actual,
 }
 
-/// „Anzeige“ of the viewer (plan 2026-11-17 P8): Direct3D 11 for pictures
-/// of FFmpeg's D3D11VA stage on Windows, wgpu/glow for every other picture
-/// and wherever Direct3D 11 does not open; „wgpu“ keeps every picture on
-/// the wgpu/glow path. Automatic is Direct3D 11 with that fallback.
+/// „Anzeige“ (plan 2026-11-17 P8): Direct3D 11 for FFmpeg's D3D11VA pictures
+/// on Windows, wgpu/glow for every other picture and wherever Direct3D 11
+/// does not open (Automatic); „wgpu“ keeps every picture on that path.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DisplayChoice {
@@ -114,8 +107,7 @@ pub struct ViewerPrefs {
     /// „Anzeige“ (P8); absent is „Automatisch“.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display: Option<DisplayChoice>,
-    /// „Monitor“ and „Auflösung“ (P5); absent is „Automatisch“ following
-    /// the window.
+    /// „Monitor“ and „Auflösung“ (P5); absent: „Automatisch“ (the window).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub virtual_display: Option<VirtualDisplayChoice>,
     /// „Ton“ (plan 2026-11-17 P9, `screen_audio.rs`); absent is on.
@@ -215,8 +207,7 @@ pub fn set_codec_choice(
     })
 }
 
-/// „Dekodierer-Bibliothek“ and „Anzeige“ of this process (P8): unread
-/// (`None`) or the values.
+/// „Dekodierer-Bibliothek“ and „Anzeige“ (P8): unread (`None`) or the values.
 type OutputChoice = (Option<DecoderLibrary>, Option<DisplayChoice>);
 static OUTPUT: Mutex<Option<OutputChoice>> = Mutex::new(None);
 
@@ -228,14 +219,20 @@ fn output_choice() -> OutputChoice {
     })
 }
 
-/// The stored „Dekodierer-Bibliothek“.
+/// „Dekodierer-Bibliothek“ in force (`codec_offer::effective_library`).
 pub fn decoder_library_choice() -> DecoderLibrary {
-    output_choice().0.unwrap_or_default()
+    codec_offer::effective_library(stored_output().0)
 }
 
-/// The stored „Anzeige“.
+/// „Anzeige“ in force (`codec_offer::effective_display`).
 pub fn display_choice() -> DisplayChoice {
-    output_choice().1.unwrap_or_default()
+    codec_offer::effective_display(stored_output().1)
+}
+
+/// The stored „Dekodierer-Bibliothek“ and „Anzeige“.
+pub fn stored_output() -> (DecoderLibrary, DisplayChoice) {
+    let (library, display) = output_choice();
+    (library.unwrap_or_default(), display.unwrap_or_default())
 }
 
 /// Stores „Dekodierer-Bibliothek“ and „Anzeige“ at once (`None` keeps that
@@ -389,10 +386,8 @@ mod bildkette_codec_tests {
     use super::*;
     use crate::screen::core::negotiate::CodecPreference;
 
-    /// 4.10: „Codec“ replaces the switch „Verlustfrei“ without changing its
-    /// meaning: a stored `lossless` of an older viewer becomes „Verlustfrei“
-    /// (still `SET_MODE` `lossless`, negotiation automatic), and every new
-    /// choice writes `lossless` along for an older viewer reading the file.
+    /// 4.10: a stored `lossless` of an older viewer becomes „Verlustfrei“
+    /// (`SET_MODE` `lossless`); every choice writes `lossless` along.
     #[test]
     fn bildkette_task_codec_lossless_switch_is_taken_over() {
         let dir = tempfile::tempdir().unwrap();
@@ -428,9 +423,8 @@ mod bildkette_codec_tests {
         assert_eq!(chosen.codec_setting(), CodecSetting::Lossless);
     }
 
-    /// P9: the switch „Schärfe vor Flüssigkeit“ is „Codec: Scharf (GPU)“:
-    /// a stored switch reads as that codec, the codec sends `sharpness` and
-    /// writes the switch along for an older viewer.
+    /// P9: the switch „Schärfe vor Flüssigkeit“ is „Codec: Scharf (GPU)“,
+    /// read, sent as `sharpness` and written along for an older viewer.
     #[test]
     fn p9_task_sharpness_switch_is_the_sharp_codec() {
         let older = ViewerPrefs {
@@ -458,9 +452,8 @@ mod bildkette_codec_tests {
         assert_eq!(both.codec_setting(), CodecSetting::Lossless);
     }
 
-    /// P8: „Dekodierer-Bibliothek“ and „Anzeige“ are stored beside the
-    /// other choices; a file without them means automatic (FFmpeg first,
-    /// Direct3D 11 for D3D11VA pictures), and „wgpu“ turns the presenter off.
+    /// P8: „Dekodierer-Bibliothek“ and „Anzeige“ are stored; absent means
+    /// automatic, and „wgpu“ turns the presenter off.
     #[test]
     fn bildkette_task_ffmpeg_output_choices_are_stored() {
         let dir = tempfile::tempdir().unwrap();
@@ -488,11 +481,19 @@ mod bildkette_codec_tests {
     }
 }
 
+#[path = "screen_codec_offer.rs"]
+pub mod codec_offer;
 #[path = "screen_prefs_start.rs"]
 mod start;
 #[path = "screen_prefs_store.rs"]
 mod store;
-pub use start::{current, hold_start_choices, start_choices};
+pub use start::{current, start_choices};
+
+/// `start::hold_start_choices`; the target's device is the full view's.
+pub fn hold_start_choices(target_json: &str) {
+    start::hold_start_choices(target_json);
+    codec_offer::start_target(target_json);
+}
 #[cfg(test)]
 #[path = "wahlgilt_prefs_task_tests.rs"]
 mod wahlgilt_prefs_task_tests;

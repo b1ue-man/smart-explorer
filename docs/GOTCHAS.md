@@ -319,7 +319,9 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
   older/newer driver. There is no link-time Dokany import and no DLL or driver
   beside the app. The recommended NSIS installer does, however, embed the
   reviewed official `Dokan_x64.msi` as a standard-selected optional offline
-  component; portable/auto-updated users obtain the same pin through the GUI or
+  component; portable/auto-updated users obtain the same pin when a drive first
+  mounts (install-on-use behind UAC, one install at a time through
+  `login/os/shared/install_gate.rs`), or ahead of time through the GUI or
   `se drive install-runtime`. Keep the base install per-user and invoke UAC only
   for the system-wide MSI. Plain `/S` must skip it; only
   `/S /INSTALLDOKANY=1` opts a silent setup in. Never uninstall the shared
@@ -1490,7 +1492,10 @@ Plan 2026-11-17 P9 „Audio“. Paths below `native/crates/engine/src/screen/` u
   the helper itself verifies as router-less, and never on a routed network.
   Every platform facility (ICS installed, `SharedAccess` startable, task
   registered, NetworkManager owning its bus name, `dnsmasq` present, polkit)
-  is probed and reported as `nicht verfuegbar: <Grund>`; never assume it.
+  is probed and reported as `nicht verfuegbar: <Grund>`; never assume it. A
+  missing `dnsmasq` is the exception: the one-time setup installs it (polkit),
+  and after a declined or failed install the probe reports a repair instead of
+  asking again on its own.
 
 ## Connections per purpose (source state 2026-11-14, not built, not released)
 

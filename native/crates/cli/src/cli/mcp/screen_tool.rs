@@ -29,7 +29,7 @@ const DEFAULT_MAX_EDGE: u64 = 1568;
 /// Seconds to wait for the device's user unless the call says otherwise.
 const DEFAULT_WAIT_SECS: u64 = 30;
 
-pub(super) const DESCRIPTION: &str = "Looks at the screen of a paired device: `devices` lists the devices and their screen rights, `probe` shows platform, monitors, codecs, limits and `virtual_display` (whether the device can show its desktop on se's own display in the viewer's resolution; a viewer chooses it with `se screen view --virtual-display auto|off|request --display-size WxH`; with `live: true` the viewer's „Monitor“ and „Auflösung“ change it within the running session), `windows` lists the windows that run there, `families` returns confirmed versioned window-family selectors, `snapshot` returns one still picture (PNG image, long edge at most 1568 px unless `max_edge` says otherwise), `audio` reads or sets („on“) whether the desktop viewer plays the device's sound („Ton“, default on; also `se screen view --audio on|off`). The other device must have granted „screen view“; if it asks its user, the call waits up to `wait` seconds (default 30) and then fails with `approval_pending`. There is no live video and no way to answer a confirmation through this tool; input goes through the tool `screen_input`.";
+pub(super) const DESCRIPTION: &str = "Looks at the screen of a paired device: `devices` lists the devices and their screen rights, `probe` shows platform, monitors, codecs, limits and `virtual_display` (whether the device can show its desktop on se's own display in the viewer's resolution; a viewer chooses it with `se screen view --virtual-display auto|off|request --display-size WxH`; with `live: true` the viewer's „Monitor“ and „Auflösung“ change it within the running session; `text` is the German line the viewers show; `inactive`/`setup_needed`: the first viewer with „screen control“ that asks installs the display driver, on Windows with one administrator confirmation on that device unless se runs privileged there; while it installs, sessions report `setup` (`windows_display_driver_install_prompt` or `_installing`), keep the current monitor and switch by themselves after success; `unsupported` with `windows_display_driver_declined` or `windows_display_driver_install_failed: <message>` names the cause, a new request tries again), `windows` lists the windows that run there, `families` returns confirmed versioned window-family selectors, `snapshot` returns one still picture (PNG image, long edge at most 1568 px unless `max_edge` says otherwise), `audio` reads or sets („on“) whether the desktop viewer plays the device's sound („Ton“, default on; also `se screen view --audio on|off`). `probe` also answers `viewer_codecs`: every „Codec“ of the viewer (`auto`, `h264`, `hevc`, `av1`, `sharp`, `lossless`) with `usable` and, when this pair of devices cannot run it, the German `reason` (`se screen view --codec` refuses those). The other device must have granted „screen view“; if it asks its user, the call waits up to `wait` seconds (default 30) and then fails with `approval_pending`. There is no live video and no way to answer a confirmation through this tool; input goes through the tool `screen_input`.";
 
 const DEVICE: &str = "Device: a `share://direct/<id>` or `share://room/<room>/<device>` endpoint, a name, an id or a fingerprint prefix; `devices` lists them.";
 
@@ -137,6 +137,53 @@ fn audio(args: &Args) -> Result<CallToolResult, String> {
     ))
 }
 
+/// Each „Codec“ of the desktop viewer with this device (user rule
+/// 2026-11-24): `{codec, label, usable, reason}` from the device's `codecs`
+/// and this device's decoders under the stored „Dekodierer“ and
+/// „Dekodier-Bibliothek“ (`codec_offer::codec_verdict`); `null` when the
+/// device shows nothing to this one.
+fn viewer_codecs(probe: &Value) -> Value {
+    use crate::app::screen_prefs::codec_offer::{codec_verdict, Viewer};
+    use crate::screen::core::negotiate::{CodecOffer, CodecSetting};
+    let shown = probe["supported"] == Value::Bool(true) && probe["view"] != "off";
+    let host = serde_json::from_value::<Vec<CodecOffer>>(probe["codecs"].clone());
+    let Some(host) = host.ok().filter(|_| shown) else {
+        return Value::Null;
+    };
+    let decoder = crate::app::screen_prefs::decoder_choice();
+    let offers = |library| {
+        crate::screen::core::negotiate::set_decoder_preference(decoder);
+        crate::screen::core::decoder_library::set_decoder_library(library);
+        crate::screen::os::codec_inventory::registry().decoder_offers()
+    };
+    // A chosen library without decoders here runs as „Automatisch“ in the
+    // viewer (`codec_offer::effective_library`).
+    let mut library = crate::app::screen_prefs::stored_output().0;
+    let mut decoders = offers(library);
+    if !decoders.iter().any(|offer| offer.codec.is_video()) {
+        library = crate::screen::core::decoder_library::DecoderLibrary::Automatic;
+        decoders = offers(library);
+    }
+    let viewer = Viewer {
+        decoders: &decoders,
+        decoder,
+        library,
+    };
+    CodecSetting::ALL
+        .iter()
+        .map(|codec| {
+            let verdict = codec_verdict(*codec, Some(&host), &viewer);
+            let reason = verdict.reason().map(str::to_string);
+            json!({
+                "codec": codec.key(),
+                "label": codec.label(),
+                "usable": reason.is_none(),
+                "reason": reason,
+            })
+        })
+        .collect()
+}
+
 pub(super) const INPUT_DESCRIPTION: &str = "Clicks, moves the pointer, scrolls, types text, presses a key or a key combination, or runs an Android system action on the screen of a paired device (one input per call). The other device must have granted „screen control“ to this device; if it asks its user, the call waits up to `wait` seconds (default 30) and then fails with `approval_pending`. Coordinates are pixels of the source (in its own size; a host that does not name a window's size takes percentages only) or percentages (`50%`). The answer says whether the input was sent (`sent`) and whether the device confirmed that it applied it (`applied`: `true` or `false` from a device that sends input receipts, which answers once the input is settled, on an Android device once it performed or refused it; `null` from an older device, whose answer is awaited 1.5 s, 3.8 s on an Android device, so `sent` is unconfirmed, and `null` with `unconfirmed` (the reason) when a device with receipts sent none within the computed limit), why the device blocked it (`blocked`: `elevated_window`, `secure_desktop`, `control_unavailable`, `unsupported_on_host`) or why it held the input back without applying it (`held`: `viewer_hidden`, `waiting_for_picture`, `release_pending`, `backlog_full`, `other`; `waiting_for_picture` also when no picture came within five seconds, the input is then not sent) or why it took the input but did not perform it (`refused`: the device's sentence, e.g. a mouse button without counterpart or a password field), or that the text was not typed to its end (`stopped`: `untyped` characters, `exact`, the German `text`, and `block` or `held` when a block or hold stopped it partway; without them the control went or the session ended). Ctrl+Alt+Delete is never sent.";
 
 pub(super) fn input_properties() -> Value {
@@ -209,9 +256,11 @@ pub(super) fn screen(args: &Args) -> Result<CallToolResult, String> {
         "devices" => Ok(response::ok(crate::cli::screen::devices_value(
             args.flag("probe")?,
         )?)),
-        "probe" => Ok(response::ok(crate::cli::screen::probe_value(
-            &args.string("device")?,
-        )?)),
+        "probe" => {
+            let mut probe = crate::cli::screen::probe_value(&args.string("device")?)?;
+            probe["viewer_codecs"] = viewer_codecs(&probe);
+            Ok(response::ok(probe))
+        }
         "windows" => {
             let selector = args.string("device")?;
             let wait = wait(args)?;

@@ -138,7 +138,8 @@ pub(super) fn run(args: ScreenArgs) -> Result<i32, String> {
         ScreenCommand::Probe { device, json } => {
             let target = select_device(&device)?.target;
             let report = crate::daemon::screen_probe(target)?;
-            output::print(json, &report, || output::probe_text(&report));
+            let value = output::probe_json(&report)?;
+            output::print(json, &value, || output::probe_text(&report));
             Ok(0)
         }
         ScreenCommand::Windows(args) => windows::run(args),
@@ -323,7 +324,7 @@ pub(crate) fn devices_value(probe: bool) -> Result<serde_json::Value, String> {
 pub(crate) fn probe_value(selector: &str) -> Result<serde_json::Value, String> {
     let (target, _) = device_target(selector)?;
     let report = crate::daemon::screen_probe(target)?;
-    serde_json::to_value(&report).map_err(|error| error.to_string())
+    output::probe_json(&report)
 }
 
 fn devices(room: Option<&str>, probe: bool, json: bool) -> Result<i32, String> {

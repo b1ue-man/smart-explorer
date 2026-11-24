@@ -484,6 +484,10 @@ pub fn session_facts() -> String {
 /// `se rdp host-setup --system <step>`: `state=<state>` and exit code 0
 /// when done, 1 otherwise. Linux steps take no user SID.
 pub fn run_system_step(step: &str, user_sid: Option<&str>) -> (String, i32) {
+    // Install-on-use of FUSE, FreeRDP 3 and dnsmasq (`package_install.rs`).
+    if let Some(done) = crate::login::os::platform::package_install::system_step(step) {
+        return done;
+    }
     let state = match (SystemStep::parse(step), user_sid) {
         (Some(step), None) => system_step(step),
         _ => SetupState::Failed("unknown_system_step".into()),

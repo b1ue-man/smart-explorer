@@ -1,5 +1,7 @@
 //! Linux privilege boundary: root broker, dedicated gateway UID, greeter UID helper.
 mod host_status;
+/// Install-on-use of FUSE, FreeRDP 3 and dnsmasq (user order 2026-11-24).
+pub mod package_install;
 mod protected;
 mod readiness;
 mod self_platform;

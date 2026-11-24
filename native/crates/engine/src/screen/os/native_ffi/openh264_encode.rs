@@ -7,7 +7,7 @@
 //! (`openh264_capture::admitted_i420`).
 use super::codec_inventory::openh264_encoder_offers;
 use super::openh264_capture::{admitted_i420, capture_limit, copy_access_unit};
-use super::openh264_codec::{coder_error, load, OPENH264_NAME};
+use super::openh264_codec::{coder_error, load, session_ready, Side, OPENH264_NAME};
 use super::openh264_install::OpenH264Store;
 use crate::screen::core::capture_admission::CaptureGrant;
 use crate::screen::core::capture_image::CapturedImage;
@@ -48,6 +48,9 @@ impl EncoderFactory for OpenH264EncoderFactory {
     }
 
     fn offers(&self) -> Vec<CodecOffer> {
+        if !session_ready(&self.store, Side::Encoder) {
+            return Vec::new();
+        }
         openh264_encoder_offers()
     }
 

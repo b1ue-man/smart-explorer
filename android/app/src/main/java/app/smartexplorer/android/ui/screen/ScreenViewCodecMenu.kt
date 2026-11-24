@@ -1,5 +1,6 @@
 package app.smartexplorer.android.ui.screen
 
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.text.KeyboardOptions
@@ -37,25 +38,49 @@ internal fun decoderLabelRes(decoder: String): Int = when (decoder) {
     else -> R.string.screen_view_decoder_auto
 }
 
+/** One entry of a choice list: disabled with its German [reason] as a second line when this pair cannot run it. */
+@Composable
+private fun ChoiceItem(label: String, selected: Boolean, reason: String?, onClick: () -> Unit) {
+    DropdownMenuItem(
+        text = {
+            Column {
+                Text(label)
+                if (reason != null) Text(reason, style = MaterialTheme.typography.bodySmall)
+            }
+        },
+        leadingIcon = { RadioButton(selected = selected, onClick = null, enabled = reason == null) },
+        enabled = reason == null,
+        onClick = onClick,
+    )
+}
+
 /**
  * The entries „Codec“ (Automatisch, H.264, HEVC, AV1, Scharf (GPU), Verlustfrei), „Dekodierer“ (Automatisch, Hardware, Software)
  * and „Höchste Datenrate“ of the settings menu (plan 2026-11-14 `bildkette.md` 4.10). A change goes to [onSettings];
- * the data rate opens [MaxRateDialog] through [onRate].
+ * the data rate opens [MaxRateDialog] through [onRate]. User rule of 2026-11-24 („was du anzeigst MUSS funktionieren“):
+ * an entry this phone and the host of [ui] cannot run together is disabled with its reason ([ScreenCodecOffer]), and a
+ * stored choice the session runs as „Automatisch“ is named with its reason ([ScreenSessionState.sessionNotes]).
  */
 @Composable
-internal fun ColumnScope.CodecMenuItems(settings: ViewSettings, onSettings: (ViewSettings) -> Unit, onRate: () -> Unit) {
+internal fun ColumnScope.CodecMenuItems(settings: ViewSettings, onSettings: (ViewSettings) -> Unit, onRate: () -> Unit, ui: ScreenSessionState) {
     val choice = settings.choice
+    val backend = LocalScreenBackend.current
+    // The phone's decoders are read once per choice and host (MediaCodecList), not at every recomposition.
+    val (codecReasons, decoderReasons) = remember(choice, ui.hostCodecs, backend) {
+        val offersFor = { wanted: ViewerCodecChoice -> backend.offers(wanted) }
+        val running = ScreenCodecOffer.sessionChoice(choice, ui.hostCodecs, offersFor).choice
+        ScreenCodecOffer.codecReasons(choice, ui.hostCodecs, offersFor) to
+            ScreenCodecOffer.decoderReasons(running, ui.hostCodecs, offersFor)
+    }
     Text(
         stringResource(R.string.screen_view_codec),
         style = MaterialTheme.typography.labelMedium,
         modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
     )
     ViewerCodecChoice.CODECS.forEach { codec ->
-        DropdownMenuItem(
-            text = { Text(stringResource(codecLabelRes(codec))) },
-            leadingIcon = { RadioButton(selected = choice.codec == codec, onClick = null) },
-            onClick = { onSettings(settings.copy(choice = choice.copy(codec = codec))) },
-        )
+        ChoiceItem(stringResource(codecLabelRes(codec)), choice.codec == codec, codecReasons[codec]) {
+            onSettings(settings.copy(choice = choice.copy(codec = codec)))
+        }
     }
     Text(
         stringResource(R.string.screen_view_decoder),
@@ -63,10 +88,16 @@ internal fun ColumnScope.CodecMenuItems(settings: ViewSettings, onSettings: (Vie
         modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
     )
     ViewerCodecChoice.DECODERS.forEach { decoder ->
-        DropdownMenuItem(
-            text = { Text(stringResource(decoderLabelRes(decoder))) },
-            leadingIcon = { RadioButton(selected = choice.decoder == decoder, onClick = null) },
-            onClick = { onSettings(settings.copy(choice = choice.copy(decoder = decoder))) },
+        ChoiceItem(stringResource(decoderLabelRes(decoder)), choice.decoder == decoder, decoderReasons[decoder]) {
+            onSettings(settings.copy(choice = choice.copy(decoder = decoder)))
+        }
+    }
+    ui.sessionNotes.forEach { note ->
+        Text(
+            note,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
         )
     }
     val value = choice.maxRateBps?.let { stringResource(R.string.screen_view_max_rate_mbit, ViewerCodecChoice.mbitText(it)) }

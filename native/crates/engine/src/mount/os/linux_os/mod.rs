@@ -66,10 +66,25 @@ pub fn fuse_runtime_report(version: bool) -> FuseRuntimeReport {
     fuse_runtime::report(&fuse_runtime::RuntimeProbe::system(version))
 }
 
-/// `se drive install-runtime` under Linux: se installs no system package.
+/// `se drive install-runtime` under Linux: se installs fuse3 behind the
+/// polkit dialog (install-on-use, `package_install.rs`).
 #[cfg(target_os = "linux")]
 pub fn fuse_install_outcome() -> FuseInstallOutcome {
     fuse_runtime::install_outcome(&fuse_runtime::RuntimeProbe::system(false))
+}
+
+/// Whether an install of fuse3 runs now (any process of this account).
+#[cfg(target_os = "linux")]
+pub fn fuse_installing() -> bool {
+    crate::login::os::platform::package_install::installing(
+        crate::login::os::platform::package_install::Component::Fuse,
+    )
+}
+
+/// The window's note about FUSE; `None` when it is ready. Installs nothing.
+#[cfg(target_os = "linux")]
+pub fn fuse_runtime_note() -> Option<String> {
+    fuse_runtime::runtime_note(&fuse_runtime::RuntimeProbe::system(false))
 }
 
 /// Ends the se drive mounted at `folder` from outside its host, as the

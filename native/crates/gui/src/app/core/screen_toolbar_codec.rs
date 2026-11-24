@@ -16,13 +16,19 @@
 //! running session applies (`screen_toolbar_state.rs`): „Codec:
 //! Automatisch (AV1)“, „Dekodierer: Hardware (wird angewendet …)“ until the
 //! session answered, „Codec: H.264 → läuft: AV1“ when it runs otherwise.
+//!
+//! User rule 2026-11-24 („was du anzeigst MUSS funktionieren“): an entry
+//! this pair of devices cannot run stays in its list, disabled, with the
+//! reason as hover text (`screen_prefs::codec_offer`); a stored choice the
+//! host cannot serve reads „Codec: AV1 → Automatisch (H.264)“ with the
+//! reason below, the session runs with „Automatisch“.
 use std::sync::{Mutex, PoisonError};
 use std::time::Instant;
 
 use eframe::egui::{self, RichText, WidgetText};
 
-use super::super::screen_prefs::{CodecSetting, DecoderPreference};
-use super::applied::{self, Applied, PendingChoices, SessionFacts, Setting};
+use super::super::screen_prefs::{codec_offer, CodecSetting, DecoderPreference};
+use super::applied::{self, chosen_text, Applied, Pair, PendingChoices, SessionFacts, Setting};
 use super::{ToolbarAction, ToolbarInput};
 
 /// The last failed save of a toolbar choice (review 2026-11-19: the errors
@@ -93,53 +99,101 @@ fn list_text(ui: &egui::Ui, name: &str, chosen: &str, state: &Applied) -> Widget
     }
 }
 
+/// One list of the bar: an entry with a reason is shown disabled with it as
+/// hover text. The entry picked, when another than `current`.
+fn list<T: Copy + PartialEq>(
+    ui: &mut egui::Ui,
+    salt: &str,
+    text: WidgetText,
+    current: T,
+    entries: &[(T, &str, Option<String>)],
+    hint: &str,
+) -> Option<T> {
+    let mut picked = current;
+    let _ = super::wrap::item(ui, salt, |ui| {
+        super::wrap::fitted(ui, egui::ComboBox::from_id_salt(salt), text)
+            .show_ui(ui, |ui| {
+                super::wrap::popup(ui, entries.iter().map(|(_, label, _)| *label));
+                for (value, label, reason) in entries {
+                    let Some(reason) = reason else {
+                        ui.selectable_value(&mut picked, *value, *label);
+                        continue;
+                    };
+                    let entry = egui::SelectableLabel::new(picked == *value, *label);
+                    let _ = ui
+                        .add_enabled(false, entry)
+                        .on_disabled_hover_text(format!("{label}: {reason}"));
+                }
+            })
+            .response
+            .on_hover_text(hint)
+    });
+    (picked != current).then_some(picked)
+}
+
+/// `(value, label, reason)` of each entry.
+fn labelled<T: Copy>(
+    entries: Vec<(T, Option<String>)>,
+    label: fn(T) -> &'static str,
+) -> Vec<(T, &'static str, Option<String>)> {
+    entries
+        .into_iter()
+        .map(|(value, reason)| (value, label(value), reason))
+        .collect()
+}
+
 /// „Codec“ and „Dekodierer“ as two drop-down lists.
 pub(super) fn codec_rows(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Vec<ToolbarAction>) {
     let facts = session_facts(ui, input);
     let now = Instant::now();
+    let pair = applied::pair(ui, input);
+    let session = &pair.session;
     let codec = super::super::screen_prefs::codec_setting();
-    let state = applied::codec_state(codec, &facts, waits(ui, Setting::Codec, &facts, now));
-    let mut chosen = codec;
-    let _ = super::wrap::item(ui, "codec", |ui| {
-        ({
-            let text = list_text(ui, "Codec", codec.label(), &state);
-            super::wrap::fitted(ui, egui::ComboBox::from_id_salt("screen_codec"), text)
-        })
-        .show_ui(ui, |ui| {
-            super::wrap::popup(ui, CodecSetting::ALL.map(CodecSetting::label));
-            for setting in CodecSetting::ALL {
-                ui.selectable_value(&mut chosen, setting, setting.label());
-            }
-        })
-        .response
-        .on_hover_text(codec_hint())
-    });
-    if chosen != codec {
+    let state = applied::codec_state(
+        session.codec,
+        &facts,
+        waits(ui, Setting::Codec, &facts, now),
+    );
+    let text = list_text(
+        ui,
+        "Codec",
+        &chosen_text(codec.label(), session.codec.label()),
+        &state,
+    );
+    let entries = labelled(pair.codecs(), CodecSetting::label);
+    if let Some(chosen) = list(ui, "screen_codec", text, codec, &entries, &codec_hint()) {
         out.push(ToolbarAction::Codec(chosen));
         changed(ui, Setting::Codec, &facts, now);
     }
     let decoder = super::super::screen_prefs::decoder_choice();
     let state = applied::decoder_state(decoder, &facts, waits(ui, Setting::Decoder, &facts, now));
-    let mut picked = decoder;
-    let _ = super::wrap::item(ui, "decoder", |ui| {
-        ({
-            let text = list_text(ui, "Dekodierer", decoder.label(), &state);
-            super::wrap::fitted(ui, egui::ComboBox::from_id_salt("screen_decoder"), text)
-        })
-        .show_ui(ui, |ui| {
-            super::wrap::popup(ui, DecoderPreference::ALL.map(DecoderPreference::label));
-            for choice in DecoderPreference::ALL {
-                ui.selectable_value(&mut picked, choice, choice.label());
-            }
-        })
-        .response
-        .on_hover_text("Automatisch: Hardware, bei Fehlern Software.")
-    });
-    if picked != decoder {
+    let chosen = chosen_text(decoder.label(), session.decoder.label());
+    let text = list_text(ui, "Dekodierer", &chosen, &state);
+    let entries = labelled(pair.decoders(), DecoderPreference::label);
+    let hint = "Automatisch: Hardware, bei Fehlern Software.";
+    if let Some(picked) = list(ui, "screen_decoder", text, decoder, &entries, hint) {
         out.push(ToolbarAction::Decoder(picked));
         changed(ui, Setting::Decoder, &facts, now);
     }
-    output_rows(ui, &facts, now, out);
+    output_rows(ui, &facts, &pair, now, out);
+    // Why this session does not run a stored choice (user rule 2026-11-24).
+    let warning = crate::app::theme::warning(ui);
+    for note in &session.notes {
+        super::wrap::note(ui, RichText::new(note).small().color(warning));
+    }
+    // A host that refused a stored choice whose encoders were not known at
+    // the opening: once they are, the session opens again with what it
+    // serves, once per refusal.
+    let Some(end) = input.info.and_then(|info| info.end.as_ref()) else {
+        return;
+    };
+    let id = egui::Id::new("screen_codec_reopened");
+    let done = ui.data(|data| data.get_temp::<String>(id)).as_deref() == Some(end.text.as_str());
+    let refused = applied::refused_for_choice(end.code.as_deref(), codec, session.codec);
+    if refused && !done && codec_offer::enabled() {
+        ui.data_mut(|data| data.insert_temp(id, end.text.clone()));
+        out.push(ToolbarAction::Device(input.current.clone()));
+    }
 }
 
 /// The hover text of „Codec“: the mode „Scharf (GPU)“ (plan 2026-11-17 P9)
@@ -148,7 +202,7 @@ fn codec_hint() -> String {
     use crate::screen::core::sharp_mode::{SHARP_HINT, SHARP_KEY};
     let mut hint = String::from(
         "Automatisch wählt nach Hardware beider Geräte, AV1 nie zuerst; \
-         Verlustfrei überträgt Kacheln.",
+         Verlustfrei überträgt Kacheln. Grau: mit diesem Gerät nicht möglich.",
     );
     if CodecSetting::parse(SHARP_KEY).is_some() {
         hint.push('\n');
@@ -164,56 +218,33 @@ fn codec_hint() -> String {
 fn output_rows(
     ui: &mut egui::Ui,
     facts: &SessionFacts,
+    pair: &Pair,
     now: Instant,
     out: &mut Vec<ToolbarAction>,
 ) {
     use super::super::screen_prefs::{DecoderLibrary, DisplayChoice};
-    let library = super::super::screen_prefs::decoder_library_choice();
+    let (library, display) = super::super::screen_prefs::stored_output();
     let state = applied::library_state(library, facts, waits(ui, Setting::Library, facts, now));
-    let mut chosen = library;
-    let _ = super::wrap::item(ui, "library", |ui| {
-        ({
-            let text = list_text(ui, "Bibliothek", library.label(), &state);
-            super::wrap::fitted(
-                ui,
-                egui::ComboBox::from_id_salt("screen_decoder_library"),
-                text,
-            )
-        })
-        .show_ui(ui, |ui| {
-            super::wrap::popup(ui, DecoderLibrary::ALL.map(DecoderLibrary::label));
-            for choice in DecoderLibrary::ALL {
-                ui.selectable_value(&mut chosen, choice, choice.label());
-            }
-        })
-        .response
-        .on_hover_text(
-            "Automatisch: erst Hardware (FFmpeg D3D11VA/DXVA2, dann Media Foundation), \
-             danach Software.",
-        )
-    });
-    if chosen != library {
+    let chosen = chosen_text(library.label(), pair.library_running().label());
+    let text = list_text(ui, "Bibliothek", &chosen, &state);
+    let entries = labelled(pair.libraries(), DecoderLibrary::label);
+    let hint = "Automatisch: erst Hardware (FFmpeg D3D11VA/DXVA2, dann Media Foundation), \
+                danach Software.";
+    if let Some(chosen) = list(ui, "screen_decoder_library", text, library, &entries, hint) {
         out.push(ToolbarAction::DecoderLibrary(chosen));
         changed(ui, Setting::Library, facts, now);
     }
-    let display = super::super::screen_prefs::display_choice();
-    let state = applied::display_state(display, facts, waits(ui, Setting::Display, facts, now));
-    let mut picked = display;
-    let _ = super::wrap::item(ui, "display", |ui| {
-        ({
-            let text = list_text(ui, "Anzeige", display.label(), &state);
-            super::wrap::fitted(ui, egui::ComboBox::from_id_salt("screen_display"), text)
-        })
-        .show_ui(ui, |ui| {
-            super::wrap::popup(ui, DisplayChoice::ALL.map(DisplayChoice::label));
-            for choice in DisplayChoice::ALL {
-                ui.selectable_value(&mut picked, choice, choice.label());
-            }
-        })
-        .response
-        .on_hover_text("Automatisch: Direct3D 11 ohne CPU-Umweg, sonst wgpu.")
-    });
-    if picked != display {
+    let in_force = super::super::screen_prefs::display_choice();
+    let state = applied::display_state(in_force, facts, waits(ui, Setting::Display, facts, now));
+    let text = list_text(
+        ui,
+        "Anzeige",
+        &chosen_text(display.label(), in_force.label()),
+        &state,
+    );
+    let entries = labelled(applied::displays(), DisplayChoice::label);
+    let hint = "Automatisch: Direct3D 11 ohne CPU-Umweg, sonst wgpu.";
+    if let Some(picked) = list(ui, "screen_display", text, display, &entries, hint) {
         out.push(ToolbarAction::Display(picked));
         changed(ui, Setting::Display, facts, now);
     }
@@ -224,6 +255,7 @@ fn output_rows(
 fn output_rows(
     _ui: &mut egui::Ui,
     _facts: &SessionFacts,
+    _pair: &Pair,
     _now: Instant,
     _out: &mut Vec<ToolbarAction>,
 ) {

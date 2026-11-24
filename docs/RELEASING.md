@@ -85,7 +85,9 @@ resolves it before the build, passes it to NSIS, then uses 7-Zip to extract the
 embedded MSI from the completed installer and compares its size and SHA-256
 again. This MSI remains inside the Windows installer: it is not a standalone
 update-feed payload or GitHub Release asset, and portable/auto-updated users get
-it on demand through the GUI or `se drive install-runtime`. The official
+it on demand: the drive host installs it at the first mount behind UAC and mounts
+again (install-on-use, `mount/os/windows/runtime_install.rs`), and the GUI button
+and `se drive install-runtime` do the same ahead of time. The official
 `dokan2.dll`, `dokan2.sys`, `DokanSetup.exe`, debug installers and unreviewed
 Dokany files must not be copied beside Smart Explorer or added as separate
 assets. The candidate's separate reviewed private-DLL embedding is described
@@ -240,9 +242,13 @@ Linux drives (`se drive mount`, from 0.5.183) use FUSE through the Rust crate `f
 (`native/Cargo.toml`, pinned `=0.18.0`). The crate is statically linked; the system
 needs the `fuse3` package at run time. `/dev/fuse` must be readable and writable for the
 user, and `fusermount3` must be setuid root (`native/crates/engine/src/mount/os/linux_os/fuse_runtime.rs`,
-module header). `se drive install-runtime` installs no package on Linux; it prints the
-distribution's command (`native/crates/cli/src/cli/drive_output_linux.rs`). `install-linux.sh --with-fuse` installs `fuse3` from the distribution's package sources
-(apt, dnf, pacman or zypper); without the flag the script only prints the package command. It then
+module header). A missing `fuse3` is installed on use: the drive host, and ahead of time
+`se drive install-runtime`, run `pkexec se rdp host-setup --system package-install:fuse`
+(apt-get, dnf, pacman or zypper, plus `modprobe fuse` without `/dev/fuse`;
+`native/crates/engine/src/login/os/linux_os/package_install.rs`). The same step installs
+FreeRDP 3 (`package-install:freerdp`) when Remote Desktop finds no client and dnsmasq
+(`package-install:dnsmasq`) for the LAN uplink. `install-linux.sh --with-fuse` installs `fuse3` from the distribution's package sources
+(apt, dnf, pacman or zypper); without the flag se installs it at the first mount. It then
 checks `fusermount3` (setuid root) and `/dev/fuse` and warns when either is not ready
 (`install-linux.sh`, function `check_fuse`).
 

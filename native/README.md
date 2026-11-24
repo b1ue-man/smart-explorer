@@ -93,9 +93,11 @@ bleiben auch hinter Peer wegen ihres TOCTOU-Fensters `Unverified`.
 
 Smart Explorer bindet Dokany nicht statisch. Der empfohlene NSIS-Installer
 bettet die exakt gepinnte offizielle `Dokan_x64.msi` als standardmäßig
-ausgewählte optionale Offline-Komponente ein; portable oder per Auto-Update
-aktualisierte Installationen laden denselben Pin über die GUI oder
-`se drive install-runtime`. `dokany-runtime.nsh` bindet dafür die offizielle
+ausgewählte optionale Offline-Komponente ein; fehlt die Runtime trotzdem
+(portable, Auto-Update, stilles Setup ohne `/INSTALLDOKANY=1`), installiert der
+Laufwerks-Host denselben Pin beim ersten Einbinden selbst und bindet danach
+einmal erneut ein (Install-on-use, `mount/os/windows/runtime_install.rs`);
+vorab geht es über die GUI oder `se drive install-runtime`. `dokany-runtime.nsh` bindet dafür die offizielle
 2.3.1.1000-URL, exakt 9.269.248 Bytes und SHA-256
 `69ff8cb37bfec3a75921c85ffd1c6370b50a9ec4ecef2cf3a009d488dcbf5465`.
 Die Basis-App bleibt per-user, nur der systemweite

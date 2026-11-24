@@ -122,7 +122,7 @@ fn screen_task_openh264_disable_unloads() {
         .open_encoder(&choice, size, 30)
         .err()
         .expect("switched off");
-    assert!(refused.to_string().contains("switched off"), "{refused}");
+    assert!(refused.to_string().contains("no h264"), "{refused}");
     drop(opened);
     assert!(
         !library_loaded(),

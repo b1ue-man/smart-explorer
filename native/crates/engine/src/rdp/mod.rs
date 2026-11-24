@@ -6,7 +6,10 @@ pub use self::core::{AuthenticatedProbe, HostProbe};
 pub use os::probe as probe_local_host;
 #[cfg(all(target_os = "linux", any(test, feature = "test-support")))]
 pub use os::shared::clients::choose_client;
-pub use os::shared::clients::{local_clients, watch_process_exit, Credentials, NEEDS_SDL};
+pub use os::shared::clients::{
+    client_install_note, client_install_progress, local_clients, watch_process_exit, Credentials,
+    NEEDS_SDL,
+};
 /// Sign-in with the grant's account, host side (plan 2026-11-17 P4).
 pub use os::shared::host_login;
 /// Host-side RDP self-setup (design 3): triggers, state and system steps.

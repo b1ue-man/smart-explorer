@@ -7,10 +7,12 @@
 //!   line per problem; hints follow as `fuse\thint\t<text>` (kernel request
 //!   timeout above 0, WSL). JSON: `FuseRuntimeReport`. Exit 0 when ready,
 //!   else 1.
-//! - `install-runtime [--json]`: se installs no system package:
-//!   `{"status":"manual_required","command","reason"}` (exit 2) or
-//!   `{"status":"already_ready"}` (exit 0); text `fuse\tmanual-required\t
-//!   <command>\t<reason>` or `fuse\talready-ready`.
+//! - `install-runtime [--json]`: se installs fuse3 (and loads the module
+//!   `fuse`) behind the polkit dialog (install-on-use, 2026-11-24):
+//!   `{"status":"already_ready"}` or `{"status":"installed"}` (exit 0),
+//!   `{"status":"failed","reason"}` (exit 1), `{"status":"declined",
+//!   "reason"}` (exit 2); text `fuse\talready-ready`, `fuse\tinstalled`,
+//!   `fuse\tfailed\t<reason>` or `fuse\tdeclined\t<reason>`.
 //! - `mount`: `--letter` other than `auto` and `--system-runtime` are
 //!   refused (exit 2); `--mount-point` names the folder.
 //! - `list`: column 3 is the folder, the status `mounted:<path>`.
@@ -92,13 +94,9 @@ pub(super) fn install_runtime(json: bool) -> Result<i32, String> {
 pub(super) fn install_text(outcome: &FuseInstallOutcome) -> String {
     match outcome {
         FuseInstallOutcome::AlreadyReady => "fuse\talready-ready".into(),
-        FuseInstallOutcome::ManualRequired { command, reason } => {
-            format!(
-                "fuse\tmanual-required\t{}\t{}",
-                clean(command),
-                clean(reason)
-            )
-        }
+        FuseInstallOutcome::Installed => "fuse\tinstalled".into(),
+        FuseInstallOutcome::Failed { reason } => format!("fuse\tfailed\t{}", clean(reason)),
+        FuseInstallOutcome::Declined { reason } => format!("fuse\tdeclined\t{}", clean(reason)),
     }
 }
 

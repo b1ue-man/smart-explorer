@@ -10,11 +10,12 @@
 //! (`screen_task_grid_switch_tile_reuses_connection`).
 use crate::daemon::StreamRequest;
 
-use super::screen_prefs::ViewerPrefs;
+use super::screen_prefs::codec_offer::{self, SessionChoice};
+use super::screen_prefs::{DecoderLibrary, ViewerPrefs};
 use super::screen_session::{Backend, ViewerSession};
 use super::screen_target::ScreenTarget;
 use crate::screen::core::decoder_health::GivenUp;
-use crate::screen::core::negotiate::{CodecOffer, CodecSetting};
+use crate::screen::core::negotiate::{CodecOffer, CodecSetting, DecoderPreference};
 use crate::screen::core::pixel_convert::FrameSize;
 use crate::screen::core::set_decoders::SetDecoders;
 use crate::screen::core::window_list::SourceId;
@@ -68,12 +69,32 @@ pub fn preview_gap_ms(interval_ms: u64) -> u64 {
     }
 }
 
+/// A preview with the stored choices (task tests; the group view names its
+/// device, `preview_request_to`).
+#[cfg(test)]
 pub fn preview_request(offers: &[CodecOffer], edge: u32, interval_ms: u64) -> StreamRequest {
-    announced(preview_base(offers, edge, interval_ms), GivenUp::default())
+    preview_request_to(None, offers, edge, interval_ms)
 }
 
-/// A preview's request before `announced`.
-fn preview_base(offers: &[CodecOffer], edge: u32, interval_ms: u64) -> StreamRequest {
+/// A preview of `target` with what its host serves (`open_choice`).
+pub fn preview_request_to(
+    target: Option<&ScreenTarget>,
+    offers: &[CodecOffer],
+    edge: u32,
+    interval_ms: u64,
+) -> StreamRequest {
+    let choice = open_choice(target, offers, false);
+    let base = preview_base(offers, edge, interval_ms, &choice);
+    announced(base, GivenUp::default(), choice.library)
+}
+
+/// A preview's request before `announced`, with `choice`'s codec and stage.
+fn preview_base(
+    offers: &[CodecOffer],
+    edge: u32,
+    interval_ms: u64,
+    choice: &SessionChoice,
+) -> StreamRequest {
     StreamRequest {
         expected_node: None,
         mode: SessionMode::Preview,
@@ -83,8 +104,8 @@ fn preview_base(offers: &[CodecOffer], edge: u32, interval_ms: u64) -> StreamReq
         max_fps: preview_fps(interval_ms.min(FASTEST_PREVIEW_INTERVAL_MS)),
         frame_capabilities: None,
         max_rate_bps: super::screen_prefs::max_rate_bps(),
-        codec: Some(super::screen_prefs::codec_setting()),
-        decoder: Some(super::screen_prefs::decoder_choice()),
+        codec: Some(choice.codec),
+        decoder: Some(choice.decoder),
         gop_continue: false,
         gop_continue_decoders: Vec::new(),
         // A preview never changes the host's display (plan 2026-11-17 P5).
@@ -99,15 +120,20 @@ fn preview_base(offers: &[CodecOffer], edge: u32, interval_ms: u64) -> StreamReq
 /// decoder that may open for the request's offers keeps its references, and
 /// per codec the offers whose decoders do (`screen_decode_local`); a preview
 /// raised to the full view keeps its session, so both ask.
-fn announced(mut request: StreamRequest, given_up: GivenUp) -> StreamRequest {
+fn announced(
+    mut request: StreamRequest,
+    given_up: GivenUp,
+    library: DecoderLibrary,
+) -> StreamRequest {
     let offers = super::screen_decode_local::current_offers(&request.decoders);
     request.decoders = given_up.filter(&offers);
     // A chosen „Dekodier-Bibliothek“ offers no tiles beside its video (the
     // tiles decode in neither library), so the host never falls back to them
     // (Codex 6/13). Safe since the hello and `SET_DECODERS` name the choice
     // (`codec_choice`): the host no longer reads it from the missing tiles.
-    // A library without any video is refused before (`library_refusal`).
-    let library = super::screen_prefs::decoder_library_choice();
+    // A library without any video is refused before (`library_refusal`);
+    // `library` is „Automatisch“ where the host serves the library's video
+    // with none of its encoders (`codec_offer::session_choice`).
     let lossless = request.codec == Some(super::screen_prefs::CodecSetting::Lossless);
     let video = request.decoders.iter().any(|offer| offer.codec.is_video());
     if library != super::screen_prefs::DecoderLibrary::Automatic && !lossless && video {
@@ -161,9 +187,20 @@ pub fn tiles_only_line(request: &StreamRequest, given_up: GivenUp) -> Option<Str
 /// would carry.
 /// The request `decoders_frame` is made of: its `decoders` are the
 /// register's offers before „Codec“ and „Dekodierer“ narrow them.
+/// The full view's session choice (`view_choice`) narrows them.
 pub fn announced_request(offers: &[CodecOffer]) -> StreamRequest {
-    let base = preview_base(offers, PREVIEW_MIN_EDGE, DEFAULT_PREVIEW_INTERVAL_MS);
-    announced(base, GivenUp::default())
+    announced_without(offers, GivenUp::default())
+}
+
+fn announced_without(offers: &[CodecOffer], given_up: GivenUp) -> StreamRequest {
+    let choice = view_choice(offers, false);
+    let base = preview_base(
+        offers,
+        PREVIEW_MIN_EDGE,
+        DEFAULT_PREVIEW_INTERVAL_MS,
+        &choice,
+    );
+    announced(base, given_up, choice.library)
 }
 
 pub fn decoders_frame(offers: &[CodecOffer]) -> SetDecoders {
@@ -172,8 +209,7 @@ pub fn decoders_frame(offers: &[CodecOffer]) -> SetDecoders {
 
 /// `decoders_frame` without the codecs one session gave up.
 pub fn decoders_frame_without(offers: &[CodecOffer], given_up: GivenUp) -> SetDecoders {
-    let base = preview_base(offers, PREVIEW_MIN_EDGE, DEFAULT_PREVIEW_INTERVAL_MS);
-    announced(base, given_up).decoders_frame()
+    announced_without(offers, given_up).decoders_frame()
 }
 
 pub fn full_request(
@@ -182,6 +218,9 @@ pub fn full_request(
     display: FrameSize,
     control: bool,
 ) -> StreamRequest {
+    // „Codec“ and „Dekodierer“ (plan 2026-11-14 „Bildkette“ 4.10, BK6) as the
+    // full view's host serves them (user rule 2026-11-24, `view_choice`).
+    let choice = view_choice(offers, true);
     let request = StreamRequest {
         expected_node: None,
         mode: if control {
@@ -195,15 +234,108 @@ pub fn full_request(
         max_fps: full_fps(),
         frame_capabilities: None,
         max_rate_bps: super::screen_prefs::max_rate_bps(),
-        // „Codec“ and „Dekodierer“ (plan 2026-11-14 „Bildkette“ 4.10, BK6).
-        codec: Some(super::screen_prefs::codec_setting()),
-        decoder: Some(super::screen_prefs::decoder_choice()),
+        codec: Some(choice.codec),
+        decoder: Some(choice.decoder),
         gop_continue: false,
         gop_continue_decoders: Vec::new(),
         // „Monitor“ and „Auflösung“ (plan 2026-11-17 P5).
         virtual_display: Some(super::screen_prefs::virtual_display_choice()),
     };
-    announced(request, GivenUp::default())
+    announced(request, GivenUp::default(), choice.library)
+}
+
+/// Longest wait of the full view's opening for its host's encoders
+/// (assumption: a probe over a working path answers within it).
+pub const OPEN_WAIT: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// Devices whose sessions run with „Dekodierer: Automatisch“ in place of the
+/// stored stage (`SessionChoice::decoder`).
+static RELAXED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+/// What a session to `target` runs with (`codec_offer::session_choice`):
+/// the stored choices unless its host cannot serve them. The host's
+/// encoders come from an earlier `HELLO_OK` or a probe (`learn`); `wait`
+/// lets the full view's opening wait for a running probe at most
+/// `OPEN_WAIT` (after it the stored choice goes out unchecked). Without a
+/// target the stored choices. The register opens every decoder stage while
+/// one device's sessions need „Automatisch“ in place of the stored one.
+pub fn open_choice(
+    target: Option<&ScreenTarget>,
+    offers: &[CodecOffer],
+    wait: bool,
+) -> SessionChoice {
+    let stored = super::screen_prefs::codec_setting();
+    let decoder = super::screen_prefs::decoder_choice();
+    let library = super::screen_prefs::decoder_library_choice();
+    let Some(target) = target.filter(|_| codec_offer::enabled()) else {
+        return SessionChoice {
+            codec: stored,
+            decoder,
+            library,
+            notes: Vec::new(),
+        };
+    };
+    let decoders = super::screen_decode_local::current_offers(offers);
+    let viewer = codec_offer::Viewer {
+        decoders: &decoders,
+        decoder,
+        library,
+    };
+    let mut host = codec_offer::host_encoders(target);
+    if host.is_none() && codec_offer::host_matters(stored, &viewer) {
+        let running = codec_offer::learn(target, None);
+        if running && wait {
+            host = codec_offer::wait_host(target, OPEN_WAIT);
+        }
+    }
+    let choice = codec_offer::session_choice(stored, host.as_deref(), &viewer);
+    let key = codec_offer::peer_key(target);
+    let mut relaxed = RELAXED.lock().unwrap_or_else(|e| e.into_inner());
+    relaxed.retain(|k| *k != key);
+    if choice.decoder != decoder {
+        relaxed.push(key);
+    }
+    let process = match relaxed.is_empty() {
+        true => decoder,
+        false => DecoderPreference::Automatic,
+    };
+    crate::screen::core::negotiate::set_decoder_preference(process);
+    crate::screen::core::decoder_library::set_decoder_library(library);
+    choice
+}
+
+/// `open_choice` for the full view's device (`codec_offer::view`).
+pub fn view_choice(offers: &[CodecOffer], wait: bool) -> SessionChoice {
+    open_choice(codec_offer::view().as_ref(), offers, wait)
+}
+
+/// Whether the preview of `target` waits for its host's encoders: its
+/// session depends on them and a probe runs (`wake` follows its answer).
+pub fn host_pending(
+    target: &ScreenTarget,
+    offers: &[CodecOffer],
+    wake: super::screen_session::Wake,
+) -> bool {
+    if !codec_offer::enabled() || codec_offer::host_encoders(target).is_some() {
+        return false;
+    }
+    let decoders = super::screen_decode_local::current_offers(offers);
+    let viewer = codec_offer::Viewer {
+        decoders: &decoders,
+        decoder: super::screen_prefs::decoder_choice(),
+        library: super::screen_prefs::decoder_library_choice(),
+    };
+    codec_offer::host_matters(super::screen_prefs::codec_setting(), &viewer)
+        && codec_offer::learn(target, Some(wake))
+}
+
+/// The codec the full view's session runs for: `stored` as `view_choice`
+/// keeps it (a caller's own settings stay theirs).
+fn view_codec(stored: CodecSetting) -> CodecSetting {
+    match stored == super::screen_prefs::codec_setting() {
+        true => view_choice(&[], false).codec,
+        false => stored,
+    }
 }
 
 // The production opener binds capabilities to its concrete renderer and lease.
@@ -215,10 +347,11 @@ pub fn full_set_mode(source: Option<SourceId>, display: FrameSize, prefs: &Viewe
         source,
         size: Some(display),
         fps: Some(full_fps()),
-        // „Scharf (GPU)“ sets the bit the switch „Schärfe vor Flüssigkeit“ set (P9).
-        sharpness: prefs.codec_setting().sharpness(),
-        // „Codec: Verlustfrei“ keeps the meaning of the old switch (4.10).
-        lossless: prefs.codec_setting().lossless(),
+        // „Scharf (GPU)“ sets the bit the switch „Schärfe vor Flüssigkeit“
+        // set (P9); „Codec: Verlustfrei“ keeps the old switch's meaning
+        // (4.10); both as the session runs them (`view_codec`).
+        sharpness: view_codec(prefs.codec_setting()).sharpness(),
+        lossless: view_codec(prefs.codec_setting()).lossless(),
     }
 }
 
@@ -226,14 +359,16 @@ pub fn full_set_mode(source: Option<SourceId>, display: FrameSize, prefs: &Viewe
 /// The rate of `interval_ms` alone, size and codec unchanged: a new rate
 /// keeps the encoder (host `same_but_rate`). A preview opens at the host's
 /// own rate (one picture a second) until it hears another.
-pub fn preview_rate_mode(interval_ms: u64) -> SetMode {
+pub fn preview_rate_mode(interval_ms: u64, codec: CodecSetting) -> SetMode {
     SetMode {
         size: None,
-        ..preview_set_mode(PREVIEW_MIN_EDGE, interval_ms)
+        ..preview_set_mode_for(PREVIEW_MIN_EDGE, interval_ms, codec)
     }
 }
 
-pub fn preview_set_mode(edge: u32, interval_ms: u64) -> SetMode {
+/// `SET_MODE` back to a preview of a session that runs for `codec`
+/// (`Shared::codec_choice`: what its host serves of the stored choice).
+pub fn preview_set_mode_for(edge: u32, interval_ms: u64, codec: CodecSetting) -> SetMode {
     SetMode {
         mode: StreamMode::Preview,
         source: None,
@@ -244,8 +379,8 @@ pub fn preview_set_mode(edge: u32, interval_ms: u64) -> SetMode {
         // the choice (`set_codec_preference`), so a `SET_MODE` without it
         // replaced the encoder right after the opening and left the choice;
         // before, a view lowered to its tile left it as well.
-        sharpness: super::screen_prefs::codec_setting().sharpness(),
-        lossless: super::screen_prefs::codec_setting().lossless(),
+        sharpness: codec.sharpness(),
+        lossless: codec.lossless(),
     }
 }
 
@@ -275,7 +410,12 @@ pub fn to_view(
     target: &ScreenTarget,
     open: &ViewOpen,
 ) -> ViewerSession {
+    // The tile's hello names the host's encoders for the full request.
+    codec_offer::set_view(target);
     if let Some(session) = tile {
+        if let Some(hello) = session.info().hello.as_ref() {
+            codec_offer::note_hello(target, hello);
+        }
         session.close();
     }
     ViewerSession::open(
@@ -315,7 +455,12 @@ pub fn to_tile(mut session: ViewerSession, edge: u32, interval_ms: u64) -> Optio
     if sound {
         session.send(ViewerFrame::Audio(false));
     }
-    session.send(ViewerFrame::SetMode(preview_set_mode(edge, interval_ms)));
+    let codec = session.shared.codec_choice();
+    session.send(ViewerFrame::SetMode(preview_set_mode_for(
+        edge,
+        interval_ms,
+        codec,
+    )));
     session.set_prefer_yuv(false);
     session.set_present_gap_ms(preview_gap_ms(interval_ms));
     session.mode = SessionMode::Preview;

@@ -79,6 +79,9 @@ pub fn inject_login_input(
 
 #[path = "shared/codec_inventory.rs"]
 pub mod codec_inventory;
+// 2026-11-24: OpenH264 and the Windows FFmpeg runtime install on their own.
+#[path = "shared/codec_runtime_install.rs"]
+pub mod codec_runtime_install;
 // Android has no host process (the app captures): the client stays unused there.
 #[cfg_attr(target_os = "android", allow(dead_code))]
 #[path = "shared/host_worker_client.rs"]

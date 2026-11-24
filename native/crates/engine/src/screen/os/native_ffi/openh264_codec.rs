@@ -12,6 +12,12 @@
 //! BGRA, or after `prefer_yuv(true)` (SCR-M7, the viewer's GPU path) keeps
 //! the I420 planes and skips that conversion. OpenH264 encodes at most 3840 × 2160 (`openh264` 0.9.9,
 //! `encoder.rs`).
+//!
+//! 2026-11-24: a session's register of this user's store holds both coders
+//! in every state; they offer only while the library is present and not
+//! switched off, and install it at once (`OpenH264Store::session_ready`)
+//! when the session's side has no other H.264 coder (`other_h264`).
+use std::cell::Cell;
 use std::io;
 use std::os::raw::c_int;
 use std::sync::Arc;
@@ -23,6 +29,7 @@ use openh264_sys2::{
 };
 
 use super::codec_inventory::openh264_decoder_offers;
+use super::codec_runtime_install::Trigger;
 pub use super::openh264_encode::OpenH264EncoderFactory;
 use super::openh264_install::OpenH264Store;
 use crate::screen::core::codec_registry::{
@@ -30,9 +37,9 @@ use crate::screen::core::codec_registry::{
 };
 use crate::screen::core::decoded_frame::{DecodedFrame, FrameIdentities};
 use crate::screen::core::host_backend::{Chroma, ScreenDecoder, YuvPicture};
-use crate::screen::core::negotiate::CodecOffer;
 #[cfg(any(test, feature = "test-support"))]
 use crate::screen::core::negotiate::H264Profile;
+use crate::screen::core::negotiate::{CodecKind, CodecOffer};
 use crate::screen::core::pixel_convert::{
     i420_to_bgra, BgraImage, FrameSize, I420Image, YuvMatrix,
 };
@@ -51,8 +58,10 @@ pub(super) fn load(store: &OpenH264Store) -> io::Result<OpenH264API> {
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))
 }
 
-/// The OpenH264 coders of `store` when the user switched them on, and the
-/// state for the report; `verify` checks the file against its pin first.
+/// The OpenH264 coders of `store` and the state for the report; `verify`
+/// (the report) checks the file against its pin first and lists the coders
+/// only when OpenH264 is installed. Without `verify` (a session's register)
+/// a store that installs on demand lists them in every state.
 pub fn codecs(
     store: OpenH264Store,
     verify: bool,
@@ -63,14 +72,11 @@ pub fn codecs(
 ) {
     let report = if verify {
         store.report()
-    } else if store.switched_on() {
-        OpenH264Report::new(OpenH264State::Enabled, None)
-    } else if store.library_path().is_some_and(|path| path.is_file()) {
-        OpenH264Report::new(OpenH264State::Disabled, None)
     } else {
-        OpenH264Report::new(OpenH264State::Absent, None)
+        store.quick_report()
     };
-    if report.state != OpenH264State::Enabled {
+    let listed = report.state == OpenH264State::Enabled || (!verify && store.installs_on_demand());
+    if !listed {
         return (Vec::new(), Vec::new(), report);
     }
     let encoder: Arc<dyn EncoderFactory> = Arc::new(OpenH264EncoderFactory {
@@ -78,6 +84,47 @@ pub fn codecs(
     });
     let decoder: Arc<dyn DecoderFactory> = Arc::new(OpenH264DecoderFactory { store });
     (vec![encoder], vec![decoder], report)
+}
+
+/// The side of a session a coder serves.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Side {
+    Encoder,
+    Decoder,
+}
+
+/// Whether another H.264 coder of `side` serves this process's sessions:
+/// the offers of this user's register without OpenH264's own (a nested
+/// call answers `true`, so OpenH264 offers nothing while it is asked).
+fn other_h264(side: Side) -> bool {
+    thread_local! {
+        static ASKING: Cell<bool> = const { Cell::new(false) };
+    }
+    struct Done;
+    impl Drop for Done {
+        fn drop(&mut self) {
+            ASKING.with(|asking| asking.set(false));
+        }
+    }
+    if ASKING.with(|asking| asking.replace(true)) {
+        return true;
+    }
+    let _done = Done;
+    let registry = super::codec_inventory::registry();
+    let offers = match side {
+        Side::Encoder => registry.encoder_offers(),
+        Side::Decoder => registry.decoder_offers(),
+    };
+    offers.iter().any(|offer| offer.codec == CodecKind::H264)
+}
+
+/// Whether the coders of `store` offer for a session of `side` now
+/// (installing OpenH264 first where the session needs it).
+pub(super) fn session_ready(store: &OpenH264Store, side: Side) -> bool {
+    store.session_ready(
+        || other_h264(side),
+        |store| store.ensure_installed(Trigger::Session),
+    )
 }
 
 /// Review 2026-11-19 C17: the decoder library the viewer chose on Windows
@@ -100,7 +147,7 @@ impl DecoderFactory for OpenH264DecoderFactory {
     }
 
     fn offers(&self) -> Vec<CodecOffer> {
-        if library_chosen().is_some() {
+        if library_chosen().is_some() || !session_ready(&self.store, Side::Decoder) {
             return Vec::new();
         }
         openh264_decoder_offers()

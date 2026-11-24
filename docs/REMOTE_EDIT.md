@@ -83,9 +83,9 @@ The recommended NSIS installer embeds the pinned official x64 MSI offline as a
 standard-selected optional component. Smart Explorer itself remains per-user;
 only the machine-wide MSI invokes UAC. Silent installation deliberately skips
 that elevation unless `/S /INSTALLDOKANY=1` is supplied, and uninstalling Smart
-Explorer never removes Dokany. Portable and auto-updated installations can use
-the GUI action or `se drive install-runtime` to download and install the same
-pin.
+Explorer never removes Dokany. Portable and auto-updated installations
+download and install the same pin when a drive first mounts (install-on-use,
+behind UAC), or ahead of time with the GUI action or `se drive install-runtime`.
 
 The single source of dependency truth is
 [`native/dokany-runtime.nsh`](../native/dokany-runtime.nsh):

@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use super::super::pixel_convert::FrameSize;
 use super::super::wire_hello::SessionMode;
+use super::windows_driver::reason_text;
 use super::{size_text, VirtualDisplayWish, LIMIT_UNSUPPORTED_PREFIX};
 
 /// Reasons of `Inactive` a host names.
@@ -19,6 +20,9 @@ pub const REASON_PHYSICAL: &str = "physical_monitor";
 pub const REASON_AVAILABLE: &str = "available";
 /// A probe: the driver setup with one approval comes first.
 pub const REASON_SETUP: &str = "setup_needed";
+/// Reason of `Unsupported`: the driver setup would lift it, but only a
+/// viewer that may steer the screen („Bildschirm steuern“) starts it.
+pub const REASON_SETUP_NEEDS_CONTROL: &str = "setup_needs_control";
 /// Reason of `Inactive` when the physical monitor lists no mode for the
 /// fixed size or refused it.
 pub const REASON_PHYSICAL_MODE_REFUSED: &str = "physical_mode_refused";
@@ -198,47 +202,7 @@ impl VirtualDisplayReport {
     /// the size wherever the report names one, a size the host set other
     /// than the chosen one with its reason, and a moved source.
     pub fn text(&self) -> String {
-        let size = self.size().map(size_text).unwrap_or_else(|| "?".into());
-        let at = self
-            .size()
-            .map(|size| format!(", {}", size_text(size)))
-            .unwrap_or_default();
-        let reason = self.reason.as_deref();
-        let text = match self.state {
-            VirtualDisplayState::Inactive => match reason {
-                Some(REASON_PHYSICAL) => format!("aus (Monitor am Gerät{at})"),
-                Some(REASON_OFF) => format!("aus (physischer Monitor gewählt{at})"),
-                Some(REASON_AVAILABLE) => format!("bereit ({}{at})", self.driver),
-                Some(REASON_SETUP) => "bereit nach einmaliger Einrichtung mit Freigabe".into(),
-                Some(REASON_PHYSICAL_MODE_REFUSED) => {
-                    format!("aus (der Monitor lehnte die gewählte Auflösung ab{at})")
-                }
-                Some(REASON_SOURCE_NOT_MONITOR) => format!("aus ({}{at})", source_not_monitor()),
-                Some(other) => format!("aus ({other}{at})"),
-                None => match self.size() {
-                    Some(size) => format!("aus ({})", size_text(size)),
-                    None => "aus".to_string(),
-                },
-            },
-            VirtualDisplayState::Active => format!("{size} ({})", self.driver),
-            VirtualDisplayState::Offered => {
-                format!("{size} am Portal angeboten, die Sitzung entscheidet")
-            }
-            VirtualDisplayState::Setup => {
-                "wird eingerichtet (Freigabe des Betriebssystems)".to_string()
-            }
-            VirtualDisplayState::AfterRestart => {
-                "eingerichtet, wirkt nach Abmeldung oder Neustart".to_string()
-            }
-            VirtualDisplayState::Unsupported => match reason {
-                Some(REASON_SOURCE_NOT_MONITOR) => {
-                    format!("nicht möglich ({})", source_not_monitor())
-                }
-                _ => format!("nicht möglich ({})", reason.unwrap_or("unbekannt")),
-            },
-            VirtualDisplayState::Other => "unbekannter Zustand".to_string(),
-        };
-        let mut line = format!("Virtueller Bildschirm: {text}");
+        let mut line = format!("Virtueller Bildschirm: {}", self.state_text());
         if let Some(requested) = self.requested {
             let set = self.size().map_or_else(|| "keine".to_string(), size_text);
             let why = self
@@ -261,6 +225,54 @@ impl VirtualDisplayReport {
         line
     }
 
+    /// The German state of `text` (after „Virtueller Bildschirm: “).
+    fn state_text(&self) -> String {
+        let size = self.size().map(size_text).unwrap_or_else(|| "?".into());
+        let at = self
+            .size()
+            .map(|size| format!(", {}", size_text(size)))
+            .unwrap_or_default();
+        let reason = self.reason.as_deref();
+        match self.state {
+            VirtualDisplayState::Inactive => match reason {
+                Some(REASON_PHYSICAL) => format!("aus (Monitor am Gerät{at})"),
+                Some(REASON_OFF) => format!("aus (physischer Monitor gewählt{at})"),
+                Some(REASON_AVAILABLE) => format!("bereit ({}{at})", self.driver),
+                Some(REASON_SETUP) => "bereit nach einmaliger Einrichtung mit Freigabe".into(),
+                Some(REASON_PHYSICAL_MODE_REFUSED) => {
+                    format!("aus (der Monitor lehnte die gewählte Auflösung ab{at})")
+                }
+                Some(REASON_SOURCE_NOT_MONITOR) => format!("aus ({}{at})", source_not_monitor()),
+                Some(other) => format!("aus ({other}{at})"),
+                None => match self.size() {
+                    Some(size) => format!("aus ({})", size_text(size)),
+                    None => "aus".to_string(),
+                },
+            },
+            VirtualDisplayState::Active => format!("{size} ({})", self.driver),
+            VirtualDisplayState::Offered => {
+                format!("{size} am Portal angeboten, die Sitzung entscheidet")
+            }
+            VirtualDisplayState::Setup => match reason.and_then(reason_text) {
+                Some(text) => text,
+                None => "wird eingerichtet (Freigabe des Betriebssystems)".to_string(),
+            },
+            VirtualDisplayState::AfterRestart => {
+                "eingerichtet, wirkt nach Abmeldung oder Neustart".to_string()
+            }
+            VirtualDisplayState::Unsupported => {
+                let why = match reason {
+                    Some(REASON_SOURCE_NOT_MONITOR) => source_not_monitor().to_string(),
+                    Some(REASON_SETUP_NEEDS_CONTROL) => SETUP_NEEDS_CONTROL_TEXT.to_string(),
+                    Some(reason) => reason_text(reason).unwrap_or_else(|| reason.to_string()),
+                    None => "unbekannt".to_string(),
+                };
+                format!("nicht möglich ({why})")
+            }
+            VirtualDisplayState::Other => "unbekannter Zustand".to_string(),
+        }
+    }
+
     /// The short form of the statistics (`HostStats.chain.virtual_display`)
     /// and of `se screen probe`: `active:1920x1080:randr`, `inactive:off`, …;
     /// `;requested=<w>x<h>;adjusted=<ADJUST_*>` when the host set another
@@ -277,7 +289,11 @@ impl VirtualDisplayReport {
             }
             VirtualDisplayState::Unsupported => format!("unsupported:{reason}"),
             VirtualDisplayState::Inactive => format!("inactive:{reason}"),
-            VirtualDisplayState::Setup => "setup".into(),
+            // A setup names its reason where it has one (Windows at use time).
+            VirtualDisplayState::Setup => match &self.reason {
+                Some(reason) => format!("setup:{reason}"),
+                None => "setup".into(),
+            },
             VirtualDisplayState::AfterRestart => "after_restart".into(),
             VirtualDisplayState::Other => "other".into(),
         };
@@ -295,6 +311,31 @@ impl VirtualDisplayReport {
         key
     }
 }
+
+/// The German state of a statistics key (`chain_key`) that names the driver
+/// setup or why the host cannot (`setup`, `setup:<reason>`,
+/// `after_restart`, `unsupported:<reason>`), as `text` names the state;
+/// `None` for the other keys, which the viewers show as they are. The parts
+/// after `;` are left out.
+pub fn chain_text(key: &str) -> Option<String> {
+    let key = key.split(';').next().unwrap_or(key);
+    let (state, reason) = match key.split_once(':') {
+        Some((state, reason)) => (state, Some(reason)),
+        None => (key, None),
+    };
+    let state = match state {
+        "setup" => VirtualDisplayState::Setup,
+        "after_restart" => VirtualDisplayState::AfterRestart,
+        "unsupported" => VirtualDisplayState::Unsupported,
+        _ => return None,
+    };
+    let mut report = VirtualDisplayReport::new(state, None, "");
+    report.reason = reason.map(str::to_string);
+    Some(report.state_text())
+}
+
+const SETUP_NEEDS_CONTROL_TEXT: &str =
+    "die einmalige Einrichtung startet nur ein Betrachter mit dem Recht „Bildschirm steuern“";
 
 fn source_not_monitor() -> &'static str {
     "die gewählte Quelle ist kein Monitor; der Monitor-Wunsch gilt nur für eine \

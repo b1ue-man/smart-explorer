@@ -16,7 +16,7 @@ use eframe::egui::{self, RichText};
 
 use super::super::screen_prefs::{VirtualDisplayChoice, VirtualDisplayWish};
 use super::{ToolbarAction, ToolbarInput};
-use crate::screen::core::virtual_display::{parse_size, size_text, SIZE_CHOICES};
+use crate::screen::core::virtual_display::{chain_text, parse_size, size_text, SIZE_CHOICES};
 
 /// The short text of the closed „Monitor“ list.
 fn wish_text(wish: VirtualDisplayWish) -> &'static str {
@@ -184,7 +184,10 @@ pub(super) fn state_text(
     });
     let mut line = plain.text();
     if let Some(key) = now_key.filter(|key| *key != plain.chain_key()) {
-        line.push_str(&format!(" · jetzt {key}"));
+        // A setup or a reason why not in German (a driver installed at use
+        // time, its decline or failure); other states as their key.
+        let now = chain_text(key).unwrap_or_else(|| key.to_string());
+        line.push_str(&format!(" · jetzt {now}"));
     }
     let shown = now_source.or(report.source.as_deref());
     if let Some(shown) = shown {

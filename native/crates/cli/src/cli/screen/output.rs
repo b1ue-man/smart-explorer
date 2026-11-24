@@ -70,14 +70,35 @@ pub(super) fn probe_text(report: &ScreenProbeReport) -> String {
         format!("codecs\t{}", listed(&codecs)),
         format!("monitors\t{}", report.monitors.len()),
         format!("limits\t{}", listed(&report.limits)),
+        // The key, then the German line the viewers show.
         format!(
             "virtual_display\t{}",
             report
                 .virtual_display
                 .as_ref()
-                .map_or("-".to_string(), |display| display.chain_key())
+                .map_or("-".to_string(), |display| format!(
+                    "{}\t{}",
+                    display.chain_key(),
+                    display.text()
+                ))
         ),
     ])
+}
+
+/// The JSON of `probe` (`se screen probe --json`, the MCP tool `screen`):
+/// the report with `virtual_display.text`, the German line the viewers
+/// show for the host's answer.
+pub(super) fn probe_json(report: &ScreenProbeReport) -> Result<Value, String> {
+    let mut value = serde_json::to_value(report).map_err(|error| error.to_string())?;
+    if let (Some(display), Some(object)) = (
+        report.virtual_display.as_ref(),
+        value
+            .get_mut("virtual_display")
+            .and_then(Value::as_object_mut),
+    ) {
+        object.insert("text".into(), Value::String(display.text()));
+    }
+    Ok(value)
 }
 
 fn number(value: f64) -> String {

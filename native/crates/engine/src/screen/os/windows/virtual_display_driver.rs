@@ -1,6 +1,8 @@
 //! The Windows side of the virtual display at use time (plan 2026-11-17
 //! P5). The driver of VirtualDrivers (installed by the elevated step,
-//! `virtual_display_install.rs`) keeps one monitor; se attaches it to the
+//! `virtual_display_install.rs`, of the installation, an update or, for a
+//! viewer that asks a host without a working driver, of this use:
+//! `virtual_display_on_demand.rs`) keeps one monitor; se attaches it to the
 //! desktop in the listed mode that serves the viewer
 //! (`windows_driver::best_mode`), makes it the primary monitor so a
 //! session's source (`None` = primary) shows it, and keeps the other
@@ -12,9 +14,9 @@
 //! start. A viewer's fixed size where the physical monitor shows (P9,
 //! `set_display.rs`) sets the mode that monitor lists nearest to it
 //! (`physical_mode`); the saved layout gives it its size and rate back.
-//! Everything runs in the user's session without administrator rights
-//! (display settings are the user's own); nothing here installs or
-//! configures the driver.
+//! Everything here runs in the user's session without administrator rights
+//! (display settings are the user's own); the install at use time hands the
+//! driver step to se's one elevation.
 use std::io;
 use std::path::PathBuf;
 use std::sync::OnceLock;
@@ -30,13 +32,17 @@ use windows_sys::Win32::Graphics::Gdi::{
 use super::device;
 use crate::screen::core::pixel_convert::FrameSize;
 use crate::screen::core::virtual_display::windows_driver::{
-    adapter_is_ours, best_mode, layout_with_virtual, physical_monitor, AdapterFact, ListedMode,
-    Placement, REASON_DRIVER_BROKEN, REASON_DRIVER_MISSING, REASON_MONITOR_MISSING,
+    adapter_is_ours, best_mode, installs_on_use, layout_with_virtual, physical_monitor,
+    AdapterFact, ListedMode, Placement, REASON_DRIVER_BROKEN, REASON_DRIVER_MISSING,
+    REASON_MONITOR_MISSING,
 };
 use crate::screen::core::virtual_display::DriverLimit;
 use crate::screen::core::virtual_display_host::{
     DisplayProbe, SetupProgress, VirtualDisplayDriver,
 };
+
+#[path = "virtual_display_on_demand.rs"]
+mod on_demand;
 
 /// The virtual display of a Windows host.
 pub struct WindowsVirtualDisplay;
@@ -344,9 +350,9 @@ impl VirtualDisplayDriver for WindowsVirtualDisplay {
             driver: "vdd".into(),
             current,
             unsupported: unsupported.map(str::to_string),
-            // Never a setup step during use (user 2026-11-17): the driver
-            // comes with the installation or an update.
-            setup_possible: false,
+            // User rule 2026-11-24: a missing or broken driver is installed
+            // when a viewer asks for se's display (`on_demand`).
+            setup_possible: installs_on_use(unsupported) && on_demand::possible(),
             portal: false,
         })
     }
@@ -389,7 +395,16 @@ impl VirtualDisplayDriver for WindowsVirtualDisplay {
     }
 
     fn request_setup(&self) -> SetupProgress {
-        SetupProgress::Failed(REASON_DRIVER_MISSING.into())
+        on_demand::request()
+    }
+
+    /// The driver adds its monitor beside the physical ones.
+    fn setup_adds_display(&self) -> bool {
+        true
+    }
+
+    fn setup_reason(&self) -> Option<String> {
+        on_demand::reason()
     }
 
     /// The physical display that shows the desktop (the primary one that is

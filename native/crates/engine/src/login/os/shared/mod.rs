@@ -6,6 +6,8 @@ pub mod child_reader;
 pub mod client;
 pub mod helper;
 pub mod helper_capture;
+/// One install of a system component at a time (install-on-use).
+pub mod install_gate;
 pub mod installation;
 use std::io;
 pub fn denied(reason: impl ToString) -> io::Error {

@@ -37,7 +37,7 @@ Diese Regeln gelten für alle Wege; die Entscheidungen E11 bis E20 stehen mit Nu
   Server nur Direktwege. Der DNS-Auflöser des Share-Endpunkts fragt nur die Systemkonfiguration
   (`getaddrinfo` und die Systemnameserver), keine öffentlichen Rückfall-Resolver.
   Außerhalb des Verbindungswegs bleiben: der Update-Feed auf GitHub, der Download des
-  OpenH264-Codecs bei Cisco (Lizenzbedingung des Codecs) und das vom Nutzer eingerichtete
+  OpenH264-Codecs bei Cisco (automatisch, abschaltbar; Lizenzbedingung) und der FFmpeg-Laufzeit für Windows bei GitHub und das vom Nutzer eingerichtete
   Google-Drive-Backend.
 - **Server ohne Zugangsverwaltung (E18, E19).** Der Share-Server vermittelt Anwesenheit und
   Adressen, führt keine Liste zugelassener Geräte und verwaltet keine Konten. Schlüsselnachweis

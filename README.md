@@ -166,8 +166,10 @@ Voraussetzung unter Windows ist die offizielle
 mit DLL-API **231** und Kernel-Treiberprotokoll **0x190** (dezimal **400**).
 Der empfohlene Smart-Explorer-Installer enthält die exakt gepinnte offizielle
 `Dokan_x64.msi` offline als standardmäßig ausgewählte optionale Komponente.
-Portable und per Auto-Update aktualisierte Installationen können dieselbe
-Runtime aus der GUI oder mit `se drive install-runtime` sicher nachinstallieren.
+Fehlt sie, installiert se sie beim ersten Einbinden eines Laufwerks, des
+Gerätebaums oder eines Tresor-Laufwerks selbst (dieselbe gepinnte MSI hinter der
+Windows-UAC-Abfrage) und bindet danach ein; die GUI-Schaltfläche und
+`se drive install-runtime` tun dasselbe auf Wunsch vorab.
 Die Smart-Explorer-Basis bleibt eine per-user-Installation; nur der Windows
 Installer (`msiexec`) fordert für den systemweiten Treiber UAC an. Die offizielle
 signierte Runtime braucht weder Developer Mode noch `TESTSIGNING`. Als
@@ -217,15 +219,16 @@ Gespeicherte Verbindungen, Share-Geräte, Google Drive und entsperrte Tresore
 (`vault://SITE`) erscheinen unter `~/SmartExplorer/<Name>`; `--mount-point PFAD` wählt
 einen leeren Ordner. Unter Linux gibt es keinen Laufwerksbuchstaben: `--letter` ist dort
 ein Fehler. Ohne `--read-write` ist das Laufwerk nur lesbar. Voraussetzung ist das
-Paket `fuse3` (`fusermount3` mit setuid root). `se drive runtime` prüft die Bereitschaft,
-Kernel-Zeitlimit und Paketbefehl je Distribution; `se drive install-runtime` installiert
-kein Paket. Das Laufwerk hat kein `auto_unmount`: Ein Auswerfen im Dateimanager beendet
+Paket `fuse3` (`fusermount3` mit setuid root). Fehlt es, installiert se es beim ersten
+Einbinden selbst (apt-get, dnf, pacman oder zypper hinter der polkit-Abfrage, bei
+fehlendem `/dev/fuse` auch das Kernelmodul) und bindet danach ein; `se drive install-runtime`
+tut dasselbe vorab, `se drive runtime` prüft Bereitschaft und Kernel-Zeitlimit. Das Laufwerk hat kein `auto_unmount`: Ein Auswerfen im Dateimanager beendet
 die Sitzung, `se drive unmount --force` löst auch ein belegtes Laufwerk, dessen offene
 Dateien dann die Verbindung verlieren. Hängt eine Anfrage länger als das Kernel-Zeitlimit
 `fs.fuse.default_request_timeout`, bricht der Kernel das Laufwerk ab; `se drive runtime`
 nennt den Wert. Der Dateimanager bekommt einen Ort: ein GTK-Lesezeichen außerhalb von
 Home, einen KDE-Ort in `user-places.xbel`. Mit `install-linux.sh --with-fuse` installiert das Skript `fuse3` (siehe
-„Installieren“); ohne den Schalter nennt es den Paketbefehl, und `se drive runtime` nennt ihn ebenfalls.
+„Installieren“); ohne den Schalter installiert se das Paket beim ersten Einbinden.
 
 **Verbundene Geräte als Ordner (ab 0.5.183):** `se drive devices on` zeigt jedes gekoppelte
 Gerät als Ordner: Unter Windows liegt der Baum als Laufwerk „Smart Explorer Geräte“, unter
@@ -1123,9 +1126,11 @@ einmalige Freigabe (Windows-UAC fuer eine Aufgabenplanungs-Hilfe und den
 ICS-Dienst, Linux polkit-Regel fuer NetworkManager), danach startet und beendet
 sich die Freigabe von selbst (Start nach 5 s Stabilitaet, Ende 90 s nach dem
 Verschwinden des Geraets oder beim Verlust des eigenen Uplinks). Haben beide
-Seiten Internet, teilt niemand. Ohne ICS beziehungsweise NetworkManager plus
-dnsmasq meldet die App „Internet-Teilen nicht verfuegbar: <Grund>", die
-LAN-Erkennung arbeitet trotzdem. CLI: `se share lan [status|presence on|off|
+Seiten Internet, teilt niemand. Fehlt unter Linux dnsmasq, installiert die
+einmalige Einrichtung es mit (Paket `dnsmasq-base` bzw. `dnsmasq`, eigene
+polkit-Abfrage); nach einer Ablehnung zeigt die App den Grund und „Einrichtung
+reparieren“ fragt erneut. Ohne ICS beziehungsweise NetworkManager meldet die App
+„Internet-Teilen nicht verfuegbar: <Grund>", die LAN-Erkennung arbeitet trotzdem. CLI: `se share lan [status|presence on|off|
 uplink enable|disable|stop|status]`.
 Vor einer manuellen Deinstallation unter Linux im Benutzerkonto der Installation
 `se share lan uplink disable` und anschließend `se --lan-uplink-cleanup` ausführen,
@@ -1235,9 +1240,9 @@ Remote-Laufwerke kann eine Administratorbestätigung anfordern. Zwei Wege:
 2. **Portable:** [`Smart Explorer.exe`](release-native/Smart%20Explorer.exe)
    herunterladen und direkt starten (keine Installation). Für Auto-Update einmalig
    die Update-Quelle setzen (siehe unten). Das portable Terminal-Binary liegt als
-   [`se.exe`](release-native/se.exe) daneben. Falls das Laufwerksfeature Dokany
-   benötigt: in der GUI **Dokany installieren** wählen oder in PowerShell
-   `se drive install-runtime` ausführen. Der Download ist auf die veröffentlichte
+   [`se.exe`](release-native/se.exe) daneben. Das Laufwerksfeature installiert
+   Dokany beim ersten Einbinden selbst; vorab geht es über **Dokany installieren**
+   in der GUI oder `se drive install-runtime`. Der Download ist auf die veröffentlichte
    URL, Dateigröße und SHA-256 festgelegt, wird per Authenticode geprüft und
    fordert erst für `msiexec` UAC an. Eine erkannte inkompatible gemeinsam
    genutzte Dokany-Version wird nicht automatisch ersetzt.
