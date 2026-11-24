@@ -91,10 +91,7 @@ impl Pipeline {
         // group of that kind with a key frame of the running encoder (its
         // preview receipts reset, `new_group`); `resize` replaces it when
         // its size no longer fits.
-        let same_kind = QualityMode {
-            kind: mode.kind,
-            ..previous
-        };
+        let same_kind = previous.with_kind(mode.kind);
         if !mode.same_but_rate(&same_kind)
             || encoder(&self.choice) != encoder(&previous_choice)
             || beyond

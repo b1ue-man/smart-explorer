@@ -87,6 +87,13 @@ impl QualityMode {
     /// pairing it selects (`quality_choice`), which `set_quality_mode`
     /// compares itself, so „Automatisch“ → „Verlustfrei“ on a session that
     /// sends the tiles already keeps their running encoder.
+    /// This mode with another stream kind (its sizes stay private to this
+    /// module, so a struct update elsewhere cannot name them).
+    pub(super) fn with_kind(mut self, kind: StreamKind) -> Self {
+        self.kind = kind;
+        self
+    }
+
     pub(super) fn same_but_rate(&self, other: &Self) -> bool {
         let rates = Self {
             full_fps: other.full_fps,
