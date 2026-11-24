@@ -271,8 +271,10 @@ class ScreenInputMapper(
     fun drain(): List<JsonObject> = ArrayList(queue).also { queue.clear() }
 
     /**
-     * How often [releaseAll] dropped typed text that had not gone out: the screen keyboard field still shows it, so it
-     * starts again from its padding, or the next edit compared against text the host never got (round 12, B1).
+     * How often [releaseAll] dropped typed text or a key press that had not gone out: the screen keyboard field still
+     * shows the edit, so it starts again from its padding, or the next edit compared against text the host never got
+     * (round 12, B1). A deletion in the field is a tapped backspace, a key press: dropped, the field holds one character
+     * less than the host (round 13, V6).
      */
     var textDrops = 0
         private set
@@ -287,7 +289,7 @@ class ScreenInputMapper(
         val unsentButtons = HashSet<String>()
         val unsentKeys = HashSet<String>()
         val unsentTouches = HashSet<String>()
-        if (queue.any { it.text("type") == "text" }) textDrops++
+        if (queue.any { it.text("type") == "text" || it.text("type") == "key" && (it["down"] as? JsonPrimitive)?.content == "true" }) textDrops++
         for (event in queue) {
             val down = (event["down"] as? JsonPrimitive)?.content == "true"
             when (event.text("type")) {

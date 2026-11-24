@@ -15,13 +15,24 @@
 //! pictures wait: the decoder's own identity window
 //! (`decoded_frame::MAX_PENDING_FRAMES`) takes no more pictures in flight, and
 //! the host sends its family state after the first picture operation of the
-//! new layout. Beyond it the held records are dropped as before and the
-//! viewer asks for a key frame when the layout state comes.
+//! new layout. At most `MAX_HELD_RECORDS` records wait, pieces of a picture
+//! (`FLAG_MORE`) included (round 13, V2): the memory the viewer offered in
+//! its frame contract counts with that many live record copies, each within
+//! the record limit, and a host that sent pieces without end would otherwise
+//! fill the hold without bound. Beyond either bound the held records are
+//! dropped as before and the viewer asks for a key frame when the layout
+//! state comes.
 use super::decoded_frame::MAX_PENDING_FRAMES;
 use super::wire_binary::{FrameRecord, GopHeader};
 
 /// Pictures (records without `FLAG_MORE`) held at most.
 pub const MAX_HELD_FRAMES: usize = MAX_PENDING_FRAMES;
+
+/// Records held at most, pieces of a picture included: the live record
+/// copies the viewer's frame contract budgets for
+/// (`frame_size_packet.rs`: thirty-two live record copies beside the
+/// queue's record, each at most the contract's record size).
+pub const MAX_HELD_RECORDS: usize = 32;
 
 /// What the viewer does with a record of a family session.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -79,7 +90,7 @@ impl LayoutHold {
             };
         }
         let picture = !record.has_more();
-        if picture && self.pictures >= MAX_HELD_FRAMES {
+        if (picture && self.pictures >= MAX_HELD_FRAMES) || self.records.len() >= MAX_HELD_RECORDS {
             replaced.extend(self.take());
             replaced.push((header, record));
             return Held {
@@ -202,6 +213,16 @@ mod tests {
         let full = hold.hold(header(11, 8), record(99, 0));
         assert!(!full.kept);
         assert_eq!(full.replaced.len(), MAX_HELD_FRAMES + 1);
+        assert!(hold.is_empty());
+
+        // Round 13, V2: pieces of a picture count against the record bound;
+        // one record beyond it drops everything held.
+        for _ in 0..MAX_HELD_RECORDS {
+            assert!(hold.hold(header(12, 9), record(40, FLAG_MORE)).kept);
+        }
+        let endless = hold.hold(header(12, 9), record(40, FLAG_MORE));
+        assert!(!endless.kept);
+        assert_eq!(endless.replaced.len(), MAX_HELD_RECORDS + 1);
         assert!(hold.is_empty());
     }
 }

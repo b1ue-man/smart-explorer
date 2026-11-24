@@ -19,6 +19,11 @@ impl ViewSession {
         self.gop_offset
             .store(self.latest_gop.load(Ordering::SeqCst), Ordering::SeqCst);
         *lock(&self.keyframes) = KeyframeRequester::default();
+        // Records the connection before held for its newer layout: the new
+        // host session counts its layouts anew, so they would meet its
+        // states or push out its valid records (round 13, V5; the desktop
+        // drops them in `new_epoch`).
+        drop(lock(&self.layout_hold).take());
     }
 
     /// The id the app sees for group `host` of the current connection.

@@ -159,6 +159,13 @@ mod tests {
         assert!(super::release(&session, &mut sink, &encoder));
         assert_eq!(session.latest_gop.load(Ordering::SeqCst), 2);
         assert_eq!(*lock(&session.family_picture), Some((2, 4)));
+
+        // Round 13, V5: what one connection holds does not reach the next.
+        session.begin_connection();
+        super::record(&session, &mut sink, &encoder, header(5, 6), keyframe(5));
+        assert!(!lock(&session.layout_hold).is_empty());
+        session.begin_connection();
+        assert!(lock(&session.layout_hold).is_empty());
         session.close();
     }
 }

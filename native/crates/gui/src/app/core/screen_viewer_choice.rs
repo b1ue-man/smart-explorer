@@ -17,12 +17,21 @@ pub(super) fn toolbar(ctx: &egui::Context, fullscreen: bool, add: impl FnOnce(&m
         // („Steuern“) or a narrower window adds lay outside it for one pass.
         // A changed height discards that pass and lays it out again
         // (Codex 12/16).
+        // The panel's first pass clips to its default height (no panel
+        // state yet: `interact_size.y` plus the frame's inner margin, at
+        // least the panel's 20 points): a bar of several rows opened cut off
+        // for one pass (round 13, V7).
+        let available = ctx.available_rect().height();
         let shown = egui::TopBottomPanel::top("screen_toolbar").show(ctx, add);
         let id = egui::Id::new("screen_toolbar_height");
         let height = shown.response.rect.height();
         let before = ctx.data_mut(|data| data.get_temp::<f32>(id));
         ctx.data_mut(|data| data.insert_temp(id, height));
-        if before.is_some_and(|before| (before - height).abs() > 0.5) {
+        let changed = match before {
+            Some(before) => (before - height).abs() > 0.5,
+            None => height.min(available) > first_pass_height(ctx).min(available) + 0.5,
+        };
+        if changed {
             ctx.request_discard("screen toolbar changed its height");
         }
         return;
@@ -42,6 +51,15 @@ pub(super) fn toolbar(ctx: &egui::Context, fullscreen: bool, add: impl FnOnce(&m
     // The hint over the picture goes below it (`toolbar_overlay_bottom`).
     let bottom = (ctx.cumulative_pass_nr(), shown.response.rect.bottom());
     ctx.data_mut(|data| data.insert_temp(egui::Id::new(OVERLAY_BOTTOM), bottom));
+}
+
+/// The height a top panel clips to before it has a state (egui 0.29.1
+/// `TopBottomPanel::show_inside_dyn`: its default height, clamped to the
+/// panel's height range that starts at 20 points).
+fn first_pass_height(ctx: &egui::Context) -> f32 {
+    let style = ctx.style();
+    let margin = egui::Frame::side_top_panel(&style).inner_margin.sum().y;
+    (style.spacing.interact_size.y + margin).max(20.0)
 }
 
 /// A list or menu of the toolbar is open, or the pointer lies over one: the
@@ -190,4 +208,44 @@ fn refusal(
             )
         })
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::toolbar;
+    use eframe::egui;
+
+    /// Passes of one frame with a window toolbar of `rows` rows.
+    fn passes(ctx: &egui::Context, rows: usize) -> usize {
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(800.0, 600.0),
+            )),
+            ..Default::default()
+        };
+        let mut passes = 0;
+        let _ = ctx.run(input, |ctx| {
+            passes += 1;
+            toolbar(ctx, false, |ui| {
+                for row in 0..rows {
+                    ui.label(format!("Zeile {row}"));
+                }
+            });
+        });
+        passes
+    }
+
+    /// Round 13, V7: a toolbar of several rows is laid out again in its
+    /// first frame instead of showing cut off to the panel's default
+    /// height; a bar of one row and a bar that keeps its height take one
+    /// pass.
+    #[test]
+    fn screen_task_viewer_toolbar_first_pass_not_cut() {
+        let tall = egui::Context::default();
+        assert_eq!(passes(&tall, 3), 2);
+        assert_eq!(passes(&tall, 3), 1);
+        let short = egui::Context::default();
+        assert_eq!(passes(&short, 1), 1);
+    }
 }

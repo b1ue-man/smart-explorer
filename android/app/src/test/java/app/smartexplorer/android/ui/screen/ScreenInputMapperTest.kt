@@ -157,6 +157,19 @@ class ScreenInputMapperTest {
             released,
         )
         assertTrue(m.releaseAll().isEmpty())
+        assertEquals("the dropped text counts once", 1, m.textDrops)
+        // A deletion in the keyboard field (a tapped backspace) dropped unsent counts like dropped text: the field
+        // starts again from its padding (round 13, V6).
+        val deleted = mapper(InputHost.DESKTOP)
+        deleted.tapKey("backspace")
+        assertTrue(deleted.releaseAll().isEmpty())
+        assertEquals(1, deleted.textDrops)
+        // Only releases of presses already sent go out: nothing typed is dropped.
+        val sentKey = mapper(InputHost.DESKTOP)
+        sentKey.onKey(KeyEvent.KEYCODE_D, true)
+        sentKey.drain()
+        sentKey.releaseAll()
+        assertEquals(0, sentKey.textDrops)
         // A press that never left takes its release with it: nothing goes out.
         val unsent = mapper(InputHost.DESKTOP)
         unsent.onTouch(TouchKind.DOWN, 0, listOf(finger(0, 100f, 100f)))

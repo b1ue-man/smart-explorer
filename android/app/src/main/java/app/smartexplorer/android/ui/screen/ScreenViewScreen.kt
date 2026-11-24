@@ -174,7 +174,12 @@ fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, a
     // One opening at a time (Codex 12/4): a second one waits until the first is in place, so „Steuern“ switched off
     // during an opening and a replacement of a controlling session see the session they act on.
     val openLock = remember { Mutex() }
-    suspend fun openOwn(newMode: String, unlessRunning: Boolean = false) = openLock.withLock {
+    // The mode a reopening keeps (a codec, a display or the tiles' end), read when its turn under [openLock] comes, not
+    // when it was queued (round 13, V3): a reopening queued while „Steuern“ opened its control session keeps control
+    // instead of replacing it with a viewing one. A full view that still shows the adopted preview opens its own view.
+    fun modeInForce() = if (controlOn) "control" else if (mode == "preview") "view" else mode
+    suspend fun openOwn(unlessRunning: Boolean = false, pick: () -> String = { modeInForce() }): Unit = openLock.withLock {
+        val newMode = pick()
         // „Steuern“ switched on twice during one opening: the control session that opened meanwhile serves the second.
         if (unlessRunning && mode == newMode && current?.state?.value?.let { it.ended == null } == true) return@withLock
         // The host gives control to one session: a replacement that is to control as well lets the one before go
@@ -184,33 +189,40 @@ fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, a
         val before = current
         val released = newMode == "control" && before != null && before !== adopted &&
             before.state.value.holder == "viewer" && before.state.value.ended == null
-        if (released) {
-            before?.call { control(it, "release") }
-            withTimeoutOrNull(CONTROL_RELEASE_WAIT_MS) { before?.state?.first { it.holder != "viewer" || it.ended != null } }
-        }
-        val opened = ScreenSession(target, backend)
+        var placed = false
         try {
-            opened.open(newMode, settings.source, viewerExtent[0].takeIf { it > 0 } ?: metrics.widthPixels, viewerExtent[1].takeIf { it > 0 } ?: metrics.heightPixels, maxFps, backend.offers(settings.choice), settings.choice)
-        } catch (e: CoreException) {
-            failure = e.message
-            // The session before keeps running: it takes control again.
-            if (released && controlOn) before?.call { control(it, "take") }
-            return@withLock
-        }
-        // „Steuern“ was switched off while the control session opened: the host gave it control at the opening, so it
-        // lets go at once instead of keeping the device for a second viewer (Codex 12/4).
-        if (newMode == "control" && !controlOn) opened.call { control(it, "release") }
-        val previous = current
-        owned.add(opened)
-        current = opened
-        if (previous === adopted && previous != null) {
-            previous.publishVisibility(ScreenVisibilityFacts(false,Rect.Zero,Rect.Zero,Rect.Zero,0,0))
-        }
-        mode = newMode
-        failure = null
-        if (previous != null && previous !== adopted) {
-            owned.remove(previous)
-            previous.close()
+            if (released) {
+                before?.call { control(it, "release") }
+                withTimeoutOrNull(CONTROL_RELEASE_WAIT_MS) { before?.state?.first { it.holder != "viewer" || it.ended != null } }
+            }
+            val opened = ScreenSession(target, backend)
+            try {
+                opened.open(newMode, settings.source, viewerExtent[0].takeIf { it > 0 } ?: metrics.widthPixels, viewerExtent[1].takeIf { it > 0 } ?: metrics.heightPixels, maxFps, backend.offers(settings.choice), settings.choice)
+            } catch (e: CoreException) {
+                failure = e.message
+                return@withLock
+            }
+            // „Steuern“ was switched off while the control session opened: the host gave it control at the opening, so it
+            // lets go at once instead of keeping the device for a second viewer (Codex 12/4).
+            if (newMode == "control" && !controlOn) opened.call { control(it, "release") }
+            val previous = current
+            owned.add(opened)
+            current = opened
+            placed = true
+            if (previous === adopted && previous != null) {
+                previous.publishVisibility(ScreenVisibilityFacts(false,Rect.Zero,Rect.Zero,Rect.Zero,0,0))
+            }
+            mode = newMode
+            failure = null
+            if (previous != null && previous !== adopted) {
+                owned.remove(previous)
+                previous.close()
+            }
+        } finally {
+            // Without a replacement in place the session before keeps running: it takes control again on every way out —
+            // a failed opening and a cancelled one alike (round 13, V4: a second codec change cancels the first and may
+            // switch within the session, which opens nothing that would take control).
+            if (released && !placed && controlOn) before?.call { control(it, "take") }
         }
     }
     LaunchedEffect(Unit) {
@@ -223,13 +235,11 @@ fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, a
                 current = family.screen
             } catch (cancel: kotlinx.coroutines.CancellationException) { throw cancel
             } catch (error: Exception) { failure = error.message ?: "Fensterverbindung konnte nicht geöffnet werden." }
-        } else if (adopted == null) {
-            openOwn(mode)
         } else {
             // A preview owns its small immutable frame contract. Full view gets
             // its own actual budget, as control already did, and leaves the tile
             // available for the return path without widening that contract.
-            openOwn(if(target.control) "control" else "view")
+            openOwn()
         }
     }
 
@@ -279,7 +289,7 @@ fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, a
         releaseInputs()
         // A session opened for the tiles that the host ended for a chosen video codec (`set_decoders.rs`,
         // TILES_SESSION): it opens again with the choice, as on the desktop (`screen_decode_events.rs`, Codex 3/14).
-        if (family == null && ended.detail?.contains(TILES_SESSION_REASON) == true) openOwn(mode)
+        if (family == null && ended.detail?.contains(TILES_SESSION_REASON) == true) openOwn()
     }
     // E22: while the stream pauses with the secure desktop, the lock screen or no user session, the
     // paired device's login screen opens without a tap; it closes when the user session shows again.
@@ -478,7 +488,7 @@ fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, a
                 } catch (_: LinkageError) {
                     false
                 }
-                if (!switched && settings.display == next.display) openOwn(mode)
+                if (!switched && settings.display == next.display) openOwn()
             }
             if (previous.copy(display = next.display) == next) return
         }
@@ -523,7 +533,7 @@ fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, a
                     if (previous.choice.maxRateBps != next.choice.maxRateBps) own.setMaxRate(next.choice.maxRateBps)
                 } else {
                     if (own != null && prior != null && own.choice == next.choice) own.restoreChoice(prior)
-                    openOwn(mode)
+                    openOwn()
                 }
             }
             return
@@ -693,7 +703,7 @@ fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, a
                         zoomMode = zoomMode,
                         onControl = { on ->
                             controlOn = on
-                            if (on && mode != "control") scope.launch { openOwn("control", unlessRunning = true) }
+                            if (on && mode != "control") scope.launch { openOwn(unlessRunning = true) { "control" } }
                             if (!on) session?.call { control(it, "release") }
                         },
                         onSource = { applySettings(settings.copy(source = it)) },
@@ -723,7 +733,7 @@ fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, a
             }
             if (ended != null) {
                 Row(Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(16.dp)) {
-                    if (family == null) TextButton(onClick = { scope.launch { openOwn(if (controlOn) "control" else "view") } }) {
+                    if (family == null) TextButton(onClick = { scope.launch { openOwn { if (controlOn) "control" else "view" } } }) {
                         Text(stringResource(R.string.screen_view_reconnect), color = Color.White)
                     }
                     TextButton(onClick = onClose) { Text(stringResource(R.string.screen_view_close), color = Color.White) }

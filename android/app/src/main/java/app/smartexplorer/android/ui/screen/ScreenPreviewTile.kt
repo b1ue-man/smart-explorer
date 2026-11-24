@@ -148,7 +148,10 @@ fun ScreenPreviewTile(
     }
     val lifecycleState by LocalLifecycleOwner.current.lifecycle.currentStateAsState()
     val started = lifecycleState.isAtLeast(Lifecycle.State.STARTED)
-    LaunchedEffect(gate, started, previewRefused) {
+    // Keyed by the adoption of this tile's own session too (round 13, V1): a choice the preview cannot hold, stored in
+    // the full view that adopted the session, leaves it running there; given back when the full view closes, it ends
+    // here then. A full view over another tile changes nothing here (no session of this tile: no new key).
+    LaunchedEffect(gate, started, previewRefused, adoptedBy != null && adoptedBy === session) {
         // In the background, and under a choice the preview cannot hold (stored later in the full view, round 12, B2), a
         // tile's own session ends; the tile names the reason (`previewRefused`).
         if (!started || previewRefused != null) {
