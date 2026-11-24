@@ -166,9 +166,12 @@ fn review1119_task_new_reasons_read_german() {
     ));
     assert!(include_str!("../os/windows/vendor_encode.rs")
         .contains("\"{name} refused to lower its bit rate to {} bit/s: {error}\""));
-    assert!(include_str!("host_pipeline_admit.rs").contains(
-        "\"chosen_codec_unavailable: {}: the picture of {}x{} pixels is smaller than \\\n"
-    ));
+    // A Windows checkout ends lines with CRLF.
+    assert!(include_str!("host_pipeline_admit.rs")
+        .replace("\r\n", "\n")
+        .contains(
+            "\"chosen_codec_unavailable: {}: the picture of {}x{} pixels is smaller than \\\n"
+        ));
     // Round 8 Gemini 8/10: sound that does not fit under the ceiling.
     assert_eq!(
         encoder_notice_text(&sound_over_ceiling(53_400, 50_000)).as_deref(),
