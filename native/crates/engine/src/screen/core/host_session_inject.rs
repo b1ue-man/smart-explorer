@@ -234,7 +234,25 @@ impl Session<'_> {
                 // S3: a refusal for a reference the source just left holds
                 // the batch back and keeps what the user holds; the new
                 // reference lets go of it when it moves the floor.
-                if presented && self.stale_refusal(blocked, reference) {
+                let stale = presented && self.stale_refusal(blocked, reference);
+                if !went.is_empty() {
+                    // Round 13 (S2): calls of its text went in before this
+                    // one failed: the viewer hears how much was not typed and
+                    // why, not that the whole batch was held back or blocked
+                    // (a resend would type its start twice).
+                    if stale {
+                        self.release_held_ups(events);
+                    } else {
+                        self.release_pressed();
+                    }
+                    let (block, held) = if stale {
+                        (None, Some(InputHeld::WaitingForPicture))
+                    } else {
+                        (Some(blocked), None)
+                    };
+                    self.stopped_partway(numbers.0, (events, &went), (block, held))
+                        .await?;
+                } else if stale {
                     // Held back, not blocked (review O2a); its releases of
                     // held keys go in (E2: the viewer sends each once).
                     self.release_held_ups(events);
@@ -242,11 +260,12 @@ impl Session<'_> {
                     self.receipts_settled(numbers.0, InputResult::Held { held })
                         .await?;
                     return self.report_held(held).await;
+                } else {
+                    self.release_pressed();
+                    self.receipts_settled(numbers.0, InputResult::Blocked { block: blocked })
+                        .await?;
+                    self.report_block(blocked).await?;
                 }
-                self.release_pressed();
-                self.receipts_settled(numbers.0, InputResult::Blocked { block: blocked })
-                    .await?;
-                self.report_block(blocked).await?;
                 if !presented
                     && sink
                         .as_ref()

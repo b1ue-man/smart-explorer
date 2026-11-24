@@ -14,18 +14,29 @@
 //! viewer without receipts hears of an untyped text rest by `ERROR`
 //! `input_stopped`. The numbers and the queued batches are kept for every
 //! viewer (without numbers for one that did not ask): the backlog's numbers
-//! stay in its order, and an untyped rest is known either way.
+//! stay in its order, and an untyped rest is known either way. Round 13
+//! (S2): a text whose later call failed after earlier calls went in is
+//! stopped with its reason (`stopped_partway`); (S5) a queued batch asks
+//! the sink that took it, never a sink the source got since (whose marks
+//! count other batches).
 use super::*;
 use crate::screen::core::host_backend::ScreenInputSink;
 use crate::screen::core::input_receipt::{
-    stopped_detail, text_characters, InputReceipt, InputResult, INPUT_STOPPED,
+    stopped_cause_detail, stopped_detail, text_characters, InputReceipt, InputResult, INPUT_STOPPED,
 };
+use crate::screen::core::wire_control::{ControlBlock, InputHeld};
 use std::collections::VecDeque;
 use std::sync::Arc;
+
+/// The numbers of an injection that ended, the sink's mark before it and
+/// the sink that took it (`receipts_ended`).
+pub(in super::super) type Ended = (Vec<u64>, u64, Option<Arc<dyn ScreenInputSink>>);
 
 /// Batches a queueing sink took, waiting for its app.
 struct Queued {
     batches: Vec<u64>,
+    /// The sink that took them (round 13, S5: its marks only).
+    sink: Arc<dyn ScreenInputSink>,
     /// The sink's mark before the batch and with its last call.
     after: u64,
     mark: u64,
@@ -44,9 +55,11 @@ pub(in super::super) struct Receipts {
     deciding: Vec<u64>,
     /// The numbers of each backlog entry, in the backlog's order.
     backlog: VecDeque<Vec<u64>>,
-    /// The numbers of the batch being injected and the sink's mark before it.
+    /// The numbers of the batch being injected, the sink's mark before it
+    /// and that sink (round 13, S5: the one that takes the batch).
     injecting: Vec<u64>,
     injecting_after: u64,
+    injecting_sink: Option<Arc<dyn ScreenInputSink>>,
     queued: VecDeque<Queued>,
 }
 
@@ -111,6 +124,7 @@ impl Session<'_> {
         let receipts = &mut self.health.receipts;
         receipts.injecting = std::mem::take(&mut receipts.deciding);
         receipts.injecting_after = sink.and_then(|sink| sink.input_mark()).unwrap_or(0);
+        receipts.injecting_sink = sink.cloned();
     }
 
     /// The deciding batch is not injected: its receipts.
@@ -122,12 +136,14 @@ impl Session<'_> {
         self.send_receipts(batches, result).await
     }
 
-    /// The numbers of the injection that ended and the sink's mark before it.
-    pub(in super::super) fn receipts_ended(&mut self) -> (Vec<u64>, u64) {
+    /// The numbers of the injection that ended, the sink's mark before it
+    /// and the sink that took it.
+    pub(in super::super) fn receipts_ended(&mut self) -> Ended {
         let receipts = &mut self.health.receipts;
         (
             std::mem::take(&mut receipts.injecting),
             receipts.injecting_after,
+            receipts.injecting_sink.take(),
         )
     }
 
@@ -135,18 +151,17 @@ impl Session<'_> {
     /// queues input for later, waiting for its app (`poll_receipts`).
     pub(in super::super) async fn receipts_applied(
         &mut self,
-        (batches, after): (Vec<u64>, u64),
+        (batches, after, sink): Ended,
         events: &[InputEvent],
     ) -> io::Result<()> {
-        let mark = self
-            .pipeline
-            .input_sink()
-            .and_then(|sink| sink.input_mark());
+        // Round 13 (S5): the mark of the sink that took the batch; a sink
+        // the source got meanwhile counts its own batches.
+        let taken = sink.and_then(|sink| sink.input_mark().map(|mark| (sink, mark)));
         let text = text_characters(events);
-        match mark {
+        match taken {
             // Kept also without numbers when it holds text: an untyped rest
             // is told either way (`finish_injection`).
-            Some(mark) if !batches.is_empty() || text > 0 => {
+            Some((sink, mark)) if !batches.is_empty() || text > 0 => {
                 // A batch merged into one still waiting has that one's mark.
                 let after = if mark > after {
                     after
@@ -155,6 +170,7 @@ impl Session<'_> {
                 };
                 self.health.receipts.queued.push_back(Queued {
                     batches,
+                    sink,
                     after,
                     mark,
                     text,
@@ -175,21 +191,25 @@ impl Session<'_> {
                 .receipts
                 .queued
                 .front()
-                .map(|queued| (queued.after, queued.mark, queued.text))
+                .map(|queued| (queued.sink.clone(), queued.after, queued.mark, queued.text))
             else {
                 return Ok(());
             };
-            let (after, mark, text) = front;
-            // A source without the sink that took them never says it.
-            let result = match self.pipeline.input_sink() {
-                Some(sink) => match sink.input_outcome(after, mark) {
-                    None => return Ok(()),
-                    Some(None) => InputResult::Applied,
-                    Some(Some(reason)) => InputResult::Refused { reason },
-                },
+            let (sink, after, mark, text) = front;
+            // Round 13 (S5): the sink that took them says it, also after
+            // the source got another one; a sink that takes no input any
+            // more (`closed`: its session's channel ended, its waiting
+            // batches were dropped) and a source without a sink never do.
+            let gone = sink.closed() || self.pipeline.input_sink().is_none();
+            let result = match sink.input_outcome(after, mark) {
+                Some(None) => InputResult::Applied,
+                Some(Some(reason)) => InputResult::Refused { reason },
+                None if !gone => return Ok(()),
                 None => InputResult::Stopped {
                     untyped: text,
                     exact: false,
+                    block: None,
+                    held: None,
                 },
             };
             let batches = self
@@ -210,6 +230,33 @@ impl Session<'_> {
         result: InputResult,
     ) -> io::Result<()> {
         self.send_receipts(batches, result).await
+    }
+
+    /// Round 13 (S2): `events` failed after its calls `went` went in, for
+    /// `block` or `held`: what of its text was not typed, and why, as the
+    /// receipts of `batches` or as `ERROR` `input_stopped` (the call that
+    /// failed may have typed some: at most that many).
+    pub(in super::super) async fn stopped_partway(
+        &mut self,
+        batches: Vec<u64>,
+        (events, went): (&[InputEvent], &[InputEvent]),
+        (block, held): (Option<ControlBlock>, Option<InputHeld>),
+    ) -> io::Result<()> {
+        let untyped = text_characters(events).saturating_sub(text_characters(went));
+        if self.health.receipts.asked {
+            let result = InputResult::Stopped {
+                untyped,
+                exact: false,
+                block,
+                held,
+            };
+            return self.send_receipts(batches, result).await;
+        }
+        let error = ScreenWireError {
+            code: INPUT_STOPPED.into(),
+            detail: Some(stopped_cause_detail(untyped, false, block, held)),
+        };
+        self.frame(HostFrame::Error(error)).await
     }
 
     async fn send_receipts(&mut self, batches: Vec<u64>, result: InputResult) -> io::Result<()> {
@@ -314,6 +361,8 @@ impl Session<'_> {
                 let result = InputResult::Stopped {
                     untyped: text,
                     exact,
+                    block: None,
+                    held: None,
                 };
                 let _ = self.send_receipts(batches, result).await;
             }
@@ -325,5 +374,30 @@ impl Session<'_> {
             };
             let _ = self.frame(HostFrame::Error(error)).await;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// Round 13 (S2): a batch whose later text call failed after earlier
+    /// calls went in is reported stopped with the untyped rest and its
+    /// reason (receipt or `ERROR` `input_stopped`), not held back or blocked
+    /// whole; (S5) a queued batch is asked of the sink that took it.
+    #[test]
+    fn r13_task_partway_text_is_stopped_with_its_reason() {
+        let inject = include_str!("host_session_inject.rs").replace("\r\n", "\n");
+        let partway = inject
+            .split("if !went.is_empty() {")
+            .nth(1)
+            .and_then(|rest| rest.split("} else if stale {").next())
+            .unwrap_or_default();
+        assert!(partway.contains("self.stopped_partway(numbers.0, (events, &went), (block, held))"));
+        assert!(!partway.contains("receipts_settled"));
+        assert!(!partway.contains("report_block"));
+        let receipts = include_str!("host_input_receipts.rs").replace("\r\n", "\n");
+        let code = receipts.split("#[cfg(test)]").next().unwrap_or_default();
+        assert!(code.contains("detail: Some(stopped_cause_detail(untyped, false, block, held)),"));
+        assert!(code.contains("receipts.injecting_sink = sink.cloned();"));
+        assert!(code.contains("let result = match sink.input_outcome(after, mark) {"));
     }
 }

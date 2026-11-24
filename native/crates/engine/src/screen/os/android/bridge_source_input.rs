@@ -180,4 +180,11 @@ impl ScreenInputSink for BridgeInputSink {
     fn input_outcome(&self, after: u64, mark: u64) -> Option<Option<String>> {
         self.channel.input_outcome(after, mark)
     }
+
+    /// The session's channel ended (round 13, S5): its waiting batches were
+    /// dropped (`bridge_channels::close`), so none of them is reported any
+    /// more, and a release keeper stops trying at once.
+    fn closed(&self) -> bool {
+        matches!(self.channel.phase(), Phase::Ended(_))
+    }
 }

@@ -110,18 +110,24 @@ impl Channel {
 
     /// The batches after `after` up to `mark`: `None` while the app has
     /// not finished `mark`, else the sentence of the first refused one, if
-    /// any (the refusals up to `mark` are then forgotten).
+    /// any (the refusals up to `mark` are then forgotten). No batch lies
+    /// between them when `mark` is not above `after` (round 13, S5: the
+    /// range panicked then and ended the session's task).
     pub fn input_outcome(&self, after: u64, mark: u64) -> Option<Option<String>> {
         let mut state = lock(&self.state);
         let queues = &mut state.1;
         if queues.input_done < mark {
             return None;
         }
-        let refused = queues
-            .input_refusals
-            .range(after.saturating_add(1)..=mark)
-            .next()
-            .map(|(_, text)| text.clone());
+        let refused = (after < mark)
+            .then(|| {
+                queues
+                    .input_refusals
+                    .range(after.saturating_add(1)..=mark)
+                    .next()
+                    .map(|(_, text)| text.clone())
+            })
+            .flatten();
         queues.input_refusals.retain(|batch, _| *batch > mark);
         Some(refused)
     }

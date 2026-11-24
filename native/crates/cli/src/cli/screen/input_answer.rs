@@ -1,12 +1,13 @@
 //! The device's answer to the input of `se screen input` and of the MCP tool
 //! `screen_input`: its receipt (`input_receipt.rs`, round 12 rest, Codex
-//! 12/15) from a host that announced receipts, else what an older host
-//! reports within `answer_wait` (unconfirmed).
+//! 12/15) from a host that announced receipts, waited for at most
+//! `receipt_wait` (round 13, S4), else what an older host reports within
+//! `answer_wait` (unconfirmed).
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
-use super::InputOutcome;
+use super::{InputOutcome, Stopped};
 use crate::daemon::StreamEvent;
 use crate::screen::core::input_receipt::InputResult;
 use crate::screen::core::wire_control::HostFrame;
@@ -20,12 +21,32 @@ pub(super) type Next<'a> = dyn Fn(Option<Duration>) -> Result<Option<StreamEvent
 const REBUILT: &str = "the device rebuilt the screen session while the input went out; it may \
                        not have been applied";
 
-/// The receipt of the first `INPUT` after `INPUT_RECEIPTS`: no fixed wait,
-/// the session's end ends it.
-pub(super) fn receipt_outcome(next: &Next<'_>) -> Result<InputOutcome, String> {
+/// The receipt of the first `INPUT` after `INPUT_RECEIPTS`, waited for at
+/// most `wait` (the session's end ends it earlier); without one by then the
+/// input is `sent` with `applied: null` and the reason in `unconfirmed`
+/// (round 13, S4: a lost receipt held the command until the session ended).
+pub(super) fn receipt_outcome(next: &Next<'_>, wait: Duration) -> Result<InputOutcome, String> {
+    let deadline = Instant::now() + wait;
     loop {
-        match next(None)? {
-            Some(StreamEvent::Host(HostFrame::ControlState(state))) => {
+        let left = deadline.saturating_duration_since(Instant::now());
+        let event = if left.is_zero() {
+            None
+        } else {
+            next(Some(left))?
+        };
+        let Some(event) = event else {
+            return Ok(InputOutcome {
+                sent: true,
+                unconfirmed: Some(format!(
+                    "the device sent no receipt for the input within {} s; whether it was \
+                     applied is unknown",
+                    wait.as_secs()
+                )),
+                ..InputOutcome::not_sent()
+            });
+        };
+        match event {
+            StreamEvent::Host(HostFrame::ControlState(state)) => {
                 let Some(receipt) = state.input.filter(|receipt| receipt.batch == 1) else {
                     continue;
                 };
@@ -41,8 +62,18 @@ pub(super) fn receipt_outcome(next: &Next<'_>) -> Result<InputOutcome, String> {
                     InputResult::Blocked { block } => outcome.blocked = Some(block),
                     InputResult::Held { held } => outcome.held = Some(held),
                     InputResult::Refused { reason } => outcome.refused = Some(reason),
-                    InputResult::Stopped { untyped, exact } => {
-                        outcome.stopped = Some((untyped, exact))
+                    InputResult::Stopped {
+                        untyped,
+                        exact,
+                        block,
+                        held,
+                    } => {
+                        outcome.stopped = Some(Stopped {
+                            untyped,
+                            exact,
+                            block,
+                            held,
+                        })
                     }
                     InputResult::Other => {
                         return Err(
@@ -54,15 +85,15 @@ pub(super) fn receipt_outcome(next: &Next<'_>) -> Result<InputOutcome, String> {
                 }
                 return Ok(outcome);
             }
-            Some(StreamEvent::Accepted { .. }) => return Err(REBUILT.into()),
-            Some(StreamEvent::Host(HostFrame::Error(error))) => {
+            StreamEvent::Accepted { .. } => return Err(REBUILT.into()),
+            StreamEvent::Host(HostFrame::Error(error)) => {
                 return Err(format!(
                     "{}: {}",
                     error.code,
                     error.detail.unwrap_or_default()
                 ))
             }
-            Some(StreamEvent::End(end)) => return Err(end.code),
+            StreamEvent::End(end) => return Err(end.code),
             _ => {}
         }
     }
@@ -125,11 +156,18 @@ pub(super) fn unconfirmed_outcome(
 
 /// The answer as JSON (`se screen input --json`, MCP `screen_input`).
 pub(crate) fn outcome_value(outcome: &InputOutcome) -> Value {
-    let stopped = outcome.stopped.map(|(untyped, exact)| {
+    let stopped = outcome.stopped.as_ref().map(|stopped| {
         json!({
-            "untyped": untyped,
-            "exact": exact,
-            "text": crate::screen::core::input_receipt::stopped_text(untyped, exact),
+            "untyped": stopped.untyped,
+            "exact": stopped.exact,
+            "block": stopped.block,
+            "held": stopped.held,
+            "text": crate::screen::core::input_receipt::stopped_result_text(
+                stopped.untyped,
+                stopped.exact,
+                stopped.block,
+                stopped.held,
+            ),
         })
     });
     json!({
@@ -139,11 +177,13 @@ pub(crate) fn outcome_value(outcome: &InputOutcome) -> Value {
         "held": outcome.held,
         "refused": outcome.refused,
         "stopped": stopped,
+        "unconfirmed": outcome.unconfirmed,
     })
 }
 
 /// The answer as one line: `held`, `blocked`, `refused` or `stopped` with
-/// its reason, else `applied` (receipt) or `sent` (no receipt).
+/// its reason, else `applied` (receipt), `sent` with the reason in
+/// `unconfirmed` (no receipt in time) or `sent` (no receipt).
 pub(super) fn outcome_line(value: &Value) -> String {
     let text = |key: &str| value[key].as_str().map(str::to_string);
     if let Some(held) = text("held") {
@@ -159,7 +199,10 @@ pub(super) fn outcome_line(value: &Value) -> String {
         return format!("stopped\t{stopped}\n");
     }
     if value["applied"] == Value::Bool(true) {
-        "applied\n".into()
+        return "applied\n".into();
+    }
+    if let Some(unconfirmed) = text("unconfirmed") {
+        format!("sent\t{unconfirmed}\n")
     } else {
         "sent\n".into()
     }

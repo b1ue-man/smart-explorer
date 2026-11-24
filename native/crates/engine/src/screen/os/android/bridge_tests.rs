@@ -281,7 +281,8 @@ fn screen_task_android_input_needs_accessibility_and_stream() {
 /// Round 12 rest (Codex 12/15): every batch the app reads carries its
 /// number; the session's sink marks the input path's last batch and says
 /// what became of it only once the app reported it finished, performed or
-/// refused with its sentence.
+/// refused with its sentence. Round 13 (S5): marks without a batch between
+/// them answer without one.
 #[test]
 fn screen_task_android_input_receipt_waits_for_the_app() {
     let _guard = fresh();
@@ -319,6 +320,10 @@ fn screen_task_android_input_receipt_waits_for_the_app() {
     );
     // A refusal is told once.
     assert_eq!(sink.input_outcome(first, second), Some(None));
+    // Round 13 (S5): no batch between the marks (one taken by another sink,
+    // or none yet) is no panic.
+    assert_eq!(sink.input_outcome(second, first), Some(None));
+    assert_eq!(sink.input_outcome(0, 0), Some(None));
     drop(source);
 }
 

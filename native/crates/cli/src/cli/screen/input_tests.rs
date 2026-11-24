@@ -90,10 +90,13 @@ fn screen_task_cli_input_android_refusal_is_waited_for() {
 }
 
 /// Round 12 rest (Codex 12/15): with a host that sends input receipts the
-/// command waits for the receipt of its input, however late, and reports
-/// what it says (applied, refused with the device's sentence, stopped with
-/// the untyped characters); states without a receipt do not end the wait.
-/// Without receipts `sent` stays unconfirmed (`applied: null`).
+/// command waits for the receipt of its input and reports what it says
+/// (applied, refused with the device's sentence, stopped with the untyped
+/// characters); states without a receipt do not end the wait. Without
+/// receipts `sent` stays unconfirmed (`applied: null`). Round 13: the wait
+/// ends after `receipt_wait`, derived from the host's limits for the batch,
+/// with `applied: null` and the reason in `unconfirmed` (S4); a text stopped
+/// partway names its block (S2).
 #[test]
 fn screen_task_cli_input_waits_for_the_receipt() {
     use super::answer::{outcome_line, receipt_outcome, unconfirmed_outcome};
@@ -115,7 +118,7 @@ fn screen_task_cli_input_waits_for_the_receipt() {
         let next = |_: Option<Duration>| -> Result<Option<StreamEvent>, String> {
             Ok(events.borrow_mut().pop_front())
         };
-        receipt_outcome(&next)
+        receipt_outcome(&next, Duration::from_secs(60))
     };
     let sentence = "the device did not answer an input in time";
     let refused = answer(vec![
@@ -143,13 +146,63 @@ fn screen_task_cli_input_waits_for_the_receipt() {
         Some(InputResult::Stopped {
             untyped: 5,
             exact: false,
+            block: None,
+            held: None,
         }),
     )])
     .unwrap();
-    assert_eq!(stopped.stopped, Some((5, false)));
+    assert_eq!(
+        stopped.stopped,
+        Some(Stopped {
+            untyped: 5,
+            exact: false,
+            block: None,
+            held: None,
+        })
+    );
     let value = outcome_value(&stopped);
     assert_eq!(value["stopped"]["untyped"], 5);
     assert!(outcome_line(&value).contains("bis zu 5 Zeichen wurden nicht getippt"));
+    let partway = answer(vec![state(
+        None,
+        Some(InputResult::Stopped {
+            untyped: 70,
+            exact: false,
+            block: Some(ControlBlock::ElevatedWindow),
+            held: None,
+        }),
+    )])
+    .unwrap();
+    let value = outcome_value(&partway);
+    assert_eq!(value["stopped"]["block"], "elevated_window");
+    assert!(outcome_line(&value).starts_with("stopped\tDer Text wurde nicht fertig getippt, weil"));
+
+    // Round 13 (S4): no receipt within the wait: sent, `applied: null`, why.
+    let lost = answer(vec![state(Some(InputHeld::ReleasePending), None)]).unwrap();
+    assert!(lost.sent);
+    assert_eq!(lost.applied, None);
+    let value = outcome_value(&lost);
+    assert!(value["applied"].is_null());
+    assert!(value["unconfirmed"]
+        .as_str()
+        .is_some_and(|text| text.contains("no receipt")));
+    assert!(outcome_line(&value).starts_with("sent\tthe device sent no receipt"));
+    // The wait covers the host's limits for the batch: per call of text its
+    // link wait and answer time, and the time per character.
+    let short = [InputEvent::Text { text: "a".into() }];
+    let base = answer_wait(HostPlatform::Linux) + ANSWER_WAIT;
+    assert_eq!(
+        receipt_wait(HostPlatform::Linux, &short),
+        base + INPUT_TIMEOUT * 2 + TEXT_CHARACTER_TIME
+    );
+    let long = [InputEvent::Text {
+        text: "x".repeat(TEXT_CALL_CHARACTERS * 3 + 1),
+    }];
+    let characters = u32::try_from(TEXT_CALL_CHARACTERS * 3 + 1).unwrap();
+    assert_eq!(
+        receipt_wait(HostPlatform::Linux, &long),
+        base + INPUT_TIMEOUT * 8 + TEXT_CHARACTER_TIME * characters
+    );
 
     // An older host: nothing within the wait, `sent` without confirmation.
     let silent = |_: Option<Duration>| -> Result<Option<StreamEvent>, String> { Ok(None) };

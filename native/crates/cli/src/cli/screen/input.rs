@@ -16,8 +16,10 @@
 //! device neither blocked, held back, refused nor stopped it. A device that
 //! sends input receipts (`input_receipt.rs`, round 12 rest) answers once the
 //! input is settled, on an Android device once its app performed or refused
-//! it, and the command waits for that answer as long as the session lasts:
-//! `applied` is then `true` or `false`. An older device sends no receipt:
+//! it, and the command waits for that answer as long as the session lasts,
+//! at most `receipt_wait` (round 13, S4): `applied` is then `true` or
+//! `false`; without a receipt within that time `applied` is `null` and
+//! `unconfirmed` names why (`sent` stays `true`). An older device sends no receipt:
 //! its answer is waited for 1.5 s (3.8 s on an Android device) and `applied`
 //! is `null`, so `sent` is unconfirmed. `blocked` is `elevated_window`, `secure_desktop`,
 //! `control_unavailable` or `unsupported_on_host`; `held` says the host held
@@ -27,10 +29,11 @@
 //! (`waiting_for_picture`); `refused` is the device's sentence for an input
 //! it took but did not perform (an Android host: a mouse button without
 //! counterpart, a field whose content it cannot see); `stopped`
-//! (`{"untyped","exact","text"}`) says the control went or the session ended
-//! before the text was typed, with the untyped characters (`exact: false`:
-//! at most that many). With any of them the exit code is 1. No input is ever
-//! logged.
+//! (`{"untyped","exact","text","block","held"}`) says the control went or the
+//! session ended before the text was typed, or (with `block` or `held`, round
+//! 13 S2) that a block or hold stopped it after part of it was typed, with
+//! the untyped characters (`exact: false`: at most that many). With any of
+//! them the exit code is 1. No input is ever logged.
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
@@ -40,7 +43,7 @@ use clap_complete::ArgValueCandidates;
 use crate::daemon::{screen_stream, StreamEvent, StreamRequest};
 #[cfg(test)]
 use crate::screen::core::input_model::{InputEvent, SystemAction};
-use crate::screen::core::input_receipt::INPUT_RECEIPTS_V1;
+use crate::screen::core::input_receipt::{text_characters, INPUT_RECEIPTS_V1};
 use crate::screen::core::negotiate::CodecOffer;
 #[cfg(test)]
 use crate::screen::core::pixel_convert::FrameSize;
@@ -48,6 +51,9 @@ use crate::screen::core::session_state::SessionState;
 use crate::screen::core::window_list::SourceId;
 use crate::screen::core::wire_control::{ControlBlock, HostFrame, InputHeld, ViewerFrame};
 use crate::screen::core::wire_hello::{HostPlatform, SessionMode};
+use crate::screen::core::worker_limits::{
+    INPUT_TIMEOUT, TEXT_CALL_CHARACTERS, TEXT_CHARACTER_TIME,
+};
 use crate::share::access_grant::Capability;
 use crate::share::PeerOpenTarget;
 
@@ -72,6 +78,26 @@ fn answer_wait(platform: HostPlatform) -> Duration {
         HostPlatform::Android => BLOCK_WAIT + ANDROID_ANSWER,
         _ => BLOCK_WAIT,
     }
+}
+
+/// How long the receipt of `batch` is waited for on a host of `platform`
+/// (round 13, S4: a lost receipt held the command for the whole session):
+/// the answer of an older host (`answer_wait`), `ANSWER_WAIT` for the way
+/// there and back [assumption: transport, not measured], and the host's own
+/// limits for the batch (`worker_limits`): per text call of at most
+/// `TEXT_CALL_CHARACTERS` characters the wait for the host process's link and
+/// its answer time (`INPUT_TIMEOUT` each), plus `TEXT_CHARACTER_TIME` per
+/// character.
+fn receipt_wait(
+    platform: HostPlatform,
+    batch: &[crate::screen::core::input_model::InputEvent],
+) -> Duration {
+    let characters = text_characters(batch);
+    let calls = characters.div_ceil(TEXT_CALL_CHARACTERS as u64).max(1);
+    let times = |count: u64| u32::try_from(count).unwrap_or(u32::MAX);
+    (answer_wait(platform) + ANSWER_WAIT)
+        .saturating_add(INPUT_TIMEOUT.saturating_mul(times(calls.saturating_mul(2))))
+        .saturating_add(TEXT_CHARACTER_TIME.saturating_mul(times(characters)))
 }
 
 #[derive(Args, Debug, PartialEq, Eq)]
@@ -132,9 +158,22 @@ pub(crate) struct InputOutcome {
     /// Android host's notice: a mouse button without counterpart, a field
     /// whose content it cannot see, a refused text or action).
     pub refused: Option<String>,
-    /// The control went or the session ended before the text was typed:
-    /// the untyped characters and whether that number is exact.
-    pub stopped: Option<(u64, bool)>,
+    /// The control went or the session ended before the text was typed,
+    /// or a block or hold stopped it partway (round 13, S2): the untyped
+    /// characters, whether that number is exact, and that block or hold.
+    pub stopped: Option<Stopped>,
+    /// No receipt came within `receipt_wait` (round 13, S4): why `applied`
+    /// is `null` although the device announced receipts.
+    pub unconfirmed: Option<String>,
+}
+
+/// What a `stopped` receipt says (`InputResult::Stopped`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Stopped {
+    pub untyped: u64,
+    pub exact: bool,
+    pub block: Option<ControlBlock>,
+    pub held: Option<InputHeld>,
 }
 
 impl InputOutcome {
@@ -147,6 +186,7 @@ impl InputOutcome {
             held: None,
             refused: None,
             stopped: None,
+            unconfirmed: None,
         }
     }
 }
@@ -317,6 +357,7 @@ pub(crate) fn deliver(
             );
         }
         let batch = events(action, size)?;
+        let receipt_limit = receipt_wait(hello.platform, &batch);
         // Round 12 rest (Codex 12/15): a host that announced receipts answers
         // this input once it is settled (on an Android host: once its app
         // performed or refused it), however long that takes; the session's
@@ -332,7 +373,7 @@ pub(crate) fn deliver(
             .send(&ViewerFrame::Input(batch))
             .map_err(|error| error.to_string())?;
         if receipts {
-            return receipt_outcome(&next);
+            return receipt_outcome(&next, receipt_limit);
         }
         unconfirmed_outcome(&next, answer)
     })();

@@ -8,7 +8,10 @@
 //! everyone's input waiting; a job past its limit is awaited first (at most
 //! `GATE_LIMIT`), and what it failed gets one more `GATE_LIMIT` of tries
 //! (round 12, S3: the keeper ended with it still running, and its failed
-//! releases stayed unread).
+//! releases stayed unread). A delivery past `GATE_LIMIT` stays the keeper's
+//! as well (round 13, S6): it is awaited again after the late jobs, and
+//! what it could not deliver is tried again, instead of a second delivery
+//! beside it whose first one's undelivered releases nobody read.
 use crate::screen::core::host_backend::{ScreenHostBackend, ScreenInputSink};
 use crate::screen::core::input_model::{InputEvent, MAX_INPUT_EVENTS};
 use crate::screen::core::wire_control::ControlBlock;
@@ -114,18 +117,31 @@ pub(super) fn take_over(
                 continue;
             }
             let sink = target.clone();
-            let delivery = tokio::task::spawn_blocking(move || deliver(&sink, events));
-            let Ok(joined) = tokio::time::timeout(GATE_LIMIT, delivery).await else {
-                // Round 12 (S3): a late job's failures still follow.
-                if late.is_empty() {
+            let mut delivery = tokio::task::spawn_blocking(move || deliver(&sink, events));
+            let joined = match tokio::time::timeout(GATE_LIMIT, &mut delivery).await {
+                Ok(joined) => joined,
+                Err(_) if late.is_empty() => {
                     super::super::visibility::note_viewer(
                         "releases of a former holder did not finish; given up",
                     );
                     return;
                 }
-                await_late(&mut late).await;
-                started = Instant::now();
-                continue;
+                // Round 12 (S3): a late job's failures still follow. Round 13
+                // (S6): after the late jobs, this delivery once more; what it
+                // could not deliver joins them.
+                Err(_) => {
+                    await_late(&mut late).await;
+                    started = Instant::now();
+                    match tokio::time::timeout(GATE_LIMIT, &mut delivery).await {
+                        Ok(joined) => joined,
+                        Err(_) => {
+                            super::super::visibility::note_viewer(
+                                "releases of a former holder did not finish; given up",
+                            );
+                            return;
+                        }
+                    }
+                }
             };
             let (left, went) = joined.unwrap_or_default();
             owes = !went && matches!(target, Target::Sink(_));
@@ -189,4 +205,28 @@ fn deliver(target: &Target, events: Vec<InputEvent>) -> (Vec<InputEvent>, bool) 
     let left = events[done..].to_vec();
     let went = left.is_empty();
     (left, went)
+}
+
+#[cfg(test)]
+mod tests {
+    /// Round 13 (S6): a delivery past `GATE_LIMIT` stays the keeper's: it is
+    /// awaited again after the late jobs (what it could not deliver is
+    /// tried again), never left running beside a second one.
+    #[test]
+    fn r13_task_release_keeper_keeps_a_late_delivery() {
+        let source = include_str!("host_release_gate.rs").replace("\r\n", "\n");
+        let code = source.split("#[cfg(test)]").next().unwrap_or_default();
+        assert!(code.contains("let mut delivery = tokio::task::spawn_blocking("));
+        assert_eq!(
+            code.matches("tokio::time::timeout(GATE_LIMIT, &mut delivery)")
+                .count(),
+            2
+        );
+        assert!(!code.contains("timeout(GATE_LIMIT, delivery)"));
+        let late = code
+            .split("Err(_) => {\n                    await_late(&mut late).await;")
+            .nth(1)
+            .unwrap_or_default();
+        assert!(late.contains("Ok(joined) => joined,"));
+    }
 }

@@ -7,10 +7,14 @@
 //! its target for up to 44 minutes; the keeper waits for one call at most
 //! (`worker_limits::INJECTION_CALL_LIMIT`). The calls that went
 //! (`Injection::done`) count as pressed when the batch fails or stops.
-//! Only a sink's injection is cut: it blocks while the host process types.
-//! A source without a sink (Android) hands the batch to its queue without
-//! waiting (`bridge_input_queue.rs`), which holds at most `HARD_LIMIT`
-//! batches, so its batch stays one call.
+//! Only a blocking sink's injection is cut: it blocks while the host
+//! process types. A sink that queues the batch for later and answers at once
+//! (`ScreenInputSink::input_mark` is `Some`: Android's `BridgeInputSink`,
+//! whose queue `bridge_input_queue.rs` holds at most `HARD_LIMIT` batches and
+//! whose app sets a field's text as a whole) and a source without a sink
+//! (the backend injects) keep the batch as one call (round 13, S1: cut, a
+//! long text filled Android's queue, and a password's second part met a
+//! filled field the app then refused as hidden).
 use super::Injection;
 use crate::screen::core::host_backend::{ScreenHostBackend, ScreenInputSink};
 use crate::screen::core::input_model::InputEvent;
@@ -52,6 +56,16 @@ pub(super) fn calls(events: &[InputEvent]) -> Vec<Vec<InputEvent>> {
     calls
 }
 
+/// The calls of `events` for `sink` (round 13, S1): bounded calls for a
+/// sink that blocks while it types, one call for a sink that queues the
+/// batch (`input_mark` is `Some`) and without a sink.
+fn planned(events: &[InputEvent], sink: Option<&Arc<dyn ScreenInputSink>>) -> Vec<Vec<InputEvent>> {
+    match sink {
+        Some(sink) if sink.input_mark().is_none() => calls(events),
+        _ => vec![events.to_vec()],
+    }
+}
+
 /// The byte index after at most `chars` characters of `text`, one more
 /// when the cut would fall between the `\r` and `\n` of one Return.
 fn cut(text: &str, chars: usize) -> usize {
@@ -75,10 +89,7 @@ impl Injection {
         (reference, presented): (u64, bool),
         epoch: u64,
     ) -> Self {
-        let calls: Arc<[Vec<InputEvent>]> = match sink {
-            Some(_) => calls(events).into(),
-            None => vec![events.to_vec()].into(),
-        };
+        let calls: Arc<[Vec<InputEvent>]> = planned(events, sink.as_ref()).into();
         let (cancel, done) = (
             Arc::new(AtomicBool::new(false)),
             Arc::new(AtomicUsize::new(0)),
@@ -122,9 +133,31 @@ impl Injection {
 
 #[cfg(test)]
 mod tests {
-    use super::calls;
+    use super::{calls, planned};
+    use crate::screen::core::host_backend::ScreenInputSink;
     use crate::screen::core::input_model::InputEvent;
+    use crate::screen::core::wire_control::ControlBlock;
     use crate::screen::core::worker_limits::TEXT_CALL_CHARACTERS;
+    use std::sync::Arc;
+
+    /// A sink that types before `inject` returns.
+    struct Blocking;
+    impl ScreenInputSink for Blocking {
+        fn release(&self, _: &[InputEvent]) -> Result<(), ControlBlock> {
+            Ok(())
+        }
+    }
+
+    /// A sink that queues the batch for its app (Android).
+    struct Queueing;
+    impl ScreenInputSink for Queueing {
+        fn release(&self, _: &[InputEvent]) -> Result<(), ControlBlock> {
+            Ok(())
+        }
+        fn input_mark(&self) -> Option<u64> {
+            Some(0)
+        }
+    }
 
     fn text(text: &str) -> InputEvent {
         InputEvent::Text { text: text.into() }
@@ -133,7 +166,9 @@ mod tests {
     /// Round 12 (S1): a batch within the bound stays one call unchanged;
     /// a longer text goes in calls of at most `TEXT_CALL_CHARACTERS`
     /// characters, in order, other events with the text around them, and
-    /// `\r\n` is never cut apart.
+    /// `\r\n` is never cut apart. Round 13 (S1): only for a sink that blocks
+    /// while it types; a queueing sink (Android) and a source without a sink
+    /// take the long text as one call.
     #[test]
     fn screen_task_input_text_goes_in_bounded_calls() {
         let key = InputEvent::Key {
@@ -177,5 +212,12 @@ mod tests {
             split,
             vec![vec![text(&before), text("\r\n")], vec![text("z")]]
         );
+        // Round 13 (S1): who cuts.
+        let batch = vec![key.clone(), text(&long), key.clone()];
+        let blocking: Arc<dyn ScreenInputSink> = Arc::new(Blocking);
+        let queueing: Arc<dyn ScreenInputSink> = Arc::new(Queueing);
+        assert_eq!(planned(&batch, Some(&blocking)), calls(&batch));
+        assert_eq!(planned(&batch, Some(&queueing)), vec![batch.clone()]);
+        assert_eq!(planned(&batch, None), vec![batch.clone()]);
     }
 }

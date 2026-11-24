@@ -25,6 +25,47 @@ fn screen_task_x11_root_points_cover_the_source() {
 }
 
 /// A mapped, focused window that receives keys and buttons.
+/// Round 13 (S3): a batch whose sending failed partway lets go of what it
+/// pressed and did not release itself (keys, buttons, a first finger as the
+/// left button), in the order of the presses; what it released or only moved
+/// needs nothing.
+#[test]
+fn screen_task_x11_failed_batch_lets_go_of_its_presses() {
+    let key = |hid_usage: u16, down: bool| InputEvent::Key { hid_usage, down };
+    let touch = |phase: TouchPhase| InputEvent::Touch {
+        id: 0,
+        phase,
+        x: 10,
+        y: 10,
+    };
+    let button = |button: PointerButton, down: bool| InputEvent::Button { button, down };
+    let events = [
+        key(0xE1, true),
+        key(0x04, true),
+        InputEvent::Text { text: "ab".into() },
+        key(0x04, false),
+        button(PointerButton::Right, true),
+        touch(TouchPhase::Start),
+        touch(TouchPhase::Move),
+        InputEvent::PointerAbs { x: 5, y: 5 },
+    ];
+    assert_eq!(
+        letgo::left_pressed(&events),
+        vec![
+            key(0xE1, false),
+            button(PointerButton::Right, false),
+            button(PointerButton::Left, false),
+        ]
+    );
+    assert!(letgo::left_pressed(&[key(0x04, false)]).is_empty());
+    assert!(letgo::left_pressed(&[touch(TouchPhase::Start), touch(TouchPhase::Cancel)]).is_empty());
+    // A press repeated before its release is let go once.
+    assert_eq!(
+        letgo::left_pressed(&[key(0xE0, true), key(0xE0, true)]),
+        vec![key(0xE0, false)]
+    );
+}
+
 fn window() -> (RustConnection, Window, Window) {
     let (conn, screen) = RustConnection::connect(None).expect("DISPLAY with XTest");
     let root = conn.setup().roots[screen].root;

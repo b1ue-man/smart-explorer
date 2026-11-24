@@ -20,6 +20,11 @@ use crate::screen::core::window_list::SourceId;
 use crate::screen::core::wire_control::ControlBlock;
 use crate::screen::os::input_keys::{evdev_code, SasGuard};
 
+#[path = "x11_input_release.rs"]
+mod letgo;
+use letgo::let_go;
+pub use letgo::release;
+
 const BUTTON_PRESS: u8 = 4;
 const BUTTON_RELEASE: u8 = 5;
 const MOTION_NOTIFY: u8 = 6;
@@ -267,6 +272,8 @@ pub fn inject(events: &[InputEvent]) -> Result<(), ControlBlock> {
         Err(_) => {
             // A broken connection is made anew with the next batch.
             state.conn = None;
+            drop(state);
+            let_go(events);
             Err(ControlBlock::ControlUnavailable)
         }
     }
@@ -364,6 +371,8 @@ pub fn inject_bound(
         }
         Err(_) => {
             state.conn = None;
+            drop(state);
+            let_go(events);
             Err(ControlBlock::ControlUnavailable)
         }
     }
@@ -389,83 +398,6 @@ fn texts_typable<C: Connection>(conn: &C, events: &[InputEvent]) -> Result<(), C
         }
         Err(_) => Err(ControlBlock::ControlUnavailable),
     }
-}
-
-/// Session-owned compensating ups do not need an existing source window or
-/// root-space pointer position, and never emit MotionNotify on touch cancel.
-pub fn release(events: &[InputEvent]) -> Result<(), ControlBlock> {
-    let mut releases = Vec::with_capacity(events.len());
-    for event in events {
-        match event {
-            InputEvent::Key { down: false, .. } | InputEvent::Button { down: false, .. } => {
-                releases.push(event.clone())
-            }
-            InputEvent::Touch {
-                id,
-                phase: TouchPhase::End | TouchPhase::Cancel,
-                ..
-            } => {
-                if *id == 0 {
-                    releases.push(InputEvent::Button {
-                        button: PointerButton::Left,
-                        down: false,
-                    });
-                }
-            }
-            _ => return Err(ControlBlock::ControlUnavailable),
-        }
-    }
-    let mut state = state();
-    if state.conn.is_none() {
-        let (conn, screen) =
-            RustConnection::connect(None).map_err(|_| ControlBlock::ControlUnavailable)?;
-        if conn
-            .extension_information(x11rb::protocol::xtest::X11_EXTENSION_NAME)
-            .ok()
-            .flatten()
-            .is_none()
-        {
-            return Err(ControlBlock::UnsupportedOnHost);
-        }
-        let root = conn.setup().roots[screen].root;
-        // Codex 10/16: spare keys a text before could not empty again.
-        crate::screen::os::x11_keymap::restore_pending(&conn);
-        state.conn = Some((conn, root));
-    }
-    let State { sas, conn, .. } = &mut *state;
-    let Some((conn, root)) = conn.as_ref() else {
-        return Err(ControlBlock::ControlUnavailable);
-    };
-    let sent = (|| {
-        for event in &releases {
-            let (kind, detail) = match event {
-                InputEvent::Button { button, .. } => (BUTTON_RELEASE, button_code(*button)),
-                InputEvent::Key { hid_usage, .. } => {
-                    if !sas.allows(*hid_usage, false) {
-                        continue;
-                    }
-                    let Some(code) =
-                        evdev_code(*hid_usage).and_then(|code| u8::try_from(code + 8).ok())
-                    else {
-                        continue;
-                    };
-                    (x11_keymap::KEY_RELEASE, code)
-                }
-                _ => return Err(io::Error::other("non_release_event")),
-            };
-            // Check the server response before dropping the pending held state.
-            conn.xtest_fake_input(kind, detail, 0, *root, 0, 0, 0)
-                .map_err(io::Error::other)?
-                .check()
-                .map_err(io::Error::other)?;
-        }
-        Ok::<_, io::Error>(())
-    })();
-    if sent.is_err() {
-        state.conn = None;
-        return Err(ControlBlock::ControlUnavailable);
-    }
-    Ok(())
 }
 
 /// Keep the host gate's admitted member geometry through the final XTest
