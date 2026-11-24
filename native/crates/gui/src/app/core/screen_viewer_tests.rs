@@ -412,7 +412,8 @@ fn screen_task_viewer_releases_all_on_disable() {
 /// so the last change of a screen that then stands still reaches the tile.
 #[test]
 fn screen_task_viewer_preview_gap_keeps_the_last_change() {
-    let size = FrameSize::new(64, 64);
+    // `synthetic::render` draws at least `MIN_SYNTHETIC_SIZE` (128 x 72).
+    let size = FrameSize::new(256, 128);
     let mut image = BgraImage::new(size).unwrap();
     render(1, &mut image).unwrap();
     let decoder: DecoderOpener = Arc::new(|header: &GopHeader| {

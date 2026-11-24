@@ -38,7 +38,36 @@ pub(super) enum Native {
     Glow(GlowImage),
     Yuv(YuvImage),
     #[cfg(test)]
-    Controlled(egui::TextureId, [usize; 2]),
+    Controlled(egui::TextureId, ControlledImage),
+}
+/// What a texture of `Backend::Controlled` holds: CPU pixels of a size, or
+/// planes of a size and layout (I420 or not), matched like `YuvImage`.
+#[cfg(test)]
+pub(super) enum ControlledImage {
+    Cpu([usize; 2]),
+    Planes(crate::screen::core::pixel_convert::FrameSize, bool),
+}
+#[cfg(test)]
+impl ControlledImage {
+    fn of(package: &Package) -> Self {
+        match package {
+            Package::Cpu(p) => Self::Cpu(p.image.size),
+            Package::Yuv { frame, .. } => Self::Planes(frame.size, Self::i420(frame)),
+        }
+    }
+    fn i420(frame: &super::screen_wgpu_yuv::YuvFrame) -> bool {
+        use crate::screen::core::host_backend::Chroma;
+        matches!(frame.picture.chroma, Chroma::I420 { .. })
+    }
+    fn compatible(&self, package: &Package) -> bool {
+        match (self, package) {
+            (Self::Cpu(size), Package::Cpu(p)) => *size == p.image.size,
+            (Self::Planes(size, i420), Package::Yuv { frame, .. }) => {
+                *size == frame.size && *i420 == Self::i420(frame)
+            }
+            _ => false,
+        }
+    }
 }
 pub(super) struct Resident {
     pub package: Package,
@@ -350,13 +379,7 @@ impl RendererOwner {
                 };
                 set_resident(
                     s,
-                    Native::Controlled(
-                        egui::TextureId::User(1),
-                        match &package {
-                            Package::Cpu(p) => p.image.size,
-                            _ => [0, 0],
-                        },
-                    ),
+                    Native::Controlled(egui::TextureId::User(1), ControlledImage::of(&package)),
                     package,
                     Drain::default(),
                     claims,
@@ -424,7 +447,7 @@ fn compatible(native: &Native, package: &Package) -> bool {
         (Native::Yuv(t), Package::Yuv { frame, .. }) => t.compatible(frame),
         (Native::Glow(t), Package::Cpu(p)) => t.size == p.image.size,
         #[cfg(test)]
-        (Native::Controlled(_, size), Package::Cpu(p)) => *size == p.image.size,
+        (Native::Controlled(_, image), package) => image.compatible(package),
         _ => false,
     }
 }

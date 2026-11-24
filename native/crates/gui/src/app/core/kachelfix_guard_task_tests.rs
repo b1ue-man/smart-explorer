@@ -29,7 +29,10 @@ fn kachelfix_task_auto_gives_a_codec_up_for_its_session_only() {
         "{frames:?}"
     );
     let notice = shared.info().notice.clone().expect("the switch is shown");
-    assert!(notice.contains("Schlüsselbilder"), "{notice}");
+    assert!(
+        notice.contains("Bilder in Folge ließen sich nicht dekodieren"),
+        "{notice}"
+    );
     assert!(notice.contains("für diese Sitzung"), "{notice}");
     assert_eq!(
         shared.give_up_codec(CodecKind::Hevc),

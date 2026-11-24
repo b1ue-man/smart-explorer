@@ -325,9 +325,10 @@ fn screen_task_indicator_unavailable_refuses() {
     let synthetic = pair.open(&test_picture(SessionMode::View), |_| {}).unwrap();
     synthetic.close();
     // With an indicator the monitor passes the indicator rule; this host has
-    // no capture yet (`no_display`).
+    // no capture yet: `no_display` with the reason in words beside the code
+    // (`viewer_client.rs`, `synthetic_backend::CAPTURE_UNAVAILABLE`).
     *pair.host.0.screen.indicator.write().unwrap() = Arc::new(Indicator { available: true });
-    assert_eq!(refused(&pair, &monitor), "no_display");
+    assert_eq!(refused(&pair, &monitor), "no_display: capture_unavailable");
 }
 
 #[test]
