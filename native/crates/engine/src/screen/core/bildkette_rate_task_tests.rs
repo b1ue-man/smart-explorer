@@ -50,7 +50,8 @@ fn bildkette_task_rate_frame_rate_is_independent_of_the_bit_rate() {
         assert_eq!(cadence_fps(60, rate.encode_capacity_fps()), 60);
         assert_eq!(cadence_fps(144, rate.encode_capacity_fps()), 144);
     }
-    // A measured encoding time limits it: p95 of 10 ms carries 100 frames/s.
+    // A measured encoding time limits it: a median of 10 ms carries 100
+    // frames/s.
     let mut rate = RateController::new(PathKind::Direct, 0);
     for index in 0..100u64 {
         let elapsed = if index % 20 == 0 { 4_000 } else { 10_000 };
@@ -59,7 +60,16 @@ fn bildkette_task_rate_frame_rate_is_independent_of_the_bit_rate() {
     assert_eq!(rate.encode_capacity_fps(), Some(100));
     assert_eq!(cadence_fps(144, rate.encode_capacity_fps()), 100);
     assert_eq!(cadence_fps(60, rate.encode_capacity_fps()), 60);
-    // Older samples than one second leave the window.
+    // 2026-11-24: one frame in ten taking 100 ms (key frames, a GPU stall)
+    // keeps the cadence at what the typical frame carries; the 95th
+    // percentile made it 10 frames/s.
+    let mut stalls = RateController::new(PathKind::Direct, 0);
+    for index in 0..100u64 {
+        let elapsed = if index % 10 == 0 { 100_000 } else { 10_000 };
+        stalls.on_encode_at(50_000, elapsed, index * 10_000);
+    }
+    assert_eq!(stalls.encode_capacity_fps(), Some(100));
+    // Older samples than the window leave it.
     let mut timing = EncodeTiming::default();
     timing.push(0, 50_000);
     timing.push(ENCODE_WINDOW_US + 1, 5_000);

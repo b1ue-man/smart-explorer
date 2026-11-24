@@ -17,6 +17,7 @@ use crate::screen::core::host_backend::{ScreenEncoder, TilesScreenEncoder};
 use crate::screen::core::negotiate::{CodecKind, H264Profile};
 use crate::screen::core::pacing::{
     in_flight_limit, stale_after_us, PaceDecision, Pacer, SentFrame, MAX_IN_FLIGHT_FRAMES,
+    STALE_STREAM_US,
 };
 use crate::screen::core::pixel_convert::FrameSize;
 use crate::screen::core::rate_control::PathKind;
@@ -74,21 +75,25 @@ fn continuable(last_good: Option<u64>) -> ResetFacts {
     }
 }
 
-/// B-35: max(4 × smoothed round trip, 3 frame intervals) plus the time the
-/// line needs for the unacknowledged bytes; the frame limit follows it.
+/// B-35: max(4 × smoothed round trip, 3 frame intervals, one second) plus
+/// the time the line needs for the unacknowledged bytes; the frame limit
+/// follows it (the second since 2026-11-24: a reliable stream whose viewer
+/// decoded slowly for a moment is not stale).
 #[test]
 fn bildkette_task_recover_stale_time_from_rtt_and_frame_interval() {
-    // LAN, 1 ms round trip at 60 frames/s: three intervals decide.
-    assert_eq!(stale_after_us(1_000, AT_60, 0, TARGET), 3 * AT_60);
-    // WAN, 80 ms round trip: four round trips decide.
-    assert_eq!(stale_after_us(80_000, AT_60, 0, TARGET), 320_000);
+    // LAN, 1 ms round trip at 60 frames/s: the floor of one second decides.
+    assert_eq!(stale_after_us(1_000, AT_60, 0, TARGET), STALE_STREAM_US);
+    // WAN, 80 ms round trip: still the floor.
+    assert_eq!(stale_after_us(80_000, AT_60, 0, TARGET), STALE_STREAM_US);
+    // A satellite link of 400 ms: four round trips decide.
+    assert_eq!(stale_after_us(400_000, AT_60, 0, TARGET), 1_600_000);
     // A 300 KB key frame at 6 Mbit/s adds the 400 ms the line needs.
     assert_eq!(
         stale_after_us(5_000, AT_60, 300_000, TARGET),
-        3 * AT_60 + 400_000
+        STALE_STREAM_US + 400_000
     );
-    // Without a known round trip three intervals remain.
-    assert_eq!(stale_after_us(0, 33_333, 0, TARGET), 99_999);
+    // Without a known round trip the floor remains.
+    assert_eq!(stale_after_us(0, 33_333, 0, TARGET), STALE_STREAM_US);
     // Twice the frames of the stale time, at most the memory bound.
     assert_eq!(in_flight_limit(3 * AT_60, AT_60), 8);
     assert_eq!(in_flight_limit(10_000_000, 4_166), MAX_IN_FLIGHT_FRAMES);
@@ -99,8 +104,11 @@ fn bildkette_task_recover_stale_time_from_rtt_and_frame_interval() {
     let mut pacer = Pacer::default();
     pacer.set_timing(1_000, AT_60);
     pacer.on_frame_sent(sent(1, 1, 750, 0, true));
-    let stale = 3 * AT_60 + 1_000;
-    assert_eq!(pacer.stale_limits(TARGET), (stale, 8));
+    let stale = STALE_STREAM_US + 1_000;
+    assert_eq!(
+        pacer.stale_limits(TARGET),
+        (stale, in_flight_limit(stale, AT_60))
+    );
     assert_eq!(
         pacer.decide(stale, TARGET, direct, 1_000),
         PaceDecision::Encode { keyframe: false }
@@ -121,7 +129,11 @@ fn bildkette_task_recover_stale_time_from_rtt_and_frame_interval() {
     let mut old = Pacer::default();
     old.on_frame_sent(sent(1, 1, 750, 0, true));
     assert_ne!(
-        old.decide(stale + 1, TARGET, direct, 1_000),
+        old.decide(STALE_STREAM_US, TARGET, direct, 1_000),
+        PaceDecision::ResetStream
+    );
+    assert_eq!(
+        old.decide(STALE_STREAM_US + 1, TARGET, direct, 1_000),
         PaceDecision::ResetStream
     );
 }

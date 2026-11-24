@@ -308,7 +308,7 @@ impl RateController {
     pub fn on_frame_sent(&mut self, bytes: u64, now_us: u64) {
         self.started = true;
         self.sent.push(now_us, bytes);
-        self.queue.on_sent(bytes, now_us);
+        self.queue_on_sent(bytes, now_us);
     }
 
     /// A frame was dropped before encoding (queue guard, sender credit): a

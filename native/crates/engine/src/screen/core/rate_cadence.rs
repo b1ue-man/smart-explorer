@@ -4,8 +4,11 @@
 //! The frame rate is the minimum of the rate the viewer wants (its display's
 //! refresh rate, B-01), the rate of the source (a source without a new
 //! picture answers `Unchanged` and costs no frame) and the encoding capacity
-//! measured in this session: the 95th percentile of the time one frame took
-//! from capture to encoded bytes over the last second (B-02). The bit rate
+//! measured in this session: the median of the time one frame took from
+//! capture to encoded bytes over the last two seconds (B-02; the 95th
+//! percentile of one second until 2026-11-24 let a few slow frames, a key
+//! frame or a GPU stall, swing the cadence between 10 and 120 frames/s on a
+//! Windows host whose median was 22 ms). The bit rate
 //! never sets the frame rate; it only sets the quantisation of the encoder.
 //! A change of the frame rate keeps the running encoder (B-03): it was opened
 //! with the highest allowed rate and simply gets fewer pictures.
@@ -26,10 +29,14 @@ use crate::screen::core::frame_size_caps::avc_limits;
 use crate::screen::core::negotiate::{CodecChoice, CodecKind, H264Profile};
 use crate::screen::core::pixel_convert::FrameSize;
 
-/// Window of the measured encoding time: the same one second over which the
-/// rate control measures the receive and send rates (decision C3).
-pub const ENCODE_WINDOW_US: u64 = 1_000_000;
-/// Percentile of the encoding time that limits the frame rate (B-02: p95).
+/// Window of the measured encoding time: two seconds, so a still screen's
+/// few frames and single slow ones do not decide alone.
+pub const ENCODE_WINDOW_US: u64 = 2_000_000;
+/// Percentile of the encoding time that limits the frame rate: the median
+/// (B-02 took p95; a pipelined encoder carries its typical frame, not its
+/// slowest).
+const CAPACITY_PERCENTILE: f64 = 0.5;
+/// Percentile of `EncodeTiming::p95_us` (reports).
 const ENCODE_PERCENTILE: f64 = 0.95;
 /// Entries of the window: one second at 240 frames/s, four times over (the
 /// same bound as the rate windows of the rate control).
@@ -85,20 +92,28 @@ impl EncodeTiming {
 
     /// The 95th percentile of the encoding time, `None` without a frame.
     pub fn p95_us(&self) -> Option<u64> {
+        self.percentile_us(ENCODE_PERCENTILE)
+    }
+
+    /// The `share` percentile of the encoding time, `None` without a frame.
+    fn percentile_us(&self, share: f64) -> Option<u64> {
         if self.samples.is_empty() {
             return None;
         }
         let mut times: Vec<u64> = self.samples.iter().map(|(_, elapsed)| *elapsed).collect();
         times.sort_unstable();
-        let rank = (ENCODE_PERCENTILE * times.len() as f64).ceil() as usize;
-        times.get(rank.saturating_sub(1)).copied()
+        let rank = (share * times.len() as f64).ceil() as usize;
+        times
+            .get(rank.saturating_sub(1).min(times.len() - 1))
+            .copied()
     }
 
-    /// Frames per second the chain from capture to encoded bytes carries.
+    /// Frames per second the chain from capture to encoded bytes carries:
+    /// one over the median encoding time of the window.
     pub fn capacity_fps(&self) -> Option<u32> {
-        let p95 = self.p95_us()?;
+        let median = self.percentile_us(CAPACITY_PERCENTILE)?;
         Some(
-            u32::try_from(1_000_000 / p95.max(1))
+            u32::try_from(1_000_000 / median.max(1))
                 .unwrap_or(u32::MAX)
                 .max(1),
         )

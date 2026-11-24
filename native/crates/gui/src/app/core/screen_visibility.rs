@@ -34,17 +34,23 @@ pub struct VisibilityTracker {
     generation: u64,
     /// Moved rectangles not reported yet and since when they rest.
     pending: Option<(Vec<VisibleRect>, Instant)>,
+    /// Since when a shown view is covered without being minimized, not
+    /// reported yet (2026-11-24: a menu or a focus change covered it for a
+    /// few milliseconds, and the host started a new encoder for the hidden
+    /// and again for the shown report, a key frame each time).
+    hide_pending: Option<Instant>,
 }
 impl VisibilityTracker {
     pub fn invalidate(&mut self) {
         self.last = None;
         self.geometry = None;
         self.pending = None;
+        self.hide_pending = None;
     }
 
     /// Moved rectangles wait for `SETTLE` (the caller repaints for them).
     pub fn settling(&self) -> bool {
-        self.pending.is_some()
+        self.pending.is_some() || self.hide_pending.is_some()
     }
     pub fn report(
         &mut self,
@@ -167,6 +173,24 @@ impl VisibilityTracker {
         // pixels); a picture that only moves on screen changes none of them
         // and must not cost a new reference picture.
         let size_changed = self.geometry.as_ref().map(|g| g.size) != geometry.map(|g| g.size);
+        // A shown view covered without being minimized is reported once it
+        // stayed covered for `SETTLE`; uncovered before, nothing is sent.
+        // Minimizing reports at once.
+        let covering = state == VisibilityState::Hidden
+            && !window.minimized
+            && self
+                .last
+                .as_ref()
+                .is_some_and(|last| last.state != VisibilityState::Hidden && !last.minimized);
+        if covering {
+            let now = Instant::now();
+            let since = *self.hide_pending.get_or_insert(now);
+            if now.duration_since(since) < SETTLE {
+                self.geometry = geometry.copied();
+                return None;
+            }
+        }
+        self.hide_pending = None;
         // Only the rectangles moved, in the same state: reported once they rest.
         let moved = !size_changed
             && state != VisibilityState::Hidden

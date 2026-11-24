@@ -185,6 +185,28 @@ fn screen_metadata_runtime_task_visibility_race_keeps_the_proven_report() {
     let widened = tracker.report(&window, area, Some(&geometry), 2.0).unwrap();
     assert_eq!(widened.state, VisibilityState::Unknown);
     assert_eq!(widened.rects, full);
+    // 2026-11-24: covered for a moment (a menu, a focus change) the view
+    // reports nothing, so the host keeps its encoder; covered for `SETTLE`
+    // it reports hidden.
+    window.shown = Some(true);
+    assert!(tracker
+        .report(&window, area, Some(&geometry), 2.0)
+        .is_none());
+    assert!(tracker.settling());
+    window.shown = None;
+    assert!(tracker
+        .report(&window, area, Some(&geometry), 2.0)
+        .is_none());
+    assert!(!tracker.settling());
+    window.shown = Some(true);
+    assert!(tracker
+        .report(&window, area, Some(&geometry), 2.0)
+        .is_none());
+    tracker.hide_pending = Instant::now().checked_sub(SETTLE * 2);
+    let covered_long = tracker.report(&window, area, Some(&geometry), 2.0).unwrap();
+    assert!(covered_long.hidden());
+    assert!(!tracker.settling());
+    window.shown = None;
     // Minimizing still reports at once.
     window.minimized = true;
     assert!(tracker

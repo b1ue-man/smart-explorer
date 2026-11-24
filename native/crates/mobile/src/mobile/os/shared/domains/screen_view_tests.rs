@@ -496,4 +496,5 @@ fn wahlgilt_named_codec_offers_no_tiles_to_the_host() {
     assert_eq!(kinds("h264"), vec![CodecKind::H264]);
     assert!(kinds("auto").contains(&CodecKind::Tiles));
     assert!(!kinds("sharp").contains(&CodecKind::Av1));
+    assert_eq!(kinds("lossless"), vec![CodecKind::Tiles]);
 }

@@ -106,11 +106,10 @@ pub fn hardware_bars_tiles(codec: CodecSetting) -> bool {
 }
 
 /// The reason a session is not opened (Codex 6/13): a chosen
-/// „Dekodier-Bibliothek“ offers no video decoder, or the codec is
-/// „Verlustfrei“: only the tiles (software, neither library) would be left
-/// and the host would take them in silence. „Automatisch“ opens as
-/// before; „Dekodierer: Hardware“ is refused by the daemon client
-/// (`StreamRequest::unavailable_choice`, no tiles offered there).
+/// „Dekodier-Bibliothek“ offers no video decoder for a video codec.
+/// „Verlustfrei“ always opens (2026-11-24, user: „was fällt dir ein die
+/// Nutzereinstellung zu verweigern“): the library chooses among video
+/// decoders, and the tiles have their own decoder on every device.
 pub(super) fn library_refusal(request: &crate::daemon::StreamRequest) -> Option<String> {
     library_refusal_for(&request.decoders, request.codec.unwrap_or_default())
 }
@@ -125,17 +124,8 @@ pub fn library_refusal_for(
     use crate::screen::core::decoder_library::DecoderLibrary;
     let library = super::super::screen_prefs::decoder_library_choice();
     let video = decoders.iter().any(|offer| offer.codec.is_video());
-    if library == DecoderLibrary::Automatic || (video && codec != CodecSetting::Lossless) {
+    if library == DecoderLibrary::Automatic || codec == CodecSetting::Lossless || video {
         return None;
-    }
-    // „Verlustfrei“ takes the tiles, which neither library decodes (Gemini
-    // 5/7 decision: refused like „Hardware“ under „Verlustfrei“).
-    if codec == CodecSetting::Lossless {
-        return Some(format!(
-            "Codec „Verlustfrei“ mit Dekodier-Bibliothek „{}“: die Kacheln dekodiert keine \
-             Bibliothek; die Sitzung wird nicht geöffnet (nur „Automatisch“).",
-            library.label()
-        ));
     }
     Some(format!(
         "Dekodier-Bibliothek „{}“ bietet keinen Video-Dekodierer; es wird nicht auf \

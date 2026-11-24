@@ -96,7 +96,7 @@ fn p9_rate_task_delivery_rate_measures_the_line() {
     let mut idle = DeliveryRate::default();
     for index in 0..5u64 {
         let at = index * 33_333;
-        idle.on_sent(10_000, at);
+        idle.on_sent(10_000, at, 0);
         assert!(idle.on_acked(at, at + 5_000).is_some());
     }
     assert_eq!(idle.link_bps(200_000), None);
@@ -171,6 +171,43 @@ fn p9_rate_task_refused_frames_lower_a_target_above_the_line() {
     }
     light.on_back_pressure(200_000);
     assert_eq!(light.target_bps(), 84_000_000);
+    // 2026-11-24 (host log of a Windows viewer session: 19.7 Mbit/s lowered
+    // to 628 kbit/s): a quiet screen's frames of 2 kB at 60 frames/s whose
+    // acknowledgements come 40 ms later, after the viewer decoded them, are
+    // always two or three in flight, yet the line is idle. They measure the
+    // content, never the line: no line rate, the guard follows the target
+    // and a refusal keeps it.
+    let mut quiet = RateController::new(PathKind::Direct, 0);
+    quiet.set_stream_start(17_500_000);
+    quiet.set_timing(10_000, 16_666);
+    let mut events: Vec<(u64, Option<u64>)> = Vec::new();
+    for index in 0..60u64 {
+        let at = index * 16_666;
+        events.push((at, None));
+        events.push((at + 40_000, Some(at)));
+    }
+    events.sort_unstable();
+    for (at, ack) in events {
+        match ack {
+            None => quiet.on_frame_sent(2_000, at),
+            Some(send_us) => {
+                let sample = AckSample {
+                    send_us,
+                    recv_us: at - 30_000,
+                    bytes: 2_000,
+                    keyframe: false,
+                };
+                quiet.on_frame_acked(sample, at);
+            }
+        }
+    }
+    let now = 59 * 16_666 + 40_000;
+    assert_eq!(quiet.link_rate_bps(now), None);
+    let target = quiet.target_bps();
+    assert_eq!(quiet.queue_rate_bps(now), target);
+    assert_eq!(quiet.ack_floor_us(now), Some(40_000));
+    quiet.on_back_pressure(now);
+    assert_eq!(quiet.target_bps(), target);
 }
 
 #[test]

@@ -36,6 +36,13 @@ const NOTICE_CONTROL_ABOVE: &str = " bit/s leave the pictures too little of the 
 const NOTICE_SOUND: &str = "the sound and the pictures' least share need ";
 const NOTICE_SOUND_ABOVE: &str = " bit/s, more than the highest data rate ";
 
+/// Whether `error` is an encoder's refusal to lower its rate (`mf_rate.rs`,
+/// `vendor_encode.rs`, `openh264_encode.rs`): the encoder works, only a
+/// fresh instance at the lowered rate is needed (2026-11-24).
+pub fn refused_lowering(error: &str) -> bool {
+    error.contains(REFUSED_LOWER_FROM) || error.contains(VENDOR_REFUSED_LOWER)
+}
+
 /// The notice of sound that does not fit under „Höchste Datenrate“ (round 8
 /// Gemini 8/10): no sound is sent (`audio_codec::sound_fits`).
 pub fn sound_over_ceiling(needed_bps: u64, ceiling_bps: u64) -> String {

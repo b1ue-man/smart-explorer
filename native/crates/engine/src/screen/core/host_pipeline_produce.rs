@@ -185,9 +185,17 @@ impl Pipeline {
         self.pacer.set_drain_rate(self.rate.sustained_bps());
         // P9: frames wait for at most what the line delivers over the
         // round-trip floor plus two frames (`rate_control::queue`).
+        // Frames the viewer still decodes are in flight too: the guard
+        // allows the rate over the smallest time to an acknowledgement, the
+        // viewer's decoding included (2026-11-24; over the path's round trip
+        // alone every picture larger than two average ones waited).
         let base_rtt_us = self.rate.base_rtt_us(now).unwrap_or(rtt_us);
+        let window_us = self
+            .rate
+            .ack_floor_us(now)
+            .map_or(base_rtt_us, |ack| ack.max(base_rtt_us));
         self.pacer
-            .set_queue(self.rate.queue_rate_bps(now), base_rtt_us);
+            .set_queue(self.rate.queue_rate_bps(now), window_us);
         // A frame the line cannot take is dropped before encoding: for the
         // tile codec, whose size no target steers, this is how its frame rate
         // sinks to what the line carries; for every codec it is back pressure.

@@ -92,13 +92,18 @@ impl StreamRequest {
     /// The decoders the hello names under „Codec“ and „Dekodierer“: tiles
     /// under „Automatisch“ (a chosen codec offers none, the host reads the
     /// choice from that), tiles alone for „Verlustfrei“ (fix 2026-11-19), no
-    /// tiles (software) for a chosen „Hardware“ (Codex 4/15), under
-    /// „Verlustfrei“ neither (Gemini 5/7: `unavailable_choice` names it).
+    /// tiles (software) for a chosen „Hardware“ (Codex 4/15). „Verlustfrei“
+    /// always offers the tiles (2026-11-24, user: „was fällt dir ein die
+    /// Nutzereinstellung zu verweigern“): „Dekodierer“ chooses among video
+    /// decoders, and the tiles have their one decoder on every device.
     pub fn chosen_decoders(&self) -> Vec<CodecOffer> {
         let setting = self.codec.unwrap_or_default();
         let decoder = self.decoder.unwrap_or_default();
         let codec = match setting {
-            CodecSetting::Lossless => crate::screen::core::negotiate::CodecPreference::Tiles,
+            CodecSetting::Lossless => {
+                return crate::screen::core::negotiate::CodecPreference::Tiles
+                    .filter_decoders(&self.decoders);
+            }
             setting => setting.preference(),
         };
         let mut offers = decoder.filter_offers(&codec.filter_decoders(&self.decoders));

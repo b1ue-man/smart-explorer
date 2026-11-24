@@ -64,10 +64,17 @@ pub fn guard_bytes(target_bps: u64, path: PathKind, rtt_us: u64) -> u64 {
 /// not from the moment it left, so a key frame larger than four round trips
 /// of the line (300 KB at 6 Mbit/s need 400 ms) would otherwise reset its
 /// own stream before its acknowledgement could arrive, every time.
+///
+/// Never below `STALE_STREAM_US` (2026-11-24): the picture stream is a
+/// reliable ordered stream, so a frame acknowledged late is a viewer that
+/// decoded slowly for a moment, not a lost one. The host log of a Windows
+/// viewer session showed resets at 249 ms after a decoding spike, each one
+/// a key frame and a lowered target; below a second a reset only cost.
 pub fn stale_after_us(srtt_us: u64, interval_us: u64, unacked_bytes: u64, target_bps: u64) -> u64 {
     let base = srtt_us
         .saturating_mul(STALE_RTT_FACTOR)
-        .max(interval_us.saturating_mul(STALE_FRAME_INTERVALS));
+        .max(interval_us.saturating_mul(STALE_FRAME_INTERVALS))
+        .max(STALE_STREAM_US);
     let drain = u128::from(unacked_bytes) * 8 * 1_000_000 / u128::from(target_bps.max(1));
     base.saturating_add(u64::try_from(drain).unwrap_or(u64::MAX))
 }

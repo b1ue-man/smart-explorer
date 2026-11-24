@@ -12,9 +12,18 @@
 //!   acknowledged frame, all on the host's clock (`SentFrame::sent_us`, the
 //!   arrival of `FRAME_ACK`). A sample is never larger than what the line
 //!   carried, so the largest sample of `DELIVERY_WINDOW_US` estimates the
-//!   line. A frame sent while an earlier one was still unacknowledged
-//!   (`busy`) measures the line itself, not the content: only those samples
-//!   may lower the target (`link_bps`).
+//!   line. Only a frame sent while the sender had more than the line took
+//!   (`busy`, BBR's „not application-limited“ of
+//!   draft-cheng-iccrg-delivery-rate-estimation-02 3.4) measures the line
+//!   itself: the bytes in flight before it reached what the target carries
+//!   over the round-trip floor, or a frame was refused within the last two
+//!   intervals. Only those samples may lower the target (`link_bps`). Fix of
+//!   2026-11-24: before, any frame sent while an earlier one waited for its
+//!   acknowledgement counted, and the acknowledgement comes only after the
+//!   viewer decoded it, so on a fast line nearly every frame of a quiet
+//!   screen was „busy“ and measured the content (200 kbit/s): the target
+//!   fell from 19.7 Mbit/s to 628 kbit/s and the guard dropped hundreds of
+//!   pictures (host log of a Windows viewer session, 4 pictures/s sent).
 //! - Queue guard (`queue_cap_bytes`): the frames in flight may hold the
 //!   line's rate over the smallest round trip of `RTT_FLOOR_WINDOW_US`
 //!   plus `QUEUE_FRAMES` frames: the one on the line and the next one. A
@@ -169,10 +178,13 @@ impl Default for DeliveryRate {
 }
 
 impl DeliveryRate {
-    /// A frame of `bytes` was handed to the stream at `sent_us`.
-    pub fn on_sent(&mut self, bytes: u64, sent_us: u64) {
-        let busy = !self.stamps.is_empty();
-        if !busy {
+    /// A frame of `bytes` was handed to the stream at `sent_us`; it measures
+    /// the line (`busy`) when the bytes in flight before it reach
+    /// `pipe_bytes` (0: any frame in flight, after a refusal).
+    pub fn on_sent(&mut self, bytes: u64, sent_us: u64, pipe_bytes: u64) {
+        let in_flight: u64 = self.stamps.iter().map(|stamp| stamp.bytes).sum();
+        let busy = !self.stamps.is_empty() && in_flight >= pipe_bytes;
+        if self.stamps.is_empty() {
             // Nothing in flight: the delivery starts with this frame.
             self.first_sent_us = sent_us;
             self.delivered_us = sent_us;
@@ -245,6 +257,11 @@ impl DeliveryRate {
 pub struct QueueState {
     delivery: DeliveryRate,
     rtt_floor: Extremum,
+    /// The smallest time from handing a frame to the stream until its
+    /// acknowledgement (the viewer's decoding included) of
+    /// `RTT_FLOOR_WINDOW_US`: frames the viewer still decodes count as in
+    /// flight, so the guard allows the target over this time (2026-11-24).
+    ack_floor: Extremum,
     /// The smoothed round trip of the path at the last tick (0: none).
     last_rtt_us: u64,
     /// The last frame the queue guard or the sender credit refused.
@@ -258,6 +275,7 @@ impl Default for QueueState {
         Self {
             delivery: DeliveryRate::default(),
             rtt_floor: Extremum::min(RTT_FLOOR_WINDOW_US),
+            ack_floor: Extremum::min(RTT_FLOOR_WINDOW_US),
             last_rtt_us: 0,
             full_us: None,
             lowered_us: None,
@@ -270,8 +288,8 @@ impl QueueState {
         self.last_rtt_us = rtt_us;
     }
 
-    pub fn on_sent(&mut self, bytes: u64, sent_us: u64) {
-        self.delivery.on_sent(bytes, sent_us);
+    pub fn on_sent(&mut self, bytes: u64, sent_us: u64, pipe_bytes: u64) {
+        self.delivery.on_sent(bytes, sent_us, pipe_bytes);
     }
 
     /// One acknowledged frame; the round trip of the last tick joins the
@@ -279,6 +297,9 @@ impl QueueState {
     pub fn on_acked(&mut self, sent_us: u64, now_us: u64) -> Option<u64> {
         if self.last_rtt_us != 0 {
             self.rtt_floor.push(now_us, self.last_rtt_us);
+        }
+        if now_us > sent_us {
+            self.ack_floor.push(now_us, now_us - sent_us);
         }
         self.delivery.on_acked(sent_us, now_us)
     }
@@ -296,14 +317,47 @@ mod p9_rate_queue_task_tests;
 
 /// The queue of the picture stream (plan 2026-11-17 P9).
 impl super::RateController {
-    /// The rate the queue guard lets wait: the target, at most what the line
-    /// was measured to deliver (`DeliveryRate::rate_bps`).
+    /// The rate the queue guard lets wait: the target, at most the line's
+    /// rate measured with frames that queued (`link_rate_bps`). A sample of
+    /// a sender that did not fill the line measures its content, never the
+    /// line (fix 2026-11-24: the guard shrank to a quiet screen's 200 kbit/s
+    /// and dropped every larger picture until its acknowledgement).
     pub fn queue_rate_bps(&self, now_us: u64) -> u64 {
         let target = self.target_bps();
-        self.queue
-            .delivery
-            .rate_bps(now_us)
-            .map_or(target, |delivered| delivered.min(target))
+        self.link_rate_bps(now_us)
+            .map_or(target, |link| link.min(target))
+    }
+
+    /// The smallest time a frame took from its send to its acknowledgement
+    /// within `RTT_FLOOR_WINDOW_US` (the viewer's decoding included).
+    pub fn ack_floor_us(&self, now_us: u64) -> Option<u64> {
+        self.queue.ack_floor.value(now_us)
+    }
+
+    /// A frame of `bytes` was handed to the stream at `now_us` (from
+    /// `on_frame_sent`): it measures the line only when the sender had more
+    /// than the line took, a frame refused within the last two intervals or
+    /// at least the target over the round-trip floor already in flight.
+    pub(super) fn queue_on_sent(&mut self, bytes: u64, now_us: u64) {
+        let refused = self
+            .queue
+            .recently_full(now_us, self.interval_us.saturating_mul(2));
+        let pipe = if refused { 0 } else { self.pipe_bytes(now_us) };
+        self.queue.on_sent(bytes, now_us, pipe);
+    }
+
+    /// The bytes the target carries over the round-trip floor (the last
+    /// round trip before a floor, `QUEUE_ALLOWANCE_US` before either).
+    fn pipe_bytes(&self, now_us: u64) -> u64 {
+        let window_us = self
+            .queue
+            .rtt_floor
+            .value(now_us)
+            .or((self.queue.last_rtt_us != 0).then_some(self.queue.last_rtt_us))
+            .unwrap_or(crate::screen::core::pacing::QUEUE_ALLOWANCE_US)
+            .min(STALE_STREAM_US);
+        let bytes = u128::from(self.target_bps()) * u128::from(window_us) / 8 / 1_000_000;
+        bytes.min(u128::from(u64::MAX)) as u64
     }
 
     /// The smallest smoothed round trip of the last `RTT_FLOOR_WINDOW_US`;

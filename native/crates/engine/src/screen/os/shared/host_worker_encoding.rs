@@ -77,7 +77,16 @@ impl Encoding {
                 Err(error) => {
                     let _ = crate::screen::core::convert_clock::take();
                     let factory = running.factory.clone();
-                    let refuses = running.failure_refuses() || gave_up(&error);
+                    // 2026-11-24: an encoder that only refused to lower its
+                    // rate works; a fresh instance of the same factory opens
+                    // at the lowered rate, every time, and the session never
+                    // moves to another encoder or codec for it (the user's
+                    // choice stays; the host log showed HEVC sessions moved
+                    // onto H.264 by two refused lowerings).
+                    let lowering = crate::screen::core::codec_reason_text::refused_lowering(
+                        &error.to_string(),
+                    );
+                    let refuses = !lowering && (running.failure_refuses() || gave_up(&error));
                     eprintln!("screen encoder: {} failed: {error}", running.encoder.name());
                     self.running = None;
                     if factory == crate::screen::core::codec_registry::TILES_NAME {
@@ -85,10 +94,16 @@ impl Encoding {
                     }
                     request.to_mut().keyframe = true;
                     if !refuses {
-                        eprintln!(
-                            "screen encoder: a fresh {factory} encoder with a key frame after its first failure"
-                        );
-                        fresh = Some(factory);
+                        if lowering {
+                            eprintln!(
+                                "screen encoder: a fresh {factory} encoder at the lowered rate"
+                            );
+                        } else {
+                            eprintln!(
+                                "screen encoder: a fresh {factory} encoder with a key frame after its first failure"
+                            );
+                            fresh = Some(factory);
+                        }
                         continue;
                     }
                     if !self.refused.contains(&factory) {
