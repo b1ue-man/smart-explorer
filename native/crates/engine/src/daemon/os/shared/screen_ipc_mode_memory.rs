@@ -145,6 +145,11 @@ impl ModeMemory {
         folded.lossless = set.lossless;
     }
 
+    /// Whether the viewer sent a `SET_MODE` (`replay` has frames then).
+    pub(crate) fn chose_mode(&self) -> bool {
+        self.last.is_some()
+    }
+
     /// The ceiling a new session gets again; `None` when none was sent.
     pub(crate) fn rate_ceiling(&self) -> Option<Option<u64>> {
         self.ceiling
@@ -189,10 +194,10 @@ impl ModeMemory {
 
     /// The frames that put a new session where the viewer left the old one,
     /// in the order to send them; none when the viewer never sent a
-    /// `SET_MODE`. The source travels once, in the first frame (none
-    /// without `with_source`, round 12 H3); the stream kind in force comes
-    /// last.
-    pub(crate) fn replay(&self, with_source: bool) -> Vec<SetMode> {
+    /// `SET_MODE`. `source` travels once, in the first frame (the relay
+    /// decides it, round 12 H3, round 13 H3/H4: none, the one chosen last,
+    /// or the first request's); the stream kind in force comes last.
+    pub(crate) fn replay(&self, source: Option<SourceId>) -> Vec<SetMode> {
         let Some(folded) = &self.last else {
             return Vec::new();
         };
@@ -200,7 +205,7 @@ impl ModeMemory {
             StreamMode::Full => (StreamMode::Preview, folded.preview, folded.full),
             StreamMode::Preview => (StreamMode::Full, folded.full, folded.preview),
         };
-        let mut source = folded.source.clone().filter(|_| with_source);
+        let mut source = source;
         let mut frame = |mode, choice: Choice| SetMode {
             mode,
             source: source.take(),

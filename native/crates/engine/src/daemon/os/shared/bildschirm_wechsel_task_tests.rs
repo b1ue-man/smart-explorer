@@ -203,7 +203,7 @@ fn mode(
 }
 
 fn replayed(memory: &ModeMemory) -> Vec<SetMode> {
-    memory.replay(true)
+    memory.replay(memory.source())
 }
 
 #[test]
@@ -361,7 +361,7 @@ fn r12_task_rebuild_opens_with_the_display_and_one_source_change() {
     let request = rebuild::request(&memory, &first, None);
     assert_eq!(request.virtual_display, Some(display));
     assert_eq!(request.source, None, "the display decides at a monitor");
-    let frames = rebuild::frames(&memory, &request, false, false);
+    let frames = rebuild::frames(&memory, &first, &request, false, false);
     assert_eq!(source_changes(&frames), vec![window.to_string()]);
 
     // A window, then the display: the session ends at the display's monitor
@@ -372,7 +372,7 @@ fn r12_task_rebuild_opens_with_the_display_and_one_source_change() {
     let request = rebuild::request(&memory, &first, None);
     assert_eq!(request.virtual_display, Some(display));
     assert_eq!(request.source, None);
-    let frames = rebuild::frames(&memory, &request, false, false);
+    let frames = rebuild::frames(&memory, &first, &request, false, false);
     assert!(source_changes(&frames).is_empty(), "{frames:?}");
 
     // A chosen monitor stays in the hello with the display.
@@ -387,7 +387,7 @@ fn r12_task_rebuild_opens_with_the_display_and_one_source_change() {
 
     // A first opening tried again opened with the first request: the
     // display chosen meanwhile still goes, after the source (Codex 11/4).
-    let frames = rebuild::frames(&memory, &first, false, false);
+    let frames = rebuild::frames(&memory, &first, &first, false, false);
     assert_eq!(
         source_changes(&frames),
         vec!["monitor:DP-2".to_string(), "display".to_string()]
@@ -404,7 +404,92 @@ fn r12_task_rebuild_opens_with_the_display_and_one_source_change() {
     // host's own source and the replay asks for the window again.
     let fallback = rebuild::without_source(&request).expect("a source to leave");
     assert_eq!(fallback.source, None);
-    let frames = rebuild::frames(&memory, &fallback, false, false);
+    let frames = rebuild::frames(&memory, &first, &fallback, false, false);
     assert_eq!(source_changes(&frames), vec![window.to_string()]);
     assert!(rebuild::without_source(&fallback).is_none());
+}
+
+/// Round 13 (H3a): only a refusal of the source itself (`no_display` with a
+/// reason that names the source gone) lets the next attempt open on the
+/// host's own source; a bare `no_display` (no graphical session yet) or a
+/// transient reason keeps the chosen one.
+#[test]
+fn r13_task_rebuild_falls_back_only_for_a_refused_source() {
+    use super::rebuild::source_refused;
+    let refused = |text: &str| source_refused(&ViewerError::Refused(text.into()));
+    assert!(refused("no_display: window_not_found"));
+    assert!(refused("no_display: monitor_not_found"));
+    assert!(refused("no_display: source_permission_revoked"));
+    assert!(!refused("no_display"));
+    assert!(!refused("no_display:  "));
+    assert!(!refused("no_display: session_inactive"));
+    assert!(!refused("no_display: host_process: connection reset"));
+    assert!(!refused("capture_failed: window_not_found"));
+    assert!(!source_refused(&ViewerError::Unsupported));
+}
+
+/// Round 13 (H4, H3b): a monitor named only in the first request stays the
+/// session's source when a display is chosen later (before, the hello lost
+/// it and „Auflösung“ went to the host's own monitor); a fallback that
+/// opened elsewhere asks for that monitor again and then for the display,
+/// and the viewer's settings follow without the source, so a refused source
+/// keeps them. se's own display shows at whatever monitor: no source change.
+#[test]
+fn r13_task_rebuild_keeps_the_first_monitor_and_asks_for_it_again() {
+    use super::rebuild;
+    use crate::screen::core::virtual_display::{VirtualDisplayChoice, VirtualDisplayWish};
+    let fixed = VirtualDisplayChoice {
+        wish: VirtualDisplayWish::Auto,
+        size: Some(FrameSize::new(1920, 1080)),
+    };
+    let monitor = SourceId::Monitor("DP-2".into());
+    let first = first_request(Some(monitor.clone()));
+    let mut memory = ModeMemory::default();
+    memory.note(&mode(StreamMode::Full, None, Some((1280, 720)), None));
+    memory.note(&ViewerFrame::SetDisplay(fixed));
+    let request = rebuild::request(&memory, &first, None);
+    assert_eq!(request.source, Some(monitor.clone()));
+    assert_eq!(request.virtual_display, Some(fixed));
+    let frames = rebuild::frames(&memory, &first, &request, false, false);
+    assert!(source_changes(&frames).is_empty(), "{frames:?}");
+
+    let fallback = rebuild::without_source(&request).expect("a source to leave");
+    let frames = rebuild::frames(&memory, &first, &fallback, false, false);
+    assert_eq!(
+        source_changes(&frames),
+        vec![monitor.to_string(), "display".to_string()]
+    );
+    let sets: Vec<&SetMode> = frames
+        .iter()
+        .filter_map(|frame| match frame {
+            ViewerFrame::SetMode(set) => Some(set),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(sets.len(), 2, "{frames:?}");
+    assert_eq!(sets[1].source, None);
+    assert_eq!(sets[1].size, sets[0].size);
+    assert_eq!(sets[1].size, Some(FrameSize::new(1280, 720)));
+
+    // Without a `SET_MODE` of the viewer no frame carries the monitor:
+    // neither it nor the display is asked again (no needless display change).
+    let mut memory = ModeMemory::default();
+    memory.note(&ViewerFrame::SetDisplay(fixed));
+    let request = rebuild::request(&memory, &first, None);
+    let fallback = rebuild::without_source(&request).expect("a source to leave");
+    let frames = rebuild::frames(&memory, &first, &fallback, false, false);
+    assert!(source_changes(&frames).is_empty(), "{frames:?}");
+
+    let own = VirtualDisplayChoice {
+        wish: VirtualDisplayWish::Request,
+        size: None,
+    };
+    let mut memory = ModeMemory::default();
+    memory.note(&mode(StreamMode::Full, Some(monitor.clone()), None, None));
+    memory.note(&ViewerFrame::SetDisplay(own));
+    let first = first_request(None);
+    let request = rebuild::request(&memory, &first, None);
+    let fallback = rebuild::without_source(&request).expect("a source to leave");
+    let frames = rebuild::frames(&memory, &first, &fallback, false, false);
+    assert!(source_changes(&frames).is_empty(), "{frames:?}");
 }

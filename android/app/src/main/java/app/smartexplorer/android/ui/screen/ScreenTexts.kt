@@ -136,14 +136,41 @@ object ScreenTexts {
      * detail `<characters>` or `<characters>+` (at most that many), as `input_receipt::stopped_text` says it.
      */
     fun stoppedText(detail: String?): String? {
-        val raw = detail?.trim() ?: return null
+        val trimmed = detail?.trim() ?: return null
+        // `<n>[+]` or, for a text a block or hold stopped partway (round 13, S2), `<n>[+];block=<key>` /
+        // `<n>[+];held=<key>`; the same sentences as `input_receipt::stopped_detail_text`.
+        val raw = trimmed.substringBefore(';').trim()
+        val cause = trimmed.substringAfter(';', "").trim().takeIf { it.isNotEmpty() }
         val count = raw.removeSuffix("+").toLongOrNull() ?: return null
+        val number = if (raw.endsWith("+")) "bis zu $count" else "$count"
+        stoppedCause(cause)?.let {
+            return "Der Text wurde nicht fertig getippt, weil $it: $number Zeichen wurden nicht getippt."
+        }
         if (count == 0L) {
             return "Die Steuerung wurde abgegeben oder die Sitzung beendet, bevor die Eingabe sicher ausgeführt war."
         }
-        val number = if (raw.endsWith("+")) "bis zu $count" else "$count"
         return "Die Steuerung wurde abgegeben oder die Sitzung beendet, bevor der Text fertig getippt war: " +
             "$number Zeichen wurden nicht getippt."
+    }
+
+    /** The reason of a text stopped partway (`input_receipt::cause_text`); null for the hand-over/end case. */
+    private fun stoppedCause(cause: String?): String? = when {
+        cause == null -> null
+        cause.startsWith("block=") -> when (cause.removePrefix("block=")) {
+            "elevated_window" -> "ein Fenster mit erhöhten Rechten nimmt keine Eingabe an"
+            "secure_desktop" -> "der gesicherte Desktop (Anmeldung, Sperre oder Benutzerkontensteuerung) ist aktiv"
+            "control_unavailable" -> "das Gerät hat die Eingabe nicht angenommen"
+            "unsupported_on_host" -> "das Gerät unterstützt diese Eingabe nicht"
+            else -> "das Gerät hat die Eingabe abgelehnt"
+        }
+        cause.startsWith("held=") -> when (cause.removePrefix("held=")) {
+            "viewer_hidden" -> "das Bild ist verdeckt oder minimiert"
+            "waiting_for_picture" -> "das Bild hat sich geändert und ist noch nicht angezeigt"
+            "release_pending" -> "gehaltene Tasten werden erst gelöst"
+            "backlog_full" -> "zu viele Eingaben warten noch auf das Gerät"
+            else -> "das Gerät hat die Eingabe zurückgehalten"
+        }
+        else -> null
     }
 
     /** Why the host held input back without applying it (`ControlState.held`, E2). */

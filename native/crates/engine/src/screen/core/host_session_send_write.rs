@@ -1,7 +1,7 @@
 //! The session's side of the outbox (`host_session_send.rs`): frames in,
 //! pieces out.
 use super::super::*;
-use super::{family, large, Held, Writing};
+use super::{budget_takes_excess, family, large, Held, Writing};
 use crate::screen::core::cursor_overlay::CursorPosition;
 
 impl Session<'_> {
@@ -101,9 +101,20 @@ impl Session<'_> {
     /// the position that waited for its shape and the small frames behind
     /// it follow.
     pub(in super::super) async fn flush_outbox(&mut self) -> io::Result<()> {
-        // Small frames that wait for the budget go before held large ones.
+        // Small frames that wait for the budget go before held large ones,
+        // and (round 13, H1) before the next part of the one being written.
         if self.outbox.small_due() {
-            return self.send_behind().await;
+            self.send_behind().await?;
+            if self.outbox.writing.is_none() {
+                return Ok(());
+            }
+            // The part goes on the credit the small frames left, else it
+            // waits for the budget again (`Outbox::ready`).
+            if let Some(rate) = self.outbox.budget.rate() {
+                if !self.outbox.budget.admits(now_us(), rate) {
+                    return Ok(());
+                }
+            }
         }
         let mut writing = match self.outbox.writing.take() {
             Some(writing) => writing,
@@ -202,9 +213,15 @@ impl Session<'_> {
     }
 
     /// The small frames in `behind`, in their order, while the budget takes
-    /// them (`take_small_share`); the first it does not take waits there.
+    /// them (`take_small_share`); the first it does not take waits there,
+    /// and so does a family frame while a large frame is being written
+    /// (round 13, H1: they go between its parts, a family frame after it).
     async fn send_behind(&mut self) -> io::Result<()> {
         while let Some(frame) = self.outbox.behind.pop_front() {
+            if self.outbox.writing.is_some() && (!self.outbox.parts || family(&frame)) {
+                self.outbox.behind.push_front(frame);
+                return Ok(());
+            }
             if let Some(rate) = self.outbox.budget.rate() {
                 if !self.take_small_share(rate, &frame) {
                     self.outbox.behind.push_front(frame);
@@ -241,7 +258,13 @@ impl Session<'_> {
     async fn drain_behind(&mut self) -> io::Result<()> {
         while !self.outbox.behind.is_empty() {
             self.outbox.ready().await;
-            self.send_behind().await?;
+            // A large frame still being written goes on, so a family frame
+            // behind it is reached (`send_behind`).
+            if self.outbox.writing.is_some() {
+                self.flush_outbox().await?;
+            } else {
+                self.send_behind().await?;
+            }
         }
         Ok(())
     }
@@ -297,15 +320,20 @@ impl Session<'_> {
     /// (round 12: booked with the picture, `SharedBudget::picture_sent`).
     /// `false`: the budget is in debt, nothing is taken, the frame waits
     /// (round 12, Codex 12/5, H5: no frame goes on top of the debt, and a
-    /// position or statistics frame is no longer dropped).
+    /// position or statistics frame is no longer dropped). Round 13 (H2):
+    /// while the pictures' share is short the budget takes no excess the
+    /// share will cover in time (`budget_takes_excess`).
     fn take_small_share(&mut self, rate: u64, frame: &HostFrame) -> bool {
         let bytes = control_sender::wire_bytes(frame);
         let reserved = self.outbox.budget.reserved();
         let now = now_us();
         let excess = self.outbox.lane.peek(now, reserved, bytes);
+        let shared = self.outbox.lane.wait_us(now, reserved, bytes).is_some();
         let taken = if excess == 0 || self.outbox.budget.absorb_while_writing(excess) {
             true
-        } else if self.outbox.budget.admits(now, rate) {
+        } else if budget_takes_excess(&self.outbox.budget, shared)
+            && self.outbox.budget.admits(now, rate)
+        {
             self.outbox.budget.on_sent(now, excess, rate);
             true
         } else {

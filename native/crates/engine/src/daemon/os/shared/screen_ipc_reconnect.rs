@@ -124,8 +124,9 @@ struct LinkDialer {
     expected_node: Option<String>,
     request: ViewerRequest,
     /// Round 12 (H4): the request on the host's own source, taken from the
-    /// attempt after one that the host refused with `no_display` (the chosen
-    /// source is gone in its new session); `fell_back` says it was.
+    /// attempt after one whose source the host refused (`no_display` with
+    /// its reason, round 13 H3a: the chosen source is gone in its new
+    /// session); `fell_back` says it was.
     fallback: Option<ViewerRequest>,
     fell_back: Arc<AtomicBool>,
     metadata: bool,
@@ -192,8 +193,10 @@ impl Dial for LinkDialer {
                         "Handshake: the screen host did not answer in time",
                     )))
                 });
-            if let (Some(fell_back), Err(error @ ViewerError::Refused(_))) = (fall_back, &result) {
-                if error.code() == ScreenErrorCode::NoDisplay.key() {
+            // Round 13 (H3a): only a refusal of the source itself; a bare
+            // `no_display` (no graphical session yet) keeps the chosen one.
+            if let (Some(fell_back), Err(error)) = (fall_back, &result) {
+                if rebuild::source_refused(error) {
                     fell_back.store(true, Ordering::Release);
                 }
             }
@@ -235,12 +238,17 @@ async fn end(out: &mpsc::Sender<(u8, Vec<u8>)>, code: String, detail: Option<Str
     }
 }
 
-/// Sends what the viewer chose since the first opening to `next`, opened
-/// with `opened` (`rebuild::frames`).
-async fn replay(modes: &ModeMemory, next: &ViewerSession, opened: &ViewerRequest) {
+/// Sends what the viewer chose since the first opening (`first`) to `next`,
+/// opened with `opened` (`rebuild::frames`).
+async fn replay(
+    modes: &ModeMemory,
+    next: &ViewerSession,
+    first: &ViewerRequest,
+    opened: &ViewerRequest,
+) {
     let audio = next.hello.audio.is_some();
     let visibility = next.hello.frame_contract.is_some();
-    for frame in rebuild::frames(modes, opened, audio, visibility) {
+    for frame in rebuild::frames(modes, first, opened, audio, visibility) {
         let _ = next.control.send(frame).await;
     }
 }
@@ -304,7 +312,7 @@ pub(super) async fn relay_session(
             schedule.failed(now, &error);
             match again(dialer, SystemClock, &mut schedule, &mut input, &mut modes).await {
                 Outcome::Opened(session) => {
-                    replay(&modes, &session, &request).await;
+                    replay(&modes, &session, &request, &request).await;
                     session
                 }
                 Outcome::Refused(error) => {
@@ -421,7 +429,7 @@ pub(super) async fn relay_session(
                     Some(fallback) if fell_back.load(Ordering::Acquire) => fallback,
                     _ => chosen,
                 };
-                replay(&modes, &next, &opened_with).await;
+                replay(&modes, &next, &request, &opened_with).await;
                 if session
                     .cursor_wish
                     .load(std::sync::atomic::Ordering::Acquire)

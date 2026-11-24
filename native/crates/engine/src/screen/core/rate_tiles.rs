@@ -159,7 +159,12 @@ impl RateController {
         // at the same rate (Codex 6/8); without a user ceiling for none.
         // Round 7 P2: with too little left for pictures, the held frames get
         // only that rest, not the pictures' floor (the sum keeps the ceiling).
-        let rate = if self.picture_share_short() {
+        // Round 13 (H2): in that state the budget takes no small frame's
+        // excess at the rest's rate (100 bytes were minutes of debt at
+        // 1 bit/s); the small frames wait for their share instead
+        // (`SharedBudget::share_short`).
+        let short = self.picture_share_short();
+        let rate = if short {
             self.user_ceiling_bps
                 .map(|ceiling| ceiling.saturating_sub(self.control_bps).max(1))
         } else {
@@ -167,7 +172,8 @@ impl RateController {
                 .and_then(|_| self.stream_budget_bps(now_us, video))
         };
         self.tiles.set_rate(rate);
-        if self.picture_share_short() {
+        self.tiles.set_share_short(short);
+        if short {
             return false;
         }
         self.stream_budget_bps(now_us, video)

@@ -17,7 +17,9 @@
 //! viewer draws a position only with its own shape, `CursorView::visible`,
 //! and the position of a held shape waits with it); while a large frame is
 //! being written, small frames wait behind it, the newest position and
-//! statistics replacing older ones. A newer window list, family list,
+//! statistics replacing older ones; a viewer that takes parts gets them
+//! between its parts as the budget allows, a family frame after it (round
+//! 13, H1). A newer window list, family list,
 //! pointer shape or reply for the same icon replaces its held one. A full
 //! queue holds the metadata answers back (`full`, the session's metadata
 //! branch). Without a user ceiling everything goes at once, as before, a
@@ -72,6 +74,16 @@ fn large(frame: &HostFrame) -> bool {
         HostFrame::FamilyOperation(result) => result.snapshot.is_some(),
         _ => false,
     }
+}
+
+/// Whether the budget takes a small frame's excess beyond its share
+/// (`take_small_share`). Round 13 (H2): not while control and sound leave
+/// the pictures less than their floor (`SharedBudget::share_short`), where
+/// its rate is the rest down to 1 bit/s and 100 bytes were minutes of debt;
+/// such a frame waits for its share (`shared`: the share covers it in time),
+/// and only one the share never covers takes the budget.
+fn budget_takes_excess(budget: &SharedBudget, shared: bool) -> bool {
+    !budget.share_short() || !shared
 }
 
 /// A family's state or an operation result about it: they reach the viewer
@@ -138,18 +150,24 @@ pub(super) struct SmallLane {
 }
 
 impl SmallLane {
-    /// The bytes of `bytes` at `now_us` beyond the share at `reserved_bps`,
-    /// and the share's booking that takes them (`take`).
-    fn excess_of(&self, now_us: u64, reserved_bps: u64, bytes: u64) -> (u64, (u64, i128)) {
+    /// The share's balance in bits at `now_us` under `reserved_bps`, at most
+    /// its burst.
+    fn balance(&self, now_us: u64, reserved_bps: u64) -> i128 {
         let rate = i128::from(reserved_bps);
         let cap = rate * i128::from(LANE_BURST_US) / 1_000_000;
-        let balance = match self.booked {
+        match self.booked {
             None => cap,
             Some((at, balance)) => {
                 let earned = rate * i128::from(now_us.saturating_sub(at)) / 1_000_000;
                 balance.saturating_add(earned).min(cap)
             }
-        };
+        }
+    }
+
+    /// The bytes of `bytes` at `now_us` beyond the share at `reserved_bps`,
+    /// and the share's booking that takes them (`take`).
+    fn excess_of(&self, now_us: u64, reserved_bps: u64, bytes: u64) -> (u64, (u64, i128)) {
+        let balance = self.balance(now_us, reserved_bps);
         let need = i128::from(bytes) * 8;
         let covered = need.min(balance.max(0));
         let excess = u64::try_from((need - covered + 7) / 8).unwrap_or(u64::MAX);
@@ -167,6 +185,23 @@ impl SmallLane {
         let (excess, booked) = self.excess_of(now_us, reserved_bps, bytes);
         self.booked = Some(booked);
         excess
+    }
+
+    /// Microseconds from `now_us` until the share at `reserved_bps` covers
+    /// `bytes` whole (0: now, `peek` is 0 then); `None` when it never does
+    /// (no share, or more than its burst). Round 13 (H1, H2): the session
+    /// wakes for it (`Outbox::ready`) instead of only for the budget.
+    pub(super) fn wait_us(&self, now_us: u64, reserved_bps: u64, bytes: u64) -> Option<u64> {
+        let rate = i128::from(reserved_bps);
+        let need = i128::from(bytes) * 8;
+        if rate == 0 || need > rate * i128::from(LANE_BURST_US) / 1_000_000 {
+            return None;
+        }
+        let missing = need - self.balance(now_us, reserved_bps);
+        if missing <= 0 {
+            return Some(0);
+        }
+        u64::try_from((missing * 1_000_000 + rate - 1) / rate).ok()
     }
 }
 
@@ -240,9 +275,31 @@ impl Outbox {
         self.writing.is_some() || !self.held.is_empty() || !self.behind.is_empty()
     }
 
-    /// Small frames wait for the budget, not behind a large frame (`SmallLane`).
+    /// Small frames wait for the budget, not behind a large frame
+    /// (`SmallLane`). Round 13 (H1): a viewer that takes parts gets them
+    /// between the parts of the large frame being written as well (before,
+    /// `STATE`, `CONTROL_STATE`, `ERROR` and `PONG` waited for its end,
+    /// seconds for a family state under a low ceiling); a family frame keeps
+    /// its place behind it (Codex 9/9).
     fn small_due(&self) -> bool {
-        self.writing.is_none() && !self.behind.is_empty()
+        self.behind
+            .front()
+            .is_some_and(|head| self.writing.is_none() || (self.parts && !family(head)))
+    }
+
+    /// Microseconds until the small frame at the head of `behind` may go at
+    /// `now_us`: its share covers it, or the budget at `rate` takes its
+    /// excess (`take_small_share`); `None` when neither will by time alone.
+    fn small_wait_us(&self, now_us: u64, rate: u64) -> Option<u64> {
+        let head = self.behind.front()?;
+        let bytes = control_sender::wire_bytes(head);
+        let lane = self.lane.wait_us(now_us, self.budget.reserved(), bytes);
+        let budget = budget_takes_excess(&self.budget, lane.is_some())
+            .then(|| self.budget.wait_us(now_us, rate));
+        match (lane, budget) {
+            (Some(lane), Some(budget)) => Some(lane.min(budget)),
+            (lane, budget) => lane.or(budget),
+        }
     }
 
     /// Whether the metadata answers wait (no answer goes without credit).
@@ -255,25 +312,53 @@ impl Outbox {
     /// write ends).
     pub(super) async fn ready(&self) {
         loop {
+            // Round 13 (H2): a new rate, share or short state computes the
+            // wait again (a wait computed at 1 bit/s slept for minutes).
+            let changed = self.budget.inputs_changed();
+            tokio::pin!(changed);
+            changed.as_mut().enable();
             let Some(rate) = self.budget.rate() else {
                 return;
             };
-            // A picture being written takes the small frames' excess into
-            // its pace (`take_small_share`): they need not wait for it.
-            if self.small_due() && self.budget.picture_writing() {
-                return;
-            }
+            let small = self.small_due();
             if self.budget.picture_writing() {
+                // A picture being written takes the small frames' excess
+                // into its pace (`take_small_share`): they need not wait.
+                if small {
+                    return;
+                }
                 // Woken when the picture ends; the next picture leaves this
                 // frame one piece first (round 10: no polling, no starving).
                 self.budget.wait_picture().await;
                 continue;
             }
-            let wait = self.budget.wait_us(now_us(), rate);
+            let now = now_us();
+            // A piece waits for the budget's credit; with small frames due
+            // and no large frame being written only they go (`flush_outbox`).
+            let piece = (self.writing.is_some() || !small).then(|| self.budget.wait_us(now, rate));
+            // Round 13 (H1, H2): small frames due go as soon as their share
+            // covers the head, not only when the budget has credit.
+            let head = if small {
+                self.small_wait_us(now, rate)
+            } else {
+                None
+            };
+            let wait = match (piece, head) {
+                (Some(piece), Some(head)) => piece.min(head),
+                (Some(wait), None) | (None, Some(wait)) => wait,
+                // Only a change of rate, share or short state lets it go.
+                (None, None) => {
+                    changed.as_mut().await;
+                    continue;
+                }
+            };
             if wait == 0 {
                 return;
             }
-            tokio::time::sleep(Duration::from_micros(wait)).await;
+            tokio::select! {
+                () = tokio::time::sleep(Duration::from_micros(wait)) => {}
+                () = &mut changed => {}
+            }
         }
     }
 

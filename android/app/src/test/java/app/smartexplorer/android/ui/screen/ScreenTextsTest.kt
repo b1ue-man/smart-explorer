@@ -63,5 +63,15 @@ class ScreenTextsTest {
             ScreenTexts.stoppedText("5+"),
         )
         assertEquals(null, ScreenTexts.stoppedText("x"))
+        assertEquals(
+            "Der Text wurde nicht fertig getippt, weil das Bild hat sich geändert und ist noch nicht angezeigt: " +
+                "bis zu 120 Zeichen wurden nicht getippt.",
+            ScreenTexts.stoppedText("120+;held=waiting_for_picture"),
+        )
+        assertEquals(
+            "Der Text wurde nicht fertig getippt, weil das Gerät hat die Eingabe nicht angenommen: " +
+                "50 Zeichen wurden nicht getippt.",
+            ScreenTexts.stoppedText("50;block=control_unavailable"),
+        )
     }
 }

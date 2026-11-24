@@ -150,6 +150,15 @@ pub struct Turns {
     writing: std::sync::atomic::AtomicBool,
     owed: std::sync::atomic::AtomicBool,
     changed: tokio::sync::Notify,
+    /// Control and sound leave the pictures less than their floor
+    /// (`RateController::picture_share_short`): the budget's rate is then the
+    /// rest of the ceiling down to 1 bit/s, and small frames take only their
+    /// share (round 13, H2).
+    short: std::sync::atomic::AtomicBool,
+    /// The rate, the reserved share or `short` changed: the session's wait
+    /// for the budget (`Outbox::ready`) computes its time again (round 13,
+    /// H2: a wait computed at 1 bit/s slept for minutes after the rate rose).
+    inputs: tokio::sync::Notify,
 }
 
 /// The longest wait for the other side's turn: a missed wake-up never
@@ -187,7 +196,9 @@ impl SharedBudget {
     /// The budget's rate for the held-back control frames; `None` lets
     /// them go at once.
     pub fn set_rate(&self, rate_bps: Option<u64>) {
-        self.with(|(_, rate)| *rate = rate_bps);
+        if self.with(|(_, rate)| std::mem::replace(rate, rate_bps) != rate_bps) {
+            self.2.inputs.notify_waiters();
+        }
     }
     pub fn rate(&self) -> Option<u64> {
         self.with(|(_, rate)| *rate)
@@ -228,9 +239,32 @@ impl SharedBudget {
     /// (`RateController::user_picture_bps`); small control frames beyond it
     /// take this budget (Codex 11/7).
     pub fn set_reserved(&self, bps: u64) {
-        self.2
+        let before = self
+            .2
             .reserved
-            .store(bps, std::sync::atomic::Ordering::Release);
+            .swap(bps, std::sync::atomic::Ordering::AcqRel);
+        if before != bps {
+            self.2.inputs.notify_waiters();
+        }
+    }
+    /// Whether control and sound leave the pictures less than their floor
+    /// (`RateController::stream_admit`, round 13 H2).
+    pub fn set_share_short(&self, short: bool) {
+        let before = self
+            .2
+            .short
+            .swap(short, std::sync::atomic::Ordering::AcqRel);
+        if before != short {
+            self.2.inputs.notify_waiters();
+        }
+    }
+    pub fn share_short(&self) -> bool {
+        self.2.short.load(std::sync::atomic::Ordering::Acquire)
+    }
+    /// Completes when the rate, the reserved share or the short state
+    /// changes after this call (enable it before reading them).
+    pub fn inputs_changed(&self) -> tokio::sync::futures::Notified<'_> {
+        self.2.inputs.notified()
     }
     /// A small frame's `bytes` beyond its share go while a picture is
     /// written (Codex 11/7, round 12): its pace counts them (`absorbed`) and
