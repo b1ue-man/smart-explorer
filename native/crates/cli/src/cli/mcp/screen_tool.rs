@@ -137,7 +137,7 @@ fn audio(args: &Args) -> Result<CallToolResult, String> {
     ))
 }
 
-pub(super) const INPUT_DESCRIPTION: &str = "Clicks, moves the pointer, scrolls, types text, presses a key or a key combination, or runs an Android system action on the screen of a paired device (one input per call). The other device must have granted „screen control“ to this device; if it asks its user, the call waits up to `wait` seconds (default 30) and then fails with `approval_pending`. Coordinates are pixels of the source (in its own size; a host that does not name a window's size takes percentages only) or percentages (`50%`). The answer says whether the input was sent (`sent`; the device sends no receipt that it applied it; its answer is awaited 1.5 s, 3.8 s on an Android device), why the device blocked it (`blocked`: `elevated_window`, `secure_desktop`, `control_unavailable`, `unsupported_on_host`) or why it held the input back without applying it (`held`: `viewer_hidden`, `waiting_for_picture`, `release_pending`, `backlog_full`, `other`; `waiting_for_picture` also when no picture came within five seconds, the input is then not sent) or why it took the input but did not perform it (`refused`: the device's sentence, e.g. a mouse button without counterpart or a password field). Ctrl+Alt+Delete is never sent.";
+pub(super) const INPUT_DESCRIPTION: &str = "Clicks, moves the pointer, scrolls, types text, presses a key or a key combination, or runs an Android system action on the screen of a paired device (one input per call). The other device must have granted „screen control“ to this device; if it asks its user, the call waits up to `wait` seconds (default 30) and then fails with `approval_pending`. Coordinates are pixels of the source (in its own size; a host that does not name a window's size takes percentages only) or percentages (`50%`). The answer says whether the input was sent (`sent`) and whether the device confirmed that it applied it (`applied`: `true` or `false` from a device that sends input receipts, which answers once the input is settled, on an Android device once it performed or refused it; `null` from an older device, whose answer is awaited 1.5 s, 3.8 s on an Android device, so `sent` is unconfirmed), why the device blocked it (`blocked`: `elevated_window`, `secure_desktop`, `control_unavailable`, `unsupported_on_host`) or why it held the input back without applying it (`held`: `viewer_hidden`, `waiting_for_picture`, `release_pending`, `backlog_full`, `other`; `waiting_for_picture` also when no picture came within five seconds, the input is then not sent) or why it took the input but did not perform it (`refused`: the device's sentence, e.g. a mouse button without counterpart or a password field), or that the control went or the session ended before the text was typed (`stopped`: `untyped` characters, `exact`, and the German `text`). Ctrl+Alt+Delete is never sent.";
 
 pub(super) fn input_properties() -> Value {
     json!({
@@ -164,7 +164,8 @@ pub(super) fn input_properties() -> Value {
     })
 }
 
-/// The tool `screen_input`: one input, the answer `{"sent","blocked","held","refused"}`.
+/// The tool `screen_input`: one input, the answer
+/// `{"device","sent","applied","blocked","held","refused","stopped"}`.
 pub(super) fn screen_input(args: &Args) -> Result<CallToolResult, String> {
     let selector = args.string("device")?;
     let source = args
@@ -198,13 +199,9 @@ pub(super) fn screen_input(args: &Args) -> Result<CallToolResult, String> {
     let wait = wait(args)?;
     let (target, device) = crate::cli::screen::device_target(&selector)?;
     let outcome = crate::cli::screen::input::deliver(target, source, &input, Some(wait), |_| {})?;
-    Ok(response::ok(json!({
-        "device": device,
-        "sent": outcome.sent,
-        "blocked": outcome.blocked,
-        "held": outcome.held,
-        "refused": outcome.refused,
-    })))
+    let mut answer = crate::cli::screen::input::outcome_value(&outcome);
+    answer["device"] = json!(device);
+    Ok(response::ok(answer))
 }
 
 pub(super) fn screen(args: &Args) -> Result<CallToolResult, String> {

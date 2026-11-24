@@ -30,6 +30,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -725,9 +726,17 @@ internal object ScreenHostControl {
                     // batch would wait as long again each, so it is left and the refusal goes out at once (round 12, S9).
                     if (reason.get() == "timeout") break
                 }
+                // Every performed batch of a session is reported finished, a refused one with its kind (round 12
+                // rest: the viewer's input receipts wait for it), on this thread so a later report never overtakes an
+                // earlier refusal.
                 val kind = refused
-                if (kind != null && owner != 0L) scope.launch {
-                    try { ScreenApi.inputRefused(owner, kind) } catch (e: CoreException) { Log.w(TAG, "Eingabefehler nicht gemeldet: ${e.message}") }
+                val batch = message.long("batch")
+                if (owner != 0L && (kind != null || batch > 0L)) {
+                    try {
+                        runBlocking { ScreenApi.inputSettled(owner, batch, kind) }
+                    } catch (e: CoreException) {
+                        Log.w(TAG, "Eingabeergebnis nicht gemeldet: ${e.message}")
+                    }
                 }
             }
         } finally {

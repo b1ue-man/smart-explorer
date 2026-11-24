@@ -270,7 +270,7 @@ impl ScreenHostBackend for BridgeBackend {
         // reported as a block, never dropped in silence.
         // Without a session (every Android source injects through its own
         // sink, `bridge_source::BridgeInputSink`): 0, dropped with the last.
-        if channels::send_input(0, events) {
+        if channels::send_input(0, events).is_some() {
             Ok(())
         } else {
             Err(ControlBlock::ControlUnavailable)

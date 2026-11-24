@@ -11,29 +11,36 @@
 //! `ctrl_left+c`: pressed in order, released backwards). Ctrl+Alt+Delete is
 //! never sent. The input goes out once the session has received a complete
 //! picture (the host takes input only after the viewer acknowledged a picture
-//! of its current reference). JSON `{"sent","blocked","held","refused"}`: `sent` says
-//! the input left this device and the device neither blocked nor held it
-//! back; the host does not confirm that it applied it, so it is no delivery
-//! receipt (the answer is waited for 1.5 s, on an Android host 3.8 s: it
-//! answers a refused input after its strokes). `blocked` is `elevated_window`, `secure_desktop`,
+//! of its current reference). JSON `{"sent","applied","blocked","held",
+//! "refused","stopped"}`: `sent` says the input left this device and the
+//! device neither blocked, held back, refused nor stopped it. A device that
+//! sends input receipts (`input_receipt.rs`, round 12 rest) answers once the
+//! input is settled, on an Android device once its app performed or refused
+//! it, and the command waits for that answer as long as the session lasts:
+//! `applied` is then `true` or `false`. An older device sends no receipt:
+//! its answer is waited for 1.5 s (3.8 s on an Android device) and `applied`
+//! is `null`, so `sent` is unconfirmed. `blocked` is `elevated_window`, `secure_desktop`,
 //! `control_unavailable` or `unsupported_on_host`; `held` says the host held
 //! the input back without applying it (`viewer_hidden`,
 //! `waiting_for_picture`, `release_pending`, `backlog_full`, `other`), or that no complete
 //! picture came within five seconds, so the input was not sent
 //! (`waiting_for_picture`); `refused` is the device's sentence for an input
 //! it took but did not perform (an Android host: a mouse button without
-//! counterpart, a field whose content it cannot see). With any of them the
-//! exit code is 1. No input is ever logged.
+//! counterpart, a field whose content it cannot see); `stopped`
+//! (`{"untyped","exact","text"}`) says the control went or the session ended
+//! before the text was typed, with the untyped characters (`exact: false`:
+//! at most that many). With any of them the exit code is 1. No input is ever
+//! logged.
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
 use clap::Args;
 use clap_complete::ArgValueCandidates;
-use serde_json::json;
 
 use crate::daemon::{screen_stream, StreamEvent, StreamRequest};
 #[cfg(test)]
 use crate::screen::core::input_model::{InputEvent, SystemAction};
+use crate::screen::core::input_receipt::INPUT_RECEIPTS_V1;
 use crate::screen::core::negotiate::CodecOffer;
 #[cfg(test)]
 use crate::screen::core::pixel_convert::FrameSize;
@@ -102,22 +109,46 @@ pub(crate) struct InputArgs {
 
 #[path = "input_action.rs"]
 mod action;
+#[path = "input_answer.rs"]
+mod answer;
 pub(crate) use action::{action_of, events, InputAction};
 use action::{hello_size, needs_size};
+pub(crate) use answer::outcome_value;
+use answer::{receipt_outcome, unconfirmed_outcome};
 
 /// What became of the input: `sent` when it left this device and the
-/// device neither blocked nor held it back within `answer_wait`. The host
-/// sends no receipt for applied input, so this is never a delivery
-/// confirmation. `held`: the host dropped the batch without applying it.
+/// device neither blocked, held back, refused nor stopped it. `applied`:
+/// the device's receipt (`input_receipt.rs`) says it applied the input
+/// (`Some(true)`) or not (`Some(false)`); `None` for a device without
+/// receipts, whose `sent` is then unconfirmed (its answer was waited for
+/// `answer_wait`). `held`: the host dropped the batch without applying it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct InputOutcome {
     pub sent: bool,
+    pub applied: Option<bool>,
     pub blocked: Option<ControlBlock>,
     pub held: Option<InputHeld>,
-    /// The device took the input but did not perform it (its reason, an
+    /// The device took the input but did not perform it (its sentence, an
     /// Android host's notice: a mouse button without counterpart, a field
     /// whose content it cannot see, a refused text or action).
-    pub refused: Option<&'static str>,
+    pub refused: Option<String>,
+    /// The control went or the session ended before the text was typed:
+    /// the untyped characters and whether that number is exact.
+    pub stopped: Option<(u64, bool)>,
+}
+
+impl InputOutcome {
+    /// Not sent: `blocked`, `held` or neither (set by the caller).
+    fn not_sent() -> Self {
+        Self {
+            sent: false,
+            applied: None,
+            blocked: None,
+            held: None,
+            refused: None,
+            stopped: None,
+        }
+    }
 }
 
 /// Opens a control session to `target`, sends `action` and ends it.
@@ -201,10 +232,8 @@ pub(crate) fn deliver(
         };
         if !supported {
             return Ok(InputOutcome {
-                sent: false,
                 blocked: Some(ControlBlock::UnsupportedOnHost),
-                held: None,
-                refused: None,
+                ..InputOutcome::not_sent()
             });
         }
         let mut size = hello_size(&hello, &source);
@@ -265,10 +294,8 @@ pub(crate) fn deliver(
         }
         if !picture {
             return Ok(InputOutcome {
-                sent: false,
-                blocked: None,
                 held: Some(InputHeld::WaitingForPicture),
-                refused: None,
+                ..InputOutcome::not_sent()
             });
         }
         // A pixel position needs the size of the running stream's source: the
@@ -290,75 +317,24 @@ pub(crate) fn deliver(
             );
         }
         let batch = events(action, size)?;
+        // Round 12 rest (Codex 12/15): a host that announced receipts answers
+        // this input once it is settled (on an Android host: once its app
+        // performed or refused it), however long that takes; the session's
+        // end ends the wait. An older host sends none: its answer is waited
+        // for `answer_wait` and the result stays unconfirmed (`applied: null`).
+        let receipts = hello.input_receipts == Some(INPUT_RECEIPTS_V1);
+        if receipts {
+            control
+                .send(&ViewerFrame::InputReceipts(true))
+                .map_err(|error| error.to_string())?;
+        }
         control
             .send(&ViewerFrame::Input(batch))
             .map_err(|error| error.to_string())?;
-        let deadline = Instant::now() + answer;
-        while Instant::now() < deadline {
-            match next(Some(deadline - Instant::now()))? {
-                // The device answered that it did not perform the input (an
-                // Android host's notice, no block: round 11, M3).
-                Some(StreamEvent::Host(HostFrame::State(report))) => {
-                    if let Some(refused) = report
-                        .reason
-                        .as_deref()
-                        .and_then(crate::screen::core::codec_reason_text::input_refusal)
-                    {
-                        return Ok(InputOutcome {
-                            sent: false,
-                            blocked: None,
-                            held: None,
-                            refused: Some(refused),
-                        });
-                    }
-                }
-                // Rebuilt while the input went out: the relay drops control
-                // frames during the rebuild, so whether it was applied is
-                // unknown; it is not sent twice (a second click).
-                Some(StreamEvent::Accepted { .. }) => {
-                    return Err(
-                        "the device rebuilt the screen session while the input went out; \
-                                it may not have been applied"
-                            .into(),
-                    )
-                }
-                // Held back (E2): not applied. Its `blocked` only repeats the
-                // block reported before this batch, so `held` decides.
-                Some(StreamEvent::Host(HostFrame::ControlState(state))) if state.held.is_some() => {
-                    return Ok(InputOutcome {
-                        sent: false,
-                        blocked: None,
-                        held: state.held,
-                        refused: None,
-                    })
-                }
-                Some(StreamEvent::Host(HostFrame::ControlState(state)))
-                    if state.blocked.is_some() =>
-                {
-                    return Ok(InputOutcome {
-                        sent: false,
-                        blocked: state.blocked,
-                        held: None,
-                        refused: None,
-                    })
-                }
-                Some(StreamEvent::Host(HostFrame::Error(error))) => {
-                    return Err(format!(
-                        "{}: {}",
-                        error.code,
-                        error.detail.unwrap_or_default()
-                    ))
-                }
-                Some(StreamEvent::End(end)) => return Err(end.code),
-                _ => {}
-            }
+        if receipts {
+            return receipt_outcome(&next);
         }
-        Ok(InputOutcome {
-            sent: true,
-            blocked: None,
-            held: None,
-            refused: None,
-        })
+        unconfirmed_outcome(&next, answer)
     })();
     let _ = control.close();
     outcome
@@ -387,28 +363,8 @@ pub(super) fn run(args: InputArgs) -> Result<i32, String> {
         None,
         super::pending_notice(choice.name),
     )?;
-    let blocked = outcome
-        .blocked
-        .map(|blocked| serde_json::to_value(blocked).unwrap_or_default());
-    let held = outcome
-        .held
-        .map(|held| serde_json::to_value(held).unwrap_or_default());
-    let value = json!({
-        "sent": outcome.sent,
-        "blocked": blocked,
-        "held": held,
-        "refused": outcome.refused,
-    });
-    super::output::print(args.json, &value, || {
-        match (&held, &blocked, outcome.refused) {
-            (Some(reason), _, _) => format!("held\t{}\n", reason.as_str().unwrap_or_default()),
-            (None, Some(reason), _) => {
-                format!("blocked\t{}\n", reason.as_str().unwrap_or_default())
-            }
-            (None, None, Some(reason)) => format!("refused\t{reason}\n"),
-            (None, None, None) => "sent\n".to_string(),
-        }
-    });
+    let value = answer::outcome_value(&outcome);
+    super::output::print(args.json, &value, || answer::outcome_line(&value));
     Ok(if outcome.sent { 0 } else { 1 })
 }
 

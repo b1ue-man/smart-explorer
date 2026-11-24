@@ -16,7 +16,10 @@
 //!   the encoder refused) or `{session, inputRefused}` (`gesture`, `text`,
 //!   `action`, `timeout`, `button`, `secret`, `field`: an input Android did not perform): a notice for
 //!   the viewer while encoder and session keep running
-//!   (`HostStage::take_notice`, review 2026-11-19).
+//!   (`HostStage::take_notice`, review 2026-11-19). `inputBatch` (with or
+//!   without `inputRefused`) names the batch the app finished (the `batch`
+//!   of its `input` message): the session's input receipts wait for it
+//!   (round 12 rest, `input_receipt.rs`).
 //!
 //! Events: `screenHostStart {session, source, still, maxWidth, maxHeight,
 //! viewerName, viewerDeviceId}`, `screenSession {session, state, reason}`.
@@ -353,6 +356,16 @@ fn notice(args: &Value) -> Result<Value, ApiError> {
         channels::rate_floor(id, epoch, bps).map_err(not_found)?;
         return Ok(json!({}));
     }
+    // Input receipts (round 12 rest): the batch the app finished.
+    let batch = match args.get("inputBatch") {
+        None | Some(Value::Null) => None,
+        Some(value) => Some(
+            value
+                .as_u64()
+                .filter(|batch| *batch > 0)
+                .ok_or_else(|| invalid("„inputBatch“ ist die Nummer eines Eingabepakets."))?,
+        ),
+    };
     // Android did not perform an input of the session (Codex 2/19): a notice
     // for its viewer; the host session learns of input only when it queues it.
     if let Some(kind) = opt_str(args, "inputRefused") {
@@ -388,6 +401,13 @@ fn notice(args: &Value) -> Result<Value, ApiError> {
         if let Some(block) = block {
             channels::input_refused(id, block).map_err(not_found)?;
         }
+        if let Some(batch) = batch {
+            channels::input_done(id, batch, Some(text.into())).map_err(not_found)?;
+        }
+        return Ok(json!({}));
+    }
+    if let Some(batch) = batch {
+        channels::input_done(id, batch, None).map_err(not_found)?;
         return Ok(json!({}));
     }
     let name = str_arg(args, "parameter")?;

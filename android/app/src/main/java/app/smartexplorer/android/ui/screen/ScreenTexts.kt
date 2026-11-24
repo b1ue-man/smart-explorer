@@ -108,6 +108,8 @@ object ScreenTexts {
         if (code == "capture_failed" && detail?.startsWith("metadata_queue_full") == true) {
             return context.getString(R.string.screen_error_metadata_queue_full)
         }
+        // The rest of a text was not typed (round 12 rest, `input_receipt.rs`).
+        if (code == "input_stopped") stoppedText(detail)?.let { return it }
         val res = errorRes(code) ?: return context.getString(R.string.screen_error_unknown, code)
         val base = context.getString(res)
         // Codex 11/16: a refused source names its reason as well.
@@ -128,6 +130,21 @@ object ScreenTexts {
     /** Why input does not reach the host. */
     fun blockedText(context: Context, key: String): String =
         context.getString(blockRes(key) ?: R.string.screen_block_other)
+
+    /**
+     * The control was given up or the session ended before a text was typed: `ERROR` `input_stopped` with the
+     * detail `<characters>` or `<characters>+` (at most that many), as `input_receipt::stopped_text` says it.
+     */
+    fun stoppedText(detail: String?): String? {
+        val raw = detail?.trim() ?: return null
+        val count = raw.removeSuffix("+").toLongOrNull() ?: return null
+        if (count == 0L) {
+            return "Die Steuerung wurde abgegeben oder die Sitzung beendet, bevor die Eingabe sicher ausgeführt war."
+        }
+        val number = if (raw.endsWith("+")) "bis zu $count" else "$count"
+        return "Die Steuerung wurde abgegeben oder die Sitzung beendet, bevor der Text fertig getippt war: " +
+            "$number Zeichen wurden nicht getippt."
+    }
 
     /** Why the host held input back without applying it (`ControlState.held`, E2). */
     fun heldText(key: String): String = when (key) {

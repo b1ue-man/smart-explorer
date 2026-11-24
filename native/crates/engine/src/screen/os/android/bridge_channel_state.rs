@@ -83,6 +83,49 @@ impl Channel {
         lock(&self.state).1.input_refused.take()
     }
 
+    /// Input receipts: the input path queued batch `batch` (its last call).
+    pub fn note_input_queued(&self, batch: u64) {
+        lock(&self.state).1.input_queued = batch;
+    }
+
+    /// The number of the last batch the input path queued (0: none yet).
+    pub fn input_queued(&self) -> u64 {
+        lock(&self.state).1.input_queued
+    }
+
+    /// The app finished batch `batch`: performed, or refused with its
+    /// sentence. The refusals of batches no receipt asks for are bounded by
+    /// the queue's own bound (an older one cannot still be waited for).
+    pub fn note_input_done(&self, batch: u64, refused: Option<String>) {
+        let mut state = lock(&self.state);
+        let queues = &mut state.1;
+        queues.input_done = queues.input_done.max(batch);
+        if let Some(text) = refused {
+            if queues.input_refusals.len() >= super::input_queue::HARD_LIMIT {
+                queues.input_refusals.pop_first();
+            }
+            queues.input_refusals.insert(batch, text);
+        }
+    }
+
+    /// The batches after `after` up to `mark`: `None` while the app has
+    /// not finished `mark`, else the sentence of the first refused one, if
+    /// any (the refusals up to `mark` are then forgotten).
+    pub fn input_outcome(&self, after: u64, mark: u64) -> Option<Option<String>> {
+        let mut state = lock(&self.state);
+        let queues = &mut state.1;
+        if queues.input_done < mark {
+            return None;
+        }
+        let refused = queues
+            .input_refusals
+            .range(after.saturating_add(1)..=mark)
+            .next()
+            .map(|(_, text)| text.clone());
+        queues.input_refusals.retain(|batch, _| *batch > mark);
+        Some(refused)
+    }
+
     /// The oldest notice not given yet.
     pub fn take_notice(&self) -> Option<String> {
         lock(&self.state).1.notices.pop_front()

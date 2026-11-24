@@ -29,6 +29,8 @@ use crate::share::PeerOpenTarget;
 mod cursor_events;
 #[path = "screen_view_epoch.rs"]
 mod epoch;
+#[path = "screen_view_layout.rs"]
+mod layout;
 
 pub(super) type SendFrame = Arc<dyn Fn(&ViewerFrame) -> io::Result<()> + Send + Sync>;
 type CloseFn = Arc<dyn Fn() -> io::Result<()> + Send + Sync>;
@@ -66,6 +68,8 @@ pub(super) struct ViewSession {
     pub family: Mutex<Option<crate::screen::core::family_viewer::FamilyViewer>>,
     pub family_presented: AtomicBool,
     family_picture: Mutex<Option<(u64, u64)>>,
+    /// Records of a family layout newer than its state (round 12 rest).
+    layout_hold: Mutex<crate::screen::core::family_layout_hold::LayoutHold>,
     local_limits: Mutex<Option<crate::screen::core::frame_budget::FrameLimits>>,
     /// The host's pointer beside the picture (plan 2026-11-14 P6).
     cursor: cursor_events::CursorEvents,
@@ -146,6 +150,7 @@ fn new_session(mode: SessionMode) -> Arc<ViewSession> {
         family: Mutex::new(None),
         family_presented: AtomicBool::new(false),
         family_picture: Mutex::new(None),
+        layout_hold: Mutex::default(),
         local_limits: Mutex::new(None),
         cursor: Default::default(),
         set_decoders: AtomicBool::new(false),
@@ -329,27 +334,11 @@ fn on_event(
             fields["setDisplay"] = json!(set_display);
             emit(id, "accepted", fields);
         }
-        StreamEvent::Host(frame) => on_host_frame(session, encoder, own, frame),
+        StreamEvent::Host(frame) => on_host_frame(session, sink, encoder, own, frame),
         StreamEvent::Record { mut header, record } => {
             header.gop_id = session.viewer_gop(header.gop_id);
-            if let Some(family) = lock(&session.family).as_ref() {
-                if header.gop_id < session.latest_gop.load(Ordering::SeqCst) {
-                    return;
-                }
-                let Some(snapshot) = &family.snapshot else {
-                    return;
-                };
-                if header.family_layout_revision != Some(snapshot.layout_revision) {
-                    return;
-                }
-                *lock(&session.family_picture) = Some((header.gop_id, snapshot.layout_revision));
-            }
-            session
-                .latest_gop
-                .fetch_max(header.gop_id, Ordering::SeqCst);
-            for output in sink.record(&header, &record, now_us()) {
-                on_sink_output(session, encoder, output);
-            }
+            // A family's newer layout waits for its state (`screen_view_layout.rs`).
+            layout::record(session, sink, encoder, header, record);
         }
         StreamEvent::Broken { gop_id } => {
             if let Some(output) = sink.broken(session.viewer_gop(gop_id), now_us()) {
@@ -392,23 +381,37 @@ fn on_sink_output(session: &ViewSession, encoder: &(String, bool), output: SinkO
     }
 }
 
-fn on_host_frame(session: &ViewSession, encoder: &mut (String, bool), own: &str, frame: HostFrame) {
+fn on_host_frame(
+    session: &ViewSession,
+    sink: &mut ViewerSink,
+    encoder: &mut (String, bool),
+    own: &str,
+    frame: HostFrame,
+) {
     let id = session.id;
     if let Some(result) = super::family::event(session, &frame) {
         match result {
+            // Round 12 rest: the new layout's records that came before its
+            // state go to the sink now, its key frame first; a key frame is
+            // asked for only when none waited.
             Ok(true) => {
-                let _ = session.send(&ViewerFrame::KeyframeRequest(
-                    crate::screen::core::wire_control::KeyframeRequest {
-                        reason: crate::screen::core::wire_control::KeyframeReason::Reset,
-                        gop_id: Some(session.latest_gop.load(Ordering::SeqCst)),
-                    },
-                ));
+                if !layout::release(session, sink, encoder) {
+                    let _ = session.send(&ViewerFrame::KeyframeRequest(
+                        crate::screen::core::wire_control::KeyframeRequest {
+                            reason: crate::screen::core::wire_control::KeyframeReason::Reset,
+                            gop_id: Some(session.latest_gop.load(Ordering::SeqCst)),
+                        },
+                    ));
+                }
             }
             Err(error) => {
                 finish(session, "invalid_family", Some(error.to_string()));
                 session.shut();
             }
-            _ => {}
+            // The first state, or one without a new layout.
+            Ok(false) => {
+                layout::release(session, sink, encoder);
+            }
         }
         return;
     }

@@ -73,9 +73,10 @@ fn screen_task_cli_input_events() {
     assert!(action_of(None, None, None, None, None, None).is_err());
 }
 
-/// Round 12, S9 / Codex 12/15: an Android host answers a refused input
-/// after its strokes and the wait for its accessibility service; the command
-/// waits that long before it says `sent`, a desktop host as before.
+/// Round 12, S9 / Codex 12/15: a host without input receipts (an older
+/// version) answers a refused input after its strokes and the wait for its
+/// accessibility service; the command waits that long before it says `sent`
+/// (unconfirmed), a desktop host as before.
 #[test]
 fn screen_task_cli_input_android_refusal_is_waited_for() {
     assert_eq!(answer_wait(HostPlatform::Windows), BLOCK_WAIT);
@@ -86,4 +87,75 @@ fn screen_task_cli_input_android_refusal_is_waited_for() {
         answer_wait(HostPlatform::Android),
         BLOCK_WAIT + Duration::from_millis(1000 + 2 * (150 + 500))
     );
+}
+
+/// Round 12 rest (Codex 12/15): with a host that sends input receipts the
+/// command waits for the receipt of its input, however late, and reports
+/// what it says (applied, refused with the device's sentence, stopped with
+/// the untyped characters); states without a receipt do not end the wait.
+/// Without receipts `sent` stays unconfirmed (`applied: null`).
+#[test]
+fn screen_task_cli_input_waits_for_the_receipt() {
+    use super::answer::{outcome_line, receipt_outcome, unconfirmed_outcome};
+    use crate::screen::core::input_receipt::{InputReceipt, InputResult};
+    use crate::screen::core::wire_control::ControlState;
+    use std::cell::RefCell;
+    use std::collections::VecDeque;
+
+    let state = |held: Option<InputHeld>, result: Option<InputResult>| {
+        StreamEvent::Host(HostFrame::ControlState(ControlState {
+            holder: None,
+            blocked: None,
+            held,
+            input: result.map(|result| InputReceipt { batch: 1, result }),
+        }))
+    };
+    let answer = |events: Vec<StreamEvent>| {
+        let events = RefCell::new(VecDeque::from(events));
+        let next = |_: Option<Duration>| -> Result<Option<StreamEvent>, String> {
+            Ok(events.borrow_mut().pop_front())
+        };
+        receipt_outcome(&next)
+    };
+    let sentence = "the device did not answer an input in time";
+    let refused = answer(vec![
+        state(Some(InputHeld::ReleasePending), None),
+        state(
+            None,
+            Some(InputResult::Refused {
+                reason: sentence.into(),
+            }),
+        ),
+    ])
+    .unwrap();
+    assert!(!refused.sent);
+    assert_eq!(refused.applied, Some(false));
+    assert_eq!(refused.refused.as_deref(), Some(sentence));
+    let value = outcome_value(&refused);
+    assert_eq!(outcome_line(&value), format!("refused\t{sentence}\n"));
+
+    let applied = answer(vec![state(None, Some(InputResult::Applied))]).unwrap();
+    assert!(applied.sent);
+    assert_eq!(outcome_line(&outcome_value(&applied)), "applied\n");
+
+    let stopped = answer(vec![state(
+        None,
+        Some(InputResult::Stopped {
+            untyped: 5,
+            exact: false,
+        }),
+    )])
+    .unwrap();
+    assert_eq!(stopped.stopped, Some((5, false)));
+    let value = outcome_value(&stopped);
+    assert_eq!(value["stopped"]["untyped"], 5);
+    assert!(outcome_line(&value).contains("bis zu 5 Zeichen wurden nicht getippt"));
+
+    // An older host: nothing within the wait, `sent` without confirmation.
+    let silent = |_: Option<Duration>| -> Result<Option<StreamEvent>, String> { Ok(None) };
+    let unconfirmed = unconfirmed_outcome(&silent, Duration::from_millis(1)).unwrap();
+    assert!(unconfirmed.sent);
+    let value = outcome_value(&unconfirmed);
+    assert!(value["applied"].is_null());
+    assert_eq!(outcome_line(&value), "sent\n");
 }

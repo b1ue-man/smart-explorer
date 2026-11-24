@@ -2,6 +2,7 @@
 //! session loop takes it from `settle_input` on every viewer frame and
 //! capture tick, applies it and starts the batches that waited, in order.
 use super::*;
+use crate::screen::core::input_receipt::InputResult;
 
 /// Events a waiting batch may absorb (round 8, I2; round 9, E6): pointer
 /// positions, wheel steps and touch moves.
@@ -127,6 +128,8 @@ impl Session<'_> {
     /// Takes the result of a finished injection and starts the batches that
     /// waited, in their order (on every viewer frame and capture tick).
     pub(in super::super) async fn settle_input(&mut self) -> io::Result<()> {
+        // Round 12 rest: batches a queueing sink's app finished.
+        self.poll_receipts().await?;
         loop {
             if let Some(job) = self.health.injecting.as_mut() {
                 use std::future::Future;
@@ -149,6 +152,7 @@ impl Session<'_> {
                 self.health.overflow = false;
                 return Ok(());
             };
+            self.receipts_next();
             self.start_batch(&next).await?;
         }
     }
@@ -169,6 +173,8 @@ impl Session<'_> {
     ) -> io::Result<()> {
         // Round 12 (S1): of a failed batch, the calls that went in whole.
         let went: Vec<InputEvent> = job.went().cloned().collect();
+        // Round 12 rest: its receipts (`host_input_receipts.rs`).
+        let numbers = self.receipts_ended();
         let super::super::input_release::Injection {
             events,
             reference,
@@ -211,10 +217,11 @@ impl Session<'_> {
                         holder: self.handle.controller(),
                         blocked: self.health.block_reported,
                         held: None,
+                        input: None,
                     };
                     self.frame(HostFrame::ControlState(state)).await?;
                 }
-                Ok(())
+                self.receipts_applied(numbers, events).await
             }
             Err(blocked) => {
                 for event in &went {
@@ -231,9 +238,14 @@ impl Session<'_> {
                     // Held back, not blocked (review O2a); its releases of
                     // held keys go in (E2: the viewer sends each once).
                     self.release_held_ups(events);
-                    return self.report_held(InputHeld::WaitingForPicture).await;
+                    let held = InputHeld::WaitingForPicture;
+                    self.receipts_settled(numbers.0, InputResult::Held { held })
+                        .await?;
+                    return self.report_held(held).await;
                 }
                 self.release_pressed();
+                self.receipts_settled(numbers.0, InputResult::Blocked { block: blocked })
+                    .await?;
                 self.report_block(blocked).await?;
                 if !presented
                     && sink

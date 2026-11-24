@@ -84,34 +84,10 @@ struct Start<'a> {
     hello: &'a ScreenClientHello,
 }
 
-impl Start<'_> {
-    fn hello_ok(
-        &self,
-        metadata: &HostMetadata,
-        authorization: ScreenAuthorization,
-        approval: ApprovalKind,
-        frame_contract: Option<FrameContract>,
-    ) -> ScreenHelloOk {
-        let mut ok = ScreenHelloOk {
-            authorization,
-            platform: metadata.platform,
-            encoders: Vec::new(),
-            encoders_v2: None,
-            input: metadata.input.clone(),
-            monitors: metadata.monitors.clone(),
-            limits: metadata.limits.clone(),
-            approval,
-            frame_contract,
-            icon_version: self.icon_version,
-            family_version: self.family_version,
-            virtual_display: None,
-            audio: None,
-        };
-        ok.offer_encoders(&metadata.encoders, self.hello);
-        ok.set_virtual_display(metadata.virtual_display.clone());
-        ok
-    }
+#[path = "host_server_hello.rs"]
+mod hello;
 
+impl Start<'_> {
     /// Registers under the current rights; `None` when they no longer allow
     /// the session.
     fn register(&self, new: NewSession) -> Option<SessionHandle> {

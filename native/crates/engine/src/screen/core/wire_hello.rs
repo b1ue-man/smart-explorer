@@ -369,6 +369,10 @@ pub struct ScreenHelloOk {
     /// (P9); absent from older hosts and from hosts that cannot capture it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audio: Option<super::audio_wire::AudioAccept>,
+    /// `input_receipts_v1` (`input_receipt.rs`): `Some(1)` when this host
+    /// answers every `INPUT` after the viewer's `INPUT_RECEIPTS`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_receipts: Option<u16>,
 }
 
 impl ScreenHelloOk {

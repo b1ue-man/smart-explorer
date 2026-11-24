@@ -137,13 +137,23 @@ impl DecodeState {
                         Ok(true) if self.decodes_layout(&frame) => {
                             self.shared.cancel_presentation();
                         }
+                        // Round 12 rest: the new layout's records that came
+                        // before its state waited (`screen_decode_layout.rs`)
+                        // and are decoded now, its key frame first; a key
+                        // frame is asked for only when none of them opened
+                        // the layout's group.
                         Ok(true) => {
                             self.shared.cancel_presentation();
-                            self.chain.continuity.broken();
-                            self.gop = None;
-                            self.request_keyframe(KeyframeReason::Reset, self.latest_gop);
+                            if !(self.release_layout() && self.decodes_layout(&frame)) {
+                                self.chain.continuity.broken();
+                                self.gop = None;
+                                self.request_keyframe(KeyframeReason::Reset, self.latest_gop);
+                            }
                         }
-                        Ok(false) => {}
+                        // The first state, or one without a new layout.
+                        Ok(false) => {
+                            self.release_layout();
+                        }
                     }
                 } else {
                     self.host(frame);
@@ -237,6 +247,8 @@ impl DecodeState {
         self.broken_frame = None;
         self.last_record = None;
         self.keyframes = KeyframeRequester::default();
+        // Records of the old session's layouts.
+        drop(self.layout_hold.take());
         self.shared.forget_first_stream();
         self.shared.cancel_presentation();
         // The new host session knows no visibility report and counts its

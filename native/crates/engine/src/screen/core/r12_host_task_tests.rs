@@ -100,7 +100,8 @@ fn r12_task_lossless_alone_keeps_the_running_encoder() {
 
 /// Round 12 (Codex 12/8): a family's new layout answers every key frame
 /// request for the groups before the one it opens, also one that arrives
-/// while that group is still being encoded.
+/// while that group is still being encoded; a group opened for the layout
+/// already takes the key frame inside it (round 12 rest).
 #[test]
 fn r12_task_new_layout_answers_the_request_for_the_group_before() {
     use super::super::mode::keyframe_request_stale;
@@ -111,11 +112,23 @@ fn r12_task_new_layout_answers_the_request_for_the_group_before() {
     let actor = include_str!("host_pipeline_actor_changes.rs").replace("\r\n", "\n");
     assert!(actor.contains("let newest = self.facts.gop.max(self.facts.answered_below);"));
     let rebind = actor
-        .split("pub fn rebind_reference(&mut self) {")
+        .split("pub fn rebind_reference(&mut self, layout: u64) {")
         .nth(1)
         .and_then(|rest| rest.split("\n    }\n").next())
         .expect("rebind_reference");
     assert!(rebind.contains("self.answer_requests_up_to(newest);"));
+    // Round 12 rest: a group that already carries the new layout takes its
+    // key frame inside it (no second group); any other opens a new one.
+    assert!(rebind.contains("self.pending.layout_keyframe = Some(layout);"));
+    assert!(!rebind.contains("self.pending.keyframe = true;"));
+    let keyframe = actor
+        .split("pub(super) fn layout_keyframe(")
+        .nth(1)
+        .and_then(|rest| rest.split("\n    }\n").next())
+        .expect("layout_keyframe");
+    assert!(keyframe.contains(".filter(|gop| gop.header().family_layout_revision == Some(layout))"));
+    assert!(keyframe.contains("p.pacer.request_keyframe();"));
+    assert!(keyframe.contains("None => p.request_keyframe(),"));
 }
 
 /// Round 12 (H5, Codex 12/5): a small frame whose excess finds the budget in
@@ -132,4 +145,36 @@ fn r12_task_small_frames_wait_for_the_budget() {
     let send = include_str!("host_session_send.rs").replace("\r\n", "\n");
     assert!(send.contains("|| !self.behind.is_empty()"));
     assert!(send.contains("const LANE_BURST_US: u64 = 1_000_000;"));
+}
+
+/// Round 12 rest (Codex 12/15): every batch of a viewer that asked for
+/// receipts gets one where it is settled: held back, blocked or refused
+/// while it is decided, at the end of its injection (or, on a sink that
+/// queues it, once the app finished it), and stopped when the control goes
+/// before its text was typed; a merged batch keeps its number in the
+/// backlog's order.
+#[test]
+fn r12_task_input_receipts_follow_every_batch() {
+    let control = include_str!("host_session_control.rs").replace("\r\n", "\n");
+    assert!(control.contains("self.count_input();\n                self.input(&events).await"));
+    assert!(control.contains("ViewerFrame::InputReceipts(on) => {"));
+    assert!(control.contains("self.receipts_merged();\n                return Ok(());"));
+    assert!(control.contains(
+        "self.health.backlog.push_back(events.to_vec());\n                self.receipts_waiting(true);"
+    ));
+    assert!(control.contains(
+        "self.health.backlog.push_back(releases);\n                self.receipts_waiting(false);"
+    ));
+    assert!(control.contains("self.receipts_injecting(sink.as_ref());"));
+    let report = include_str!("host_session_report.rs").replace("\r\n", "\n");
+    assert_eq!(report.matches("self.settle_deciding(").count(), 3);
+    let inject = include_str!("host_session_inject.rs").replace("\r\n", "\n");
+    assert!(inject.contains("self.poll_receipts().await?;"));
+    assert!(inject.contains("self.receipts_next();\n            self.start_batch(&next).await?;"));
+    assert!(inject.contains("self.receipts_applied(numbers, events).await"));
+    assert_eq!(inject.matches("self.receipts_settled(").count(), 2);
+    let release = include_str!("host_input_release.rs").replace("\r\n", "\n");
+    assert!(release.contains("self.finish_injection().await;"));
+    let receipts = include_str!("host_input_receipts.rs").replace("\r\n", "\n");
+    assert!(receipts.contains("code: INPUT_STOPPED.into(),"));
 }

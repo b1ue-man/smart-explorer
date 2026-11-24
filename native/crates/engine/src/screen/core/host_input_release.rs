@@ -9,6 +9,8 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 mod calls;
 #[path = "host_release_gate.rs"]
 pub(super) mod gate;
+#[path = "host_input_receipts.rs"]
+mod receipts;
 
 /// Runs one input injection on tokio's blocking pool and waits for it. A
 /// host process answers input only after a running picture request (the
@@ -75,6 +77,8 @@ pub(super) struct InputHealth {
     /// need not wait behind it (`hold_reason`), as the sink delivers its
     /// own debts before any later input.
     pub(super) nudging: bool,
+    /// Round 12 rest: input receipts (`host_input_receipts.rs`).
+    pub(super) receipts: receipts::Receipts,
 }
 
 /// One batch on its way to the platform (`Session::start_batch`), in calls
@@ -316,43 +320,6 @@ impl Session<'_> {
         self.finish_release().await;
         if self.input_release.is_none() && self.flush_releases_as(true) {
             self.finish_release().await;
-        }
-    }
-    /// Codex 7/10: before the control goes, the batch being injected ends
-    /// (at most `CLOSE_GRACE`); its keys count as held then, so the release
-    /// that follows lets go of them, and the batches waiting behind it are
-    /// dropped (their releases are part of that release).
-    async fn finish_injection(&mut self) {
-        self.health.backlog.clear();
-        let Some(mut job) = self.health.injecting.take() else {
-            return;
-        };
-        // Round 12 (S1): the rest of its calls does not go.
-        job.cancel.store(true, std::sync::atomic::Ordering::Release);
-        let applied = match tokio::time::timeout(CLOSE_GRACE, &mut job.handle).await {
-            Ok(result) => result.map(|result| result.is_ok()).unwrap_or(false),
-            Err(_) => {
-                super::visibility::note_viewer("an input injection outlasted the close grace");
-                // Round 8 (I8): it stays the session's, so no release runs
-                // beside it; `hand_releases_over` gives it to the keeper.
-                // Round 9 (E5): only its presses count as held; a release in
-                // it may not have gone, so what it releases stays held and is
-                // let go again (a second release is harmless).
-                for event in job.events.iter().filter(|event| !releases(event)) {
-                    self.pressed.observe(event);
-                }
-                self.health.injecting = Some(job);
-                return;
-            }
-        };
-        // A stopped or failed batch: the calls that went count (S1).
-        let went: Vec<&InputEvent> = if applied {
-            job.events.iter().collect()
-        } else {
-            job.went().collect()
-        };
-        for event in went {
-            self.pressed.observe(event);
         }
     }
     /// Z3/Z4: waits for the running release job, at most `CLOSE_GRACE`; a

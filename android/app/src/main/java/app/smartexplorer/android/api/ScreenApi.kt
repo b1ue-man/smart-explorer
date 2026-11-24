@@ -211,13 +211,16 @@ object ScreenApi {
     }
 
     /**
-     * Android did not perform an input of [session] ([kind]: `gesture` cancelled, `text` or `action` refused, or no
-     * answer in time: `timeout`); the viewer hears it as a notice.
+     * The app finished input batch [batch] of [session] (its `batch`; 0: an older core named none): performed, or
+     * not performed with [kind] (`gesture` cancelled, `text` or `action` refused, no answer in time: `timeout`,
+     * `button`, `secret`, `field`); a refusal reaches the viewer as a notice, the batch number the session's input
+     * receipts (round 12 rest).
      */
-    suspend fun inputRefused(session: Long, kind: String) {
+    suspend fun inputSettled(session: Long, batch: Long, kind: String?) {
         Core.call("screen.hostNotice", buildJsonObject {
             put("session", session)
-            put("inputRefused", kind)
+            if (batch > 0L) put("inputBatch", batch)
+            if (kind != null) put("inputRefused", kind)
         })
     }
 

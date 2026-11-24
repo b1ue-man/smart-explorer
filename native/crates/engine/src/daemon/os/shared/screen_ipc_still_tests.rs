@@ -54,6 +54,7 @@ impl StillSession for Script {
 fn hello(monitors: Vec<MonitorInfo>) -> ScreenHelloOk {
     ScreenHelloOk {
         family_version: None,
+        input_receipts: None,
         icon_version: None,
         encoders_v2: None,
         virtual_display: None,

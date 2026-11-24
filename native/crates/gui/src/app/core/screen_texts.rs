@@ -75,6 +75,12 @@ pub fn state_text(state: SessionState, reason: Option<&str>) -> String {
 
 /// The text of an error code of the host (`HELLO_ERROR`, `ERROR`).
 pub fn error_text(code: &str, detail: Option<&str>) -> String {
+    // The rest of a text was not typed (round 12 rest, `input_receipt.rs`).
+    if code == crate::screen::core::input_receipt::INPUT_STOPPED {
+        if let Some(text) = crate::screen::core::input_receipt::stopped_detail_text(detail) {
+            return text;
+        }
+    }
     let Some(known) = ScreenErrorCode::from_key(code) else {
         return format!("Fehler des Geräts: {code}");
     };

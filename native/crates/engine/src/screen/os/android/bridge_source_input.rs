@@ -121,10 +121,14 @@ impl BridgeInputSink {
         } else {
             super::super::bridge_channels::send_input(id, events)
         };
-        if queued {
-            Ok(())
-        } else {
-            Err(ControlBlock::ControlUnavailable)
+        match queued {
+            // The input path's batches carry the receipts (`input_mark`).
+            Some(batch) if controlling => {
+                self.channel.note_input_queued(batch);
+                Ok(())
+            }
+            Some(_) => Ok(()),
+            None => Err(ControlBlock::ControlUnavailable),
         }
     }
 }
@@ -166,5 +170,14 @@ impl ScreenInputSink for BridgeInputSink {
     /// A batch the app queued but did not perform (`inputRefused`).
     fn take_refusal(&self) -> Option<ControlBlock> {
         self.channel.take_input_refused()
+    }
+
+    /// The app performs the batches later (input receipts, round 12 rest).
+    fn input_mark(&self) -> Option<u64> {
+        Some(self.channel.input_queued())
+    }
+
+    fn input_outcome(&self, after: u64, mark: u64) -> Option<Option<String>> {
+        self.channel.input_outcome(after, mark)
     }
 }

@@ -113,7 +113,15 @@ impl Session<'_> {
                     Err(failure) => self.error(failure.code, failure.error.to_string()).await,
                 }
             }
-            ViewerFrame::Input(events) => self.input(&events).await,
+            ViewerFrame::Input(events) => {
+                self.count_input();
+                self.input(&events).await
+            }
+            // Receipts for every later `INPUT` (`host_input_receipts.rs`).
+            ViewerFrame::InputReceipts(on) => {
+                self.input_receipts(on);
+                Ok(())
+            }
             ViewerFrame::ControlRequest(request) => self.control(request.action).await,
             ViewerFrame::CursorOverlay(on) => self.cursor_overlay(on).await,
             // „Höchste Datenrate“ of the viewer (B-09, `rate_ceiling_v1`).
@@ -262,11 +270,13 @@ impl Session<'_> {
                 _ => false,
             };
             if merged {
+                self.receipts_merged();
                 return Ok(());
             }
             let waiting: usize = self.health.backlog.iter().map(Vec::len).sum();
             if !self.health.overflow && waiting + events.len() <= inject::BACKLOG_EVENTS {
                 self.health.backlog.push_back(events.to_vec());
+                self.receipts_waiting(true);
                 return Ok(());
             }
             // Round 9 (E6), round 10: beyond the bound only releases wait,
@@ -276,6 +286,7 @@ impl Session<'_> {
             let releases = self.overflow_releases(events);
             if !releases.is_empty() {
                 self.health.backlog.push_back(releases);
+                self.receipts_waiting(false);
             }
             return self.report_held(InputHeld::BacklogFull).await;
         }
@@ -332,6 +343,7 @@ impl Session<'_> {
             return self.report_held(InputHeld::ReleasePending).await;
         }
         // Round 12 (S1): in calls of a bounded text (`input_calls.rs`).
+        self.receipts_injecting(sink.as_ref());
         self.health.injecting = Some(super::input_release::Injection::start(
             events,
             (sink, self.context.backend.clone()),
@@ -364,6 +376,7 @@ impl Session<'_> {
                         holder: Some(holder),
                         blocked: None,
                         held: None,
+                        input: None,
                     };
                     self.frame(HostFrame::ControlState(state)).await?;
                     return self
@@ -377,6 +390,7 @@ impl Session<'_> {
             holder: self.handle.controller(),
             blocked: None,
             held: None,
+            input: None,
         };
         self.health.block_reported = None;
         self.health.held_reported = None;

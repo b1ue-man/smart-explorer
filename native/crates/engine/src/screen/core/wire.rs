@@ -96,6 +96,7 @@ pub fn tag_limit(tag: u8) -> usize {
         super::cursor_overlay::CURSOR_POSITION => 21,
         super::frame_timing::FRAME_TIMING => 256,
         super::audio_wire::AUDIO => 1,
+        super::input_receipt::INPUT_RECEIPTS => 1,
         super::audio_wire::AUDIO_REPORT => super::audio_wire::AUDIO_REPORT_BYTES,
         _ => MAX_CONTROL_BYTES,
     }

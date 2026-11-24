@@ -95,6 +95,12 @@ fn screen_task_viewer_state_texts_complete() {
         error_text("von_einem_neuen_geraet", None),
         "Fehler des Geräts: von_einem_neuen_geraet"
     );
+    // Round 12 rest: the untyped rest of a text after the control went.
+    assert_eq!(
+        error_text("input_stopped", Some("37")),
+        "Die Steuerung wurde abgegeben oder die Sitzung beendet, bevor der Text fertig getippt \
+         war: 37 Zeichen wurden nicht getippt."
+    );
 
     // Every reason a session ends has a text, whether the relay names it
     // by an `EndReason` or by the code of a refusal.

@@ -81,6 +81,8 @@ pub struct DecodeState {
     guard: crate::screen::core::decoder_health::DecoderGuard,
     /// Named codecs whose missing picture went to the viewer log once.
     reported: crate::screen::core::decoder_health::GivenUp,
+    /// Records of a family layout newer than its state (round 12 rest).
+    layout_hold: crate::screen::core::family_layout_hold::LayoutHold,
     // Declared last: decoder/pending pictures must die before the session lease.
     shared: Arc<Shared>,
     memory: crate::screen::core::frame_memory::MemoryHold,
@@ -92,6 +94,8 @@ mod continuation;
 mod events;
 #[path = "screen_decode_guard.rs"]
 mod guard;
+#[path = "screen_decode_layout.rs"]
+mod layout;
 
 impl DecodeState {
     pub fn new(
@@ -123,6 +127,7 @@ impl DecodeState {
             chain: Default::default(),
             guard: Default::default(),
             reported: Default::default(),
+            layout_hold: Default::default(),
         }
     }
 
@@ -214,6 +219,10 @@ impl DecodeState {
         if header.kind == crate::screen::core::wire_binary::StreamKind::Snapshot {
             return;
         }
+        // A newer layout's records wait for its state (`screen_decode_layout.rs`).
+        let Some(record) = self.layout_gate(header, record) else {
+            return;
+        };
         if !record.has_more() {
             // A picture is complete at the decode thread with its last record.
             self.flow(|flow| flow.received());
@@ -249,18 +258,6 @@ impl DecodeState {
             && header.codec != crate::screen::core::negotiate::CodecKind::Tiles
         {
             // Every record not decoded breaks the chain (B-36).
-            self.chain.continuity.broken();
-            self.left_out(&record, Dropped::NotDecoded);
-            return;
-        }
-        // Decided under the lock and released before counting: `left_out`
-        // takes the same lock (Codex 3/1: a deadlock of the decode thread).
-        let family_mismatch = self.shared.info().family.as_ref().is_some_and(|family| {
-            family.snapshot.as_ref().is_none_or(|snapshot| {
-                header.family_layout_revision != Some(snapshot.layout_revision)
-            })
-        });
-        if family_mismatch {
             self.chain.continuity.broken();
             self.left_out(&record, Dropped::NotDecoded);
             return;

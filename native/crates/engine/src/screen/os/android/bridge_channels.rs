@@ -120,6 +120,12 @@ struct Queues {
     /// The app did not perform an input batch (`inputRefused`); the session
     /// reports it as a block (`ScreenInputSink::take_refusal`).
     input_refused: Option<crate::screen::core::wire_control::ControlBlock>,
+    /// Input receipts (round 12 rest): the number of the last batch the
+    /// input path queued, the highest one the app reported finished, and
+    /// the refused ones with their sentence (at most `HARD_LIMIT`).
+    input_queued: u64,
+    input_done: u64,
+    input_refusals: BTreeMap<u64, String>,
 }
 
 /// One host session as the app sees it.
@@ -393,6 +399,14 @@ pub fn notice(id: u64, text: String, bitrate: bool) -> Result<(), String> {
         channel.note_bitrate_refused();
     }
     channel.push_notice(text);
+    Ok(())
+}
+
+/// `screen.hostNotice` with `inputBatch`: the app finished batch `batch` of
+/// session `id`, performed or refused with `refused` (input receipts).
+pub fn input_done(id: u64, batch: u64, refused: Option<String>) -> Result<(), String> {
+    let channel = channel(id).ok_or_else(|| format!("Keine Bildschirmsitzung {id}"))?;
+    channel.note_input_done(batch, refused);
     Ok(())
 }
 

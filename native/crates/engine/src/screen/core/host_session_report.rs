@@ -3,6 +3,7 @@
 //! platform reported after the batch was queued, and the refusal that may
 //! only name a reference the source just left (D2).
 use super::*;
+use crate::screen::core::input_receipt::InputResult;
 
 /// How long a block the platform reported after the batch stays shown (Z2):
 /// at least one look at the toolbar [assumption: 3 s, not measured].
@@ -15,6 +16,10 @@ impl Session<'_> {
         code: ScreenErrorCode,
         detail: String,
     ) -> io::Result<()> {
+        // Round 12 rest: a batch this refuses (no control, a family target,
+        // a changed picture area) is not applied.
+        let block = crate::screen::core::wire_control::ControlBlock::ControlUnavailable;
+        self.settle_deciding(InputResult::Blocked { block }).await?;
         let error = ScreenWireError::new(code, Some(detail));
         self.frame(HostFrame::Error(error)).await
     }
@@ -25,6 +30,8 @@ impl Session<'_> {
         &mut self,
         blocked: crate::screen::core::wire_control::ControlBlock,
     ) -> io::Result<()> {
+        self.settle_deciding(InputResult::Blocked { block: blocked })
+            .await?;
         self.health.block_reported = Some(blocked);
         self.health.block_shown_until = None;
         // This state names no hold: the next hold is reported again (N4).
@@ -33,6 +40,7 @@ impl Session<'_> {
             holder: self.handle.controller(),
             blocked: Some(blocked),
             held: None,
+            input: None,
         };
         self.frame(HostFrame::ControlState(state)).await
     }
@@ -108,11 +116,14 @@ impl Session<'_> {
             holder: self.handle.controller(),
             blocked: self.health.block_reported,
             held: None,
+            input: None,
         };
         self.frame(HostFrame::ControlState(state)).await
     }
 
     pub(super) async fn report_held(&mut self, held: InputHeld) -> io::Result<()> {
+        // Round 12 rest: the batch held back has its receipt in any case.
+        self.settle_deciding(InputResult::Held { held }).await?;
         // Round 11 (N2): a hold with another reason is reported anew.
         if self.health.held_reported == Some(held) || !self.handle.holds_control() {
             return Ok(());
@@ -122,6 +133,7 @@ impl Session<'_> {
             holder: self.handle.controller(),
             blocked: self.health.block_reported,
             held: Some(held),
+            input: None,
         };
         self.frame(HostFrame::ControlState(state)).await
     }

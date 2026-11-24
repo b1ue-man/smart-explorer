@@ -278,6 +278,50 @@ fn screen_task_android_input_needs_accessibility_and_stream() {
     );
 }
 
+/// Round 12 rest (Codex 12/15): every batch the app reads carries its
+/// number; the session's sink marks the input path's last batch and says
+/// what became of it only once the app reported it finished, performed or
+/// refused with its sentence.
+#[test]
+fn screen_task_android_input_receipt_waits_for_the_app() {
+    let _guard = fresh();
+    register_app("on");
+    let (prepared, admission) = prepare();
+    let id = channels::channels()[0].id;
+    ready(id, true);
+    let source = activate(prepared, &admission, CodecKind::Tiles);
+    let sink = source.input_sink().expect("an Android source has a sink");
+    let events = [InputEvent::Text {
+        text: "hallo".into(),
+    }];
+    assert_eq!(sink.input_mark(), Some(0));
+    assert_eq!(sink.inject(&events, 0, false), Ok(()));
+    let first = sink.input_mark().expect("a mark");
+    assert!(first > 0);
+    let read = drain(channels::INPUT_CHANNEL);
+    assert_eq!(read.len(), 1);
+    assert!(
+        read[0].contains(&format!("\"batch\":{first}")),
+        "{}",
+        read[0]
+    );
+    assert_eq!(sink.input_outcome(0, first), None);
+    channels::input_done(id, first, None).unwrap();
+    assert_eq!(sink.input_outcome(0, first), Some(None));
+    assert_eq!(sink.inject(&events, 0, false), Ok(()));
+    let second = sink.input_mark().expect("a mark");
+    assert!(second > first);
+    let sentence = "the focused field did not take the text (it is read-only or refuses text)";
+    channels::input_done(id, second, Some(sentence.into())).unwrap();
+    assert_eq!(
+        sink.input_outcome(first, second),
+        Some(Some(sentence.to_string()))
+    );
+    // A refusal is told once.
+    assert_eq!(sink.input_outcome(first, second), Some(None));
+    drop(source);
+}
+
 #[test]
 fn batches_capture_task_android_wide_native_still_scales_once_without_false_resize() {
     let _guard = fresh();

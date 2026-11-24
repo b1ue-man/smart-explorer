@@ -308,6 +308,10 @@ pub struct ControlState {
     /// `serde_json::from_slice`); absent while nothing is held.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub held: Option<InputHeld>,
+    /// What became of one `INPUT`, only for a viewer that asked for
+    /// receipts (`input_receipt.rs`); absent otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input: Option<super::input_receipt::InputReceipt>,
 }
 
 /// `ERROR` during a session. `code` is a `ScreenErrorCode` key or a code of
@@ -373,6 +377,10 @@ pub enum ViewerFrame {
     Audio(bool),
     /// `AUDIO_REPORT` (P9): the viewer's jitter buffer statistics.
     AudioReport(super::audio_wire::AudioReport),
+    /// `INPUT_RECEIPTS`: receipts for every later `INPUT` on or off; only
+    /// after the host announced `input_receipts` in `HELLO_OK`
+    /// (`input_receipt.rs`).
+    InputReceipts(bool),
 }
 
 /// Viewer to host: `u64` big-endian, the ceiling in bit/s, 0 automatic.

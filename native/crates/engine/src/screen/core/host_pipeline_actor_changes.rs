@@ -97,10 +97,14 @@ impl PipelineActor {
         self.pending.visible = Some(rects);
         self.poll();
     }
-    /// Codex 11/21: a family's new layout moves the input reference and
-    /// takes a key frame; the encoder stays (a new size or capture
+    /// Codex 11/21: a family's new layout `layout` moves the input reference
+    /// and takes a key frame; the encoder stays (a new size or capture
     /// generation of the source replaces it in `sync_source_reference`).
-    pub fn rebind_reference(&mut self) {
+    /// Round 12 rest: when the open group already carries `layout` (the
+    /// capture of the new layout opened it before the family state went
+    /// out), the key frame comes inside that group (`apply`): a new group
+    /// cost the viewer a second stream and decoder for one layout change.
+    pub fn rebind_reference(&mut self, layout: u64) {
         // Round 12 (Codex 12/8): the key frame of the new layout answers a
         // `KEYFRAME_REQUEST` for every group before it, also one that comes
         // before that group is opened (`request_keyframe`).
@@ -108,8 +112,28 @@ impl PipelineActor {
         self.answer_requests_up_to(newest);
         self.interrupt();
         self.pending.rebind = true;
-        self.pending.keyframe = true;
+        self.pending.layout_keyframe = Some(layout);
         self.poll();
+    }
+
+    /// The key frame of a family's new layout (`rebind_reference`), applied
+    /// with the pipeline at hand: inside the open group when that group
+    /// carries `layout`, which then answers requests naming it again (a key
+    /// frame inside it answers them, `request_keyframe` below); otherwise a
+    /// new group, as before.
+    pub(super) fn layout_keyframe(&mut self, p: &mut super::Pipeline, layout: u64) {
+        let open = p
+            .gop
+            .as_ref()
+            .filter(|gop| gop.header().family_layout_revision == Some(layout))
+            .map(|gop| gop.header().gop_id);
+        match open {
+            Some(open) => {
+                self.facts.answered_below = self.facts.answered_below.min(open);
+                p.pacer.request_keyframe();
+            }
+            None => p.request_keyframe(),
+        }
     }
 
     /// A new group with a key frame follows: requests naming `gop` or an

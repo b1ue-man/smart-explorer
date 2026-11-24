@@ -35,6 +35,9 @@ struct Pending {
     expect: Option<FrameSize>,
     /// A key frame inside the open group (`request_keyframe`).
     refresh: bool,
+    /// A family's new layout (`rebind_reference`): a key frame inside the
+    /// open group when it carries this layout, else in a new group.
+    layout_keyframe: Option<u64>,
     /// A changed visible area (`retarget_visible_rects`): a key frame only
     /// where the running reference lacks pixels (`visible_needs_keyframe`).
     visible_refresh: bool,
@@ -235,6 +238,9 @@ impl PipelineActor {
         }
         if std::mem::take(&mut self.pending.keyframe) {
             p.request_keyframe();
+        }
+        if let Some(layout) = self.pending.layout_keyframe.take() {
+            self.layout_keyframe(&mut p, layout);
         }
         // A stream the interrupted operation reset already is not reset
         // again (round 7 P5).
@@ -473,27 +479,3 @@ impl PipelineActor {
 mod changes;
 #[path = "host_pipeline_actor_wait.rs"]
 mod wait;
-fn dispose(pipeline: Pipeline) {
-    if let Ok(runtime) = tokio::runtime::Handle::try_current() {
-        let _ = runtime.spawn_blocking(move || drop(pipeline));
-    } else {
-        drop(pipeline);
-    }
-}
-impl Drop for PipelineActor {
-    fn drop(&mut self) {
-        self.work.interrupt();
-        if let Some(pipeline) = self.pipeline.take() {
-            dispose(pipeline);
-        }
-        if let Some(job) = self.job.take() {
-            if let Ok(runtime) = tokio::runtime::Handle::try_current() {
-                let _ = runtime.spawn(async move {
-                    if let Ok((pipeline, _)) = job.await {
-                        dispose(pipeline);
-                    }
-                });
-            }
-        }
-    }
-}

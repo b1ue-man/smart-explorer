@@ -29,6 +29,7 @@ fn run<F: std::future::Future>(future: F) -> F::Output {
 fn replies() -> Vec<HelloReply> {
     let accepted = ScreenHelloOk {
         family_version: None,
+        input_receipts: None,
         icon_version: None,
         encoders_v2: None,
         virtual_display: None,
@@ -189,6 +190,7 @@ fn host_frames() -> Vec<HostFrame> {
             }),
             blocked: Some(ControlBlock::ElevatedWindow),
             held: Some(InputHeld::WaitingForPicture),
+            input: None,
         }),
         HostFrame::Error(ScreenWireError::new(
             ScreenErrorCode::HostShutdown,
@@ -319,6 +321,7 @@ fn screen_task_wire_roundtrip_all_tags() {
             holder: None,
             blocked: None,
             held: None,
+            input: None,
         };
         assert_eq!(
             crate::screen::core::wire::to_json(&plain).unwrap(),

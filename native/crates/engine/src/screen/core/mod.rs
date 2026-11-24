@@ -116,6 +116,7 @@ pub mod visibility;
 // (input of SCR-M6 and the viewer of SCR-M7).
 #[allow(dead_code)]
 pub mod input_model;
+pub mod input_receipt;
 pub mod licenses;
 // Not yet used by SCR-M2: `LatencySamples::count`.
 #[allow(dead_code)]
@@ -165,6 +166,7 @@ pub mod worker_capture_wire;
 pub mod worker_limits;
 pub mod worker_wire;
 
+pub mod family_layout_hold;
 pub mod family_listing;
 pub mod family_protocol;
 pub mod family_viewer;

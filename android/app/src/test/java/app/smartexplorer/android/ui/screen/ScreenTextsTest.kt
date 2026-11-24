@@ -48,4 +48,20 @@ class ScreenTextsTest {
         assertEquals("Die Sitzung ist fehlgeschlagen", ScreenTexts.withDetail("Die Sitzung ist fehlgeschlagen", "  "))
         assertEquals("Die Sitzung ist fehlgeschlagen", ScreenTexts.withDetail("Die Sitzung ist fehlgeschlagen", null))
     }
+
+    /** Round 12 rest: the untyped rest of a text in the desktop's words (`input_receipt::stopped_text`). */
+    @Test
+    fun input_stopped_names_the_untyped_characters() {
+        assertEquals(
+            "Die Steuerung wurde abgegeben oder die Sitzung beendet, bevor der Text fertig getippt war: " +
+                "37 Zeichen wurden nicht getippt.",
+            ScreenTexts.stoppedText("37"),
+        )
+        assertEquals(
+            "Die Steuerung wurde abgegeben oder die Sitzung beendet, bevor der Text fertig getippt war: " +
+                "bis zu 5 Zeichen wurden nicht getippt.",
+            ScreenTexts.stoppedText("5+"),
+        )
+        assertEquals(null, ScreenTexts.stoppedText("x"))
+    }
 }

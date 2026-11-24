@@ -21,11 +21,15 @@ use crate::screen::core::input_model::{InputEvent, TouchPhase};
 /// behind. Below it every move keeps its place (drag paths stay exact).
 const MERGE_FROM: usize = 8;
 /// Batches the queue holds at most; a batch beyond is refused.
-const HARD_LIMIT: usize = 128;
+pub(super) const HARD_LIMIT: usize = 128;
 
 /// A batch and the host session (bridge channel) it belongs to; 0: a batch
 /// of the backend without a session (`BridgeBackend::inject`).
 struct Batch {
+    /// Its number (from 1, `NEXT_BATCH`): the app names it when it reports
+    /// the batch performed or refused (`screen.hostNotice {inputBatch}`,
+    /// input receipts, round 12 rest).
+    id: u64,
     session: u64,
     events: Vec<InputEvent>,
     /// The batch lets go of something (a key or button up, a touch that ends):
@@ -63,6 +67,12 @@ fn releases(events: &[InputEvent]) -> bool {
 }
 
 static INPUT: Mutex<VecDeque<Batch>> = Mutex::new(VecDeque::new());
+/// The number of the next queued batch.
+static NEXT_BATCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+fn next_batch() -> u64 {
+    NEXT_BATCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
 static READY: Condvar = Condvar::new();
 
 fn queue() -> MutexGuard<'static, VecDeque<Batch>> {
@@ -113,9 +123,10 @@ fn merge(tail: &mut Vec<InputEvent>, batch: &[InputEvent]) -> bool {
 }
 
 /// Queues the input of the controlling viewer of host session `session`
-/// without waiting; `false` when the queue holds `HARD_LIMIT` batches and
-/// `events` merges with none.
-pub fn send_input(session: u64, events: &[InputEvent]) -> bool {
+/// without waiting: the number of the batch that carries it (a merged batch
+/// keeps the number of the one it joined); `None` when the queue holds
+/// `HARD_LIMIT` batches and `events` merges with none.
+pub fn send_input(session: u64, events: &[InputEvent]) -> Option<u64> {
     push(queue(), session, events)
 }
 
@@ -127,7 +138,7 @@ pub fn send_input(session: u64, events: &[InputEvent]) -> bool {
 /// so it is dropped instead of performed for the new holder (review
 /// 2026-11-19, Codex 3/3); a batch that releases something stays for
 /// clean-up only (`perform: false`).
-pub fn send_controlling_input(session: u64, events: &[InputEvent]) -> bool {
+pub fn send_controlling_input(session: u64, events: &[InputEvent]) -> Option<u64> {
     let mut queue = queue();
     queue.retain_mut(|batch| {
         batch.session == session || batch.session == 0 || keep_for_cleanup(batch)
@@ -154,6 +165,7 @@ pub fn send_release(session: u64, events: &[InputEvent]) -> bool {
         return false;
     }
     queue.push_back(Batch {
+        id: next_batch(),
         session,
         events: events.to_vec(),
         release: true,
@@ -167,7 +179,7 @@ fn push(
     mut queue: MutexGuard<'static, VecDeque<Batch>>,
     session: u64,
     events: &[InputEvent],
-) -> bool {
+) -> Option<u64> {
     if queue.len() >= MERGE_FROM {
         if let Some(tail) = queue
             .back_mut()
@@ -175,27 +187,30 @@ fn push(
         {
             if merge(&mut tail.events, events) {
                 READY.notify_all();
-                return true;
+                return Some(tail.id);
             }
         }
     }
     if queue.len() >= HARD_LIMIT {
-        return false;
+        return None;
     }
+    let id = next_batch();
     queue.push_back(Batch {
+        id,
         session,
         events: events.to_vec(),
         release: releases(events),
         perform: true,
     });
     READY.notify_all();
-    true
+    Some(id)
 }
 
-/// The next batch as the app reads it (`{"op":"input","session":…,
-/// "perform":…,"events":[…]}`; the app performs it only while that session
-/// exists and `perform` holds, and feeds every batch to that session's own
-/// gesture state), waiting at most `timeout`.
+/// The next batch as the app reads it (`{"op":"input","batch":…,
+/// "session":…,"perform":…,"events":[…]}`; the app performs it only while
+/// that session exists and `perform` holds, feeds every batch to that
+/// session's own gesture state and reports a performed batch's number),
+/// waiting at most `timeout`.
 pub(super) fn take(timeout: Duration) -> Option<String> {
     let queue = queue();
     let (mut queue, _) = READY
@@ -204,6 +219,7 @@ pub(super) fn take(timeout: Duration) -> Option<String> {
     queue.pop_front().map(|batch| {
         json!({
             "op": "input",
+            "batch": batch.id,
             "session": batch.session,
             "perform": batch.perform,
             "events": batch.events,

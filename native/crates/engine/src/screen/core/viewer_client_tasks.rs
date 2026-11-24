@@ -81,6 +81,9 @@ pub(super) fn spawn(start: Start, accepted: &ScreenHelloOk) -> Running {
     let frame_timing_supported = frame_timing.clone();
     // P9: `SET_DISPLAY` only to a host that answered `live` (`set_display.rs`).
     let set_display = super::super::set_display::negotiated(Some(accepted));
+    // Round 12 rest: `INPUT_RECEIPTS` only to a host that announced them.
+    let input_receipts =
+        accepted.input_receipts == Some(super::super::input_receipt::INPUT_RECEIPTS_V1);
     let writer = tokio::spawn(async move {
         while let Some(frame) = outgoing.recv().await {
             if let ViewerFrame::Visibility(report) = &frame {
@@ -104,6 +107,9 @@ pub(super) fn spawn(start: Start, accepted: &ScreenHelloOk) -> Running {
                 continue;
             }
             if matches!(frame, ViewerFrame::SetDisplay(_)) && !set_display {
+                continue;
+            }
+            if matches!(frame, ViewerFrame::InputReceipts(_)) && !input_receipts {
                 continue;
             }
             if matches!(frame, ViewerFrame::FrameTiming(_))

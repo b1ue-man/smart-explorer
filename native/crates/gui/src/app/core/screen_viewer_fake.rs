@@ -57,6 +57,7 @@ pub(super) struct Inner {
 pub(super) fn hello(view: CapabilityDecision) -> ScreenHelloOk {
     ScreenHelloOk {
         family_version: None,
+        input_receipts: None,
         icon_version: None,
         encoders_v2: None,
         virtual_display: None,

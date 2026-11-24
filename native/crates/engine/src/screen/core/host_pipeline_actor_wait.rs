@@ -213,3 +213,30 @@ impl PipelineActor {
 #[cfg(test)]
 #[path = "bildkette_chain_credit_task_tests.rs"]
 mod credit_tests;
+
+/// The pipeline ends off the session's runtime thread, also the one a
+/// running picture operation still holds (the actor's drop).
+fn dispose(pipeline: Pipeline) {
+    if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+        let _ = runtime.spawn_blocking(move || drop(pipeline));
+    } else {
+        drop(pipeline);
+    }
+}
+impl Drop for PipelineActor {
+    fn drop(&mut self) {
+        self.work.interrupt();
+        if let Some(pipeline) = self.pipeline.take() {
+            dispose(pipeline);
+        }
+        if let Some(job) = self.job.take() {
+            if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+                let _ = runtime.spawn(async move {
+                    if let Ok((pipeline, _)) = job.await {
+                        dispose(pipeline);
+                    }
+                });
+            }
+        }
+    }
+}
