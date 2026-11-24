@@ -386,7 +386,14 @@ pub(super) async fn relay_session(
             return;
         }
         let chosen = rebuild::request(&modes, &request, ceiling(&modes, max_rate_bps));
-        let fallback = rebuild::without_source(&chosen);
+        // A viewer that never sent SET_MODE (CLI, MCP) cannot re-ask for its
+        // source after a fallback: its input and stills would go to the
+        // host's source unseen. It keeps its source; a source gone ends the
+        // view with the host's reason (Codex 13/1).
+        let fallback = modes
+            .chose_mode()
+            .then(|| rebuild::without_source(&chosen))
+            .flatten();
         let fell_back = Arc::new(AtomicBool::new(false));
         let dialer = LinkDialer {
             service: redial.service.clone(),
