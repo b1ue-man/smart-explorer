@@ -175,6 +175,11 @@ kotlin {
     }
 }
 
+// The Android jars of the Robolectric tests (see `copyRobolectricSdks` below).
+val robolectricSdks by configurations.creating {
+    isTransitive = false
+}
+
 dependencies {
     implementation(platform(libs.compose.bom))
     androidTestImplementation(platform(libs.compose.bom))
@@ -200,6 +205,12 @@ dependencies {
     testImplementation(libs.junit4)
     // DRV-M8: the documents provider and its commit worker on the JVM (android-build stage).
     testImplementation("org.robolectric:robolectric:4.14.1")
+    // The Android jars Robolectric 4.14.1 runs the tests on (API 34 and 35, `DefaultSdkProvider`,
+    // preinstrumented version 7), resolved by Gradle through the repositories of settings.gradle.kts
+    // (with the Google mirror of Maven Central) instead of Robolectric's own download from
+    // repo1.maven.org at test time, which failed on the CI runner (MavenArtifactFetcher IOException).
+    robolectricSdks("org.robolectric:android-all-instrumented:14-robolectric-10818077-i7")
+    robolectricSdks("org.robolectric:android-all-instrumented:15-robolectric-12650502-i7")
     testImplementation(libs.androidx.test.core)
     testImplementation(libs.androidx.work.testing)
 
@@ -212,4 +223,18 @@ dependencies {
     androidTestImplementation(libs.androidx.test.uiautomator)
     androidTestImplementation(libs.androidx.work.testing)
     androidTestImplementation(libs.compose.ui.test.junit4)
+}
+
+// Robolectric offline (robolectric.org/configuring: `robolectric.offline`, `robolectric.dependency.dir`):
+// its local resolver looks for `<artifactId>-<version>.jar` in that folder, the names Gradle copies.
+val copyRobolectricSdks by tasks.registering(Sync::class) {
+    from(robolectricSdks)
+    into(layout.buildDirectory.dir("robolectric-sdks"))
+}
+
+tasks.withType<Test>().configureEach {
+    dependsOn(copyRobolectricSdks)
+    val sdkDir = layout.buildDirectory.dir("robolectric-sdks")
+    systemProperty("robolectric.offline", "true")
+    systemProperty("robolectric.dependency.dir", sdkDir.get().asFile.absolutePath)
 }
