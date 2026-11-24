@@ -18,6 +18,7 @@ import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.window.DialogWindowProvider
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -31,11 +32,17 @@ import kotlin.math.floor
 
 data class ScreenVisibleRect(val x: Int, val y: Int, val width: Int, val height: Int)
 data class ScreenVisibilityReport(val geometryGeneration: Long, val state: String,
-    val minimized: Boolean, val rects: List<ScreenVisibleRect>) {
+    val minimized: Boolean, val rects: List<ScreenVisibleRect>, val picture: IntSize? = null) {
     fun asJson(): JsonObject = buildJsonObject {
         put("geometry_generation", geometryGeneration)
         put("state", state)
         put("minimized", minimized)
+        picture?.let { size ->
+            put("picture", buildJsonObject {
+                put("width", size.width)
+                put("height", size.height)
+            })
+        }
         put("rects", buildJsonArray { rects.forEach { r -> add(buildJsonObject {
             put("x",r.x); put("y",r.y); put("width",r.width); put("height",r.height)
         }) } })
@@ -43,6 +50,23 @@ data class ScreenVisibilityReport(val geometryGeneration: Long, val state: Strin
 }
 internal data class ScreenVisibilityFacts(val visible: Boolean, val viewport: Rect,
     val clipped: Rect, val content: Rect, val sourceWidth: Int, val sourceHeight: Int, val sourceKey: String? = null) {
+    /**
+     * The report of these facts as generation [generation]. It names the picture size the rectangles are measured in
+     * (`picture`, as the desktop does): the host scales them to the size of its encoder, so after a size change or with a
+     * scaled preview bitmap they still cover the shown part (Codex 12/12; before, they were taken as encoder pixels).
+     */
+    fun report(generation: Long): ScreenVisibilityReport {
+        val picture = if (sourceWidth > 0 && sourceHeight > 0) IntSize(sourceWidth, sourceHeight) else null
+        val rects = rects()
+        val state = when {
+            !visible -> "hidden"
+            picture == null -> "unknown"
+            rects.isEmpty() -> "hidden"
+            else -> "visible"
+        }
+        return ScreenVisibilityReport(generation, state, false, rects, picture)
+    }
+
     fun rects(): List<ScreenVisibleRect> {
         val r = clipped.intersect(content)
         if (!visible || r.width <= 0 || r.height <= 0 || content.width <= 0 || content.height <= 0 || sourceWidth <= 0 || sourceHeight <= 0) return emptyList()

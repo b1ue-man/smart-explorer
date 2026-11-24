@@ -3,6 +3,8 @@ package app.smartexplorer.android.ui.screen
 import android.content.Context
 import app.smartexplorer.android.api.DecoderOffer
 import java.math.BigDecimal
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 
 /**
  * What this viewer chooses for the picture chain (plan 2026-11-14 `bildkette.md` 4.10, package BK7b): the codec
@@ -127,7 +129,15 @@ object ScreenViewPrefs {
         ViewerCodecChoice()
     }
 
+    /** The stored choice as it changes ([save]); tiles that keep running follow it (round 12, B2 / Codex 12/9). */
+    @Volatile private var observed: MutableStateFlow<ViewerCodecChoice>? = null
+
+    fun observe(context: Context): StateFlow<ViewerCodecChoice> = synchronized(this) {
+        observed ?: MutableStateFlow(load(context)).also { observed = it }
+    }
+
     fun save(context: Context, choice: ViewerCodecChoice) {
+        synchronized(this) { observed?.value = choice }
         try {
             context.applicationContext.getSharedPreferences(FILE, Context.MODE_PRIVATE).edit().apply {
                 putString(KEY_CODEC, choice.codec)

@@ -89,6 +89,14 @@ impl LatencyWindow {
         self.put_at = Some(Instant::now());
     }
 
+    /// A preview's picture that waited for the end of its gap was replaced
+    /// by a newer one (`Shared::take_due_picture`): left out by the gap.
+    pub fn on_gap_replaced(&mut self) {
+        self.dropped += 1;
+        self.flow.dropped(flow::Dropped::Gap);
+        self.put_at = Some(Instant::now());
+    }
+
     /// The drawing thread drew the shown picture again: no new one came.
     pub fn on_repeated(&mut self) {
         self.repeated += 1;

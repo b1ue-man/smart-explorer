@@ -87,7 +87,11 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.filterIsInstance
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.delay
 
 /** Zero-width characters in front of the keyboard field, so deleting works on an empty field. */
@@ -105,6 +109,9 @@ internal const val DECODER_ENDED = "Dekodierer beendet"
 
 /** Restarts of a dead decoding thread per view; after them its cause stays shown. */
 internal const val MAX_DECODER_RESTARTS = 3
+
+/** How long a replaced controlling session waits for the host to confirm that it let go (one round trip, with margin). */
+private const val CONTROL_RELEASE_WAIT_MS = 2_000L
 
 private const val WHOLE_SCREEN_UNNAMED = "„Ganzer Bildschirm“ nicht möglich: Der Gastgeber nennt keinen Bildschirm. Die bisherige Quelle bleibt."
 
@@ -164,14 +171,35 @@ fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, a
     val metrics = context.resources.displayMetrics
     val maxFps = ceil(runCatching { context.display?.refreshRate }.getOrNull() ?: 60f).toInt().coerceAtLeast(1)
 
-    suspend fun openOwn(newMode: String) {
+    // One opening at a time (Codex 12/4): a second one waits until the first is in place, so „Steuern“ switched off
+    // during an opening and a replacement of a controlling session see the session they act on.
+    val openLock = remember { Mutex() }
+    suspend fun openOwn(newMode: String, unlessRunning: Boolean = false) = openLock.withLock {
+        // „Steuern“ switched on twice during one opening: the control session that opened meanwhile serves the second.
+        if (unlessRunning && mode == newMode && current?.state?.value?.let { it.ended == null } == true) return@withLock
+        // The host gives control to one session: a replacement that is to control as well lets the one before go
+        // first and waits for the host's answer (its `CONTROL_STATE` no longer names this viewer), else the host
+        // answered the own replacement with `control_busy` (Codex 12/4). Without an answer within
+        // [CONTROL_RELEASE_WAIT_MS] the replacement opens anyway; the host then names the busy control visibly.
+        val before = current
+        val released = newMode == "control" && before != null && before !== adopted &&
+            before.state.value.holder == "viewer" && before.state.value.ended == null
+        if (released) {
+            before?.call { control(it, "release") }
+            withTimeoutOrNull(CONTROL_RELEASE_WAIT_MS) { before?.state?.first { it.holder != "viewer" || it.ended != null } }
+        }
         val opened = ScreenSession(target, backend)
         try {
             opened.open(newMode, settings.source, viewerExtent[0].takeIf { it > 0 } ?: metrics.widthPixels, viewerExtent[1].takeIf { it > 0 } ?: metrics.heightPixels, maxFps, backend.offers(settings.choice), settings.choice)
         } catch (e: CoreException) {
             failure = e.message
-            return
+            // The session before keeps running: it takes control again.
+            if (released && controlOn) before?.call { control(it, "take") }
+            return@withLock
         }
+        // „Steuern“ was switched off while the control session opened: the host gave it control at the opening, so it
+        // lets go at once instead of keeping the device for a second viewer (Codex 12/4).
+        if (newMode == "control" && !controlOn) opened.call { control(it, "release") }
         val previous = current
         owned.add(opened)
         current = opened
@@ -228,7 +256,14 @@ fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, a
     // Input goes out only in a session of mode control, which the device lets control, while nobody else holds it.
     val sending = !familyMenuOpen && controlOn && ui.canControl && mode == "control" && ui.holder != "other" && ui.inputReady && renderReady
     val sendingNow by rememberUpdatedState(sending)
-    fun releaseInputs() = sessionNow?.sendInput(mapperNow.releaseAll())
+    // Text the screen keyboard field shows but the host never got starts the field over (round 12, B1).
+    var keyboardResets by remember { mutableIntStateOf(0) }
+    fun releaseInputs() {
+        val drops = mapperNow.textDrops
+        val released = mapperNow.releaseAll()
+        sessionNow?.sendInput(released)
+        if (mapperNow.textDrops != drops) keyboardResets++
+    }
     LaunchedEffect(Unit) {
         for (signal in flush) {
             withFrameNanos { }
@@ -658,7 +693,7 @@ fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, a
                         zoomMode = zoomMode,
                         onControl = { on ->
                             controlOn = on
-                            if (on && mode != "control") scope.launch { openOwn("control") }
+                            if (on && mode != "control") scope.launch { openOwn("control", unlessRunning = true) }
                             if (!on) session?.call { control(it, "release") }
                         },
                         onSource = { applySettings(settings.copy(source = it)) },
@@ -700,7 +735,7 @@ fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, a
             }
             // The field stays while the keyboard is on; short input pauses
             // (new picture, visibility) must not close and reopen the IME.
-            if (keyboardOn && controlOn && mode == "control") ScreenKeyboardField(mapper, flush) { sendingNow }
+            if (keyboardOn && controlOn && mode == "control") ScreenKeyboardField(mapper, flush, keyboardResets) { sendingNow }
         }
     }
     autoLogin?.let { paired ->
@@ -735,12 +770,15 @@ private fun surfaceView(context: android.content.Context, onSurface: (Surface?) 
  * lets deleting work on an empty field.
  */
 @Composable
-private fun ScreenKeyboardField(mapper: ScreenInputMapper, flush: Channel<Unit>, sending: () -> Boolean) {
+private fun ScreenKeyboardField(mapper: ScreenInputMapper, flush: Channel<Unit>, resets: Int, sending: () -> Boolean) {
     val pad = "\u200B".repeat(FIELD_PAD)
     // The cursor starts and stays behind the padding: a field from a plain
     // String puts it at index 0, so every typed character landed in front of
     // the padding and was never sent (2026-10-27: phone typing never arrived).
     var field by remember { mutableStateOf(TextFieldValue(pad, TextRange(pad.length))) }
+    // Typed text the host did not get was dropped (`ScreenInputMapper.textDrops`): the field holds only what went out,
+    // so a later backspace deletes on the host what the user sees deleted here (round 12, B1).
+    LaunchedEffect(resets) { if (resets > 0) field = TextFieldValue(pad, TextRange(pad.length)) }
     val focus = remember { FocusRequester() }
     val keyboard = LocalSoftwareKeyboardController.current
     LaunchedEffect(Unit) {
@@ -753,14 +791,17 @@ private fun ScreenKeyboardField(mapper: ScreenInputMapper, flush: Channel<Unit>,
         onValueChange = { next ->
             val (removed, inserted) = keyboardEdit(field.text, next.text)
             // The field stays through short input pauses, but what is typed while the view blocks input (no
-            // control, no picture shown yet, a local menu open) goes nowhere (Codex 11/8).
-            if (sending()) {
+            // control, no picture shown yet, a local menu open) goes nowhere (Codex 11/8), and the field does not keep
+            // it either: it starts again from its padding, so the next edit is measured against what the host has
+            // (round 12, B1: a backspace deleted a character on the host the user never typed there).
+            val sent = sending()
+            if (sent) {
                 repeat(removed) { mapper.tapKey("backspace") }
                 if (inserted.isNotEmpty()) mapper.onText(inserted)
                 if (removed > 0 || inserted.isNotEmpty()) flush.trySend(Unit)
             }
             val length = next.text.length
-            field = if (next.composition == null && (length < FIELD_PAD / 2 || length > FIELD_PAD * 8)) {
+            field = if (!sent || next.composition == null && (length < FIELD_PAD / 2 || length > FIELD_PAD * 8)) {
                 TextFieldValue(pad, TextRange(pad.length))
             } else {
                 next

@@ -14,7 +14,8 @@
 //! of its current reference). JSON `{"sent","blocked","held","refused"}`: `sent` says
 //! the input left this device and the device neither blocked nor held it
 //! back; the host does not confirm that it applied it, so it is no delivery
-//! receipt. `blocked` is `elevated_window`, `secure_desktop`,
+//! receipt (the answer is waited for 1.5 s, on an Android host 3.8 s: it
+//! answers a refused input after its strokes). `blocked` is `elevated_window`, `secure_desktop`,
 //! `control_unavailable` or `unsupported_on_host`; `held` says the host held
 //! the input back without applying it (`viewer_hidden`,
 //! `waiting_for_picture`, `release_pending`, `backlog_full`, `other`), or that no complete
@@ -39,7 +40,7 @@ use crate::screen::core::pixel_convert::FrameSize;
 use crate::screen::core::session_state::SessionState;
 use crate::screen::core::window_list::SourceId;
 use crate::screen::core::wire_control::{ControlBlock, HostFrame, InputHeld, ViewerFrame};
-use crate::screen::core::wire_hello::SessionMode;
+use crate::screen::core::wire_hello::{HostPlatform, SessionMode};
 use crate::share::access_grant::Capability;
 use crate::share::PeerOpenTarget;
 
@@ -47,6 +48,24 @@ use crate::share::PeerOpenTarget;
 const ANSWER_WAIT: Duration = Duration::from_secs(5);
 /// How long a blocked input may take to come back.
 const BLOCK_WAIT: Duration = Duration::from_millis(1500);
+/// What an Android host may take on top of that before it says that it did
+/// not perform an input (round 12, S9 / Codex 12/15): once the wait for its
+/// accessibility service (`AccessLink.INPUT_CONNECT_WAIT_MS`, 1 s; the host
+/// leaves the rest of the batch after it) and per stroke its duration plus
+/// the grace for Android's answer (`ScreenHostControl.STROKE_GRACE_MS`,
+/// 500 ms); the largest input of this command, a scroll, makes two strokes of
+/// 150 ms (`GestureMapper`). Before, a refusal after 1.5 s was reported as
+/// `sent`.
+const ANDROID_ANSWER: Duration = Duration::from_millis(1000 + 2 * (150 + 500));
+
+/// How long the answer to a sent input is waited for on a host of
+/// `platform`.
+fn answer_wait(platform: HostPlatform) -> Duration {
+    match platform {
+        HostPlatform::Android => BLOCK_WAIT + ANDROID_ANSWER,
+        _ => BLOCK_WAIT,
+    }
+}
 
 #[derive(Args, Debug, PartialEq, Eq)]
 pub(crate) struct InputArgs {
@@ -87,7 +106,7 @@ pub(crate) use action::{action_of, events, InputAction};
 use action::{hello_size, needs_size};
 
 /// What became of the input: `sent` when it left this device and the
-/// device neither blocked nor held it back within `BLOCK_WAIT`. The host
+/// device neither blocked nor held it back within `answer_wait`. The host
 /// sends no receipt for applied input, so this is never a delivery
 /// confirmation. `held`: the host dropped the batch without applying it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -189,6 +208,7 @@ pub(crate) fn deliver(
             });
         }
         let mut size = hello_size(&hello, &source);
+        let answer = answer_wait(hello.platform);
         // The host drops input silently until the viewer acknowledged a
         // picture of its current reference (`host_session_control.rs`,
         // `input`); the worker acknowledges every picture it receives, so
@@ -273,12 +293,9 @@ pub(crate) fn deliver(
         control
             .send(&ViewerFrame::Input(batch))
             .map_err(|error| error.to_string())?;
-        let deadline = Instant::now() + BLOCK_WAIT;
+        let deadline = Instant::now() + answer;
         while Instant::now() < deadline {
             match next(Some(deadline - Instant::now()))? {
-                // Rebuilt while the input went out: the relay drops control
-                // frames during the rebuild, so whether it was applied is
-                // unknown; it is not sent twice (a second click).
                 // The device answered that it did not perform the input (an
                 // Android host's notice, no block: round 11, M3).
                 Some(StreamEvent::Host(HostFrame::State(report))) => {
@@ -295,6 +312,9 @@ pub(crate) fn deliver(
                         });
                     }
                 }
+                // Rebuilt while the input went out: the relay drops control
+                // frames during the rebuild, so whether it was applied is
+                // unknown; it is not sent twice (a second click).
                 Some(StreamEvent::Accepted { .. }) => {
                     return Err(
                         "the device rebuilt the screen session while the input went out; \

@@ -12,7 +12,19 @@ use eframe::egui;
 /// area: a visibility report (1:1) and maybe a new size, so a new encoder.
 pub(super) fn toolbar(ctx: &egui::Context, fullscreen: bool, add: impl FnOnce(&mut egui::Ui)) {
     if !fullscreen {
-        egui::TopBottomPanel::top("screen_toolbar").show(ctx, add);
+        // The panel clips to the height of the pass before (egui 0.29.1
+        // `TopBottomPanel::show_inside_dyn`): a row that a host answer
+        // („Steuern“) or a narrower window adds lay outside it for one pass.
+        // A changed height discards that pass and lays it out again
+        // (Codex 12/16).
+        let shown = egui::TopBottomPanel::top("screen_toolbar").show(ctx, add);
+        let id = egui::Id::new("screen_toolbar_height");
+        let height = shown.response.rect.height();
+        let before = ctx.data_mut(|data| data.get_temp::<f32>(id));
+        ctx.data_mut(|data| data.insert_temp(id, height));
+        if before.is_some_and(|before| (before - height).abs() > 0.5) {
+            ctx.request_discard("screen toolbar changed its height");
+        }
         return;
     }
     let width = ctx.screen_rect().width();

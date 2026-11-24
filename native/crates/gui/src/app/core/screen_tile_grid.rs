@@ -264,7 +264,13 @@ impl ScreenTileGrid {
         let Some(session) = tile.session.as_ref() else {
             return;
         };
-        if let Some(picture) = session.take_picture() {
+        // Under the preview's gap a picture waits for its end (Codex 12/13);
+        // the paint then comes by itself, also with no further picture.
+        let due = session.take_due_picture().unwrap_or_else(|wait| {
+            ctx.request_repaint_after(wait);
+            None
+        });
+        if let Some(picture) = due {
             if let Some(size) = accept_preview_picture(session, &mut tile.texture, ctx, picture) {
                 tile.picture = Some(size);
                 tile.wait_frame = false;

@@ -56,9 +56,10 @@ pub fn preview_fps(interval_ms: u64) -> u16 {
 }
 
 /// Shortest time between two shown previews. An interval longer than a
-/// second cannot be asked of the host, so the viewer shows every n-th
-/// picture itself (each one is still decoded: tile frames build on each
-/// other).
+/// second cannot be asked of the host, so the viewer shows the newest
+/// picture once the interval has passed (each one is still decoded: tile
+/// frames build on each other); one that came within it waits for that
+/// moment instead of being left out (`Shared::take_due_picture`, Codex 12/13).
 pub fn preview_gap_ms(interval_ms: u64) -> u64 {
     if interval_ms > 1000 {
         interval_ms
@@ -238,9 +239,12 @@ pub fn preview_set_mode(edge: u32, interval_ms: u64) -> SetMode {
         source: None,
         size: Some(FrameSize::new(edge, edge)),
         fps: Some(preview_fps(interval_ms)),
-        sharpness: false,
-        // „Codec: Verlustfrei“ stays in the preview too (fix 2026-11-19):
-        // before, a view lowered to its tile left it for lossy tiles.
+        // „Scharf (GPU)“ and „Codec: Verlustfrei“ stay in the preview too
+        // (fix 2026-11-19; round 12, B3): the host opened the preview with
+        // the choice (`set_codec_preference`), so a `SET_MODE` without it
+        // replaced the encoder right after the opening and left the choice;
+        // before, a view lowered to its tile left it as well.
+        sharpness: super::screen_prefs::codec_setting().sharpness(),
         lossless: super::screen_prefs::codec_setting().lossless(),
     }
 }

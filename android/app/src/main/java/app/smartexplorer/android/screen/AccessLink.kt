@@ -33,6 +33,15 @@ internal object AccessLink {
      */
     private const val CONNECT_WAIT_MS = 20_000L
 
+    /**
+     * How long a viewer's input waits for the binding to connect (round 12, S9 / Codex 12/15): the binding to the running
+     * `:access` connects within a main-thread turn, so a longer wait means `:access` is starting anew. The input is then
+     * refused with „did not answer in time“ instead of being performed seconds later, and the refusal reaches the viewer
+     * while it still waits for it (`se screen input` waits this long plus the strokes, `cli/screen/input.rs`
+     * `ANDROID_ANSWER`).
+     */
+    const val INPUT_CONNECT_WAIT_MS = 1_000L
+
     private val lock = java.lang.Object()
     private var holders = 0
     private var bound = false
@@ -94,9 +103,17 @@ internal object AccessLink {
         List(count) { (reply.readString() ?: "") to (reply.readString() ?: "") }.filter { it.first.isNotEmpty() }
     } ?: emptyList()
 
-    /** Runs [action] in the service; [done] gets whether Android carried it out (`false` without the service). */
-    /** [refusal] hears the kind of a refusal that has its own reason (`secret`: a field whose content is hidden). */
+    /**
+     * Runs [action] in the service; [done] gets whether Android carried it out (`false` without the service).
+     * [refusal] hears the kind of a refusal that has its own reason (`secret`: a field whose content is hidden, `field`:
+     * the field refused the text, `timeout`: the switched-on service did not answer within [INPUT_CONNECT_WAIT_MS]).
+     */
     fun perform(action: PhoneAction, refusal: (String) -> Unit = {}, done: (Boolean) -> Unit) {
+        // The service is switched on but did not answer in time (round 12, S9): said as such, not as „no field“.
+        fun unreachable() {
+            val context = synchronized(lock) { app }
+            if (context != null && ScreenControlService.enabled(context)) refusal("timeout")
+        }
         when (action) {
             is PhoneAction.Stroke -> {
                 val points = action.points.take(AccessProtocol.MAX_POINTS)
@@ -106,8 +123,8 @@ internal object AccessLink {
                     data.writeLong(action.durationMs)
                     data.writeInt(points.size)
                     points.forEach { (x, y) -> data.writeFloat(x); data.writeFloat(y) }
-                }) { _, _ -> true }
-                if (sent != true) done(false)
+                }, INPUT_CONNECT_WAIT_MS) { _, _ -> true }
+                if (sent != true) { unreachable(); done(false) }
             }
             is PhoneAction.Gesture -> {
                 // Points shared among the strokes: the parcel stays within one stroke's bound.
@@ -124,16 +141,21 @@ internal object AccessLink {
                         data.writeInt(points.size)
                         points.forEach { (x, y) -> data.writeFloat(x); data.writeFloat(y) }
                     }
-                }) { _, _ -> true }
-                if (sent != true) done(false)
+                }, INPUT_CONNECT_WAIT_MS) { _, _ -> true }
+                if (sent != true) { unreachable(); done(false) }
             }
             is PhoneAction.Text -> {
-                val result = call(AccessProtocol.TEXT, { it.writeString(action.text) }) { _, reply -> reply.readInt() } ?: 0
+                val result = call(AccessProtocol.TEXT, { it.writeString(action.text) }, INPUT_CONNECT_WAIT_MS) { _, reply -> reply.readInt() }
+                if (result == null) unreachable()
                 if (result == ScreenControlService.TEXT_HIDDEN) refusal("secret")
                 if (result == ScreenControlService.TEXT_REFUSED) refusal("field")
                 done(result == ScreenControlService.TEXT_DONE)
             }
-            is PhoneAction.Global -> done(global(action.action))
+            is PhoneAction.Global -> {
+                val result = call(AccessProtocol.GLOBAL, { it.writeInt(action.action) }, INPUT_CONNECT_WAIT_MS) { _, reply -> reply.readInt() == 1 }
+                if (result == null) unreachable()
+                done(result == true)
+            }
             is PhoneAction.Refused -> done(false)
         }
     }
@@ -232,8 +254,8 @@ internal object AccessLink {
      * One synchronous transaction; `null` when no binding is held, the service is off, it did not
      * connect in time, it is called on the main thread (which delivers the connection) or `:access` died.
      */
-    private fun <T> call(code: Int, write: (Parcel) -> Unit = {}, read: (Int, Parcel) -> T): T? {
-        val binder = binder() ?: return null
+    private fun <T> call(code: Int, write: (Parcel) -> Unit = {}, connectWaitMs: Long = CONNECT_WAIT_MS, read: (Int, Parcel) -> T): T? {
+        val binder = binder(connectWaitMs) ?: return null
         val data = Parcel.obtain()
         val reply = Parcel.obtain()
         return try {
@@ -249,13 +271,13 @@ internal object AccessLink {
         }
     }
 
-    private fun binder(): IBinder? {
+    private fun binder(connectWaitMs: Long = CONNECT_WAIT_MS): IBinder? {
         synchronized(lock) {
             val context = app ?: return null
             if (holders == 0 || !ScreenControlService.enabled(context)) return null
             if (!bound) bindLocked(context)
             if (Looper.myLooper() == Looper.getMainLooper()) return remote
-            val deadline = SystemClock.uptimeMillis() + CONNECT_WAIT_MS
+            val deadline = SystemClock.uptimeMillis() + connectWaitMs
             while (bound && remote == null) {
                 val left = deadline - SystemClock.uptimeMillis()
                 if (left <= 0) break

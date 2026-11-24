@@ -72,3 +72,18 @@ fn screen_task_cli_input_events() {
     assert!(action_of(None, None, Some("10"), None, None, None).is_err());
     assert!(action_of(None, None, None, None, None, None).is_err());
 }
+
+/// Round 12, S9 / Codex 12/15: an Android host answers a refused input
+/// after its strokes and the wait for its accessibility service; the command
+/// waits that long before it says `sent`, a desktop host as before.
+#[test]
+fn screen_task_cli_input_android_refusal_is_waited_for() {
+    assert_eq!(answer_wait(HostPlatform::Windows), BLOCK_WAIT);
+    assert_eq!(answer_wait(HostPlatform::Linux), BLOCK_WAIT);
+    // `AccessLink.INPUT_CONNECT_WAIT_MS` once, two scroll strokes of 150 ms
+    // with `ScreenHostControl.STROKE_GRACE_MS` each, then the way back.
+    assert_eq!(
+        answer_wait(HostPlatform::Android),
+        BLOCK_WAIT + Duration::from_millis(1000 + 2 * (150 + 500))
+    );
+}

@@ -406,3 +406,43 @@ fn screen_task_viewer_releases_all_on_disable() {
     assert!(down.iter().all(|down| !down), "only lifts: {events:?}");
     assert!(!state.control_on);
 }
+
+/// Round 12, Codex 13: under a preview's gap the picture that came within
+/// it is not left out; it waits in the slot and is shown when the gap ends,
+/// so the last change of a screen that then stands still reaches the tile.
+#[test]
+fn screen_task_viewer_preview_gap_keeps_the_last_change() {
+    let size = FrameSize::new(64, 64);
+    let mut image = BgraImage::new(size).unwrap();
+    render(1, &mut image).unwrap();
+    let decoder: DecoderOpener = Arc::new(|header: &GopHeader| {
+        Ok::<Box<dyn ScreenDecoder>, io::Error>(Box::new(TilesScreenDecoder::new(header.size)?))
+    });
+    let send = Arc::new(|_: &ViewerFrame| Ok::<(), io::Error>(()));
+    let shared = Shared::new(false, 200);
+    shared.update(|info| info.hello = Some(hello(CapabilityDecision::Allow)));
+    let mut state = DecodeState::new(shared.clone(), decoder, send, false);
+    let feed = |state: &mut DecodeState, records: Vec<FrameRecord>| {
+        for record in records {
+            let header = tile_header(1, size);
+            state.on_event(StreamEvent::Record { header, record });
+        }
+    };
+    feed(&mut state, tile_records(1, &image, true));
+    let first = shared.take_due_picture().expect("no gap before the first");
+    assert!(first.is_some(), "the first picture is shown at once");
+    // A change right after it waits for the end of the gap.
+    render(2, &mut image).unwrap();
+    feed(&mut state, tile_records(2, &image, false));
+    let wait = shared
+        .take_due_picture()
+        .expect_err("the gap is still running");
+    assert!(wait <= Duration::from_millis(200), "{wait:?}");
+    std::thread::sleep(wait + Duration::from_millis(5));
+    let last = shared.take_due_picture().expect("the gap has ended");
+    assert_eq!(
+        last.map(|picture| picture.presented.frame_id),
+        Some(2),
+        "the last change is shown, not lost"
+    );
+}

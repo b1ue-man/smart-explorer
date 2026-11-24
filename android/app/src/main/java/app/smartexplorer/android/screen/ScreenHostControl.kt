@@ -721,6 +721,9 @@ internal object ScreenHostControl {
                         action is PhoneAction.Text -> "text"
                         else -> "action"
                     }
+                    // The switched-on service did not answer within `AccessLink.INPUT_CONNECT_WAIT_MS`: the rest of the
+                    // batch would wait as long again each, so it is left and the refusal goes out at once (round 12, S9).
+                    if (reason.get() == "timeout") break
                 }
                 val kind = refused
                 if (kind != null && owner != 0L) scope.launch {

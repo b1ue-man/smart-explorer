@@ -139,6 +139,8 @@ pub struct Shared {
     /// Shortest time between two shown pictures of a preview, in ms; every
     /// picture is still decoded (later tile frames build on earlier ones).
     present_gap_ms: AtomicU64,
+    /// When the preview took its last picture (`take_due_picture`).
+    taken_at: Mutex<Option<std::time::Instant>>,
     pub(super) resume: Mutex<ResumeGate>,
     pub(super) presentation: Mutex<super::screen_presented::PresentationState>,
     pub(super) visibility: Mutex<Option<(ViewerVisibility, bool)>>,
@@ -172,6 +174,7 @@ impl Shared {
             memory: Mutex::new(None),
             prefer_yuv: AtomicBool::new(prefer_yuv),
             present_gap_ms: AtomicU64::new(present_gap_ms),
+            taken_at: Mutex::new(None),
             resume: Mutex::new(ResumeGate::default()),
             presentation: Mutex::new(super::screen_presented::PresentationState::default()),
             visibility: Mutex::new(None),
@@ -212,6 +215,25 @@ impl Shared {
         picture
     }
 
+    /// The newest picture once the preview's gap has passed (Codex 12/13):
+    /// one that came within it waits in the slot (a newer one replaces it),
+    /// so a still screen's last change is shown. `Err(wait)`: the gap's rest.
+    pub fn take_due_picture(&self) -> Result<Option<Picture>, std::time::Duration> {
+        let gap = std::time::Duration::from_millis(self.present_gap_ms());
+        let mut taken = lock(&self.taken_at);
+        if let Some(wait) = taken
+            .map(|at| gap.saturating_sub(at.elapsed()))
+            .filter(|wait| !wait.is_zero())
+        {
+            return Err(wait);
+        }
+        let picture = self.take_picture();
+        if picture.is_some() {
+            *taken = Some(std::time::Instant::now());
+        }
+        Ok(picture)
+    }
+
     pub fn update(&self, edit: impl FnOnce(&mut SessionInfo)) {
         edit(&mut lock(&self.info));
     }
@@ -223,7 +245,12 @@ impl Shared {
             let unshown = lock(&self.picture).is_some();
             self.local.replace(&self.picture, picture);
             drop(presentation);
-            lock(&self.info).latency.on_put(unshown);
+            let mut info = lock(&self.info);
+            if unshown && self.present_gap_ms() > 0 {
+                info.latency.on_gap_replaced();
+            } else {
+                info.latency.on_put(unshown);
+            }
         }
     }
 
@@ -384,6 +411,11 @@ impl ViewerSession {
     /// The newest picture since the last call.
     pub fn take_picture(&self) -> Option<Picture> {
         self.shared.take_picture()
+    }
+
+    /// `Shared::take_due_picture`: a preview's picture under its gap.
+    pub fn take_due_picture(&self) -> Result<Option<Picture>, std::time::Duration> {
+        self.shared.take_due_picture()
     }
 
     /// A paint drew the shown picture again because no new one came (r1).

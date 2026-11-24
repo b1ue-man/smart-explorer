@@ -23,6 +23,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -109,16 +110,22 @@ fun ScreenPreviewTile(
     var transformTick by remember { mutableIntStateOf(0) }
     val transform = remember { ViewTransform { transformTick++ } }
     val target = remember(device) { device.toTarget() }
-    // The stored „Codec“, „Dekodierer“ and „Höchste Datenrate“ (Codex 2/15): the rate binds the preview too.
-    val stored = remember { ScreenViewPrefs.load(context) }
+    // The stored „Codec“, „Dekodierer“ and „Höchste Datenrate“ (Codex 2/15): the rate binds the preview too. Observed,
+    // so a choice stored in the full view reaches the tiles that keep running (round 12, B2 / Codex 12/9).
+    val stored by remember { ScreenViewPrefs.observe(context) }.collectAsState()
     // A preview draws bitmaps only (no Surface for MediaCodec): it can run the lossless tiles, decoded in software.
     // A named video codec or „Dekodierer: Hardware“ cannot hold there; the tile says so and opens no session instead
     // of showing the tiles against the choice (Codex 11/9). The full view keeps the choice.
     val previewRefused = previewRefusal(stored)
-    // The decoder reads the interval in force, not the one of its start (Codex 11/13).
-    val skip by rememberUpdatedState((intervalMs / 1000).coerceAtLeast(1))
-    // A dead decoding thread is started again a few times, its cause shown (Codex 11/11, as the full view).
-    var decoderRestarts by remember { mutableIntStateOf(0) }
+    // The interval in force, not the one of the decoder's start (Codex 11/13).
+    val interval by rememberUpdatedState(intervalMs.toLong())
+    // A dead decoding thread is started again a few times, its cause shown (Codex 11/11, as the full view). Counted per
+    // session: a new session starts its decoder once, not a second time when a reset of the count followed (round 12, B4).
+    var decoderRestarts by remember(session) { mutableIntStateOf(0) }
+    // A picture that came before the interval's end waits for it (round 12, Codex 12/13): the newest one is shown then,
+    // so the last change of a screen that stands still afterwards is not lost. `nextShowAt` is the end (uptime ms).
+    var waiting by remember(session) { mutableStateOf<Pair<Bitmap, ScreenPresentedFrame>?>(null) }
+    var nextShowAt by remember(session) { mutableLongStateOf(0L) }
 
     LaunchedEffect(device.online) {
         gate = TileGate.Probing
@@ -141,8 +148,10 @@ fun ScreenPreviewTile(
     }
     val lifecycleState by LocalLifecycleOwner.current.lifecycle.currentStateAsState()
     val started = lifecycleState.isAtLeast(Lifecycle.State.STARTED)
-    LaunchedEffect(gate, started) {
-        if (!started) {
+    LaunchedEffect(gate, started, previewRefused) {
+        // In the background, and under a choice the preview cannot hold (stored later in the full view, round 12, B2), a
+        // tile's own session ends; the tile names the reason (`previewRefused`).
+        if (!started || previewRefused != null) {
             val running = session
             if (running != null && adoptedBy !== running) {
                 running.close()
@@ -150,7 +159,7 @@ fun ScreenPreviewTile(
             }
             return@LaunchedEffect
         }
-        if (gate != TileGate.Allow || previewRefused != null) return@LaunchedEffect
+        if (gate != TileGate.Allow) return@LaunchedEffect
         // One connection per tile: a probe that answers `allow` again (the device list follows the
         // Share status) keeps the running session; only an ended one is closed and replaced.
         val running = session
@@ -172,7 +181,36 @@ fun ScreenPreviewTile(
         }
     }
     DisposableEffect(Unit) { onDispose { session?.close() } }
-    LaunchedEffect(session) { bitmap = null; bitmapFrame = null; pictures = 0; decoderRestarts = 0 }
+    LaunchedEffect(session) { bitmap = null; bitmapFrame = null; pictures = 0 }
+    // „Höchste Datenrate“ and „Verlustfrei“ stored while the session runs go live (round 12, B2): the rate as
+    // `RATE_CEILING`, the lossless tiles as `SET_MODE`. A session a full view holds gets them from there.
+    val applied = remember(session) { arrayOf<Any?>(session?.openedMaxRateBps, session?.choice?.lossless) }
+    LaunchedEffect(session, adoptedBy === session, stored.maxRateBps, stored.lossless) {
+        val running = session ?: return@LaunchedEffect
+        if (adoptedBy === running || previewRefused != null) return@LaunchedEffect
+        if (applied[0] != stored.maxRateBps) { applied[0] = stored.maxRateBps; running.setMaxRate(stored.maxRateBps) }
+        if (applied[1] != stored.lossless) {
+            applied[1] = stored.lossless
+            running.chooseCodec(stored.codec)
+            running.setMode("preview", lossless = stored.lossless)
+        }
+    }
+    /** Shows [picture] of [frame] now; the next one waits for the interval. */
+    fun show(picture: Bitmap, frame: ScreenPresentedFrame) {
+        if (failure == ScreenScaling.COPY_ERROR || failure?.startsWith(DECODER_ENDED) == true) failure = null
+        bitmapFrame = frame
+        bitmap = picture
+        hiddenSinceFrame = false
+        pictures++
+        nextShowAt = android.os.SystemClock.uptimeMillis() + interval
+    }
+    LaunchedEffect(waiting) {
+        val (picture, frame) = waiting ?: return@LaunchedEffect
+        delay((nextShowAt - android.os.SystemClock.uptimeMillis()).coerceAtLeast(0L))
+        waiting = null
+        val active = session ?: return@LaunchedEffect
+        if (active.isDisplayable(frame) || active.awaitsAck(frame)) show(picture, frame)
+    }
     LaunchedEffect(nativePixels, bitmap?.width, bitmap?.height) { transform.nativePixels(if (nativePixels) bitmap?.width else null, if (nativePixels) bitmap?.height else null) }
     LaunchedEffect(intervalMs, session) {
         session?.setMode("preview",fps=if(intervalMs<=500) 2 else 1)
@@ -189,7 +227,6 @@ fun ScreenPreviewTile(
     DisposableEffect(session, adoptedBy === session, decoderRestarts) {
         val active = session
         if (active == null || adoptedBy === active) return@DisposableEffect onDispose { }
-        var received = 0
         val activeDecoder = java.util.concurrent.atomic.AtomicBoolean(true)
         val main = android.os.Handler(android.os.Looper.getMainLooper())
         val decoder = ScreenDecoder(
@@ -207,8 +244,7 @@ fun ScreenPreviewTile(
                     // Every picture is decoded; only selected immutable snapshots can be acknowledged. A picture that
                     // came before the host's visibility answer is kept (`awaitsAck`): of a static desktop it is the
                     // only one, and the answer decides by its first frame whether it is shown (Codex 11/10).
-                    if (!activeDecoder.get() || !(active.isDisplayable(frame) || active.awaitsAck(frame)) ||
-                        received++ % skip != 0) return
+                    if (!activeDecoder.get() || !(active.isDisplayable(frame) || active.awaitsAck(frame))) return
                     if(!active.beginBitmapSnapshot()) return
                     val snapshot = try {ScreenScaling.snapshot(picture,active.state.value.bufferBudget)} catch(error:Throwable) {
                         active.endBitmapSnapshot();throw error
@@ -219,12 +255,12 @@ fun ScreenPreviewTile(
                         if (snapshot == null) {
                             failure = ScreenScaling.COPY_ERROR; bitmap = null; bitmapFrame = null
                             active.invalidateDisplay(false)
+                        } else if (android.os.SystemClock.uptimeMillis() >= nextShowAt) {
+                            waiting = null
+                            show(snapshot, frame)
                         } else {
-                            if (failure == ScreenScaling.COPY_ERROR || failure?.startsWith(DECODER_ENDED) == true) failure = null
-                            bitmapFrame = frame
-                            bitmap = snapshot
-                            hiddenSinceFrame = false
-                            pictures++
+                            // Within the interval: the newest picture waits for its end (Codex 12/13).
+                            waiting = snapshot to frame
                         }
                         } finally {active.endBitmapSnapshot()}
                     }
@@ -249,7 +285,7 @@ fun ScreenPreviewTile(
         decoder.start()
         // A decoder started in the middle of a picture group (a restart) needs a key frame.
         if (decoderRestarts > 0 && active.state.value.stream != null) active.call { keyframe(it) }
-        onDispose { activeDecoder.set(false); decoder.stop(); active.invalidateDisplay(false) }
+        onDispose { activeDecoder.set(false); waiting = null; decoder.stop(); active.invalidateDisplay(false) }
     }
 
     val ended = ui.ended
@@ -282,8 +318,8 @@ fun ScreenPreviewTile(
             BoxWithConstraints(Modifier.fillMaxWidth().aspectRatio(16f / 9f).background(Color.Black).clipToBounds().drawWithContent { ScreenScaling.observeRenderer(drawContext.canvas.nativeCanvas); drawContent() }, contentAlignment = Alignment.Center) {
                 @Suppress("UNUSED_VARIABLE") val drawnFor = transformTick
                 // The host's visibility answer decides about a picture held before it (Codex 11/10): read here so
-                // the box draws again when it comes.
-                @Suppress("UNUSED_VARIABLE") val ackedFor = ui.ackedMinFrame
+                // the box draws again when it comes, also when it names the same first frame again (round 12, B5).
+                @Suppress("UNUSED_VARIABLE") val ackedFor = ui.visibilityAcks
                 val vw = constraints.maxWidth.toFloat()
                 val vh = constraints.maxHeight.toFloat()
                 val shownSize = bitmap

@@ -27,8 +27,13 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.filterIsInstance
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -58,6 +63,11 @@ data class ScreenSessionState(
      * a picture kept before the ack (`awaitsAck`) is drawn by the recomposition that follows (Codex 3/10).
      */
     val ackedMinFrame: Long? = null,
+    /**
+     * The host's `VISIBILITY_ACK`s of this viewer's reports, counted: an ack that names the same first frame as the one
+     * before leaves [ackedMinFrame] equal, and a picture kept for it (`awaitsAck`) was not drawn (round 12, B5).
+     */
+    val visibilityAcks: Int = 0,
     val path: String? = null,
     val platform: String? = null,
     val view: String = "off",
@@ -424,7 +434,10 @@ class ScreenSession(private val target: ScreenTarget, private val backend: Scree
         this.openedCodec = choice.codec
         this.openedMaxRateBps = choice.maxRateBps
         synchronized(lock) {
-            wantedMode=ScreenModeRequest(if(mode=="preview") "preview" else "full")
+            // The host opens with the choice („Scharf (GPU)“, „Verlustfrei“, `set_codec_preference`): a later `SET_MODE`
+            // that names only another rate or source keeps it, so the host keeps its encoder (round 12, B3, as the
+            // desktop's `preview_set_mode`); before, a preview's interval or the way back from the full view cleared it.
+            wantedMode=ScreenModeRequest(if(mode=="preview") "preview" else "full", sharpness = choice.sharp, lossless = choice.lossless)
             mutable.value = mutable.value.copy(chosenCodec = choice.codec)
         }
         val backlog = ArrayList<ScreenViewEvent>()
@@ -435,11 +448,33 @@ class ScreenSession(private val target: ScreenTarget, private val backend: Scree
                 }
             }
         }
-        val opened = try {
-            backend.openWith(target, mode, source, displayWidth, displayHeight, maxFps, decoders, choice)
-        } catch (e: CoreException) {
+        // The opening runs to the core's answer even when the caller leaves meanwhile (a tile that left the screen): the
+        // core's call cannot be taken back, so a session it opened is closed here instead of running without an owner,
+        // and the collector, which keeps every event while no id is known, ends on every way out (Codex 12/6).
+        // The id is kept inside the block: a cancellation reported only on the way out of `withContext` still finds it.
+        var answer: Long? = null
+        val failed = try {
+            withContext(NonCancellable) {
+                answer = backend.openWith(target, mode, source, displayWidth, displayHeight, maxFps, decoders, choice)
+            }
+            null
+        } catch (e: Throwable) {
+            e
+        }
+        val opened = answer ?: run {
             collector?.cancel()
-            throw e
+            scope.cancel()
+            throw failed ?: CoreException("internal", "Die Sitzung hat keine Nummer erhalten.")
+        }
+        if (failed != null || !currentCoroutineContext().isActive || synchronized(lock) { closed }) {
+            collector?.cancel()
+            withContext(NonCancellable) {
+                try { backend.close(opened) } catch (e: CoreException) { Unit }
+            }
+            scope.cancel()
+            if (failed != null) throw failed
+            currentCoroutineContext().ensureActive()
+            throw CoreException("closed", "Die Sitzung wurde während des Öffnens geschlossen.")
         }
         synchronized(lock) {
             id = opened
@@ -538,7 +573,8 @@ class ScreenSession(private val target: ScreenTarget, private val backend: Scree
             val early = earlyPresented
             earlyPresented = null
             if (early != null && displayable(early, beforeAck = false)) acceptPresented(early)
-            mutable.value = mutable.value.copy(ackedMinFrame = event.minFrameId, inputReady = visibilityReport?.state != "hidden" &&
+            mutable.value = mutable.value.copy(ackedMinFrame = event.minFrameId, visibilityAcks = mutable.value.visibilityAcks + 1,
+                inputReady = visibilityReport?.state != "hidden" &&
                 latestComplete?.let { it >= event.minFrameId } == true)
         }
         val report = visibilityReport
@@ -557,10 +593,9 @@ class ScreenSession(private val target: ScreenTarget, private val backend: Scree
         if (visibilityFacts == facts) return@synchronized
         val before = visibilityFacts
         visibilityFacts = facts
-        val rects = facts.rects()
-        val state = if (!facts.visible) "hidden" else if (facts.sourceWidth <= 0 || facts.sourceHeight <= 0) "unknown" else if (rects.isEmpty()) "hidden" else "visible"
         val previous = visibilityReport
-        val report = ScreenVisibilityReport((previous?.geometryGeneration ?: 0L)+1L, state, false, rects)
+        val report = facts.report((previous?.geometryGeneration ?: 0L)+1L)
+        val state = report.state
         visibilityReport = report
         // A view that stays visible on the same source changed only its visible area (a pan, a zoom): the host keeps
         // encoder and held keys for it, so the shown picture, its receipts and the input stay here too, as on the

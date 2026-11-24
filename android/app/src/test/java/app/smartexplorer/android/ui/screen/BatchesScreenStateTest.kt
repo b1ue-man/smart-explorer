@@ -91,6 +91,80 @@ class BatchesScreenStateTest {
         assertFalse(session.beginBitmapSnapshot())
     }
 
+    /** Round 12, B5: an ack that names the same first frame again still changes the state, so a kept picture is drawn. */
+    @Test
+    fun batches_android_every_visibility_ack_is_counted() = runBlocking {
+        val backend = Backend()
+        val session = ScreenSession(ScreenTarget("direct", "fixture", null), backend)
+        try {
+            session.open("full", null, 64, 64, 30, emptyList())
+            await { session.state.value.stream != null }
+            val rect = Rect(0f, 0f, 64f, 64f)
+            session.publishVisibility(ScreenVisibilityFacts(true, rect, rect, rect, 64, 64))
+            await { session.state.value.visibilityAcks == 1 }
+            // Hidden and shown again: the fixture's host names the same first frame for every report.
+            session.publishVisibility(ScreenVisibilityFacts(false, rect, Rect.Zero, rect, 64, 64))
+            await { session.state.value.visibilityAcks == 2 }
+            session.publishVisibility(ScreenVisibilityFacts(true, rect, rect, rect, 64, 64))
+            await { session.state.value.visibilityAcks == 3 }
+            assertEquals(backend.minimum, session.state.value.ackedMinFrame)
+        } finally { session.close() }
+    }
+
+    /** Codex 12/12: a visibility report names the picture size its rectangles are measured in. */
+    @Test
+    fun batches_android_visibility_report_names_its_picture() {
+        val rect = Rect(0f, 0f, 100f, 50f)
+        val report = ScreenVisibilityFacts(true, rect, rect, rect, 1000, 500).report(4)
+        assertEquals("visible", report.state)
+        assertEquals(listOf(ScreenVisibleRect(0, 0, 1000, 500)), report.rects)
+        val picture = report.asJson()["picture"]!!.jsonObject
+        assertEquals(1000, picture["width"]!!.jsonPrimitive.int)
+        assertEquals(500, picture["height"]!!.jsonPrimitive.int)
+        val unknown = ScreenVisibilityFacts(true, rect, rect, rect, 0, 0).report(5)
+        assertEquals("unknown", unknown.state)
+        assertNull(unknown.asJson()["picture"])
+    }
+
+    /**
+     * Codex 12/6: an opening whose caller left meanwhile closes the session the core opened, and its event collector
+     * ends; round 12, B3: the session keeps the choice's „Verlustfrei“ in a later `SET_MODE`.
+     */
+    @Test
+    fun batches_android_cancelled_opening_closes_its_session() = runBlocking {
+        val gate = CompletableDeferred<Unit>()
+        val closed = CopyOnWriteArrayList<Long>()
+        val modes = CopyOnWriteArrayList<Boolean>()
+        val backend = object : ScreenBackend by Backend() {
+            override suspend fun openWith(target: ScreenTarget, mode: String, source: String?, displayWidth: Int, displayHeight: Int, maxFps: Int, decoders: List<DecoderOffer>, choice: ViewerCodecChoice): Long {
+                gate.await()
+                return 9
+            }
+            override suspend fun close(session: Long) { closed += session }
+            override suspend fun setMode(session: Long, mode: String, source: String?, width: Int?, height: Int?, fps: Int?, sharpness: Boolean, lossless: Boolean, fallback: Boolean) {
+                modes += lossless
+            }
+        }
+        val session = ScreenSession(ScreenTarget("direct", "fixture", null), backend)
+        val opening = launch(Dispatchers.Default) { session.open("preview", null, 64, 64, 2, emptyList()) }
+        delay(50)
+        opening.cancel()
+        gate.complete(Unit)
+        opening.join()
+        assertEquals(listOf(9L), closed.toList())
+        assertEquals(0L, session.id)
+
+        val lossless = ScreenSession(ScreenTarget("direct", "fixture", null), backend)
+        try {
+            lossless.open("preview", null, 64, 64, 2, emptyList(), ViewerCodecChoice(codec = ViewerCodecChoice.CODEC_LOSSLESS))
+            lossless.setMode("preview", fps = 1)
+            val barrier = CompletableDeferred<Unit>()
+            lossless.call { barrier.complete(Unit) }
+            withTimeout(5000) { barrier.await() }
+            assertEquals(listOf(true), modes.toList())
+        } finally { lossless.close() }
+    }
+
     @Test
     fun batches_android_stream_cache_does_not_alias_low_gop_bits() {
         val old = ScreenViewEvent.Stream(7, "tiles", null, 64, 64, 7, "fixture", false)

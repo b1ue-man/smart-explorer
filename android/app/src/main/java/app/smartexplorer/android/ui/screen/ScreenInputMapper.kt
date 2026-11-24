@@ -271,6 +271,13 @@ class ScreenInputMapper(
     fun drain(): List<JsonObject> = ArrayList(queue).also { queue.clear() }
 
     /**
+     * How often [releaseAll] dropped typed text that had not gone out: the screen keyboard field still shows it, so it
+     * starts again from its padding, or the next edit compared against text the host never got (round 12, B1).
+     */
+    var textDrops = 0
+        private set
+
+    /**
      * Input stops (the view blocked it, the session ended): what waits unsent is dropped, only the counterpart of
      * what the host already got goes out — button up, key up, touch cancel (Codex 11/8). A release that waits for a
      * press already sent stays; a press that never left takes its release with it.
@@ -280,6 +287,7 @@ class ScreenInputMapper(
         val unsentButtons = HashSet<String>()
         val unsentKeys = HashSet<String>()
         val unsentTouches = HashSet<String>()
+        if (queue.any { it.text("type") == "text" }) textDrops++
         for (event in queue) {
             val down = (event["down"] as? JsonPrimitive)?.content == "true"
             when (event.text("type")) {

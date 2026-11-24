@@ -77,15 +77,12 @@ class ScreenControlService : AccessibilityService() {
         // The node may come from the service's cache of window content; text and selection are read fresh, so a
         // quick second input builds on the first one (round 10, B7). A node that no longer exists is no field.
         if (!node.refresh()) return TEXT_NO_FIELD
-        // `ACTION_SET_TEXT` replaces the whole content: it is built from the content the node reports. A password
-        // field reports it masked or not at all (`isPassword`), some web or custom fields report no text; writing
-        // there would replace what the user cannot see. Such a field that is empty takes the text (round 11, H1): it
-        // shows its hint, or it reports no cursor (`TextView` sets the text selection only for a non-empty text,
-        // AOSP `onInitializeAccessibilityNodeInfoInternal`; an assumption for other views). With content it is
-        // refused with its reason (round 10, 8); pasting is no way, it would overwrite the user's clipboard.
-        val hidden = node.isPassword || (node.text == null && !node.isShowingHintText)
-        val empty = node.isShowingHintText || (node.text.isNullOrEmpty() && node.textSelectionStart < 0)
-        if (hidden && !empty) return TEXT_HIDDEN
+        // A field whose content the service cannot see takes no text ([hidesContent]): with content it is refused with
+        // its reason (round 10, 8); pasting is no way, it would overwrite the user's clipboard.
+        if (hidesContent(node.isPassword, node.text, node.isShowingHintText, node.textSelectionStart, node.className)) {
+            return TEXT_HIDDEN
+        }
+        val hidden = node.isPassword || node.text == null
         val current = if (node.isShowingHintText || hidden) "" else node.text?.toString().orEmpty()
         val (from, to) = node.textSelectionStart to node.textSelectionEnd
         val valid = from in 0..current.length && to in 0..current.length
@@ -95,8 +92,11 @@ class ScreenControlService : AccessibilityService() {
             putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
                 current.substring(0, start) + text + current.substring(end))
         }
-        // The field refused the text (read-only, or a view that takes no `ACTION_SET_TEXT`): its own reason (round 11, M3).
-        if (!node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments)) return TEXT_REFUSED
+        // The field refused the text (read-only, or a view that takes no `ACTION_SET_TEXT`): its own reason (round 11,
+        // M3). A node that vanished meanwhile is no field, so the viewer hears „no focused field“ (round 12, S8).
+        if (!node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments)) {
+            return if (node.refresh()) TEXT_REFUSED else TEXT_NO_FIELD
+        }
         val cursor = start + text.length
         node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, Bundle().apply {
             putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, cursor)

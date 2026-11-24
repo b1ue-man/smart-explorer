@@ -75,7 +75,6 @@ pub struct DecodeState {
     last_record: Option<(u64, u64)>,
     keyframes: KeyframeRequester,
     seq: u64,
-    last_shown: Option<Instant>,
     started: Instant,
     chain: continuation::Chain,
     /// Watch over the negotiated codec (`screen_decode_guard.rs`).
@@ -120,7 +119,6 @@ impl DecodeState {
             last_record: None,
             keyframes: KeyframeRequester::default(),
             seq: 0,
-            last_shown: None,
             started: Instant::now(),
             chain: Default::default(),
             guard: Default::default(),
@@ -431,10 +429,6 @@ impl DecodeState {
         presented: super::screen_presented::PresentedFrame,
     ) {
         let shown_us = now_us();
-        let gap = std::time::Duration::from_millis(self.shared.present_gap_ms());
-        let due = self
-            .last_shown
-            .is_none_or(|shown| gap.is_zero() || shown.elapsed() >= gap);
         self.shared.update(|info| {
             let latency =
                 i128::from(shown_us) + i128::from(info.clock_offset_us) - i128::from(capture_ts_us);
@@ -442,20 +436,14 @@ impl DecodeState {
                 info.latency.record(latency);
             }
             info.pictures += 1;
-            // Left out by the preview's shortest gap (BK0: dropped pictures).
-            info.latency.dropped += u64::from(!due);
-            if !due {
-                let gap = super::screen_chain_window::flow::Dropped::Gap;
-                info.latency.flow.dropped(gap);
-            }
         });
-        if !due {
-            return;
-        }
+        // A preview's shortest gap is kept where the picture is taken
+        // (`Shared::take_due_picture`, Codex 12/13): a picture that came
+        // within it waits in the slot instead of being left out here, so the
+        // last change of a screen that then stands still is shown.
         // P8: a D3D11VA picture goes to the presenter on this thread.
         if let Some(picture) = gop.gpu.then(|| gop.decoder.take_gpu_picture()).flatten() {
             self.seq += 1;
-            self.last_shown = Some(Instant::now());
             if !super::screen_direct::deliver(&self.shared, &*self.send, picture, presented) {
                 self.request_keyframe(KeyframeReason::DecodeError, gop.header.gop_id);
             }
@@ -482,7 +470,6 @@ impl DecodeState {
             None => PictureData::Bgra(gop.decoder.take_picture()),
         };
         self.seq += 1;
-        self.last_shown = Some(Instant::now());
         self.shared.put_picture(Picture {
             memory: self.memory.clone(),
             seq: self.seq,
