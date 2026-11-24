@@ -200,6 +200,9 @@ fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, a
                 opened.open(newMode, settings.source, viewerExtent[0].takeIf { it > 0 } ?: metrics.widthPixels, viewerExtent[1].takeIf { it > 0 } ?: metrics.heightPixels, maxFps, backend.offers(settings.choice), settings.choice)
             } catch (e: CoreException) {
                 failure = e.message
+                // A refused first control opening (control busy, permission denied) leaves „Steuern“ off: the viewing
+                // session keeps running, and later reopenings (codec, display, tiles' end) open to view again (round 14, B1).
+                if (newMode == "control" && mode != "control") controlOn = false
                 return@withLock
             }
             // „Steuern“ was switched off while the control session opened: the host gave it control at the opening, so it

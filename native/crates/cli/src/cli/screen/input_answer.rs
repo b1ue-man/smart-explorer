@@ -38,9 +38,9 @@ pub(super) fn receipt_outcome(next: &Next<'_>, wait: Duration) -> Result<InputOu
             return Ok(InputOutcome {
                 sent: true,
                 unconfirmed: Some(format!(
-                    "the device sent no receipt for the input within {} s; whether it was \
+                    "the device sent no receipt for the input within {:.1} s; whether it was \
                      applied is unknown",
-                    wait.as_secs()
+                    wait.as_secs_f64()
                 )),
                 ..InputOutcome::not_sent()
             });
