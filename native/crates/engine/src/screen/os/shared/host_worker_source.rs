@@ -137,10 +137,21 @@ impl crate::screen::core::host_backend::ScreenInputSink for WorkerInputSink {
         use crate::screen::core::wire_control::ControlBlock;
         // The picture request already has FRAME_TIMEOUT; retain this exact worker
         // until its admitted capture completes, then release its pressed inputs.
-        let mut link = self
-            .0
-            .lock()
-            .map_err(|_| ControlBlock::ControlUnavailable)?;
+        // Round 12 (S4): at most that long; a link still held (another
+        // session's text call) fails the release, which stays owed and is
+        // tried again (`InputHealth::failed`, the release keeper).
+        let deadline = std::time::Instant::now() + FRAME_TIMEOUT;
+        let mut link = loop {
+            match self.0.try_lock() {
+                Ok(link) => break link,
+                Err(std::sync::TryLockError::WouldBlock)
+                    if std::time::Instant::now() < deadline =>
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(2));
+                }
+                Err(_) => return Err(ControlBlock::ControlUnavailable),
+            }
+        };
         match link.ask(&WorkerRequest::Release(events.to_vec()), INPUT_TIMEOUT) {
             Ok(WorkerReply::InputDone { blocked: None, .. }) => Ok(()),
             Ok(WorkerReply::InputDone {

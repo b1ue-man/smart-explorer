@@ -153,12 +153,22 @@ impl Session<'_> {
         }
     }
 
+    /// `settle_input` on a capture tick, then the hold the viewer heard is
+    /// checked against its reason now (round 12, S5: `on_frame` checks it
+    /// after the new reference; without viewer frames only the ticks do).
+    pub(in super::super) async fn settle_input_on_tick(&mut self) -> io::Result<()> {
+        self.settle_input().await?;
+        self.end_hold().await
+    }
+
     /// What a finished injection means for the session and its viewer.
     pub(super) async fn applied(
         &mut self,
         job: super::super::input_release::Injection,
         applied: Result<(), ControlBlock>,
     ) -> io::Result<()> {
+        // Round 12 (S1): of a failed batch, the calls that went in whole.
+        let went: Vec<InputEvent> = job.went().cloned().collect();
         let super::super::input_release::Injection {
             events,
             reference,
@@ -207,6 +217,13 @@ impl Session<'_> {
                 Ok(())
             }
             Err(blocked) => {
+                for event in &went {
+                    self.pressed.observe(event);
+                }
+                // Codex 3: the sink may keep releases of its own (Windows
+                // lets go of what a partial batch pressed and keeps what it
+                // refused); they are nudged until it confirms.
+                self.health.sink_owes |= sink.is_some();
                 // S3: a refusal for a reference the source just left holds
                 // the batch back and keeps what the user holds; the new
                 // reference lets go of it when it moves the floor.

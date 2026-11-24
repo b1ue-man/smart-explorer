@@ -292,7 +292,7 @@ impl<'a> Session<'a> {
     /// a self-paced stage only when its credit is free (`begin_chained`).
     async fn produce_with(&mut self, chained: bool) -> Option<Ending> {
         self.poll_input_release();
-        if self.settle_input().await.is_err() {
+        if self.settle_input_on_tick().await.is_err() {
             return Some(self.unwritable());
         }
         if let Some(applied) = self.pipeline.poll_capture_active() {

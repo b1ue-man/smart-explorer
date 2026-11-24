@@ -5,6 +5,8 @@ use crate::screen::core::wire_control::ControlBlock;
 use std::future::Future;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
+#[path = "input_calls.rs"]
+mod calls;
 #[path = "host_release_gate.rs"]
 pub(super) mod gate;
 
@@ -61,12 +63,30 @@ pub(super) struct InputHealth {
     /// injection began before one is let go again when it ends.
     pub(super) release_epoch: u64,
     pub(super) backlog: std::collections::VecDeque<Vec<InputEvent>>,
+    /// Round 12 (Codex 3): the sink may owe releases of its own (Windows
+    /// keeps those it refused after a partial batch, `input_send_owed.rs`;
+    /// the Wayland portal its refused ones): set by a failed injection or
+    /// release through it or a late refusal, cleared by a release through
+    /// it that went (the sink delivers its own first). While set,
+    /// `retry_failed_releases` nudges the sink, also with nothing failed
+    /// here, until it confirms.
+    pub(super) sink_owes: bool,
+    /// The running release job is a nudge without events of ours: input
+    /// need not wait behind it (`hold_reason`), as the sink delivers its
+    /// own debts before any later input.
+    pub(super) nudging: bool,
 }
 
-/// One batch on its way to the platform (`Session::start_batch`).
+/// One batch on its way to the platform (`Session::start_batch`), in calls
+/// (`input_calls.rs`, round 12 S1).
 pub(super) struct Injection {
     pub(super) handle: tokio::task::JoinHandle<Result<(), ControlBlock>>,
     pub(super) events: Vec<InputEvent>,
+    /// `events` as the calls the job makes, and how many went in whole.
+    calls: Arc<[Vec<InputEvent>]>,
+    done: Arc<std::sync::atomic::AtomicUsize>,
+    /// Set: the job makes no further call.
+    pub(super) cancel: Arc<std::sync::atomic::AtomicBool>,
     pub(super) reference: u64,
     pub(super) presented: bool,
     pub(super) started: Instant,
@@ -182,16 +202,35 @@ impl Session<'_> {
     }
     /// Failed releases are tried again at most once per `RELEASE_RETRY`
     /// (from `poll_input_release`, on every viewer frame and capture tick),
-    /// with or without the control: they are this session's own.
+    /// with or without the control: they are this session's own. A sink
+    /// that may owe releases of its own is nudged as often (round 12,
+    /// Codex 3: Windows kept a release it refused after a partial batch
+    /// until the next input, and the session's list was empty).
     fn retry_failed_releases(&mut self) {
         let due = self
             .health
             .retried
             .is_none_or(|at| at.elapsed() >= RELEASE_RETRY);
-        if due && !failed_list(&self.health.failed).is_empty() {
+        let failed = !failed_list(&self.health.failed).is_empty();
+        if due && (failed || self.health.sink_owes) {
             self.health.retried = Some(Instant::now());
-            self.flush_releases();
+            if failed {
+                self.flush_releases();
+            } else if self.health.injecting.is_none() {
+                // Codex 3: the sink's own debts, with nothing of ours (a
+                // source without a sink any more owes nothing).
+                self.start_release(Vec::new(), true, false);
+                self.health.sink_owes = self.input_release.is_some();
+            }
         }
+    }
+    /// The end of a release job: its block for the next batch (none for a
+    /// nudge, which refuses nothing of ours), and whether the sink may still
+    /// owe releases of its own (`sink_owes`).
+    fn release_ended(&mut self, result: Result<(), ControlBlock>) {
+        let nudge = std::mem::take(&mut self.health.nudging);
+        self.health.sink_owes = result.is_err() && self.pipeline.input_sink().is_some();
+        self.release_blocked = if nudge { None } else { result.err() };
     }
     /// One release job for `events`; what fails goes back to
     /// `InputHealth::failed` (`Retained`). `nudge`: also without events when
@@ -222,14 +261,15 @@ impl Session<'_> {
                     Box::new(move |events| backend.inject(events))
                 }
             };
+            self.health.nudging = retained.events.is_empty();
             self.input_release = Some(runtime.spawn_blocking(move || {
                 // Gemini 3/10: a host process takes at most `MAX_INPUT_EVENTS`
                 // per batch (`encode_batch`); what went in leaves `retained`.
                 if retained.events.is_empty() {
-                    // A nudge: the sink's own debts; it reports nothing of ours.
+                    // A nudge: the sink's own debts; nothing of ours fails,
+                    // its answer says whether the sink still owes (Codex 3).
                     retained.released = true;
-                    let _ = job(&[]);
-                    return Ok(());
+                    return job(&[]);
                 }
                 let mut done = 0;
                 let mut result = Ok(());
@@ -287,6 +327,8 @@ impl Session<'_> {
         let Some(mut job) = self.health.injecting.take() else {
             return;
         };
+        // Round 12 (S1): the rest of its calls does not go.
+        job.cancel.store(true, std::sync::atomic::Ordering::Release);
         let applied = match tokio::time::timeout(CLOSE_GRACE, &mut job.handle).await {
             Ok(result) => result.map(|result| result.is_ok()).unwrap_or(false),
             Err(_) => {
@@ -303,10 +345,14 @@ impl Session<'_> {
                 return;
             }
         };
-        if applied {
-            for event in &job.events {
-                self.pressed.observe(event);
-            }
+        // A stopped or failed batch: the calls that went count (S1).
+        let went: Vec<&InputEvent> = if applied {
+            job.events.iter().collect()
+        } else {
+            job.went().collect()
+        };
+        for event in went {
+            self.pressed.observe(event);
         }
     }
     /// Z3/Z4: waits for the running release job, at most `CLOSE_GRACE`; a
@@ -318,8 +364,8 @@ impl Session<'_> {
             return;
         };
         match tokio::time::timeout(CLOSE_GRACE, &mut job).await {
-            Ok(Ok(result)) => self.release_blocked = result.err(),
-            Ok(Err(_)) => self.release_blocked = Some(ControlBlock::ControlUnavailable),
+            Ok(Ok(result)) => self.release_ended(result),
+            Ok(Err(_)) => self.release_ended(Err(ControlBlock::ControlUnavailable)),
             Err(_) => {
                 super::visibility::note_viewer(
                     "the release of held input outlasted the close grace; it goes on",
@@ -342,9 +388,9 @@ impl Session<'_> {
                 self.input_release = Some(job);
                 return;
             }
-            std::task::Poll::Ready(Ok(result)) => self.release_blocked = result.err(),
+            std::task::Poll::Ready(Ok(result)) => self.release_ended(result),
             std::task::Poll::Ready(Err(_)) => {
-                self.release_blocked = Some(ControlBlock::ControlUnavailable)
+                self.release_ended(Err(ControlBlock::ControlUnavailable))
             }
         }
         if !self.health.queued.is_empty() || self.health.revoke_pending {
@@ -369,13 +415,14 @@ impl Session<'_> {
         // An injection that outlasted its grace goes first (round 8, I8).
         // Round 11 (M2): with their own limits from the core's worker times
         // (`worker_limits`): a release job within a host process's link wait
-        // and answer time, an injection with its text time more.
-        use crate::screen::core::worker_limits::{injection_job_limit, RELEASE_JOB_LIMIT};
-        let injecting = self
-            .health
-            .injecting
-            .take()
-            .map(|job| (job.handle, injection_job_limit(&job.events)));
+        // and answer time; round 12 (S1): an injection stops before its next
+        // call, so one call's time more.
+        use crate::screen::core::worker_limits::{INJECTION_CALL_LIMIT, RELEASE_JOB_LIMIT};
+        let injecting = self.health.injecting.take().map(|job| {
+            job.cancel.store(true, std::sync::atomic::Ordering::Release);
+            (job.handle, INJECTION_CALL_LIMIT)
+        });
+        self.health.nudging = false;
         let jobs: Vec<_> = injecting
             .into_iter()
             .chain(
@@ -385,7 +432,14 @@ impl Session<'_> {
             )
             .collect();
         let queued = std::mem::take(&mut self.health.queued);
-        if jobs.is_empty() && queued.is_empty() && failed_list(&self.health.failed).is_empty() {
+        // Codex 3: a sink that may owe releases of its own is nudged too.
+        let owes =
+            std::mem::take(&mut self.health.sink_owes) && self.pipeline.input_sink().is_some();
+        if jobs.is_empty()
+            && queued.is_empty()
+            && !owes
+            && failed_list(&self.health.failed).is_empty()
+        {
             return;
         }
         let key = self.input_target();
@@ -396,7 +450,7 @@ impl Session<'_> {
         // Round 8 (I3): the keeper owns this list now; the session goes on
         // with a new one, so it never takes the keeper's releases.
         let failed = std::mem::take(&mut self.health.failed);
-        gate::take_over(jobs, failed, queued, target, key);
+        gate::take_over(jobs, (failed, queued, owes), target, key);
     }
 }
 

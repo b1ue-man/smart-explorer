@@ -13,6 +13,7 @@ use x11rb::protocol::xproto::{ConnectionExt as _, Window};
 use x11rb::protocol::xtest::ConnectionExt as _;
 use x11rb::rust_connection::RustConnection;
 
+use super::x11_keymap::Checked;
 use super::{x11_keymap, x11_monitors, x11_windows};
 use crate::screen::core::input_model::{InputEvent, PointerButton, TouchPhase};
 use crate::screen::core::window_list::SourceId;
@@ -117,16 +118,16 @@ fn button_code(button: PointerButton) -> u8 {
     }
 }
 
-fn fake<C: Connection>(
-    conn: &C,
+/// One fake input; its X11 error is checked with `sent` (round 12, Codex
+/// 10: a dropped cookie left a refusal unread, the batch counted as sent).
+fn fake<'c, C: Connection>(
+    (conn, sent): (&'c C, &mut Checked<'c, C>),
     root: Window,
     kind: u8,
     detail: u8,
     at: (i16, i16),
 ) -> io::Result<()> {
-    conn.xtest_fake_input(kind, detail, 0, root, at.0, at.1, 0)
-        .map_err(io::Error::other)?;
-    Ok(())
+    sent.push(conn.xtest_fake_input(kind, detail, 0, root, at.0, at.1, 0))
 }
 
 /// Whole notches of `rest` plus `amount` (1/120 notch); the remainder stays
@@ -137,8 +138,8 @@ fn whole_notches(rest: &mut i32, amount: i16) -> i32 {
     total / NOTCH
 }
 
-fn wheel<C: Connection>(
-    conn: &C,
+fn wheel<'c, C: Connection>(
+    (conn, sent): (&'c C, &mut Checked<'c, C>),
     root: Window,
     rest: &mut i32,
     amount: i16,
@@ -148,8 +149,8 @@ fn wheel<C: Connection>(
     let notches = whole_notches(rest, amount);
     let button = if notches > 0 { positive } else { negative };
     for _ in 0..notches.abs() {
-        fake(conn, root, BUTTON_PRESS, button, (0, 0))?;
-        fake(conn, root, BUTTON_RELEASE, button, (0, 0))?;
+        fake((conn, &mut *sent), root, BUTTON_PRESS, button, (0, 0))?;
+        fake((conn, &mut *sent), root, BUTTON_RELEASE, button, (0, 0))?;
     }
     Ok(())
 }
@@ -164,19 +165,24 @@ pub(super) fn send<C: Connection>(
     wheel_rest: &mut (i32, i32),
 ) -> io::Result<usize> {
     let mut skipped = 0;
+    let mut sent = Checked::new();
     for event in events {
         match event {
-            InputEvent::PointerAbs { x, y } => {
-                fake(conn, root, MOTION_NOTIFY, 0, root_point(area, *x, *y))?
-            }
+            InputEvent::PointerAbs { x, y } => fake(
+                (conn, &mut sent),
+                root,
+                MOTION_NOTIFY,
+                0,
+                root_point(area, *x, *y),
+            )?,
             InputEvent::Button { button, down } => {
                 let kind = if *down { BUTTON_PRESS } else { BUTTON_RELEASE };
-                fake(conn, root, kind, button_code(*button), (0, 0))?;
+                fake((conn, &mut sent), root, kind, button_code(*button), (0, 0))?;
             }
             // Up and right are positive (C5); X11 scrolls up with 4, right with 7.
             InputEvent::Wheel { dx, dy } => {
-                wheel(conn, root, &mut wheel_rest.1, *dy, 4, 5)?;
-                wheel(conn, root, &mut wheel_rest.0, *dx, 7, 6)?;
+                wheel((conn, &mut sent), root, &mut wheel_rest.1, *dy, 4, 5)?;
+                wheel((conn, &mut sent), root, &mut wheel_rest.0, *dx, 7, 6)?;
             }
             InputEvent::Key { hid_usage, down } => {
                 if !sas.allows(*hid_usage, *down) {
@@ -190,16 +196,22 @@ pub(super) fn send<C: Connection>(
                     } else {
                         x11_keymap::KEY_RELEASE
                     };
-                    fake(conn, root, kind, code, (0, 0))?;
+                    fake((conn, &mut sent), root, kind, code, (0, 0))?;
                 }
             }
             InputEvent::Text { text } => skipped += x11_keymap::type_text(conn, root, text)?,
             InputEvent::Touch { id: 0, phase, x, y } => {
-                fake(conn, root, MOTION_NOTIFY, 0, root_point(area, *x, *y))?;
+                fake(
+                    (conn, &mut sent),
+                    root,
+                    MOTION_NOTIFY,
+                    0,
+                    root_point(area, *x, *y),
+                )?;
                 match phase {
-                    TouchPhase::Start => fake(conn, root, BUTTON_PRESS, 1, (0, 0))?,
+                    TouchPhase::Start => fake((conn, &mut sent), root, BUTTON_PRESS, 1, (0, 0))?,
                     TouchPhase::End | TouchPhase::Cancel => {
-                        fake(conn, root, BUTTON_RELEASE, 1, (0, 0))?
+                        fake((conn, &mut sent), root, BUTTON_RELEASE, 1, (0, 0))?
                     }
                     TouchPhase::Move => {}
                 }
@@ -207,7 +219,8 @@ pub(super) fn send<C: Connection>(
             InputEvent::Touch { .. } | InputEvent::Action { .. } => {}
         }
     }
-    conn.flush().map_err(io::Error::other)?;
+    // Sends what waits and fails on the first request the server refused.
+    sent.check()?;
     Ok(skipped)
 }
 

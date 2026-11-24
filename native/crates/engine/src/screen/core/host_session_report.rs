@@ -55,6 +55,8 @@ impl Session<'_> {
         else {
             return Ok(());
         };
+        // Codex 3: a refused release stays the sink's (the Wayland portal).
+        self.health.sink_owes = true;
         if !self.handle.holds_control() {
             return Ok(());
         }
@@ -68,8 +70,9 @@ impl Session<'_> {
     pub(super) fn hold_reason(&self) -> Option<InputHeld> {
         if !self.visible {
             Some(InputHeld::ViewerHidden)
-        } else if self.input_release.is_some() || self.target_busy() {
+        } else if (self.input_release.is_some() && !self.health.nudging) || self.target_busy() {
             // Codex 7/1: also a former holder's releases on their way.
+            // Round 12 (Codex 3): not a nudge for the sink's own debts.
             Some(InputHeld::ReleasePending)
         } else if self.input_floor.is_some() || !self.pipeline.input_reference_ready() {
             Some(InputHeld::WaitingForPicture)
@@ -79,14 +82,26 @@ impl Session<'_> {
     }
 
     /// S4: the viewer heard of a hold whose reason ended: it hears that it
-    /// ended (the block it heard last stays named).
+    /// ended (the block it heard last stays named). Round 12 (S5): a reason
+    /// that replaced the one it heard is named (a hidden view shown again
+    /// that now waits for its picture), and the capture ticks check too
+    /// (`settle_input_on_tick`), so a drained backlog or an ended release
+    /// does not stay shown until the viewer's next frame.
     pub(super) async fn end_hold(&mut self) -> io::Result<()> {
-        // Round 10: an overflowed backlog stays reported until it drained.
-        if self.health.held_reported.is_none()
-            || self.hold_reason().is_some()
-            || self.health.overflow
-        {
+        let Some(heard) = self.health.held_reported else {
             return Ok(());
+        };
+        // Round 10: an overflowed backlog stays reported until it drained.
+        let now = if self.health.overflow {
+            Some(InputHeld::BacklogFull)
+        } else {
+            self.hold_reason()
+        };
+        if now == Some(heard) {
+            return Ok(());
+        }
+        if let Some(held) = now {
+            return self.report_held(held).await;
         }
         self.health.held_reported = None;
         let state = ControlState {

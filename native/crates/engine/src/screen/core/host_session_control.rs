@@ -331,20 +331,13 @@ impl Session<'_> {
             self.release_held_ups(events);
             return self.report_held(InputHeld::ReleasePending).await;
         }
-        let owned = events.to_vec();
-        let (backend, target) = (self.context.backend.clone(), sink);
-        let handle = tokio::task::spawn_blocking(move || match target {
-            Some(sink) => sink.inject(&owned, reference, presented),
-            None => backend.inject(&owned),
-        });
-        self.health.injecting = Some(super::input_release::Injection {
-            handle,
-            events: events.to_vec(),
-            reference,
-            presented,
-            started: Instant::now(),
-            epoch: self.health.release_epoch,
-        });
+        // Round 12 (S1): in calls of a bounded text (`input_calls.rs`).
+        self.health.injecting = Some(super::input_release::Injection::start(
+            events,
+            (sink, self.context.backend.clone()),
+            (reference, presented),
+            self.health.release_epoch,
+        ));
         Ok(())
     }
 

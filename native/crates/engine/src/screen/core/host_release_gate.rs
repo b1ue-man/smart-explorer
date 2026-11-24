@@ -5,7 +5,10 @@
 //! input (`busy`, `Session::hold_reason`): a new holder's first press never
 //! meets a late release of the one before. The keeper gives up after
 //! `GATE_LIMIT` (named in the host log) so that a dead sink cannot keep
-//! everyone's input waiting.
+//! everyone's input waiting; a job past its limit is awaited first (at most
+//! `GATE_LIMIT`), and what it failed gets one more `GATE_LIMIT` of tries
+//! (round 12, S3: the keeper ended with it still running, and its failed
+//! releases stayed unread).
 use crate::screen::core::host_backend::{ScreenHostBackend, ScreenInputSink};
 use crate::screen::core::input_model::{InputEvent, MAX_INPUT_EVENTS};
 use crate::screen::core::wire_control::ControlBlock;
@@ -56,13 +59,15 @@ impl Drop for Outstanding {
     }
 }
 
+type Job = tokio::task::JoinHandle<Result<(), ControlBlock>>;
+
 /// Takes over the running `jobs` (an injection that outlasted its grace,
 /// a release job; their failures land in `failed`), in their order, and
-/// the releases still `queued`.
+/// the releases still `queued`; `owes`: the sink may owe releases of its
+/// own (round 12, Codex 3), it is nudged until it confirms.
 pub(super) fn take_over(
-    jobs: Vec<(tokio::task::JoinHandle<Result<(), ControlBlock>>, Duration)>,
-    failed: Arc<Mutex<Vec<InputEvent>>>,
-    mut queued: Vec<InputEvent>,
+    jobs: Vec<(Job, Duration)>,
+    (failed, mut queued, mut owes): (Arc<Mutex<Vec<InputEvent>>>, Vec<InputEvent>, bool),
     target: Target,
     key: String,
 ) {
@@ -81,10 +86,11 @@ pub(super) fn take_over(
         // waiting. Its releases still follow: they go through the same sink,
         // which serialises them behind it (the host process's link lock,
         // Android's queue, the portal thread), so they cannot overtake it.
-        // Round 11 (M2): each job gets its own limit (a text takes its
-        // characters' time); a job past it is awaited again before the
-        // keeper ends, as it may still put failed releases into `failed`.
-        let mut late = Vec::new();
+        // Round 11 (M2): each job gets its own limit (round 12, S1: an
+        // injection one call's time, it stops before its next call); a job
+        // past it is awaited again before the keeper ends, as it may still
+        // put failed releases into `failed`.
+        let mut late: Vec<Job> = Vec::new();
         for (mut job, limit) in jobs {
             if tokio::time::timeout(limit, &mut job).await.is_err() {
                 super::super::visibility::note_viewer(
@@ -99,26 +105,31 @@ pub(super) fn take_over(
             let mut events =
                 std::mem::take(&mut *failed.lock().unwrap_or_else(PoisonError::into_inner));
             events.append(&mut queued);
-            if events.is_empty() {
+            if events.is_empty() && !owes {
                 if late.is_empty() {
                     return;
                 }
-                for job in late.drain(..) {
-                    let _ = tokio::time::timeout(GATE_LIMIT, job).await;
-                }
+                await_late(&mut late).await;
                 started = Instant::now();
                 continue;
             }
-            let target = target.clone();
-            let delivery = tokio::task::spawn_blocking(move || deliver(&target, events));
+            let sink = target.clone();
+            let delivery = tokio::task::spawn_blocking(move || deliver(&sink, events));
             let Ok(joined) = tokio::time::timeout(GATE_LIMIT, delivery).await else {
-                super::super::visibility::note_viewer(
-                    "releases of a former holder did not finish; given up",
-                );
-                return;
+                // Round 12 (S3): a late job's failures still follow.
+                if late.is_empty() {
+                    super::super::visibility::note_viewer(
+                        "releases of a former holder did not finish; given up",
+                    );
+                    return;
+                }
+                await_late(&mut late).await;
+                started = Instant::now();
+                continue;
             };
-            let left = joined.unwrap_or_default();
-            if left.is_empty() {
+            let (left, went) = joined.unwrap_or_default();
+            owes = !went && matches!(target, Target::Sink(_));
+            if went {
                 continue;
             }
             failed
@@ -128,17 +139,40 @@ pub(super) fn take_over(
             // Round 8 (I4): a sink whose host process ended takes nothing
             // more; nobody's input waits for it.
             let closed = matches!(&target, Target::Sink(sink) if sink.closed());
-            if closed || started.elapsed() >= GATE_LIMIT {
+            if closed || (started.elapsed() >= GATE_LIMIT && late.is_empty()) {
                 super::super::visibility::note_viewer("releases of a former holder were given up");
                 return;
+            }
+            if started.elapsed() >= GATE_LIMIT {
+                // Round 12 (S3): a late job may still fail releases into
+                // `failed`; they get their own tries after it.
+                await_late(&mut late).await;
+                started = Instant::now();
+                continue;
             }
             tokio::time::sleep(RETRY).await;
         }
     });
 }
 
-/// Delivers `events` in chunks a host process takes; what did not go.
-fn deliver(target: &Target, events: Vec<InputEvent>) -> Vec<InputEvent> {
+/// Waits for the jobs past their limit (each at most `GATE_LIMIT`).
+async fn await_late(late: &mut Vec<Job>) {
+    for job in late.drain(..) {
+        let _ = tokio::time::timeout(GATE_LIMIT, job).await;
+    }
+}
+
+/// Delivers `events` in chunks a host process takes: what did not go, and
+/// whether all went. No events: a nudge for the sink's own debts (Codex 3),
+/// which went when the sink answers without a refusal.
+fn deliver(target: &Target, events: Vec<InputEvent>) -> (Vec<InputEvent>, bool) {
+    if events.is_empty() {
+        let went = match target {
+            Target::Sink(sink) => sink.revoke(&[]).is_ok(),
+            Target::Backend(_) => true,
+        };
+        return (events, went);
+    }
     let mut done = 0;
     for chunk in events.chunks(MAX_INPUT_EVENTS) {
         // Round 8 (I6): the giving-up session's own releases: a queueing
@@ -152,5 +186,7 @@ fn deliver(target: &Target, events: Vec<InputEvent>) -> Vec<InputEvent> {
         }
         done += chunk.len();
     }
-    events[done..].to_vec()
+    let left = events[done..].to_vec();
+    let went = left.is_empty();
+    (left, went)
 }

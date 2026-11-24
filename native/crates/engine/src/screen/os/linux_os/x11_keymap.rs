@@ -153,11 +153,15 @@ impl KeyMap {
     }
 }
 
-fn press<C: Connection>(conn: &C, root: Window, code: Keycode, down: bool) -> io::Result<()> {
+/// Sends one fake key event; its X11 error is checked with `sent`.
+fn press<'c, C: Connection>(
+    (conn, sent): (&'c C, &mut Checked<'c, C>),
+    root: Window,
+    code: Keycode,
+    down: bool,
+) -> io::Result<()> {
     let kind = if down { KEY_PRESS } else { KEY_RELEASE };
-    conn.xtest_fake_input(kind, code, 0, root, 0, 0, 0)
-        .map_err(io::Error::other)?;
-    Ok(())
+    sent.push(conn.xtest_fake_input(kind, code, 0, root, 0, 0, 0))
 }
 
 /// `Shift_L`.
@@ -183,8 +187,8 @@ fn held_keys<C: Connection>(conn: &C) -> io::Result<Vec<Keycode>> {
 /// is when the level needs it; one the level must not have is lifted for
 /// the press and pressed again after (Codex 5/15: the text let go of a
 /// held Shift).
-fn tap<C: Connection>(
-    conn: &C,
+fn tap<'c, C: Connection>(
+    (conn, sent): (&'c C, &mut Checked<'c, C>),
     root: Window,
     code: Keycode,
     level: Option<(bool, bool)>,
@@ -209,34 +213,25 @@ fn tap<C: Connection>(
         }
     }
     for key in &lift {
-        press(conn, root, *key, false)?;
+        press((conn, &mut *sent), root, *key, false)?;
     }
     if let Some(key) = press_altgr {
-        press(conn, root, key, true)?;
+        press((conn, &mut *sent), root, key, true)?;
     }
     if let Some(key) = press_shift {
-        press(conn, root, key, true)?;
+        press((conn, &mut *sent), root, key, true)?;
     }
-    press(conn, root, code, true)?;
-    press(conn, root, code, false)?;
+    press((conn, &mut *sent), root, code, true)?;
+    press((conn, &mut *sent), root, code, false)?;
     if let Some(key) = press_shift {
-        press(conn, root, key, false)?;
+        press((conn, &mut *sent), root, key, false)?;
     }
     if let Some(key) = press_altgr {
-        press(conn, root, key, false)?;
+        press((conn, &mut *sent), root, key, false)?;
     }
     for key in &lift {
-        press(conn, root, *key, true)?;
+        press((conn, &mut *sent), root, *key, true)?;
     }
-    Ok(())
-}
-
-/// Waits until the server handled every request so far.
-fn sync<C: Connection>(conn: &C) -> io::Result<()> {
-    conn.get_input_focus()
-        .map_err(io::Error::other)?
-        .reply()
-        .map_err(io::Error::other)?;
     Ok(())
 }
 
@@ -260,23 +255,28 @@ pub(super) fn type_text<C: Connection>(conn: &C, root: Window, text: &str) -> io
     let caps = caps_latched(conn, root)?
         .then(|| map.find(CAPS_LOCK).map(|(code, _, _)| code))
         .flatten();
+    // Round 12 (Codex 10): the fake inputs are checked, so a press the
+    // server refused is no typed character.
+    let mut sent = Checked::new();
     if let Some(key) = caps {
-        press(conn, root, key, true)?;
-        press(conn, root, key, false)?;
+        press((conn, &mut sent), root, key, true)?;
+        press((conn, &mut sent), root, key, false)?;
     }
     // The levels are looked up in the first group's columns; another active
     // group (a second layout) is locked to the first for the text and set
     // back after it (review 2026-11-19).
     let group = first_group(conn);
-    let typed = type_unlatched(conn, root, text, map);
+    let typed = type_unlatched((conn, &mut sent), root, text, map);
     if let Some((locked, latched)) = group {
         restore_group(conn, locked, latched);
     }
     if let Some(key) = caps {
-        press(conn, root, key, true)?;
-        press(conn, root, key, false)?;
+        press((conn, &mut sent), root, key, true)?;
+        press((conn, &mut sent), root, key, false)?;
     }
-    typed
+    let checked = sent.check();
+    let skipped = typed?;
+    checked.map(|()| skipped)
 }
 
 /// The core keyboard (`XkbUseCoreKbd`).
@@ -343,8 +343,8 @@ fn caps_latched<C: Connection>(conn: &C, root: Window) -> io::Result<bool> {
     Ok(u16::from(mask) & u16::from(x11rb::protocol::xproto::KeyButMask::LOCK) != 0)
 }
 
-fn type_unlatched<C: Connection>(
-    conn: &C,
+fn type_unlatched<'c, C: Connection>(
+    (conn, sent): (&'c C, &mut Checked<'c, C>),
     root: Window,
     text: &str,
     map: KeyMap,
@@ -357,13 +357,21 @@ fn type_unlatched<C: Connection>(
     // after the text unless its emptying failed.
     let mut claimed = Vec::new();
     let mut owed = Vec::new();
-    let typed = type_chars(conn, root, text, map, &held, &mut claimed, &mut owed);
+    let typed = type_chars(
+        (conn, sent),
+        root,
+        text,
+        map,
+        &held,
+        &mut claimed,
+        &mut owed,
+    );
     spares::settle(&claimed, &owed);
     typed
 }
 
-fn type_chars<C: Connection>(
-    conn: &C,
+fn type_chars<'c, C: Connection>(
+    (conn, sent): (&'c C, &mut Checked<'c, C>),
     root: Window,
     text: &str,
     mut map: KeyMap,
@@ -376,7 +384,14 @@ fn type_chars<C: Connection>(
         let sym = keysym_of(character);
         if let Some((code, shift, level3)) = map.find(sym) {
             let keys = (map.level3, &map.shifts[..]);
-            tap(conn, root, code, Some((shift, level3)), keys, held)?;
+            tap(
+                (conn, &mut *sent),
+                root,
+                code,
+                Some((shift, level3)),
+                keys,
+                held,
+            )?;
             continue;
         }
         let Some(spare) = map.spare() else {
@@ -389,20 +404,23 @@ fn type_chars<C: Connection>(
         }
         let per = map.per_code.max(1);
         let column = vec![sym; usize::from(per)];
-        conn.change_keyboard_mapping(1, spare, per, &column)
-            .map_err(io::Error::other)?;
-        // Round 10 (Codex 10/16): from here the spare key carries the
+        // Round 10 (Codex 10/16): from here the spare key may carry the
         // keysym; it is emptied again on every way out, and a failed
         // emptying is retried with the next connection (`restore_pending`).
-        let typed = sync(conn)
-            .and_then(|()| tap(conn, root, spare, None, (None, &[]), held))
-            .and_then(|()| sync(conn));
+        // Round 12 (Codex 10): the remapping and the press are checked (the
+        // earlier characters' presses with them), so a refused one is an
+        // error and no typed character.
+        let typed = sent
+            .push(conn.change_keyboard_mapping(1, spare, per, &column))
+            .and_then(|()| sent.check())
+            .and_then(|()| tap((conn, &mut *sent), root, spare, None, (None, &[]), held))
+            .and_then(|()| sent.check());
         match &typed {
             // Clients read the mapping lazily: give them the press first.
             Ok(()) => std::thread::sleep(std::time::Duration::from_millis(20)),
             // A press that went out without its release is let go.
             Err(_) => {
-                let _ = press(conn, root, spare, false);
+                let _ = press((conn, &mut *sent), root, spare, false);
             }
         }
         let restored = empty_spare(conn, spare, per);
@@ -417,6 +435,9 @@ fn type_chars<C: Connection>(
     Ok(skipped)
 }
 
+#[path = "x11_checked.rs"]
+mod checked;
+pub(super) use checked::Checked;
 #[path = "x11_keymap_spares.rs"]
 mod spares;
 use spares::empty_spare;
