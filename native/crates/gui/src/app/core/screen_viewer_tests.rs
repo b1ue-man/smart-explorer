@@ -434,9 +434,10 @@ fn screen_task_viewer_preview_gap_keeps_the_last_change() {
     // A change right after it waits for the end of the gap.
     render(2, &mut image).unwrap();
     feed(&mut state, tile_records(2, &image, false));
-    let wait = shared
-        .take_due_picture()
-        .expect_err("the gap is still running");
+    // `Picture` has no `Debug`, so no `expect_err`.
+    let Err(wait) = shared.take_due_picture() else {
+        panic!("the gap is still running");
+    };
     assert!(wait <= Duration::from_millis(200), "{wait:?}");
     std::thread::sleep(wait + Duration::from_millis(5));
     let last = shared.take_due_picture().expect("the gap has ended");
