@@ -202,14 +202,17 @@ impl Pipeline {
     pub fn chain(&self) -> (bool, bool) {
         (self.self_paced, self.chain_ready)
     }
-    pub fn set_visible_rects(&mut self, rects: Option<Vec<super::visibility::VisibleRect>>) {
+    pub fn set_visible_rects(&mut self, area: Option<super::visibility::VisibleArea>) {
         // The viewer projects its visible area into the picture it decodes,
-        // i.e. the encoded size, not the native source size.
-        let basis = self
+        // i.e. the encoded size, not the native source size; measured in the
+        // size it names (round 12, Codex 12/12), else the running one.
+        let running = self
             .running
             .as_ref()
             .map_or_else(|| self.target_size(), |(_, size)| *size);
-        self.visible_rects = rects
+        let basis = area.as_ref().and_then(|area| area.basis).unwrap_or(running);
+        self.visible_rects = area
+            .map(|area| area.rects)
             .filter(|rects| {
                 rects.len() <= super::visibility::MAX_VISIBLE_RECTS
                     && rects.iter().all(|r| {
@@ -456,34 +459,5 @@ fn scale_visible(
 }
 
 #[cfg(test)]
-mod visible_scale_tests {
-    use super::*;
-    use crate::screen::core::visibility::VisibleRect;
-
-    /// A phone at 1344x2992 streamed as 448x998: the viewer reports the whole
-    /// picture it shows; scaling it to the same picture keeps it whole
-    /// (before, it was read as native pixels and shrank to a third).
-    #[test]
-    fn screen_metadata_runtime_task_visible_rects_use_the_picture_size() {
-        let picture = FrameSize::new(448, 998);
-        let whole = [VisibleRect {
-            x: 0,
-            y: 0,
-            width: 448,
-            height: 998,
-        }];
-        let scaled = scale_visible(picture, &whole, picture).expect("scaled");
-        assert_eq!(scaled, whole.to_vec());
-        let half = scale_visible(picture, &whole, FrameSize::new(224, 499)).expect("half");
-        assert_eq!(
-            half,
-            vec![VisibleRect {
-                x: 0,
-                y: 0,
-                width: 224,
-                height: 499
-            }]
-        );
-        assert!(scale_visible(FrameSize::new(0, 0), &whole, picture).is_none());
-    }
-}
+#[path = "host_pipeline_visible_tests.rs"]
+mod visible_scale_tests;

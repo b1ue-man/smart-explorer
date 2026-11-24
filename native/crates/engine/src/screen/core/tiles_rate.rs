@@ -13,8 +13,9 @@
 //! takes its bits, and a picture larger than the credit is sent whole and
 //! leaves a debt that the following time pays off at the rate (spread over
 //! time, never booked twice): the next picture waits only until the debt is
-//! paid. A picture is booked at the start of its send, so the time its send
-//! took is not charged again after it.
+//! paid. A picture is booked as sent from the start of its send, when its
+//! write ends, so the time its send took is not charged again after it; the
+//! small frames it absorbed meanwhile are booked with it (round 12, H2).
 //!
 //! The budget rate (`RateController::tiles_budget_bps`) is the ceiling C =
 //! min(user ceiling, codec ceiling) and, while the path signalled
@@ -143,7 +144,8 @@ pub struct SharedBudget(
 pub struct Turns {
     /// The control rate the pictures leave free (`set_reserved`).
     reserved: std::sync::atomic::AtomicU64,
-    /// Small frames' excess sent while a picture is written (`absorb_small`).
+    /// Small frames' excess sent while the picture being written is
+    /// (`absorb_while_writing`); booked with that picture (`picture_sent`).
     absorbed: std::sync::atomic::AtomicU64,
     writing: std::sync::atomic::AtomicBool,
     owed: std::sync::atomic::AtomicBool,
@@ -230,16 +232,44 @@ impl SharedBudget {
             .reserved
             .store(bps, std::sync::atomic::Ordering::Release);
     }
-    /// A small frame's `bytes` beyond its share went while a picture is
-    /// written (Codex 11/7, round 12): its pace counts them (`take_absorbed`).
-    pub fn absorb_small(&self, bytes: u64) {
-        self.2
-            .absorbed
-            .fetch_add(bytes, std::sync::atomic::Ordering::AcqRel);
+    /// A small frame's `bytes` beyond its share go while a picture is
+    /// written (Codex 11/7, round 12): its pace counts them (`absorbed`) and
+    /// they are booked with it when its write ends (`picture_sent`), not now
+    /// (round 12, H2 / Codex 12/2: a booking during the write capped the
+    /// credit the picture earned meanwhile at `TILE_BURST_US` and moved the
+    /// whole picture's booking to that moment, which left the next picture
+    /// waiting up to the time the write took). `false` when no picture is
+    /// being written (checked under the budget's lock).
+    pub fn absorb_while_writing(&self, bytes: u64) -> bool {
+        self.with(|_| {
+            if !self.2.writing.load(std::sync::atomic::Ordering::Acquire) {
+                return false;
+            }
+            self.2
+                .absorbed
+                .fetch_add(bytes, std::sync::atomic::Ordering::AcqRel);
+            true
+        })
     }
-    /// The absorbed bytes since the last call.
-    pub fn take_absorbed(&self) -> u64 {
-        self.2.absorbed.swap(0, std::sync::atomic::Ordering::AcqRel)
+    /// The small frames' bytes absorbed by the picture being written.
+    pub fn absorbed(&self) -> u64 {
+        self.2.absorbed.load(std::sync::atomic::Ordering::Acquire)
+    }
+    /// The picture's write ended: its `bytes` and the small frames' bytes it
+    /// absorbed are booked as sent from its start `at_us` under `rate_bps`
+    /// (`None`: no budget), and the line is free, in one step under the
+    /// budget's lock, so no absorbed frame is left unbooked.
+    pub fn picture_sent(&self, at_us: u64, bytes: u64, rate_bps: Option<u64>) {
+        self.with(|(budget, _)| {
+            let absorbed = self.2.absorbed.swap(0, std::sync::atomic::Ordering::AcqRel);
+            if let Some(rate) = rate_bps {
+                budget.on_sent(at_us, bytes.saturating_add(absorbed), rate);
+            }
+            self.2
+                .writing
+                .store(false, std::sync::atomic::Ordering::Release);
+        });
+        self.2.changed.notify_waiters();
     }
     pub fn reserved(&self) -> u64 {
         self.2.reserved.load(std::sync::atomic::Ordering::Acquire)
@@ -285,16 +315,29 @@ pub struct PictureWrite(SharedBudget);
 
 impl PictureWrite {
     pub fn start(budget: SharedBudget) -> Self {
-        budget.set_picture_writing(true);
-        // Bytes absorbed by an earlier picture's end are booked already.
-        let _ = budget.take_absorbed();
+        budget.with(|_| {
+            // An earlier picture booked what it absorbed (`picture_sent`).
+            budget
+                .2
+                .absorbed
+                .store(0, std::sync::atomic::Ordering::Release);
+            budget
+                .2
+                .writing
+                .store(true, std::sync::atomic::Ordering::Release);
+        });
+        budget.2.changed.notify_waiters();
         Self(budget)
     }
 }
 
 impl Drop for PictureWrite {
     fn drop(&mut self) {
-        self.0.set_picture_writing(false);
+        // A write dropped before its booking books what it absorbed.
+        if self.0.picture_writing() {
+            let now = crate::screen::core::gop_stream::now_us();
+            self.0.picture_sent(now, 0, self.0.rate());
+        }
     }
 }
 

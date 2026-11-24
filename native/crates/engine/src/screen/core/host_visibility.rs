@@ -45,9 +45,10 @@ impl Session<'_> {
                 report.geometry_generation,
                 report.rects.len()
             ));
-            // Gemini 3/23: in the size of the picture the host sends now.
+            // Gemini 3/23, round 12 (Codex 12/12): with the size they are
+            // measured in, scaled when the pipeline applies them.
             let size = self.pipeline.stream_info().map(|stream| stream.size);
-            let rects = (report.state == VisibilityState::Visible).then(|| report.rects_in(size));
+            let rects = (report.state == VisibilityState::Visible).then(|| report.area(size));
             self.pipeline.retarget_visible_rects(rects)?;
             self.visibility_ack_pending = true;
             return Ok(());
@@ -63,7 +64,7 @@ impl Session<'_> {
         self.pipeline.begin_capture_active(self.visible)?;
         self.pipeline
             .set_visible_rects(if report.state == VisibilityState::Visible {
-                Some(report.rects_in(self.pipeline.stream_info().map(|stream| stream.size)))
+                Some(report.area(self.pipeline.stream_info().map(|stream| stream.size)))
             } else {
                 None
             });

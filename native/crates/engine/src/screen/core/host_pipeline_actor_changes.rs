@@ -2,7 +2,7 @@
 //! reference (a new encoder) and which keep the running one (review
 //! 2026-11-19, V1/V2: about one new encoder a second with a GUI viewer).
 use super::{Connection, FrameSize, PipelineActor, StreamKind};
-use crate::screen::core::visibility::VisibleRect;
+use crate::screen::core::visibility::VisibleArea;
 use crate::screen::core::wire_control::KeyframeReason;
 use crate::share::route_state::RouteClass;
 use std::io;
@@ -70,13 +70,16 @@ impl PipelineActor {
         }
         // A new rate or size alone waits for the running operation (review
         // O1): the pipeline takes it in `set_quality_mode`/`resize`.
-        let more = (mode.kind, mode.sharpness, mode.lossless, mode.chosen)
-            != (
-                self.mode.kind,
-                self.mode.sharpness,
-                self.mode.lossless,
-                self.mode.chosen,
-            );
+        // Round 12 (Codex 12/7): „Verlustfrei“ for a stream that sends the
+        // tiles already changes nothing the running picture depends on.
+        let tiles =
+            self.facts.stream.as_ref().is_some_and(|stream| {
+                stream.codec == crate::screen::core::negotiate::CodecKind::Tiles
+            });
+        let lossless = mode.lossless != self.mode.lossless && !(mode.lossless && tiles);
+        let more = lossless
+            || (mode.kind, mode.sharpness, mode.chosen)
+                != (self.mode.kind, self.mode.sharpness, self.mode.chosen);
         self.mode = mode;
         self.presence.set_full(mode.kind == StreamKind::Video);
         if more {
@@ -87,7 +90,7 @@ impl PipelineActor {
     }
     /// The visible area of a view that was hidden or is hidden now: a new
     /// encoder and a new input reference (round 7, M1).
-    pub fn set_visible_rects(&mut self, rects: Option<Vec<VisibleRect>>) {
+    pub fn set_visible_rects(&mut self, rects: Option<VisibleArea>) {
         self.interrupt();
         self.pending.invalidate = true;
         self.pending.rebind = true;
@@ -98,10 +101,22 @@ impl PipelineActor {
     /// takes a key frame; the encoder stays (a new size or capture
     /// generation of the source replaces it in `sync_source_reference`).
     pub fn rebind_reference(&mut self) {
+        // Round 12 (Codex 12/8): the key frame of the new layout answers a
+        // `KEYFRAME_REQUEST` for every group before it, also one that comes
+        // before that group is opened (`request_keyframe`).
+        let newest = self.facts.gop;
+        self.answer_requests_up_to(newest);
         self.interrupt();
         self.pending.rebind = true;
         self.pending.keyframe = true;
         self.poll();
+    }
+
+    /// A new group with a key frame follows: requests naming `gop` or an
+    /// older group are answered by it.
+    fn answer_requests_up_to(&mut self, gop: u64) {
+        let below = gop.saturating_add(1);
+        self.facts.answered_below = self.facts.answered_below.max(below);
     }
     /// A new encoder and a new input reference (a view shown again).
     pub fn invalidate_reference(&mut self) {
@@ -134,7 +149,7 @@ impl PipelineActor {
     /// on the viewer, which takes a key frame inside its group already).
     /// The capture's state is reported once more, which lets the session
     /// send the acknowledgement with the floor after this change.
-    pub fn retarget_visible_rects(&mut self, rects: Option<Vec<VisibleRect>>) -> io::Result<()> {
+    pub fn retarget_visible_rects(&mut self, rects: Option<VisibleArea>) -> io::Result<()> {
         if self.stopped {
             return Err(io::Error::new(
                 io::ErrorKind::NotConnected,
@@ -199,9 +214,15 @@ impl PipelineActor {
     /// the stream, its bytes on the line and the viewer's reader stay. Only
     /// a broken stream (`Reset`) gets a new one.
     pub fn request_keyframe(&mut self, gop: Option<u64>, reason: KeyframeReason) {
+        // Round 12 (Codex 12/8): a group a key frame was already asked for
+        // (a family's new layout, a reset honoured before) is answered by the
+        // group that follows it, also while that one is still being encoded:
+        // the viewer's own request after a layout change opened a second
+        // group and a second decoder.
+        let newest = self.facts.gop.max(self.facts.answered_below);
         if self.facts.keyframe
             || self.facts.reference != self.work.reference()
-            || super::super::mode::keyframe_request_stale(gop, self.facts.gop)
+            || super::super::mode::keyframe_request_stale(gop, newest)
         {
             return;
         }
@@ -209,6 +230,9 @@ impl PipelineActor {
             self.pending.refresh = true;
             self.poll();
             return;
+        }
+        if let Some(gop) = gop {
+            self.answer_requests_up_to(gop);
         }
         // A key frame keeps the reference input binds to (review 2026-11-19,
         // E1): the running operation ends, input goes on.

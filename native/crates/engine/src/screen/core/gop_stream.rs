@@ -210,11 +210,20 @@ impl GopWriter {
             ceiling_at_start: rate_ceiling.unwrap_or(0),
             control_bps,
             line_bps: line_bps.max(1),
+            free_bps: rate_bps,
         });
     }
 
+    /// The picture's rate apart from the user's ceiling (round 12, Codex
+    /// 12/14, `Pace::free_bps`), after `pace_next_frame`.
+    pub fn pace_free(&mut self, free_bps: u64) {
+        if let Some(pace) = self.pace.as_mut() {
+            pace.free_bps = free_bps.max(pace.rate_bps);
+        }
+    }
+
     /// The small control frames' excess sent while this picture is written
-    /// counts in its pace (`SharedBudget::absorb_small`, Codex 11/7).
+    /// counts in its pace (`SharedBudget::absorb_while_writing`, Codex 11/7).
     pub fn pace_absorbs(&mut self, shared: crate::screen::core::tiles_rate::SharedBudget) {
         if let Some(pace) = self.pace.as_mut() {
             pace.shared = Some(shared);

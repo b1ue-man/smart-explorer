@@ -17,7 +17,7 @@ enum Receipt {
 struct Pending {
     source: Option<Box<dyn ScreenSource>>,
     mode: Option<QualityMode>,
-    visible: Option<Option<Vec<crate::screen::core::visibility::VisibleRect>>>,
+    visible: Option<Option<crate::screen::core::visibility::VisibleArea>>,
     active: Option<bool>,
     invalidate: bool,
     rebind: bool, // a new input reference (`Pipeline::rebind_input`)
@@ -50,8 +50,10 @@ struct Pending {
 }
 struct Facts {
     next: u64,
-    /// The newest picture group opened (`Pipeline::newest_gop`).
+    /// The newest picture group opened (`Pipeline::newest_gop`), and the
+    /// lowest group a key frame already asked for may not answer (round 12).
     gop: u64,
+    answered_below: u64,
     floor: u64,
     reference: u64,
     source_generation: u64,
@@ -111,6 +113,7 @@ impl PipelineActor {
         let facts = Facts {
             next: pipeline.next_frame_id(),
             gop: pipeline.newest_gop(),
+            answered_below: 0,
             floor: pipeline.reference_floor(),
             reference: work.reference(),
             source_generation: pipeline.input_reference_generation(),

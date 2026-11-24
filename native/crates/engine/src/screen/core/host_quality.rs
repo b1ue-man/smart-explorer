@@ -24,6 +24,9 @@ mod codec_fallback_tests;
 #[cfg(test)]
 #[path = "netzrate_task_tests.rs"]
 mod netzrate_task_tests;
+#[cfg(test)]
+#[path = "r12_host_task_tests.rs"]
+mod r12_host_task_tests;
 
 use super::{CodecChoice, CodecKind, FrameSize, Pipeline, StreamKind};
 use crate::screen::core::first_picture::FirstPictureWatch;
@@ -79,13 +82,18 @@ impl QualityMode {
     /// (O1): the wanted sizes do not count either; a new window size gave a
     /// new encoder even when the picture kept its size (a source smaller
     /// than the window). `Pipeline::resize` compares the running encoder's
-    /// size with the new target size after it.
+    /// size with the new target size after it. Round 12 (Codex 12/7):
+    /// `lossless` does not count either: it reaches the encoder only as the
+    /// pairing it selects (`quality_choice`), which `set_quality_mode`
+    /// compares itself, so „Automatisch“ → „Verlustfrei“ on a session that
+    /// sends the tiles already keeps their running encoder.
     pub(super) fn same_but_rate(&self, other: &Self) -> bool {
         let rates = Self {
             full_fps: other.full_fps,
             preview_fps: other.preview_fps,
             full_size: other.full_size,
             preview_size: other.preview_size,
+            lossless: other.lossless,
             ..*self
         };
         rates == *other

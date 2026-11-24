@@ -32,6 +32,7 @@
 //! chose (`ModeMemory`: source, raise from the group view, picture size) and
 //! its pointer wish. Any other end is passed on as before.
 use std::io;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -75,6 +76,8 @@ const PIN_CLOSE: u32 = 0x5345;
 #[path = "screen_ipc_mode_memory.rs"]
 mod mode_memory;
 pub(super) use mode_memory::{ModeMemory, RelayedFrame};
+#[path = "screen_ipc_rebuild.rs"]
+mod rebuild;
 #[path = "screen_ipc_retry_plan.rs"]
 mod retry_plan;
 use retry_plan::retryable;
@@ -120,9 +123,24 @@ struct LinkDialer {
     target: PeerOpenTarget,
     expected_node: Option<String>,
     request: ViewerRequest,
+    /// Round 12 (H4): the request on the host's own source, taken from the
+    /// attempt after one that the host refused with `no_display` (the chosen
+    /// source is gone in its new session); `fell_back` says it was.
+    fallback: Option<ViewerRequest>,
+    fell_back: Arc<AtomicBool>,
     metadata: bool,
     /// The viewer hears of a confirmation (first opening only).
     pending: Option<mpsc::Sender<(u8, Vec<u8>)>>,
+}
+
+impl LinkDialer {
+    /// The request the opened session started from.
+    fn opened(&self) -> &ViewerRequest {
+        match &self.fallback {
+            Some(fallback) if self.fell_back.load(Ordering::Acquire) => fallback,
+            _ => &self.request,
+        }
+    }
 }
 
 /// `error` of the step `step` (P9: the viewer reads where it failed).
@@ -141,7 +159,12 @@ impl Dial for LinkDialer {
         let service = self.service.clone();
         let target = self.target.clone();
         let expected = self.expected_node.clone();
-        let request = self.request.clone();
+        let request = self.opened().clone();
+        let fall_back = self
+            .fallback
+            .is_some()
+            .then(|| self.fell_back.clone())
+            .filter(|fell_back| !fell_back.load(Ordering::Acquire));
         let metadata = self.metadata;
         let pending = self.pending.clone();
         Box::pin(async move {
@@ -161,14 +184,20 @@ impl Dial for LinkDialer {
                 }
                 open(link, &request, metadata, pending).await
             };
-            tokio::time::timeout(remaining, opened)
+            let result = tokio::time::timeout(remaining, opened)
                 .await
                 .unwrap_or_else(|_| {
                     Err(ViewerError::Io(io::Error::new(
                         io::ErrorKind::TimedOut,
                         "Handshake: the screen host did not answer in time",
                     )))
-                })
+                });
+            if let (Some(fell_back), Err(error @ ViewerError::Refused(_))) = (fall_back, &result) {
+                if error.code() == ScreenErrorCode::NoDisplay.key() {
+                    fell_back.store(true, Ordering::Release);
+                }
+            }
+            result
         })
     }
 }
@@ -206,76 +235,14 @@ async fn end(out: &mpsc::Sender<(u8, Vec<u8>)>, code: String, detail: Option<Str
     }
 }
 
-/// What the viewer chose since the first opening, sent to a session built
-/// again (the new one starts from the first request): its modes, ceiling,
-/// decoders, display, sound, and (Gemini 3/9) its control and visibility.
-async fn replay(modes: &ModeMemory, next: &ViewerSession) {
-    // Codex 11/4: a display choice older than the last source goes first,
-    // so it never undoes a later window choice.
-    let display = modes.display();
-    if let Some(choice) = display.filter(|_| !modes.display_last()) {
-        let _ = next.control.send(ViewerFrame::SetDisplay(choice)).await;
+/// Sends what the viewer chose since the first opening to `next`, opened
+/// with `opened` (`rebuild::frames`).
+async fn replay(modes: &ModeMemory, next: &ViewerSession, opened: &ViewerRequest) {
+    let audio = next.hello.audio.is_some();
+    let visibility = next.hello.frame_contract.is_some();
+    for frame in rebuild::frames(modes, opened, audio, visibility) {
+        let _ = next.control.send(frame).await;
     }
-    for mode in modes.replay() {
-        let _ = next.control.send(ViewerFrame::SetMode(mode)).await;
-    }
-    if let Some(ceiling) = modes.rate_ceiling() {
-        let _ = next.control.send(ViewerFrame::RateCeiling(ceiling)).await;
-    }
-    // The decoders of the viewer's last „Codec“/„Dekodierer“ (P1): the new
-    // session opened with the first request's.
-    if let Some(set) = modes.decoders() {
-        let _ = next.control.send(ViewerFrame::SetDecoders(set)).await;
-    }
-    // „Monitor“/„Auflösung“ chosen in the session (P9); the viewer task drops
-    // it for a host without `live`.
-    if let Some(choice) = display.filter(|_| modes.display_last()) {
-        let _ = next.control.send(ViewerFrame::SetDisplay(choice)).await;
-    }
-    // The host's sound (P9), only to a host that answered it.
-    if let Some(on) = modes.audio().filter(|_| next.hello.audio.is_some()) {
-        let _ = next.control.send(ViewerFrame::Audio(on)).await;
-    }
-    // A control the viewer released stays released, a taken one is taken.
-    if let Some(action) = modes.control() {
-        let request = crate::screen::core::wire_control::ControlRequest { action };
-        let _ = next
-            .control
-            .send(ViewerFrame::ControlRequest(request))
-            .await;
-    }
-    // The visible area, to a host that reads it (with a frame contract,
-    // `host_server.rs`, as the first session's did).
-    if let Some(report) = modes.visibility() {
-        if next.hello.frame_contract.is_some() {
-            let _ = next.control.send(ViewerFrame::Visibility(report)).await;
-        }
-    }
-}
-
-/// The request of a session built again: the ceiling (Gemini 5/10) and the
-/// decoders with their „Codec“ (round 8 B4) as the viewer last chose them go
-/// in the hello itself, so the new session never starts above the ceiling
-/// nor with an encoder of the first request's codec that `SET_DECODERS`
-/// (`replay`, unchanged for the host then) would replace at once.
-fn current(modes: &ModeMemory, first: &ViewerRequest, opening: Option<u64>) -> ViewerRequest {
-    let mut request = first.clone();
-    request.max_rate_bps = ceiling(modes, opening);
-    // Codex 11/4: the source and display in force, not the first ones (the
-    // first source may be gone; `replay` follows with the same choices).
-    if let Some(source) = modes.source() {
-        request.source = Some(source);
-    }
-    if let Some(choice) = modes.display().filter(|_| modes.display_last()) {
-        request.virtual_display = Some(choice);
-    }
-    if let Some(set) = modes.decoders() {
-        request.decoders = set.decoders;
-        request.gop_continue = set.gop_continue;
-        request.gop_continue_decoders = set.gop_continue_decoders;
-        request.codec_choice = set.codec_choice.or(first.codec_choice);
-    }
-    request
 }
 
 /// „Höchste Datenrate“ as the viewer last chose it (`opening`: the one of
@@ -326,6 +293,9 @@ pub(super) async fn relay_session(
                 target: redial.target.clone(),
                 expected_node: redial.expected_node.clone(),
                 request: request.clone(),
+                // The first request is the viewer's own choice: no fallback.
+                fallback: None,
+                fell_back: Arc::default(),
                 metadata,
                 pending: Some(out.clone()),
             };
@@ -334,7 +304,7 @@ pub(super) async fn relay_session(
             schedule.failed(now, &error);
             match again(dialer, SystemClock, &mut schedule, &mut input, &mut modes).await {
                 Outcome::Opened(session) => {
-                    replay(&modes, &session).await;
+                    replay(&modes, &session, &request).await;
                     session
                 }
                 Outcome::Refused(error) => {
@@ -407,11 +377,16 @@ pub(super) async fn relay_session(
             end(&out, code, detail).await;
             return;
         }
+        let chosen = rebuild::request(&modes, &request, ceiling(&modes, max_rate_bps));
+        let fallback = rebuild::without_source(&chosen);
+        let fell_back = Arc::new(AtomicBool::new(false));
         let dialer = LinkDialer {
             service: redial.service.clone(),
             target: redial.target.clone(),
             expected_node: redial.expected_node.clone(),
-            request: current(&modes, &request, max_rate_bps),
+            request: chosen.clone(),
+            fallback: fallback.clone(),
+            fell_back: fell_back.clone(),
             metadata,
             pending: None,
         };
@@ -442,7 +417,11 @@ pub(super) async fn relay_session(
                 return;
             }
             Outcome::Opened(next) => {
-                replay(&modes, &next).await;
+                let opened_with = match fallback {
+                    Some(fallback) if fell_back.load(Ordering::Acquire) => fallback,
+                    _ => chosen,
+                };
+                replay(&modes, &next, &opened_with).await;
                 if session
                     .cursor_wish
                     .load(std::sync::atomic::Ordering::Acquire)

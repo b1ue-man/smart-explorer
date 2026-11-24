@@ -97,7 +97,8 @@ pub(super) struct Outbox {
     /// list of 8 replaced shapes let positions of older ones through).
     latest_shape: Option<u32>,
     writing: Option<Writing>,
-    /// Small frames that came while a large frame was being written.
+    /// Small frames that came while a large frame was being written, or
+    /// that wait for the budget's credit (round 12, `SmallLane`).
     behind: VecDeque<HostFrame>,
     /// The sound under the viewer's ceiling (`SoundCeiling`).
     pub(super) sound: SoundCeiling,
@@ -105,23 +106,31 @@ pub(super) struct Outbox {
     lane: SmallLane,
     /// The viewer takes large frames in parts (`control_parts.rs`).
     parts: bool,
+    /// The session ends (`end_outbox`): a small frame waits for the budget
+    /// in place instead of in `behind`.
+    ending: bool,
 }
 
-/// The longest a small frame waits for the budget when its share and the
-/// budget are spent (Codex 11/7): it then goes, its excess as a debt the
-/// pictures pay off, so no `PONG`, `ERROR`, `STATE` or `CONTROL_STATE`
-/// starves.
-pub(super) const SMALL_WAIT: Duration = Duration::from_millis(20);
-/// The burst of the small frames' share: 200 ms of it.
-const LANE_BURST_US: u64 = 200_000;
+/// The burst of the small frames' share: the window their rate is measured
+/// over (`RateController::update_control`, one second). Round 12 (H2): with
+/// 200 ms, a frame sent once a second (`STATS`, `PONG`) found a fifth of its
+/// bytes in the share and took the rest from the pictures' budget for good.
+const LANE_BURST_US: u64 = 1_000_000;
 
 /// The small control frames under a user ceiling (Codex 11/7). The pictures
-/// leave the control stream's measured rate free (`SharedBudget::reserved`);
-/// small frames take that share as a token bucket, and only what goes beyond
-/// it is booked in the pictures' budget before it is sent. Every small
-/// frame is still measured as control bytes, so a lasting rise moves into
-/// the reserved share with the next reading: the excess is counted twice
-/// only while the share catches up, never in a steady state.
+/// leave the control stream's measured rate free (`SharedBudget::reserved`,
+/// at most the ceiling); small frames take that share as a token bucket, and
+/// only what goes beyond it is booked in the pictures' budget before it is
+/// sent. Every small frame is still measured as control bytes, so a lasting
+/// rise moves into the reserved share with the next reading: the excess is
+/// counted twice only while the share catches up, never in a steady state.
+/// Round 12 (Codex 12/5, H5): a frame whose excess finds the budget in debt
+/// waits in `Outbox::behind` until it has credit again (the session loop
+/// goes on meanwhile, `Outbox::ready`), the newest position and statistics
+/// replacing older ones; before, a position or statistics frame was dropped
+/// (a pointer at rest kept its old place on the viewer) and every other
+/// frame went after 20 ms on top of the debt, which let steady control
+/// traffic exceed the ceiling.
 #[derive(Default)]
 pub(super) struct SmallLane {
     /// The last booking: its time and the share's balance in bits.
@@ -129,9 +138,9 @@ pub(super) struct SmallLane {
 }
 
 impl SmallLane {
-    /// Takes `bytes` at `now_us` from the share at `reserved_bps`; the bytes
-    /// beyond it.
-    pub(super) fn excess(&mut self, now_us: u64, reserved_bps: u64, bytes: u64) -> u64 {
+    /// The bytes of `bytes` at `now_us` beyond the share at `reserved_bps`,
+    /// and the share's booking that takes them (`take`).
+    fn excess_of(&self, now_us: u64, reserved_bps: u64, bytes: u64) -> (u64, (u64, i128)) {
         let rate = i128::from(reserved_bps);
         let cap = rate * i128::from(LANE_BURST_US) / 1_000_000;
         let balance = match self.booked {
@@ -143,8 +152,21 @@ impl SmallLane {
         };
         let need = i128::from(bytes) * 8;
         let covered = need.min(balance.max(0));
-        self.booked = Some((now_us, balance - covered));
-        u64::try_from((need - covered + 7) / 8).unwrap_or(u64::MAX)
+        let excess = u64::try_from((need - covered + 7) / 8).unwrap_or(u64::MAX);
+        (excess, (now_us, balance - covered))
+    }
+
+    /// The bytes beyond the share, without taking it (the frame may wait).
+    pub(super) fn peek(&self, now_us: u64, reserved_bps: u64, bytes: u64) -> u64 {
+        self.excess_of(now_us, reserved_bps, bytes).0
+    }
+
+    /// Takes `bytes` at `now_us` from the share at `reserved_bps`; the bytes
+    /// beyond it.
+    pub(super) fn excess(&mut self, now_us: u64, reserved_bps: u64, bytes: u64) -> u64 {
+        let (excess, booked) = self.excess_of(now_us, reserved_bps, bytes);
+        self.booked = Some(booked);
+        excess
     }
 }
 
@@ -189,6 +211,7 @@ impl Outbox {
     pub(super) fn new(budget: SharedBudget, ceiling: Option<u64>) -> Self {
         Self {
             parts: false,
+            ending: false,
             lane: SmallLane::default(),
             sound: SoundCeiling {
                 ceiling,
@@ -214,7 +237,12 @@ impl Outbox {
     }
 
     pub(super) fn waiting(&self) -> bool {
-        self.writing.is_some() || !self.held.is_empty()
+        self.writing.is_some() || !self.held.is_empty() || !self.behind.is_empty()
+    }
+
+    /// Small frames wait for the budget, not behind a large frame (`SmallLane`).
+    fn small_due(&self) -> bool {
+        self.writing.is_none() && !self.behind.is_empty()
     }
 
     /// Whether the metadata answers wait (no answer goes without credit).
@@ -230,6 +258,11 @@ impl Outbox {
             let Some(rate) = self.budget.rate() else {
                 return;
             };
+            // A picture being written takes the small frames' excess into
+            // its pace (`take_small_share`): they need not wait for it.
+            if self.small_due() && self.budget.picture_writing() {
+                return;
+            }
             if self.budget.picture_writing() {
                 // Woken when the picture ends; the next picture leaves this
                 // frame one piece first (round 10: no polling, no starving).

@@ -38,11 +38,28 @@ impl Session<'_> {
             self.outbox.hold(held);
             return Ok(());
         }
+        // Round 12: small frames waiting for the budget keep their order.
+        if !self.outbox.behind.is_empty() && self.outbox.writing.is_none() {
+            if let Held::Frame(frame) = held {
+                if large(&frame) {
+                    self.outbox.hold(Held::Frame(frame));
+                } else {
+                    self.outbox.queue_behind(frame);
+                }
+                return Ok(());
+            }
+        }
         if self.outbox.writing.is_some() {
             match held {
                 // A viewer that takes parts gets small frames between them
-                // (round 10, Codex 10/10); a family's frames keep their order.
-                Held::Frame(frame) if !large(&frame) && self.outbox.parts && !family(&frame) => {
+                // (round 10, Codex 10/10); a family's frames keep their order,
+                // and so do frames behind one that waits for the budget.
+                Held::Frame(frame)
+                    if !large(&frame)
+                        && self.outbox.parts
+                        && !family(&frame)
+                        && self.outbox.behind.is_empty() =>
+                {
                     return self.write(Held::Frame(frame)).await;
                 }
                 Held::Frame(frame) if !large(&frame) => {
@@ -84,6 +101,10 @@ impl Session<'_> {
     /// the position that waited for its shape and the small frames behind
     /// it follow.
     pub(in super::super) async fn flush_outbox(&mut self) -> io::Result<()> {
+        // Small frames that wait for the budget go before held large ones.
+        if self.outbox.small_due() {
+            return self.send_behind().await;
+        }
         let mut writing = match self.outbox.writing.take() {
             Some(writing) => writing,
             None => {
@@ -172,12 +193,25 @@ impl Session<'_> {
         }
         if writing.shape.is_some() && writing.shape == self.outbox.shape {
             self.outbox.shape = None;
+            // The position that waited for its shape goes first.
             if let Some(position) = self.outbox.position.take() {
-                self.write(Held::Frame(position)).await?;
+                self.outbox.behind.push_front(position);
             }
         }
+        self.send_behind().await
+    }
+
+    /// The small frames in `behind`, in their order, while the budget takes
+    /// them (`take_small_share`); the first it does not take waits there.
+    async fn send_behind(&mut self) -> io::Result<()> {
         while let Some(frame) = self.outbox.behind.pop_front() {
-            self.write(Held::Frame(frame)).await?;
+            if let Some(rate) = self.outbox.budget.rate() {
+                if !self.take_small_share(rate, &frame) {
+                    self.outbox.behind.push_front(frame);
+                    return Ok(());
+                }
+            }
+            self.send_small(&frame).await?;
         }
         Ok(())
     }
@@ -193,29 +227,52 @@ impl Session<'_> {
         self.outbox.held.clear();
         self.outbox.shape = None;
         self.outbox.position = None;
+        // Round 12: the farewell's own frames wait for the budget in place.
+        self.outbox.ending = true;
         while self.outbox.writing.is_some() {
             self.outbox.ready().await;
             self.flush_outbox().await?;
         }
-        while let Some(frame) = self.outbox.behind.pop_front() {
-            self.write(Held::Frame(frame)).await?;
+        self.drain_behind().await
+    }
+
+    /// Waits for the budget until every small frame in `behind` went (the
+    /// farewell, within `CLOSE_GRACE`).
+    async fn drain_behind(&mut self) -> io::Result<()> {
+        while !self.outbox.behind.is_empty() {
+            self.outbox.ready().await;
+            self.send_behind().await?;
         }
         Ok(())
     }
 
+    /// A small frame whole, booked as the control stream's rate.
+    async fn send_small(&mut self, frame: &HostFrame) -> io::Result<()> {
+        let peer = self.connection.remote_id().to_string();
+        let sent = control_sender::send_counted(peer, &mut self.send, frame).await?;
+        self.pipeline.book_control_bytes(sent);
+        Ok(())
+    }
+
     /// Writes `held` whole and books it as the control stream's rate (a
-    /// small frame, or a large one without a user ceiling).
+    /// small frame, or a large one without a user ceiling). A small frame
+    /// the budget does not take now waits in `behind` (`SmallLane`).
     async fn write(&mut self, held: Held) -> io::Result<()> {
-        if let (Some(rate), Held::Frame(frame)) = (self.outbox.budget.rate(), &held) {
-            if !self.take_small_share(rate, frame).await {
-                return Ok(());
+        let waits = match (&held, self.outbox.budget.rate()) {
+            (Held::Frame(frame), Some(rate)) => !self.take_small_share(rate, frame),
+            _ => false,
+        };
+        if waits {
+            if let Held::Frame(frame) = held {
+                self.outbox.queue_behind(frame);
             }
+            if self.outbox.ending {
+                return self.drain_behind().await;
+            }
+            return Ok(());
         }
         let sent = match &held {
-            Held::Frame(frame) => {
-                let peer = self.connection.remote_id().to_string();
-                control_sender::send_counted(peer, &mut self.send, frame).await?
-            }
+            Held::Frame(frame) => return self.send_small(frame).await,
             Held::Metadata(frame) => {
                 host_metadata::send(
                     self.context,
@@ -236,38 +293,27 @@ impl Session<'_> {
 
     /// A small frame under a ceiling (Codex 11/7): what goes beyond the
     /// share the pictures leave the control stream is booked in their budget
-    /// before it is sent. With the budget spent, a position or statistics
-    /// frame is dropped (a newer one follows), every other frame waits at
-    /// most `SMALL_WAIT` and then goes, its excess as a debt. `false`: drop.
-    async fn take_small_share(&mut self, rate: u64, frame: &HostFrame) -> bool {
+    /// before it is sent; a picture being written takes it into its pace
+    /// (round 12: booked with the picture, `SharedBudget::picture_sent`).
+    /// `false`: the budget is in debt, nothing is taken, the frame waits
+    /// (round 12, Codex 12/5, H5: no frame goes on top of the debt, and a
+    /// position or statistics frame is no longer dropped).
+    fn take_small_share(&mut self, rate: u64, frame: &HostFrame) -> bool {
         let bytes = control_sender::wire_bytes(frame);
         let reserved = self.outbox.budget.reserved();
-        let excess = self.outbox.lane.excess(now_us(), reserved, bytes);
-        if excess == 0 {
-            return true;
+        let now = now_us();
+        let excess = self.outbox.lane.peek(now, reserved, bytes);
+        let taken = if excess == 0 || self.outbox.budget.absorb_while_writing(excess) {
+            true
+        } else if self.outbox.budget.admits(now, rate) {
+            self.outbox.budget.on_sent(now, excess, rate);
+            true
+        } else {
+            false
+        };
+        if taken {
+            let _ = self.outbox.lane.excess(now, reserved, bytes);
         }
-        // A picture being written takes the excess into its pace (round 12):
-        // the frame goes now, and picture and frame keep the rate together.
-        if self.outbox.budget.picture_writing() {
-            self.outbox.budget.on_sent(now_us(), excess, rate);
-            self.outbox.budget.absorb_small(excess);
-            return true;
-        }
-        if !self.outbox.budget.admits(now_us(), rate) {
-            let droppable = match frame {
-                HostFrame::CursorPosition(position) => {
-                    *position != crate::screen::core::cursor_overlay::CursorPosition::hidden()
-                }
-                HostFrame::Stats(_) => true,
-                _ => false,
-            };
-            if droppable {
-                return false;
-            }
-            let wait = Duration::from_micros(self.outbox.budget.wait_us(now_us(), rate));
-            tokio::time::sleep(wait.min(super::SMALL_WAIT)).await;
-        }
-        self.outbox.budget.on_sent(now_us(), excess, rate);
-        true
+        taken
     }
 }

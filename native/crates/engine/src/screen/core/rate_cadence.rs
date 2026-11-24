@@ -199,6 +199,7 @@ impl RateController {
     /// (`stream_budget_bps`).
     pub fn set_ceiling(&mut self, ceiling_bps: Option<u64>) {
         self.user_ceiling_bps = ceiling_bps.map(|bps| bps.max(1));
+        self.update_reserved();
     }
 
     pub fn user_ceiling_bps(&self) -> Option<u64> {

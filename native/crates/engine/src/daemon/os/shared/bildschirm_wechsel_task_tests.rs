@@ -203,7 +203,7 @@ fn mode(
 }
 
 fn replayed(memory: &ModeMemory) -> Vec<SetMode> {
-    memory.replay()
+    memory.replay(true)
 }
 
 #[test]
@@ -306,4 +306,105 @@ fn review1119_task_relay_keeps_the_choice_under_a_marked_fallback() {
     chosen.note_relayed(&relayed(lossless(true), false));
     chosen.note_relayed(&relayed(lossless(true), true));
     assert!(replayed(&chosen)[0].lossless);
+}
+
+fn first_request(source: Option<SourceId>) -> crate::screen::core::viewer_client::ViewerRequest {
+    crate::screen::core::viewer_client::ViewerRequest {
+        mode: crate::screen::core::wire_hello::SessionMode::View,
+        source,
+        decoders: Vec::new(),
+        display_size: None,
+        max_fps: 30,
+        frame_capabilities: None,
+        gop_continue: false,
+        gop_continue_decoders: Vec::new(),
+        virtual_display: None,
+        codec_choice: None,
+        max_rate_bps: None,
+    }
+}
+
+/// The sources a replay asks for, in their order (`SET_MODE` with a source
+/// and `SET_DISPLAY`, which ends at a monitor).
+fn source_changes(frames: &[ViewerFrame]) -> Vec<String> {
+    frames
+        .iter()
+        .filter_map(|frame| match frame {
+            ViewerFrame::SetMode(set) => set.source.as_ref().map(|s| s.to_string()),
+            ViewerFrame::SetDisplay(_) => Some("display".into()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Round 12 (H3, H4): a session built again opens with the display in its
+/// hello at a monitor and reaches a window chosen after it with one source
+/// change (before: window, display, window); a display chosen after the
+/// source is not sent twice; a source the new session lacks falls back to
+/// the host's own one and is asked for again by `SET_MODE`.
+#[test]
+fn r12_task_rebuild_opens_with_the_display_and_one_source_change() {
+    use super::rebuild;
+    use crate::screen::core::virtual_display::{VirtualDisplayChoice, VirtualDisplayWish};
+    let display = VirtualDisplayChoice {
+        wish: VirtualDisplayWish::Request,
+        size: Some(FrameSize::new(2560, 1440)),
+    };
+    let window = SourceId::Window("42".into());
+    let first = first_request(Some(SourceId::Monitor("DP-1".into())));
+
+    // Display first, then a window: the hello carries the display at the
+    // host's own monitor; one `SET_MODE` reaches the window.
+    let mut memory = ModeMemory::default();
+    memory.note(&ViewerFrame::SetDisplay(display));
+    memory.note(&mode(StreamMode::Full, Some(window.clone()), None, None));
+    let request = rebuild::request(&memory, &first, None);
+    assert_eq!(request.virtual_display, Some(display));
+    assert_eq!(request.source, None, "the display decides at a monitor");
+    let frames = rebuild::frames(&memory, &request, false, false);
+    assert_eq!(source_changes(&frames), vec![window.to_string()]);
+
+    // A window, then the display: the session ends at the display's monitor
+    // with no source change at all.
+    let mut memory = ModeMemory::default();
+    memory.note(&mode(StreamMode::Full, Some(window.clone()), None, None));
+    memory.note(&ViewerFrame::SetDisplay(display));
+    let request = rebuild::request(&memory, &first, None);
+    assert_eq!(request.virtual_display, Some(display));
+    assert_eq!(request.source, None);
+    let frames = rebuild::frames(&memory, &request, false, false);
+    assert!(source_changes(&frames).is_empty(), "{frames:?}");
+
+    // A chosen monitor stays in the hello with the display.
+    let monitor = SourceId::Monitor("DP-2".into());
+    let mut memory = ModeMemory::default();
+    memory.note(&mode(StreamMode::Full, Some(monitor.clone()), None, None));
+    memory.note(&ViewerFrame::SetDisplay(display));
+    assert_eq!(
+        rebuild::request(&memory, &first, None).source,
+        Some(monitor)
+    );
+
+    // A first opening tried again opened with the first request: the
+    // display chosen meanwhile still goes, after the source (Codex 11/4).
+    let frames = rebuild::frames(&memory, &first, false, false);
+    assert_eq!(
+        source_changes(&frames),
+        vec!["monitor:DP-2".to_string(), "display".to_string()]
+    );
+
+    // No display: the source in force opens the session, `SET_MODE` names
+    // it again (no change on the host, `host_visibility.rs`).
+    let mut memory = ModeMemory::default();
+    memory.note(&mode(StreamMode::Full, Some(window.clone()), None, None));
+    let request = rebuild::request(&memory, &first, Some(650_000));
+    assert_eq!(request.source, Some(window.clone()));
+    assert_eq!(request.max_rate_bps, Some(650_000));
+    // H4: the window is gone in the new session: the fallback opens on the
+    // host's own source and the replay asks for the window again.
+    let fallback = rebuild::without_source(&request).expect("a source to leave");
+    assert_eq!(fallback.source, None);
+    let frames = rebuild::frames(&memory, &fallback, false, false);
+    assert_eq!(source_changes(&frames), vec![window.to_string()]);
+    assert!(rebuild::without_source(&fallback).is_none());
 }

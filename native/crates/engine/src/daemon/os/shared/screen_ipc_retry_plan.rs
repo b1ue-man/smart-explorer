@@ -134,10 +134,15 @@ pub(in super::super) enum Outcome<S> {
 /// its new session is not ready yet (`NOT_READY`). Any other refusal of the
 /// host is final, and so is a host whose identity does not match the pinned
 /// one (`PermissionDenied`, P9: a new connection cannot change that).
+/// Round 12 (H1): a refusal carries the host's reason after its key
+/// (`capture_failed: <reason>`, `viewer_client.rs`); the key decides.
 pub(super) fn retryable(error: &ViewerError) -> bool {
     match error {
         ViewerError::Io(error) => error.kind() != std::io::ErrorKind::PermissionDenied,
-        ViewerError::Refused(code) => NOT_READY.iter().any(|ready| ready.key() == code.as_str()),
+        ViewerError::Refused(_) => {
+            let key = error.code();
+            NOT_READY.iter().any(|ready| ready.key() == key)
+        }
         ViewerError::Unsupported => false,
     }
 }
@@ -233,5 +238,37 @@ mod tests {
         assert_eq!(code, "capture_failed");
         assert!(detail.contains("nach 2 Versuchen"), "{detail}");
         assert!(Schedule::new(start).gave_up().is_none());
+    }
+
+    /// Round 12 (H1): a host that names why its new session is not ready
+    /// (`capture_failed: <reason>`, `no_display: <reason>`) is tried again
+    /// like one that sends the bare key; any other refusal stays final.
+    #[test]
+    fn r12_task_retry_reads_the_key_of_a_refusal_with_reason() {
+        for ready in [
+            "capture_failed",
+            "no_display",
+            "indicator_unavailable",
+            "host_shutdown",
+        ] {
+            assert!(retryable(&ViewerError::Refused(ready.into())), "{ready}");
+            let reasoned = ViewerError::Refused(format!("{ready}: Sitzung wechselt"));
+            assert!(retryable(&reasoned), "{ready} with a reason");
+        }
+        for final_key in [
+            "permission_denied: nein",
+            "encoder_failed: av1: fehlt",
+            "control_busy",
+        ] {
+            assert!(
+                !retryable(&ViewerError::Refused(final_key.into())),
+                "{final_key}"
+            );
+        }
+        let pinned = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "pin");
+        assert!(!retryable(&ViewerError::Io(pinned)));
+        assert!(retryable(&ViewerError::Io(std::io::Error::other(
+            "offline"
+        ))));
     }
 }

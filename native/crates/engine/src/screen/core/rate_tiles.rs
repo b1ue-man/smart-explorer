@@ -51,9 +51,20 @@ impl RateController {
     pub fn update_control(&mut self, now_us: u64) {
         self.control.prune(now_us);
         self.control_bps = self.control.window_bps().saturating_add(self.audio_bps);
-        // The share the pictures leave the session's small control frames
-        // (round 11, Codex 11/7: what goes beyond it takes the budget).
-        self.tiles.set_reserved(self.control.window_bps());
+        self.update_reserved();
+    }
+
+    /// The share the pictures leave the session's small control frames
+    /// (round 11, Codex 11/7: what goes beyond it takes the budget), never
+    /// above the user's ceiling (round 12, Codex 12/5: after a lowered
+    /// ceiling the rate measured before it let control alone exceed the new
+    /// one); also at once when the ceiling changes (`set_ceiling`).
+    pub(super) fn update_reserved(&mut self) {
+        let window = self.control.window_bps();
+        let reserved = self
+            .user_ceiling_bps
+            .map_or(window, |ceiling| window.min(ceiling));
+        self.tiles.set_reserved(reserved);
     }
 
     pub fn control_bps(&self) -> u64 {
@@ -124,6 +135,23 @@ impl RateController {
         Some((rate.max(1), self.tiles.credit_bits(now_us, rate) / 8))
     }
 
+    /// The rate a picture's send at `now_us` has apart from the user's
+    /// ceiling (round 12, Codex 12/14): its pace takes a ceiling raised or
+    /// removed during the write up to it (`Pace::rate`). A video stream has
+    /// no other bound; the tiles keep their rate on a congested path (round
+    /// 7 P1) and else the codec pairing's ceiling.
+    pub fn stream_free_bps(&self, now_us: u64, video: bool) -> u64 {
+        if video {
+            u64::MAX
+        } else if self.tiles.network_limited(now_us) {
+            self.tiles_budget_bps(now_us)
+        } else {
+            self.codec_ceiling_bps
+                .unwrap_or(u64::MAX)
+                .max(super::MIN_BITRATE_BPS)
+        }
+    }
+
     /// Whether a picture of the stream may be captured and encoded at
     /// `now_us`.
     pub fn stream_admit(&self, now_us: u64, video: bool) -> bool {
@@ -159,11 +187,12 @@ impl RateController {
         crate::screen::core::tiles_rate::PictureWrite::start(self.tiles.clone())
     }
 
-    /// A picture of the stream of `bytes` started its send at `at_us`.
+    /// A picture of the stream of `bytes` started its send at `at_us` and
+    /// its write ended: booked with the small frames it absorbed, and the
+    /// line is free (`SharedBudget::picture_sent`, round 12 H2).
     pub fn on_stream_sent(&mut self, at_us: u64, bytes: u64, video: bool) {
-        if let Some(rate) = self.stream_budget_bps(at_us, video) {
-            self.tiles.on_sent(at_us, bytes, rate);
-        }
+        let rate = self.stream_budget_bps(at_us, video);
+        self.tiles.picture_sent(at_us, bytes, rate);
     }
 
     /// Whether a picture of the tiles may be taken at `now_us`.

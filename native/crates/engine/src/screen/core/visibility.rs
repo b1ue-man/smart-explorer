@@ -38,7 +38,29 @@ pub struct ViewerVisibility {
     pub picture: Option<super::pixel_convert::FrameSize>,
 }
 
+/// Visible rectangles with the picture size they are measured in (round 12,
+/// Codex 12/12): kept together until the pipeline applies them, which scales
+/// them to the picture it encodes then (`Pipeline::set_visible_rects`);
+/// before, the host scaled them to its size at the report and the pipeline
+/// took them for the size it ran at when it applied them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VisibleArea {
+    /// `None`: the size the pipeline encodes when it applies them.
+    pub basis: Option<super::pixel_convert::FrameSize>,
+    pub rects: Vec<VisibleRect>,
+}
+
 impl ViewerVisibility {
+    /// The visible area of the report: measured in the viewer's picture
+    /// size, else (a viewer that names none) in `shown`, the size the host
+    /// sends at the report.
+    pub fn area(&self, shown: Option<super::pixel_convert::FrameSize>) -> VisibleArea {
+        VisibleArea {
+            basis: self.picture.or(shown),
+            rects: self.rects.clone(),
+        }
+    }
+
     pub fn validate(&self) -> io::Result<()> {
         if self.geometry_generation == 0 || self.rects.len() > MAX_VISIBLE_RECTS {
             return Err(invalid(

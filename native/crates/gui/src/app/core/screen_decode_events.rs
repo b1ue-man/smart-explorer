@@ -129,6 +129,14 @@ impl DecodeState {
                             });
                             return true;
                         }
+                        // Round 12 (Codex 12/8): a group the host opened for
+                        // the new layout already (its header names that
+                        // layout) is its answer; only an older one is
+                        // dropped, and the host answers the request with the
+                        // group it opens for the layout (`answered_below`).
+                        Ok(true) if self.decodes_layout(&frame) => {
+                            self.shared.cancel_presentation();
+                        }
                         Ok(true) => {
                             self.shared.cancel_presentation();
                             self.chain.continuity.broken();
@@ -198,6 +206,23 @@ impl DecodeState {
             }
         }
         false
+    }
+
+    /// Whether the running group is the newest one and was opened for the
+    /// layout the family state in `frame` names (round 12, Codex 12/8).
+    fn decodes_layout(&self, frame: &HostFrame) -> bool {
+        let layout = match frame {
+            HostFrame::FamilySnapshot(snapshot) => Some(snapshot.layout_revision),
+            HostFrame::FamilyOperation(result) => result
+                .snapshot
+                .as_ref()
+                .map(|snapshot| snapshot.layout_revision),
+            _ => None,
+        };
+        layout.is_some()
+            && self.gop.as_ref().is_some_and(|gop| {
+                gop.id == self.latest_gop && gop.header.family_layout_revision == layout
+            })
     }
 
     /// A new host session behind the same relay: the groups and frames

@@ -52,6 +52,11 @@ pub(super) struct Pace {
     /// take within the stale time plus its time at it is a stall (Codex 6/9;
     /// the pace's own waits never count).
     pub(super) line_bps: u64,
+    /// The picture's rate apart from the user's ceiling (round 12, Codex
+    /// 12/14: `RateController::stream_free_bps`): a ceiling raised or
+    /// removed during the write lets the rest go up to it. `rate_bps` when
+    /// not given.
+    pub(super) free_bps: u64,
 }
 
 impl Pace {
@@ -61,12 +66,21 @@ impl Pace {
     /// ceiling less control and sound, never 0 (round 7 P2: the pictures'
     /// floor would put pictures and control above the ceiling; a new picture
     /// below the floor is not made at all, `stream_admit`).
+    /// Round 12 (Codex 12/14): a ceiling raised during the write gives the
+    /// rest the rate apart from the ceiling (`free_bps`) up to the new
+    /// ceiling less control and sound, a removed one `free_bps`; before, the
+    /// rest kept the old ceiling's rate for seconds.
     pub(super) fn rate(&self) -> u64 {
         let live = self
             .limit
             .as_ref()
             .map_or(0, |cell| cell.load(std::sync::atomic::Ordering::Acquire));
-        if !self.lowered(live) {
+        if self.ceiling_at_start != 0 && live == 0 {
+            self.rate_bps.max(self.free_bps)
+        } else if self.ceiling_at_start != 0 && live > self.ceiling_at_start {
+            let share = live.saturating_sub(self.control_bps);
+            self.rate_bps.max(self.free_bps.min(share))
+        } else if !self.lowered(live) {
             self.rate_bps
         } else {
             // Round 8 R1: an admitted picture goes on at least at the
@@ -91,10 +105,11 @@ impl Pace {
         self.written.saturating_add(self.absorbed)
     }
 
-    /// Takes in the small frames' bytes sent since the last call.
+    /// Takes in the small frames' bytes sent during this picture's write
+    /// (`SharedBudget::absorbed`, booked with the picture when it ends).
     pub(super) fn absorb(&mut self) {
         if let Some(shared) = &self.shared {
-            self.absorbed = self.absorbed.saturating_add(shared.take_absorbed());
+            self.absorbed = shared.absorbed();
         }
     }
 
@@ -153,4 +168,52 @@ impl Pace {
 fn earned(rate_bps: u64, since: tokio::time::Instant) -> u128 {
     let micros = u128::from(u64::try_from(since.elapsed().as_micros()).unwrap_or(u64::MAX));
     u128::from(rate_bps) * micros / 8 / 1_000_000
+}
+
+#[cfg(test)]
+mod r12_tests {
+    use super::Pace;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::Arc;
+
+    fn pace(rate_bps: u64, free_bps: u64, cell: &Arc<AtomicU64>) -> Pace {
+        Pace {
+            rate_bps,
+            banked: 0,
+            anchor: tokio::time::Instant::now(),
+            anchor_rate: None,
+            written: 0,
+            absorbed: 0,
+            shared: None,
+            total: 300_000,
+            limit: Some(cell.clone()),
+            ceiling_at_start: 200_000,
+            control_bps: 50_000,
+            line_bps: 1,
+            free_bps,
+        }
+    }
+
+    /// Round 12 (Codex 12/14): a video picture started under 200 kbit/s
+    /// (150 kbit/s for it, 50 kbit/s control) goes on at the new ceiling less
+    /// control when the ceiling rises, unpaced when it is removed; a lowered
+    /// ceiling slows it as before; the tiles on a congested path keep their
+    /// rate (round 7 P1).
+    #[test]
+    fn r12_task_raised_ceiling_speeds_the_rest_of_a_picture_up() {
+        let cell = Arc::new(AtomicU64::new(200_000));
+        let video = pace(150_000, u64::MAX, &cell);
+        assert_eq!(video.rate(), 150_000);
+        cell.store(1_000_000, Ordering::Release);
+        assert_eq!(video.rate(), 950_000);
+        cell.store(0, Ordering::Release);
+        assert_eq!(video.rate(), u64::MAX);
+        cell.store(100_000, Ordering::Release);
+        assert_eq!(video.rate(), 50_000);
+        let congested = pace(150_000, 150_000, &cell);
+        cell.store(1_000_000, Ordering::Release);
+        assert_eq!(congested.rate(), 150_000);
+        let codec = pace(150_000, 600_000, &cell);
+        assert_eq!(codec.rate(), 600_000);
+    }
 }
