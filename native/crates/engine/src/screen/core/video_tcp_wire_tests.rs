@@ -2,6 +2,9 @@ use std::net::{IpAddr, SocketAddr};
 
 use super::*;
 use crate::net::InterfaceFacts;
+use crate::screen::core::frame_budget::{FrameCapabilities, MAX_SESSION_WORKING_BYTES};
+use crate::screen::core::pixel_convert::FrameSize;
+use crate::screen::core::video_transport::video_message::Admission;
 use crate::screen::core::wire::{tag_limit, MAX_CONTROL_BYTES};
 use crate::screen::core::wire_hello::tests::server_hello;
 use crate::screen::core::wire_hello::ScreenServerHello;
@@ -339,4 +342,45 @@ fn video_tcp_task_path_classification_and_german_reasons() {
         r#""wrong_token""#
     );
     assert_eq!(TcpPathKind::Punched.label(), "durch NAT gelocht");
+}
+
+/// User 2026-11-25 („was du anzeigst MUSS funktionieren“): a picture is one
+/// link record whatever size its frame contract lets it have. The host's
+/// bound (`link_record_limit`) is the viewer's (`Admission::max_message`)
+/// for every contract, the legacy one included; it follows the contract (a
+/// smaller one, a smaller bound; hybrid regions change nothing) and for the
+/// extended contract lies above one picture record, the link's bound before
+/// (`DEFAULT_LINK_RECORD_BYTES`), within what the `u32` length names.
+#[test]
+fn video_tcp_task_link_record_bound_follows_the_frame_contract() {
+    let negotiated = |texture: FrameSize, bytes: u64| {
+        let caps = FrameCapabilities::admitted(texture, bytes).unwrap();
+        FrameContract::negotiate(Some(caps), Some(caps))
+            .unwrap()
+            .unwrap()
+    };
+    let large = negotiated(FrameSize::new(4096, 2304), MAX_SESSION_WORKING_BYTES);
+    let small = negotiated(FrameSize::new(1280, 720), 64 * 1024 * 1024);
+    let hybrid = FrameContract {
+        hybrid_regions: !large.hybrid_regions,
+        ..large
+    };
+    for contract in [Some(large), Some(small), Some(hybrid), None] {
+        let viewer = Admission {
+            contract,
+            local: contract.map(|contract| contract.limits),
+            memory_bytes: None,
+        };
+        assert_eq!(
+            link_record_limit(contract).unwrap(),
+            viewer.max_message().unwrap(),
+            "{contract:?}"
+        );
+    }
+    let large_limit = link_record_limit(Some(large)).unwrap();
+    assert!(large_limit > DEFAULT_LINK_RECORD_BYTES, "{large_limit}");
+    assert!(large_limit <= MAX_LINK_RECORD_BYTES);
+    assert!(link_record_limit(Some(small)).unwrap() < large_limit);
+    assert_eq!(link_record_limit(Some(hybrid)).unwrap(), large_limit);
+    assert_eq!(DEFAULT_LINK_RECORD_BYTES, MAX_RECORD_BYTES + 4096);
 }

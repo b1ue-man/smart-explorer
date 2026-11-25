@@ -12,9 +12,10 @@
 //!
 //! Viewer: gathers at the session's start (`ViewerTcp::gather`), sends the
 //! offer, and on the host's answer establishes the link in a task of its
-//! own that passes every record (one picture message) to the picture task
-//! and tells the host `VIDEO_TCP_RESULT`. Its writer stays open while the
-//! link carries pictures: its end would end the host's carrier.
+//! own that passes every record (one picture message, as long as the frame
+//! contract lets a picture be: a lossless tile picture too) to the picture
+//! task and tells the host `VIDEO_TCP_RESULT`. Its writer stays open while
+//! the link carries pictures: its end would end the host's carrier.
 //!
 //! The Iroh endpoint's own addresses (`GatherPlan::endpoint_addrs`, as the
 //! Share worker last published them, QAD included) give the predicted
@@ -31,8 +32,8 @@ use crate::screen::core::video_tcp_wire::{
 use crate::screen::core::video_transport::video_route::{RecordSender, SendFuture, VideoRoute};
 use crate::screen::core::wire_control::ViewerFrame;
 use crate::screen::os::video_tcp_link::{
-    GatherPlan, HostTcpLocal, ReflectorTarget, TcpLinkFailure, TcpPictureLink, TcpRecordWriter,
-    ViewerTcpLocal, ESTABLISH_TIMEOUT, REFLECT_TIMEOUT,
+    GatherPlan, HostTcpLocal, ReflectorTarget, TcpLinkFailure, TcpPictureLink, TcpRecordReader,
+    TcpRecordWriter, ViewerTcpLocal, ESTABLISH_TIMEOUT, REFLECT_TIMEOUT,
 };
 
 /// One line in the screen log of this process.
@@ -166,10 +167,31 @@ pub fn spawn_host_tcp(
     })
 }
 
+/// Passes every record of the viewer's `reader` (one picture message each,
+/// at most the reader's bound) to the picture task until the link ends;
+/// `Some`: why it ended, `None`: the picture task is gone. A place in
+/// `records` is taken before the next record is read, so whole pictures
+/// wait only in its places (`video_viewer.rs` `RECORDS`), and a slower
+/// decoder holds the host back through TCP's flow control.
+async fn forward_pictures(
+    reader: &mut TcpRecordReader,
+    records: &mpsc::Sender<Vec<u8>>,
+) -> Option<String> {
+    loop {
+        let place = records.reserve().await.ok()?;
+        match reader.recv().await {
+            Ok(Some(record)) => place.send(record),
+            Ok(None) => return Some("direct TCP link ended by the host".to_string()),
+            Err(error) => return Some(format!("direct TCP link ended: {error}")),
+        }
+    }
+}
+
 /// The viewer's side of the link.
 pub struct ViewerTcp {
     local: Option<ViewerTcpLocal>,
-    /// The largest record the reader takes (the largest picture message).
+    /// The largest record the reader takes: the largest picture message of
+    /// the frame contract (`Admission::max_message`); 0 keeps the default.
     max_record: usize,
 }
 
@@ -242,17 +264,13 @@ impl ViewerTcp {
             }
             // Open while the pictures come: its end would end the carrier.
             let _writer = writer;
-            loop {
-                match reader.recv().await {
-                    Ok(Some(record)) => {
-                        if records.send(record).await.is_err() {
-                            return;
-                        }
-                    }
-                    Ok(None) => return log("viewer: direct TCP link ended by the host"),
-                    Err(error) => return log(&format!("viewer: direct TCP link ended: {error}")),
-                }
+            if let Some(end) = forward_pictures(&mut reader, &records).await {
+                log(&format!("viewer: {end}"));
             }
         }))
     }
 }
+
+#[cfg(test)]
+#[path = "video_tcp_carrier_tests.rs"]
+mod tests;

@@ -21,12 +21,29 @@
 //! (`FRAME_LOSS`, `VIDEO_OFFER`, `VIDEO_ANSWER`, `VIDEO_REPORT`).
 //! All three payloads are JSON within the default control budget
 //! (`MAX_CONTROL_BYTES`), so `wire::tag_limit` needs no entry.
+//!
+//! On the link each picture is one record, a whole picture message
+//! (`video_message.rs`): a tile picture of many records as well as one video
+//! access unit. Its bound follows the frame contract on both sides
+//! (`link_record_limit`): the host refuses a longer message before it sends,
+//! the viewer's reader takes no longer record (`Admission::max_message`) and
+//! asks for its memory only after the length passed. One record instead of
+//! parts of a picture: the link carries nothing but pictures, in one
+//! direction and in order, so parts would interleave with nothing, while the
+//! viewer would still have to hold the whole message before it hands it on
+//! (`MessageDelivery::deliver`). And an earlier viewer with the link (since
+//! v0.5.205) refuses a record above its old bound of one picture record and
+//! ends the link, so its host falls back to the streams; parts it cannot
+//! read it would drop one by one as unreadable messages with the link up.
 use std::fmt;
 use std::io;
 use std::net::{IpAddr, SocketAddr};
 
 use serde::{Deserialize, Serialize};
 
+use super::frame_budget::FrameContract;
+use super::frame_size_caps::PacketBudget;
+use super::video_transport::video_message::MESSAGE_OVERHEAD;
 use super::wire::{from_json, invalid, to_json};
 use super::wire_binary::MAX_RECORD_BYTES;
 
@@ -57,9 +74,28 @@ pub const TCP_ALPN: &[u8] = b"smart-explorer/screen-tcp/1";
 /// Bytes a link record may carry beyond one picture record payload: the
 /// picture group head with its contract extension and the record head.
 pub const LINK_RECORD_OVERHEAD: usize = 4096;
-/// Largest record of the link (`u32` length + bytes): one picture record
-/// (`wire_binary::MAX_RECORD_BYTES`) with its heads.
-pub const MAX_LINK_RECORD_BYTES: usize = MAX_RECORD_BYTES + LINK_RECORD_OVERHEAD;
+/// The bound of a link's reader until its side names the pictures' bound
+/// (`TcpRecordReader::set_max_record`): one picture record
+/// (`wire_binary::MAX_RECORD_BYTES`) with its heads. The host's reader
+/// keeps it: the viewer sends no pictures.
+pub const DEFAULT_LINK_RECORD_BYTES: usize = MAX_RECORD_BYTES + LINK_RECORD_OVERHEAD;
+/// The longest record the `u32` length of a link record names.
+pub const MAX_LINK_RECORD_BYTES: usize = u32::MAX as usize;
+
+/// The longest picture record on the link for a group of `contract`: the
+/// largest message `video_message::encode` lets through, i.e. the records
+/// with their heads within the packet budget's `encoded_bytes`, plus
+/// `MESSAGE_OVERHEAD` (message head, group head, largest contract
+/// extension). The viewer's `Admission::max_message` of the same contract
+/// is the same number, so whatever size the contract lets a picture have,
+/// it travels as one record.
+pub fn link_record_limit(contract: Option<FrameContract>) -> io::Result<usize> {
+    PacketBudget::for_contract(contract)?
+        .encoded_bytes
+        .checked_add(MESSAGE_OVERHEAD)
+        .filter(|bytes| *bytes <= MAX_LINK_RECORD_BYTES)
+        .ok_or_else(|| invalid("picture message exceeds the TCP record length"))
+}
 
 /// How a side learned a candidate (statistics; every kind is dialed).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]

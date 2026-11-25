@@ -137,10 +137,11 @@ pub struct TcpLinkInfo {
 }
 
 /// An established link: records both ways in place of QUIC uni streams.
-/// The host's picture writer sends each picture group head and frame record
-/// with `writer.send(&[head, payload])`; the viewer's reader takes them
-/// with `reader.recv()` (bounded by `MAX_LINK_RECORD_BYTES` or
-/// `set_max_record`).
+/// The host's picture writer sends each picture message as one record with
+/// `writer.send(&[message])` (`video_tcp_carrier.rs`); the viewer's reader
+/// takes them with `reader.recv()`, bounded by `DEFAULT_LINK_RECORD_BYTES`
+/// until `set_max_record` names the frame contract's largest picture
+/// message (`video_tcp_wire::link_record_limit`).
 pub struct TcpPictureLink {
     pub info: TcpLinkInfo,
     pub reader: TcpRecordReader,

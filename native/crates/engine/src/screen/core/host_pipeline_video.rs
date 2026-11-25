@@ -1,39 +1,74 @@
 //! The pipeline's pictures as messages (`video_transport.rs`): which
-//! carrier a picture takes (under „UDP“ the direct UDP pair or QUIC
-//! datagrams, under „TCP“ the direct TCP link, else the picture streams),
-//! the switch between kinds of carrier (a new group with a key frame), the
-//! send of one message group's picture, and the answer to a lost picture:
-//! the viewer's `FRAME_LOSS`, or a picture the carrier did not take, ends
-//! the group; the next one continues from the confirmed picture (B-36) or
-//! starts with a key frame, as after a stale stream (`reset_stale_stream`).
+//! carrier a picture takes (`carrier_choice`: under „UDP“ the direct UDP
+//! pair or QUIC datagrams, under „TCP“ the direct TCP link, else the
+//! picture streams), the switch between kinds of carrier (a new group with
+//! a key frame), the send of one message group's picture, and the answer to
+//! a lost picture: the viewer's `FRAME_LOSS`, or a picture the carrier did
+//! not take, ends the group; the next one continues from the confirmed
+//! picture (B-36) or starts with a key frame, as after a stale stream
+//! (`reset_stale_stream`).
 use super::*;
 use crate::screen::core::chain_meter;
 use crate::screen::core::delivery::Delivery;
 use crate::screen::core::gop_continue::ResetFacts;
+use crate::screen::core::negotiate::CodecKind;
 use crate::screen::core::rate_control::PathKind;
 use crate::screen::core::sender_budget::EncodePermit;
 use crate::screen::core::video_transport::video_route::{loss_recovery, LossRecovery};
-use crate::screen::core::video_transport::video_sink::{MessageCarrier, MessageGroup, SinkKind};
+use crate::screen::core::video_transport::video_sink::{
+    MessageCarrier, MessageGroup, SendFailure, SinkKind,
+};
 use crate::screen::core::video_transport::FrameLoss;
 
 /// One encoded picture: frame, id, capture time, size.
 pub(super) type Picture = (EncodedFrame, u64, u64, FrameSize);
 
+/// The kind of carrier a picture may take.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CarrierChoice {
+    /// The QUIC picture streams.
+    Streams,
+    /// „UDP“: the direct UDP pair, else QUIC datagrams the viewer offered.
+    Datagrams,
+    /// „TCP“: the direct TCP link while it is up.
+    Records,
+}
+
+/// The carrier of a picture of `kind` and `codec` under `delivery`;
+/// `hybrid`: the group's contract carries hybrid regions. Previews and
+/// stills keep the streams. Under „TCP“ every `video` picture takes the
+/// direct link (user 2026-11-25: „TCP und UDP, DIREKT“): the video codecs,
+/// the tiles („Verlustfrei“) and pictures with hybrid regions, each picture
+/// one record however large its contract lets it be
+/// (`video_tcp_wire::link_record_limit`). Under „UDP“ only the video
+/// codecs without hybrid regions go as datagrams; a tile or hybrid picture
+/// of many records keeps the streams.
+fn carrier_choice(
+    kind: StreamKind,
+    codec: CodecKind,
+    hybrid: bool,
+    delivery: Delivery,
+) -> CarrierChoice {
+    if kind != StreamKind::Video {
+        return CarrierChoice::Streams;
+    }
+    match delivery {
+        Delivery::Reliable => CarrierChoice::Records,
+        Delivery::Realtime if codec.is_video() && !hybrid => CarrierChoice::Datagrams,
+        Delivery::Realtime => CarrierChoice::Streams,
+    }
+}
+
 impl Pipeline {
-    /// The carrier of the next picture for a `video` picture of a video
-    /// codec without hybrid regions: under „UDP“ the direct pair or QUIC
-    /// datagrams the viewer offered, under „TCP“ the direct TCP link;
-    /// `None`: the picture streams.
+    /// The carrier of the next picture (`carrier_choice`); `None`: the
+    /// picture streams, also while the chosen carrier is missing (no
+    /// direct pair or datagrams offered, no TCP link up).
     pub(super) fn message_carrier(&self, connection: &Connection) -> Option<MessageCarrier> {
-        let video = self.kind == StreamKind::Video
-            && self.choice.codec.is_video()
-            && !self.frame_contract.is_some_and(|c| c.hybrid_regions);
-        if !video {
-            return None;
-        }
-        match self.pacer.delivery() {
-            Delivery::Realtime => self.work.video().carrier(connection),
-            Delivery::Reliable => self.work.video().record_carrier(),
+        let hybrid = self.frame_contract.is_some_and(|c| c.hybrid_regions);
+        match carrier_choice(self.kind, self.choice.codec, hybrid, self.pacer.delivery()) {
+            CarrierChoice::Streams => None,
+            CarrierChoice::Datagrams => self.work.video().carrier(connection),
+            CarrierChoice::Records => self.work.video().record_carrier(),
         }
     }
 
@@ -128,11 +163,16 @@ impl Pipeline {
         let gop_id = group.header().gop_id;
         let writing = group.write_picture(frame_id, capture_ts_us, keyframe, frame.records);
         let written = tokio::select! {biased;
-            _ = work.cancelled(work_epoch) => Err(io::Error::from(io::ErrorKind::Interrupted)),
+            _ = work.cancelled(work_epoch) => Err(SendFailure::Carrier(
+                io::Error::from(io::ErrorKind::Interrupted),
+            )),
             result = writing => result,
         };
         let booked = written.as_ref().map_or(0, |sent| sent.bytes);
-        self.rate.on_stream_sent(send_started_us, booked, true);
+        // Booked as the streams book it (`host_frame_send.rs`): `video` is
+        // false for a tile picture.
+        let video = self.choice.codec.is_video();
+        self.rate.on_stream_sent(send_started_us, booked, video);
         drop(picture_write);
         let sent = match written {
             Ok(sent) => sent,
@@ -142,16 +182,19 @@ impl Pipeline {
                 self.reset_stream();
                 return Ok(Produced::Reset);
             }
-            Err(error) => {
+            Err(failure) => {
                 // Not taken whole: the picture is lost; recovered at once.
-                // A TCP link that failed is given up (the streams follow).
-                if records {
-                    self.work.video().record_ended(&error.to_string());
-                } else {
-                    self.work.video().note_failed();
+                // A TCP link that failed is given up (the streams follow);
+                // a picture its group's budget refused leaves the link up.
+                match &failure {
+                    SendFailure::Carrier(error) if records => {
+                        self.work.video().record_ended(&error.to_string());
+                    }
+                    SendFailure::Picture(_) if records => {}
+                    _ => self.work.video().note_failed(),
                 }
                 self.note_restart(&format!(
-                    "picture {frame_id} not sent as a message: {error}"
+                    "picture {frame_id} not sent as a message: {failure}"
                 ));
                 self.apply_loss(FrameLoss { gop_id, frame_id });
                 return Ok(Produced::Reset);
@@ -253,3 +296,7 @@ impl Pipeline {
         self.continue_from = Some(last_good);
     }
 }
+
+#[cfg(test)]
+#[path = "host_pipeline_video_tests.rs"]
+mod tests;

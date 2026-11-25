@@ -1,6 +1,10 @@
 //! The record layer of the direct TCP picture link (`video_tcp_link.rs`):
 //! the TLS handshake on the TCP stream, then records of a `u32` big-endian
 //! length and that many bytes, and the token exchange of `video_tcp_tls.rs`.
+//! A reader takes records up to its bound (`DEFAULT_LINK_RECORD_BYTES` until
+//! its side names the frame contract's largest picture message); a writer
+//! refuses only what the `u32` length cannot name, the picture's own bound
+//! is the pipeline's (`video_tcp_wire::link_record_limit`).
 //!
 //! The reader and the writer share the rustls state behind a mutex held only
 //! for synchronous rustls calls; each owns its half of the TCP stream and
@@ -17,7 +21,9 @@ use tokio::net::TcpStream;
 use tokio::time::{timeout_at, Instant};
 
 use super::tls::tls_io;
-use crate::screen::core::video_tcp_wire::{TcpToken, CONFIRM, MAX_LINK_RECORD_BYTES, TOKEN_BYTES};
+use crate::screen::core::video_tcp_wire::{
+    TcpToken, CONFIRM, DEFAULT_LINK_RECORD_BYTES, MAX_LINK_RECORD_BYTES, TOKEN_BYTES,
+};
 
 /// Why a TLS stage of one connection ended.
 #[derive(Debug)]
@@ -115,7 +121,7 @@ pub(super) async fn handshake(
         reader: TcpRecordReader {
             shared: shared.clone(),
             read,
-            max_record: MAX_LINK_RECORD_BYTES,
+            max_record: DEFAULT_LINK_RECORD_BYTES,
             received: 0,
         },
         writer: TcpRecordWriter {
@@ -171,8 +177,10 @@ impl TcpRecordReader {
         }
     }
 
-    /// Lowers the largest record this reader takes (at most
-    /// `MAX_LINK_RECORD_BYTES`), e.g. to the negotiated frame contract.
+    /// The largest record this reader takes from now on (at most what the
+    /// `u32` length names, `MAX_LINK_RECORD_BYTES`): the viewer names the
+    /// largest picture message of its frame contract
+    /// (`Admission::max_message`), which can lie above the default.
     pub fn set_max_record(&mut self, bytes: usize) {
         self.max_record = bytes.min(MAX_LINK_RECORD_BYTES);
     }
@@ -240,16 +248,21 @@ pub struct TcpRecordWriter {
 impl TcpRecordWriter {
     /// Writes one record: the `u32` length of all `parts` together, then
     /// the parts as they are (a picture is not copied into one buffer
-    /// first). Returns when the kernel took the last byte.
+    /// first). Returns when the kernel took the last byte. A record longer
+    /// than the length names (`MAX_LINK_RECORD_BYTES`) is refused before
+    /// anything is sent.
     pub async fn send(&mut self, parts: &[&[u8]]) -> io::Result<()> {
-        let total: usize = parts.iter().map(|part| part.len()).sum();
-        if total > MAX_LINK_RECORD_BYTES {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "TCP picture record exceeds its limit",
-            ));
-        }
-        let head = (total as u32).to_be_bytes();
+        let length = parts
+            .iter()
+            .try_fold(0usize, |total, part| total.checked_add(part.len()))
+            .and_then(|total| u32::try_from(total).ok())
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "TCP picture record exceeds its limit",
+                )
+            })?;
+        let head = length.to_be_bytes();
         let mut chunks: Vec<&[u8]> = Vec::with_capacity(parts.len() + 1);
         chunks.push(&head);
         chunks.extend_from_slice(parts);

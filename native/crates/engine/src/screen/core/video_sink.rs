@@ -4,9 +4,12 @@
 //! (`video_message.rs`) on a message carrier: split into FEC-protected
 //! packets on the direct UDP pair or as QUIC DATAGRAM frames (`SinkKind::
 //! Packets`, „UDP“), or as one record each on the direct TCP link
-//! (`SinkKind::Records`, „TCP“). Groups, ids, the link to the picture
-//! before and the viewer's delivery (`video_delivery.rs`) are the same for
-//! every message carrier; a group keeps its kind of carrier.
+//! (`SinkKind::Records`, „TCP“; a record as long as the group's contract
+//! lets a picture be, `video_tcp_wire::link_record_limit`). Groups, ids,
+//! the link to the picture before and the viewer's delivery
+//! (`video_delivery.rs`) are the same for every message carrier; a group
+//! keeps its kind of carrier.
+use std::fmt;
 use std::io;
 use std::sync::Arc;
 use std::time::Duration;
@@ -17,6 +20,7 @@ use iroh::endpoint::{Connection, SendDatagramError};
 use super::super::capture_records::CapturedRecords;
 use super::super::gop_stream::GopWriter;
 use super::super::pacing::STALE_STREAM_US;
+use super::super::video_tcp_wire::link_record_limit;
 use super::super::wire::invalid;
 use super::super::wire_binary::GopHeader;
 use super::video_message::{encode, PictureMeta};
@@ -106,6 +110,26 @@ impl MessageCarrier {
     }
 }
 
+/// Why a picture did not go whole.
+#[derive(Debug)]
+pub enum SendFailure {
+    /// The picture itself: its message is outside its group's budget (or
+    /// its build failed); the carrier stays usable.
+    Picture(io::Error),
+    /// The carrier did not take it: the TCP link failed, the packets
+    /// stalled or a packet did not go.
+    Carrier(io::Error),
+}
+
+impl fmt::Display for SendFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Picture(error) => write!(formatter, "the picture: {error}"),
+            Self::Carrier(error) => write!(formatter, "the carrier: {error}"),
+        }
+    }
+}
+
 /// What one picture took.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MessageSent {
@@ -158,14 +182,15 @@ impl MessageGroup {
 
     /// Sends one picture: its message cut into packets with parity, all at
     /// once, none sent again, within the stale time or not at all; on the
-    /// TCP link as one record, however long the line takes.
+    /// TCP link as one record of any length the group's contract admits
+    /// (a tile picture of many records too), however long the line takes.
     pub async fn write_picture(
         &mut self,
         frame_id: u64,
         capture_ts_us: u64,
         keyframe: bool,
         records: CapturedRecords,
-    ) -> io::Result<MessageSent> {
+    ) -> Result<MessageSent, SendFailure> {
         let meta = PictureMeta {
             frame_id,
             capture_ts_us,
@@ -183,10 +208,20 @@ impl MessageGroup {
             message
         })
         .await
-        .map_err(io::Error::other)??;
+        .map_err(io::Error::other)
+        .and_then(|message| message)
+        .map_err(SendFailure::Picture)?;
         // „TCP“: the message whole as one record; a slower line delays it.
         if let MessageCarrier::Record(record) = &self.carrier {
-            record.send(&message).await?;
+            // The viewer's reader takes the same bound (`Admission::
+            // max_message` of the contract); `encode` keeps the picture in it.
+            let limit = link_record_limit(header.frame_contract).map_err(SendFailure::Picture)?;
+            if message.len() > limit {
+                return Err(SendFailure::Picture(invalid(
+                    "picture exceeds the TCP link's record bound",
+                )));
+            }
+            record.send(&message).await.map_err(SendFailure::Carrier)?;
             return Ok(MessageSent {
                 bytes: message.len() as u64,
                 packets: 1,
@@ -197,7 +232,9 @@ impl MessageGroup {
         let budget = Duration::from_micros(STALE_STREAM_US);
         tokio::time::timeout(budget, self.send_message(message, frame_id))
             .await
-            .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "picture packets stalled"))?
+            .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "picture packets stalled"))
+            .and_then(|sent| sent)
+            .map_err(SendFailure::Carrier)
     }
 
     async fn send_message(&self, message: Arc<Vec<u8>>, frame_id: u64) -> io::Result<MessageSent> {

@@ -41,8 +41,10 @@
 //! video_tcp_link.rs`, `video_tcp_carrier.rs`), which both sides set up at
 //! the session's start when the host names `video_tcp`; without it the QUIC
 //! picture streams carry them, and `STATS` says why (`tcp_failure`).
-//! Only `video` pictures of H.264, HEVC and AV1 without hybrid regions
-//! travel as messages; tiles and previews keep the streams.
+//! Under „UDP“ only `video` pictures of H.264, HEVC and AV1 without hybrid
+//! regions travel as messages; under „TCP“ every `video` picture does, tiles
+//! and hybrid regions included (one record each within
+//! `video_tcp_wire::link_record_limit`); previews and stills keep the streams.
 use std::io;
 use std::net::SocketAddr;
 
