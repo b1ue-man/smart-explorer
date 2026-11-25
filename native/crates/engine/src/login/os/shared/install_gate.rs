@@ -162,9 +162,12 @@ impl Gate {
                 eprintln!("install {}: lock not taken: {error}", self.name);
             }
         }
+        // Only an install that ended after this caller asked was waited for
+        // (strictly later: a use in the same millisecond as the end of the
+        // last install asks again, CI 2026-11-25).
         let waited_for = self
             .read()
-            .filter(|record| !record.running && record.at_ms >= asked_ms)
+            .filter(|record| !record.running && record.at_ms > asked_ms)
             .and_then(|record| record.ended);
         if let Some(ended) = waited_for {
             return ended;
