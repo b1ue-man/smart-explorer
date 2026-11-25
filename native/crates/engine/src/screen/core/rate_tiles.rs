@@ -108,7 +108,8 @@ impl RateController {
     /// Otherwise the queue guard holds the tiles to what the line delivers.
     /// Never above the user's ceiling, also below the floor of the target.
     pub fn tiles_budget_bps(&self, now_us: u64) -> u64 {
-        let rate = if self.tiles.network_limited(now_us) {
+        // Unthrottled (user 2026-11-25) a congested path holds nothing back.
+        let rate = if !self.unthrottled && self.tiles.network_limited(now_us) {
             self.target_bps()
         } else {
             self.ceiling_bps()
@@ -143,7 +144,7 @@ impl RateController {
     pub fn stream_free_bps(&self, now_us: u64, video: bool) -> u64 {
         if video {
             u64::MAX
-        } else if self.tiles.network_limited(now_us) {
+        } else if !self.unthrottled && self.tiles.network_limited(now_us) {
             self.tiles_budget_bps(now_us)
         } else {
             self.codec_ceiling_bps
