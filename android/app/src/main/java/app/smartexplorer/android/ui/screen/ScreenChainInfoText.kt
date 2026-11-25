@@ -9,11 +9,12 @@ data class DecoderStage(val codec: String, val name: String, val hardware: Boole
 
 /**
  * The info line of the full view (plan 2026-11-14 `bildkette.md` 4.10, BK7b): the codec of the stream, the decoder stage of
- * this phone (Hardware or Software, with the decoder's name) and what the host says to „Höchste Datenrate“. Every
- * part is a string resource; [rate] says whether the host knows the limit.
+ * this phone (Hardware or Software, with the decoder's name) and what the host says to „Datenrate“; [rate] says whether
+ * the host knows the value. [delivery] adds the statistics texts of „Übertragung“ and the measured rate
+ * ([ScreenDelivery.infoParts], user 2026-11-25).
  */
 @Composable
-internal fun chainInfoLine(codec: String?, stage: DecoderStage?, rate: RateNote): String {
+internal fun chainInfoLine(codec: String?, stage: DecoderStage?, rate: RateNote, delivery: List<String> = emptyList()): String {
     val parts = ArrayList<String>()
     if (codec != null) {
         // The tile codec is the lossless picture.
@@ -34,5 +35,6 @@ internal fun chainInfoLine(codec: String?, stage: DecoderStage?, rate: RateNote)
         is RateNote.Unsupported -> parts.add(stringResource(R.string.screen_view_info_rate_unsupported, ViewerCodecChoice.mbitText(rate.bps)))
         is RateNote.Sent -> parts.add(stringResource(R.string.screen_view_info_rate_sent, ViewerCodecChoice.mbitText(rate.bps)))
     }
+    parts.addAll(delivery)
     return parts.joinToString(" · ")
 }

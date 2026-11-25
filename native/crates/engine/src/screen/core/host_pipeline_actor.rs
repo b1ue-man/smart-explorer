@@ -50,6 +50,8 @@ struct Pending {
     /// A visibility acknowledgement's floor (`visibility_floor`).
     forget_below: Option<u64>,
     receipts: VecDeque<Receipt>,
+    /// „Übertragung“ and a measured rate while a picture operation runs.
+    line: line::LinePending,
 }
 struct Facts {
     next: u64,
@@ -69,6 +71,8 @@ struct Facts {
     chain: wait::Chain,
     /// Station times and chain facts (BK0), shared with the pipeline.
     meter: crate::screen::core::chain_meter::SharedChain,
+    /// What the bandwidth probe watches (`Pipeline::line_facts`).
+    line: crate::screen::core::bandwidth_probe::LineFacts,
 }
 pub struct PipelineActor {
     pipeline: Option<Pipeline>,
@@ -128,6 +132,7 @@ impl PipelineActor {
             stats,
             chain: wait::Chain::default(),
             meter: pipeline.chain.clone(),
+            line: pipeline.line_facts(now_us()),
         };
         Self {
             pipeline: Some(pipeline),
@@ -176,6 +181,7 @@ impl PipelineActor {
             self.facts.stream = p.stream_info();
             self.facts.totals = p.totals();
             (self.facts.chain.self_paced, self.facts.chain.ready) = p.chain();
+            self.facts.line = p.line_facts(now_us());
         }
     }
     fn interrupt(&mut self) {
@@ -277,6 +283,7 @@ impl PipelineActor {
         if let Some(ceiling) = self.pending.ceiling.take() {
             p.set_rate_ceiling(ceiling);
         }
+        self.pending.line.apply(&mut p);
         self.apply_decoders(&mut p);
         if std::mem::take(&mut self.pending.second) {
             self.facts.stats = p.second(&self.connection);
@@ -477,5 +484,7 @@ impl PipelineActor {
 }
 #[path = "host_pipeline_actor_changes.rs"]
 mod changes;
+#[path = "host_pipeline_actor_line.rs"]
+mod line;
 #[path = "host_pipeline_actor_wait.rs"]
 mod wait;

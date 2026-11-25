@@ -1,6 +1,7 @@
 //! Tagged screen control encoding and decoding; domain types stay in the parent.
 use std::io;
 
+use super::super::bandwidth_probe as probe;
 use super::super::cursor_overlay::{
     CursorPosition, CursorShape, CURSOR_POSITION, CURSOR_REQUEST, CURSOR_SHAPE,
 };
@@ -78,6 +79,14 @@ pub fn encode_viewer_frame(frame: &ViewerFrame) -> io::Result<(u8, Vec<u8>)> {
             super::super::input_receipt::INPUT_RECEIPTS,
             vec![u8::from(*on)],
         ),
+        ViewerFrame::SetDelivery(delivery) => {
+            (probe::SET_DELIVERY, vec![probe::delivery_code(*delivery)])
+        }
+        ViewerFrame::Remeasure => (probe::REMEASURE, b"{}".to_vec()),
+        ViewerFrame::ProbeResult(result) => {
+            result.validate()?;
+            (probe::PROBE_RESULT, result.encode())
+        }
     })
 }
 
@@ -168,6 +177,12 @@ pub fn decode_viewer_frame(tag: u8, payload: &[u8]) -> io::Result<ViewerFrame> {
         super::super::input_receipt::INPUT_RECEIPTS if payload == [0] || payload == [1] => {
             ViewerFrame::InputReceipts(payload[0] != 0)
         }
+        probe::SET_DELIVERY => ViewerFrame::SetDelivery(probe::delivery_of_payload(payload)?),
+        probe::REMEASURE => {
+            from_json::<serde_json::Map<String, serde_json::Value>>(payload)?;
+            ViewerFrame::Remeasure
+        }
+        probe::PROBE_RESULT => ViewerFrame::ProbeResult(probe::ProbeResult::decode(payload)?),
         _ => return Err(invalid("unknown screen frame from the viewer")),
     })
 }

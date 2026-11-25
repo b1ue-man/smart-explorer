@@ -31,6 +31,9 @@ pub struct StartChoices {
     virtual_display: Option<VirtualDisplayChoice>,
     #[serde(default)]
     audio: Option<bool>,
+    /// „Übertragung“ (`screen_delivery.rs`).
+    #[serde(default)]
+    delivery: Option<crate::screen::core::delivery::Delivery>,
 }
 
 /// This process's start choices, when its start request named them.
@@ -47,6 +50,7 @@ pub fn start_choices() -> serde_json::Value {
         max_rate_bps: super::max_rate_bps(),
         virtual_display: Some(super::virtual_display_choice()),
         audio: super::super::screen_audio::stored(),
+        delivery: super::super::screen_delivery::stored(),
     };
     serde_json::to_value(choices).unwrap_or(serde_json::Value::Null)
 }
@@ -75,6 +79,7 @@ pub fn current() -> ViewerPrefs {
         prefs.max_rate_bps = start.max_rate_bps;
         prefs.virtual_display = start.virtual_display.or(prefs.virtual_display);
         prefs.audio = start.audio.or(prefs.audio);
+        prefs.delivery = start.delivery.or(prefs.delivery);
     }
     prefs
 }

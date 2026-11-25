@@ -174,6 +174,13 @@ impl Session<'_> {
                 self.handle.update(|view| view.audio = Some(report));
                 Ok(())
             }
+            // „Übertragung“, „Neu messen“ and a probe's answer (`delivery_v1`).
+            frame @ (ViewerFrame::SetDelivery(_)
+            | ViewerFrame::Remeasure
+            | ViewerFrame::ProbeResult(_)) => {
+                self.line
+                    .on_frame(frame, &mut self.pipeline, self.connection)
+            }
         }
     }
 
@@ -474,21 +481,6 @@ impl Session<'_> {
                 )
                 .await
             }
-        }
-    }
-}
-
-impl Session<'_> {
-    /// Sound that does not fit under the viewer's ceiling is not sent; the
-    /// viewer hears why once (round 8 Gemini 8/10).
-    async fn sound_notice(
-        &mut self,
-        ceiling: Option<Option<u64>>,
-        on: Option<bool>,
-    ) -> io::Result<()> {
-        match self.outbox.sound.update(ceiling, on) {
-            Some(text) => self.report(self.state, Some(&text)).await,
-            None => Ok(()),
         }
     }
 }

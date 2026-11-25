@@ -28,6 +28,9 @@ impl DecodeState {
                 // reason before this (round 11 N1): nothing to show of it.
                 rate_ceiling: _,
                 set_decoders,
+                // What a newer relay adds is read where it is used (the
+                // host's „Übertragung“ from its statistics, `screen_delivery`).
+                ..
             } => {
                 let exceeds = self
                     .shared

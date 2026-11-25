@@ -1,10 +1,11 @@
 //! The view and settings items of the viewer's toolbar (fit, full screen,
-//! latency, statistics, sound, codec, decoder, data rate, monitor and
-//! resolution), each one unit of the row (`wrap::item`).
+//! latency, statistics, sound, codec, decoder, transport, data rate with
+//! „Neu messen“, monitor and resolution), each one unit of the row
+//! (`wrap::item`).
 use eframe::egui::{self, RichText};
 
 use super::super::screen_prefs::Fit;
-use super::{codec_rows, display_rows, wrap, ToolbarAction, ToolbarInput};
+use super::{codec_rows, display_rows, rate_rows, wrap, ToolbarAction, ToolbarInput};
 
 pub(super) fn view_row(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Vec<ToolbarAction>) {
     let fit = input.prefs.fit;
@@ -66,11 +67,11 @@ pub(super) fn view_row(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Vec<To
         wrap::reserve(ui, wrap::checkbox_width(ui, "Ton"));
         super::super::screen_audio::toolbar_row(ui, input.info, out);
     });
-    // „Codec“ (replaces „Verlustfrei“), „Dekodierer“, „Höchste Datenrate“.
+    // „Codec“ (replaces „Verlustfrei“), „Dekodierer“, „Übertragung“ and
+    // „Datenrate“ (formerly „Höchste Datenrate“) with „Neu messen“.
     codec_rows::codec_rows(ui, input, out);
-    wrap::item(ui, "max_rate", |ui| {
-        codec_rows::max_rate_row(ui, input, out)
-    });
+    rate_rows::delivery_row(ui, input, out);
+    rate_rows::rate_row(ui, input, out);
     // „Monitor“ and „Auflösung“ of the host (plan 2026-11-17 P5).
     display_rows::display_rows(ui, input, out);
     codec_rows::save_error_row(ui);

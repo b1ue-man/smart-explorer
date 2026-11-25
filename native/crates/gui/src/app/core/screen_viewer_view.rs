@@ -388,13 +388,19 @@ impl ViewState {
                     self.reconnect(common, display);
                 }
             }
-            // „Höchste Datenrate“ at once; the relay drops it for a host
-            // without `rate_ceiling_v1` and the statistics say so (BK6).
+            // „Datenrate“ at once; the relay drops it for a host without
+            // `rate_ceiling_v1` and the statistics say so (BK6).
             ToolbarAction::MaxRate(rate) => {
                 if let Some(session) = &self.session {
                     session.send(ViewerFrame::RateCeiling(*rate));
                 }
             }
+            // „Übertragung“ and „Neu messen“ (user 2026-11-25), only to a
+            // host that runs „Übertragung“ (`screen_delivery::negotiated`).
+            ToolbarAction::Delivery(mode) => {
+                super::screen_delivery::switch(self.session.as_ref(), *mode)
+            }
+            ToolbarAction::Remeasure => super::screen_delivery::remeasure(self.session.as_ref()),
             ToolbarAction::Key(usage) => self.send_keys(vec![
                 InputEvent::Key {
                     hid_usage: *usage,

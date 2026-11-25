@@ -86,3 +86,37 @@ fn bildkette_task_bench_cli_text_names_host_timing_and_chain() {
         "{text}"
     );
 }
+
+/// User 2026-11-25: `se screen sessions` and `se screen bench` name the
+/// host's „Übertragung“ and the rate it measured with its age; `-` from a
+/// host that reports none.
+#[test]
+fn delivery_task_cli_chain_text_names_transport_and_measured_rate() {
+    use crate::screen::core::delivery::Delivery;
+    let chain = ChainReport {
+        delivery: Some(Delivery::Reliable),
+        measured_kbps: Some(48_200),
+        measured_age_ms: Some(3_400),
+        rate_limit: Some("measured".into()),
+        ..ChainReport::default()
+    };
+    let text = super::super::output::chain_text(&chain);
+    for part in [
+        "rate_limit=measured",
+        "delivery=reliable",
+        "measured_kbps=48200",
+        "measured_age_ms=3400",
+    ] {
+        assert!(
+            text.split('\t').any(|field| field == part),
+            "{part}: {text}"
+        );
+    }
+    let older = super::super::output::chain_text(&ChainReport::default());
+    for part in ["delivery=-", "measured_kbps=-", "measured_age_ms=-"] {
+        assert!(
+            older.split('\t').any(|field| field == part),
+            "{part}: {older}"
+        );
+    }
+}

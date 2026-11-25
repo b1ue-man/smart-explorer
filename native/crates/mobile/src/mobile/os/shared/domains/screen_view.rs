@@ -11,7 +11,8 @@
 //! - `screen.probe {relation, relationId, deviceId}` and `screen.windows
 //!   {…}` answer like `ProbeReport` and `WindowList` with camelCase keys.
 //! - `screen.viewOpen {…, mode, source?, decoders, displayWidth,
-//!   displayHeight, maxFps, maxRate?, codec?, decoder?}` → `{"session"}`
+//!   displayHeight, maxFps, maxRate?, codec?, decoder?, delivery?}` →
+//!   `{"session"}`
 //!   (`maxRate`: „Höchste Datenrate“ in bit/s, absent = automatic; `codec`
 //!   and `decoder`: `screen_view_codecs.rs`; the event `accepted` carries
 //!   `rateCeiling`: `automatic`, `applied` or `unsupported_by_host`);
@@ -23,7 +24,9 @@
 //!   serde form of `InputEvent`; a `key` event may name the key instead of its
 //!   `hid_usage`), `viewControl {session, action}`, `viewListWindows`,
 //!   `viewKeyframe`, `viewClose` (idempotent), `viewSetDecoders` (a new
-//!   „Codec“/„Dekodierer“ in the session, `screen_view_switch.rs`).
+//!   „Codec“/„Dekodierer“ in the session, `screen_view_switch.rs`),
+//!   `viewSetDelivery`/`viewRemeasure` and `viewOpen`'s `delivery`
+//!   („Übertragung“, „Neu messen“, `screen_view_delivery.rs`).
 use std::collections::BTreeMap;
 use std::sync::atomic::Ordering;
 use std::sync::Mutex;
@@ -48,6 +51,8 @@ use crate::share::{PeerOpenTarget, ShareProfiles};
 
 #[path = "screen_view_codecs.rs"]
 mod codecs;
+#[path = "screen_view_delivery.rs"]
+mod delivery;
 #[path = "screen_family.rs"]
 mod family;
 #[path = "screen_feed.rs"]
@@ -89,6 +94,8 @@ pub(super) fn handle(method: &str, args: &Value) -> Option<Result<Value, ApiErro
         "screen.viewSetMode" => set_mode(args),
         "screen.viewSetDecoders" => switch::set_decoders(args),
         "screen.viewSetDisplay" => switch::set_display(args),
+        "screen.viewSetDelivery" => delivery::set_delivery(args),
+        "screen.viewRemeasure" => delivery::remeasure(args),
         "screen.viewInput" => input(args),
         "screen.viewVisibility" => visibility(args),
         "screen.viewPresented" => presented::confirm(args),
@@ -322,6 +329,7 @@ fn view_open(args: &Value) -> Result<Value, ApiError> {
         gop_continue_decoders: Vec::new(),
         // P5: „Monitor“ and „Auflösung“ (`screen_view_codecs.rs`).
         virtual_display: codecs::virtual_display_arg(args)?,
+        delivery: delivery::delivery_arg(args)?,
     };
     let id = run::start(mode, target.peer(), request, own_device())?;
     Ok(json!({ "session": id }))

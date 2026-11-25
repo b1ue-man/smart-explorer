@@ -1,8 +1,9 @@
 //! Control frames after the handshake (decision C3). The viewer sends
 //! `SET_MODE`, `INPUT`, `FRAME_ACK`, `KEYFRAME_REQUEST`, `PING`,
 //! `LIST_WINDOWS`, `SNAPSHOT`, `CONTROL_REQUEST`, `PREVIEW_ACK`,
-//! `CURSOR_REQUEST`, `RATE_CEILING` (8 bytes) and `FRAME_TIMING` (JSON,
-//! `frame_timing.rs`); the host sends `STATE`, `PONG`, `WINDOWS`, `STATS`,
+//! `CURSOR_REQUEST`, `RATE_CEILING` (8 bytes), `FRAME_TIMING` (JSON,
+//! `frame_timing.rs`) and `SET_DELIVERY`, `REMEASURE`, `PROBE_RESULT`
+//! (`bandwidth_probe.rs`); the host sends `STATE`, `PONG`, `WINDOWS`, `STATS`,
 //! `CONTROL_STATE`, `ERROR`, `CURSOR_SHAPE` and `CURSOR_POSITION` (the
 //! pointer overlay of `cursor_overlay.rs`).
 //! Frames that come with every picture or input event have a fixed
@@ -381,6 +382,13 @@ pub enum ViewerFrame {
     /// after the host announced `input_receipts` in `HELLO_OK`
     /// (`input_receipt.rs`).
     InputReceipts(bool),
+    /// `SET_DELIVERY`: the viewer's „Übertragung“ (`delivery.rs`); only after
+    /// the host announced `delivery_v1` (`bandwidth_probe.rs`).
+    SetDelivery(super::delivery::Delivery),
+    /// `REMEASURE`: „Neu messen“, a new bandwidth probe; only after `delivery_v1`.
+    Remeasure,
+    /// `PROBE_RESULT`: what the viewer counted during a probe stream.
+    ProbeResult(super::bandwidth_probe::ProbeResult),
 }
 
 /// Viewer to host: `u64` big-endian, the ceiling in bit/s, 0 automatic.

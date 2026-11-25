@@ -132,6 +132,7 @@ impl ShareHost {
                     gop_continue_decoders: Vec::new(),
                     expected_node: metadata_pin,
                     virtual_display: None,
+                    delivery: None,
                 };
                 return self.screen_stream(stream, &target, request, true);
             }
@@ -262,6 +263,7 @@ impl ShareHost {
         let mut viewer = viewer_request(SessionMode::View, Some(source.clone()), decoders);
         viewer.display_size = Some(options.size);
         viewer.max_fps = options.fps;
+        viewer.delivery = request.delivery;
         let mut pending = stream.try_clone().map_err(|error| error.to_string())?;
         let connection = link.connection.clone();
         let measured = service.screen_runtime().block_on(async move {
@@ -345,6 +347,8 @@ impl ShareHost {
             codec_choice: request.codec,
             // Codex 4/6: the ceiling holds from the first picture on.
             max_rate_bps: request.max_rate_bps,
+            // „Übertragung“ from the first picture on.
+            delivery: request.delivery,
         };
         let redial = reconnect::Redial {
             service: service.clone(),
@@ -402,6 +406,7 @@ fn viewer_request(
         virtual_display: None,
         codec_choice: None,
         max_rate_bps: None,
+        delivery: None,
     }
 }
 
@@ -421,10 +426,14 @@ fn relay_input(input: &mut TcpStream, frames: &mpsc::Sender<Option<reconnect::Re
         let Ok(frame) = decode_viewer_frame(*wire_tag, body) else {
             break;
         };
-        // Pictures are acknowledged and `PING` is sent by the worker itself.
+        // Pictures are acknowledged, `PING` is sent and a bandwidth probe is
+        // answered by the worker itself.
         let own = matches!(
             frame,
-            ViewerFrame::FrameAck(_) | ViewerFrame::PreviewAck(_) | ViewerFrame::Ping(_)
+            ViewerFrame::FrameAck(_)
+                | ViewerFrame::PreviewAck(_)
+                | ViewerFrame::Ping(_)
+                | ViewerFrame::ProbeResult(_)
         );
         if !own
             && frames

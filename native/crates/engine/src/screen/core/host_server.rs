@@ -435,6 +435,8 @@ pub async fn serve(context: HostContext, viewer: ProvenViewer) -> io::Result<()>
     if let Some(ceiling) = hello.max_rate_bps.filter(|bps| *bps > 0) {
         pipeline.set_rate_ceiling(Some(ceiling));
     }
+    // „Übertragung“ from the first picture on (absent: the default).
+    pipeline.set_delivery(hello.delivery.unwrap_or_default());
     if let Some(tiles) = negotiate_for_contract(
         &metadata.encoders,
         &hello.decoders,
@@ -462,6 +464,7 @@ pub async fn serve(context: HostContext, viewer: ProvenViewer) -> io::Result<()>
         super::family_protocol::selector(&source_id).map(str::to_owned),
     );
     session.set_control_parts(hello.control_parts == Some(super::control_parts::CONTROL_PARTS_V1));
+    session.line = super::bandwidth_probe::LineLink::for_hello(&hello);
     session.run(recv, max_fps).await;
     Ok(())
 }

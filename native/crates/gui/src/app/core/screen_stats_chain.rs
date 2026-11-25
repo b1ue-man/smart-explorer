@@ -3,7 +3,8 @@
 //! its fallback, conversion on GPU or CPU, read-backs, pointer in the
 //! picture, a capped capture rate), what limits frame rate and bit rate,
 //! the rate the encoder is given and whether it keeps it (plan 2026-11-17),
-//! the kinds of recovery, the host's station times (after `FRAME_TIMING`,
+//! „Übertragung“ and the rate the host measured on the line (user
+//! 2026-11-25, `screen_delivery.rs`), the kinds of recovery, the host's station times (after `FRAME_TIMING`,
 //! the network with the clock offset) and the viewer's own stations
 //! (decode, hand-over to the graphics, dropped pictures, pictures drawn
 //! again because no new one came). A host before
@@ -20,7 +21,10 @@ fn limit_text(key: &str) -> &str {
         "source" => "Quelle",
         "encode_time" => "Kodierzeit",
         "link" => "Leitung",
-        "ceiling" => "Höchste Datenrate",
+        // The viewer's own „Datenrate“ (formerly „Höchste Datenrate“) and,
+        // under „Automatisch“, the rate the host measured (user 2026-11-25).
+        "ceiling" => "Datenrate wie gewählt",
+        "measured" => "Datenrate wie gemessen",
         "codec_ceiling" => "Obergrenze der Codec-Paarung",
         "ramp" => "Anlauf",
         "content" => "Bildinhalt",
@@ -133,7 +137,11 @@ fn stage_lines(chain: &ChainReport) -> Vec<String> {
 pub fn chain_lines(info: &SessionInfo) -> Vec<String> {
     let stats = info.stats.as_ref();
     let mut lines = match stats.and_then(|stats| stats.chain.as_ref()) {
-        Some(chain) => stage_lines(chain),
+        Some(chain) => {
+            let mut lines = stage_lines(chain);
+            lines.extend(super::screen_delivery::stats_lines(chain));
+            lines
+        }
         None => vec![format!("Bildkette: {NOT_REPORTED} (ältere Version)")],
     };
     match stats.and_then(|stats| stats.stations.as_ref()) {

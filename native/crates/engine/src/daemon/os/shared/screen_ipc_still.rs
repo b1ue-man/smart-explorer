@@ -86,6 +86,7 @@ impl Relayed {
             gop_continue: false,
             gop_continue_decoders: Vec::new(),
             virtual_display: None,
+            delivery: None,
         };
         let mut stream = if metadata {
             match expected_node {

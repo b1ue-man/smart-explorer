@@ -74,6 +74,7 @@ pub fn named_decoders(setting: CodecSetting, viewer: &Viewer) -> Vec<CodecOffer>
         gop_continue: false,
         gop_continue_decoders: Vec::new(),
         virtual_display: None,
+        delivery: None,
     }
     .chosen_decoders()
 }

@@ -71,6 +71,7 @@ fn bildkette_task_viewer_announces_only_with_capable_decoders() {
         gop_continue: false,
         gop_continue_decoders: Vec::new(),
         virtual_display: None,
+        delivery: None,
     };
     let auto = DecoderPreference::Automatic;
     // H.264 among the offers: a decoder that may open cannot continue.

@@ -2,10 +2,11 @@
 //! profile, encoder and decoder with their stage (Hardware/Software, plan
 //! 2026-11-14 „Bildkette“ 4.10a), picture size and rate, bit rate, path,
 //! round trip, drops, key frames, resets, the latency of the latest
-//! pictures and, when the host cannot take it, that „Höchste Datenrate“
-//! does not apply, in the corner of the picture. A value that is not known
-//! shows „–“. The chain lines of BK0 (stages, limits, station times) follow
-//! from `screen_stats_chain.rs`.
+//! pictures and, when the host cannot take it, that „Datenrate“ does not
+//! apply, in the corner of the picture. A value that is not known shows
+//! „–“. The chain lines of BK0 (stages, limits, station times) and
+//! „Übertragung …“ with „Datenrate gemessen …“ (user 2026-11-25) follow from
+//! `screen_stats_chain.rs`.
 use eframe::egui::{self, Color32, FontId};
 
 use super::screen_session::SessionInfo;

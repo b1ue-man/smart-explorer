@@ -216,6 +216,8 @@ pub(crate) fn deliver(
         gop_continue: false,
         gop_continue_decoders: Vec::new(),
         virtual_display: None,
+        // Input only: the host's default „Übertragung“ (Echtzeit).
+        delivery: None,
     };
     let mut stream = screen_stream(target, request)?;
     let control = stream.control();

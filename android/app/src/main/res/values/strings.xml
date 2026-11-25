@@ -107,7 +107,7 @@
     <string name="screen_view_more">Weitere Einstellungen</string>
     <string name="screen_view_sharpness">Scharf (GPU): Grafikkarten-Kodierung, H.264/HEVC, hohe Qualität</string>
     <string name="screen_view_lossless">Verlustfrei</string>
-    <!-- Codec, Dekodierer, Höchste Datenrate (plan 2026-11-14 „Bildkette“ 4.10, BK7b) -->
+    <!-- Codec, Dekodierer, Datenrate (plan 2026-11-14 „Bildkette“ 4.10, BK7b; „Höchste Datenrate“ bis 2026-11-25), Übertragung -->
     <string name="screen_view_codec">Codec</string>
     <string name="screen_view_codec_auto">Automatisch</string>
     <string name="screen_view_codec_h264">H.264</string>
@@ -117,15 +117,17 @@
     <string name="screen_view_decoder_auto">Automatisch</string>
     <string name="screen_view_decoder_hardware">Hardware</string>
     <string name="screen_view_decoder_software">Software</string>
-    <string name="screen_view_max_rate">Höchste Datenrate</string>
-    <string name="screen_view_max_rate_auto">automatisch</string>
-    <string name="screen_view_max_rate_line">Höchste Datenrate: %1$s</string>
+    <string name="screen_view_max_rate">Datenrate</string>
+    <string name="screen_view_max_rate_auto">Automatisch</string>
+    <string name="screen_view_max_rate_line">Datenrate: %1$s</string>
     <string name="screen_view_max_rate_mbit">%1$s Mbit/s</string>
-    <string name="screen_view_max_rate_prompt">Höchste Datenrate in Mbit/s (leer: automatisch)</string>
+    <string name="screen_view_max_rate_prompt">Datenrate in Mbit/s (leer: automatisch, wie gemessen)</string>
     <string name="screen_view_max_rate_invalid">Bitte eine positive Zahl eingeben, zum Beispiel 20 oder 7,5.</string>
     <string name="screen_view_max_rate_minimum">Mindestens %1$s Mbit/s: Darunter arbeitet das Gerät nicht, es würde die Rate von selbst anheben.</string>
     <string name="screen_view_max_rate_set">Übernehmen</string>
     <string name="screen_view_max_rate_cancel">Abbrechen</string>
+    <string name="screen_view_remeasure">Neu messen</string>
+    <string name="screen_view_delivery">Übertragung</string>
     <string name="screen_view_display_monitor">Monitor</string>
     <string name="screen_view_monitor_auto">Automatisch (eigener nur ohne Monitor am Gerät)</string>
     <string name="screen_view_monitor_off">Physischer Monitor</string>
@@ -138,9 +140,9 @@
     <string name="screen_view_info_codec">Codec: %1$s</string>
     <string name="screen_view_info_decoder_hardware">Dekodierer: Hardware (%1$s)</string>
     <string name="screen_view_info_decoder_software">Dekodierer: Software (%1$s)</string>
-    <string name="screen_view_info_rate_applied">Höchste Datenrate: %1$s Mbit/s</string>
-    <string name="screen_view_info_rate_unsupported">Höchste Datenrate %1$s Mbit/s: Das Gerät kennt sie nicht, sie gilt dort nicht.</string>
-    <string name="screen_view_info_rate_sent">Höchste Datenrate %1$s Mbit/s gesendet; das Gerät hat sie nicht bestätigt.</string>
+    <string name="screen_view_info_rate_applied">Datenrate: %1$s Mbit/s</string>
+    <string name="screen_view_info_rate_unsupported">Datenrate %1$s Mbit/s: Das Gerät kennt sie nicht, sie gilt dort nicht.</string>
+    <string name="screen_view_info_rate_sent">Datenrate %1$s Mbit/s gesendet; das Gerät hat sie nicht bestätigt.</string>
     <string name="screen_view_whole_screen">Ganzer Bildschirm</string>
     <string name="screen_view_monitor">Bildschirm %1$s: %2$s</string>
     <string name="screen_view_monitor_pick_on_host">Auswahl am Gerät</string>

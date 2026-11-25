@@ -196,6 +196,10 @@ impl ScreenLink {
             // it on with `AUDIO` (an older host ignores the field).
             audio: crate::screen::core::audio_wire::offer(request.mode),
             control_parts: None,
+            // „Übertragung“ (an older host ignores it); `viewer_client::
+            // handshake_for` announces the bandwidth probe.
+            delivery: request.delivery,
+            bandwidth_probe: None,
         };
         // Plan 2026-11-17 P5: the viewer's „Monitor“ and „Auflösung“, only
         // to a host that announced it.

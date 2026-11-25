@@ -12,7 +12,9 @@
 //! BK0 of plan 2026-11-14 „Bildkette“ also `source`, `host_timing` and
 //! `host_chain` when present), `sessions` `{"sessions":[…]}` (each session
 //! with `chain` and `stations` once the host has statistics; the text adds a
-//! `session_chain` and one `session_stage_us` line per station), `stop`
+//! `session_chain` and one `session_stage_us` line per station; `chain`
+//! names „Übertragung“ and the measured rate, `delivery=`,
+//! `measured_kbps=` and `measured_age_ms=` in the text), `stop`
 //! `{"stopped"}` and
 //! `devices` `{"devices":[{"target","device_id","name","relation","room",
 //! "online","probe"}]}`.
@@ -234,6 +236,14 @@ pub(super) fn chain_text(chain: &ChainReport) -> String {
         // Plan 2026-11-17: the rate the encoder is given and its honour.
         format!("encoder_rate_kbps={}", count(chain.encoder_rate_kbps)),
         format!("rate_honour={}", text(&chain.rate_honour)),
+        // User 2026-11-25: „Übertragung“ (`--transport`) and the rate the
+        // host measured, under the keys of the JSON.
+        format!(
+            "delivery={}",
+            chain.delivery.map_or("-", |delivery| delivery.key())
+        ),
+        format!("measured_kbps={}", count(chain.measured_kbps)),
+        format!("measured_age_ms={}", count(chain.measured_age_ms)),
     ]
     .join("\t")
 }

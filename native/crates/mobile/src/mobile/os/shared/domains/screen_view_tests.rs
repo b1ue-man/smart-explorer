@@ -455,10 +455,9 @@ fn wahlgilt_accepted_and_stats_carry_the_virtual_display_report() {
     );
 }
 
-/// The app's decoder list goes to the host through the core's
-/// `chosen_decoders`: under a named codec it holds that codec alone, no
-/// tiles (the host reads the choice from it and never replaces it); under
-/// „Automatisch“ the tiles stay the last fallback.
+/// The app's decoder list goes to the host through the core's `chosen_decoders`: under a
+/// named codec it holds that codec alone, no tiles (the host reads the choice from it and
+/// never replaces it); under „Automatisch“ the tiles stay the last fallback.
 #[test]
 fn wahlgilt_named_codec_offers_no_tiles_to_the_host() {
     use crate::screen::core::negotiate::CodecKind;
@@ -486,6 +485,7 @@ fn wahlgilt_named_codec_offers_no_tiles_to_the_host() {
             gop_continue: false,
             gop_continue_decoders: Vec::new(),
             virtual_display: None,
+            delivery: None,
         }
         .chosen_decoders()
     };

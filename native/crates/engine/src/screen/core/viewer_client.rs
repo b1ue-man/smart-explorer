@@ -17,7 +17,7 @@ use iroh::endpoint::{Connection, VarInt};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
-use super::gop_stream::{PictureEvent, VIEWER_UNI_STREAMS};
+use super::gop_stream::PictureEvent;
 use super::negotiate::CodecOffer;
 use super::pixel_convert::FrameSize;
 use super::window_list::SourceId;
@@ -69,6 +69,8 @@ pub struct ViewerRequest {
     /// „Höchste Datenrate“ for the hello (`ScreenClientHello::max_rate_bps`);
     /// `None` is automatic.
     pub max_rate_bps: Option<u64>,
+    /// „Übertragung“ for the hello (`ScreenClientHello::delivery`).
+    pub delivery: Option<super::delivery::Delivery>,
 }
 
 /// Why a session did not start or ended.
@@ -335,11 +337,9 @@ async fn handshake_for(
         }
     }
     let probe = hello.mode == SessionMode::Probe;
-    connection.set_max_concurrent_uni_streams(VarInt::from_u32(if probe {
-        0
-    } else {
-        VIEWER_UNI_STREAMS
-    }));
+    // The picture streams and, announced in the hello, the host's probe.
+    let streams = super::bandwidth_probe::viewer_streams(&mut hello, metadata);
+    connection.set_max_concurrent_uni_streams(VarInt::from_u32(streams));
     send_client_hello(&mut send, &hello).await?;
     let accepted = loop {
         match recv_hello_reply(&mut recv).await? {
@@ -444,6 +444,7 @@ async fn handshake_for(
             cursor_wish: cursor_wish.clone(),
             rate_ceiling: super::wire_hello::rate_ceiling_negotiated(&server) && !metadata,
             set_decoders: super::set_decoders::negotiated(&server) && !metadata,
+            delivery: super::bandwidth_probe::delivery_negotiated(&server) && !metadata,
         },
         &accepted,
     );

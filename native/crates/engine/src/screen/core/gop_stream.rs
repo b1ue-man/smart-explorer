@@ -159,6 +159,8 @@ pub struct GopWriter {
     /// The bytes of the frame being written handed to the stream so far
     /// (`handed_bytes`, Codex 6/9: a cut-off write booked them all).
     handed: u64,
+    /// A stalled piece ends the write (`piece`); not under „Zuverlässig“.
+    stall_cut: bool,
 }
 
 #[path = "gop_stream_pace.rs"]
@@ -177,6 +179,7 @@ impl GopWriter {
             pace: None,
             header_bytes,
             handed: 0,
+            stall_cut: true,
         })
     }
 
@@ -278,6 +281,12 @@ impl GopWriter {
 
     /// Marks the stream, opened and still empty, as a continuation: its
     /// first frame (no key frame) carries `FLAG_CONTINUE` (B-36).
+    /// Under „Zuverlässig“ (user 2026-11-25) a write waits for the line
+    /// however long it takes; only „Echtzeit“ gives a stalled picture up.
+    pub fn set_stall_cut(&mut self, cut: bool) {
+        self.stall_cut = cut;
+    }
+
     pub fn mark_continuation(&mut self) {
         self.continues = true;
     }
@@ -440,7 +449,7 @@ impl GopWriter {
     /// within the stale time plus its time on the measured line is a stall.
     async fn piece(&mut self, piece: bytes::Bytes) -> io::Result<()> {
         let bytes = piece.len() as u64;
-        let limit = self.pace.as_ref().map(|pace| {
+        let limit = self.pace.as_ref().filter(|_| self.stall_cut).map(|pace| {
             let line_us = u128::from(bytes) * 8 * 1_000_000 / u128::from(pace.line_bps);
             super::pacing::STALE_STREAM_US
                 .saturating_add(u64::try_from(line_us).unwrap_or(u64::MAX))

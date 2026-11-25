@@ -87,12 +87,13 @@ pub(super) fn source_refused(error: &ViewerError) -> bool {
             .is_some_and(|first| SESSION_WIDE.contains(&first.trim()))
 }
 
-/// The request of a session built again: the ceiling (Gemini 5/10) and the
-/// decoders with their „Codec“ (round 8 B4) as the viewer last chose them go
-/// in the hello itself, so the new session never starts above the ceiling
-/// nor with an encoder of the first request's codec that `SET_DECODERS`
-/// would replace at once; so do the source and display in force (Codex
-/// 11/4: the first source may be gone), the display at a monitor (H3).
+/// The request of a session built again: the ceiling (Gemini 5/10), the
+/// „Übertragung“ and the decoders with their „Codec“ (round 8 B4) as the
+/// viewer last chose them go in the hello itself, so the new session never
+/// starts above the ceiling nor with an encoder of the first request's codec
+/// that `SET_DECODERS` would replace at once; so do the source and display
+/// in force (Codex 11/4: the first source may be gone), the display at a
+/// monitor (H3).
 pub(super) fn request(
     modes: &ModeMemory,
     first: &ViewerRequest,
@@ -100,6 +101,8 @@ pub(super) fn request(
 ) -> ViewerRequest {
     let mut request = first.clone();
     request.max_rate_bps = ceiling;
+    // „Übertragung“ as the viewer chose it last, in the hello.
+    request.delivery = modes.delivery().or(first.delivery);
     match modes.display() {
         None => {
             if let Some(source) = modes.source() {

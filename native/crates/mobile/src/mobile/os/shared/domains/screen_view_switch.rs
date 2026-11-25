@@ -44,6 +44,7 @@ pub(super) fn set_decoders(args: &Value) -> Result<Value, ApiError> {
         gop_continue: false,
         gop_continue_decoders: Vec::new(),
         virtual_display: None,
+        delivery: None,
     };
     session.send(&ViewerFrame::SetDecoders(request.decoders_frame()))?;
     Ok(json!({ "switched": true }))

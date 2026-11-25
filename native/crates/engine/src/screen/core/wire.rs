@@ -98,6 +98,9 @@ pub fn tag_limit(tag: u8) -> usize {
         super::audio_wire::AUDIO => 1,
         super::input_receipt::INPUT_RECEIPTS => 1,
         super::audio_wire::AUDIO_REPORT => super::audio_wire::AUDIO_REPORT_BYTES,
+        super::bandwidth_probe::SET_DELIVERY => super::bandwidth_probe::SET_DELIVERY_BYTES,
+        super::bandwidth_probe::REMEASURE => super::bandwidth_probe::REMEASURE_BYTES,
+        super::bandwidth_probe::PROBE_RESULT => super::bandwidth_probe::PROBE_RESULT_BYTES,
         _ => MAX_CONTROL_BYTES,
     }
 }

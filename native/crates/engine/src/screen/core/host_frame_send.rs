@@ -102,6 +102,7 @@ impl Pipeline {
             self.rate.sustained_bps(),
         );
         gop.pace_free(self.rate.stream_free_bps(send_started_us, video));
+        gop.set_stall_cut(self.pacer.delivery() == super::super::delivery::Delivery::Realtime);
         gop.pace_absorbs(self.rate.shared_budget());
         // Codex 6/9, round 7 P3: a stalled stream ends the write piece by
         // piece (`GopWriter::piece`, at the rate the line was measured to

@@ -56,8 +56,9 @@ private fun ChoiceItem(label: String, selected: Boolean, reason: String?, onClic
 
 /**
  * The entries „Codec“ (Automatisch, H.264, HEVC, AV1, Scharf (GPU), Verlustfrei), „Dekodierer“ (Automatisch, Hardware, Software)
- * and „Höchste Datenrate“ of the settings menu (plan 2026-11-14 `bildkette.md` 4.10). A change goes to [onSettings];
- * the data rate opens [MaxRateDialog] through [onRate]. User rule of 2026-11-24 („was du anzeigst MUSS funktionieren“):
+ * and „Datenrate“ (formerly „Höchste Datenrate“; „Automatisch“ names the rate the host measured, user 2026-11-25) of the
+ * settings menu (plan 2026-11-14 `bildkette.md` 4.10). A change goes to [onSettings]; the data rate opens [MaxRateDialog]
+ * through [onRate]. User rule of 2026-11-24 („was du anzeigst MUSS funktionieren“):
  * an entry this phone and the host of [ui] cannot run together is disabled with its reason ([ScreenCodecOffer]), and a
  * stored choice the session runs as „Automatisch“ is named with its reason ([ScreenSessionState.sessionNotes]).
  */
@@ -101,14 +102,17 @@ internal fun ColumnScope.CodecMenuItems(settings: ViewSettings, onSettings: (Vie
         )
     }
     val value = choice.maxRateBps?.let { stringResource(R.string.screen_view_max_rate_mbit, ViewerCodecChoice.mbitText(it)) }
-        ?: stringResource(R.string.screen_view_max_rate_auto)
+        ?: ScreenDelivery.automaticText(stringResource(R.string.screen_view_max_rate_auto), ui.delivery)
     DropdownMenuItem(
         text = { Text(stringResource(R.string.screen_view_max_rate_line, value)) },
         onClick = onRate,
     )
 }
 
-/** Asks for „Höchste Datenrate“ in Mbit/s; empty is automatic ([onSet] gets `null`), a number is bit/s via [ViewerCodecChoice.parseMbit]. */
+/**
+ * Asks for „Datenrate“ in Mbit/s; empty is automatic, the rate the host measures ([onSet] gets `null`), a number is
+ * bit/s via [ViewerCodecChoice.parseMbit], which the host then uses exactly.
+ */
 @Composable
 internal fun MaxRateDialog(current: Long?, onDismiss: () -> Unit, onSet: (Long?) -> Unit) {
     var text by remember { mutableStateOf(ViewerCodecChoice.mbitText(current)) }

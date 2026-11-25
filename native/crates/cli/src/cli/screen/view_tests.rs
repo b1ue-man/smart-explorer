@@ -91,6 +91,7 @@ fn screen_task_viewer_launch_args() {
             virtual_display: None,
             display_size: None,
             audio: None,
+            transport: None,
             json: true,
         }
     );
@@ -316,6 +317,27 @@ fn audio_task_cli_audio_option() {
         assert!(parse_audio(wrong).is_err(), "{wrong}");
     }
     assert!(Wrapper::try_parse_from(["screen", "view", "Laptop", "--audio", "loud"]).is_err());
+}
+
+/// User 2026-11-25: `--transport realtime|reliable` takes „Übertragung“ by
+/// the key the viewer stores; anything else is refused before the window.
+#[test]
+fn delivery_task_cli_transport_option() {
+    use super::parse_transport;
+    use crate::app::screen_delivery::Delivery;
+    let view = ["screen", "view", "Laptop", "--transport", "reliable"];
+    let ScreenCommand::View(args) = Wrapper::try_parse_from(view).unwrap().command else {
+        panic!("not the view command");
+    };
+    assert_eq!(args.transport, Some(Delivery::Reliable));
+    assert_eq!(parse_transport("realtime"), Ok(Delivery::Realtime));
+    assert_eq!(parse_transport(" reliable "), Ok(Delivery::Reliable));
+    for wrong in ["", "udp", "tcp", "Reliable", "auto"] {
+        let error = parse_transport(wrong).unwrap_err();
+        assert!(error.contains("realtime or reliable"), "{wrong}: {error}");
+    }
+    let refused = ["screen", "view", "Laptop", "--transport", "fast"];
+    assert!(Wrapper::try_parse_from(refused).is_err());
 }
 
 /// Rule „Wahl gilt“ (2026-11-18): `--max-rate` below the encoders' lowest

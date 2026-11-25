@@ -186,6 +186,18 @@ pub struct ChainReport {
     /// absent for a session whose viewer sent no wish.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub virtual_display: Option<String>,
+    /// The line's available rate the last bandwidth probe found, in kbit/s
+    /// (`bandwidth_probe.rs`); absent before the first answer, for a viewer
+    /// that reads no probe streams and from hosts before it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub measured_kbps: Option<u64>,
+    /// How long ago that answer arrived, in ms.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub measured_age_ms: Option<u64>,
+    /// The „Übertragung“ the host runs (`delivery.rs`); absent from hosts
+    /// before it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery: Option<super::delivery::Delivery>,
 }
 
 /// The capture API a session uses.

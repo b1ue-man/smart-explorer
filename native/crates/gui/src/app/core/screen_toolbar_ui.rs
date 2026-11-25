@@ -2,13 +2,13 @@
 //! choice, „Steuern“, fit and full screen, lowest latency (P9: the switch
 //! „Schärfe vor Flüssigkeit“ is the codec choice „Scharf (GPU)“ now),
 //! the keys egui cannot deliver (only those the host offers), the system
-//! actions of an Android host, the statistics switch, and „Codec“,
-//! „Dekodierer“ and „Höchste Datenrate“ (`screen_toolbar_codec.rs`, plan
-//! 2026-11-14 „Bildkette“ 4.10). Apart from „Höchste Datenrate“, which it
-//! stores itself, and „Niedrigste Latenz“, which it hands to the Direct3D 11
-//! display at once (P9), it changes nothing: `show` returns the user's
-//! choices, and the viewer app carries them out.
-use eframe::egui::{self, RichText};
+//! actions of an Android host, the statistics switch, „Codec“ and
+//! „Dekodierer“ (`screen_toolbar_codec.rs`, plan 2026-11-14 „Bildkette“
+//! 4.10), „Übertragung“ and „Datenrate“ (`screen_toolbar_rate.rs`). Apart
+//! from „Datenrate“, which it stores itself, and „Niedrigste Latenz“, which
+//! it hands to the Direct3D 11 display at once (P9), it changes nothing:
+//! `show` returns the user's choices, and the viewer app carries them out.
+use eframe::egui;
 
 use super::screen_devices::DeviceEntry;
 use super::screen_prefs::{Fit, ViewerPrefs};
@@ -92,6 +92,10 @@ pub enum ToolbarAction {
     VirtualDisplay(super::screen_prefs::VirtualDisplayChoice),
     /// „Ton“: the host's sound on or off (plan 2026-11-17 P9).
     Audio(bool),
+    /// „Übertragung“ (user 2026-11-25, `screen_delivery.rs`).
+    Delivery(super::screen_delivery::Delivery),
+    /// „Neu messen“: the host measures the line again.
+    Remeasure,
     LowLatency(bool),
     Stats(bool),
     Key(u16),
@@ -396,84 +400,19 @@ fn source_row(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Vec<ToolbarActi
     }
 }
 
-fn control_row(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Vec<ToolbarAction>) {
-    wrap::item(ui, "control", |ui| control_items(ui, input, out));
-}
-
-fn control_items(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Vec<ToolbarAction>) {
-    let Some(hello) = input.info.and_then(|info| info.hello.as_ref()) else {
-        return;
-    };
-    if !control_offered(hello) {
-        return;
-    }
-    let mut on = input.control_on;
-    let taken = input.controlled_by.is_some();
-    // A disabled child never breaks its row itself (Gemini 3/8).
-    wrap::reserve(ui, wrap::button_width(ui, "Steuern"));
-    if ui
-        .add_enabled(!taken, egui::SelectableLabel::new(on, "Steuern"))
-        .on_hover_text("Strg+Umschalt+K")
-        .clicked()
-    {
-        on = !on;
-        out.push(ToolbarAction::Control(on));
-    }
-    if let Some(name) = input.controlled_by {
-        wrap::note(ui, RichText::new(format!("Gesteuert von {name}")).small());
-    }
-    // A held or blocked input is named over the picture
-    // (`ViewState::status_text`), not in the bar (Gemini 3/5.3: its line
-    // changed the bar's height, the picture area and so the visibility).
-}
-
-fn keys_menu(ui: &mut egui::Ui, input: &ToolbarInput, out: &mut Vec<ToolbarAction>) {
-    let Some(hello) = input.info.and_then(|info| info.hello.as_ref()) else {
-        return;
-    };
-    let keys: Vec<(u16, &str)> = hello
-        .input
-        .toolbar_keys
-        .iter()
-        .filter_map(|usage| toolbar_label(*usage).map(|label| (*usage, label)))
-        .collect();
-    let actions = &hello.input.actions;
-    if keys.is_empty() && actions.is_empty() {
-        return;
-    }
-    wrap::item(ui, "keys", |ui| {
-        wrap::reserve(ui, wrap::button_width(ui, "Tasten ▾"));
-        ui.add_enabled_ui(input.control_on, |ui| {
-            ui.menu_button("Tasten ▾", |ui| {
-                for (usage, label) in &keys {
-                    if ui.button(*label).clicked() {
-                        out.push(ToolbarAction::Key(*usage));
-                        ui.close_menu();
-                    }
-                }
-                if !keys.is_empty() && !actions.is_empty() {
-                    ui.separator();
-                }
-                for action in actions {
-                    if ui.button(action_label(*action)).clicked() {
-                        out.push(ToolbarAction::System(*action));
-                        ui.close_menu();
-                    }
-                }
-            });
-        });
-    });
-}
-
 #[cfg_attr(not(windows), allow(dead_code))] // library and display: Windows
 #[path = "screen_toolbar_state.rs"]
 mod applied;
 #[path = "screen_toolbar_codec.rs"]
 mod codec_rows;
+#[path = "screen_toolbar_control.rs"]
+mod control_rows;
 pub use codec_rows::apply_codec;
 pub(super) use codec_rows::note_save;
 #[path = "screen_toolbar_display.rs"]
 mod display_rows;
+#[path = "screen_toolbar_rate.rs"]
+mod rate_rows;
 #[path = "screen_toolbar_view.rs"]
 mod view_rows;
 #[path = "screen_toolbar_wrap.rs"]
@@ -490,8 +429,8 @@ pub fn show(ui: &mut egui::Ui, input: &ToolbarInput) -> Vec<ToolbarAction> {
         wrap::begin(ui);
         device_row(ui, input, &mut out);
         source_row(ui, input, &mut out);
-        control_row(ui, input, &mut out);
-        keys_menu(ui, input, &mut out);
+        control_rows::control_row(ui, input, &mut out);
+        control_rows::keys_menu(ui, input, &mut out);
         view_rows::view_row(ui, input, &mut out);
     });
     out

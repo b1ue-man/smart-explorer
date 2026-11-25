@@ -57,6 +57,10 @@ fn bildkette_task_stats_viewer_lines_name_every_station() {
         encoder_rate_kbps: Some(12_000),
         rate_honour: Some("corrected".into()),
         virtual_display: None,
+        // „Übertragung“ and the measured rate: `screen_delivery_tests.rs`.
+        measured_kbps: None,
+        measured_age_ms: None,
+        delivery: None,
     };
     let station = Some(StationUs {
         p50_us: 1_500,

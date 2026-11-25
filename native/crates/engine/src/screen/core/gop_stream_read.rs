@@ -4,11 +4,14 @@
 //! in order. A continuation stream (`FLAG_CONTINUE`, plan 2026-11-14
 //! „Bildkette“ B-36) is handed on only after every older stream was: the
 //! frames the viewer acknowledged reach the decoder before the frame that
-//! references them. Split from `gop_stream.rs`.
+//! references them. A stream that starts with `SCRP` is the host's
+//! bandwidth probe (`bandwidth_probe.rs`): it is counted and answered, and
+//! no continuation waits for it. Split from `gop_stream.rs`.
 use super::*;
 use std::time::Duration;
 
 use iroh::endpoint::RecvStream;
+use tokio::io::AsyncReadExt;
 use tokio::sync::{mpsc, watch};
 
 use super::super::pacing::STALE_STREAM_US;
@@ -84,7 +87,9 @@ pub async fn accept_picture_streams_admitted(
     memory: frame_memory::MemoryHold,
     local: Option<frame_budget::FrameLimits>,
 ) {
-    let readers = std::sync::Arc::new(tokio::sync::Semaphore::new(VIEWER_UNI_STREAMS as usize));
+    // The probe stream has a slot of its own (`bandwidth_probe::PROBE_STREAMS`).
+    let slots = VIEWER_UNI_STREAMS + super::super::bandwidth_probe::PROBE_STREAMS;
+    let readers = std::sync::Arc::new(tokio::sync::Semaphore::new(slots as usize));
     // Active readers whose records a continuation stream must wait for.
     let mut active: Vec<watch::Receiver<bool>> = Vec::new();
     while let Ok(recv) = connection.accept_uni().await {
@@ -97,11 +102,27 @@ pub async fn accept_picture_streams_admitted(
         let (done, finished) = watch::channel(false);
         let before = active.clone();
         active.push(finished);
+        let line = connection.clone();
         tokio::spawn(async move {
+            let mut recv = recv;
+            let mut magic = [0u8; 4];
+            if recv.read_exact(&mut magic).await.is_err() {
+                let _ = recv.stop(STREAM_RESET_CODE);
+                let _ = done.send(true);
+                return;
+            }
+            if magic == super::super::bandwidth_probe::PROBE_MAGIC {
+                // No continuation waits for the probe.
+                let _ = done.send(true);
+                super::super::bandwidth_probe::read_probe(recv, &line, &acks).await;
+                drop((permit, memory));
+                return;
+            }
             let bytes = memory.as_ref().map(|lease| lease.bytes());
             let streams = (recv, before);
             let broken = events.clone();
-            let gop = read_picture_stream(streams, events, acks, contract, bytes, local).await;
+            let gop =
+                read_picture_stream(streams, magic, events, acks, contract, bytes, local).await;
             // The slot of a broken stream comes free before its `Broken`
             // waits for the decoder (Gemini 3/3: four broken readers that
             // waited held every slot, and the host's next stream timed out).
@@ -130,13 +151,16 @@ async fn older_ended(before: Vec<watch::Receiver<bool>>) -> bool {
 
 async fn read_picture_stream(
     (mut recv, mut before): (RecvStream, Vec<watch::Receiver<bool>>),
+    magic: [u8; 4],
     events: mpsc::Sender<PictureEvent>,
     acks: mpsc::Sender<ViewerFrame>,
     contract: Option<frame_budget::FrameContract>,
     memory_bytes: Option<u64>,
     local: Option<frame_budget::FrameLimits>,
 ) -> Option<u64> {
-    let header = match read_gop_header(&mut recv).await {
+    // The magic was read to tell a picture stream from the probe.
+    let header = read_gop_header(&mut (&magic[..]).chain(&mut recv)).await;
+    let header = match header {
         Ok(header) => header,
         Err(_) => {
             let _ = recv.stop(STREAM_RESET_CODE);

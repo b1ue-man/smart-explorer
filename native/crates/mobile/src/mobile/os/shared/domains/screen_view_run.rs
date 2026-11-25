@@ -77,6 +77,9 @@ pub(super) struct ViewSession {
     pub set_decoders: AtomicBool,
     /// The host takes `SET_DISPLAY` (P9, `screen.viewSetDisplay`).
     pub set_display: AtomicBool,
+    /// The host's statistics name its „Übertragung“: it takes `SET_DELIVERY`
+    /// and `REMEASURE` (`screen_view_delivery.rs`).
+    pub delivery: AtomicBool,
     /// Connections the relay accepted for this session (`screen_view_epoch.rs`).
     connections: AtomicU64,
     /// Added to the host's group ids of the current connection (a rebuilt
@@ -155,6 +158,7 @@ fn new_session(mode: SessionMode) -> Arc<ViewSession> {
         cursor: Default::default(),
         set_decoders: AtomicBool::new(false),
         set_display: AtomicBool::new(false),
+        delivery: AtomicBool::new(false),
         connections: AtomicU64::new(0),
         gop_offset: AtomicU64::new(0),
     });
@@ -275,6 +279,9 @@ fn on_event(
             path,
             rate_ceiling,
             set_decoders,
+            // What a newer relay adds is read where it is used (the host's
+            // „Übertragung“ from its statistics, `screen_view_delivery.rs`).
+            ..
         } => {
             session.begin_connection();
             session.set_decoders.store(set_decoders, Ordering::SeqCst);
@@ -430,7 +437,11 @@ fn on_host_frame(
         HostFrame::IconReply(response) => session
             .icons
             .deliver(&format!("session:{}", session.id), response),
-        HostFrame::Stats(stats) => emit(id, "stats", stats_fields(&stats)),
+        HostFrame::Stats(stats) => {
+            let runs = super::delivery::host_runs_delivery(&stats);
+            session.delivery.store(runs, Ordering::SeqCst);
+            emit(id, "stats", stats_fields(&stats));
+        }
         HostFrame::VisibilityAck(ack) => emit(
             id,
             "visibilityAck",

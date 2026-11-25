@@ -94,6 +94,8 @@ pub(super) struct Session<'a> {
     cursor: control::CursorLink,
     /// Large control frames held back for the byte budget (Codex 6/8).
     outbox: send::Outbox,
+    /// „Übertragung“ and the bandwidth probe (`bandwidth_probe.rs`).
+    pub(super) line: crate::screen::core::bandwidth_probe::LineLink,
 }
 
 /// How a session ended: the reason and the `ERROR` the viewer gets first.
@@ -145,6 +147,7 @@ impl<'a> Session<'a> {
             family: family::FamilyState::new(families_supported, family_source),
             cursor: Default::default(),
             outbox,
+            line: Default::default(),
         }
     }
 
@@ -265,23 +268,6 @@ impl<'a> Session<'a> {
             stream,
         };
         self.frame(HostFrame::State(report)).await
-    }
-
-    async fn second(&mut self) -> io::Result<()> {
-        self.report_refusal().await?;
-        if self.family.selected.is_some() {
-            self.family_snapshot(false).await?;
-        }
-        let mut stats = self.pipeline.second(self.connection);
-        let requested =
-            crate::screen::core::chain_meter::lock(self.pipeline.chain_meter()).requested();
-        self.handle.update(|view| {
-            view.bitrate_kbps = stats.sent_kbps;
-            view.fps = stats.fps;
-            view.path = stats.path.key().into();
-            crate::screen::core::chain_meter::publish(view, &mut stats, requested);
-        });
-        self.frame(HostFrame::Stats(stats)).await
     }
 
     async fn produce(&mut self) -> Option<Ending> {

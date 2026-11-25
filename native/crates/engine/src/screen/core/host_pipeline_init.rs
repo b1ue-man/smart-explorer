@@ -84,6 +84,7 @@ impl Pipeline {
             kept_encoder: false,
             key_gop: 0,
             chain,
+            stale_resets: 0,
         };
         pipeline.quality.size = pipeline.fitted_size();
         pipeline.resize();
@@ -119,6 +120,18 @@ impl Pipeline {
 
     pub fn measured_bps(&self) -> Option<u64> {
         self.rate.measured_bps()
+    }
+
+    /// What the bandwidth probe watches of the line at `now_us`: the stale
+    /// resets so far and when the oldest unacknowledged picture left.
+    pub fn line_facts(&self, now_us: u64) -> super::super::bandwidth_probe::LineFacts {
+        super::super::bandwidth_probe::LineFacts {
+            stale_resets: self.stale_resets,
+            oldest_unacked_sent_us: self
+                .pacer
+                .oldest_age_us(now_us)
+                .map(|age| now_us.saturating_sub(age)),
+        }
     }
 
     pub fn hold_admission(

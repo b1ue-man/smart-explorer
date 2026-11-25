@@ -45,6 +45,7 @@ fn bildkette_task_bench_source_old_daemon_and_old_client() {
         fps: 30,
         seconds: 10,
         source: None,
+        delivery: None,
     };
     // Without `--source` the request is byte for byte the old one.
     let json = serde_json::to_value(&request).unwrap();

@@ -317,6 +317,9 @@ fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, a
             // A „Höchste Datenrate“ changed in the full view binds the tile it returns to as well (Gemini 3/20).
             if (family == null && adopted != null && adopted.choice.maxRateBps != settings.choice.maxRateBps)
                 adopted.setMaxRate(settings.choice.maxRateBps)
+            // „Übertragung“ as well (user 2026-11-25).
+            if (family == null && adopted != null && adopted.choice.delivery != settings.choice.delivery)
+                adopted.setDelivery(settings.choice.delivery)
             CoroutineScope(Dispatchers.IO).launch { try { PairedLogin.end(autoLoginKey) } catch (_: Throwable) { Unit } }
         }
     }
@@ -534,6 +537,7 @@ fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, a
                     // because the host keeps a new pairing under „Verlustfrei“ until that switch goes off.
                     own.setMode("full", next.source.takeIf { it != previous.source }, sharpness = next.sharpness, lossless = next.lossless)
                     if (previous.choice.maxRateBps != next.choice.maxRateBps) own.setMaxRate(next.choice.maxRateBps)
+                    if (previous.choice.delivery != next.choice.delivery) own.setDelivery(next.choice.delivery)
                 } else {
                     if (own != null && prior != null && own.choice == next.choice) own.restoreChoice(prior)
                     openOwn()
@@ -542,14 +546,17 @@ fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, a
             return
         }
         // The source goes out only when it changed (a named source makes the host open its capture again, which
-        // interrupts picture and control); „Höchste Datenrate“ alone goes out only as `RATE_CEILING`.
-        val rateOnly = previous.copy(choice = previous.choice.copy(maxRateBps = next.choice.maxRateBps)) == next
+        // interrupts picture and control); „Datenrate“ alone goes out only as `RATE_CEILING`, „Übertragung“ alone only as
+        // `SET_DELIVERY` (user 2026-11-25).
+        val rateOnly = previous.copy(choice = previous.choice.copy(maxRateBps = next.choice.maxRateBps, delivery = next.choice.delivery)) == next
         if (!rateOnly) session?.setMode("full",next.source.takeIf { it != previous.source },sharpness=next.sharpness,lossless=next.lossless)
         if (previous.choice.maxRateBps != next.choice.maxRateBps) session?.setMaxRate(next.choice.maxRateBps)
+        if (previous.choice.delivery != next.choice.delivery) session?.setDelivery(next.choice.delivery)
     }
     val ended = ui.ended
     val openedRate = session?.openedMaxRateBps?.takeIf { ui.rateSends == 0 }
-    val info = chainInfoLine(ui.stream?.codec, decoderStage, ScreenChainInfo.rateNote(ui.rateCeiling, openedRate, settings.choice.maxRateBps, ui.rateAnswered, ui.chainRateCeilingKbps))
+    val info = chainInfoLine(ui.stream?.codec, decoderStage, ScreenChainInfo.rateNote(ui.rateCeiling, openedRate, settings.choice.maxRateBps, ui.rateAnswered, ui.chainRateCeilingKbps),
+        ScreenDelivery.infoParts(ui.delivery, ui.stats != null))
     val decodeFailedText = stringResource(R.string.screen_view_decode_failed)
     val status = when {
         ended != null -> ScreenTexts.endText(context, ended.code, ended.detail)
@@ -725,6 +732,7 @@ fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, a
                         onNativePixels = { nativePixels = !nativePixels },
                         immersive = immersive,
                         onFullscreen = { releaseInputs(); immersive = !immersive; barVisible = true },
+                        onRemeasure = { session?.remeasure() },
                     )
                 }
             }

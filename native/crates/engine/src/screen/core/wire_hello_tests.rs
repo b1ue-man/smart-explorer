@@ -28,6 +28,8 @@ pub(crate) fn client_hello() -> ScreenClientHello {
         max_rate_bps: None,
         audio: None,
         control_parts: None,
+        delivery: None,
+        bandwidth_probe: None,
         frame_capabilities: None,
         protocol_version: SCREEN_PROTOCOL_VERSION,
         relation_kind: "direct".into(),

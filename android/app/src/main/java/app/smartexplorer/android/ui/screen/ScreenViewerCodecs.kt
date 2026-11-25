@@ -19,13 +19,19 @@ import kotlinx.serialization.json.put
  * What this viewer chooses for the picture chain (plan 2026-11-14 `bildkette.md` 4.10, package BK7b): the codec
  * (`auto`, `h264`, `hevc`, `av1`, `sharp` „Scharf (GPU)“, which replaces the switch „Schärfe“ and sets the same `SET_MODE`
  * bit `sharpness`, or `lossless`, which replaces the switch „Verlustfrei“ with the same meaning), the decoder
- * stage (`auto`, `hardware`, `software`) and the highest data rate in bit/s (`null` = automatic). The values are
- * the ones of `screen.viewOpen` (`codec`, `decoder`, `maxRate`).
+ * stage (`auto`, `hardware`, `software`), the data rate in bit/s (`null` = automatic: the rate the host measured)
+ * and „Übertragung“ (`realtime`, `reliable`, user 2026-11-25). The values are the ones of `screen.viewOpen` (`codec`,
+ * `decoder`, `maxRate`, `delivery`).
  */
 data class ViewerCodecChoice(
     val codec: String = CODEC_AUTO,
     val decoder: String = DECODER_AUTO,
     val maxRateBps: Long? = null,
+    /**
+     * „Übertragung“: [DELIVERY_REALTIME] („Echtzeit (wie UDP)“, late pictures are given up) or [DELIVERY_RELIABLE]
+     * („Zuverlässig (wie TCP)“, every picture arrives). Live through `screen.viewSetDelivery`, never a new session.
+     */
+    val delivery: String = DELIVERY_REALTIME,
     /**
      * The stored choice this session's choice stands in for when its host cannot serve that one ([ScreenCodecOffer],
      * user rule of 2026-11-24); `null` when the session runs the stored choice itself.
@@ -78,11 +84,17 @@ data class ViewerCodecChoice(
         const val DECODER_SOFTWARE = "software"
         val DECODERS = listOf(DECODER_AUTO, DECODER_HARDWARE, DECODER_SOFTWARE)
 
-        /** A choice from stored or typed values; a name this version does not know is the automatic one. */
-        fun of(codec: String?, decoder: String?, maxRateBps: Long?): ViewerCodecChoice = ViewerCodecChoice(
+        /** The keys of „Übertragung“ (`Delivery::key` of the core); `realtime` is the default. */
+        const val DELIVERY_REALTIME = "realtime"
+        const val DELIVERY_RELIABLE = "reliable"
+        val DELIVERIES = listOf(DELIVERY_REALTIME, DELIVERY_RELIABLE)
+
+        /** A choice from stored or typed values; a name this version does not know is the automatic one („Echtzeit“). */
+        fun of(codec: String?, decoder: String?, maxRateBps: Long?, delivery: String? = null): ViewerCodecChoice = ViewerCodecChoice(
             codec = codec?.takeIf { it in CODECS } ?: CODEC_AUTO,
             decoder = decoder?.takeIf { it in DECODERS } ?: DECODER_AUTO,
             maxRateBps = maxRateBps?.takeIf { it > 0 },
+            delivery = delivery?.takeIf { it in DELIVERIES } ?: DELIVERY_REALTIME,
         )
 
         /**
@@ -130,11 +142,13 @@ object ScreenViewPrefs {
     private const val KEY_CODEC = "codec"
     private const val KEY_DECODER = "decoder"
     private const val KEY_RATE = "max_rate_bps"
+    /** „Übertragung“ (user 2026-11-25); absent in the preferences of an older app: `realtime`. */
+    private const val KEY_DELIVERY = "delivery"
     /** The key of the old switch „Verlustfrei“: a stored `true` becomes the codec `lossless`. */
     private const val KEY_LOSSLESS = "lossless"
 
-    fun decode(codec: String?, decoder: String?, rate: Long?, legacyLossless: Boolean): ViewerCodecChoice =
-        ViewerCodecChoice.of(codec ?: ViewerCodecChoice.CODEC_LOSSLESS.takeIf { legacyLossless }, decoder, rate)
+    fun decode(codec: String?, decoder: String?, rate: Long?, legacyLossless: Boolean, delivery: String? = null): ViewerCodecChoice =
+        ViewerCodecChoice.of(codec ?: ViewerCodecChoice.CODEC_LOSSLESS.takeIf { legacyLossless }, decoder, rate, delivery)
 
     fun load(context: Context): ViewerCodecChoice = try {
         val prefs = context.applicationContext.getSharedPreferences(FILE, Context.MODE_PRIVATE)
@@ -142,6 +156,7 @@ object ScreenViewPrefs {
             prefs.getString(KEY_CODEC, null), prefs.getString(KEY_DECODER, null),
             if (prefs.contains(KEY_RATE)) prefs.getLong(KEY_RATE, 0L) else null,
             prefs.getBoolean(KEY_LOSSLESS, false),
+            prefs.getString(KEY_DELIVERY, null),
         )
     } catch (e: RuntimeException) {
         ViewerCodecChoice()
@@ -161,6 +176,7 @@ object ScreenViewPrefs {
                 putString(KEY_CODEC, choice.codec)
                 putString(KEY_DECODER, choice.decoder)
                 if (choice.maxRateBps != null) putLong(KEY_RATE, choice.maxRateBps) else remove(KEY_RATE)
+                putString(KEY_DELIVERY, choice.delivery)
                 remove(KEY_LOSSLESS)
             }.apply()
         } catch (e: RuntimeException) {

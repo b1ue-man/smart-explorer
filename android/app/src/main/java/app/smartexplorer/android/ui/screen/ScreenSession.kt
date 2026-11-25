@@ -106,6 +106,8 @@ data class ScreenSessionState(
     /** `chain.rateCeilingKbps` of the latest statistics: the „Höchste Datenrate“ the host applies, in kbit/s. */
     val chainRateCeilingKbps: Long? = null,
     val stats: JsonObject? = null,
+    /** „Übertragung“ the host runs and the rate it measured, from the latest statistics ([DeliveryReport]). */
+    val delivery: DeliveryReport? = null,
     /** `rateCeiling` of the `accepted` event: `automatic`, `applied` or `unsupported_by_host` (B-09); `null` before it. */
     val rateCeiling: String? = null,
     /** Limits sent during the session ([ScreenSession.setMaxRate]) and answers to them (`rateCeiling` events, r1). */
@@ -169,6 +171,7 @@ data class ScreenSessionState(
             stats = event.body,
             chainVirtualDisplay = ((event.body["chain"] as? JsonObject)?.get("virtualDisplay") as? JsonPrimitive)?.contentOrNull,
             chainRateCeilingKbps = ((event.body["chain"] as? JsonObject)?.get("rateCeilingKbps") as? JsonPrimitive)?.contentOrNull?.toLongOrNull(),
+            delivery = DeliveryReport.of(event.body),
         )
         is ScreenViewEvent.RateCeiling -> copy(rateCeiling = event.state, rateAnswers = rateAnswers + 1)
         is ScreenViewEvent.ControlState -> copy(holder = event.holder, blocked = event.blocked, held = event.held)
@@ -227,8 +230,14 @@ interface ScreenBackend {
     suspend fun openWith(target: ScreenTarget, mode: String, source: String?, displayWidth: Int, displayHeight: Int, maxFps: Int, decoders: List<DecoderOffer>, choice: ViewerCodecChoice): Long =
         open(target, mode, source, displayWidth, displayHeight, maxFps, decoders)
 
-    /** „Höchste Datenrate“ changed during the session ([maxRate] in bit/s, 0 automatic); the mode and switches stay as given. */
+    /** „Datenrate“ changed during the session ([maxRate] in bit/s, 0 automatic); the mode and switches stay as given. */
     suspend fun setRateCeiling(session: Long, mode: String, sharpness: Boolean, lossless: Boolean, maxRate: Long, fallback: Boolean = false) = Unit
+
+    /** „Übertragung“ ([delivery] `realtime` or `reliable`) changed during the session; `false` when the host does not take it. */
+    suspend fun setDelivery(session: Long, delivery: String): Boolean = false
+
+    /** „Neu messen“: the host measures the line again; `false` when the host does not take it. */
+    suspend fun remeasure(session: Long): Boolean = false
 
     suspend fun input(session: Long, events: List<JsonObject>): Int
 
@@ -274,10 +283,14 @@ object CoreScreenBackend : ScreenBackend {
             // „Monitor“/„Auflösung“ only for a full view: a preview tile never makes a host attach or resize a display
             // (Gemini 3/20; the desktop's previews send none either, `screen_pool.rs`).
             maxRate = choice.maxRateBps, codec = choice.codec, decoder = choice.decoder,
-            display = ScreenDisplayPrefs.current.takeIf { mode != "preview" })
+            display = ScreenDisplayPrefs.current.takeIf { mode != "preview" }, delivery = choice.delivery)
 
     override suspend fun setRateCeiling(session: Long, mode: String, sharpness: Boolean, lossless: Boolean, maxRate: Long, fallback: Boolean) =
         ScreenApi.viewSetMode(session, mode, sharpness = sharpness, lossless = lossless, maxRate = maxRate, fallback = fallback)
+
+    override suspend fun setDelivery(session: Long, delivery: String) = ScreenApi.viewSetDelivery(session, delivery)
+
+    override suspend fun remeasure(session: Long) = ScreenApi.viewRemeasure(session)
 
     override suspend fun input(session: Long, events: List<JsonObject>) = ScreenApi.viewInput(session, events)
 
@@ -771,6 +784,22 @@ class ScreenSession(private val target: ScreenTarget, private val backend: Scree
                 throw e
             }
         }
+    }
+
+    /**
+     * „Übertragung“ ([delivery] `realtime` or `reliable`) changes while the session runs: the core sends it to a host whose
+     * statistics name „Übertragung“ (`screen.viewSetDelivery`); an older host keeps its way, the choice applies from the
+     * next session on. A session that is not open yet opens with the stored choice.
+     */
+    fun setDelivery(delivery: String) {
+        if (id == 0L) return
+        synchronized(lock) { choice = choice.copy(delivery = delivery) }
+        call { session -> setDelivery(session, delivery) }
+    }
+
+    /** „Neu messen“: the host measures the line again; its statistics name the new rate ([ScreenSessionState.delivery]). */
+    fun remeasure() {
+        call { session -> remeasure(session) }
     }
 
     /** Runs a call on this session in the background; its failure becomes the shown error. */

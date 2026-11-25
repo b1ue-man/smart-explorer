@@ -122,6 +122,10 @@ pub struct ScreenServerHello {
     /// `HELLO_OK`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub virtual_display: Option<u16>,
+    /// `delivery_v1` (`bandwidth_probe.rs`): this host reads the hello's
+    /// `delivery`, `SET_DELIVERY` and `REMEASURE`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub delivery_v1: bool,
 }
 
 #[path = "wire_hello_codecs.rs"]
@@ -152,6 +156,7 @@ impl ScreenServerHello {
             rate_ceiling: Some(RATE_CEILING_V1),
             set_decoders: Some(super::set_decoders::SET_DECODERS_V1),
             virtual_display: Some(super::virtual_display::VIRTUAL_DISPLAY_V1),
+            delivery_v1: true,
         }
     }
 
@@ -245,6 +250,14 @@ pub struct ScreenClientHello {
     /// go (review round 10, Codex 10/10); an older host ignores it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub control_parts: Option<u16>,
+    /// The viewer's „Übertragung“ at the opening (`delivery.rs`); absent:
+    /// `Delivery::default()`. An older host ignores it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery: Option<super::delivery::Delivery>,
+    /// `Some(1)` (`bandwidth_probe::BANDWIDTH_PROBE_V1`): this viewer reads
+    /// probe streams and answers `PROBE_RESULT`; an older host ignores it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bandwidth_probe: Option<u16>,
 }
 
 impl ScreenClientHello {

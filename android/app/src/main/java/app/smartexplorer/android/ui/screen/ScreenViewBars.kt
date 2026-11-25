@@ -34,8 +34,8 @@ import app.smartexplorer.android.screen.ScreenIconRef
 import app.smartexplorer.android.screen.ScreenIconTarget
 
 /**
- * What the viewer asks the host for besides the picture: the shown source and the [choice] of codec, decoder and
- * highest data rate. The old switches „Verlustfrei“ and „Schärfe“ are the codec choices `lossless` and `sharp`
+ * What the viewer asks the host for besides the picture: the shown source and the [choice] of codec, decoder, data
+ * rate and „Übertragung“. The old switches „Verlustfrei“ and „Schärfe“ are the codec choices `lossless` and `sharp`
  * („Scharf (GPU)“, the same `SET_MODE` bit `sharpness`, as on the desktop viewer); both are stored with the codec.
  */
 data class ViewSettings(
@@ -94,7 +94,10 @@ internal fun ScreenTopBar(
     onSettings: (ViewSettings) -> Unit,
     onStatus: (() -> Unit)?,
     onClose: () -> Unit,
-    /** Codec, decoder stage and the answer to „Höchste Datenrate“ of the running picture chain (one line, may be empty). */
+    /**
+     * Codec, decoder stage, the answer to „Datenrate“, „Übertragung“ and the measured rate of the running picture chain
+     * (one line, may be empty).
+     */
     info: String = "",
     /** „Monitor“/„Auflösung“: chosen, what the host did and why ([ScreenDisplayReportText.line]). */
     displayLine: String = "",
@@ -102,6 +105,8 @@ internal fun ScreenTopBar(
     onNativePixels: () -> Unit = {},
     immersive: Boolean = false,
     onFullscreen: () -> Unit = {},
+    /** „Neu messen“ of the settings menu: the host measures the line again (user 2026-11-25). */
+    onRemeasure: () -> Unit = {},
 ) {
     Surface(color = Color.Black.copy(alpha = 0.6f), contentColor = Color.White) {
         Column(Modifier.statusBarsPadding().padding(horizontal = 8.dp, vertical = 4.dp)) {
@@ -120,7 +125,7 @@ internal fun ScreenTopBar(
                 }
                 TextButton(onClick = onNativePixels) { Text(if (nativePixels) "Einpassen" else "1:1") }
                 TextButton(onClick = onFullscreen) { Text(if (immersive) "Vollbild verlassen" else "Vollbild") }
-                SettingsMenu(settings, onSettings, displayLine, ui)
+                SettingsMenu(settings, onSettings, displayLine, ui, onRemeasure)
                 TextButton(onClick = onClose, modifier = Modifier.testTag("screen_view_close")) { Text(stringResource(R.string.screen_view_close)) }
             }
             if (immersive) Text("Zurück oder Randgeste · Strg+Alt+Pause · Strg+Alt+Umschalt+F · F11", style = MaterialTheme.typography.bodySmall)
@@ -225,7 +230,7 @@ private fun ActionsMenu(
 }
 
 @Composable
-private fun SettingsMenu(settings: ViewSettings, onSettings: (ViewSettings) -> Unit, displayLine: String, ui: ScreenSessionState) {
+private fun SettingsMenu(settings: ViewSettings, onSettings: (ViewSettings) -> Unit, displayLine: String, ui: ScreenSessionState, onRemeasure: () -> Unit) {
     var open by remember { mutableStateOf(false) }
     var rateDialog by remember { mutableStateOf(false) }
     var sizeDialog by remember { mutableStateOf(false) }
@@ -242,8 +247,10 @@ private fun SettingsMenu(settings: ViewSettings, onSettings: (ViewSettings) -> U
         TextButton(onClick = { open = true }) { Text("⋮") }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             // „Codec“ (with „Scharf (GPU)“ and „Verlustfrei“ in the place of the old switches), „Dekodierer“ and
-            // „Höchste Datenrate“ (BK7b, P9); what this pair cannot run is disabled with its reason (2026-11-24).
+            // „Datenrate“ (BK7b, P9); what this pair cannot run is disabled with its reason (2026-11-24).
             CodecMenuItems(settings, onSettings, onRate = { open = false; rateDialog = true }, ui = ui)
+            // „Neu messen“ and „Übertragung“ (user 2026-11-25): live to a host that names „Übertragung“ in its statistics.
+            DeliveryMenuItems(settings, onSettings, ui, onRemeasure = { open = false; onRemeasure() })
             // „Monitor“ and „Auflösung“ of the host's display (P5/P9).
             DisplayMenuItems(settings, onSettings, onCustom = { open = false; sizeDialog = true }, stateLine = displayLine)
         }

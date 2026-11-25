@@ -8,6 +8,7 @@ import app.smartexplorer.android.screen.ScreenIconRef
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
@@ -288,6 +289,8 @@ object ScreenApi {
         decoder: String? = null,
         /** „Monitor“ and „Auflösung“ (P5/P9): `virtualDisplay`, `virtualWidth`, `virtualHeight`. */
         display: app.smartexplorer.android.ui.screen.ViewerDisplayChoice? = null,
+        /** „Übertragung“ (user 2026-11-25): `realtime` or `reliable`; `null` is the host's default `realtime`. */
+        delivery: String? = null,
     ): Long {
         val args = buildJsonObject {
             put("relation", relation)
@@ -299,6 +302,7 @@ object ScreenApi {
             maxRate?.let { put("maxRate", it) }
             codec?.takeIf { it != "auto" }?.let { put("codec", it) }
             decoder?.takeIf { it != "auto" }?.let { put("decoder", it) }
+            delivery?.let { put("delivery", it) }
             display?.let { choice ->
                 put("virtualDisplay", choice.wish)
                 if (choice.width != null && choice.height != null) {
@@ -387,6 +391,24 @@ object ScreenApi {
     /** The decoder failed: one key frame request. */
     suspend fun viewKeyframe(session: Long) {
         Core.call("screen.viewKeyframe", buildJsonObject { put("session", session) })
+    }
+
+    /**
+     * „Übertragung“ ([delivery] `realtime` or `reliable`) changed in the running session; `false` when the host does not
+     * take it (an older version, or before its first statistics): the choice then applies from the next session on.
+     */
+    suspend fun viewSetDelivery(session: Long, delivery: String): Boolean {
+        val answer = Core.call("screen.viewSetDelivery", buildJsonObject {
+            put("session", session)
+            put("delivery", delivery)
+        }) as? JsonObject
+        return (answer?.get("switched") as? JsonPrimitive)?.content == "true"
+    }
+
+    /** „Neu messen“: the host measures the line again; `false` when it does not take it (same condition as [viewSetDelivery]). */
+    suspend fun viewRemeasure(session: Long): Boolean {
+        val answer = Core.call("screen.viewRemeasure", buildJsonObject { put("session", session) }) as? JsonObject
+        return (answer?.get("sent") as? JsonPrimitive)?.content == "true"
     }
 
     /** Ends the session; closing twice is fine. */

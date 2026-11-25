@@ -57,6 +57,9 @@ pub(super) struct BenchArgs {
     /// The host's real capture instead of the test picture: monitor:<id> or window:<id>
     #[arg(long, value_name = "QUELLE", conflicts_with = "local")]
     source: Option<String>,
+    /// „Übertragung“: realtime (late pictures given up, default) or reliable
+    #[arg(long, value_name = "MODE", value_parser = super::view::parse_transport, conflicts_with = "local")]
+    transport: Option<crate::screen::core::delivery::Delivery>,
     #[arg(long, help = "Print machine-readable JSON")]
     json: bool,
 }
@@ -137,7 +140,7 @@ pub(super) fn run(args: BenchArgs) -> Result<i32, String> {
                 };
                 eprintln!("Warte auf Bestätigung an {name}: Bildschirm {what} …");
             };
-            crate::daemon::screen_bench(choice.target, &options, source, pending)?
+            crate::daemon::screen_bench(choice.target, &options, source, args.transport, pending)?
         }
     };
     super::output::print(args.json, &report, || super::output::bench_text(&report));

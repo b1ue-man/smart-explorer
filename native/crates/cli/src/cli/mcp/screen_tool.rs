@@ -12,6 +12,10 @@
 //! device; the device needs „screen control“ for this device, and
 //! Ctrl+Alt+Delete is never sent. The text of an input is not echoed in
 //! the answer.
+//!
+//! `transport` (user 2026-11-25) reads or sets the desktop viewer's
+//! „Übertragung“ (`screen_delivery.rs`) and answers the rate the host
+//! measured for each screen session this device shows to another one.
 use super::args::Args;
 use super::response;
 use crate::screen::core::pixel_convert::FrameSize;
@@ -29,7 +33,7 @@ const DEFAULT_MAX_EDGE: u64 = 1568;
 /// Seconds to wait for the device's user unless the call says otherwise.
 const DEFAULT_WAIT_SECS: u64 = 30;
 
-pub(super) const DESCRIPTION: &str = "Looks at the screen of a paired device: `devices` lists the devices and their screen rights, `probe` shows platform, monitors, codecs, limits and `virtual_display` (whether the device can show its desktop on se's own display in the viewer's resolution; a viewer chooses it with `se screen view --virtual-display auto|off|request --display-size WxH`; with `live: true` the viewer's „Monitor“ and „Auflösung“ change it within the running session; `text` is the German line the viewers show; `inactive`/`setup_needed`: the first viewer with „screen control“ that asks installs the display driver, on Windows with one administrator confirmation on that device unless se runs privileged there; while it installs, sessions report `setup` (`windows_display_driver_install_prompt` or `_installing`), keep the current monitor and switch by themselves after success; `unsupported` with `windows_display_driver_declined` or `windows_display_driver_install_failed: <message>` names the cause, a new request tries again), `windows` lists the windows that run there, `families` returns confirmed versioned window-family selectors, `snapshot` returns one still picture (PNG image, long edge at most 1568 px unless `max_edge` says otherwise), `audio` reads or sets („on“) whether the desktop viewer plays the device's sound („Ton“, default on; also `se screen view --audio on|off`). `probe` also answers `viewer_codecs`: every „Codec“ of the viewer (`auto`, `h264`, `hevc`, `av1`, `sharp`, `lossless`) with `usable` and, when this pair of devices cannot run it, the German `reason` (`se screen view --codec` refuses those). The other device must have granted „screen view“; if it asks its user, the call waits up to `wait` seconds (default 30) and then fails with `approval_pending`. There is no live video and no way to answer a confirmation through this tool; input goes through the tool `screen_input`.";
+pub(super) const DESCRIPTION: &str = "Looks at the screen of a paired device: `devices` lists the devices and their screen rights, `probe` shows platform, monitors, codecs, limits and `virtual_display` (whether the device can show its desktop on se's own display in the viewer's resolution; `se screen view --virtual-display auto|off|request --display-size WxH` chooses it; with `live: true` the viewer's „Monitor“ and „Auflösung“ change it in the running session; `text` is the German line the viewers show; `inactive`/`setup_needed`: the first viewer with „screen control“ that asks installs the display driver, on Windows with one administrator confirmation there unless se runs privileged; while it installs, sessions report `setup` (`windows_display_driver_install_prompt` or `_installing`), keep the current monitor and switch after success; `unsupported` with `windows_display_driver_declined` or `windows_display_driver_install_failed: <message>` names the cause, a new request tries again), `windows` lists its windows, `families` returns confirmed window-family selectors, `snapshot` returns one still picture (PNG, long edge at most 1568 px unless `max_edge` says otherwise), `audio` reads or sets („on“) whether the desktop viewer plays the device's sound („Ton“, default on; also `se screen view --audio on|off`), `transport` reads or sets its „Übertragung“ (`realtime` drops late pictures, default; `reliable` delivers each, later; also `se screen view --transport`) and lists the measured rate of each session this device hosts. `probe` also answers `viewer_codecs`: every „Codec“ of the viewer (`auto`, `h264`, `hevc`, `av1`, `sharp`, `lossless`) with `usable` and, when this pair cannot run it, the German `reason` (`se screen view --codec` refuses those). The other device must have granted „screen view“; if it asks its user, the call waits up to `wait` seconds (default 30) and then fails with `approval_pending`. There is no live video and no way to answer a confirmation here; input goes through the tool `screen_input`.";
 
 const DEVICE: &str = "Device: a `share://direct/<id>` or `share://room/<room>/<device>` endpoint, a name, an id or a fingerprint prefix; `devices` lists them.";
 
@@ -37,8 +41,8 @@ pub(super) fn properties() -> Value {
     json!({
         "action": {
             "type": "string",
-            "enum": ["devices", "probe", "windows", "families", "snapshot", "audio"],
-            "description": "devices, probe, windows, confirmed families, snapshot or audio (the viewer's „Ton“)."
+            "enum": ["devices", "probe", "windows", "families", "snapshot", "audio", "transport"],
+            "description": "devices, probe, windows, confirmed families, snapshot, audio (the viewer's „Ton“) or transport (its „Übertragung“)."
         },
         "device": {"type": "string", "description": DEVICE},
         "source": {
@@ -67,6 +71,11 @@ pub(super) fn properties() -> Value {
         "on": {
             "type": "boolean",
             "description": "audio: play the device's sound in the desktop viewer (true) or not (false); omitted reads the setting."
+        },
+        "transport": {
+            "type": "string",
+            "enum": ["realtime", "reliable"],
+            "description": "transport: the desktop viewer's „Übertragung“, `realtime` (late pictures are given up, like UDP; the default) or `reliable` (every picture arrives, later on a slow line, like TCP); omitted reads the setting."
         }
     })
 }
@@ -135,6 +144,47 @@ fn audio(args: &Args) -> Result<CallToolResult, String> {
     Ok(response::ok(
         json!({"audio": crate::app::screen_audio::audio_on()}),
     ))
+}
+
+/// `transport` (user 2026-11-25): the desktop viewer's „Übertragung“, read
+/// or set (a value other than `realtime` or `reliable` is refused before
+/// anything is stored), with the rate the host measured for each screen
+/// session this device shows (`hosted_sessions`, as `se screen sessions`
+/// names it; `hosted_sessions_error` when the background service does not
+/// answer).
+fn transport(args: &Args) -> Result<CallToolResult, String> {
+    use crate::app::screen_delivery::{self as delivery, Delivery};
+    if let Some(text) = args.opt_string("transport")? {
+        let mode =
+            Delivery::parse(&text).ok_or("argument `transport` must be realtime or reliable")?;
+        delivery::set_delivery(mode)
+            .map_err(|error| format!("cannot store the transport choice: {error}"))?;
+    }
+    let mode = delivery::delivery();
+    let mut answer = json!({"transport": mode.key(), "label": mode.label(), "hint": mode.hint()});
+    match crate::daemon::screen_sessions() {
+        Ok((_, sessions)) => answer["hosted_sessions"] = hosted_rates(&sessions),
+        Err(error) => answer["hosted_sessions_error"] = json!(error.to_string()),
+    }
+    Ok(response::ok(answer))
+}
+
+/// Each session this device hosts with the „Übertragung“ it runs and the
+/// rate it measured (`null` from a host that reports none).
+fn hosted_rates(sessions: &[crate::screen::core::registry::SessionView]) -> Value {
+    sessions
+        .iter()
+        .map(|session| {
+            let chain = session.chain.as_ref();
+            json!({
+                "session": session.id,
+                "device": session.device_name,
+                "delivery": chain.and_then(|chain| chain.delivery).map(|mode| mode.key()),
+                "measured_kbps": chain.and_then(|chain| chain.measured_kbps),
+                "measured_age_ms": chain.and_then(|chain| chain.measured_age_ms),
+            })
+        })
+        .collect()
 }
 
 /// Each „Codec“ of the desktop viewer with this device (user rule
@@ -270,6 +320,7 @@ pub(super) fn screen(args: &Args) -> Result<CallToolResult, String> {
         }
         "snapshot" => snapshot(args),
         "audio" => audio(args),
+        "transport" => transport(args),
         "families" => {
             let (target, _) = crate::cli::screen::device_target(&args.string("device")?)?;
             // The device feed first (design 5.2); the device is asked only
@@ -288,7 +339,7 @@ pub(super) fn screen(args: &Args) -> Result<CallToolResult, String> {
             ))
         }
         other => Err(format!(
-            "unknown action `{other}`: use devices, probe, windows, families, snapshot or audio"
+            "unknown action `{other}`: use devices, probe, windows, families, snapshot, audio or transport"
         )),
     }
 }

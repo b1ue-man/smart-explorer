@@ -50,6 +50,9 @@ pub(super) struct Start {
     /// The host announced `set_decoders_v1`: only then may `SET_DECODERS`
     /// leave the viewer (P1).
     pub(super) set_decoders: bool,
+    /// The host announced `delivery_v1`: only then may `SET_DELIVERY` and
+    /// `REMEASURE` leave the viewer (`bandwidth_probe.rs`).
+    pub(super) delivery: bool,
 }
 
 pub(super) fn spawn(start: Start, accepted: &ScreenHelloOk) -> Running {
@@ -65,6 +68,7 @@ pub(super) fn spawn(start: Start, accepted: &ScreenHelloOk) -> Running {
         cursor_wish,
         rate_ceiling,
         set_decoders,
+        delivery,
     } = start;
     let (control, mut outgoing) = mpsc::channel::<ViewerFrame>(CONTROL_QUEUE);
     let (host_tx, host) = mpsc::channel(CONTROL_QUEUE);
@@ -104,6 +108,9 @@ pub(super) fn spawn(start: Start, accepted: &ScreenHelloOk) -> Running {
                 continue;
             }
             if matches!(frame, ViewerFrame::SetDecoders(_)) && !set_decoders {
+                continue;
+            }
+            if matches!(frame, ViewerFrame::SetDelivery(_) | ViewerFrame::Remeasure) && !delivery {
                 continue;
             }
             if matches!(frame, ViewerFrame::SetDisplay(_)) && !set_display {

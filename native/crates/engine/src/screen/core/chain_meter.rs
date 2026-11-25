@@ -323,6 +323,10 @@ impl ChainMeter {
             encoder_rate_kbps: rates.encoder_bps.map(|bps| bps / 1000),
             rate_honour: rates.honour.map(|verdict| verdict.key().to_string()),
             virtual_display: None,
+            // The host session fills them (`bandwidth_probe::LineLink::report`).
+            measured_kbps: None,
+            measured_age_ms: None,
+            delivery: None,
         }
     }
 

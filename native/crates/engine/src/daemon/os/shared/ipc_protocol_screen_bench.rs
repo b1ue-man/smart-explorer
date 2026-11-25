@@ -23,6 +23,10 @@ pub struct BenchRequest {
     /// the test picture; the client then finds no `source` in the report.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
+    /// `--transport` („Übertragung“, user 2026-11-25); absent is the
+    /// default (`realtime`); a daemon before it ignores the field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery: Option<crate::screen::core::delivery::Delivery>,
 }
 
 /// The source a bench request names: the test picture without `--source`.

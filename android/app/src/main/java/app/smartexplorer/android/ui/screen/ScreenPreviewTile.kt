@@ -185,13 +185,15 @@ fun ScreenPreviewTile(
     }
     DisposableEffect(Unit) { onDispose { session?.close() } }
     LaunchedEffect(session) { bitmap = null; bitmapFrame = null; pictures = 0 }
-    // „Höchste Datenrate“ and „Verlustfrei“ stored while the session runs go live (round 12, B2): the rate as
-    // `RATE_CEILING`, the lossless tiles as `SET_MODE`. A session a full view holds gets them from there.
-    val applied = remember(session) { arrayOf<Any?>(session?.openedMaxRateBps, session?.choice?.lossless) }
-    LaunchedEffect(session, adoptedBy === session, stored.maxRateBps, stored.lossless) {
+    // „Datenrate“, „Verlustfrei“ and „Übertragung“ stored while the session runs go live (round 12, B2; user
+    // 2026-11-25): the rate as `RATE_CEILING`, the lossless tiles as `SET_MODE`, „Übertragung“ as `SET_DELIVERY` to a host
+    // that names it in its statistics. A session a full view holds gets them from there.
+    val applied = remember(session) { arrayOf<Any?>(session?.openedMaxRateBps, session?.choice?.lossless, session?.choice?.delivery) }
+    LaunchedEffect(session, adoptedBy === session, stored.maxRateBps, stored.lossless, stored.delivery) {
         val running = session ?: return@LaunchedEffect
         if (adoptedBy === running || previewRefused != null) return@LaunchedEffect
         if (applied[0] != stored.maxRateBps) { applied[0] = stored.maxRateBps; running.setMaxRate(stored.maxRateBps) }
+        if (applied[2] != stored.delivery) { applied[2] = stored.delivery; running.setDelivery(stored.delivery) }
         if (applied[1] != stored.lossless) {
             applied[1] = stored.lossless
             running.chooseCodec(stored.codec)

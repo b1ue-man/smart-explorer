@@ -73,6 +73,7 @@ fn viewer_request(mode: SessionMode) -> ViewerRequest {
         virtual_display: None,
         codec_choice: None,
         max_rate_bps: None,
+        delivery: None,
     }
 }
 

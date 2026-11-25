@@ -46,6 +46,10 @@ mod screen_pool;
 // --audio` and the MCP tool `screen`.
 #[path = "core/screen_audio.rs"]
 pub mod screen_audio;
+// „Übertragung“ and the measured „Datenrate“ (user 2026-11-25); public for
+// `se screen view --transport` and the MCP tool `screen`.
+#[path = "core/screen_delivery.rs"]
+pub mod screen_delivery;
 // Public for `se screen view --max-rate` (plan 2026-11-14 „Bildkette“ B-09).
 #[path = "core/screen_prefs.rs"]
 pub mod screen_prefs;

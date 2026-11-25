@@ -110,6 +110,8 @@ fn preview_base(
         gop_continue_decoders: Vec::new(),
         // A preview never changes the host's display (plan 2026-11-17 P5).
         virtual_display: None,
+        // „Übertragung“ (user 2026-11-25): previews as the full view.
+        delivery: Some(super::screen_delivery::delivery()),
     }
 }
 
@@ -240,6 +242,8 @@ pub fn full_request(
         gop_continue_decoders: Vec::new(),
         // „Monitor“ and „Auflösung“ (plan 2026-11-17 P5).
         virtual_display: Some(super::screen_prefs::virtual_display_choice()),
+        // „Übertragung“ (user 2026-11-25, `screen_delivery.rs`).
+        delivery: Some(super::screen_delivery::delivery()),
     };
     announced(request, GivenUp::default(), choice.library)
 }

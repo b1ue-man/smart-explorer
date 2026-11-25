@@ -112,6 +112,7 @@ pub fn screen_bench(
     target: PeerOpenTarget,
     options: &BenchOptions,
     source: Option<String>,
+    delivery: Option<crate::screen::core::delivery::Delivery>,
     pending: impl FnMut(Capability),
 ) -> Result<BenchReport, String> {
     crate::daemon::ensure_worker_ready()?;
@@ -121,6 +122,7 @@ pub fn screen_bench(
         fps: options.fps,
         seconds: options.seconds,
         source,
+        delivery,
     };
     match exchange(ScreenIpcRequest::Bench { target, options }, None, pending)? {
         ScreenIpcReply::Bench(report) => Ok(report),

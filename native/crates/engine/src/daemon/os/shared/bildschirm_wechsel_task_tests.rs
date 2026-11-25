@@ -321,11 +321,11 @@ fn first_request(source: Option<SourceId>) -> crate::screen::core::viewer_client
         virtual_display: None,
         codec_choice: None,
         max_rate_bps: None,
+        delivery: None,
     }
 }
 
-/// The sources a replay asks for, in their order (`SET_MODE` with a source
-/// and `SET_DISPLAY`, which ends at a monitor).
+/// The sources a replay asks for, in order (`SET_MODE`, `SET_DISPLAY`).
 fn source_changes(frames: &[ViewerFrame]) -> Vec<String> {
     frames
         .iter()

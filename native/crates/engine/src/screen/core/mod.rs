@@ -38,6 +38,8 @@ pub mod audio_jitter;
 pub mod audio_port;
 pub mod audio_wire;
 pub mod authorize;
+// User 2026-11-25: the line's available rate, measured like Shadow's „Auto-detect“.
+pub mod bandwidth_probe;
 #[cfg(test)]
 mod batches_4k_task_tests;
 #[cfg(test)]

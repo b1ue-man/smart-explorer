@@ -63,6 +63,8 @@ pub(crate) struct ModeMemory {
     /// The viewer's last `VISIBILITY` (Gemini 3/9): a hidden or partly
     /// covered view stays so in the new session.
     visibility: Option<crate::screen::core::visibility::ViewerVisibility>,
+    /// The viewer's last `SET_DELIVERY`: a new session's hello carries it.
+    delivery: Option<crate::screen::core::delivery::Delivery>,
 }
 
 #[derive(Clone, Debug)]
@@ -113,6 +115,10 @@ impl ModeMemory {
         }
         if let ViewerFrame::Visibility(report) = frame {
             self.visibility = Some(report.clone());
+            return;
+        }
+        if let ViewerFrame::SetDelivery(delivery) = frame {
+            self.delivery = Some(*delivery);
             return;
         }
         let ViewerFrame::SetMode(set) = frame else {
@@ -185,6 +191,11 @@ impl ModeMemory {
     /// The viewer's last `AUDIO`; `None` when it sent none.
     pub(crate) fn audio(&self) -> Option<bool> {
         self.audio
+    }
+
+    /// The viewer's last „Übertragung“; `None` when it sent none.
+    pub(crate) fn delivery(&self) -> Option<crate::screen::core::delivery::Delivery> {
+        self.delivery
     }
 
     /// The decoders a new session gets again; `None` when none were sent.

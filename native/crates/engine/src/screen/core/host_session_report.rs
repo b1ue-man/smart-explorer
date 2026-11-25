@@ -10,6 +10,42 @@ use crate::screen::core::input_receipt::InputResult;
 const LATE_BLOCK_SHOWN: Duration = Duration::from_secs(3);
 
 impl Session<'_> {
+    /// `STATS` once a second (moved from `host_session.rs`), with the
+    /// „Übertragung“ and the line's measured rate; the bandwidth probe's
+    /// schedule is asked at the same time (`bandwidth_probe::LineLink`).
+    pub(in super::super) async fn second(&mut self) -> io::Result<()> {
+        self.report_refusal().await?;
+        if self.family.selected.is_some() {
+            self.family_snapshot(false).await?;
+        }
+        let mut stats = self.pipeline.second(self.connection);
+        self.line
+            .second(&self.pipeline, self.connection, &mut stats);
+        let requested =
+            crate::screen::core::chain_meter::lock(self.pipeline.chain_meter()).requested();
+        self.handle.update(|view| {
+            view.bitrate_kbps = stats.sent_kbps;
+            view.fps = stats.fps;
+            view.path = stats.path.key().into();
+            crate::screen::core::chain_meter::publish(view, &mut stats, requested);
+        });
+        self.frame(HostFrame::Stats(stats)).await
+    }
+
+    /// Sound that does not fit under the viewer's ceiling is not sent; the
+    /// viewer hears why once (round 8 Gemini 8/10; moved from
+    /// `host_session_control.rs`).
+    pub(super) async fn sound_notice(
+        &mut self,
+        ceiling: Option<Option<u64>>,
+        on: Option<bool>,
+    ) -> io::Result<()> {
+        match self.outbox.sound.update(ceiling, on) {
+            Some(text) => self.report(self.state, Some(&text)).await,
+            None => Ok(()),
+        }
+    }
+
     /// An `ERROR` for the viewer; the session goes on.
     pub(in super::super) async fn error(
         &mut self,

@@ -67,6 +67,7 @@ fn request(mode: SessionMode, source: SourceId, size: FrameSize, fps: u16) -> Vi
         virtual_display: None,
         codec_choice: None,
         max_rate_bps: None,
+        delivery: None,
     }
 }
 

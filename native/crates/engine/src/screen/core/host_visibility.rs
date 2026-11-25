@@ -104,6 +104,8 @@ impl Session<'_> {
         let size = followed.or(set.size);
         self.pipeline
             .set_mode(kind, size, set.fps, set.sharpness, set.lossless);
+        // Only the full view is measured (`bandwidth_probe.rs`).
+        self.line.set_full(kind == StreamKind::Video);
         let shown = match (kind, self.mode) {
             (StreamKind::Preview, _) => SessionMode::Preview,
             (_, SessionMode::Control) => SessionMode::Control,

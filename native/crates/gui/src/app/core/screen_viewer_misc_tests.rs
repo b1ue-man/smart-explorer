@@ -305,7 +305,11 @@ fn screen_task_viewer_toolbar_labels() {
         // „Codec“ replaces the switch „Verlustfrei“ (BK6, one of its entries).
         "Codec: Automatisch",
         "Dekodierer: Automatisch",
-        "Höchste Datenrate",
+        // User 2026-11-25: „Übertragung“, „Datenrate“ (formerly „Höchste
+        // Datenrate“) and „Neu messen“.
+        "Übertragung: Echtzeit (wie UDP)",
+        "Datenrate: Automatisch",
+        "Neu messen",
     ] {
         assert!(shown.iter().any(|text| text == label), "{label}: {shown:?}");
     }

@@ -2,13 +2,16 @@
 //! [--max-rate RATE] [--codec CODEC] [--decoder DECODER]
 //! [--decoder-library LIBRARY] [--display DISPLAY]
 //! [--virtual-display auto|off|request] [--display-size WxH|window]
-//! [--audio on|off] [--json]`
+//! [--audio on|off] [--transport realtime|reliable] [--json]`
 //! and `se screen grid [--room RAUM] [--json]` (SCR-M7): open the desktop
 //! viewer window of the GUI program (`--screen-view <ziel-json>`,
 //! `--screen-grid [--room <id>]`, V5) as a process of its own and return.
 //! The window asks the device and its user itself. Output: `launched\t<pid>`
 //! or, with `--json`, `{"launched":true,"pid":<n>}`. Without the desktop app
 //! next to this `se` the command fails with „Desktop-App nicht installiert“.
+//! `--transport` stores „Übertragung“ (user 2026-11-25): `realtime`
+//! („Echtzeit (wie UDP)“, never chosen) or `reliable` („Zuverlässig (wie
+//! TCP)“); the window opens every session with it.
 //! „Monitor“ and „Auflösung“ changed later in the window's toolbar apply
 //! within the running session at a host that answers `live` (P9,
 //! `SET_DISPLAY`); an older host's session opens again with them.
@@ -22,6 +25,7 @@ use clap_complete::ArgValueCandidates;
 use serde_json::{json, Value};
 
 use super::DeviceChoice;
+use crate::app::screen_delivery::Delivery;
 use crate::app::screen_prefs::DisplayChoice;
 use crate::app::start_request::StartRequest;
 use crate::screen::core::decoder_library::DecoderLibrary;
@@ -80,6 +84,11 @@ pub(super) struct ViewArgs {
     /// device's sound plays in the viewer, the default) or off
     #[arg(long, value_name = "AN_AUS", value_parser = parse_audio)]
     audio: Option<bool>,
+    /// „Übertragung“ of the desktop viewer, stored before it opens: realtime
+    /// (late pictures are given up, like UDP; never chosen) or reliable
+    /// (every picture arrives, later on a slow line, like TCP)
+    #[arg(long, value_name = "MODE", value_parser = parse_transport)]
+    transport: Option<Delivery>,
     #[arg(long, help = "Print machine-readable JSON")]
     json: bool,
 }
@@ -110,6 +119,11 @@ pub(super) fn parse_audio(text: &str) -> Result<bool, String> {
         "off" => Ok(false),
         _ => Err(format!("invalid audio: {text} (on or off)")),
     }
+}
+
+/// `--transport realtime|reliable` (user 2026-11-25).
+pub(super) fn parse_transport(text: &str) -> Result<Delivery, String> {
+    Delivery::parse(text).ok_or_else(|| format!("invalid transport: {text} (realtime or reliable)"))
 }
 
 /// `--display-size`: the viewer's window or a fixed size.
@@ -340,6 +354,10 @@ pub(super) fn run_view(args: ViewArgs) -> Result<i32, String> {
     if let Some(on) = args.audio {
         crate::app::screen_audio::set_audio(on)
             .map_err(|error| format!("cannot store the audio choice: {error}"))?;
+    }
+    if let Some(mode) = args.transport {
+        crate::app::screen_delivery::set_delivery(mode)
+            .map_err(|error| format!("cannot store the transport choice: {error}"))?;
     }
     // This call's settings go to its own window too: a second call that
     // stores others before the window reads the file does not decide for it.

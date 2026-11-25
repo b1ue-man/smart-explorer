@@ -421,16 +421,15 @@ pub fn hello(mode: SessionMode, metadata: bool) -> ScreenClientHello {
         max_rate_bps: None,
         audio: None,
         control_parts: None,
+        delivery: None,
+        bandwidth_probe: None,
     }
 }
 
 pub fn run<F: Future>(multi: bool, work: F) -> F::Output {
-    let mut builder = if multi {
-        tokio::runtime::Builder::new_multi_thread()
-    } else {
-        tokio::runtime::Builder::new_current_thread()
-    };
+    let mut builder = tokio::runtime::Builder::new_current_thread();
     if multi {
+        builder = tokio::runtime::Builder::new_multi_thread();
         builder.worker_threads(2);
     }
     builder.enable_all().build().unwrap().block_on(work)

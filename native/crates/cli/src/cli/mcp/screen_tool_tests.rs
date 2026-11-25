@@ -31,14 +31,28 @@ fn screen_task_mcp_screen_tool_schema() {
             "on",
             "probe",
             "source",
+            "transport",
             "wait"
         ]
     );
     assert_eq!(
         properties["action"]["enum"],
         // `families` since 1aea1216 (window-family selectors for `screen_window`).
-        // `audio` since plan 2026-11-17 P9 (the viewer's „Ton“).
-        json!(["devices", "probe", "windows", "families", "snapshot", "audio"])
+        // `audio` since plan 2026-11-17 P9 (the viewer's „Ton“), `transport`
+        // since 2026-11-25 (its „Übertragung“).
+        json!([
+            "devices",
+            "probe",
+            "windows",
+            "families",
+            "snapshot",
+            "audio",
+            "transport"
+        ])
+    );
+    assert_eq!(
+        properties["transport"]["enum"],
+        json!(["realtime", "reliable"])
     );
     for integer in ["max_edge", "max_bytes", "wait"] {
         assert_eq!(properties[integer]["type"], "integer", "{integer}");
@@ -46,7 +60,13 @@ fn screen_task_mcp_screen_tool_schema() {
     assert_eq!(properties["probe"]["type"], "boolean");
     assert_eq!(properties["on"]["type"], "boolean");
     assert!(DESCRIPTION.len() <= 2_048);
-    for fact in ["approval_pending", "1568", "no live video", "`wait`"] {
+    for fact in [
+        "approval_pending",
+        "1568",
+        "no live video",
+        "`wait`",
+        "`transport`",
+    ] {
         assert!(DESCRIPTION.contains(fact), "{fact}");
     }
     // The tool as the catalog publishes it: closed object, `action`
@@ -127,6 +147,11 @@ fn mcp_task_screen_refuses_unnamed_devices_and_unknown_actions() {
     // `audio` refuses a non-boolean before it stores anything.
     let error = call(json!({"action": "audio", "on": "yes"})).unwrap_err();
     assert!(error.contains("`on`"), "{error}");
+    // `transport` refuses an unknown mode before it stores anything.
+    for wrong in [json!("udp"), json!("Reliable"), json!(true)] {
+        let error = call(json!({"action": "transport", "transport": wrong})).unwrap_err();
+        assert!(error.contains("`transport`"), "{error}");
+    }
 }
 
 /// The tool `screen_input` (SCR-M6): one input per call, every input kind

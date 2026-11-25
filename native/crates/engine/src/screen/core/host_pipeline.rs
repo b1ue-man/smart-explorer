@@ -191,6 +191,8 @@ pub struct Pipeline {
     key_gop: u64,
     /// Station times and chain facts (BK0); the stage records into it too.
     chain: super::chain_meter::SharedChain,
+    /// Streams given up as stale (`reset_stale_stream`), for the bandwidth probe.
+    stale_resets: u64,
 }
 
 impl Pipeline {
@@ -387,6 +389,7 @@ impl Pipeline {
     /// at most once per stale time, plan 2026-11-17).
     fn reset_stale_stream(&mut self) {
         let (stale_us, _) = self.pacer.stale_limits(self.rate.target_bps());
+        self.stale_resets = self.stale_resets.saturating_add(1);
         self.note_restart(&format!("unacknowledged beyond {} ms", stale_us / 1000));
         self.rate.on_stale_stream(now_us(), stale_us);
         let facts = super::gop_continue::ResetFacts {
