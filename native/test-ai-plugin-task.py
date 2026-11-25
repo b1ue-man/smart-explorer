@@ -12,9 +12,11 @@ milestone once:
   unit     `mcp_task_` tests and the directly affected `cli::` and handoff tests
   mcp      `se mcp` over both lifecycles (Codex `initialize` 2025-06-18,
            Claude Code `server/discover` 2026-07-28): catalog (25 tools, read-only
-           hints, `alwaysLoad` on exactly the 12 file tools, the priority
+           hints, `alwaysLoad` on exactly the 12 file tools and the 4 remote-command
+           tools exec, job_input, job_cancel and sessions, the priority
            paragraph within the first 512 characters of the instructions, the
-           `session` and `attachable` arguments of `exec`), stray-print
+           shells of `exec` named in the instructions, the `session`,
+           `attachable` and `shell` arguments of `exec`), stray-print
            protection, the `sessions` tool and its refusals, `se shell --list`,
            local file tools, jobs and cancellation, the `se` tool,
            status/connections, update stop, session cleanup
@@ -68,7 +70,9 @@ EXPECTED_TOOLS = [
 READ_ONLY = {"status", "connections", "list", "stat", "read", "search", "job_status"}
 # Tools Claude Code loads upfront (`_meta["anthropic/alwaysLoad"]`, catalog.rs `UPFRONT`).
 UPFRONT = {"connections", "list", "stat", "read", "write", "edit", "mkdir", "remove", "copy", "move",
-           "search", "job_status"}
+           "search", "exec", "job_status", "job_input", "job_cancel", "sessions"}
+# Words of the instructions that tell which shell `exec` runs where (2026-11-25).
+SHELL_WORDS = ("PowerShell", "pwsh 7", "5.1", "&&", "if ($?)", "login shell", "`shell`", "`argv`")
 # Words of the priority paragraph an agent must receive: the order (before) and the host tools it
 # ranks below Smart Explorer.
 PRIORITY_WORDS = ("first", "before", "Read", "Write", "Edit", "Glob", "ls", "cat", "find")
@@ -374,6 +378,8 @@ def stage_mcp(results, se_binary, work, log_root):
                 missing = [word for word in PRIORITY_WORDS if word not in first]
                 ensure(not missing, f"priority paragraph lacks {missing}: {first}")
                 ensure("sessions" in instructions, "instructions do not name the sessions tool")
+                missing = [word for word in SHELL_WORDS if word not in instructions]
+                ensure(not missing, f"instructions do not name the shells of exec: {missing}")
                 tools = session.tools()
                 ensure([tool["name"] for tool in tools] == EXPECTED_TOOLS, [tool["name"] for tool in tools])
                 for tool in tools:
@@ -385,7 +391,9 @@ def stage_mcp(results, se_binary, work, log_root):
                            f"{tool['name']}: alwaysLoad {upfront!r}")
                     ensure(len(tool.get("description", "")) <= 2048, f"{tool['name']} description length")
                 exec_tool = next(tool for tool in tools if tool["name"] == "exec")
-                ensure({"session", "attachable"} <= set(exec_tool["inputSchema"]["properties"]), exec_tool)
+                ensure({"session", "attachable", "shell"} <= set(exec_tool["inputSchema"]["properties"]), exec_tool)
+                ensure(exec_tool["inputSchema"]["properties"]["shell"].get("enum") == ["powershell", "cmd", "sh"],
+                       exec_tool["inputSchema"]["properties"]["shell"])
                 ensure("target" not in exec_tool["inputSchema"].get("required", []), exec_tool["inputSchema"])
                 try:
                     session.request("tools/call", {"name": "no_such_tool", "arguments": {}})

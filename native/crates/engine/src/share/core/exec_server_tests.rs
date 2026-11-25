@@ -28,6 +28,7 @@ fn terminal_ack_drains_in_flight_frames_and_rejects_other_exec_ids() {
         timeout_ms: None,
         max_output_bytes: None,
         terminal: None,
+        shell: None,
     };
     let mut protocol = ServerProtocolState::default();
     protocol
@@ -83,6 +84,7 @@ fn terminal_start(exec_id: ExecId) -> ExecStart {
             term: "xterm-256color".into(),
             size: ExecTerminalSize { cols: 80, rows: 24 },
         }),
+        shell: None,
     }
 }
 
@@ -208,6 +210,7 @@ fn delayed_terminal_ack_uses_the_server_budget_and_strict_slack() {
                     stdout_bytes: 0,
                     stderr_bytes: 0,
                     output_truncated: false,
+                    shell: None,
                 }),
             )
             .await?;

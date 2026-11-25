@@ -4,8 +4,10 @@
 use super::exec_tool::ExecRequest;
 use super::jobs::{spawn_worker, Job, JobControl, JobEnd, JobKind, JobStatus};
 use super::session::Session;
-use crate::cli::exec_ssh::{exit_code, remote_command_line, SshExecTarget};
+use crate::cli::exec_peer::NO_SHELL;
+use crate::cli::exec_ssh::{exit_code, remote_command_line, SshExecTarget, SSH_LOGIN_SHELL};
 use crate::sftp::{SshCommandControl, SshCommandEnd, SshCommandEvent};
+use crate::share::ExecCommand;
 use serde_json::json;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -33,6 +35,10 @@ pub(super) fn start(
     request: ExecRequest,
 ) -> Result<Arc<Job>, String> {
     let summary = request.summary();
+    let shell = match request.command {
+        ExecCommand::Shell { .. } => SSH_LOGIN_SHELL,
+        _ => NO_SHELL,
+    };
     let cwd = request.cwd.clone().or(target.cwd.clone());
     let line = remote_command_line(&request.command, cwd.as_deref(), &request.env)?;
     let backend = session.targets.ssh(&target.connection)?;
@@ -75,7 +81,7 @@ pub(super) fn start(
                 SshCommandEvent::Stdout(bytes) => job.append("stdout", &bytes),
                 SshCommandEvent::Stderr(bytes) => job.append("stderr", &bytes),
                 SshCommandEvent::Finished(end) => {
-                    return command_end(&end, timed_out.load(Ordering::SeqCst))
+                    return command_end(&end, timed_out.load(Ordering::SeqCst), shell)
                 }
             };
             if let Err(error) = appended {
@@ -96,7 +102,8 @@ pub(super) fn start(
     Ok(job)
 }
 
-fn command_end(end: &SshCommandEnd, timed_out: bool) -> JobEnd {
+/// `shell`: the result name of the shell (`ssh login shell`, `none` for argv).
+fn command_end(end: &SshCommandEnd, timed_out: bool, shell: &str) -> JobEnd {
     let timed_out = timed_out && end.exit_status.is_none();
     let status = if timed_out {
         JobStatus::TimedOut
@@ -113,6 +120,7 @@ fn command_end(end: &SshCommandEnd, timed_out: bool) -> JobEnd {
             "exit_code": end.exit_status,
             "signal": end.signal,
             "cli_exit_code": exit_code(end, timed_out),
+            "shell": shell,
         }),
         error: end.error.clone(),
     }
@@ -130,19 +138,38 @@ mod tests {
             exit_status: Some(0),
             ..Default::default()
         };
-        assert_eq!(command_end(&done, false).status, JobStatus::Completed);
+        assert_eq!(
+            command_end(&done, false, "ssh login shell").status,
+            JobStatus::Completed
+        );
+        assert_eq!(
+            command_end(&done, false, "ssh login shell").result["shell"],
+            "ssh login shell"
+        );
         let killed = SshCommandEnd {
             signal: Some("TERM".into()),
             cancelled: true,
             ..Default::default()
         };
-        assert_eq!(command_end(&killed, false).status, JobStatus::Cancelled);
-        assert_eq!(command_end(&killed, true).status, JobStatus::TimedOut);
-        assert_eq!(command_end(&killed, true).result["cli_exit_code"], 124);
+        assert_eq!(
+            command_end(&killed, false, "none").status,
+            JobStatus::Cancelled
+        );
+        assert_eq!(
+            command_end(&killed, true, "none").status,
+            JobStatus::TimedOut
+        );
+        assert_eq!(
+            command_end(&killed, true, "none").result["cli_exit_code"],
+            124
+        );
         let refused = SshCommandEnd {
             error: Some("rejected".into()),
             ..Default::default()
         };
-        assert_eq!(command_end(&refused, false).status, JobStatus::Failed);
+        assert_eq!(
+            command_end(&refused, false, "none").status,
+            JobStatus::Failed
+        );
     }
 }

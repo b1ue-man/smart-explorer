@@ -135,6 +135,7 @@ fn start(command: ExecCommand) -> ExecStart {
         timeout_ms: None,
         max_output_bytes: None,
         terminal: None,
+        shell: None,
     }
 }
 

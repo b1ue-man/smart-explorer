@@ -145,6 +145,7 @@ fn share_terminal(
             term: options.term.clone(),
             size: options.size.into(),
         }),
+        shell: None,
     };
     start.validate().map_err(|error| error.to_string())?;
     let mut session = crate::daemon::connect_exec(peer.clone(), start)?;
@@ -433,16 +434,23 @@ mod tests {
     fn shell_session_task_share_session_needs_one_start_line() {
         let line = share_start_line();
         // cmd.exe: a failing first command with its error sent to NUL, then
-        // PowerShell on the session's input, then `rem` for the rest.
+        // PowerShell 7 when installed, else Windows PowerShell 5.1, on the
+        // session's input, then `rem` for the rest.
         let (cmd, posix) = line.split_once("'; ").unwrap();
+        let options = "-NoLogo -NoProfile -NonInteractive -Command -";
+        let installed = "\"%ProgramFiles%\\PowerShell\\7\\pwsh.exe\"";
         assert_eq!(
             cmd,
-            "SE_PS=' 2>NUL & powershell.exe -NoLogo -NoProfile -NonInteractive -Command - & rem "
+            format!(
+                "SE_PS=' 2>NUL & where /q pwsh.exe & if not errorlevel 1 (pwsh.exe {options}) \
+                 else if exist {installed} ({installed} {options}) \
+                 else (powershell.exe {options}) & rem "
+            )
         );
         // POSIX: the single-quoted part is one assignment; the session shell
         // follows unchanged.
         assert!(!cmd["SE_PS='".len()..].contains('\''));
-        assert!(!line.contains(['"', '%', '^', '!']));
+        assert!(!line.contains(['^', '!']));
         assert_eq!(
             posix,
             "exec sh -c 'if command -v bash >/dev/null 2>&1; then exec bash -l; fi; exec sh -l'"

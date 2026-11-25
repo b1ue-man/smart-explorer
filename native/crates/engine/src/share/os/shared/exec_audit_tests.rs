@@ -27,6 +27,7 @@ fn shell_start() -> ExecStart {
         timeout_ms: None,
         max_output_bytes: None,
         terminal: None,
+        shell: None,
     }
 }
 
@@ -50,6 +51,7 @@ fn finished_view(start: &ExecStart) -> ExecJobView {
             stdout_bytes: 5,
             stderr_bytes: 0,
             output_truncated: false,
+            shell: None,
         }),
     }
 }

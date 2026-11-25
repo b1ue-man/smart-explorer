@@ -212,6 +212,11 @@ pub(in crate::cli) struct SessionInfo {
     pub(in crate::cli) cwd: Option<String>,
     /// This client's role.
     pub(in crate::cli) role: Role,
+    /// The shell the session runs in, as it named itself at the start
+    /// (`pwsh 7`, `powershell 5.1`, `bash`, `sh`); owners before shell names
+    /// send none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(in crate::cli) shell: Option<String>,
 }
 
 /// What the other participants of a session did, as one client sees it.

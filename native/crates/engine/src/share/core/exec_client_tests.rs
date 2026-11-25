@@ -73,6 +73,7 @@ fn start(byte: &str) -> ExecStart {
         timeout_ms: None,
         max_output_bytes: None,
         terminal: None,
+        shell: None,
     }
 }
 
@@ -108,6 +109,7 @@ fn terminal(id: &ExecId) -> ExecTerminal {
         stdout_bytes: 3,
         stderr_bytes: 2,
         output_truncated: false,
+        shell: None,
     }
 }
 

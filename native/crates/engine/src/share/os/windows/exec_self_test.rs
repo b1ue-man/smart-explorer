@@ -243,6 +243,7 @@ fn helper_request(arguments: Vec<String>) -> io::Result<ExecStart> {
         timeout_ms: Some(10_000),
         max_output_bytes: None,
         terminal: None,
+        shell: None,
     })
 }
 

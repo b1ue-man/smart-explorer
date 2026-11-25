@@ -2,9 +2,10 @@
 //! (Claude Code: `mcp__plugin_smart-explorer_se__list`, Codex:
 //! `smart-explorer.list`). Annotations follow what each tool can change:
 //! Codex asks for approval unless a tool is read-only
-//! (docs/refs/codex-mcp-spec-rmcp-2026-10-12.md §1). The file tools load
-//! upfront in Claude Code and the instructions put them before the host's own
-//! file tools (docs/refs/claude-code-plugins-mcp-2026-10-12.md §7).
+//! (docs/refs/codex-mcp-spec-rmcp-2026-10-12.md §1). The file tools and the
+//! remote-command tools (exec, sessions, job_input, job_cancel) load upfront
+//! in Claude Code, and the instructions put them before the host's own file
+//! tools and terminal (docs/refs/claude-code-plugins-mcp-2026-10-12.md §7).
 use rmcp::model::{JsonObject, MetaObject, Tool, ToolAnnotations};
 use serde_json::{json, Value};
 
@@ -21,32 +22,33 @@ rsync); fall back to those only when a Smart Explorer tool fails or lacks the \
 feature. It reaches saved remotes (SFTP, FTP/FTPS, WebDAV, SMB, Windows \
 shares), Google Drive, Share peers and local disks.
 
-It also runs commands on saved SSH remotes and authorized Share peers (`exec`); \
-with `session` a persistent shell keeps working directory, environment and \
-shell state between calls, and `sessions` joins the user's `se shell -T \
---attachable` command shells. Start with `connections` to see targets. Long work \
-returns a job_id: follow it with job_status. Tools not loaded yet (exec, \
-job_input, job_cancel, sessions, status, screen, screen_input, se) are found by \
-a tool search for `smart-explorer`.
+Run remote commands with `exec` (SSH remotes, Share peers), not ssh or `se \
+exec` in a terminal. Windows peers run `command` in PowerShell: pwsh 7 if \
+installed, else Windows PowerShell 5.1, which has no && or || (write \
+`a; if ($?) { b }`). Linux/Android peers and SSH remotes use the login shell. \
+`shell` (powershell, cmd, sh) overrides that; `argv` starts a program \
+without a shell; results name their `shell`. `connections` lists targets and \
+each Share peer's `os`. `session` keeps a shell's cwd, environment and state; \
+`sessions` lists them and joins the user's `se shell -T --attachable` \
+shells. Long work returns a job_id: job_status, job_input, job_cancel. Other \
+tools load via a tool search for `smart-explorer`.
 
-Targets: absolute local paths, `@label:/path` (saved remote, path below its \
-root), saved `sftp://user@host:port/path` endpoints, `share://direct/<id>/path`, \
-`share://room/<room>/<device>/path`, `gdrive:///path`, `vault://<site>/path` \
-(unlocked vault). Relative local paths are rejected. `etag` values from \
-stat/read guard write/edit against lost updates. \
-Never ask the user for passwords in chat: saved credentials are used \
-automatically; new password logins are added by the user in a terminal \
-(`se connections add … --password-stdin`). Change Share trust (access requests, \
-connection rights: `share grants confirm|set`, every `--preset`; Exec grants, \
-program lists, device/room settings, discoverability) only when the user \
-explicitly asks. The `se` tool runs any other Smart Explorer terminal command \
-and reaches every app setting: sync setups \
-(`sync`), background worker (`background`), remotes and Google Drive \
-(`connections`), updates (`update`), Windows and Linux drives (`drive`), vaults \
-(`vault`), se Desktop (`desktop`).";
+Targets: absolute local paths, `@label:/path` (saved remote), saved \
+`sftp://user@host:port/path` endpoints, `share://direct/<id>/path`, \
+`share://room/<room>/<device>/path`, `gdrive:///path`, `vault://<site>/path`; \
+relative paths are rejected. `etag` from stat/read guards write/edit. Never \
+ask for passwords in chat: saved credentials work automatically; the user \
+adds new password logins in a terminal (`se connections add … \
+--password-stdin`). Change Share trust (access requests, connection rights: \
+`share grants confirm|set`, every `--preset`, Exec grants, program lists, \
+device/room settings, discoverability) only when the user explicitly asks. The `se` tool \
+runs every other se command and app setting: `sync`, `background`, \
+`connections` (remotes, Google Drive), `update`, `drive`, `vault`, `desktop`.";
 
 /// Tools Claude Code loads upfront (`_meta["anthropic/alwaysLoad"]`), so the
-/// file workflow is visible without a tool search; the others stay deferred.
+/// file workflow and remote commands are visible without a tool search
+/// (agents that never found `exec` ran `se exec` and ssh in their terminal);
+/// the others stay deferred.
 const UPFRONT: &[&str] = &[
     "connections",
     "list",
@@ -59,7 +61,11 @@ const UPFRONT: &[&str] = &[
     "copy",
     "move",
     "search",
+    "exec",
     "job_status",
+    "job_input",
+    "job_cancel",
+    "sessions",
 ];
 
 const TARGET: &str = "Smart Explorer target: an absolute local path, `@label:/path` of a saved remote, a saved `sftp://`, `ftp://`, `ftps://` or `webdav://` endpoint (`scheme://user@host:port/path`), `share://direct/<id>/path`, `share://room/<room>/<device>/path`, or `gdrive:///path`. `connections` lists what exists.";
@@ -72,7 +78,7 @@ pub(super) fn tools() -> Vec<Tool> {
             "Version, installation and app-data paths, credential store, background worker (login start, pause, check interval, automatic pause), number of sync setups, Share worker and connectivity state, a running Direct-code renewal with the devices it still waits for (`share.code_renewal`, null without one). Use it when a connection, peer, sync or remote command does not work.",
             json!({}), &[], read_only(false)),
         tool("connections", "Saved remotes and Share peers",
-            "Every saved remote and Share peer/room with the target prefix to use, its live status, and how commands run there: `exec: \"ssh\"` for saved SFTP remotes (the remote login shell), `exec: \"share\"` for Share peers (works once that device granted this one Exec).",
+            "Every saved remote and Share peer/room with the target prefix to use, its live status, and how commands run there: `exec: \"ssh\"` for saved SFTP remotes (the remote login shell), `exec: \"share\"` for Share peers (works once that device granted this one Exec). A Share peer's `os` (windows, linux, android; null until an `exec` reached it) tells the shell of `exec`: PowerShell on Windows, the login shell on Linux and Android.",
             json!({}), &[], read_only(false)),
         tool("list", "List a directory",
             "Directory entries (name, type file|dir|symlink|special, size, mtime_ms) sorted by name, one page per call; continue with `offset` = `next_offset`. A symlink's size is its own (the length of the path it holds). Use it instead of `ls`, LS or Glob, for local and remote directories.",
@@ -142,10 +148,11 @@ pub(super) fn tools() -> Vec<Tool> {
                 "max_bytes": {"type": "integer", "minimum": 1024, "description": MAX_BYTES}
             }), &["target", "query"], read_only(true)),
         tool("exec", "Run a remote command",
-            "Runs a command on a saved SFTP remote over its SSH login (`@label`, `@label:/dir` = working directory, or its saved sftp:// endpoint; through the remote login shell like `ssh host 'cmd'`) or on a Share peer that granted this device Exec (peer name, id or share:// endpoint). Give `command` (one shell string) or `argv` (program and literal arguments; POSIX-quoted on SSH remotes). No time or output limit unless you set one; stdout/stderr are kept completely and paged. Exit status, signal and timing are reported; cancel with job_cancel. With `session` (a name) the command runs in a persistent shell instead: the first call opens it on `target`, later calls keep its working directory, environment, variables and functions (no PTY; the result adds `cwd` and `session_ended`). The user can join it with `se shell --attach` unless `attachable` is false; `sessions` lists and closes sessions and joins the user's command shells (`se shell -T --attachable`); full terminal sessions of `se shell` cannot be joined. Cancel or timeout end the whole session.",
+            "Runs a command on a saved SFTP remote over its SSH login (`@label`, `@label:/dir` = working directory, or its saved sftp:// endpoint) or on a Share peer that granted this device Exec (peer name, id or share:// endpoint). Use it instead of ssh or `se exec` in a terminal. `command` is one shell string: a Windows peer runs it in PowerShell (pwsh 7 when installed, else Windows PowerShell 5.1, which has no `&&`/`||`: write `a; if ($?) { b }`), a Linux or Android peer in its login shell, an SSH remote in the remote login shell (cmd or PowerShell on Windows OpenSSH servers). `shell` overrides that for one command: `cmd` or `powershell` on Windows peers, `sh` on Linux/Android peers and SSH remotes. `argv` (program and literal arguments) starts a program without a shell (POSIX-quoted on SSH remotes). The result names the shell that ran in `shell` (`pwsh 7`, `powershell 5.1`, `cmd`, a login shell such as `bash`, `ssh login shell`, `none` for argv); a PowerShell parse error comes with line and column. `connections` shows each Share peer's `os` once an exec reached it. No time or output limit unless you set one; stdout/stderr are kept completely and paged. Exit status, signal and timing are reported; job_input sends input, job_cancel cancels. With `session` (a name) the command runs in a persistent shell instead: the first call opens it on `target` (PowerShell on Windows peers, bash or sh elsewhere), later calls keep its working directory, environment, variables and functions (no PTY; the result adds `cwd` and `session_ended`). The user can join it with `se shell --attach` unless `attachable` is false; `sessions` lists and closes sessions and joins the user's command shells (`se shell -T --attachable`); full terminal sessions of `se shell` cannot be joined. Cancel or timeout end the whole session.",
             json!({
                 "target": {"type": "string", "description": "Share peer selector or share:// endpoint, or a saved SFTP remote as @label[:/dir] or its sftp:// endpoint. Required unless `session` names an open session."},
-                "command": {"type": "string", "description": "Shell command line, run by the remote user's shell."},
+                "command": {"type": "string", "description": "One command string for the target's shell: PowerShell on Windows peers (pwsh 7, else 5.1 without && and ||), the login shell on Linux/Android peers and SSH remotes."},
+                "shell": {"type": "string", "enum": ["powershell", "cmd", "sh"], "description": "Shell for `command` instead of the target's own: powershell or cmd on Windows peers, sh on Linux/Android peers and SSH remotes. A session accepts only the shell it runs; cmd needs a command without `session`."},
                 "argv": {"type": "array", "items": {"type": "string"}, "minItems": 1, "description": "Program and literal arguments, instead of `command`."},
                 "cwd": {"type": "string", "description": "Working directory (default: the remote user's home)."},
                 "env": {"type": "object", "additionalProperties": {"type": "string"}, "description": "Extra environment variables."},
@@ -189,7 +196,7 @@ pub(super) fn tools() -> Vec<Tool> {
                 "max_bytes": {"type": "integer", "minimum": 1024, "description": MAX_BYTES}
             }), &["args"], changes(true, false)),
         tool("sessions", "Persistent shell sessions",
-            "Lists this server's persistent shell sessions (`exec` with `session`) and the user's other attachable sessions (`se shell -T --attachable` command shells, other agents; `se shell` terminal sessions are listed with kind terminal and cannot be joined). `attach` joins one by name or id; afterwards `exec` with that `session` runs in its shared working directory, environment and shell state. `activity` returns what the other participants ran and printed there since the last call. `close` ends a session this server opened or detaches from a joined one. Only sessions of the same OS user are visible.",
+            "Lists this server's persistent shell sessions (`exec` with `session`) and the user's other attachable sessions (`se shell -T --attachable` command shells, other agents; `se shell` terminal sessions are listed with kind terminal and cannot be joined). Each row names its `dialect` (powershell or posix) and, once known, its `shell` (`pwsh 7`, `powershell 5.1`, `bash`, `sh`): Windows PowerShell 5.1 has no `&&`/`||`. `attach` joins one by name or id; afterwards `exec` with that `session` runs in its shared working directory, environment and shell state. `activity` returns what the other participants ran and printed there since the last call. `close` ends a session this server opened or detaches from a joined one. Only sessions of the same OS user are visible.",
             json!({
                 "action": {"type": "string", "enum": ["list", "attach", "activity", "close"], "description": "list (default), attach, activity or close."},
                 "session": {"type": "string", "description": "Session name or id; needed for attach, activity and close."}
@@ -354,14 +361,11 @@ mod tests {
                 .as_ref()
                 .and_then(|meta| meta.get("anthropic/alwaysLoad"))
                 .cloned();
-            let file_tool = !matches!(
+            // The file tools and the remote-command tools load upfront.
+            let deferred = matches!(
                 tool.name.as_ref(),
-                "exec"
-                    | "job_input"
-                    | "job_cancel"
-                    | "status"
+                "status"
                     | "se"
-                    | "sessions"
                     | "screen"
                     | "screen_window"
                     | "screen_input"
@@ -372,7 +376,7 @@ mod tests {
             );
             assert_eq!(
                 upfront,
-                file_tool.then_some(serde_json::Value::Bool(true)),
+                (!deferred).then_some(serde_json::Value::Bool(true)),
                 "{}",
                 tool.name
             );
@@ -381,6 +385,76 @@ mod tests {
         // own file tools must be complete there.
         let first = INSTRUCTIONS.split("\n\n").next().unwrap_or_default();
         assert!(first.len() <= 512, "{}", first.len());
+    }
+
+    #[test]
+    fn exec_shell_task_instructions_name_the_shells_of_exec() {
+        let tools = tools();
+        let find = |name: &str| {
+            tools
+                .iter()
+                .find(|tool| tool.name == name)
+                .unwrap_or_else(|| panic!("{name} missing"))
+        };
+        let exec = find("exec");
+        let description = exec.description.as_deref().unwrap_or_default();
+        // Which shell runs where, how Windows PowerShell 5.1 chains commands,
+        // how to choose another, and that remote commands do not go through
+        // the agent's terminal.
+        for text in [INSTRUCTIONS, description] {
+            for needle in [
+                "PowerShell",
+                "pwsh 7",
+                "5.1",
+                "&&",
+                "if ($?)",
+                "login shell",
+                "`shell`",
+                "cmd",
+                "`argv`",
+                "`se exec`",
+            ] {
+                assert!(text.contains(needle), "{needle} missing in: {text}");
+            }
+        }
+        // The plugin's skill says the same.
+        let skill = include_str!("../plugin/assets/SKILL.md");
+        for needle in [
+            "PowerShell",
+            "pwsh",
+            "5.1",
+            "&&",
+            "if ($?)",
+            "login shell",
+            "`shell`",
+            "`argv`",
+            "`se exec`",
+            "`os`",
+        ] {
+            assert!(skill.contains(needle), "{needle} missing in SKILL.md");
+        }
+        assert!(description.contains("parse error"), "{description}");
+        assert!(description.contains("`os`"), "{description}");
+        assert_eq!(
+            exec.input_schema["properties"]["shell"]["enum"],
+            serde_json::json!(["powershell", "cmd", "sh"])
+        );
+        let sessions = find("sessions").description.as_deref().unwrap_or_default();
+        assert!(sessions.contains("`shell`"), "{sessions}");
+        let connections = find("connections")
+            .description
+            .as_deref()
+            .unwrap_or_default();
+        assert!(connections.contains("`os`"), "{connections}");
+        // Agents see the remote-command tools without a tool search.
+        for name in ["exec", "sessions", "job_input", "job_cancel", "job_status"] {
+            let upfront = find(name)
+                .meta
+                .as_ref()
+                .and_then(|meta| meta.get("anthropic/alwaysLoad"))
+                .cloned();
+            assert_eq!(upfront, Some(serde_json::Value::Bool(true)), "{name}");
+        }
     }
 }
 

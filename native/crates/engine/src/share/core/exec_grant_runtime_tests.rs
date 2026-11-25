@@ -308,5 +308,6 @@ fn start() -> ExecStart {
         timeout_ms: None,
         max_output_bytes: None,
         terminal: None,
+        shell: None,
     }
 }

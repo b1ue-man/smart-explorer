@@ -222,6 +222,8 @@ mod exec_registry;
 mod exec_server;
 #[path = "core/exec_session.rs"]
 mod exec_session;
+#[path = "core/exec_shell.rs"]
+pub mod exec_shell;
 #[path = "core/exec_supervisor_protocol.rs"]
 mod exec_supervisor_protocol;
 #[path = "core/exec_targets.rs"]

@@ -11,6 +11,12 @@ Exec access.
 The target may be omitted when exactly one ready peer exists. Otherwise the
 command prints every valid target and an immediately usable example.
 
+--shell runs one command string: on a Windows peer in PowerShell (PowerShell 7
+when installed, else Windows PowerShell 5.1, which has no && and ||: use ; and
+if ($?) { ... }), on a Linux or Android peer in the login shell. --shell-kind
+cmd runs it in cmd.exe on a Windows peer instead. --verbose names the shell
+that ran.
+
 A saved SFTP remote (`@label`, `@label:/dir`, or its saved sftp:// endpoint)
 runs the command over that connection's SSH login through the remote user's
 login shell, like `ssh host 'command'`; a path in the selector becomes the
@@ -21,6 +27,8 @@ Examples:
   se exec Laptop -- uname -a
   se exec share://direct/peer-id -- powershell -NoProfile -Command Get-Date
   se exec Laptop --shell 'printf \"%s\\n\" \"$HOME\"'
+  se exec WinPC --shell 'Get-ChildItem C:\\Users; if ($?) { whoami }'
+  se exec WinPC --shell-kind cmd --shell 'dir C:\\Users && whoami'
   se exec Laptop --cwd /srv --env MODE=production -- ./deploy --force
   se exec @prod:/srv/app -- git status --short
 
@@ -33,6 +41,10 @@ When the peer asks its user to confirm the command first, a status line on
 stderr says so (with --json the event {\"event\":\"approval_pending\",...});
 Ctrl+C withdraws the request. --verbose names the account the command runs
 as on the peer.";
+
+#[path = "exec_status.rs"]
+mod status;
+use status::{peer_name, StatusReport};
 
 #[derive(Args)]
 #[command(long_about = EXEC_HELP)]
@@ -68,9 +80,17 @@ pub(super) struct ExecArgs {
     #[arg(
         long,
         conflicts_with = "argv",
-        help = "Run the exact string through the remote user's shell"
+        help = "Run the exact string through the remote shell (PowerShell on Windows peers, the login shell elsewhere)"
     )]
     pub(super) shell: Option<String>,
+    #[arg(
+        long = "shell-kind",
+        value_name = "KIND",
+        requires = "shell",
+        value_parser = ["powershell", "cmd", "sh"],
+        help = "Shell for --shell: powershell or cmd on Windows peers, sh on Linux/Android peers and SSH remotes"
+    )]
+    pub(super) shell_kind: Option<String>,
     #[arg(
         last = true,
         num_args = 1..,
@@ -102,6 +122,7 @@ pub(super) fn run(args: ExecArgs) -> Result<i32, String> {
     } else {
         Some(select_target(args.target.as_deref())?)
     };
+    let shell = shell_choice(args.shell_kind.as_deref(), args.shell.is_some())?;
     let command = match (args.shell, args.argv.split_first()) {
         (Some(command), None) if !command.trim().is_empty() => {
             crate::share::ExecCommand::Shell { command }
@@ -119,6 +140,7 @@ pub(super) fn run(args: ExecArgs) -> Result<i32, String> {
         }
     };
     if let Some(target) = ssh_target {
+        super::exec_ssh::check_shell(shell)?;
         return super::exec_ssh::run(super::exec_ssh::SshRun {
             target,
             command,
@@ -137,6 +159,7 @@ pub(super) fn run(args: ExecArgs) -> Result<i32, String> {
         timeout_ms: (args.timeout > 0).then(|| args.timeout.saturating_mul(1_000)),
         max_output_bytes: (args.max_output > 0).then_some(args.max_output),
         terminal: None,
+        shell,
     };
     start.validate().map_err(|error| error.to_string())?;
     let report = StatusReport {
@@ -146,52 +169,16 @@ pub(super) fn run(args: ExecArgs) -> Result<i32, String> {
     execute(target, start, report)
 }
 
-/// Which status of a Share start goes to stderr.
-#[derive(Clone, Copy)]
-struct StatusReport {
-    /// The account line (`{device}: as {account}`).
-    verbose: bool,
-    /// JSON lines instead of text.
-    json: bool,
-}
-
-impl StatusReport {
-    /// The start waits for the peer's user (PRM-M3): once per request.
-    fn waiting(self, device: &str, approval: &crate::share::exec_access_view::ExecApprovalPending) {
-        let surface = approval.surface();
-        if self.json {
-            let event = crate::share::exec_client_messages::approval_pending_event(device, surface);
-            eprintln!("{event}");
-        } else {
-            let line = crate::share::exec_client_messages::approval_status_line(device, surface);
-            eprintln!("{line}");
-        }
+/// The shell of a `--shell` command: `--shell-kind`, else the peer's own
+/// (`ExecShell::Standard`: PowerShell on Windows peers); argv has none.
+fn shell_choice(
+    kind: Option<&str>,
+    shell_command: bool,
+) -> Result<Option<crate::share::ExecShell>, String> {
+    match kind {
+        Some(kind) => crate::share::ExecShell::parse(kind).map(Some),
+        None => Ok(shell_command.then_some(crate::share::ExecShell::Standard)),
     }
-
-    /// The account line once the peer authorized the start.
-    fn account(self, exec_id: &crate::share::ExecId, label: &str, user_label: &str) {
-        if !self.verbose {
-            return;
-        }
-        let notice = crate::daemon::exec_notice(exec_id).ok().flatten();
-        let device = peer_name(notice.as_ref(), label);
-        let access = notice.as_ref().and_then(|notice| notice.access.as_ref());
-        let line = crate::share::exec_client_messages::account_line(&device, access, user_label);
-        if self.json {
-            let event = serde_json::json!({"event": "account", "device": device, "line": line});
-            eprintln!("{event}");
-        } else {
-            eprintln!("{line}");
-        }
-    }
-}
-
-/// The peer as the worker names it, else as the user selected it.
-fn peer_name(notice: Option<&crate::daemon::ExecNoticeView>, label: &str) -> String {
-    notice
-        .map(|notice| notice.device.clone())
-        .filter(|device| !device.trim().is_empty())
-        .unwrap_or_else(|| label.to_string())
 }
 
 fn execute(
@@ -200,6 +187,8 @@ fn execute(
     report: StatusReport,
 ) -> Result<i32, String> {
     let label = target.endpoint_prefix();
+    let shell_command = matches!(start.command, crate::share::ExecCommand::Shell { .. });
+    let mut provider = None;
     let mut session = crate::daemon::connect_exec(target, start)?;
     let exec_id = session.exec_id.clone();
     // Until the start begins, its notice tells whether the peer's user is
@@ -243,8 +232,10 @@ fn execute(
             drop(notice.take());
         }
         match event {
-            crate::daemon::ExecIpcEvent::Authorized(provider) => {
-                report.account(&exec_id, &label, &provider.user_label);
+            crate::daemon::ExecIpcEvent::Authorized(status) => {
+                report.account(&exec_id, &label, &status.user_label);
+                super::exec_peer::record_os(&label, &status.provider);
+                provider = Some(status.provider);
             }
             crate::daemon::ExecIpcEvent::Started => {}
             crate::daemon::ExecIpcEvent::Stdout(bytes) => write_all(std::io::stdout(), &bytes)?,
@@ -254,6 +245,16 @@ fn execute(
                 return Ok(125);
             }
             crate::daemon::ExecIpcEvent::Terminal(terminal) => {
+                let ran =
+                    super::exec_peer::result_shell(&terminal, shell_command, provider.as_deref());
+                report.shell(ran.as_deref());
+                if let Some(message) = terminal
+                    .message
+                    .as_deref()
+                    .filter(|_| terminal.kind == crate::share::ExecTerminalKind::Failed)
+                {
+                    let _ = writeln!(std::io::stderr(), "se: {message}");
+                }
                 if terminal.output_truncated {
                     let _ = writeln!(
                         std::io::stderr(),
@@ -461,36 +462,5 @@ fn selector_matches(selector: &str, candidate: &str) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{exit_code, parse_environment, selector_matches};
-
-    #[test]
-    fn environment_and_selector_inputs_are_literal() {
-        let env = parse_environment(vec!["A=space $ ' quote".into(), "EMPTY=".into()]).unwrap();
-        assert_eq!(env["A"], "space $ ' quote");
-        assert_eq!(env["EMPTY"], "");
-        assert!(selector_matches("abcd", "abcdef"));
-        assert!(!selector_matches("abc", "abcdef"));
-    }
-
-    #[test]
-    fn terminal_status_maps_to_documented_cli_codes() {
-        let mut terminal = crate::share::ExecTerminal {
-            exec_id: crate::share::ExecId::parse("00".repeat(16)).unwrap(),
-            kind: crate::share::ExecTerminalKind::Exited,
-            exit_code: Some(7),
-            signal: None,
-            message: None,
-            stdout_bytes: 0,
-            stderr_bytes: 0,
-            output_truncated: false,
-        };
-        assert_eq!(exit_code(&terminal), 7);
-        terminal.kind = crate::share::ExecTerminalKind::TimedOut;
-        assert_eq!(exit_code(&terminal), 124);
-        terminal.kind = crate::share::ExecTerminalKind::Cancelled;
-        assert_eq!(exit_code(&terminal), 130);
-        terminal.kind = crate::share::ExecTerminalKind::Revoked;
-        assert_eq!(exit_code(&terminal), 125);
-    }
-}
+#[path = "exec_tests.rs"]
+mod tests;

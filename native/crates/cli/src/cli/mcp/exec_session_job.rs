@@ -3,14 +3,17 @@
 //! environment and shell state persist between calls. Opening runs on the job
 //! thread (a Share peer may need up to a minute). Cancel and timeout end the
 //! whole session: the exec stream has no signal path to a single command.
+//! The result names the session's shell (`pwsh 7`, `powershell 5.1`, `bash`,
+//! `sh`); `shell` may only name the shell the session runs.
 use super::exec_tool::ExecRequest;
 use super::jobs::{spawn_worker, Job, JobControl, JobEnd, JobKind, JobStatus};
 use super::session::Session;
 use super::shell_registry::Port;
 use crate::cli::shell_session::{
-    argv_command, CommandOutcome, CommandRequest, CommandSink, OutcomeStatus, StdinMode, Stream,
+    argv_command, CommandOutcome, CommandRequest, CommandSink, Dialect, OutcomeStatus, StdinMode,
+    Stream,
 };
-use crate::share::ExecCommand;
+use crate::share::{ExecCommand, ExecShell};
 use serde_json::json;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
@@ -28,6 +31,12 @@ pub(super) fn start(
         );
     }
     crate::cli::shell_session::validate_name(&name)?;
+    if request.shell == Some(ExecShell::Cmd) {
+        return Err(
+            "sessions on Windows peers run in PowerShell; `cmd` works only without `session`"
+                .into(),
+        );
+    }
     let summary = shorten(format!(
         "exec in session {name}: {}",
         request.command_text()
@@ -49,7 +58,12 @@ pub(super) fn start(
 }
 
 fn run(job: &Arc<Job>, port: &Arc<Port>, request: ExecRequest, name: &str) -> JobEnd {
-    let dialect = port.client.info().dialect;
+    let info = port.client.info();
+    let dialect = info.dialect;
+    let shell = info.shell;
+    if let Some(refused) = shell_refusal(request.shell, dialect) {
+        return failed(refused);
+    }
     let command = match &request.command {
         ExecCommand::Shell { command } => command.clone(),
         ExecCommand::Argv { program, args } => argv_command(dialect, program, args),
@@ -77,7 +91,7 @@ fn run(job: &Arc<Job>, port: &Arc<Port>, request: ExecRequest, name: &str) -> Jo
             session_ended: true,
             message: Some("cancelled before the command started".into()),
         };
-        return job_end(&cancelled, name, false, None);
+        return job_end(&cancelled, name, false, None, shell.as_deref());
     }
     let submitted = port.client.submit(
         CommandRequest {
@@ -112,7 +126,24 @@ fn run(job: &Arc<Job>, port: &Arc<Port>, request: ExecRequest, name: &str) -> Jo
         name,
         timed_out.load(Ordering::SeqCst),
         spool_error,
+        shell.as_deref(),
     )
+}
+
+/// Why `shell` does not fit a session in `dialect`; a session runs one
+/// shell, so `shell` can only confirm it.
+fn shell_refusal(shell: Option<ExecShell>, dialect: Dialect) -> Option<String> {
+    match (shell, dialect) {
+        (None | Some(ExecShell::Standard), _)
+        | (Some(ExecShell::PowerShell), Dialect::PowerShell)
+        | (Some(ExecShell::Sh), Dialect::Posix) => None,
+        (Some(chosen), dialect) => Some(format!(
+            "this session runs a {} shell, so `shell: {}` does not apply; omit `shell` or use \
+             another session name for another target",
+            dialect.label(),
+            chosen.as_str()
+        )),
+    }
 }
 
 /// Cancel ends the session: there is no signal path to one command.
@@ -184,11 +215,13 @@ impl JobSink {
     }
 }
 
+/// `shell`: the session's shell as it named itself at its start.
 fn job_end(
     outcome: &CommandOutcome,
     name: &str,
     timed_out: bool,
     spool_error: Option<String>,
+    shell: Option<&str>,
 ) -> JobEnd {
     let status = match outcome.status {
         _ if spool_error.is_some() => JobStatus::Failed,
@@ -212,6 +245,7 @@ fn job_end(
             "session_ended": outcome.session_ended,
             "message": outcome.message,
             "cli_exit_code": cli_exit_code,
+            "shell": shell,
         }),
         error: match spool_error {
             Some(error) => Some(error),
@@ -242,9 +276,10 @@ fn shorten(summary: String) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::job_end;
+    use super::{job_end, shell_refusal};
     use crate::cli::mcp::jobs::JobStatus;
-    use crate::cli::shell_session::{CommandOutcome, OutcomeStatus};
+    use crate::cli::shell_session::{CommandOutcome, Dialect, OutcomeStatus};
+    use crate::share::ExecShell;
 
     #[test]
     fn mcp_task_session_outcomes_map_to_job_states() {
@@ -255,11 +290,12 @@ mod tests {
             session_ended: false,
             message: None,
         };
-        let end = job_end(&done, "build", false, None);
+        let end = job_end(&done, "build", false, None, Some("bash"));
         assert_eq!(end.status, JobStatus::Completed);
         assert_eq!(end.result["cli_exit_code"], 3);
         assert_eq!(end.result["cwd"], "/srv");
         assert_eq!(end.result["session"], "build");
+        assert_eq!(end.result["shell"], "bash");
         let cancelled = CommandOutcome {
             status: OutcomeStatus::Cancelled,
             exit_code: None,
@@ -268,15 +304,15 @@ mod tests {
             message: Some("the session was cancelled by se shell (pid 1)".into()),
         };
         assert_eq!(
-            job_end(&cancelled, "b", true, None).status,
+            job_end(&cancelled, "b", true, None, None).status,
             JobStatus::TimedOut
         );
         assert_eq!(
-            job_end(&cancelled, "b", true, None).result["cli_exit_code"],
+            job_end(&cancelled, "b", true, None, None).result["cli_exit_code"],
             124
         );
         assert_eq!(
-            job_end(&cancelled, "b", false, None).status,
+            job_end(&cancelled, "b", false, None, None).status,
             JobStatus::Cancelled
         );
         let lost = CommandOutcome {
@@ -286,11 +322,41 @@ mod tests {
             session_ended: true,
             message: Some("lost".into()),
         };
-        let end = job_end(&lost, "b", false, None);
+        let end = job_end(&lost, "b", false, None, None);
         assert_eq!(end.status, JobStatus::Failed);
         assert_eq!(end.error.as_deref(), Some("lost"));
-        let spool = job_end(&done, "b", false, Some("disk full".into()));
+        let spool = job_end(&done, "b", false, Some("disk full".into()), None);
         assert_eq!(spool.status, JobStatus::Failed);
         assert_eq!(spool.error.as_deref(), Some("disk full"));
+    }
+
+    #[test]
+    fn exec_shell_task_a_session_names_and_keeps_its_shell() {
+        for (shell, dialect) in [
+            (None, Dialect::PowerShell),
+            (Some(ExecShell::Standard), Dialect::Posix),
+            (Some(ExecShell::PowerShell), Dialect::PowerShell),
+            (Some(ExecShell::Sh), Dialect::Posix),
+        ] {
+            assert_eq!(shell_refusal(shell, dialect), None, "{shell:?} {dialect:?}");
+        }
+        let refused = shell_refusal(Some(ExecShell::Sh), Dialect::PowerShell).unwrap();
+        assert!(refused.contains("powershell shell"), "{refused}");
+        let refused = shell_refusal(Some(ExecShell::PowerShell), Dialect::Posix).unwrap();
+        assert!(refused.contains("posix shell"), "{refused}");
+        let ended = job_end(
+            &CommandOutcome {
+                status: OutcomeStatus::Completed,
+                exit_code: Some(0),
+                cwd: Some("C:\\".into()),
+                session_ended: false,
+                message: None,
+            },
+            "w",
+            false,
+            None,
+            Some("powershell 5.1"),
+        );
+        assert_eq!(ended.result["shell"], "powershell 5.1");
     }
 }

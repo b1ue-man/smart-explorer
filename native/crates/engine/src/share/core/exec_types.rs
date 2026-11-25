@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::io;
 
+use super::exec_shell::ExecShell;
 use super::exec_terminal::ExecTerminalRequest;
 
 pub const EXEC_PROTOCOL_VERSION: u16 = 2;
@@ -70,12 +71,21 @@ pub struct ExecStart {
     /// and digest stay those of hosts and clients that predate terminals.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub terminal: Option<ExecTerminalRequest>,
+    /// The shell of a shell command (`exec_shell.rs`); without it a host
+    /// runs the shell it always ran (Windows: `cmd.exe`). Sent only to hosts
+    /// that list `EXEC_SHELL_FEATURE`; without it the bytes and digest stay
+    /// those of earlier clients.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shell: Option<ExecShell>,
 }
 
 impl ExecStart {
     pub fn validate(&self) -> io::Result<()> {
         ExecId::parse(self.exec_id.as_str())?;
         self.validate_terminal()?;
+        if self.shell.is_some() && !matches!(self.command, ExecCommand::Shell { .. }) {
+            return Err(invalid("a shell is only chosen for a shell command"));
+        }
         match &self.command {
             ExecCommand::Argv { program, args } => {
                 validate_os_string(program, "program")?;
@@ -186,6 +196,10 @@ pub struct ExecTerminal {
     pub stdout_bytes: u64,
     pub stderr_bytes: u64,
     pub output_truncated: bool,
+    /// The shell that ran a shell command (`pwsh 7`, `powershell 5.1`,
+    /// `cmd`, `bash`, `sh`); hosts before shell selection send none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shell: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -264,6 +278,7 @@ mod tests {
             timeout_ms: None,
             max_output_bytes: None,
             terminal: None,
+            shell: None,
         }
     }
 
@@ -320,6 +335,7 @@ mod tests {
             timeout_ms: None,
             max_output_bytes: None,
             terminal,
+            shell: None,
         }
     }
 
@@ -336,6 +352,7 @@ mod tests {
             timeout_ms: Some(5000),
             max_output_bytes: Some(1024),
             terminal: None,
+            shell: None,
         };
         // The encoding and digest below are those of the start type before
         // terminals existed: the struct had exactly these keys in this order.

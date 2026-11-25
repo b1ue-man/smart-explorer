@@ -304,20 +304,17 @@ fn stop_and_finish(
             && start.effective_max_output_bytes().is_some_and(|limit| {
                 outcome.stdout_bytes.saturating_add(outcome.stderr_bytes) >= limit
             }));
-    finish_job(
-        registry,
+    let mut terminal = terminal_for(
         reservation,
-        terminal_for(
-            reservation,
-            outcome.exit,
-            outcome.message,
-            outcome.stdout_bytes,
-            outcome.stderr_bytes,
-            truncated,
-        ),
-        empty,
-        output,
-    )
+        outcome.exit,
+        outcome.message,
+        outcome.stdout_bytes,
+        outcome.stderr_bytes,
+        truncated,
+    );
+    // The result names the shell that ran a shell command (`exec_shell.rs`).
+    terminal.shell = process.shell_label();
+    finish_job(registry, reservation, terminal, empty, output)
 }
 
 fn terminal_for(
@@ -347,6 +344,7 @@ fn terminal_for(
         stdout_bytes,
         stderr_bytes,
         output_truncated,
+        shell: None,
     }
 }
 

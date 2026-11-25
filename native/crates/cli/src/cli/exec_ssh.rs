@@ -103,6 +103,24 @@ pub(super) fn remote_command_line(
     Ok(line)
 }
 
+/// Result name of the shell of an SSH command: the remote login shell
+/// (POSIX on Linux servers, cmd or PowerShell on Windows OpenSSH servers).
+pub(super) const SSH_LOGIN_SHELL: &str = "ssh login shell";
+
+/// An SSH remote runs every command in its login shell; only `sh` (that
+/// login shell) can be chosen there.
+pub(super) fn check_shell(shell: Option<crate::share::ExecShell>) -> Result<(), String> {
+    use crate::share::ExecShell;
+    match shell {
+        None | Some(ExecShell::Standard | ExecShell::Sh) => Ok(()),
+        Some(other) => Err(format!(
+            "an SSH remote runs commands in its login shell; `{}` cannot be chosen there \
+             (omit it or use sh, or start the program with argv)",
+            other.as_str()
+        )),
+    }
+}
+
 /// POSIX single-quote quoting: everything is literal except `'` itself.
 pub(super) fn quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
@@ -290,6 +308,19 @@ mod tests {
         let mut bad = BTreeMap::new();
         bad.insert("A-B".to_string(), String::new());
         assert!(remote_command_line(&shell, None, &bad).is_err());
+    }
+
+    #[test]
+    fn exec_shell_task_ssh_remotes_keep_their_login_shell() {
+        use crate::share::ExecShell;
+        assert!(super::check_shell(None).is_ok());
+        assert!(super::check_shell(Some(ExecShell::Sh)).is_ok());
+        for refused in [ExecShell::PowerShell, ExecShell::Cmd] {
+            let error = super::check_shell(Some(refused)).unwrap_err();
+            assert!(error.contains("login shell"), "{error}");
+            assert!(error.contains(refused.as_str()), "{error}");
+        }
+        assert_eq!(super::SSH_LOGIN_SHELL, "ssh login shell");
     }
 
     #[test]

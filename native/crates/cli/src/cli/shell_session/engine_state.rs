@@ -71,6 +71,8 @@ pub(super) struct EngineState {
     held_bytes: usize,
     dropped_bytes: u64,
     startup_errors: Vec<u8>,
+    /// The tail of the startup command's output: it names the shell.
+    pub(super) startup_output: Vec<u8>,
     startup_exit: Option<Option<i32>>,
     pub(super) cwd: Option<String>,
     /// Exit status and message once the shell is gone.
@@ -101,6 +103,7 @@ impl EngineState {
             held_bytes: 0,
             dropped_bytes: 0,
             startup_errors: Vec::new(),
+            startup_output: Vec::new(),
             startup_exit: None,
             cwd: None,
             ended: None,
@@ -338,6 +341,10 @@ impl EngineState {
                     let room = MAX_STARTUP_ERRORS.saturating_sub(self.startup_errors.len());
                     data.truncate(room);
                     self.startup_errors.extend_from_slice(&data);
+                } else {
+                    self.startup_output.extend_from_slice(&data);
+                    let excess = self.startup_output.len().saturating_sub(MAX_STARTUP_ERRORS);
+                    self.startup_output.drain(..excess);
                 }
                 Vec::new()
             }

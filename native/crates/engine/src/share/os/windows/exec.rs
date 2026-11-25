@@ -45,6 +45,8 @@ mod exec_job_object;
 #[cfg(debug_assertions)]
 #[path = "exec_self_test.rs"]
 mod exec_self_test;
+#[path = "exec_shell_select.rs"]
+mod exec_shell_select;
 #[path = "exec_supervisor.rs"]
 mod exec_supervisor;
 
@@ -54,6 +56,7 @@ pub use self::exec_account_setup::{
     exec_accounts_apply, exec_accounts_refresh_after_update, Elevation, ExecAccountsAction,
     ExecAccountsOutcome,
 };
+pub use self::exec_shell_select::resolve_shell;
 
 use std::ffi::OsString;
 use std::io;

@@ -140,7 +140,13 @@ impl Engine {
     }
 
     pub(super) fn info(&self, role: Role) -> SessionInfo {
-        let cwd = self.state.lock().ok().and_then(|state| state.cwd.clone());
+        let (cwd, shell) = match self.state.lock() {
+            Ok(state) => (
+                state.cwd.clone(),
+                super::dialect::shell_label(self.meta.dialect, &state.startup_output),
+            ),
+            Err(_) => (None, None),
+        };
         SessionInfo {
             kind: SessionKind::Commands,
             id: self.meta.id.clone(),
@@ -151,6 +157,7 @@ impl Engine {
             attachable: self.meta.attachable,
             cwd,
             role,
+            shell,
         }
     }
 

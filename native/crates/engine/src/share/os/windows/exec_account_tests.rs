@@ -132,6 +132,7 @@ pub(super) fn request(command: ExecCommand, terminal: bool) -> ExecStart {
         timeout_ms: Some(120_000),
         max_output_bytes: None,
         terminal,
+        shell: None,
     }
 }
 

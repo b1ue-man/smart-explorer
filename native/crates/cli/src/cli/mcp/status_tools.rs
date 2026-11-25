@@ -103,12 +103,15 @@ pub(super) fn connections() -> Result<CallToolResult, String> {
         _ => Vec::new(),
     };
     for row in &mut items {
-        annotate(row);
+        annotate(row, &crate::cli::exec_peer::os_of);
     }
     Ok(response::ok(json!({ "connections": items })))
 }
 
-fn annotate(row: &mut Value) {
+/// Adds `target` and `exec` (how commands run there), and for a Share peer
+/// its `os` once an Exec answer named it (`os_of`), else null: Windows peers
+/// run commands in PowerShell, Linux and Android peers in the login shell.
+fn annotate(row: &mut Value, os_of: &dyn Fn(&str) -> Option<String>) {
     let protocol = row["protocol"].as_str().unwrap_or_default().to_string();
     let kind = row["kind"].as_str().unwrap_or_default().to_string();
     let (target, exec) = if protocol == "gdrive" {
@@ -126,9 +129,15 @@ fn annotate(row: &mut Value) {
         let label = row["label"].as_str().unwrap_or_default();
         (format!("@{label}:/"), (protocol == "sftp").then_some("ssh"))
     };
+    let os = (exec == Some("share"))
+        .then(|| os_of(target.as_str()))
+        .flatten();
     if let Value::Object(fields) = row {
         fields.insert("target".into(), json!(target));
         fields.insert("exec".into(), json!(exec));
+        if exec == Some("share") {
+            fields.insert("os".into(), json!(os));
+        }
     }
 }
 
@@ -163,6 +172,9 @@ mod tests {
 
     #[test]
     fn mcp_task_connections_name_their_target_and_exec_kind() {
+        let known =
+            |endpoint: &str| (endpoint == "share://direct/c1/").then(|| "windows".to_string());
+        let annotate = |row: &mut serde_json::Value| annotate(row, &known);
         let mut sftp = json!({"protocol": "sftp", "label": "prod", "account": "sftp://a@h:22/srv"});
         annotate(&mut sftp);
         assert_eq!(sftp["target"], "@prod:/");
@@ -179,6 +191,14 @@ mod tests {
         annotate(&mut peer);
         assert_eq!(peer["target"], "share://direct/c1/");
         assert_eq!(peer["exec"], "share");
+        // The OS a Share peer's Exec answer named; unknown before.
+        assert_eq!(peer["os"], "windows");
+        let mut other =
+            json!({"protocol": "share", "kind": "room-member", "endpoint": "share://room/r/d"});
+        annotate(&mut other);
+        assert_eq!(other["exec"], "share");
+        assert!(other["os"].is_null());
+        assert!(sftp.get("os").is_none());
         let summary =
             share_summary(&json!({"worker": {"running": true}, "grants": [1, 2], "events": [1]}));
         assert_eq!(summary["grants"], 2);

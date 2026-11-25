@@ -144,6 +144,7 @@ impl ShellRegistry {
                 "role": if port.owned { "owner" } else { "attached" },
                 "target": info.target,
                 "dialect": info.dialect,
+                "shell": info.shell,
                 "cwd": info.cwd,
                 "owner": info.owner,
                 "attachable": info.attachable,

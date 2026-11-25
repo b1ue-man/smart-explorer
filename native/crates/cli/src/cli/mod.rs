@@ -16,6 +16,7 @@ mod apps;
 mod engine_copy_tests;
 mod entry_kind;
 mod exec;
+mod exec_peer;
 mod exec_ssh;
 mod file_rule;
 mod host_key_prompt;

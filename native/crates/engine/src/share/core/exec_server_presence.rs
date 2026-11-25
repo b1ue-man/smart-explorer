@@ -55,6 +55,7 @@ mod tests {
                 term: "xterm-256color".into(),
                 size: ExecTerminalSize { cols: 80, rows: 24 },
             }),
+            shell: None,
         }
     }
 

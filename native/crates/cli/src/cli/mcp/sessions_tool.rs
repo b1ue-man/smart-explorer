@@ -27,6 +27,7 @@ pub(super) fn sessions(session: &Session, args: &Args<'_>) -> Result<CallToolRes
                 "role": "attached",
                 "target": info.target,
                 "dialect": info.dialect,
+                "shell": info.shell,
                 "cwd": info.cwd,
                 "owner": info.owner,
                 "next": format!(

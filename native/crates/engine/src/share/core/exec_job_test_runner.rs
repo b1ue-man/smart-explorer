@@ -150,6 +150,14 @@ impl JobProcess {
             Self::Test(inner) => inner.confirm_empty(deadline),
         }
     }
+
+    /// A test plan runs no shell, so its result names none.
+    pub(super) fn shell_label(&self) -> Option<String> {
+        match self {
+            Self::Platform(inner) => inner.shell_label(),
+            Self::Test(_) => None,
+        }
+    }
 }
 
 pub(super) struct TestJobProcess {

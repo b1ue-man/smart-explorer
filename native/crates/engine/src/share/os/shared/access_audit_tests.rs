@@ -35,6 +35,7 @@ fn start(command: ExecCommand) -> ExecStart {
         timeout_ms: None,
         max_output_bytes: None,
         terminal: None,
+        shell: None,
     }
 }
 
@@ -83,6 +84,7 @@ fn finished(start: &ExecStart) -> ExecJobView {
             stdout_bytes: 1,
             stderr_bytes: 0,
             output_truncated: false,
+            shell: None,
         }),
     }
 }

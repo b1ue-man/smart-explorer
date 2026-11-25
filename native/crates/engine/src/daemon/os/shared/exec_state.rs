@@ -156,6 +156,7 @@ impl ExecState {
                 stdout_bytes: 0,
                 stderr_bytes: 0,
                 output_truncated: false,
+                shell: None,
             });
             push_history(&mut state.history, active.view);
         }

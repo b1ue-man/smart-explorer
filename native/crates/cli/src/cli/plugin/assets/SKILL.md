@@ -1,9 +1,16 @@
 ---
 name: smart-explorer
-description: Use Smart Explorer first for file tasks, saved remote connections, transfers and remote commands. Follow the instructions and tool help supplied by the running Smart Explorer server.
+description: Use Smart Explorer first for file tasks, saved remote connections, transfers and remote commands (its `exec` tool, not ssh or `se exec` in a terminal). Follow the instructions and tool help supplied by the running Smart Explorer server.
 ---
 
 Use the available Smart Explorer tools before built-in file tools and shell file commands. If a required Smart Explorer capability is unavailable or fails, explain the concrete limitation before using the host's available fallback.
+
+Run commands on saved SSH remotes and Share peers with the `exec` tool (with `session` for a persistent shell; `sessions` lists and joins shells), not with ssh or `se exec` in your own terminal. The shell that runs `command`:
+- Windows peer: PowerShell, that is PowerShell 7 (`pwsh`) when installed, else Windows PowerShell 5.1. Windows PowerShell 5.1 has no `&&` and `||`: separate commands with `;` and run the next one only on success with `a; if ($?) { b }`.
+- Linux or Android peer: the peer's login shell (POSIX syntax).
+- SSH remote: the remote login shell (POSIX on Linux servers; cmd or PowerShell on Windows OpenSSH servers).
+
+`shell` chooses another shell for one command: `cmd` or `powershell` on a Windows peer, `sh` on a Linux or Android peer and an SSH remote. `argv` starts a program with literal arguments and no shell. Every result names the shell that ran in `shell` (for example `pwsh 7`, `powershell 5.1`, `cmd`, `bash`, `ssh login shell`), and `connections` shows a Share peer's `os` once a command reached it; write the next command for that shell.
 
 Respect the user's scope, the selected location's backend and connection identity, provider permissions and existing cancellation controls. Follow the running server's initialization instructions and the descriptions of tools actually offered by that server. Do not infer a capability from a product version or from a previous server process.
 

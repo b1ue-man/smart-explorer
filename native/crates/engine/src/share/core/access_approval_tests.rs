@@ -74,6 +74,7 @@ fn shell(byte: &str, text: &str) -> ExecStart {
         timeout_ms: None,
         max_output_bytes: None,
         terminal: None,
+        shell: None,
     }
 }
 

@@ -146,18 +146,34 @@ pub(super) fn connect(
     }
 }
 
-/// The command line of a Share session's one start. A Windows host runs it
-/// with `cmd.exe /D /S /C`, which does not quote with `'`: the first command
-/// fails with its error sent to NUL, `&` starts PowerShell on the session's
-/// input, and `rem` ignores the rest. Every other host runs it with a POSIX
-/// shell (`sh -c`, or the login shell with `-lc`): the single-quoted
-/// assignment hides the cmd part, then the POSIX session shell replaces the
-/// shell. Which of both runs, the session asks its shell afterwards.
+/// The command line of a Share session's one start; the start names no
+/// shell (`ExecStart::shell`), so every host runs it as it always did. A
+/// Windows host runs it with `cmd.exe /D /S /C`, which does not quote with
+/// `'`: the first command fails with its error sent to NUL, `&` starts the
+/// session's PowerShell on its input (`windows_session_shell`), and `rem`
+/// ignores the rest. Every other host runs it with a POSIX shell (`sh -c`,
+/// or the login shell with `-lc`): the single-quoted assignment hides the
+/// cmd part, then the POSIX session shell replaces the shell. Which of both
+/// runs, the session asks its shell afterwards.
 pub(super) fn share_start_line() -> String {
     format!(
         "SE_PS=' 2>NUL & {} & rem '; {}",
-        dialect::start_line(Dialect::PowerShell),
+        windows_session_shell(),
         dialect::start_line(Dialect::Posix)
+    )
+}
+
+/// cmd.exe: PowerShell 7 when `pwsh.exe` is on the `PATH` or in
+/// `%ProgramFiles%\PowerShell\7` (a `PATH` captured before its installation
+/// lacks it), else Windows PowerShell 5.1 (`dialect::start_line`). The
+/// `if`/`else` runs exactly one of them; free of `'` for the POSIX side.
+fn windows_session_shell() -> String {
+    let options = "-NoLogo -NoProfile -NonInteractive -Command -";
+    let installed = "\"%ProgramFiles%\\PowerShell\\7\\pwsh.exe\"";
+    format!(
+        "where /q pwsh.exe & if not errorlevel 1 (pwsh.exe {options}) \
+         else if exist {installed} ({installed} {options}) else ({})",
+        dialect::start_line(Dialect::PowerShell)
     )
 }
 
@@ -306,6 +322,8 @@ struct ShareTransport {
     input: Arc<ShareInput>,
     /// The peer as the user selected it.
     label: String,
+    /// The peer's endpoint, under which its OS is kept (`exec_peer.rs`).
+    endpoint: String,
     /// The session's account line is still to be shown.
     header: bool,
 }
@@ -327,6 +345,7 @@ fn share_start(
         timeout_ms: timeout.map(|limit| u64::try_from(limit.as_millis()).unwrap_or(u64::MAX)),
         max_output_bytes: None,
         terminal: None,
+        shell: None,
     };
     start.validate().map_err(|error| error.to_string())?;
     let session = crate::daemon::connect_exec(peer.clone(), start)?;
@@ -338,6 +357,7 @@ fn share_start(
         session,
         input,
         label: label.to_string(),
+        endpoint: peer.endpoint_prefix(),
         header,
     })
 }
@@ -348,11 +368,13 @@ impl Transport for ShareTransport {
             session,
             input,
             label,
+            endpoint,
             header,
         } = self;
         let pending_header = header.then(|| session.exec_id.clone());
         next_share_event_seen(session, &mut |event| match event {
             ExecIpcEvent::Authorized(provider) => {
+                crate::cli::exec_peer::record_os(endpoint.as_str(), &provider.provider);
                 if let Some(exec_id) = &pending_header {
                     *header = false;
                     print_account_line(exec_id, label, &provider.user_label);
@@ -449,6 +471,7 @@ mod tests {
             stdout_bytes: 0,
             stderr_bytes: 0,
             output_truncated: false,
+            shell: None,
         };
         assert_eq!(terminal_end(&terminal).exit_code, Some(4));
         terminal.exit_code = None;

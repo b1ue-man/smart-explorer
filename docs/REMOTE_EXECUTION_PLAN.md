@@ -351,7 +351,14 @@ Two modes deliberately share the same full-code permission:
 - `Shell { command }` passes the exact command string to the user's shell.
 
 Linux uses the configured user shell (`$SHELL -lc`) with a documented fallback
-to `/bin/sh`. Windows uses `%COMSPEC% /D /S /C`. Argument quoting for direct
+to `/bin/sh`. On Windows the start names its shell (`ExecStart.shell`, host
+feature `exec_shell_v1`, source state 2026-11-25): `standard` and `powershell`
+run PowerShell 7 (`pwsh.exe`) when installed, else Windows PowerShell 5.1,
+with `-NoLogo -NoProfile -NonInteractive -InputFormat None -Command`; `cmd` runs
+`%COMSPEC% /D /S /C`. A start without the field (older clients) and every start
+to a host without `exec_shell_v1` keep `%COMSPEC% /D /S /C`. `se exec`, the MCP
+`exec` tool and the Android app send `standard`; each result names the shell that
+ran (`shell`: `pwsh 7`, `powershell 5.1`, `cmd`, the login shell's name). Argument quoting for direct
 Windows execution follows `CreateProcessW`/`CommandLineToArgvW` rules and is
 covered by round-trip tests; it must not be assembled with ad-hoc quoting.
 

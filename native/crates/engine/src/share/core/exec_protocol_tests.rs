@@ -18,6 +18,7 @@ fn start() -> ExecStart {
         timeout_ms: None,
         max_output_bytes: None,
         terminal: None,
+        shell: None,
     }
 }
 
@@ -179,6 +180,7 @@ fn terminal_status_round_trips_distinctly() {
             stdout_bytes: 1,
             stderr_bytes: 2,
             output_truncated: false,
+            shell: None,
         });
         let (mut tx, mut rx) = tokio::io::duplex(512);
         send_server_frame(&mut tx, &frame).await.unwrap();

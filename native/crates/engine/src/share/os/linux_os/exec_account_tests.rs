@@ -55,6 +55,7 @@ pub fn request(command: ExecCommand, terminal: bool) -> ExecStart {
                 rows: 30,
             },
         }),
+        shell: None,
     }
 }
 

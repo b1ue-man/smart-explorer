@@ -86,17 +86,30 @@ lokal wie entfernt:
   Shell-Dateibefehlen (`ls`, `cat`, `find`, `cp`, `mv`, `rm`, `scp`, `rsync`) zu nutzen. Auf diese
   weicht der Agent nur aus, wenn ein Smart-Explorer-Tool scheitert oder die Funktion fehlt. Der
   Absatz ist mit 503 Zeichen in den ersten 512 Zeichen vollständig, die Codex auswertet.
+- **Befehle statt Terminal:** Der zweite Absatz der Anweisungen verlangt, Befehle auf
+  SSH-Remotes und Share-Peers mit `exec` auszuführen statt mit `ssh` oder `se exec` im Terminal
+  des Agenten, und nennt die Shell je Ziel (Abschnitt „Remote-Ausführung“, „Shell je Ziel“),
+  dass Windows PowerShell 5.1 kein `&&`/`||` kennt (`a; if ($?) { b }`), die Wahl mit `shell`
+  bzw. `argv`, dass Ergebnisse die Shell in `shell` nennen und `connections` je Share-Peer `os`.
+  Die Anweisungen haben 2 036 Byte (Grenze von Claude Code: 2 048).
 - **Vorab geladen in Claude Code:** `connections`, `list`, `stat`, `read`, `write`, `edit`,
-  `mkdir`, `remove`, `copy`, `move`, `search` und `job_status` tragen
-  `_meta["anthropic/alwaysLoad"]: true`. Claude Code zeigt sie damit ohne Tool-Suche, ohne den
-  Sitzungsstart aufzuhalten. `exec`, `job_input`, `job_cancel`, `sessions`, `status` und `se`
-  bleiben verzögert; die Anweisungen nennen die Suche nach `smart-explorer`. Wer alle Tools verzögert
+  `mkdir`, `remove`, `copy`, `move`, `search`, `exec`, `job_status`, `job_input`, `job_cancel`
+  und `sessions` tragen `_meta["anthropic/alwaysLoad"]: true`. Claude Code zeigt sie damit ohne
+  Tool-Suche, ohne den Sitzungsstart aufzuhalten. `exec`, `job_input`, `job_cancel` und
+  `sessions` sind seit 2026-11-25 dabei (Nutzermeldung: Agenten fanden die verzögerten
+  Befehls-Tools nicht und nutzten `se exec` und `ssh` in ihrem Terminal). `status`, `se`,
+  `screen`, `screen_window`, `screen_input`, `tcp_forward`, `apps`, `rdp` und `login` bleiben
+  verzögert; die Anweisungen nennen die Suche nach `smart-explorer`. Wer alle Tools verzögert
   haben will, setzt im eigenen Servereintrag `"alwaysLoad": false` (ab Claude Code v2.1.287).
 - **Tool-Beschreibungen** nennen jeweils das ersetzte Werkzeug, zum Beispiel „Use it instead of
   Read or `cat`“.
 - **Skill und Manifest:** Die Skill-Beschreibung (Auslöser in Claude Code und Codex) beginnt mit
-  dem Vorrang. Der Skill führt eine Tabelle Aufgabe → Smart-Explorer-Tool → ersetztes Werkzeug.
-  Die Plugin-Beschreibung in `plugin.json`/`marketplace.json` nennt den Vorrang ebenfalls.
+  dem Vorrang und nennt `exec` statt `ssh` oder `se exec` im Terminal. Der Skill
+  (`native/crates/cli/src/cli/plugin/assets/SKILL.md`) nennt den Vorrang, die Shell je Ziel von
+  `exec` (Windows-Peer: PowerShell 7, sonst Windows PowerShell 5.1 ohne `&&`/`||`;
+  Linux-/Android-Peer und SSH-Remote: Login-Shell), die Wahl mit `shell` bzw. `argv`, das
+  Ergebnisfeld `shell` und `os` in `connections`. Die Plugin-Beschreibung in
+  `plugin.json`/`marketplace.json` nennt den Vorrang ebenfalls.
 - Inhaltssuche in Dateien (Grep) und lokale Builds bleiben beim Host, weil `search` nur Namen
   sucht.
 
@@ -110,14 +123,14 @@ einen bereits initialisierten Hostprozess.
 | Tool | Zweck | Markierung |
 |---|---|---|
 | `status` | Version, Installation, Zugangsdatenspeicher, Hintergrunddienst, Share-Zustand, Plugin-Dateien | nur lesend |
-| `connections` | gespeicherte Remotes und Share-Peers mit `target`-Präfix und `exec`-Art (`ssh`/`share`) | nur lesend |
+| `connections` | gespeicherte Remotes und Share-Peers mit `target`-Präfix und `exec`-Art (`ssh`/`share`); je Share-Peer `os` (`windows`, `linux`, `android`, `null` vor dem ersten Exec-Start dort) | nur lesend |
 | `list`, `stat`, `read` | Verzeichnis (seitenweise, `type` `file`/`dir`/`symlink`/`special`), Metadaten mit `etag`, Inhalt ab Byte-Offset (Text oder base64; über einen Link der Inhalt seines Ziels mit `size`/`etag` = null und `through_link: true`) | nur lesend |
 | `write`, `edit` | Datei anlegen/ersetzen, exakte Textersetzungen; `if_match` = `etag` schützt vor verlorenen Änderungen; nie durch einen Link als Datei hindurch | zerstörend |
 | `mkdir`, `remove` | Ordner anlegen; löschen wie `se rm --force` (Wurzeln nur mit `allow_root`) | ändernd / zerstörend |
 | `copy`, `move` | wie `se cp`/`se mv` zwischen beliebigen Zielen, als Job; Ergebnis mit `omitted` (übersprungene Links/Sonderdateien) und `kept_directories` (beim Verschieben behaltene Quellordner) | zerstörend (Überschreiben) |
 | `search` | Namenssuche (Text oder Glob), Treffer seitenweise, als Job; Links und Sonderdateien als eigene Treffer (`symlink`, `special`), nie betreten | nur lesend |
-| `exec` | Befehl auf gespeichertem SFTP-Remote (SSH) oder Share-Peer, als Job; mit `session` in einer dauerhaften Shell | zerstörend |
-| `sessions` | dauerhafte Shell-Sitzungen auflisten (mit `kind` `commands` oder `terminal`), einer mit `se shell -T --attachable` geöffneten Befehlssitzung beitreten (`attach`; Terminalsitzungen werden abgelehnt), Aktivität der anderen lesen (`activity`), schließen bzw. lösen (`close`) | ändernd |
+| `exec` | Befehl auf gespeichertem SFTP-Remote (SSH) oder Share-Peer, als Job; mit `session` in einer dauerhaften Shell; `shell` wählt die Shell, das Ergebnis nennt sie in `shell` | zerstörend |
+| `sessions` | dauerhafte Shell-Sitzungen auflisten (mit `kind` `commands` oder `terminal`, `dialect` und `shell`), einer mit `se shell -T --attachable` geöffneten Befehlssitzung beitreten (`attach`; Terminalsitzungen werden abgelehnt), Aktivität der anderen lesen (`activity`), schließen bzw. lösen (`close`) | ändernd |
 | `job_status`, `job_input`, `job_cancel` | Jobs verfolgen (Ausgabe ab Offset), stdin senden, abbrechen | lesend / ändernd |
 | `screen` | Geräte, Bildschirmfähigkeit, Quellen und begrenzte Standbilder; `audio` mit `on` speichert die Toneinstellung des Betrachters | ändernd (nur `audio` mit `on`), sonst lesend |
 | `screen_input` | Eingabe über den autorisierten Bildschirmvertrag | ändernd |
@@ -164,6 +177,51 @@ FTPS- und WebDAV-Verbindung eine Anmeldung wiederverwendet.
 
 ## Remote-Ausführung
 
+- **Shell je Ziel (seit 2026-11-25):** `command` ist eine Befehlszeile für die Shell des Ziels.
+  - Windows-Share-Peer: PowerShell, und zwar PowerShell 7 (`pwsh.exe`), wenn es im `PATH` des
+    Auftrags (auch als App-Ausführungsalias einer Store-Installation) oder in
+    `%ProgramFiles%\PowerShell\7` liegt, sonst Windows PowerShell 5.1
+    (`%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe`). Der Host
+    (`native/crates/engine/src/share/os/windows/exec_shell_select.rs`) startet sie mit
+    `-NoLogo -NoProfile -NonInteractive -InputFormat None -Command <Skript>`. Das Skript
+    (`native/crates/engine/src/share/core/exec_shell.rs`) stellt UTF-8-Ausgabe ein, prüft den
+    Befehl zuerst mit dem PowerShell-Parser und meldet einen Syntaxfehler als
+    `se: PowerShell cannot parse line <Zeile>, column <Spalte>: <Meldung von PowerShell>` (an `&&`
+    oder `||` mit dem Hinweis auf `;` und `if ($?) { ... }`), führt ihn sonst aus und endet mit
+    demselben Exitcode wie eine Sitzung: 1 nach einem Syntax- oder abbrechenden Fehler, sonst ein
+    von 0 verschiedenes `$LASTEXITCODE`, sonst 1 nach einem Fehlerdatensatz eines Cmdlets, sonst
+    `$LASTEXITCODE` oder 0. `-InputFormat None` lässt die Standardeingabe den Programmen, die der
+    Befehl startet (`$input` bleibt leer), und eine nie geschlossene Eingabe hält PowerShell nicht
+    vor dem Befehl an. Windows PowerShell 5.1 kennt `&&` und `||` nicht: Befehle mit `;` trennen
+    und den nächsten nur bei Erfolg ausführen mit `a; if ($?) { b }`. Ein Befehl, dessen Skript
+    die Befehlszeilengrenze von Windows (32 767 Zeichen) überschreitet, wird mit dem Rat abgelehnt,
+    ihn in eine Skriptdatei zu schreiben.
+  - Linux-Share-Peer: die Login-Shell (`<Shell> -lc`, mit dem absoluten `SHELL` der
+    Auftragsumgebung, sonst `/bin/sh`); Android-Share-Peer: `/system/bin/sh -c`.
+  - SSH-Remote: die Login-Shell des Remote-Benutzers wie bisher (POSIX auf Linux-Servern, cmd oder
+    PowerShell auf Windows-OpenSSH-Servern).
+  - `shell` wählt für einen Befehl eine andere Shell: `powershell` oder `cmd` auf Windows-Peers,
+    `sh` (die Login-Shell) auf Linux- und Android-Peers und SSH-Remotes. Jede andere Kombination
+    lehnt das Ziel mit einer Meldung ab, die die erlaubten Werte nennt. Eine Sitzung nimmt nur die
+    Shell an, in der sie läuft; `cmd` geht nur ohne `session`. `argv` startet ein Programm mit
+    wörtlichen Argumenten ohne Shell; `shell` gilt dafür nicht.
+  - Jedes Ergebnis nennt die Shell in `shell`: `pwsh 7`, `powershell 5.1`, `cmd`, den Dateinamen
+    der Login-Shell eines Linux- oder Android-Peers (bei `/bin/bash` also `bash`), `login shell`
+    für einen Linux-Peer vor `exec_shell_v1`, `ssh login shell` für SSH-Remotes und `none` für
+    `argv`; `null`, wenn kein Befehl lief. `connections` nennt je Share-Peer `os` (`windows`,
+    `linux`, `android`), sobald ein Exec-Start ihn erreichte (der Provider seiner Antwort,
+    gemerkt je Gerät in `<App-Daten>/smart_explorer/exec-peer-os.json`), vorher `null`.
+  - Draht: `ExecStart.shell` (`standard`, `powershell`, `cmd`, `sh`) und `ExecTerminal.shell`
+    sind optional; ein Host mit der Fähigkeit `exec_shell_v1` in seinem Hello versteht sie. Einem
+    älteren Peer sendet der Client den Start ohne `shell`, denn der ältere Peer verwirft das
+    unbekannte Feld und lehnt dann die Prüfsumme des Starts ab. Der ältere Peer führt `command`
+    wie bisher in `cmd.exe` (Windows) bzw. der Login-Shell aus, und das Ergebnis nennt diese Shell
+    nach dem Provider seiner Antwort (`cmd`, `login shell`, `sh`). Ein Start ohne `shell` (ältere
+    Clients, die Android-App, die Startzeile der Shell-Sitzungen) läuft auch auf einem neuen
+    Windows-Host in `cmd.exe`.
+  - CLI: `se exec ZIEL --shell BEFEHL` trifft dieselbe Wahl, `--shell-kind powershell|cmd|sh`
+    überschreibt sie, `--verbose` nennt die Shell auf stderr (`se: ran in <Shell>`, mit `--json`
+    das Ereignis `{"event":"shell","shell":"<Shell>"}`).
 - **SFTP-Remotes:** eigener SSH-Exec-Kanal auf der gespeicherten Anmeldung, Ausführung durch die
   Login-Shell des Remote-Benutzers wie `ssh host 'befehl'`. `argv`, `cwd` und `env` werden
   POSIX-gequotet (`cd -- '…' || exit $?; export N='…'; …`); Windows-OpenSSH-Ziele verwenden die
@@ -245,10 +303,19 @@ Befehlssitzungen.
   `powershell.exe -NoLogo` ohne `TERM`. Startverzeichnis und Umgebung (`--cwd`, `--env`, Ordner im
   Ziel) setzt `se` beim Start. Die Ausgabe ist der unveränderte Byte-Strom des PTY; Marken, Nonce
   und der Befehlsstrom der Befehlssitzung gibt es hier nicht.
-- **Ablauf der Befehlssitzung:** Eine Probe in der Login-Shell (`echo %OS%;$PSVersionTable`) erkennt
-  cmd.exe bzw. PowerShell (dann `powershell.exe -NoLogo -NoProfile -NonInteractive -Command -`) oder
-  eine POSIX-Shell (dann `bash -l`, sonst `sh -l`). Jeder Befehl endet mit Marken, die Exitcode und
-  Arbeitsverzeichnis tragen und eine zufällige Nonce je Sitzung enthalten.
+- **Ablauf der Befehlssitzung:** Auf einem SSH-Ziel erkennt eine Probe in der Login-Shell
+  (`echo %OS%;$PSVersionTable`) cmd.exe bzw. PowerShell (dann
+  `powershell.exe -NoLogo -NoProfile -NonInteractive -Command -`) oder eine POSIX-Shell (dann
+  `bash -l`, sonst `sh -l`). Auf einem Share-Peer startet ein einziger Start ohne `shell` (also in
+  `cmd.exe` bzw. der Login-Shell) die Sitzungsshell: unter Windows PowerShell 7 (`pwsh.exe` im
+  `PATH` oder in `%ProgramFiles%\PowerShell\7`), sonst `powershell.exe`, jeweils mit
+  `-NoLogo -NoProfile -NonInteractive -Command -`; sonst `bash -l` bzw. `sh -l`. Der erste Befehl
+  der Sitzung nennt ihre Shell (`shell` in `sessions` und in jedem Ergebnis: `pwsh 7`,
+  `powershell 5.1`, `bash`, `sh`). PowerShell-Befehle laufen durch dieselbe Anweisung wie
+  Einzelbefehle auf Windows-Peers: ein Syntaxfehler kommt als Meldung von PowerShell mit Zeile und
+  Spalte statt als Ausnahme von `[ScriptBlock]::Create`, der Exitcode folgt derselben Regel. Jeder
+  Befehl endet mit Marken, die Exitcode und Arbeitsverzeichnis tragen und eine zufällige Nonce je
+  Sitzung enthalten.
 - **Anhängen, Shell an Sitzung:** `se shell --list [--json]` zeigt die anhängbaren Sitzungen des
   Benutzers (Name, ID, Dialekt oder `-`, Ziel, Besitzer, Art `terminal` oder `commands`; in
   `--json` hat jeder Eintrag `kind` immer und `dialect` nur, wenn er bekannt ist),
@@ -468,6 +535,44 @@ dem Konto des Helfers gehören. Läuft root mit dem Heimverzeichnis eines andere
 Kontos (etwa `sudo -E`), bleibt die Auffrischung aufgeschoben. Unter Windows
 bleibt ein erhöhter Helfer bei der Aufschiebung.
 
+Welche Plugindateien aufgefrischt werden (am Code geprüft 2026-11-25):
+`se plugin refresh` (`native/crates/cli/src/cli/plugin/files.rs`, `refresh`)
+schreibt für jeden Host, dessen Eigentumsmarke `.se-generated.json` vorliegt,
+jede eigene Datei neu. Claude Code: den lokalen Marketplace unter
+`<App-Daten>/smart_explorer/ai-plugins/claude` mit
+`.claude-plugin/marketplace.json`, `smart-explorer/.claude-plugin/plugin.json`
+(mit der neuen Version), `smart-explorer/.mcp.json` (Befehl und Argumente des
+Starters) und `smart-explorer/skills/smart-explorer/SKILL.md`; ein relatives
+Plugin eines lokalen Marketplace lädt Claude Code bei jedem Sitzungsstart aus
+diesem Ordner, ohne Kopie im Plugin-Cache
+([`refs/claude-code-plugins-mcp-2026-10-12.md`](refs/claude-code-plugins-mcp-2026-10-12.md),
+Abschnitt 2). Codex (`native/crates/cli/src/cli/plugin/codex.rs`, `refresh`):
+den Eintrag `mcp_servers.smart-explorer` in `config.toml` (Befehl), die
+Eigentumsdatei `.se-smart-explorer.v1.json` und
+`~/.agents/skills/smart-explorer/SKILL.md`. Die Auffrischung läuft
+1. bei einer verwalteten Installation (`mcp/current.v1.json`) nach jedem Update
+   im Updater mit dem installierten neuen `se`
+   (`native/src/bin/smart_explorer_updater/installer.rs`, `refresh_after_commit`
+   → `mcp_launcher::refresh_installed_profile`), außer ein erhöhter Helfer
+   schiebt sie auf (siehe oben);
+2. bei jedem Start von `se mcp` (`native/crates/cli/src/cli/mcp/server.rs` →
+   `plugin::refresh_generated_files`; in einer Starter-Runtime über
+   `mcp_launcher::refresh_current_profile`), also auch nach einer
+   aufgeschobenen Auffrischung;
+3. bei einer Nur-Terminal-Installation ohne Manifest nicht im Update selbst:
+   `se update` (`native/crates/cli/src/cli/update.rs`) ruft die Auffrischung im
+   alten Prozess auf, und dessen beim Start erfasster Imagehash passt nicht mehr
+   zur ersetzten Datei, sodass `files::refresh` keine alten Vorlagen schreibt;
+   die Dateien frischt der nächste Start von `se mcp` mit dem neuen `se` auf.
+   Liest die Claude-Code-Sitzung, die diesen Start auslöst, den Skill vor der
+   Auffrischung, sieht sie den neuen Skill erst in der folgenden Sitzung.
+
+Kein Host und keine Datei bleibt damit ohne Auffrischung. Werkzeugliste,
+Beschreibungen, `alwaysLoad` und Anweisungen liefert immer der laufende Server:
+eine Claude-Code-Sitzung, deren Verbindung ein Update überdauert, erhält die
+neue Werkzeugliste über `list_changed`, die neuen Anweisungen und den neuen
+Skill aber erst in ihrer nächsten Sitzung.
+
 Daemon außerhalb der Installation (Befund U1): Läuft der Hintergrunddienst des
 Kontos aus einer App-Kopie, neben der kein `mcp/` liegt (etwa ein von Hand nach
 `/usr/local/bin` kopiertes `smart_explorer`), antwortet er seit 0.5.197 auf
@@ -510,7 +615,8 @@ Teilfehler gegen dieselben ursprünglichen Dateihashes fortgesetzt.
   Passwortabfragen funktionieren nicht) und kein Abbruch einzelner Befehle (`EXEC-PTY` in
   `docs/TODO.md`). Höchstens 8 angehängte Clients und 64 wartende Befehle je Sitzung, je Befehl
   höchstens 1 MiB Befehl und Eingabe. Der PowerShell-Dialekt ist nur lokal unter Windows geprüft
-  (`EXECSESS-WIN`).
+  (`EXECSESS-WIN`). Die Shell-Wahl vom 2026-11-25 (PowerShell-Einzelbefehle, `pwsh.exe` in
+  Share-Sitzungen, `shell`, `os`) lief noch gegen keinen echten Windows-Peer (`PLUGIN-NUTZBAR`).
 - Alle Sitzungen: keine Wiederanbindung nach Verlust der Verbindung bzw. des Exec-Stroms (auch
   `ssh` kann das nicht; `EXEC-PTY`). Jede Sitzung, auch eine Terminalsitzung, belegt einen
   SSH-Kanal (OpenSSH erlaubt standardmäßig 10 je Verbindung) bzw. einen der zwei Exec-Plätze, die

@@ -263,6 +263,7 @@ mod tests {
             timeout_ms: None,
             max_output_bytes: None,
             terminal: None,
+            shell: None,
         };
         let environment = environment_for(&request);
         assert_eq!(
@@ -285,6 +286,7 @@ mod tests {
             timeout_ms: None,
             max_output_bytes: None,
             terminal: None,
+            shell: None,
         };
         let account = RunAsAccount {
             name: "alice".into(),

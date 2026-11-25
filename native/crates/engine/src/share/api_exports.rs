@@ -54,6 +54,7 @@ pub use self::exec_client::{ExecClientEvent, ExecClientInput};
 pub use self::exec_grant_runtime::ExecGrantMutation;
 pub use self::exec_policy::{ExecGrant, ExecGrantSettings, ExecRunAs};
 pub use self::exec_session::{ShareExecInput, ShareExecSession};
+pub use self::exec_shell::ExecShell;
 pub use self::exec_targets::{
     exec_target_views, resolve_exec_target, ExecTargetRelation, ExecTargetView,
 };

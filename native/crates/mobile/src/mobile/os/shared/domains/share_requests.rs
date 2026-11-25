@@ -10,7 +10,7 @@ use super::share_state::{default_home, identity, reconfigure, with_state};
 use crate::mobile::{ApiError, Runtime};
 use crate::share::lifecycle_view::request_views;
 use crate::share::{
-    DirectDecisionKind, DirectRequestId, ExecCommand, ExecId, ExecStart, PeerOpenTarget,
+    DirectDecisionKind, DirectRequestId, ExecCommand, ExecId, ExecShell, ExecStart, PeerOpenTarget,
     ShareProfiles,
 };
 
@@ -235,6 +235,10 @@ pub(super) fn exec_start(args: &Value) -> Result<(PeerOpenTarget, ExecStart, Str
         timeout_ms: Some((timeout as u64).saturating_mul(1000)),
         max_output_bytes: Some(MAX_EXEC_OUTPUT),
         terminal: None,
+        // A shell line runs in the host's shell for agents and terminals
+        // (PowerShell on Windows, the login shell elsewhere), as `se exec`
+        // and the MCP tool start it; an older host gets the start without it.
+        shell: shell.then_some(ExecShell::Standard),
     };
     start
         .validate()

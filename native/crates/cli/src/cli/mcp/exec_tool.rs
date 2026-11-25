@@ -4,7 +4,7 @@
 use super::args::Args;
 use super::jobs::Job;
 use super::session::Session;
-use crate::share::ExecCommand;
+use crate::share::{ExecCommand, ExecShell};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -16,6 +16,9 @@ pub(super) struct ExecRequest {
     pub(super) stdin: Option<String>,
     pub(super) keep_stdin_open: bool,
     pub(super) timeout_seconds: Option<u64>,
+    /// The shell `shell` names; `None`: the target's own (PowerShell on
+    /// Windows peers, the login shell elsewhere).
+    pub(super) shell: Option<ExecShell>,
 }
 
 impl ExecRequest {
@@ -58,6 +61,15 @@ pub(super) fn start(session: &Session, args: &Args<'_>) -> Result<Arc<Job>, Stri
                     .into(),
             ),
         };
+    let shell = args
+        .opt_string("shell")?
+        .map(|value| ExecShell::parse(&value))
+        .transpose()?;
+    if shell.is_some() && !matches!(command, ExecCommand::Shell { .. }) {
+        return Err(
+            "`shell` chooses the shell of `command`; `argv` starts the program without one".into(),
+        );
+    }
     let session_name = args
         .opt_string("session")?
         .map(|name| name.trim().to_string())
@@ -77,6 +89,7 @@ pub(super) fn start(session: &Session, args: &Args<'_>) -> Result<Arc<Job>, Stri
         timeout_seconds: args
             .opt_u64("timeout_seconds")?
             .filter(|seconds| *seconds > 0),
+        shell,
     };
     if let Some(name) = session_name {
         let attachable = match args.value("attachable") {
@@ -86,7 +99,10 @@ pub(super) fn start(session: &Session, args: &Args<'_>) -> Result<Arc<Job>, Stri
         return super::exec_session_job::start(session, request, name, attachable);
     }
     match crate::cli::exec_ssh::ssh_target(&request.selector)? {
-        Some(target) => super::exec_ssh_job::start(session, target, request),
+        Some(target) => {
+            crate::cli::exec_ssh::check_shell(request.shell)?;
+            super::exec_ssh_job::start(session, target, request)
+        }
         None => super::exec_share_job::start(session, request),
     }
 }

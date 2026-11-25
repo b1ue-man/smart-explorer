@@ -292,6 +292,16 @@ fn supervisor_closed() -> io::Error {
     io::Error::new(io::ErrorKind::UnexpectedEof, "exec supervisor closed")
 }
 
+/// The shell of a shell command (`exec_shell.rs`): `/system/bin/sh`;
+/// returns its result name and refuses `powershell` and `cmd`.
+pub fn resolve_shell(
+    request: &mut ExecStart,
+    environment: &std::collections::BTreeMap<String, String>,
+) -> io::Result<Option<String>> {
+    use crate::share::exec_shell::{posix, HostFamily};
+    posix(request, HostFamily::Android, environment)
+}
+
 pub fn provider_status() -> ExecProviderStatus {
     exec_contain::recover_once();
     let (available, detail) = match shell_executable() {

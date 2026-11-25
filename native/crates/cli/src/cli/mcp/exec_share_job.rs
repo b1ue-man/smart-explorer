@@ -3,13 +3,16 @@
 //! peer (docs/REMOTE_EXECUTION_PLAN.md). While the peer asks its user to
 //! confirm the start (PRM-M3), the running job's progress is
 //! `{"state":"waiting_for_approval",…}`; once authorized it names the account
-//! the command runs as.
+//! the command runs as. The result names the shell that ran (`shell`), and
+//! the peer's OS is kept for `connections` (`exec_peer.rs`).
 use super::exec_tool::ExecRequest;
 use super::jobs::{spawn_worker, Job, JobControl, JobEnd, JobKind, JobStatus};
 use super::session::Session;
 use crate::daemon::{ExecIpcEvent, ExecIpcInput, ExecIpcSession, ExecNoticeWatch};
 use crate::share::exec_client_messages::{account_line, approval_status_line};
-use crate::share::{ExecId, ExecTerminal, ExecTerminalKind};
+use crate::share::{
+    ExecCommand, ExecId, ExecProviderStatus, ExecShell, ExecTerminal, ExecTerminalKind,
+};
 use serde_json::{json, Value};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
@@ -21,6 +24,12 @@ struct ShareProgress {
     watch: Mutex<Option<ExecNoticeWatch>>,
     /// `{device}: as {account}` once the peer authorized the start.
     account: Mutex<Option<String>>,
+    /// The peer's endpoint, under which its OS is kept.
+    endpoint: String,
+    /// The start is a shell command (not argv).
+    shell_command: bool,
+    /// `ExecProviderStatus::provider` of the peer once it authorized.
+    provider: Mutex<Option<String>>,
 }
 
 impl ShareProgress {
@@ -32,11 +41,19 @@ impl ShareProgress {
         }
     }
 
-    fn authorized(&self, exec_id: &ExecId, user_label: &str) {
+    fn authorized(&self, exec_id: &ExecId, provider: &ExecProviderStatus) {
         let notice = crate::daemon::exec_notice(exec_id).ok().flatten();
         let device = self.device(notice.as_ref().map_or("", |notice| notice.device.as_str()));
         let access = notice.as_ref().and_then(|notice| notice.access.as_ref());
-        *lock(&self.account) = Some(account_line(&device, access, user_label));
+        *lock(&self.account) = Some(account_line(&device, access, &provider.user_label));
+        *lock(&self.provider) = Some(provider.provider.clone());
+        crate::cli::exec_peer::record_os(&self.endpoint, &provider.provider);
+    }
+
+    /// The shell the result names (`exec_peer::result_shell`).
+    fn shell(&self, terminal: &ExecTerminal) -> Option<String> {
+        let provider = lock(&self.provider).clone();
+        crate::cli::exec_peer::result_shell(terminal, self.shell_command, provider.as_deref())
     }
 }
 
@@ -88,6 +105,8 @@ pub(super) fn start(session: &Session, request: ExecRequest) -> Result<Arc<Job>,
     let summary = request.summary();
     let label = request.selector.clone();
     let peer = crate::cli::exec::select_target(Some(request.selector.as_str()))?;
+    let shell_command = matches!(request.command, ExecCommand::Shell { .. });
+    let endpoint = peer.endpoint_prefix();
     let start = crate::share::ExecStart {
         exec_id: crate::share::ExecId::generate().map_err(|error| error.to_string())?,
         command: request.command,
@@ -98,6 +117,9 @@ pub(super) fn start(session: &Session, request: ExecRequest) -> Result<Arc<Job>,
             .map(|seconds| seconds.saturating_mul(1_000)),
         max_output_bytes: None,
         terminal: None,
+        // PowerShell on Windows peers unless `shell` names another; an
+        // older peer gets the start without it (`exec_shell::for_host`).
+        shell: shell_command.then(|| request.shell.unwrap_or(ExecShell::Standard)),
     };
     start.validate().map_err(|error| error.to_string())?;
     let remote = crate::daemon::connect_exec(peer, start)?;
@@ -112,6 +134,9 @@ pub(super) fn start(session: &Session, request: ExecRequest) -> Result<Arc<Job>,
         label,
         watch: Mutex::new(Some(watch)),
         account: Mutex::new(None),
+        endpoint,
+        shell_command,
+        provider: Mutex::new(None),
     });
     job.set_control(Arc::new(ShareControl {
         input: input.clone(),
@@ -148,7 +173,7 @@ fn drive(
         }
         let appended = match event {
             ExecIpcEvent::Authorized(provider) => {
-                progress.authorized(&remote.exec_id, &provider.user_label);
+                progress.authorized(&remote.exec_id, &provider);
                 job.changed();
                 Ok(())
             }
@@ -162,7 +187,9 @@ fn drive(
                     error: Some(failure.message),
                 }
             }
-            ExecIpcEvent::Terminal(terminal) => return terminal_end(&terminal),
+            ExecIpcEvent::Terminal(terminal) => {
+                return terminal_end(&terminal, progress.shell(&terminal))
+            }
         };
         if let Err(error) = appended {
             let _ = input.cancel();
@@ -179,7 +206,8 @@ fn failed(error: String) -> JobEnd {
     }
 }
 
-pub(super) fn terminal_end(terminal: &ExecTerminal) -> JobEnd {
+/// `shell`: the shell that ran the command (`exec_peer::result_shell`).
+pub(super) fn terminal_end(terminal: &ExecTerminal, shell: Option<String>) -> JobEnd {
     let status = match terminal.kind {
         ExecTerminalKind::Exited => JobStatus::Completed,
         ExecTerminalKind::TimedOut => JobStatus::TimedOut,
@@ -205,6 +233,7 @@ pub(super) fn terminal_end(terminal: &ExecTerminal) -> JobEnd {
             "signal": terminal.signal,
             "cli_exit_code": cli_exit_code,
             "output_truncated": terminal.output_truncated,
+            "shell": shell,
         }),
         error: (status == JobStatus::Failed)
             .then(|| terminal.message.clone())
@@ -229,15 +258,18 @@ mod tests {
             stdout_bytes: 1,
             stderr_bytes: 0,
             output_truncated: false,
+            shell: None,
         };
-        let end = terminal_end(&terminal);
+        let end = terminal_end(&terminal, Some("pwsh 7".into()));
         assert_eq!(end.status, JobStatus::Completed);
         assert_eq!(end.result["exit_code"], 3);
         assert_eq!(end.result["cli_exit_code"], 3);
+        assert_eq!(end.result["shell"], "pwsh 7");
         terminal.kind = ExecTerminalKind::Revoked;
         terminal.message = Some("grant removed".into());
-        let end = terminal_end(&terminal);
+        let end = terminal_end(&terminal, None);
         assert_eq!(end.status, JobStatus::Failed);
+        assert!(end.result["shell"].is_null());
         assert_eq!(end.error.as_deref(), Some("grant removed"));
         assert_eq!(end.result["cli_exit_code"], 125);
     }

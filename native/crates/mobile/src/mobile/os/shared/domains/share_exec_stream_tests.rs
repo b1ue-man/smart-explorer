@@ -26,6 +26,7 @@ fn terminal(kind: ExecTerminalKind) -> ExecTerminal {
         stdout_bytes: 0,
         stderr_bytes: 0,
         output_truncated: false,
+        shell: None,
     }
 }
 
@@ -88,6 +89,10 @@ fn perm_task_bridge_exec_stream_start_from_arguments() {
             command: "echo $HOME | wc -c".into()
         }
     );
+    // A shell line asks for the host's standard shell (PowerShell on
+    // Windows, the login shell elsewhere); an argv start names none.
+    assert_eq!(shell.shell, Some(crate::share::ExecShell::Standard));
+    assert_eq!(start.shell, None);
     assert_ne!(start.exec_id, shell.exec_id);
 
     for (refused, why) in [

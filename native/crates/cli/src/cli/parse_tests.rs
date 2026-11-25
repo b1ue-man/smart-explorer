@@ -53,10 +53,32 @@ fn parses_shell_exec_without_argv() {
     match cli.command {
         super::Command::Exec(args) => {
             assert_eq!(args.shell.as_deref(), Some("echo hi"));
+            assert!(args.shell_kind.is_none());
             assert!(args.argv.is_empty());
         }
         _ => panic!("wrong command"),
     }
+    // `--shell-kind` names the shell of `--shell`: powershell, cmd or sh.
+    let cli = Cli::parse_from([
+        "se",
+        "exec",
+        "share://direct/c",
+        "--shell-kind",
+        "cmd",
+        "--shell",
+        "dir && ver",
+    ]);
+    match cli.command {
+        super::Command::Exec(args) => {
+            assert_eq!(args.shell_kind.as_deref(), Some("cmd"));
+            assert_eq!(args.shell.as_deref(), Some("dir && ver"));
+        }
+        _ => panic!("wrong command"),
+    }
+    let without_command = ["se", "exec", "c", "--shell-kind", "cmd", "--", "ver"];
+    assert!(Cli::try_parse_from(without_command).is_err());
+    let unknown = ["se", "exec", "c", "--shell-kind", "bash", "--shell", "ls"];
+    assert!(Cli::try_parse_from(unknown).is_err());
 }
 
 #[test]
@@ -113,6 +135,8 @@ fn help_exposes_exec_as_available_and_explains_context_free_discovery() {
     assert!(!exec.contains("unrestricted shell authority"));
     assert!(exec.contains("target may be omitted"));
     assert!(exec.contains("--shell"));
+    assert!(exec.contains("--shell-kind"));
+    assert!(exec.contains("Windows PowerShell 5.1"));
     assert!(exec.contains("--timeout"));
 
     let requests = nested_help(&["share", "request"]);

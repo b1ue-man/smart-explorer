@@ -50,6 +50,7 @@ fn exited(exec_id: &ExecId) -> ExecTerminal {
         stdout_bytes: 0,
         stderr_bytes: 0,
         output_truncated: false,
+        shell: None,
     }
 }
 
@@ -226,7 +227,10 @@ fn perm_task_old_client_survives_long_approval() {
 fn perm_task_new_client_old_host() {
     let host = identity("target", "Target", 7);
     let client = identity("local", "Local", 9);
-    let request = shell("cd");
+    // The client chooses the peer's own shell; a host without
+    // `exec_shell_v1` gets the start without the choice (`exec_shell::for_host`).
+    let mut request = shell("cd");
+    request.shell = Some(crate::share::exec_shell::ExecShell::Standard);
     let exec_id = request.exec_id.clone();
     let server = server_hello(&host);
     let (events, result, notice) = run(async {
@@ -262,6 +266,7 @@ fn perm_task_new_client_old_host() {
                 frame => panic!("first operation was not Start: {frame:?}"),
             };
             assert_eq!(start.exec_id, host_id);
+            assert_eq!(start.shell, None);
             let mut stream = ClientStream::new(client_frames(server_read));
             send_server_frame(
                 &mut server_write,

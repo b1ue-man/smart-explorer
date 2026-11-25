@@ -211,6 +211,7 @@ fn job(
             stdout_bytes: 0,
             stderr_bytes: 0,
             output_truncated: false,
+            shell: None,
         }),
     }
 }

@@ -4,16 +4,20 @@
 //! POSIX: `sh -c` replaces the login shell with `bash -l` (or `sh -l`); every
 //! command runs as `eval '<command>'` in that shell, so `cd`, `export`,
 //! variables and functions persist. PowerShell (Windows): `powershell.exe
-//! -Command -` executes one statement per input line, as if typed at its
-//! prompt; every command is a dot-sourced script block decoded from Base64
-//! UTF-8, so no quoting rule of the command matters, and its markers follow
-//! as a second statement after the command's output was written.
+//! -Command -` (on a Share peer `pwsh.exe` when PowerShell 7 is installed,
+//! `transports::share_start_line`) executes one statement per input line,
+//! as if typed at its prompt; every command is a dot-sourced script block
+//! decoded from Base64 UTF-8 (`share::exec_shell::powershell_statement`, the
+//! same as one-shot commands on Windows peers), so no quoting rule of the
+//! command matters and a parse error is reported as PowerShell words it; its
+//! markers follow as a second statement after the command's output was
+//! written. The startup command names the shell (`shell_label`).
 //!
 //! A terminal session needs no markers; only its start line with a working
 //! directory and environment depends on the dialect (`terminal_command`).
 use super::types::{CommandRequest, Dialect, StdinMode};
 use crate::cli::exec_ssh::quote;
-use base64::Engine as _;
+use crate::share::exec_shell::{powershell_statement, powershell_text};
 use std::collections::BTreeMap;
 
 /// Command and input text of one request; larger input belongs in a file
@@ -29,12 +33,17 @@ const POSIX_START: &str =
     "exec sh -c 'if command -v bash >/dev/null 2>&1; then exec bash -l; fi; exec sh -l'";
 const POWERSHELL_START: &str = "powershell.exe -NoLogo -NoProfile -NonInteractive -Command -";
 /// First command of a PowerShell session: UTF-8 output, no progress
-/// records, an empty prompt.
+/// records, an empty prompt, and the line that names the shell.
 const POWERSHELL_SETUP: &str =
     "try { [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false) } catch {}
 $global:OutputEncoding = [Console]::OutputEncoding
 $global:ProgressPreference = 'SilentlyContinue'
-function global:prompt { '' }";
+function global:prompt { '' }
+[Console]::Out.WriteLine('SE_SHELL:' + $(if ($PSVersionTable.PSEdition -eq 'Core') { 'pwsh ' + $PSVersionTable.PSVersion.Major } else { 'powershell ' + $PSVersionTable.PSVersion.Major + '.' + $PSVersionTable.PSVersion.Minor }))";
+/// First command of a POSIX session: it names the shell (`bash` or `sh`).
+const POSIX_SETUP: &str = "printf 'SE_SHELL:%s\\n' \"${BASH_VERSION:+bash}\"";
+/// Start of the line the startup command writes with the shell's name.
+const SHELL_LINE: &str = "SE_SHELL:";
 
 pub(super) fn classify(probe_stdout: &str) -> Dialect {
     if probe_stdout.contains("Windows_NT") || probe_stdout.contains("PSVersion") {
@@ -52,11 +61,26 @@ pub(super) fn start_line(dialect: Dialect) -> &'static str {
     }
 }
 
-/// The startup command; its marker proves the shell reads commands.
+/// The startup command; its marker proves the shell reads commands, and
+/// its output names the shell.
 pub(super) fn startup_command(dialect: Dialect) -> &'static str {
     match dialect {
-        Dialect::Posix => ":",
+        Dialect::Posix => POSIX_SETUP,
         Dialect::PowerShell => POWERSHELL_SETUP,
+    }
+}
+
+/// The shell a session runs in, from the output of its startup command
+/// (`pwsh 7`, `powershell 5.1`, `bash`, `sh`); `None` before it answered.
+pub(super) fn shell_label(dialect: Dialect, startup_output: &[u8]) -> Option<String> {
+    let output = String::from_utf8_lossy(startup_output);
+    let at = output.rfind(SHELL_LINE)?;
+    let rest = &output[at + SHELL_LINE.len()..];
+    let end = rest.find(['\r', '\n'])?;
+    match (dialect, rest[..end].trim()) {
+        (Dialect::Posix, "") => Some("sh".to_string()),
+        (_, "") => None,
+        (_, name) => Some(name.to_string()),
     }
 }
 
@@ -252,39 +276,32 @@ fn posix(nonce: &str, seq: u64, request: &CommandRequest) -> String {
     text
 }
 
-/// Exit status: 1 after a terminating error, else a non-zero
-/// `$LASTEXITCODE`, else 1 when a non-native error record was written, else
-/// `$LASTEXITCODE` or 0. The marker statement runs after the host wrote the
-/// command's output.
+/// The command through `powershell_statement` (exit status and parse
+/// errors as for one-shot commands); the working directory and environment
+/// come first in the same script block. The marker statement runs after the
+/// host wrote the command's output.
 fn powershell(nonce: &str, seq: u64, request: &CommandRequest) -> String {
-    let mut script = String::new();
+    let mut prelude = String::new();
     if let Some(cwd) = &request.cwd {
         // In argument mode an unparenthesized `[..]::..(..)` is a string up to
         // its first `(`, not an expression; the parentheses make it one.
-        script.push_str(&format!(
+        prelude.push_str(&format!(
             "Set-Location -LiteralPath ({}) -ErrorAction Stop\n",
             text(cwd)
         ));
     }
     for (name, value) in &request.env {
-        script.push_str(&format!(
+        prelude.push_str(&format!(
             "[Environment]::SetEnvironmentVariable({}, {})\n",
             text(name),
             text(value)
         ));
     }
-    script.push_str(&request.command);
-    let block = format!("([ScriptBlock]::Create({}))", text(&script));
-    let invoke = match &request.stdin {
-        StdinMode::Text(input) => format!("{} | . {block}", text(input)),
-        StdinMode::Null | StdinMode::Interactive => format!(". {block}"),
+    let input = match &request.stdin {
+        StdinMode::Text(input) => Some(input.as_str()),
+        StdinMode::Null | StdinMode::Interactive => None,
     };
-    let run = format!(
-        "$global:LASTEXITCODE=$null;$global:__se_n=$false;$global:__se_f=$false;\
-try{{{invoke} 2>&1 | ForEach-Object {{ if ($_ -is [System.Management.Automation.ErrorRecord]) {{ if ($_.FullyQualifiedErrorId -notlike 'NativeCommandError*') {{ $global:__se_n=$true }}; [Console]::Error.WriteLine($_.ToString()) }} else {{ $_ }} }} | Out-Default}}\
-catch{{$global:__se_f=$true;[Console]::Error.WriteLine($_.ToString())}};\
-$global:__se_s=if($global:__se_f){{1}}elseif($null -ne $global:LASTEXITCODE -and $global:LASTEXITCODE -ne 0){{$global:LASTEXITCODE}}elseif($global:__se_n){{1}}elseif($null -ne $global:LASTEXITCODE){{$global:LASTEXITCODE}}else{{0}}"
-    );
+    let run = powershell_statement(&request.command, &prelude, input);
     let markers = format!(
         "[Console]::Out.Flush();[Console]::Out.Write([string][char]30+'SE{nonce}:{seq}:'+$global:__se_s+':'+(Get-Location).Path+[char]30);[Console]::Out.Flush();[Console]::Error.Write([string][char]30+'SE{nonce}:{seq}'+[char]30);[Console]::Error.Flush()"
     );
@@ -293,10 +310,7 @@ $global:__se_s=if($global:__se_f){{1}}elseif($null -ne $global:LASTEXITCODE -and
 
 /// A PowerShell expression for `value` without any quoting of its own.
 fn text(value: &str) -> String {
-    format!(
-        "[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{}'))",
-        base64::engine::general_purpose::STANDARD.encode(value.as_bytes())
-    )
+    powershell_text(value)
 }
 
 fn heredoc_delimiter(nonce: &str) -> String {
@@ -312,7 +326,8 @@ fn posix_name(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        argv_command, check, classify, start_line, terminal_command, text, wrap, MAX_REQUEST_BYTES,
+        argv_command, check, classify, shell_label, start_line, startup_command, terminal_command,
+        text, wrap, MAX_REQUEST_BYTES,
     };
     use crate::cli::shell_session::types::{CommandRequest, Dialect, StdinMode};
     use std::collections::BTreeMap;
@@ -340,6 +355,30 @@ mod tests {
         assert_eq!(classify(""), Dialect::Posix);
         assert!(start_line(Dialect::Posix).starts_with("exec sh -c "));
         assert!(start_line(Dialect::PowerShell).ends_with("-Command -"));
+    }
+
+    #[test]
+    fn exec_shell_task_session_startup_names_its_shell() {
+        let named = |dialect, output: &str| shell_label(dialect, output.as_bytes());
+        assert_eq!(
+            named(Dialect::Posix, "motd\nSE_SHELL:bash\n").as_deref(),
+            Some("bash")
+        );
+        assert_eq!(named(Dialect::Posix, "SE_SHELL:\n").as_deref(), Some("sh"));
+        let windows = "SE_SHELL:powershell 5.1\r\n";
+        assert_eq!(
+            named(Dialect::PowerShell, windows).as_deref(),
+            Some("powershell 5.1")
+        );
+        assert_eq!(
+            named(Dialect::PowerShell, "SE_SHELL:pwsh 7\n").as_deref(),
+            Some("pwsh 7")
+        );
+        // Not answered yet, or the line is incomplete.
+        assert_eq!(named(Dialect::Posix, ""), None);
+        assert_eq!(named(Dialect::PowerShell, "SE_SHELL:pwsh"), None);
+        assert!(startup_command(Dialect::Posix).contains("SE_SHELL:"));
+        assert!(startup_command(Dialect::PowerShell).contains("'SE_SHELL:'"));
     }
 
     #[test]

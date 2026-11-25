@@ -37,6 +37,7 @@ pub use self::exec_helper_setup::{
     exec_accounts_apply, invoking_uid, Elevation, ExecAccountsAction, ExecAccountsOutcome,
 };
 
+use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::io;
 use std::os::unix::fs::PermissionsExt;
@@ -59,6 +60,7 @@ use self::exec_systemd::{
 
 use crate::share::exec_helper_protocol::AccountChoices;
 use crate::share::exec_platform::StopReason;
+use crate::share::exec_shell;
 use crate::share::exec_supervisor_protocol::{
     recv_event, send_command, RunAsAccount, SupervisorCommand, SupervisorEvent,
 };
@@ -364,6 +366,14 @@ fn recv_timeout_error(error: mpsc::RecvTimeoutError) -> io::Error {
 
 fn supervisor_closed() -> io::Error {
     io::Error::new(io::ErrorKind::UnexpectedEof, "exec supervisor closed")
+}
+
+/// The shell of a shell command (`exec_shell.rs`): the login shell of `LINUX_SPAWN`.
+pub fn resolve_shell(
+    request: &mut ExecStart,
+    environment: &BTreeMap<String, String>,
+) -> io::Result<Option<String>> {
+    exec_shell::posix(request, exec_shell::HostFamily::Linux, environment)
 }
 
 pub fn provider_status() -> ExecProviderStatus {

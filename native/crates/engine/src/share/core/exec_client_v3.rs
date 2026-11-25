@@ -238,6 +238,9 @@ async fn run_v3_job(
     notice: watch::Sender<ExecClientNotice>,
     reconnect: ReconnectFn,
 ) -> Result<ExecTerminal, ExecClientFailure> {
+    // A host before shell selection gets the start without the choice; a
+    // retry on a new connection to the same host keeps this start.
+    let start = crate::share::exec_shell::for_host(start, &attempt.lease.info().features);
     let digest = start
         .digest()
         .map_err(|error| protocol(error, false, "invalid_start"))?;

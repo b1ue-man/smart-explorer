@@ -122,6 +122,9 @@ fn wait_unlisted(registry_dir: &Path) {
 fn shell_session_task_local_shell_keeps_state_across_commands() {
     let registry_dir = tempfile::tempdir().unwrap();
     let client = open("state", false, registry_dir.path());
+    // The startup command names the shell: bash when the target has it.
+    let shell = client.info().shell;
+    assert!(matches!(shell.as_deref(), Some("bash" | "sh")), "{shell:?}");
     let first = run(
         &client,
         command("export SE_X=kept; cd /; MYVAR=v; f() { echo fn-$1; }"),
@@ -343,6 +346,21 @@ fn shell_session_task_local_powershell_keeps_state_across_commands() {
         run(&client, command("throw 'bad'")).outcome.exit_code,
         Some(1)
     );
+    // The session names its shell (`powershell.exe` is 5.1), and a parse
+    // error is PowerShell's own message, not the exception of
+    // `[ScriptBlock]::Create`.
+    assert_eq!(client.info().shell.as_deref(), Some("powershell 5.1"));
+    let parse = run(&client, command("cd C:\\ && dir"));
+    assert_eq!(parse.outcome.exit_code, Some(1), "{}", parse.stderr);
+    assert!(
+        parse
+            .stderr
+            .contains("se: PowerShell cannot parse line 1, column"),
+        "{}",
+        parse.stderr
+    );
+    assert!(parse.stderr.contains("&&"), "{}", parse.stderr);
+    assert!(!parse.stderr.contains("Create"), "{}", parse.stderr);
     let handled = run(&client, command("try { throw 'x' } catch { 'handled' }"));
     assert_eq!(handled.outcome.exit_code, Some(0), "{}", handled.stderr);
     assert_eq!(handled.stdout.trim_end(), "handled", "{}", handled.stderr);

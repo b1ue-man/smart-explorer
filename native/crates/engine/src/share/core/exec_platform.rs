@@ -41,6 +41,8 @@ pub struct ContainedExec {
     /// Name and uid of the account the platform prepared the start for;
     /// `None` for the worker's own account.
     prepared_for: Option<(String, u32)>,
+    /// The shell that runs a committed shell command (`exec_shell.rs`).
+    shell: Option<String>,
 }
 
 impl ContainedExec {
@@ -70,7 +72,14 @@ impl ContainedExec {
             inner: inner?,
             committed: false,
             prepared_for: account.map(|account| (account.name.clone(), account.uid)),
+            shell: None,
         })
+    }
+
+    /// The shell that runs the committed start's shell command, as its
+    /// result names it (`ExecTerminal::shell`); `None` without one.
+    pub fn shell_label(&self) -> Option<String> {
+        self.shell.clone()
     }
 
     /// Releases the start. `account` is the grant's resolved run-as account;
@@ -108,6 +117,9 @@ impl ContainedExec {
             Some(account) => environment_for_account(&request, account),
             None => environment_for(&request),
         };
+        // PowerShell on Windows becomes an argv start of the host's
+        // PowerShell; a shell this host does not have refuses the start.
+        let shell = super::platform_exec::resolve_shell(&mut request, &environment)?;
         self.inner.configure(&request)?;
         self.inner.send(&SupervisorCommand::Start(SupervisorStart {
             request,
@@ -115,6 +127,7 @@ impl ContainedExec {
             account,
         }))?;
         self.committed = true;
+        self.shell = shell;
         Ok(())
     }
 
@@ -272,6 +285,7 @@ pub(super) fn run_platform_self_test() -> io::Result<()> {
         timeout_ms: Some(10_000),
         max_output_bytes: None,
         terminal: None,
+        shell: None,
     };
     let mut process = ContainedExec::prepare(&request)?;
     process.commit(request, None, None)?;
@@ -328,6 +342,7 @@ fn run_root_exits_first_test() -> io::Result<()> {
         timeout_ms: Some(10_000),
         max_output_bytes: None,
         terminal: None,
+        shell: None,
     };
     let mut process = ContainedExec::prepare(&request)?;
     process.commit(request, None, None)?;
@@ -404,6 +419,7 @@ mod tests {
             timeout_ms: None,
             max_output_bytes: None,
             terminal: None,
+            shell: None,
         }
     }
 

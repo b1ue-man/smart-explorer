@@ -75,6 +75,7 @@ impl Session {
             timeout_ms: None,
             max_output_bytes: None,
             terminal,
+            shell: None,
         };
         // Stale window variables must not reach a terminal job.
         let environment = BTreeMap::from([

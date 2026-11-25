@@ -135,6 +135,7 @@ pub(in crate::share) fn argv_start(program: &str) -> io::Result<ExecStart> {
         timeout_ms: Some(15_000),
         max_output_bytes: None,
         terminal: None,
+        shell: None,
     })
 }
 
