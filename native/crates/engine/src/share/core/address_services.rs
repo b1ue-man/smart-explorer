@@ -79,6 +79,22 @@ pub struct ServerAddressServices {
 }
 
 static LAST: Mutex<Option<ServerAddressServices>> = Mutex::new(None);
+/// The Iroh endpoint's own direct addresses as last published (QAD and the
+/// interfaces), for the predicted TCP candidate of the screen's TCP link.
+static OWN_ADDRS: Mutex<Vec<SocketAddr>> = Mutex::new(Vec::new());
+
+/// Records the endpoint's own direct addresses each time they are published.
+pub(crate) fn record_own_addrs(addrs: Vec<SocketAddr>) {
+    *OWN_ADDRS.lock().unwrap_or_else(PoisonError::into_inner) = addrs;
+}
+
+/// The endpoint's own direct addresses as last published; empty before.
+pub fn own_endpoint_addrs() -> Vec<SocketAddr> {
+    OWN_ADDRS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone()
+}
 
 /// Records what `hello_ok` announced for the endpoint `connection_label`
 /// (`SignalEndpoint::label`) of the stored server address `server_config`.
@@ -204,5 +220,9 @@ mod tests {
         }
         let long = format!("se-reflect 1 203.0.113.7:1{}\n", " ".repeat(64));
         assert_eq!(parse_reflect_line(long.as_bytes()), None, "too long");
+        // The endpoint's published addresses reach the screen's TCP link.
+        let own: Vec<SocketAddr> = vec!["203.0.113.7:40123".parse().unwrap()];
+        record_own_addrs(own.clone());
+        assert_eq!(own_endpoint_addrs(), own);
     }
 }

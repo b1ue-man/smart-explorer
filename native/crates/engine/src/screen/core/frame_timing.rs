@@ -198,6 +198,43 @@ pub struct ChainReport {
     /// before it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delivery: Option<super::delivery::Delivery>,
+    /// The carrier of the pictures under „UDP“ (`video_transport.rs`):
+    /// `direct` (the session's own UDP pair), `quic_direct` (QUIC datagrams
+    /// on a direct path), `relay` (QUIC datagrams through the relay, not
+    /// UDP); absent while the pictures take the streams. The `udp_*`
+    /// counters run from the session's start; absent before the viewer
+    /// offered a carrier and from hosts before them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub udp_path: Option<String>,
+    /// Pictures the viewer gave up incomplete, and those the host's
+    /// carrier did not take.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub udp_lost_pictures: Option<u64>,
+    /// Whole pictures the viewer skipped because their chain broke.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub udp_skipped_pictures: Option<u64>,
+    /// Pictures completed with packets rebuilt from parity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub udp_recovered_pictures: Option<u64>,
+    /// Data packets that did not arrive, rebuilt or not.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub udp_lost_packets: Option<u64>,
+    /// Data packets rebuilt from parity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub udp_recovered_packets: Option<u64>,
+    /// The carrier of the pictures under „TCP“: `direct` (the direct TCP
+    /// link), `quic_stream` (QUIC picture streams on a direct path),
+    /// `relay` (QUIC picture streams through the relay); absent under
+    /// „UDP“ and from hosts before it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tcp_path: Option<String>,
+    /// How the direct TCP link runs (`TcpPathKind`: `lan`, `ipv6`,
+    /// `public`, `punched`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tcp_link: Option<String>,
+    /// Why the direct TCP link is missing, in German (`TcpLinkFailure`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tcp_failure: Option<String>,
 }
 
 /// The capture API a session uses.

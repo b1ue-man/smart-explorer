@@ -85,6 +85,9 @@ pub mod cursor_overlay;
 pub mod decoded_frame;
 pub mod decoder_health;
 pub mod decoder_library;
+// User 2026-11-25 („NUTZ das“, „auch DIREKT UDP“): pictures as UDP
+// datagrams with Reed-Solomon parity under „UDP“.
+pub mod fec;
 pub mod feed_host;
 pub mod ffmpeg_plan;
 pub mod first_picture;
@@ -155,6 +158,9 @@ pub mod synthetic;
 pub mod tiles_codec;
 pub mod tiles_dirty;
 pub mod tiles_rate;
+// The direct TCP picture link (user 2026-11-25), sockets in `os/shared`.
+pub mod video_tcp_wire;
+pub mod video_transport;
 pub mod viewer_client;
 pub mod viewer_reconstruct;
 // P5 (plan 2026-11-17): the virtual display in the viewer's resolution.

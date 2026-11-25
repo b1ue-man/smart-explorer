@@ -61,6 +61,16 @@ fn bildkette_task_stats_viewer_lines_name_every_station() {
         measured_kbps: None,
         measured_age_ms: None,
         delivery: None,
+        // The way of the pictures: `screen_stats_carrier_tests.rs`.
+        udp_path: Some("direct".into()),
+        udp_lost_pictures: Some(2),
+        udp_skipped_pictures: Some(1),
+        udp_recovered_pictures: Some(4),
+        udp_lost_packets: Some(9),
+        udp_recovered_packets: Some(7),
+        tcp_path: None,
+        tcp_link: None,
+        tcp_failure: None,
     };
     let station = Some(StationUs {
         p50_us: 1_500,
@@ -101,6 +111,8 @@ fn bildkette_task_stats_viewer_lines_name_every_station() {
         "Netz p50 1.5 ms, p95 2.5 ms",
         "Dekodierung p50 3.0 ms, p95 3.0 ms",
         "Verworfen beim Betrachter 1",
+        "Bildweg UDP direkt",
+        "Verworfen: unvollständig (UDP) 2",
     ] {
         assert!(
             lines.contains(&expected.to_string()),

@@ -8,17 +8,13 @@
 use std::io;
 
 use serde::{Deserialize, Serialize};
-use tokio::io::{AsyncRead, AsyncWrite};
 
 use super::input_model::InputCapabilities;
 use super::negotiate::{CodecOffer, CodecSetting, MAX_CODEC_OFFERS};
 use super::pixel_convert::FrameSize;
 use super::virtual_display::{VirtualDisplayReport, VirtualDisplayWish};
 use super::window_list::{MonitorInfo, SourceId};
-use super::wire::{
-    from_json, invalid, read_frame, recv_json, send_json, supports_version, APPROVAL_PENDING,
-    CLIENT_HELLO, HELLO_ERROR, HELLO_OK, MAX_CONTROL_BYTES, SCREEN_PROTOCOL_VERSION, SERVER_HELLO,
-};
+use super::wire::{invalid, supports_version, SCREEN_PROTOCOL_VERSION};
 use crate::share::access_grant::{Capability, CapabilityDecision};
 use crate::share::relation_proof::{relation_transcript, RelationClientHello, RelationServerHello};
 
@@ -126,6 +122,13 @@ pub struct ScreenServerHello {
     /// `delivery`, `SET_DELIVERY` and `REMEASURE`.
     #[serde(default, skip_serializing_if = "is_false")]
     pub delivery_v1: bool,
+    /// `Some(1)` when this host answers `VIDEO_TCP_OFFER` (`video_tcp_wire.rs`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub video_tcp: Option<u16>,
+    /// Carriers of the pictures under „UDP“ this host sends on
+    /// (`video_transport.rs`: `video_udp_v1`, `video_datagrams_v1`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub video_carriers: Vec<String>,
 }
 
 #[path = "wire_hello_codecs.rs"]
@@ -157,6 +160,8 @@ impl ScreenServerHello {
             set_decoders: Some(super::set_decoders::SET_DECODERS_V1),
             virtual_display: Some(super::virtual_display::VIRTUAL_DISPLAY_V1),
             delivery_v1: true,
+            video_tcp: Some(super::video_tcp_wire::VIDEO_TCP_V1),
+            video_carriers: super::video_transport::host_carriers(),
         }
     }
 
@@ -429,66 +434,14 @@ pub enum HelloReply {
     Pending(ScreenApprovalPending),
 }
 
-pub async fn send_server_hello<W: AsyncWrite + Unpin>(
-    writer: &mut W,
-    hello: &ScreenServerHello,
-) -> io::Result<()> {
-    send_json(writer, SERVER_HELLO, hello).await
-}
-
-pub async fn recv_server_hello<R: AsyncRead + Unpin>(
-    reader: &mut R,
-) -> io::Result<ScreenServerHello> {
-    recv_json(reader, SERVER_HELLO).await
-}
-
-pub async fn send_client_hello<W: AsyncWrite + Unpin>(
-    writer: &mut W,
-    hello: &ScreenClientHello,
-) -> io::Result<()> {
-    hello.validate()?;
-    send_json(writer, CLIENT_HELLO, hello).await
-}
-
-// The host reads the hello with `recv_json` (`share/core/node_screen.rs`), so
-// that an unknown version gets `screen_unsupported` before the field checks;
-// the wire tests use this one.
-#[allow(dead_code)]
-pub async fn recv_client_hello<R: AsyncRead + Unpin>(
-    reader: &mut R,
-) -> io::Result<ScreenClientHello> {
-    let hello: ScreenClientHello = recv_json(reader, CLIENT_HELLO).await?;
-    hello.validate()?;
-    Ok(hello)
-}
-
-pub async fn send_hello_reply<W: AsyncWrite + Unpin>(
-    writer: &mut W,
-    reply: &HelloReply,
-) -> io::Result<()> {
-    match reply {
-        HelloReply::Accepted(accepted) => {
-            accepted.validate()?;
-            send_json(writer, HELLO_OK, accepted).await
-        }
-        HelloReply::Refused(refused) => send_json(writer, HELLO_ERROR, refused).await,
-        HelloReply::Pending(pending) => send_json(writer, APPROVAL_PENDING, pending).await,
-    }
-}
-
-pub async fn recv_hello_reply<R: AsyncRead + Unpin>(reader: &mut R) -> io::Result<HelloReply> {
-    let (tag, payload) = read_frame(reader, MAX_CONTROL_BYTES).await?;
-    match tag {
-        HELLO_OK => {
-            let accepted: ScreenHelloOk = from_json(&payload)?;
-            accepted.validate()?;
-            Ok(HelloReply::Accepted(accepted))
-        }
-        HELLO_ERROR => Ok(HelloReply::Refused(from_json(&payload)?)),
-        APPROVAL_PENDING => Ok(HelloReply::Pending(from_json(&payload)?)),
-        _ => Err(invalid("unexpected screen handshake frame")),
-    }
-}
+#[path = "wire_hello_io.rs"]
+mod hello_io;
+// `recv_client_hello` is read by the wire tests only.
+#[allow(unused_imports)]
+pub use hello_io::{
+    recv_client_hello, recv_hello_reply, recv_server_hello, send_client_hello, send_hello_reply,
+    send_server_hello,
+};
 
 #[cfg(test)]
 #[path = "wire_hello_tests.rs"]

@@ -2,10 +2,13 @@
 //! (`bandwidth_probe.rs`) through the actor: applied by the next `apply`, as
 //! the rate ceiling (`set_rate_ceiling`), without an interrupt of the
 //! running picture operation; the pacer decides with them from the next
-//! picture on.
+//! picture on. The shared state of the picture datagrams goes to the
+//! session the same way (`video_route`).
 use super::{Pipeline, PipelineActor};
 use crate::screen::core::bandwidth_probe::LineFacts;
 use crate::screen::core::delivery::Delivery;
+use crate::screen::core::video_transport::video_route::VideoRoute;
+use std::sync::Arc;
 
 /// What waits for the end of the running picture operation.
 #[derive(Default)]
@@ -51,5 +54,10 @@ impl PipelineActor {
     /// The line facts of the last refresh (`Pipeline::line_facts`).
     pub fn line_facts(&self) -> LineFacts {
         self.facts.line
+    }
+
+    /// The picture datagrams' state the session shares (`video_host.rs`).
+    pub fn video_route(&self) -> Arc<VideoRoute> {
+        self.work.video().clone()
     }
 }

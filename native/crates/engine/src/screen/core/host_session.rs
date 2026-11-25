@@ -42,6 +42,8 @@ mod family;
 mod input_release;
 #[path = "host_session_send.rs"]
 mod send;
+#[path = "host_session_video.rs"]
+mod video_frames;
 #[path = "host_visibility.rs"]
 mod visibility;
 
@@ -96,6 +98,8 @@ pub(super) struct Session<'a> {
     outbox: send::Outbox,
     /// „Übertragung“ and the bandwidth probe (`bandwidth_probe.rs`).
     pub(super) line: crate::screen::core::bandwidth_probe::LineLink,
+    /// The picture datagrams under „UDP“ (`video_transport.rs`).
+    pub(super) video: crate::screen::core::video_transport::video_host::VideoHost,
 }
 
 /// How a session ended: the reason and the `ERROR` the viewer gets first.
@@ -148,6 +152,7 @@ impl<'a> Session<'a> {
             cursor: Default::default(),
             outbox,
             line: Default::default(),
+            video: Default::default(),
         }
     }
 
@@ -209,6 +214,10 @@ impl<'a> Session<'a> {
                     let started = self.pipeline.work_started();
                     if let Some(ending) = self.produce().await {
                         break ending;
+                    }
+                    // The carriers' frames, `VIDEO_TAIL` of a still screen.
+                    if self.video_frames().await.is_err() {
+                        break self.unwritable();
                     }
                     let after = self.pipeline.work_started();
                     missed_tick = clock::tick_missed(started, after, self.pipeline.working());

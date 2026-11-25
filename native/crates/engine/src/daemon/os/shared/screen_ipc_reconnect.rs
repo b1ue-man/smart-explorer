@@ -377,7 +377,9 @@ pub(super) async fn relay_session(
     let mut opened = Instant::now();
     loop {
         // The host's sound (P9) reaches the viewer beside the relay loop.
-        let audio = crate::screen::os::audio::relay(&session.connection, &out, RELAY_AUDIO);
+        // Read from the picture task when it takes the datagrams (UDP).
+        let feed = session.take_audio();
+        let audio = crate::screen::os::audio::relay(&session.connection, feed, &out, RELAY_AUDIO);
         let (code, detail) = super::relay_loop(&mut session, &out, &mut input, &mut modes).await;
         drop(audio);
         session.close();

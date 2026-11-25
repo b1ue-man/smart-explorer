@@ -101,6 +101,11 @@ pub fn tag_limit(tag: u8) -> usize {
         super::bandwidth_probe::SET_DELIVERY => super::bandwidth_probe::SET_DELIVERY_BYTES,
         super::bandwidth_probe::REMEASURE => super::bandwidth_probe::REMEASURE_BYTES,
         super::bandwidth_probe::PROBE_RESULT => super::bandwidth_probe::PROBE_RESULT_BYTES,
+        super::video_transport::FRAME_LOSS => super::video_transport::FRAME_LOSS_BYTES,
+        super::video_transport::VIDEO_OFFER => super::video_transport::VIDEO_OFFER_BYTES,
+        super::video_transport::VIDEO_ANSWER => super::video_transport::VIDEO_ANSWER_BYTES,
+        super::video_transport::VIDEO_REPORT => super::video_transport::VIDEO_REPORT_BYTES,
+        super::video_transport::VIDEO_TAIL => super::video_transport::FRAME_LOSS_BYTES,
         _ => MAX_CONTROL_BYTES,
     }
 }

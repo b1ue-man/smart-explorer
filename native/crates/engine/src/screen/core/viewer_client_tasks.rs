@@ -21,11 +21,27 @@ use super::super::wire_control::{
 use super::super::wire_hello::ScreenHelloOk;
 use super::{CONTROL_QUEUE, HIDDEN_PING_INTERVAL, PING_INTERVAL};
 
+/// Sound datagrams queued for the audio relay; beyond, one is dropped.
+const AUDIO_QUEUE: usize = 64;
+
+/// A host frame of the picture carriers outside `HostFrame`
+/// (`video_transport.rs`, `video_tcp_wire.rs`).
+fn carrier_frame(tag: u8) -> bool {
+    use super::super::video_tcp_wire::{VIDEO_TCP_ANSWER, VIDEO_TCP_RESULT};
+    use super::super::video_transport::{VIDEO_ANSWER, VIDEO_TAIL};
+    matches!(
+        tag,
+        VIDEO_ANSWER | VIDEO_TAIL | VIDEO_TCP_ANSWER | VIDEO_TCP_RESULT
+    )
+}
+
 /// What a session keeps of its tasks.
 pub(super) struct Running {
     pub(super) control: mpsc::Sender<ViewerFrame>,
     pub(super) host: mpsc::Receiver<io::Result<HostFrame>>,
     pub(super) pictures: mpsc::Receiver<PictureEvent>,
+    /// The sound datagrams, while the picture datagrams' task reads them.
+    pub(super) audio: Option<mpsc::Receiver<bytes::Bytes>>,
     pub(super) tasks: Vec<JoinHandle<()>>,
 }
 
@@ -53,6 +69,11 @@ pub(super) struct Start {
     /// The host announced `delivery_v1`: only then may `SET_DELIVERY` and
     /// `REMEASURE` leave the viewer (`bandwidth_probe.rs`).
     pub(super) delivery: bool,
+    /// The carriers of the picture datagrams both sides read
+    /// (`video_transport.rs`); none: only the picture streams.
+    pub(super) video: super::super::video_transport::Carriers,
+    /// The host named `video_tcp`: the direct TCP link is set up.
+    pub(super) tcp: bool,
 }
 
 pub(super) fn spawn(start: Start, accepted: &ScreenHelloOk) -> Running {
@@ -69,6 +90,8 @@ pub(super) fn spawn(start: Start, accepted: &ScreenHelloOk) -> Running {
         rate_ceiling,
         set_decoders,
         delivery,
+        video,
+        tcp,
     } = start;
     let (control, mut outgoing) = mpsc::channel::<ViewerFrame>(CONTROL_QUEUE);
     let (host_tx, host) = mpsc::channel(CONTROL_QUEUE);
@@ -150,11 +173,18 @@ pub(super) fn spawn(start: Start, accepted: &ScreenHelloOk) -> Running {
         }
         let _ = send.finish();
     });
+    // The carriers' host frames are no `HostFrame`s: the picture task takes
+    // them (`video_viewer.rs`).
+    let (carrier_tx, host_frames) = mpsc::channel::<(u8, Vec<u8>)>(8);
     let reader = tokio::spawn(async move {
         // Large frames in parts (round 10, `control_parts.rs`).
         let mut parts = super::super::control_parts::PartAssembler::default();
         loop {
             let frame = match super::super::wire::read_frame(&mut recv, MAX_WINDOWS_BYTES).await {
+                Ok((tag, payload)) if carrier_frame(tag) => {
+                    let _ = carrier_tx.try_send((tag, payload));
+                    continue;
+                }
                 Ok((super::super::control_parts::CONTROL_PART, part)) => match parts.push(&part) {
                     Ok(None) => continue,
                     Ok(Some((tag, payload))) => decode_host_frame(tag, &payload),
@@ -185,6 +215,30 @@ pub(super) fn spawn(start: Start, accepted: &ScreenHelloOk) -> Running {
             }
         }
     });
+    let datagrams = (!probe && (video.any() || tcp)).then(|| {
+        let (audio_tx, audio) = mpsc::channel(AUDIO_QUEUE);
+        let task = tokio::spawn(super::super::video_transport::video_viewer::run(
+            super::super::video_transport::video_viewer::ViewerVideo {
+                connection: connection.clone(),
+                carriers: video,
+                tcp,
+                events: pictures_tx.clone(),
+                control: control.clone(),
+                admission: super::super::video_transport::video_message::Admission {
+                    contract: accepted.frame_contract,
+                    local: local_limits,
+                    memory_bytes: memory.as_ref().map(|lease| lease.bytes()),
+                },
+                host_frames,
+                audio: audio_tx,
+            },
+        ));
+        (task, audio)
+    });
+    let (datagram_task, audio) = match datagrams {
+        Some((task, audio)) => (Some(task), Some(audio)),
+        None => (None, None),
+    };
     let streams = if probe {
         drop(pictures_tx);
         tokio::spawn(async {})
@@ -218,10 +272,13 @@ pub(super) fn spawn(start: Start, accepted: &ScreenHelloOk) -> Running {
             tokio::time::sleep(interval).await;
         }
     });
+    let mut tasks = vec![writer, reader, streams, clock];
+    tasks.extend(datagram_task);
     Running {
         control,
         host,
         pictures,
-        tasks: vec![writer, reader, streams, clock],
+        audio,
+        tasks,
     }
 }

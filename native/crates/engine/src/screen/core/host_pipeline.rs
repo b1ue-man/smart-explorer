@@ -30,6 +30,7 @@ use super::pixel_convert::FrameSize;
 use super::rate_control::{Quality, RateController};
 use super::ref_recovery::ConfirmedReference;
 use super::session_state::SessionState;
+use super::video_transport::video_sink::PictureSink;
 use super::wire_binary::{GopHeader, StreamKind};
 use super::wire_control::StreamInfo;
 use super::wire_hello::ScreenErrorCode;
@@ -145,7 +146,8 @@ pub struct Pipeline {
     fallback_notice: Option<String>,
     tile_limit: Option<FrameSize>,
     kind: StreamKind,
-    gop: Option<GopWriter>,
+    /// The open picture group: a stream, or messages under „UDP“.
+    gop: Option<PictureSink>,
     next_gop_id: u64,
     next_frame_id: u64,
     pacer: Pacer,
@@ -392,32 +394,10 @@ impl Pipeline {
         self.stale_resets = self.stale_resets.saturating_add(1);
         self.note_restart(&format!("unacknowledged beyond {} ms", stale_us / 1000));
         self.rate.on_stale_stream(now_us(), stale_us);
-        let facts = super::gop_continue::ResetFacts {
-            negotiated: self.continuation_offered(),
-            video: self.kind == StreamKind::Video
-                && self.choice.codec.is_video()
-                && !self.frame_contract.is_some_and(|c| c.hybrid_regions),
-            keyframe_due: self.pacer.keyframe_due(),
-            encoder_running: self.running.is_some(),
-            stage_continues: self.stage.as_mut().is_some_and(|stage| {
-                stage
-                    .source
-                    .host_stage()
-                    .is_none_or(|host| host.continues_references())
-            }),
-            last_good: self.confirmed.last_good(),
-        };
-        let Some(last_good) = facts.continue_from() else {
-            return self.reset_stream();
-        };
-        if let Some(gop) = self.gop.take() {
-            gop.reset();
+        match self.reset_facts().continue_from() {
+            Some(last_good) => self.continue_after_reset(last_good),
+            None => self.reset_stream(),
         }
-        self.confirmed.stream_reset();
-        self.pacer.on_stream_reset_continued();
-        self.sender.reset();
-        self.presentation.restart_group();
-        self.continue_from = Some(last_good);
     }
 }
 
@@ -431,6 +411,8 @@ mod producing;
 mod stream_report;
 #[path = "host_pipeline_tiles.rs"]
 mod tiles_wait;
+#[path = "host_pipeline_video.rs"]
+mod video_send;
 
 /// `rects` measured in a picture of `basis` pixels, scaled to `size`.
 fn scale_visible(

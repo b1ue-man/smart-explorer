@@ -61,4 +61,43 @@ class ScreenDeliveryChoiceTest {
         assertEquals("wartet auf die erste Statistik des Geräts", ScreenDelivery.measuredLine(null, statsSeen = false))
         assertEquals("1,5", ScreenDelivery.mbitText(1_500))
     }
+
+    @Test
+    fun udp_task_android_names_the_way_of_the_pictures() {
+        fun parts(json: String) = ScreenDelivery.infoParts(DeliveryReport.of(Json.parseToJsonElement(json).jsonObject), statsSeen = true)
+        // „UDP“ on the direct pair, with what became of the pictures (the texts of the desktop viewer).
+        assertEquals(
+            listOf(
+                "Übertragung UDP",
+                "Datenrate noch nicht gemessen",
+                "Bildweg UDP direkt",
+                "Verworfen: unvollständig (UDP) 3",
+                "Verworfen: Kette unterbrochen (UDP) 2",
+                "Wiederhergestellt (UDP) 11 Bilder, 37 von 40 verlorenen Paketen",
+            ),
+            parts(
+                """{"path":"direct","chain":{"delivery":"realtime","udpPath":"direct","udpLostPictures":3,""" +
+                    """"udpSkippedPictures":2,"udpRecoveredPictures":11,"udpLostPackets":40,"udpRecoveredPackets":37}}""",
+            ),
+        )
+        assertEquals("UDP über QUIC (direkt)", ScreenCarrier.way(CarrierReport(path = "direct", udpPath = "quic_direct")))
+        assertEquals("über Relay (QUIC-Datagramme, kein UDP)", ScreenCarrier.way(CarrierReport(path = "relay", udpPath = "relay")))
+        // „TCP“: the direct link with how it runs, or the streams with the reason the link is missing.
+        assertEquals(
+            listOf("Übertragung TCP", "Datenrate noch nicht gemessen", "Bildweg TCP direkt (durch NAT gelocht)"),
+            parts("""{"path":"relay","chain":{"delivery":"reliable","tcpPath":"direct","tcpLink":"punched"}}"""),
+        )
+        val failure = "TCP direkt nicht möglich: Zeitüberschreitung beim Aufbau der TCP-Verbindung"
+        assertEquals(
+            listOf("Übertragung TCP", "Datenrate noch nicht gemessen", "Bildweg über Relay (QUIC-Strom)", failure),
+            parts("""{"path":"relay","chain":{"delivery":"reliable","tcpPath":"relay","tcpFailure":"$failure"}}"""),
+        )
+        assertEquals("QUIC-Strom (direkt)", ScreenCarrier.way(CarrierReport(path = "direct", tcpPath = "quic_stream")))
+        // A host before the carriers: the QUIC streams of the connection's path.
+        assertEquals(
+            listOf("Übertragung nicht gemeldet (ältere Version)", "Bildweg über Relay (QUIC-Strom)"),
+            parts("""{"path":"relay","chain":{"rateLimit":"link"}}"""),
+        )
+        assertNull(ScreenCarrier.way(CarrierReport()))
+    }
 }

@@ -279,6 +279,7 @@ impl EndpointRoutes {
             .map(ToString::to_string)
             .unwrap_or_default();
         let candidates = current.ip_addrs().map(ToString::to_string).collect();
+        crate::share::address_services::record_own_addrs(current.ip_addrs().copied().collect());
         PublishedEndpointRoutes {
             relay_url,
             candidates,

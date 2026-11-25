@@ -148,6 +148,9 @@ pub struct Pacer {
     /// `delivery` alone decides about a picture the line delivers late.
     unthrottled: bool,
     delivery: super::delivery::Delivery,
+    /// The pictures go as datagrams (`video_transport.rs`): sent and
+    /// forgotten, never a stale reset (`pacing_datagram.rs`).
+    datagrams: bool,
 }
 
 impl Default for Pacer {
@@ -173,6 +176,7 @@ impl Default for Pacer {
             waiting_at_presented: false,
             unthrottled: false,
             delivery: super::delivery::Delivery::Realtime,
+            datagrams: false,
         }
     }
 }
@@ -201,7 +205,11 @@ impl Pacer {
         // „Zuverlässig“ (user 2026-11-25): no picture is given up, the
         // stream catches up on a slower line.
         let reliable = self.unthrottled && self.delivery == super::delivery::Delivery::Reliable;
-        if let Some(oldest) = self.in_flight.front().filter(|_| !reliable) {
+        if self.datagrams {
+            self.forget_stale_datagrams(now_us, target_bps);
+        }
+        let resets = !reliable && !self.datagrams;
+        if let Some(oldest) = self.in_flight.front().filter(|_| resets) {
             let (stale_us, limit) = self.stale_limits(target_bps);
             if now_us.saturating_sub(oldest.sent_us) > stale_us || self.in_flight.len() >= limit {
                 return PaceDecision::ResetStream;
@@ -339,12 +347,15 @@ impl Pacer {
     pub fn on_ack(&mut self, gop_id: u64, frame_id: u64) -> Option<SentFrame> {
         let mut acked = None;
         let mut released = 0u64;
+        // Datagram pictures reach the decoder in order or are given up:
+        // an acknowledgement releases every older picture of any group.
+        let any_group = self.datagrams;
         self.in_flight.retain(|frame| {
-            if frame.gop_id != gop_id || frame.frame_id > frame_id {
+            if (frame.gop_id != gop_id && !any_group) || frame.frame_id > frame_id {
                 return true;
             }
             released += frame.bytes;
-            if frame.frame_id == frame_id {
+            if frame.frame_id == frame_id && frame.gop_id == gop_id {
                 acked = Some(*frame);
             }
             false
@@ -417,82 +428,11 @@ impl Pacer {
     }
 }
 
-/// The highest frame rate the codec pairing allows for `size`: `requested`
-/// within `MAX_FPS` and the macroblock rate both report; `None` when not even
-/// one frame per second fits. The encoder opens with this rate (plan
-/// 2026-11-14 „Bildkette“ B-03).
-pub fn codec_cap(
-    requested: u32,
-    size: super::pixel_convert::FrameSize,
-    max_blocks_per_second: Option<u64>,
-) -> Option<u32> {
-    let blocks = super::frame_size_caps::macroblocks(size);
-    if blocks == 0 {
-        return None;
-    }
-    let max = max_blocks_per_second
-        .map_or(u64::from(MAX_FPS), |n| n / blocks)
-        .min(u64::from(MAX_FPS));
-    if max == 0 {
-        return None;
-    }
-    Some(requested.clamp(1, MAX_FPS).min(max as u32))
-}
-
-/// Takes captured frames at the wanted rate.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct FrameClock {
-    interval_us: u64,
-    next_due_us: Option<u64>,
-}
-
-fn interval_us(fps: u32) -> u64 {
-    1_000_000 / u64::from(fps.clamp(1, MAX_FPS))
-}
-
-impl FrameClock {
-    pub fn new(fps: u32) -> Self {
-        Self {
-            interval_us: interval_us(fps),
-            next_due_us: None,
-        }
-    }
-
-    pub fn set_fps(&mut self, fps: u32) {
-        self.interval_us = interval_us(fps);
-    }
-
-    /// Sets the cadence to `codec_cap` and returns it.
-    pub fn set_codec_fps(
-        &mut self,
-        requested: u32,
-        size: super::pixel_convert::FrameSize,
-        max_blocks_per_second: Option<u64>,
-    ) -> Option<u32> {
-        let fps = codec_cap(requested, size, max_blocks_per_second)?;
-        self.set_fps(fps);
-        Some(fps)
-    }
-
-    pub fn interval_us(&self) -> u64 {
-        self.interval_us
-    }
-
-    /// Whether the frame captured at `now_us` is taken. A frame up to a
-    /// quarter interval early counts as due, so a 60 Hz source at 30
-    /// frames/s yields every second frame despite jitter; after a stall of
-    /// more than one interval the cadence starts over instead of bursting.
-    pub fn take(&mut self, now_us: u64) -> bool {
-        let interval = self.interval_us;
-        let next = match self.next_due_us {
-            Some(due) if now_us + interval / 4 < due => return false,
-            Some(due) if due + 2 * interval >= now_us => due + interval,
-            _ => now_us + interval,
-        };
-        self.next_due_us = Some(next);
-        true
-    }
-}
+#[path = "pacing_clock.rs"]
+mod clock;
+pub use clock::{codec_cap, FrameClock};
+#[path = "pacing_datagram.rs"]
+mod datagram;
 
 #[cfg(test)]
 #[path = "pacing_tests.rs"]

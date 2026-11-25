@@ -69,6 +69,27 @@ pub async fn write_piece<W: AsyncWrite + Unpin>(
     Ok(())
 }
 
+/// A frame outside `HostFrame` (`video_transport::VIDEO_ANSWER`), whole and
+/// within the peer's control reserve like `send_counted`; returns its bytes.
+pub async fn send_raw<W: AsyncWrite + Unpin>(
+    peer: &str,
+    writer: &mut W,
+    tag: u8,
+    payload: &[u8],
+) -> io::Result<u64> {
+    if payload.len() > tag_limit(tag) {
+        return Err(invalid("screen control frame exceeds tag limit"));
+    }
+    let len =
+        u32::try_from(payload.len()).map_err(|_| invalid("screen control length overflow"))?;
+    let mut frame = Vec::with_capacity(5 + payload.len());
+    frame.push(tag);
+    frame.extend_from_slice(&len.to_be_bytes());
+    frame.extend_from_slice(payload);
+    write_piece(peer, writer, &frame).await?;
+    Ok(frame.len() as u64)
+}
+
 /// `send`, with the bytes it wrote (review 2026-11-19: the control stream
 /// counts against „Höchste Datenrate“, `Pipeline::book_control_bytes`).
 pub async fn send_counted<W: AsyncWrite + Unpin>(

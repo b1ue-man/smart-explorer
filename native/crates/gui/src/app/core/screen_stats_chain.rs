@@ -4,7 +4,9 @@
 //! picture, a capped capture rate), what limits frame rate and bit rate,
 //! the rate the encoder is given and whether it keeps it (plan 2026-11-17),
 //! „Übertragung“ and the rate the host measured on the line (user
-//! 2026-11-25, `screen_delivery.rs`), the kinds of recovery, the host's station times (after `FRAME_TIMING`,
+//! 2026-11-25, `screen_delivery.rs`), the way of the pictures with what
+//! became of the UDP pictures (`screen_stats_carrier.rs`), the kinds of
+//! recovery, the host's station times (after `FRAME_TIMING`,
 //! the network with the clock offset) and the viewer's own stations
 //! (decode, hand-over to the graphics, dropped pictures, pictures drawn
 //! again because no new one came). A host before
@@ -144,6 +146,10 @@ pub fn chain_lines(info: &SessionInfo) -> Vec<String> {
         }
         None => vec![format!("Bildkette: {NOT_REPORTED} (ältere Version)")],
     };
+    // Which way the pictures take and what became of the UDP pictures.
+    if let Some(stats) = stats {
+        lines.extend(carrier::carrier_lines(stats));
+    }
     match stats.and_then(|stats| stats.stations.as_ref()) {
         Some(stations) => {
             let named = [
@@ -183,6 +189,9 @@ pub fn chain_lines(info: &SessionInfo) -> Vec<String> {
     lines.push(format!("Wiederholt gezeichnet {}", info.latency.repeated));
     lines
 }
+
+#[path = "screen_stats_carrier.rs"]
+mod carrier;
 
 #[cfg(test)]
 #[path = "screen_stats_chain_tests.rs"]

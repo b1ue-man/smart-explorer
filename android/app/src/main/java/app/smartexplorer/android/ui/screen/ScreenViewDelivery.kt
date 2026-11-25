@@ -20,20 +20,100 @@ import kotlinx.serialization.json.contentOrNull
 /**
  * What the host's statistics say of „Übertragung“ and the line (user 2026-11-25; `stats.chain` of the core with
  * camelCase keys): [running] the mode it runs (`delivery`; `null` from a host before „Übertragung“, which neither takes
- * a change nor measures), [measuredKbps] the available rate it measured and [measuredAgeMs] how long ago.
+ * a change nor measures), [measuredKbps] the available rate it measured and [measuredAgeMs] how long ago; [carrier]
+ * the way the pictures take ([CarrierReport]).
  */
-data class DeliveryReport(val running: String?, val measuredKbps: Long?, val measuredAgeMs: Long?) {
+data class DeliveryReport(
+    val running: String?,
+    val measuredKbps: Long?,
+    val measuredAgeMs: Long?,
+    val carrier: CarrierReport = CarrierReport(),
+) {
     companion object {
         /** The report in the body of a `stats` event. */
         fun of(body: JsonObject): DeliveryReport {
             val chain = body["chain"] as? JsonObject
             fun text(key: String) = (chain?.get(key) as? JsonPrimitive)?.contentOrNull
+            fun count(key: String) = text(key)?.toLongOrNull()
             return DeliveryReport(
                 running = text("delivery")?.takeIf { it in ViewerCodecChoice.DELIVERIES },
-                measuredKbps = text("measuredKbps")?.toLongOrNull(),
-                measuredAgeMs = text("measuredAgeMs")?.toLongOrNull(),
+                measuredKbps = count("measuredKbps"),
+                measuredAgeMs = count("measuredAgeMs"),
+                carrier = CarrierReport(
+                    path = (body["path"] as? JsonPrimitive)?.contentOrNull,
+                    udpPath = text("udpPath"),
+                    tcpPath = text("tcpPath"),
+                    tcpLink = text("tcpLink"),
+                    tcpFailure = text("tcpFailure"),
+                    udpLostPictures = count("udpLostPictures"),
+                    udpSkippedPictures = count("udpSkippedPictures"),
+                    udpRecoveredPictures = count("udpRecoveredPictures"),
+                    udpLostPackets = count("udpLostPackets"),
+                    udpRecoveredPackets = count("udpRecoveredPackets"),
+                ),
             )
         }
+    }
+}
+
+/**
+ * The way of the pictures as the host's statistics name it (user 2026-11-25: „TCP und UDP, DIREKT“): [path] the
+ * connection's path (`direct`, `relay`), [udpPath] the UDP carrier (`direct`, `quic_direct`, `relay`), [tcpPath] the
+ * carrier under „TCP“ (`direct`, `quic_stream`, `relay`) with [tcpLink] how the direct link runs, [tcpFailure] why
+ * the direct TCP link is missing, and the counters of the UDP pictures.
+ */
+data class CarrierReport(
+    val path: String? = null,
+    val udpPath: String? = null,
+    val tcpPath: String? = null,
+    val tcpLink: String? = null,
+    val tcpFailure: String? = null,
+    val udpLostPictures: Long? = null,
+    val udpSkippedPictures: Long? = null,
+    val udpRecoveredPictures: Long? = null,
+    val udpLostPackets: Long? = null,
+    val udpRecoveredPackets: Long? = null,
+)
+
+/** The carrier texts of the desktop viewer (`screen_stats_carrier.rs`). Pure functions only. */
+object ScreenCarrier {
+    /** How the direct TCP link runs. */
+    private fun linkText(key: String): String = when (key) {
+        "lan" -> "LAN"
+        "ipv6" -> "IPv6"
+        "public" -> "öffentlich"
+        "punched" -> "durch NAT gelocht"
+        else -> key
+    }
+
+    /** The way of the pictures; `null` while the statistics name no path. */
+    fun way(report: CarrierReport): String? = when {
+        report.udpPath == "direct" -> "UDP direkt"
+        report.udpPath == "quic_direct" -> "UDP über QUIC (direkt)"
+        report.udpPath == "relay" -> "über Relay (QUIC-Datagramme, kein UDP)"
+        report.tcpPath == "direct" -> report.tcpLink?.let { "TCP direkt (${linkText(it)})" } ?: "TCP direkt"
+        report.tcpPath == "quic_stream" -> "QUIC-Strom (direkt)"
+        report.tcpPath == "relay" -> "über Relay (QUIC-Strom)"
+        report.udpPath != null -> report.udpPath
+        report.tcpPath != null -> report.tcpPath
+        report.path == "direct" -> "QUIC-Strom (direkt)"
+        report.path == "relay" -> "über Relay (QUIC-Strom)"
+        else -> null
+    }
+
+    /** „Bildweg …“, why TCP is missing, and what became of the UDP pictures. */
+    fun parts(report: CarrierReport): List<String> {
+        val parts = ArrayList<String>()
+        way(report)?.let { parts.add("Bildweg $it") }
+        report.tcpFailure?.let { parts.add(it) }
+        val lost = report.udpLostPictures ?: return parts
+        parts.add("Verworfen: unvollständig (UDP) $lost")
+        parts.add("Verworfen: Kette unterbrochen (UDP) ${report.udpSkippedPictures ?: 0}")
+        parts.add(
+            "Wiederhergestellt (UDP) ${report.udpRecoveredPictures ?: 0} Bilder, " +
+                "${report.udpRecoveredPackets ?: 0} von ${report.udpLostPackets ?: 0} verlorenen Paketen",
+        )
+        return parts
     }
 }
 
@@ -87,9 +167,10 @@ object ScreenDelivery {
     /** The statistics texts of the desktop viewer for the info line; none before the host's statistics. */
     fun infoParts(report: DeliveryReport?, statsSeen: Boolean): List<String> {
         if (!statsSeen) return emptyList()
-        val running = report?.running ?: return listOf("Übertragung nicht gemeldet (ältere Version)")
+        val carrier = report?.let { ScreenCarrier.parts(it.carrier) }.orEmpty()
+        val running = report?.running ?: return listOf("Übertragung nicht gemeldet (ältere Version)") + carrier
         val rate = report?.let { measured(it) }?.let { "Datenrate $it" } ?: "Datenrate noch nicht gemessen"
-        return listOf("Übertragung ${shortName(running)}", rate)
+        return listOf("Übertragung ${shortName(running)}", rate) + carrier
     }
 }
 

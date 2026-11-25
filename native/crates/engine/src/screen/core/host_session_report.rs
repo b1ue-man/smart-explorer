@@ -21,6 +21,10 @@ impl Session<'_> {
         let mut stats = self.pipeline.second(self.connection);
         self.line
             .second(&self.pipeline, self.connection, &mut stats);
+        // The picture carriers (`video_transport.rs`): counters, carrier and
+        // what the link tasks queued for the viewer.
+        self.video.report(&mut stats);
+        self.video_frames().await?;
         let requested =
             crate::screen::core::chain_meter::lock(self.pipeline.chain_meter()).requested();
         self.handle.update(|view| {

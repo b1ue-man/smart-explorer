@@ -6,6 +6,8 @@ use super::super::cursor_overlay::{
     CursorPosition, CursorShape, CURSOR_POSITION, CURSOR_REQUEST, CURSOR_SHAPE,
 };
 use super::super::input_model::{decode_batch, encode_batch};
+use super::super::video_tcp_wire as tcp;
+use super::super::video_transport as video;
 use super::super::wire::{
     from_json, invalid, to_json, CONTROL_REQUEST, CONTROL_STATE, ERROR, FRAME_ACK, ICON_REPLY,
     ICON_REQUEST, INPUT, KEYFRAME_REQUEST, LIST_WINDOWS, PING, PONG, PRESENTED, PREVIEW_ACK,
@@ -87,6 +89,14 @@ pub fn encode_viewer_frame(frame: &ViewerFrame) -> io::Result<(u8, Vec<u8>)> {
             result.validate()?;
             (probe::PROBE_RESULT, result.encode())
         }
+        ViewerFrame::FrameLoss(loss) => (video::FRAME_LOSS, loss.encode()),
+        ViewerFrame::VideoOffer(offer) => {
+            offer.validate()?;
+            (video::VIDEO_OFFER, to_json(offer)?)
+        }
+        ViewerFrame::VideoReport(report) => (video::VIDEO_REPORT, to_json(report)?),
+        ViewerFrame::VideoTcpOffer(offer) => (tcp::VIDEO_TCP_OFFER, offer.encode()?),
+        ViewerFrame::VideoTcpResult(result) => (tcp::VIDEO_TCP_RESULT, result.encode()?),
     })
 }
 
@@ -183,6 +193,15 @@ pub fn decode_viewer_frame(tag: u8, payload: &[u8]) -> io::Result<ViewerFrame> {
             ViewerFrame::Remeasure
         }
         probe::PROBE_RESULT => ViewerFrame::ProbeResult(probe::ProbeResult::decode(payload)?),
+        video::FRAME_LOSS => ViewerFrame::FrameLoss(video::FrameLoss::decode(payload)?),
+        video::VIDEO_OFFER => {
+            let offer: video::VideoOffer = from_json(payload)?;
+            offer.validate()?;
+            ViewerFrame::VideoOffer(offer)
+        }
+        video::VIDEO_REPORT => ViewerFrame::VideoReport(from_json(payload)?),
+        tcp::VIDEO_TCP_OFFER => ViewerFrame::VideoTcpOffer(tcp::VideoTcpOffer::decode(payload)?),
+        tcp::VIDEO_TCP_RESULT => ViewerFrame::VideoTcpResult(tcp::VideoTcpResult::decode(payload)?),
         _ => return Err(invalid("unknown screen frame from the viewer")),
     })
 }

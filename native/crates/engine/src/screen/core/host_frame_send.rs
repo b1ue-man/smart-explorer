@@ -22,6 +22,22 @@ impl Pipeline {
         if frame.records.is_empty() {
             return Ok(Produced::Idle);
         }
+        // „UDP“ (`video_transport.rs`): the picture as datagrams when both
+        // sides read a carrier; a group keeps its kind of carrier.
+        let carrier = self.message_carrier(connection);
+        let kind = carrier.as_ref().map_or(
+            crate::screen::core::video_transport::video_sink::SinkKind::Stream,
+            |carrier| carrier.kind(),
+        );
+        if let Some(produced) = self.switch_carrier(connection, kind, frame.keyframe, frame_id) {
+            return Ok(produced);
+        }
+        if let Some(carrier) = carrier {
+            let picture = (frame, frame_id, capture_ts_us, size);
+            return self
+                .send_message(connection, carrier, picture, permit, work_epoch)
+                .await;
+        }
         let stale = Duration::from_micros(STALE_STREAM_US);
         // B-36: a new stream whose first frame is no key frame continues the
         // encoder's chain from the confirmed picture.
@@ -60,7 +76,7 @@ impl Pipeline {
                         self.key_gop = gop.header().gop_id;
                     }
                     self.continue_from = None;
-                    self.gop = Some(gop);
+                    self.gop = Some(PictureSink::Stream(Box::new(gop)));
                 }
                 _ if connection.close_reason().is_some() => return Ok(Produced::Closed),
                 // No free stream slot or credit yet: the frame is lost, the
@@ -71,7 +87,7 @@ impl Pipeline {
                 }
             }
         }
-        let Some(gop) = self.gop.as_mut() else {
+        let Some(PictureSink::Stream(gop)) = self.gop.as_mut() else {
             return Ok(Produced::Idle);
         };
         let gop_id = gop.header().gop_id;

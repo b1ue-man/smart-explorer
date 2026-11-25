@@ -327,6 +327,16 @@ impl ChainMeter {
             measured_kbps: None,
             measured_age_ms: None,
             delivery: None,
+            // The host session fills them (`video_host::VideoHost::report`).
+            udp_path: None,
+            udp_lost_pictures: None,
+            udp_skipped_pictures: None,
+            udp_recovered_pictures: None,
+            udp_lost_packets: None,
+            udp_recovered_packets: None,
+            tcp_path: None,
+            tcp_link: None,
+            tcp_failure: None,
         }
     }
 

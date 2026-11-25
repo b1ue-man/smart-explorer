@@ -33,6 +33,22 @@ fn delivery_task_android_bridge_parses_transport() {
         ..ChainReport::default()
     });
     assert!(host_runs_delivery(&stats));
+    // The carrier fields reach the app in camelCase (`ScreenViewDelivery.kt`).
+    let fields = super::super::json_shapes::stats_fields(&HostStats {
+        chain: Some(ChainReport {
+            udp_path: Some("direct".into()),
+            udp_lost_pictures: Some(3),
+            tcp_path: Some("relay".into()),
+            tcp_failure: Some("TCP direkt nicht möglich: x".into()),
+            ..ChainReport::default()
+        }),
+        ..HostStats::default()
+    });
+    assert_eq!(fields["path"], "direct");
+    assert_eq!(fields["chain"]["udpPath"], "direct");
+    assert_eq!(fields["chain"]["udpLostPictures"], 3);
+    assert_eq!(fields["chain"]["tcpPath"], "relay");
+    assert_eq!(fields["chain"]["tcpFailure"], "TCP direkt nicht möglich: x");
 }
 
 #[test]

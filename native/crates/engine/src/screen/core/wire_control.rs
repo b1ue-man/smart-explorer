@@ -2,8 +2,9 @@
 //! `SET_MODE`, `INPUT`, `FRAME_ACK`, `KEYFRAME_REQUEST`, `PING`,
 //! `LIST_WINDOWS`, `SNAPSHOT`, `CONTROL_REQUEST`, `PREVIEW_ACK`,
 //! `CURSOR_REQUEST`, `RATE_CEILING` (8 bytes), `FRAME_TIMING` (JSON,
-//! `frame_timing.rs`) and `SET_DELIVERY`, `REMEASURE`, `PROBE_RESULT`
-//! (`bandwidth_probe.rs`); the host sends `STATE`, `PONG`, `WINDOWS`, `STATS`,
+//! `frame_timing.rs`), `SET_DELIVERY`, `REMEASURE`, `PROBE_RESULT`
+//! (`bandwidth_probe.rs`) and `FRAME_LOSS`, `VIDEO_OFFER`, `VIDEO_REPORT`
+//! (`video_transport.rs`, whose `VIDEO_ANSWER` is no `HostFrame`); the host sends `STATE`, `PONG`, `WINDOWS`, `STATS`,
 //! `CONTROL_STATE`, `ERROR`, `CURSOR_SHAPE` and `CURSOR_POSITION` (the
 //! pointer overlay of `cursor_overlay.rs`).
 //! Frames that come with every picture or input event have a fixed
@@ -389,6 +390,15 @@ pub enum ViewerFrame {
     Remeasure,
     /// `PROBE_RESULT`: what the viewer counted during a probe stream.
     ProbeResult(super::bandwidth_probe::ProbeResult),
+    /// `FRAME_LOSS`, `VIDEO_OFFER`, `VIDEO_REPORT` (`video_transport.rs`):
+    /// only to a host that named `video_carriers` in its hello.
+    FrameLoss(super::video_transport::FrameLoss),
+    VideoOffer(super::video_transport::VideoOffer),
+    VideoReport(super::video_transport::VideoReport),
+    /// `VIDEO_TCP_OFFER`, `VIDEO_TCP_RESULT` (`video_tcp_wire.rs`): only to
+    /// a host that named `video_tcp` in its hello.
+    VideoTcpOffer(super::video_tcp_wire::VideoTcpOffer),
+    VideoTcpResult(super::video_tcp_wire::VideoTcpResult),
 }
 
 /// Viewer to host: `u64` big-endian, the ceiling in bit/s, 0 automatic.

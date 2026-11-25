@@ -465,6 +465,7 @@ pub async fn serve(context: HostContext, viewer: ProvenViewer) -> io::Result<()>
     );
     session.set_control_parts(hello.control_parts == Some(super::control_parts::CONTROL_PARTS_V1));
     session.line = super::bandwidth_probe::LineLink::for_hello(&hello);
+    session.video = super::video_transport::video_host::VideoHost::for_hello(&hello);
     session.run(recv, max_fps).await;
     Ok(())
 }

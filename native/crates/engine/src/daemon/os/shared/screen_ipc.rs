@@ -426,14 +426,20 @@ fn relay_input(input: &mut TcpStream, frames: &mpsc::Sender<Option<reconnect::Re
         let Ok(frame) = decode_viewer_frame(*wire_tag, body) else {
             break;
         };
-        // Pictures are acknowledged, `PING` is sent and a bandwidth probe is
-        // answered by the worker itself.
+        // Pictures are acknowledged, `PING` is sent, a bandwidth probe is
+        // answered and the picture datagrams are negotiated and reported by
+        // the worker itself (`video_transport.rs`).
         let own = matches!(
             frame,
             ViewerFrame::FrameAck(_)
                 | ViewerFrame::PreviewAck(_)
                 | ViewerFrame::Ping(_)
                 | ViewerFrame::ProbeResult(_)
+                | ViewerFrame::FrameLoss(_)
+                | ViewerFrame::VideoOffer(_)
+                | ViewerFrame::VideoReport(_)
+                | ViewerFrame::VideoTcpOffer(_)
+                | ViewerFrame::VideoTcpResult(_)
         );
         if !own
             && frames

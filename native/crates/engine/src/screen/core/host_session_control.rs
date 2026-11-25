@@ -181,6 +181,12 @@ impl Session<'_> {
                 self.line
                     .on_frame(frame, &mut self.pipeline, self.connection)
             }
+            // The picture datagrams under „UDP“ (`video_transport.rs`).
+            frame @ (ViewerFrame::FrameLoss(_)
+            | ViewerFrame::VideoOffer(_)
+            | ViewerFrame::VideoReport(_)
+            | ViewerFrame::VideoTcpOffer(_)
+            | ViewerFrame::VideoTcpResult(_)) => self.video.on_frame(frame, &mut self.pipeline),
         }
     }
 

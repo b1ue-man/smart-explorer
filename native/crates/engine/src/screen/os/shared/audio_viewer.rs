@@ -182,11 +182,30 @@ impl Drop for RelayGuard {
 
 /// Daemon of the viewer: forwards the sound datagrams of `connection` to
 /// the viewer window as `(tag, packet)`; a full queue drops the packet.
-pub fn relay(connection: &Connection, out: &mpsc::Sender<(u8, Vec<u8>)>, tag: u8) -> RelayGuard {
+/// `feed`: the sound datagrams of a session whose picture task reads the
+/// connection's datagrams (`ViewerSession::take_audio`, the pictures as
+/// datagrams under „UDP“); only one reader gets each datagram.
+pub fn relay(
+    connection: &Connection,
+    feed: Option<mpsc::Receiver<bytes::Bytes>>,
+    out: &mpsc::Sender<(u8, Vec<u8>)>,
+    tag: u8,
+) -> RelayGuard {
     let connection = connection.clone();
     let out = out.clone();
     RelayGuard(tokio::spawn(async move {
-        while let Ok(datagram) = connection.read_datagram().await {
+        let mut feed = feed;
+        loop {
+            let datagram = match feed.as_mut() {
+                Some(feed) => match feed.recv().await {
+                    Some(datagram) => datagram,
+                    None => return,
+                },
+                None => match connection.read_datagram().await {
+                    Ok(datagram) => datagram,
+                    Err(_) => return,
+                },
+            };
             if !AudioPacket::is_audio(&datagram) {
                 continue;
             }

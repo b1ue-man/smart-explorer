@@ -288,6 +288,8 @@ impl PipelineActor {
         if std::mem::take(&mut self.pending.second) {
             self.facts.stats = p.second(&self.connection);
         }
+        // The viewer's `FRAME_LOSS` (`host_pipeline_video.rs`).
+        p.apply_video_events();
         while let Some(receipt) = self.pending.receipts.pop_front() {
             match receipt {
                 Receipt::Ack(ack, arrived) => {

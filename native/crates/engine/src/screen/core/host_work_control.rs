@@ -3,6 +3,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::Notify;
 
+use crate::screen::core::video_transport::video_route::VideoRoute;
+
 #[derive(Default)]
 pub(super) struct WorkControl {
     epoch: AtomicU64,
@@ -12,8 +14,13 @@ pub(super) struct WorkControl {
     /// between its pieces (Codex 5/12: a lowered ceiling waited for the
     /// running picture).
     ceiling: Arc<AtomicU64>,
+    /// The picture datagrams' state the session shares (`video_route.rs`).
+    video: Arc<VideoRoute>,
 }
 impl WorkControl {
+    pub(super) fn video(&self) -> &Arc<VideoRoute> {
+        &self.video
+    }
     pub(super) fn set_live_ceiling(&self, ceiling: Option<u64>) {
         self.ceiling.store(ceiling.unwrap_or(0), Ordering::Release);
     }

@@ -271,6 +271,12 @@ impl Outbox {
         self.budget.set_rate(rate);
     }
 
+    /// A frame is half written on the stream (pieces of a frame not sent in
+    /// parts): no other frame may go now.
+    pub(super) fn mid_frame(&self) -> bool {
+        self.writing.is_some() && !self.parts
+    }
+
     pub(super) fn waiting(&self) -> bool {
         self.writing.is_some() || !self.held.is_empty() || !self.behind.is_empty()
     }

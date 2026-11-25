@@ -95,6 +95,8 @@ pub mod host_worker_main;
 pub mod indicator;
 #[path = "shared/synthetic_backend.rs"]
 pub mod synthetic_backend;
+#[path = "shared/video_tcp_link.rs"]
+pub mod video_tcp_link;
 // SCR-M6: key codes of the desktop hosts' input (plain tables).
 #[cfg_attr(not(any(windows, target_os = "linux")), allow(dead_code))]
 #[path = "shared/input_keys.rs"]
@@ -113,6 +115,10 @@ mod worker_lifetime;
 // Plan 2026-11-17 P9 „Audio“: capture process, datagrams, playback.
 #[path = "shared/audio.rs"]
 pub mod audio;
+#[path = "shared/video_tcp_carrier.rs"]
+pub mod video_tcp_carrier;
+#[path = "shared/video_udp.rs"]
+pub mod video_udp;
 
 #[cfg(all(test, any(windows, target_os = "linux")))]
 #[path = "native_ffi/batches_capture_codec_task_tests.rs"]
@@ -450,29 +456,9 @@ pub fn host_indicator(registry: &Arc<ScreenRegistry>) -> Arc<dyn SessionIndicato
     Arc::new(indicator::DesktopIndicator::new(registry))
 }
 
-/// The source a host process opened, where its input points (SCR-M6); the
-/// Wayland portal session keeps its own.
-#[cfg(windows)]
-fn note_input_target(source: &crate::screen::core::window_list::SourceId) {
-    input_send::set_target(source);
-}
-
-#[cfg(target_os = "linux")]
-fn note_input_target(source: &crate::screen::core::window_list::SourceId) {
-    x11_input::set_target(source);
-}
-
-#[cfg(not(any(windows, target_os = "linux")))]
-fn note_input_target(_source: &crate::screen::core::window_list::SourceId) {}
-
-/// Enables PipeWire DMA-BUF offers in the host worker process (BK8b, W2).
-#[cfg(target_os = "linux")]
-fn enable_gpu_pictures() {
-    pipewire_stream::dmabuf::enable_gpu_pipeline(true);
-}
-
-#[cfg(not(target_os = "linux"))]
-fn enable_gpu_pictures() {}
+#[path = "worker_hooks.rs"]
+mod worker_hooks;
+use worker_hooks::{enable_gpu_pictures, note_input_target};
 
 #[cfg(target_os = "android")]
 pub fn host_indicator(registry: &Arc<ScreenRegistry>) -> Arc<dyn SessionIndicator> {
