@@ -13,6 +13,7 @@ use std::net::{Shutdown, TcpListener};
 use std::sync::{Arc, Mutex};
 
 mod access;
+mod address_services;
 #[cfg(test)]
 mod binding_rate_state_tests;
 mod bindings;
@@ -22,6 +23,8 @@ mod direct_presence;
 mod direct_validation;
 mod discovery;
 mod discovery_state;
+mod firewall_hook;
+mod firewall_ports;
 mod handshake_slots;
 mod hello_session;
 mod idle;
@@ -64,6 +67,8 @@ mod signal_stream;
 mod state;
 #[cfg(test)]
 mod state_transition_tests;
+mod stun;
+mod tcp_reflect;
 mod tracked_direct;
 #[cfg(test)]
 mod tracked_direct_hello_tests;
@@ -89,12 +94,15 @@ fn send(writer: &Writer, message: &Out) -> bool {
 }
 
 fn main() {
-    let options = match config::Options::from_env_and_args() {
-        Ok(Some(options)) => options,
-        Ok(None) => {
+    let options = match config::Command::from_env_and_args() {
+        Ok(config::Command::Serve(options)) => options,
+        Ok(config::Command::Help) => {
             println!("{}", config::HELP);
             return;
         }
+        // The pre-start step of a hardened systemd service (`firewall_hook`).
+        Ok(config::Command::AdmitFirewall(options)) => firewall_hook::admit_and_exit(options),
+        Ok(config::Command::InstallFirewallHook { unit }) => firewall_hook::install_and_exit(&unit),
         Err(error) => fatal(&error),
     };
     let bind = options.bind.to_string();
@@ -109,6 +117,14 @@ fn main() {
         }
         _ => None,
     };
+    // The server admits its own ports in the host firewall itself (user
+    // 2026-11-25: „SE MUSS ES MACHEN! AUTOMATISCH!“), or a hardened service's
+    // pre-start step did as root; it never stops over it.
+    firewall_hook::admit_at_start(&firewall_ports::server_ports(
+        options.bind,
+        relay_address,
+        tls.is_some(),
+    ));
     let mut initial_state = State::default();
     initial_state.policy = state::ServerPolicy {
         limits: options.limits,
@@ -189,6 +205,8 @@ fn main() {
     }
     // Whether QAD is reachable from outside, judged from arriving devices.
     qad_reach::start(state.clone());
+    // TCP reflector and STUN for direct device connections; never fatal.
+    address_services::start(&options.tcp_reflect, &options.stun);
     let timing = SignalTiming::new(keepalive);
     let connections = ConnectionLimiter::from_limits(&options.limits);
     let handshakes = HandshakeSlots::from_limits(&options.limits);

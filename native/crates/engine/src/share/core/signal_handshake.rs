@@ -31,6 +31,8 @@ pub(super) struct SignalCapabilities {
     /// The server's QAD self-check (`qad_status_v1`); `None` from a server
     /// without it.
     pub(super) server_qad: Option<ServerQadStatus>,
+    /// The server's TCP reflector and STUN ports (`address_services.rs`).
+    pub(super) address_services: super::address_services::AddressServicePorts,
 }
 
 #[derive(Deserialize)]
@@ -139,6 +141,9 @@ pub(super) fn parse_hello_ok(line: &str) -> io::Result<SignalCapabilities> {
                 idle_keepalive: has(IDLE_KEEPALIVE_CAPABILITY),
                 key_login: has(KEY_LOGIN_CAPABILITY),
                 server_qad: qad.as_ref().map(ServerQadStatus::from),
+                address_services: super::address_services::AddressServicePorts::from_capabilities(
+                    &capabilities,
+                ),
             })
         }
         SrvMsg::Error { scope, msg } => Err(eio(format!("{scope}: {msg}"))),

@@ -3,6 +3,8 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
+use crate::address_services::{plan, ServicePlan};
+use crate::firewall_hook::{unit_name, ADMIT_FLAG, DEFAULT_UNIT, INSTALL_FLAG};
 use crate::limits::ServerLimits;
 
 pub(super) const HELP: &str = "se-share-server [IP:PORT] [--tls-cert CERT.pem --tls-key KEY.pem]\n\
@@ -15,7 +17,77 @@ pub(super) const HELP: &str = "se-share-server [IP:PORT] [--tls-cert CERT.pem --
     also admits apps up to v0.5.169 without key login (compatibility mode).\n\
     Limits: SE_SHARE_MAX_CONNECTIONS[_PER_SOURCE|_PER_NETWORK],\n\
     SE_SHARE_MAX_HANDSHAKES[_PER_SOURCE|_PER_NETWORK],\n\
-    SE_SHARE_MAX_CLIENTS[_PER_SOURCE|_PER_NETWORK|_PER_KEY].";
+    SE_SHARE_MAX_CLIENTS[_PER_SOURCE|_PER_NETWORK|_PER_KEY].\n\
+    Address services: SE_SHARE_TCP_REFLECT_BIND (TCP reflector, port 51823) and\n\
+    SE_SHARE_STUN_BIND (STUN, UDP 3478) beside the signaling IP; `off` disables one.\n\
+    Firewall: every start admits the listening ports in the host firewall (root, else sudo).\n\
+    --admit-firewall: only admit the ports of these settings, then exit 0 (the step\n\
+    systemd runs as root before each start of a hardened service).\n\
+    --install-firewall-hook [--unit UNIT]: as root (asks through sudo otherwise) add that\n\
+    step to the systemd service UNIT (default se-share-server.service) from its ExecStart.";
+
+/// What the command line asks for; `main` dispatches on it.
+pub(super) enum Command {
+    Help,
+    Serve(Options),
+    /// `--admit-firewall`: only admit the ports of these settings, then exit 0;
+    /// a settings error travels along, so that step logs it and still ends 0.
+    AdmitFirewall(Result<Options, String>),
+    /// `--install-firewall-hook [--unit UNIT]`, the unit name normalized.
+    InstallFirewallHook {
+        unit: String,
+    },
+}
+
+impl Command {
+    pub(super) fn from_env_and_args() -> Result<Self, String> {
+        let args: Vec<String> = std::env::args().skip(1).collect();
+        Self::parse(args, |name| match std::env::var(name) {
+            Ok(value) => Ok(Some(value)),
+            Err(std::env::VarError::NotPresent) => Ok(None),
+            Err(std::env::VarError::NotUnicode(_)) => Err(format!("{name} is not valid Unicode")),
+        })
+    }
+
+    pub(super) fn parse(
+        args: Vec<String>,
+        env: impl Fn(&str) -> Result<Option<String>, String>,
+    ) -> Result<Self, String> {
+        if args.iter().any(|arg| arg == "--help" || arg == "-h") {
+            return Ok(Self::Help);
+        }
+        if args.iter().any(|arg| arg == INSTALL_FLAG) {
+            // The server's own arguments come from the unit's ExecStart.
+            let mut unit: Option<String> = None;
+            let mut rest = args.into_iter().filter(|arg| arg != INSTALL_FLAG);
+            while let Some(arg) = rest.next() {
+                if arg != "--unit" {
+                    return Err(format!(
+                        "{INSTALL_FLAG} takes only --unit UNIT, not {arg}: it reads the server's arguments from the unit's ExecStart"
+                    ));
+                }
+                if unit.is_some() {
+                    return Err("--unit given twice".into());
+                }
+                unit = Some(value(&mut rest, &arg)?);
+            }
+            let unit = unit_name(unit.as_deref().unwrap_or(DEFAULT_UNIT))?;
+            return Ok(Self::InstallFirewallHook { unit });
+        }
+        if args.iter().any(|arg| arg == "--unit") {
+            return Err(format!("--unit only goes with {INSTALL_FLAG}"));
+        }
+        let admit = args.iter().any(|arg| arg == ADMIT_FLAG);
+        let args = args.into_iter().filter(|arg| arg != ADMIT_FLAG).collect();
+        match (Options::parse(args, env), admit) {
+            (Ok(None), _) => Ok(Self::Help),
+            (Ok(Some(options)), false) => Ok(Self::Serve(options)),
+            (Ok(Some(options)), true) => Ok(Self::AdmitFirewall(Ok(options))),
+            (Err(error), true) => Ok(Self::AdmitFirewall(Err(error))),
+            (Err(error), false) => Err(error),
+        }
+    }
+}
 
 pub(super) struct Options {
     pub(super) bind: SocketAddr,
@@ -27,18 +99,12 @@ pub(super) struct Options {
     pub(super) require_key_login: bool,
     pub(super) state_file: Option<PathBuf>,
     pub(super) limits: ServerLimits,
+    /// TCP address reflector and STUN responder (`address_services.rs`).
+    pub(super) tcp_reflect: ServicePlan,
+    pub(super) stun: ServicePlan,
 }
 
 impl Options {
-    pub(super) fn from_env_and_args() -> Result<Option<Self>, String> {
-        let args: Vec<String> = std::env::args().skip(1).collect();
-        Self::parse(args, |name| match std::env::var(name) {
-            Ok(value) => Ok(Some(value)),
-            Err(std::env::VarError::NotPresent) => Ok(None),
-            Err(std::env::VarError::NotUnicode(_)) => Err(format!("{name} is not valid Unicode")),
-        })
-    }
-
     fn parse(
         args: Vec<String>,
         env: impl Fn(&str) -> Result<Option<String>, String>,
@@ -86,6 +152,14 @@ impl Options {
         let bind = bind
             .parse::<SocketAddr>()
             .map_err(|error| format!("invalid signaling bind: {error}"))?;
+        let service = |name: &str, port: u16| -> Result<ServicePlan, String> {
+            Ok(plan(name, env(name)?.as_deref(), bind, port))
+        };
+        let tcp_reflect = service(
+            "SE_SHARE_TCP_REFLECT_BIND",
+            crate::tcp_reflect::DEFAULT_PORT,
+        )?;
+        let stun = service("SE_SHARE_STUN_BIND", crate::stun::DEFAULT_PORT)?;
         if cert.is_some() != key.is_some() {
             return Err(
                 "TLS requires both --tls-cert and --tls-key (or SE_SHARE_TLS_CERT/KEY)".into(),
@@ -153,6 +227,8 @@ impl Options {
             require_key_login: !allow_legacy_clients,
             state_file: state_file.map(PathBuf::from),
             limits,
+            tcp_reflect,
+            stun,
         }))
     }
 

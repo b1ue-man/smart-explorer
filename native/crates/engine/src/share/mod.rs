@@ -9,6 +9,11 @@ pub use einrichtung_modules::*;
 #[path = "verbinden_modules.rs"]
 mod verbinden_modules;
 pub use verbinden_modules::*;
+#[path = "direktweg_modules.rs"]
+mod direktweg_modules;
+use direktweg_modules::*;
+#[path = "core/address_services.rs"]
+pub mod address_services;
 #[path = "core/auth_penalty.rs"]
 mod auth_penalty;
 #[path = "core/authorization_policy.rs"]
@@ -292,7 +297,10 @@ mod lan_link_wire;
 #[cfg(windows)]
 #[path = "os/windows/lan_permission.rs"]
 mod lan_permission;
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
+#[path = "os/linux_os/lan_permission.rs"]
+mod lan_permission;
+#[cfg(not(any(windows, target_os = "linux")))]
 #[path = "os/shared/lan_permission_unavailable.rs"]
 mod lan_permission;
 #[path = "os/shared/lan_permission_job.rs"]
@@ -348,6 +356,8 @@ mod mount_lease_cleanup;
 mod mount_lease_client;
 #[path = "core/node.rs"]
 mod node;
+// The PQ-hybrid TLS provider, also for the direct TCP screen link.
+pub(crate) use node::pq_kx::share_crypto_provider;
 #[path = "core/node_accept.rs"]
 mod node_accept;
 #[path = "core/node_screen.rs"]
@@ -477,6 +487,8 @@ mod system;
 pub mod tcp_forward;
 #[path = "os/shared/tcp_pump.rs"]
 pub mod tcp_pump;
+#[path = "os/shared/tcp_reflect_client.rs"]
+pub mod tcp_reflect_client;
 #[path = "core/tcp_registry.rs"]
 pub mod tcp_registry;
 #[path = "os/shared/tcp_sockets.rs"]
@@ -593,6 +605,6 @@ mod storage_roots;
 #[path = "core/transfer_meter.rs"]
 mod transfer_meter;
 pub use service_routes::{
-    ConnectionRouteDiagnostics, DeviceRouteDiagnostics, RouteBudgetView, RouteMeasurementView,
-    ShareRouteSnapshot, ROUTE_PAYLOAD_MEASUREMENT_NOTE,
+    ConnectionRouteDiagnostics, DeviceRouteDiagnostics, DirectRetryView, RouteBudgetView,
+    RouteMeasurementView, ShareRouteSnapshot, ROUTE_PAYLOAD_MEASUREMENT_NOTE,
 };

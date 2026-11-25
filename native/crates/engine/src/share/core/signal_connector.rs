@@ -2,6 +2,7 @@ use std::io;
 
 use crossbeam_channel::{bounded, Receiver};
 
+use super::address_services::{STUN_CAPABILITY, TCP_REFLECT_CAPABILITY};
 use super::discovery_signal_types::DISCOVERY_EXCHANGE_CAPABILITY;
 use super::identity::ShareIdentity;
 use super::server_qad::QAD_STATUS_CAPABILITY;
@@ -49,11 +50,14 @@ fn connect_and_negotiate(server: &str, identity: &ShareIdentity) -> io::Result<N
                 IDLE_KEEPALIVE_CAPABILITY.to_string(),
                 KEY_LOGIN_CAPABILITY.to_string(),
                 QAD_STATUS_CAPABILITY.to_string(),
+                TCP_REFLECT_CAPABILITY.to_string(),
+                STUN_CAPABILITY.to_string(),
             ],
         },
     )?;
     let capabilities = await_hello_ok(&mut connection, identity)?;
     super::server_qad::record(capabilities.server_qad);
+    super::address_services::record(server, connection.label(), capabilities.address_services);
     if capabilities.key_login {
         connection.confirm_key_login();
     }

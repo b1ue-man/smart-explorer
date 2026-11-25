@@ -95,15 +95,17 @@ without a valid certificate for its name keeps the plaintext address.
 
 ## Ports and firewall
 
-`se-share-server` with the default bind `0.0.0.0:51820` uses three ports. Every
-firewall between the internet and the server has to admit all three, for IPv4 and
-for IPv6 when the server has an IPv6 address:
+`se-share-server` with the default bind `0.0.0.0:51820` listens on these ports. The
+internet has to reach all of them, for IPv4 and for IPv6 when the server has an IPv6
+address:
 
 | Port | Protocol | Purpose |
 | ---: | --- | --- |
 | 51820 | TCP | Signaling (TLS WebSocket `wss://host:51820`, or explicit plaintext) |
 | 51821 | TCP | Iroh relay (signaling port + 1, `SE_IROH_RELAY_BIND`) |
 | 7842 | UDP | QUIC address discovery (QAD, `SE_IROH_QAD_BIND`), only with TLS |
+| 51823 | TCP | TCP address reflector (`SE_SHARE_TCP_REFLECT_BIND`): the public TCP address of a device for direct screen TCP |
+| 3478 | UDP | STUN responder (`SE_SHARE_STUN_BIND`): the public UDP address of a device for direct screen UDP |
 
 Without UDP 7842 the server still works, but devices behind NAT learn no public
 address: connections across the internet then run over the relay instead of
@@ -111,52 +113,108 @@ directly (seen on 2026-11-17: the firewall dropped IPv4 QAD, two devices in
 different networks used only the relay; after opening the port they connected
 directly). The server reports this itself (section "QAD self-check" below).
 
-With other ports (another bind, `SE_IROH_RELAY_BIND`, `SE_IROH_QAD_BIND`) use those
-ports in the rules below. Behind a reverse proxy only UDP 7842 and the proxy's own
-ports must be open to the internet.
+**The server opens its ports in the host firewall itself** (source state 2026-11-25,
+`share-server/src/firewall_ports.rs`; not built, not run on a server yet). At every
+start it takes the ports it actually listens on (another bind, `SE_IROH_RELAY_BIND`,
+`SE_IROH_QAD_BIND`, `SE_IROH_QAD_DISABLE` and the binds of the TCP reflector and the
+STUN responder change the list; a listener on loopback stays out, so behind a reverse
+proxy only an explicit public QAD bind is admitted) and admits them:
 
-iptables (IPv4 with `iptables`, IPv6 with the same rules through `ip6tables`; save
-them with the distribution's tool, for example `netfilter-persistent save`):
+- Linux, in the firewall that filters input, in this order: ufw (`ufw allow
+  <port>/<proto> comment 'se-share-server: …'`), firewalld (each active zone and the
+  default zone, permanently and at runtime), nftables (an accept rule with the comment
+  `se-share-server` at the head of every input base chain that drops what no rule
+  accepts; until the next reload of the ruleset, renewed at every start) or legacy
+  iptables (`iptables`/`ip6tables -I INPUT … --comment se-share-server`; until the
+  next reboot, renewed at every start). Without root the server uses sudo: in a
+  terminal sudo asks for the password, without one it runs `sudo -n` (works where sudo
+  needs no password). Without root it asks nothing while no ufw, firewalld, nftables or
+  iptables service is visible. A hardened systemd service has neither root nor sudo;
+  there a pre-start step admits the ports as root (next subsection).
+- Windows: the program-bound inbound rules `se-share-server TCP` and
+  `se-share-server UDP` for this `se-share-server.exe` in every network profile. An
+  administrator or the service account sets them directly; a console without
+  administrator rights asks through the UAC prompt.
 
-```sh
-iptables  -A INPUT -p tcp -m multiport --dports 51820,51821 -j ACCEPT
-iptables  -A INPUT -p udp --dport 7842 -j ACCEPT
-ip6tables -A INPUT -p tcp -m multiport --dports 51820,51821 -j ACCEPT
-ip6tables -A INPUT -p udp --dport 7842 -j ACCEPT
-```
+The result is one line on standard error, for example
+`se-share-server: firewall: ufw: eingehend freigegeben 51820/tcp, 51821/tcp, 7842/udp`,
+or the reason with the exact ports that stayed closed (`…; nicht freigegeben: …`). A
+port that stays closed does not stop the server.
 
-nftables (the `inet` family covers IPv4 and IPv6; table and chain names of the
-host's own ruleset may differ, add the rule to the chain that filters input):
+### Hardened systemd service: the pre-start step
 
-```sh
-nft add rule inet filter input tcp dport { 51820, 51821 } accept
-nft add rule inet filter input udp dport 7842 accept
-```
+A service with `User=` (for example `se-share`), `NoNewPrivileges=true` and an empty
+`CapabilityBoundingSet=` is neither root nor able to use sudo, so its own start
+cannot change the firewall. systemd runs an `ExecStartPre=` command prefixed with
+`+` as root regardless of `User=` and of the sandbox (`ProtectSystem=`,
+`NoNewPrivileges=`, the capability set); the server uses that (source state
+2026-11-25, `share-server/src/firewall_hook.rs`; not built, not run on a server yet):
 
-ufw (applies to IPv4 and IPv6 while `IPV6=yes` in `/etc/default/ufw`):
+- **Installation** runs, as root, once per installation and again whenever the
+  service's `ExecStart` changes:
 
-```sh
-ufw allow 51820/tcp
-ufw allow 51821/tcp
-ufw allow 7842/udp
-```
+  ```text
+  sudo /opt/smart-explorer/share-server/se-share-server --install-firewall-hook
+  ```
 
-firewalld (IPv4 and IPv6; the zone of the public interface, here `public`):
+  Without root the command asks through sudo itself (in a terminal sudo asks for the
+  password, without one it runs `sudo -n`). `--unit UNIT` names another service
+  (default `se-share-server.service`; `.service` is appended when missing). The
+  command reads the service's program and arguments with
+  `systemctl show UNIT -p ExecStart --value` and writes
+  `/etc/systemd/system/UNIT.d/se-firewall.conf` (mode 0644):
 
-```sh
-firewall-cmd --permanent --zone=public --add-port=51820/tcp --add-port=51821/tcp --add-port=7842/udp
-firewall-cmd --reload
-```
+  ```ini
+  # Written by se-share-server --install-firewall-hook, rewritten by it when ExecStart changes.
+  # "+": systemd runs the step as root, without User= and the sandbox of the service;
+  # "-": a failure never stops the start. The step admits the server's listening
+  # ports in the host firewall and exits 0.
+  [Unit]
+  After=ufw.service firewalld.service nftables.service netfilter-persistent.service iptables.service ip6tables.service
 
-Windows (PowerShell as administrator; the rules apply to IPv4 and IPv6):
+  [Service]
+  ExecStartPre=+-/opt/smart-explorer/share-server/se-share-server <ExecStart arguments> --admit-firewall
+  ```
 
-```powershell
-New-NetFirewallRule -DisplayName "se-share-server TCP" -Direction Inbound -Protocol TCP -LocalPort 51820,51821 -Action Allow
-New-NetFirewallRule -DisplayName "se-share-server QAD" -Direction Inbound -Protocol UDP -LocalPort 7842 -Action Allow
-```
+  It writes the file only when its text changes and runs `systemctl daemon-reload`
+  when it wrote the file or systemd has not loaded it yet, then checks that systemd
+  lists it in `DropInPaths`. When the service is running, it also runs the step once
+  at once with the running process's arguments and environment
+  (`/proc/<MainPID>/cmdline` and `environ`), so the ports open without a restart.
+  The result is one line on standard output, beginning
+  `se-share-server: firewall: Vorstart-Schritt für UNIT eingerichtet` (or
+  `unverändert`); a failure ends with exit code 1.
+- **Every start**, also the restart after an update (the drop-in stays when the
+  program file is replaced): systemd first runs
+  `se-share-server <ExecStart arguments> --admit-firewall` as root. That step takes the
+  ports from the same arguments and the same `Environment=` settings as the server,
+  admits them as described above, logs its `se-share-server: firewall: …` line and
+  exits 0 in every case, also when admission or the settings fail. The `After=`
+  line lets the firewall services load their rules first; the server's nftables and
+  iptables rules would otherwise be lost to a ruleset loaded after it.
+- **The server process** then starts without rights. It finds its unit in
+  `/proc/self/cgroup` and reads the drop-in. When the drop-in carries the same
+  program and arguments as this start (or a `$` variable, which the start cannot
+  compare), it changes nothing and logs that the pre-start step is responsible.
+  Otherwise it tries the admission itself; when that is refused for lack of rights,
+  it logs one more line with the exact command that installs the step, for example
+  `se-share-server: firewall: se-share-server.service läuft ohne Root-Rechte und ohne
+  Vorstart-Schritt; einmal als root einrichten, danach gibt systemd die Ports vor jedem
+  Start frei: sudo /opt/smart-explorer/share-server/se-share-server
+  --install-firewall-hook`, or, for a drop-in with other arguments, `der
+  Vorstart-Schritt in /etc/systemd/system/se-share-server.service.d/se-firewall.conf
+  nutzt andere Argumente als dieser Start von se-share-server.service; neu einrichten:
+  sudo /opt/smart-explorer/share-server/se-share-server --install-firewall-hook`.
 
-A cloud security group or provider firewall in front of the server needs the same
-three entries (TCP 51820, TCP 51821, UDP 7842) for IPv4 and IPv6.
+`systemctl show` joins the arguments with single spaces, so an `ExecStart` argument
+that itself contains a blank reaches the drop-in as two words; the server's start
+then reports the drop-in as differing on every start. A service started as root
+needs no pre-start step: it admits its ports itself. Windows has no pre-start step;
+its behaviour above is unchanged (`--install-firewall-hook` ends there with an error,
+`--admit-firewall` admits and exits 0).
+
+A cloud security group or provider firewall in front of the server is not on the
+host; it needs the same entries for IPv4 and IPv6.
 
 ## Native TLS and Key Login
 
@@ -267,9 +325,9 @@ configuration. `se-share-server` answers it on the relay's IP at that port:
   independent of QAD and unchanged since before v0.5.196 (review 2026-11-14).
 - Behind a reverse proxy the proxy forwards TCP only, so QAD on UDP 7842 is not
   served through it. The operator then
-  - opens UDP 7842 in the firewall and in any cloud security group to the server
-    (IPv4 and IPv6 when QAD is dual-stack; commands per firewall in "Ports and
-    firewall" above), and
+  - binds QAD publicly (`SE_IROH_QAD_BIND=[::]:7842`; the server then admits UDP
+    7842 in the host firewall itself, "Ports and firewall" above) and opens it in
+    any cloud security group to the server (IPv4 and IPv6 when QAD is dual-stack), and
   - gives `se-share-server` its own certificate for the relay's host name. The client
     checks the QAD certificate against the host of the relay URL and against the
     pins, as on the relay path.
@@ -318,6 +376,49 @@ Rejected method: a probe of the server to its own public address. The server doe
 not know that address without an outside service, and a packet to an own address
 is delivered locally, past a cloud firewall and usually past the host firewall's
 loopback rule, so it would report "reachable" in exactly the case it has to find.
+
+## Address services for direct device connections (TCP reflector, STUN)
+
+Since the candidate after v0.5.204 (source state 2026-11-25, not run on a server
+yet) the screen stream's „Übertragung“ choices „TCP“ and „UDP“ connect the two
+devices directly, never over the relay (user 2026-11-25: „nicht über das relay,
+auch direkt. TCP und UDP, DIREKT.“). Behind NAT each device first learns the public
+address its NAT gives the one local port it uses; `se-share-server` answers that
+with two services beside signaling. Like QAD they improve the route and guard
+nothing: a service that cannot bind stays off with a log line, the server runs on.
+
+| Service | Default | Setting | Hello capability |
+| --- | --- | --- | --- |
+| TCP address reflector (`share-server/src/tcp_reflect.rs`) | TCP 51823 | `SE_SHARE_TCP_REFLECT_BIND` | `tcp_reflect_v1` |
+| STUN Binding responder, RFC 8489 (`share-server/src/stun.rs`) | UDP 3478 | `SE_SHARE_STUN_BIND` | `stun_v1` |
+
+- Bind: without a setting, the signaling IP with the default port; a signaling bind
+  on `0.0.0.0` becomes `[::]`. Where the OS keeps IPv6 and IPv4 apart (Windows, Linux
+  with `net.ipv6.bindv6only=1`) the service binds `0.0.0.0` on the same port as well;
+  a dual-stack Linux `[::]` takes IPv4 itself; a host without IPv6 gets `0.0.0.0`
+  alone. `IP:PORT` binds elsewhere, `off` turns the service off, an invalid value
+  leaves it off with its reason in the log.
+- Hello: a device offers both capabilities; `hello_ok` lists a running service bare
+  for its default port or as `tcp_reflect_v1:<port>` / `stun_v1:<port>`, and leaves
+  a service out that does not run. The device reaches the service at the host of the
+  Share address it is connected to (`share/core/address_services.rs`,
+  `server_address_services()`), so it must be reachable directly on that host:
+  behind a reverse proxy, bind it to a public address.
+- TCP reflector: every connection gets one line, `se-reflect 1 <ip>:<port>\n`, the
+  source address the server observed (an IPv4-mapped address as IPv4); then the
+  server holds the connection until the device closes it or sends anything, 15 s at
+  most. The device connects from the port it listens on for the direct TCP link and
+  keeps the connection while both devices dial each other (TCP simultaneous open),
+  so its NAT keeps that mapping. Limits: 512 connections at once, 32 per source (an
+  IPv4 address or an IPv6 /64), and per listening socket the accept rate of the
+  signaling listener (16/s per source with a burst of 32, 128/s in total with a burst
+  of 256). A connection beyond them is closed before any byte.
+- STUN: a Binding request (class request, method Binding, magic cookie `0x2112A442`,
+  a length that matches the datagram) gets a Binding success response with
+  XOR-MAPPED-ADDRESS and the request's transaction ID; the request's attributes are
+  ignored, every other datagram gets no answer. Answers per source and in total are
+  limited per socket like the accepts above. An answer (32 bytes for IPv4, 44 for IPv6) is at
+  most 2.2 times a minimal request, so the responder amplifies little.
 
 ## Temporary Discoverability and Background Pairing
 
@@ -790,10 +891,12 @@ connection once the consumer drains capacity.
 
 The accepted direct code authorizes the owner's `Standard Direkt` export scope.
 That scope is visible next to the code and can be changed before initiating the
-pairing or while the service is online. Windows firewall setup is attempted
-automatically;
-if a normal rule fails, the app asks Windows for elevated firewall permission
-through UAC.
+pairing or while the service is online. The device's own firewall is set up by se
+itself at installation, after updates and before the Share worker connects (see the
+section „Firewall“ under „Installieren“ in `README.md`): on Windows program-bound
+inbound TCP and UDP rules for `se.exe` and `Smart Explorer.exe` in every network
+profile, Public included, with the UAC prompt when rights are missing; on Linux se's
+fixed ports in ufw, firewalld, nftables or iptables, with the polkit dialog.
 
 ## Code renewal after removing a Direct contact (2026-11-07)
 

@@ -16,12 +16,14 @@ pub(super) use super::direct_messages::{
 pub(super) const CAPABILITY: &str = "tracked_direct_v1";
 
 /// Server capabilities in the order `hello_ok` lists them.
-const SUPPORTED_CAPABILITIES: [&str; 5] = [
+const SUPPORTED_CAPABILITIES: [&str; 7] = [
     CAPABILITY,
     super::discovery::CAPABILITY,
     super::idle::CAPABILITY,
     super::login::CAPABILITY,
     super::qad_reach::CAPABILITY,
+    super::tcp_reflect::CAPABILITY,
+    super::stun::CAPABILITY,
 ];
 
 pub(super) fn negotiate_capabilities(offered: Vec<String>) -> HashSet<String> {
@@ -31,11 +33,14 @@ pub(super) fn negotiate_capabilities(offered: Vec<String>) -> HashSet<String> {
         .collect()
 }
 
+/// The negotiated capabilities as `hello_ok` lists them; an address service
+/// appears only while it runs, with its port when not the default one
+/// (`address_services::announce`).
 pub(super) fn capability_list(negotiated: &HashSet<String>) -> Vec<String> {
     SUPPORTED_CAPABILITIES
         .iter()
         .filter(|capability| negotiated.contains(**capability))
-        .map(|capability| capability.to_string())
+        .filter_map(|capability| super::address_services::announce(capability))
         .collect()
 }
 
