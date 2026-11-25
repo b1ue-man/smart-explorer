@@ -229,7 +229,7 @@ impl Pipeline {
         }
         // Unthrottled, only the siblings' turns and the relay hold it back.
         let admit_bps = match self.rate.unthrottled() {
-            true => super::sender_budget::UNTHROTTLED_BPS,
+            true => crate::screen::core::sender_budget::UNTHROTTLED_BPS,
             false => target,
         };
         let Some(permit) = self.sender.admit(admit_bps, path, rtt_us, now, keyframe) else {
