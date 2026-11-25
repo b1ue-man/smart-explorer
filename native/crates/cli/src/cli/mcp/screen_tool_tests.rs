@@ -52,7 +52,7 @@ fn screen_task_mcp_screen_tool_schema() {
     );
     assert_eq!(
         properties["transport"]["enum"],
-        json!(["realtime", "reliable"])
+        json!(["udp", "tcp", "realtime", "reliable"])
     );
     for integer in ["max_edge", "max_bytes", "wait"] {
         assert_eq!(properties[integer]["type"], "integer", "{integer}");
@@ -148,7 +148,7 @@ fn mcp_task_screen_refuses_unnamed_devices_and_unknown_actions() {
     let error = call(json!({"action": "audio", "on": "yes"})).unwrap_err();
     assert!(error.contains("`on`"), "{error}");
     // `transport` refuses an unknown mode before it stores anything.
-    for wrong in [json!("udp"), json!("Reliable"), json!(true)] {
+    for wrong in [json!("quic"), json!("auto"), json!(true)] {
         let error = call(json!({"action": "transport", "transport": wrong})).unwrap_err();
         assert!(error.contains("`transport`"), "{error}");
     }

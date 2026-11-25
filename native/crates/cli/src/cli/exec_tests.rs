@@ -47,4 +47,6 @@ fn exec_shell_task_se_exec_sends_the_shell_choice() {
         assert_eq!(shell_choice(Some(kind), true), Ok(Some(shell)));
     }
     assert!(shell_choice(Some("bash"), true).is_err());
+    // A shell kind without `--shell` (argv after `--`) is refused.
+    assert!(shell_choice(Some("cmd"), false).is_err());
 }

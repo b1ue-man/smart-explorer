@@ -140,10 +140,11 @@ fn video_tcp_task_frames_round_trip_and_refuse_bad_candidates() {
         .collect();
     assert!(answer(widest).encode().unwrap().len() < MAX_CONTROL_BYTES);
 
-    // The hello: absent while `None`, `video_tcp: 1` once set, an older
-    // hello without the field reads as `None`.
+    // The hello: a current host announces `video_tcp: 1`; absent while
+    // `None`, and an older hello without the field reads as `None`.
     let mut hello = server_hello();
-    assert_eq!(hello.video_tcp, None);
+    assert_eq!(hello.video_tcp, Some(VIDEO_TCP_V1));
+    hello.video_tcp = None;
     assert!(!serde_json::to_string(&hello).unwrap().contains("video_tcp"));
     hello.video_tcp = Some(VIDEO_TCP_V1);
     let json = serde_json::to_value(&hello).unwrap();

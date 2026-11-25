@@ -307,7 +307,12 @@ async fn handle(stream: TcpStream, dialed: bool, context: &Context) {
     let mut link = match records::handshake(stream, conn, context.deadline).await {
         Ok(link) => link,
         Err(LinkError::Tls(error)) => return report(error.to_string()).await,
-        Err(_) => return,
+        // The connection was up and the TLS handshake broke off: the side
+        // that refused the other's key (Windows answers with a reset before
+        // the alert arrives) ends it, which is a TLS failure, not a timeout.
+        Err(LinkError::Io(error)) => return report(format!("TLS abgebrochen: {error}")).await,
+        Err(LinkError::Closed) => return report("TLS abgebrochen: geschlossen".into()).await,
+        Err(LinkError::Timeout) => return,
     };
     let event = match &*context.role {
         Role::Viewer { .. } => Event::Ready { link, dialed },

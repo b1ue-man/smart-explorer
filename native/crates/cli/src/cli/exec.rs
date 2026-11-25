@@ -176,6 +176,9 @@ fn shell_choice(
     shell_command: bool,
 ) -> Result<Option<crate::share::ExecShell>, String> {
     match kind {
+        // clap's `requires` does not hold `--shell-kind` to `--shell` when
+        // argv follows `--` (suite 2026-11-25): refused here.
+        Some(_) if !shell_command => Err("--shell-kind gilt nur zusammen mit --shell".into()),
         Some(kind) => crate::share::ExecShell::parse(kind).map(Some),
         None => Ok(shell_command.then_some(crate::share::ExecShell::Standard)),
     }

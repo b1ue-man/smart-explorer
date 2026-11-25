@@ -22,7 +22,7 @@ use crate::mobile::ApiError;
 use crate::screen::core::delivery::Delivery;
 use crate::screen::core::wire_control::{HostStats, ViewerFrame};
 
-const WHICH: &str = "„delivery“ ist realtime oder reliable.";
+const WHICH: &str = "„delivery“ ist udp oder tcp (gespeichert: realtime oder reliable).";
 
 /// `delivery` of `screen.viewOpen` and `screen.viewSetDelivery`; `None`
 /// without it.

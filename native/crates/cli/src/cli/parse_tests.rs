@@ -75,8 +75,8 @@ fn parses_shell_exec_without_argv() {
         }
         _ => panic!("wrong command"),
     }
-    let without_command = ["se", "exec", "c", "--shell-kind", "cmd", "--", "ver"];
-    assert!(Cli::try_parse_from(without_command).is_err());
+    // `--shell-kind` with argv after `--` is refused when the command runs
+    // (`exec::shell_choice`, test `exec_shell_task_se_exec_sends_the_shell_choice`).
     let unknown = ["se", "exec", "c", "--shell-kind", "bash", "--shell", "ls"];
     assert!(Cli::try_parse_from(unknown).is_err());
 }

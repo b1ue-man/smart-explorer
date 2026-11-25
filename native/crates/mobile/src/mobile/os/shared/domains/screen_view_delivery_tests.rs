@@ -18,10 +18,18 @@ fn delivery_task_android_bridge_parses_transport() {
         let args = json!({ "delivery": mode.key() });
         assert_eq!(delivery_arg(&args).unwrap(), Some(mode));
     }
-    for wrong in [json!("udp"), json!(""), json!("Reliable"), json!(1)] {
+    assert_eq!(
+        delivery_arg(&json!({ "delivery": "udp" })).unwrap(),
+        Some(Delivery::Realtime)
+    );
+    assert_eq!(
+        delivery_arg(&json!({ "delivery": "TCP" })).unwrap(),
+        Some(Delivery::Reliable)
+    );
+    for wrong in [json!("quic"), json!(""), json!("auto"), json!(1)] {
         let error = delivery_arg(&json!({ "delivery": wrong })).unwrap_err();
         assert_eq!(error.kind, "invalid", "{wrong}");
-        assert!(error.message.contains("realtime oder reliable"), "{wrong}");
+        assert!(error.message.contains("udp oder tcp"), "{wrong}");
     }
     // Only statistics that name the mode show a host that takes the frames.
     let mut stats = HostStats::default();
@@ -67,7 +75,7 @@ fn delivery_task_android_bridge_sends_only_to_a_host_that_runs_it() {
     assert_eq!(remeasure(&measure).unwrap(), json!({ "sent": false }));
     assert!(sent.lock().unwrap().is_empty());
     // A wrong mode is refused, a missing session is not found.
-    let wrong = json!({ "session": session.id, "delivery": "tcp" });
+    let wrong = json!({ "session": session.id, "delivery": "quic" });
     assert_eq!(set_delivery(&wrong).unwrap_err().kind, "invalid");
     let gone = json!({ "session": 4_000_000, "delivery": "reliable" });
     assert_eq!(set_delivery(&gone).unwrap_err().kind, "not_found");
