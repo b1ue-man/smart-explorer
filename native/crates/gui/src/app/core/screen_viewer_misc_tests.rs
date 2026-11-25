@@ -307,7 +307,7 @@ fn screen_task_viewer_toolbar_labels() {
         "Dekodierer: Automatisch",
         // User 2026-11-25: „Übertragung“, „Datenrate“ (formerly „Höchste
         // Datenrate“) and „Neu messen“.
-        "Übertragung: Echtzeit (wie UDP)",
+        "Übertragung: UDP",
         "Datenrate: Automatisch",
         "Neu messen",
     ] {

@@ -70,14 +70,14 @@ fn delivery_task_statistics_name_transport_and_measured_rate() {
     assert_eq!(
         stats_lines(&chain),
         [
-            "Übertragung Zuverlässig",
+            "Übertragung TCP",
             "Datenrate gemessen 48,2 Mbit/s (vor 3 s)"
         ]
     );
     let fresh = reported(Delivery::Realtime, None, None);
     assert_eq!(
         stats_lines(&fresh),
-        ["Übertragung Echtzeit", "Datenrate noch nicht gemessen"]
+        ["Übertragung UDP", "Datenrate noch nicht gemessen"]
     );
     let undated = reported(Delivery::Realtime, Some(1_500), None);
     assert_eq!(stats_lines(&undated)[1], "Datenrate gemessen 1,5 Mbit/s");
@@ -90,7 +90,7 @@ fn delivery_task_statistics_name_transport_and_measured_rate() {
     let lines = super::super::screen_stats_chain::chain_lines(&info(Some(limited)));
     for expected in [
         "Datenrate begrenzt durch Datenrate wie gemessen",
-        "Übertragung Zuverlässig",
+        "Übertragung TCP",
         "Datenrate gemessen 48,2 Mbit/s (vor 3 s)",
     ] {
         assert!(
@@ -116,25 +116,22 @@ fn delivery_task_statistics_name_transport_and_measured_rate() {
 #[test]
 fn delivery_task_toolbar_follows_the_hosts_report() {
     let (realtime, reliable) = (Delivery::Realtime, Delivery::Reliable);
-    assert_eq!(
-        list_text(realtime, None, false, false),
-        "Übertragung: Echtzeit (wie UDP)"
-    );
+    assert_eq!(list_text(realtime, None, false, false), "Übertragung: UDP");
     assert_eq!(
         list_text(reliable, Some(realtime), true, false),
-        "Übertragung: Zuverlässig (wie TCP) (wird angewendet …)"
+        "Übertragung: TCP (wird angewendet …)"
     );
     assert_eq!(
         list_text(reliable, Some(realtime), false, false),
-        "Übertragung: Zuverlässig (wie TCP) → läuft: Echtzeit"
+        "Übertragung: TCP → läuft: UDP"
     );
     assert_eq!(
         list_text(reliable, Some(reliable), false, false),
-        "Übertragung: Zuverlässig (wie TCP)"
+        "Übertragung: TCP"
     );
     assert_eq!(
         list_text(realtime, None, false, true),
-        "Übertragung: Echtzeit (wie UDP) → Gerät kennt die Wahl nicht"
+        "Übertragung: UDP → Gerät kennt die Wahl nicht"
     );
     // No statistics yet: nothing is known, nothing goes out.
     let waiting = Shared::new(false, 0).info().clone();

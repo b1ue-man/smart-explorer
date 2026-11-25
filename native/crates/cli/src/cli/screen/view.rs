@@ -2,16 +2,16 @@
 //! [--max-rate RATE] [--codec CODEC] [--decoder DECODER]
 //! [--decoder-library LIBRARY] [--display DISPLAY]
 //! [--virtual-display auto|off|request] [--display-size WxH|window]
-//! [--audio on|off] [--transport realtime|reliable] [--json]`
+//! [--audio on|off] [--transport udp|tcp] [--json]`
 //! and `se screen grid [--room RAUM] [--json]` (SCR-M7): open the desktop
 //! viewer window of the GUI program (`--screen-view <ziel-json>`,
 //! `--screen-grid [--room <id>]`, V5) as a process of its own and return.
 //! The window asks the device and its user itself. Output: `launched\t<pid>`
 //! or, with `--json`, `{"launched":true,"pid":<n>}`. Without the desktop app
 //! next to this `se` the command fails with „Desktop-App nicht installiert“.
-//! `--transport` stores „Übertragung“ (user 2026-11-25): `realtime`
-//! („Echtzeit (wie UDP)“, never chosen) or `reliable` („Zuverlässig (wie
-//! TCP)“); the window opens every session with it.
+//! `--transport` stores „Übertragung“ (user 2026-11-25): `udp` („UDP“, never
+//! chosen) or `tcp` („TCP“); the stored keys `realtime`/`reliable` are taken
+//! too; the window opens every session with it.
 //! „Monitor“ and „Auflösung“ changed later in the window's toolbar apply
 //! within the running session at a host that answers `live` (P9,
 //! `SET_DISPLAY`); an older host's session opens again with them.
@@ -121,9 +121,9 @@ pub(super) fn parse_audio(text: &str) -> Result<bool, String> {
     }
 }
 
-/// `--transport realtime|reliable` (user 2026-11-25).
+/// `--transport udp|tcp` (user 2026-11-25; `realtime`/`reliable` too).
 pub(super) fn parse_transport(text: &str) -> Result<Delivery, String> {
-    Delivery::parse(text).ok_or_else(|| format!("invalid transport: {text} (realtime or reliable)"))
+    Delivery::parse(text).ok_or_else(|| format!("invalid transport: {text} (udp or tcp)"))
 }
 
 /// `--display-size`: the viewer's window or a fixed size.

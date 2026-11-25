@@ -319,22 +319,24 @@ fn audio_task_cli_audio_option() {
     assert!(Wrapper::try_parse_from(["screen", "view", "Laptop", "--audio", "loud"]).is_err());
 }
 
-/// User 2026-11-25: `--transport realtime|reliable` takes „Übertragung“ by
-/// the key the viewer stores; anything else is refused before the window.
+/// User 2026-11-25: `--transport udp|tcp` takes „Übertragung“ (also by the
+/// key the viewer stores); anything else is refused before the window.
 #[test]
 fn delivery_task_cli_transport_option() {
     use super::parse_transport;
     use crate::app::screen_delivery::Delivery;
-    let view = ["screen", "view", "Laptop", "--transport", "reliable"];
+    let view = ["screen", "view", "Laptop", "--transport", "tcp"];
     let ScreenCommand::View(args) = Wrapper::try_parse_from(view).unwrap().command else {
         panic!("not the view command");
     };
     assert_eq!(args.transport, Some(Delivery::Reliable));
     assert_eq!(parse_transport("realtime"), Ok(Delivery::Realtime));
     assert_eq!(parse_transport(" reliable "), Ok(Delivery::Reliable));
-    for wrong in ["", "udp", "tcp", "Reliable", "auto"] {
+    assert_eq!(parse_transport("udp"), Ok(Delivery::Realtime));
+    assert_eq!(parse_transport("TCP"), Ok(Delivery::Reliable));
+    for wrong in ["", "quic", "auto", "relay"] {
         let error = parse_transport(wrong).unwrap_err();
-        assert!(error.contains("realtime or reliable"), "{wrong}: {error}");
+        assert!(error.contains("udp or tcp"), "{wrong}: {error}");
     }
     let refused = ["screen", "view", "Laptop", "--transport", "fast"];
     assert!(Wrapper::try_parse_from(refused).is_err());

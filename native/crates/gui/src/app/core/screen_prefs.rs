@@ -115,7 +115,7 @@ pub struct ViewerPrefs {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audio: Option<bool>,
     /// „Übertragung“ (user 2026-11-25, `screen_delivery.rs`); absent is
-    /// „Echtzeit (wie UDP)“. An older viewer reads the file without it and
+    /// „UDP“. An older viewer reads the file without it and
     /// leaves it out when it writes the file.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delivery: Option<crate::screen::core::delivery::Delivery>,

@@ -7,7 +7,11 @@ fn delivery_task_keys_labels_and_default() {
         assert_eq!(Delivery::parse(mode.key()), Some(mode));
         assert!(!mode.label().is_empty() && !mode.hint().is_empty());
     }
-    assert_eq!(Delivery::parse("udp"), None);
+    assert_eq!(Delivery::parse("udp"), Some(Delivery::Realtime));
+    assert_eq!(Delivery::parse("TCP"), Some(Delivery::Reliable));
+    assert_eq!(Delivery::Realtime.label(), "UDP");
+    assert_eq!(Delivery::Reliable.label(), "TCP");
+    assert_eq!(Delivery::parse("quic"), None);
     assert_eq!(
         serde_json::to_string(&Delivery::Reliable).unwrap(),
         "\"reliable\""

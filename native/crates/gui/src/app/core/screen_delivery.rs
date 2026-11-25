@@ -4,8 +4,8 @@
 //! reliability (TCP)“ and a bit rate „Auto-detect“ with „Restart
 //! Auto-Detection“).
 //!
-//! „Übertragung“ (`Delivery`: „Echtzeit (wie UDP)“, the default, or
-//! „Zuverlässig (wie TCP)“) is stored with the viewer's settings
+//! „Übertragung“ (`Delivery`: „UDP“, the default, or
+//! „TCP“) is stored with the viewer's settings
 //! (`viewer.json` key `delivery`, absent is „Echtzeit“) and is the same for
 //! the toolbar, `se screen view --transport realtime|reliable` and the MCP
 //! tool `screen` (action `transport`). Every session opens with it
@@ -38,7 +38,7 @@ pub fn stored() -> Option<Delivery> {
     *known.get_or_insert_with(|| super::screen_prefs::current().delivery)
 }
 
-/// „Übertragung“ in force; never chosen is „Echtzeit (wie UDP)“.
+/// „Übertragung“ in force; never chosen is „UDP“.
 pub fn delivery() -> Delivery {
     stored().unwrap_or_default()
 }
@@ -53,8 +53,8 @@ pub fn set_delivery(delivery: Delivery) -> io::Result<()> {
 /// The name of a mode in the statistics: „Echtzeit“, „Zuverlässig“.
 pub fn short_name(delivery: Delivery) -> &'static str {
     match delivery {
-        Delivery::Realtime => "Echtzeit",
-        Delivery::Reliable => "Zuverlässig",
+        Delivery::Realtime => "UDP",
+        Delivery::Reliable => "TCP",
     }
 }
 

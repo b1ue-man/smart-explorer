@@ -1,8 +1,8 @@
 //! „Übertragung“ and „Neu messen“ of the Android viewer (user 2026-11-25,
 //! `screen::core::delivery`; the desktop viewer's `screen_delivery.rs`):
 //!
-//! - `screen.viewOpen {…, delivery?}`: `realtime` („Echtzeit (wie UDP)“,
-//!   also without the field) or `reliable` („Zuverlässig (wie TCP)“) as
+//! - `screen.viewOpen {…, delivery?}`: `realtime` („UDP“,
+//!   also without the field) or `reliable` („TCP“) as
 //!   `StreamRequest::delivery`; anything else is refused.
 //! - `screen.viewSetDelivery {session, delivery}` → `{"switched": bool}`:
 //!   the core sends `SET_DELIVERY` to a host whose statistics name the mode

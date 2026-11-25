@@ -28,8 +28,8 @@ data class ViewerCodecChoice(
     val decoder: String = DECODER_AUTO,
     val maxRateBps: Long? = null,
     /**
-     * „Übertragung“: [DELIVERY_REALTIME] („Echtzeit (wie UDP)“, late pictures are given up) or [DELIVERY_RELIABLE]
-     * („Zuverlässig (wie TCP)“, every picture arrives). Live through `screen.viewSetDelivery`, never a new session.
+     * „Übertragung“: [DELIVERY_REALTIME] („UDP“, late pictures are given up) or [DELIVERY_RELIABLE]
+     * („TCP“, every picture arrives). Live through `screen.viewSetDelivery`, never a new session.
      */
     val delivery: String = DELIVERY_REALTIME,
     /**

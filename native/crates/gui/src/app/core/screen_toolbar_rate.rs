@@ -2,7 +2,7 @@
 //! `screen_delivery.rs`; „Datenrate“ was „Höchste Datenrate“ of plan
 //! 2026-11-14 „Bildkette“ B-09 and moved here from `screen_toolbar_codec.rs`).
 //!
-//! „Übertragung: Echtzeit (wie UDP) / Zuverlässig (wie TCP)“, each entry with
+//! „Übertragung: UDP / TCP“, each entry with
 //! its mode's hint as hover text; a host before „Übertragung“ greys both
 //! entries out with the reason. „Datenrate: Automatisch (gemessen: X
 //! Mbit/s) / Fester Wert“: under „Automatisch“ the host sends with the rate

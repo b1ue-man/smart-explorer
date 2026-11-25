@@ -57,7 +57,7 @@ pub(super) struct BenchArgs {
     /// The host's real capture instead of the test picture: monitor:<id> or window:<id>
     #[arg(long, value_name = "QUELLE", conflicts_with = "local")]
     source: Option<String>,
-    /// „Übertragung“: realtime (late pictures given up, default) or reliable
+    /// „Übertragung“: udp (UDP datagrams, late pictures given up, default) or tcp (TCP connection, every picture arrives)
     #[arg(long, value_name = "MODE", value_parser = super::view::parse_transport, conflicts_with = "local")]
     transport: Option<crate::screen::core::delivery::Delivery>,
     #[arg(long, help = "Print machine-readable JSON")]

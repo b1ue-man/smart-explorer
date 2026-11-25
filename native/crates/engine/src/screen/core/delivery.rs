@@ -2,13 +2,15 @@
 //! „Prefer speed (UDP)“ / „Prefer reliability (TCP)“, support.shadow.tech
 //! „Streaming Preferences Explained (TCP & UDP)“, read 2026-11-25):
 //!
-//! - `Realtime` („Echtzeit (wie UDP)“, the default as Shadow's): a picture
+//! - `Realtime` („UDP“, the default as Shadow's): pictures go as QUIC
+//!   DATAGRAMs where both sides announce `video_datagrams_v1`; a picture
 //!   the line could not deliver in time is given up; the host resets its
 //!   stream after the stale time of B-35 (`pacing::stale_after_us`), the
 //!   viewer skips it and the host goes on from the last picture the viewer
 //!   confirmed or from a key frame (B-36), as Moonlight and Sunshine drop an
 //!   unrecoverable frame and invalidate its references.
-//! - `Reliable` („Zuverlässig (wie TCP)“): every picture arrives; a slower
+//! - `Reliable` („TCP“): a reliable ordered stream (QUIC; over the relay
+//!   TCP itself): every picture arrives; a slower
 //!   line delays the picture instead of losing it and the stream catches
 //!   up („tcp holt auf auf Kosten von Echtzeit“).
 //!
@@ -40,8 +42,8 @@ impl Delivery {
     /// The German name in the viewers.
     pub fn label(self) -> &'static str {
         match self {
-            Self::Realtime => "Echtzeit (wie UDP)",
-            Self::Reliable => "Zuverlässig (wie TCP)",
+            Self::Realtime => "UDP",
+            Self::Reliable => "TCP",
         }
     }
 
@@ -49,16 +51,21 @@ impl Delivery {
     pub fn hint(self) -> &'static str {
         match self {
             Self::Realtime => {
-                "Ein Bild, das zu spät käme, wird verworfen; das Bild bleibt aktuell."
+                "Bilder als UDP-Datagramme ohne Wiederholung, mit Fehlerkorrektur; ein unvollständiges Bild wird verworfen, das Bild bleibt aktuell."
             }
             Self::Reliable => {
-                "Jedes Bild kommt an; bei langsamer Leitung wird es später, nicht verworfen."
+                "Zuverlässiger, geordneter Strom mit Wiederholung: jedes Bild kommt an; bei langsamer Leitung wird es später, nicht verworfen."
             }
         }
     }
 
+    /// The key, or `udp`/`tcp` (user 2026-11-25: „NUTZ das“).
     pub fn parse(text: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|mode| mode.key() == text.trim())
+        match text.trim().to_ascii_lowercase().as_str() {
+            "udp" => Some(Self::Realtime),
+            "tcp" => Some(Self::Reliable),
+            other => Self::ALL.into_iter().find(|mode| mode.key() == other),
+        }
     }
 }
 

@@ -46,7 +46,7 @@ object ScreenDelivery {
     const val UNKNOWN_REASON = "das Gerät kennt „Übertragung“ nicht (ältere Version) und überträgt wie bisher"
 
     fun label(mode: String): String =
-        if (mode == ViewerCodecChoice.DELIVERY_RELIABLE) "Zuverlässig (wie TCP)" else "Echtzeit (wie UDP)"
+        if (mode == ViewerCodecChoice.DELIVERY_RELIABLE) "TCP" else "UDP"
 
     fun hint(mode: String): String = if (mode == ViewerCodecChoice.DELIVERY_RELIABLE) {
         "Jedes Bild kommt an; bei langsamer Leitung wird es später, nicht verworfen."
@@ -55,7 +55,7 @@ object ScreenDelivery {
     }
 
     /** The name of a mode in the statistics: „Echtzeit“, „Zuverlässig“. */
-    fun shortName(mode: String): String = if (mode == ViewerCodecChoice.DELIVERY_RELIABLE) "Zuverlässig" else "Echtzeit"
+    fun shortName(mode: String): String = if (mode == ViewerCodecChoice.DELIVERY_RELIABLE) "TCP" else "UDP"
 
     /** kbit/s as Mbit/s with one decimal and the German comma (`48,2`). */
     fun mbitText(kbps: Long): String = String.format(Locale.ROOT, "%.1f", kbps / 1000.0).replace('.', ',')

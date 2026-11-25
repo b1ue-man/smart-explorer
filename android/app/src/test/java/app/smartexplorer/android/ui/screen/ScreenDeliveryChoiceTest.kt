@@ -31,8 +31,8 @@ class ScreenDeliveryChoiceTest {
 
     @Test
     fun delivery_task_android_texts_match_desktop() {
-        assertEquals("Echtzeit (wie UDP)", ScreenDelivery.label("realtime"))
-        assertEquals("Zuverlässig (wie TCP)", ScreenDelivery.label("reliable"))
+        assertEquals("UDP", ScreenDelivery.label("realtime"))
+        assertEquals("TCP", ScreenDelivery.label("reliable"))
         assertEquals("Jedes Bild kommt an; bei langsamer Leitung wird es später, nicht verworfen.", ScreenDelivery.hint("reliable"))
         assertEquals("Ein Bild, das zu spät käme, wird verworfen; das Bild bleibt aktuell.", ScreenDelivery.hint("realtime"))
         val body = Json.parseToJsonElement(
@@ -42,7 +42,7 @@ class ScreenDeliveryChoiceTest {
         assertEquals(DeliveryReport("reliable", 48_200, 3_400), report)
         assertEquals(report, ScreenSessionState().apply(ScreenViewEvent.Stats(7, body)).delivery)
         assertEquals(
-            listOf("Übertragung Zuverlässig", "Datenrate gemessen 48,2 Mbit/s (vor 3 s)"),
+            listOf("Übertragung TCP", "Datenrate gemessen 48,2 Mbit/s (vor 3 s)"),
             ScreenDelivery.infoParts(report, statsSeen = true),
         )
         assertEquals("Automatisch (gemessen: 48,2 Mbit/s)", ScreenDelivery.automaticText("Automatisch", report))
@@ -55,7 +55,7 @@ class ScreenDeliveryChoiceTest {
         assertEquals("das Gerät misst die Leitung nicht (ältere Version)", ScreenDelivery.measuredLine(older, statsSeen = true))
         // Measuring without a result yet; before the first statistics the line says nothing.
         val fresh = DeliveryReport("realtime", null, null)
-        assertEquals(listOf("Übertragung Echtzeit", "Datenrate noch nicht gemessen"), ScreenDelivery.infoParts(fresh, statsSeen = true))
+        assertEquals(listOf("Übertragung UDP", "Datenrate noch nicht gemessen"), ScreenDelivery.infoParts(fresh, statsSeen = true))
         assertEquals("Automatisch (noch nicht gemessen)", ScreenDelivery.automaticText("Automatisch", fresh))
         assertEquals(emptyList<String>(), ScreenDelivery.infoParts(null, statsSeen = false))
         assertEquals("wartet auf die erste Statistik des Geräts", ScreenDelivery.measuredLine(null, statsSeen = false))
