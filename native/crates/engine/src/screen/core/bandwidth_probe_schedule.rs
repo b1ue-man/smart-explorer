@@ -22,8 +22,12 @@ use super::RESULT_TIMEOUT_US;
 /// A route as the pipeline watches it: generation, pause epoch, class.
 pub type RouteKey = (u64, u64, Option<crate::share::route_state::RouteClass>);
 
-/// A new probe this long after the last one started.
-pub const PERIODIC_US: u64 = 60_000_000;
+/// A new probe this long after the last one started: five minutes. A probe
+/// fills the line for up to 1.5 s and delays the pictures meanwhile
+/// (measurement 2026-11-25 ASUS→Shadow over WLAN: latency p95 above 600 ms
+/// in the probe's second); a changed line shows earlier by its resets or
+/// backlog, a route change or „Neu messen“.
+pub const PERIODIC_US: u64 = 300_000_000;
 /// Stale resets within `RESET_WINDOW_US` that ask for a new probe.
 pub const STALE_RESETS: usize = 3;
 pub const RESET_WINDOW_US: u64 = 10_000_000;

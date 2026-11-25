@@ -21,7 +21,7 @@ fn measured(schedule: &mut ProbeSchedule, facts: &ProbeFacts) -> ProbeReason {
 
 /// User 2026-11-25 (Shadow's „Auto-detect“ and „Restart Auto-Detection“):
 /// the host measures right after the opening, after a route change, on
-/// „Neu messen“ and every 60 s; not while the route stops the application
+/// „Neu messen“ and every five minutes; not while the route stops the application
 /// or the session shows a preview.
 #[test]
 fn probe_task_schedule_opening_route_remeasure_and_periodic() {
@@ -73,7 +73,7 @@ fn probe_task_schedule_opening_route_remeasure_and_periodic() {
         ..facts(8 * S)
     };
     assert_eq!(measured(&mut schedule, &still), ProbeReason::Remeasure);
-    // Every 60 s after the last start.
+    // Every five minutes after the last start.
     let periodic = |now| ProbeFacts {
         route: Some((3, 1, None)),
         ..facts(now)

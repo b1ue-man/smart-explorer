@@ -172,8 +172,9 @@ impl Pipeline {
         if !self.rate.stream_admit(now, video) {
             return Ok(Produced::Idle);
         }
-        // Gemini 3/3: a viewer behind holds the next picture, unless unthrottled.
-        if !self.rate.unthrottled() && self.pacer.viewer_behind(now) {
+        // A viewer behind holds the next picture, also unthrottled (its decoder
+        // is hardware: 120 frames/s to one decoding 40 queued 3–7 s, 2026-11-25).
+        if self.pacer.viewer_behind(now) {
             self.pacer.on_budget_drop();
             return Ok(Produced::Dropped);
         }
