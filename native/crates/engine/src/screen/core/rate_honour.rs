@@ -349,6 +349,9 @@ impl RateController {
 
     /// What holds the target now (`model::classify`).
     pub fn limit(&self) -> super::model::RateLimit {
+        if let Some(limit) = self.unthrottled_limit() {
+            return limit;
+        }
         let state = self.honour.meter.state();
         super::model::classify(&LimitFacts {
             target_bps: self.target_bps(),

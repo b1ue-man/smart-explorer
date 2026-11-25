@@ -48,7 +48,8 @@ fn bildkette_task_chain_session_tick_no_longer_rounds_a_self_paced_rate() {
     assert!(produce.contains("cadence_fps: (1_000_000 / self.clock.interval_us().max(1))"));
     // Pacer and sender budget still decide before every credit.
     assert!(produce.contains("self.pacer.decide(now, target, path, rtt_us)"));
-    assert!(produce.contains("self.sender.admit(target, path, rtt_us, now, keyframe)"));
+    // Unthrottled (2026-11-25) the budget gets a rate that holds nothing back.
+    assert!(produce.contains("self.sender.admit(admit_bps, path, rtt_us, now, keyframe)"));
     let session = source("host_session.rs");
     // The end of a picture operation, not the next tick, starts the next.
     assert!(session.contains("if missed_tick || self.pipeline.chained()"));

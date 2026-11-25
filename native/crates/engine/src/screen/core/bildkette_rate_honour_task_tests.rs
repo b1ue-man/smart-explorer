@@ -231,8 +231,7 @@ fn bildkette_task_rate_encoders_open_at_session_target() {
 fn bildkette_task_rate_lossless_keyframe_not_stale_on_slower_link() {
     // A 20 MB lossless key frame, target 80 Mbit/s (4K60 table), a line of
     // 30 Mbit/s: it needs 5.3 s. Draining at the target declared it stale
-    // after 3 s (floor of one second plus 2 s at the target), every time
-    // (the reset loop of lossless sessions).
+    // after 2.08 s, every time (the reset loop of lossless sessions).
     let mut pacer = Pacer::default();
     pacer.set_timing(20_000, FRAME_US);
     pacer.on_frame_sent(SentFrame {
@@ -244,16 +243,16 @@ fn bildkette_task_rate_lossless_keyframe_not_stale_on_slower_link() {
     });
     let target = 80_000_000;
     let direct = PathKind::Direct;
-    let decide = |pacer: &Pacer| pacer.clone().decide(3_500_000, target, direct, 20_000);
-    assert_eq!(pacer.stale_limits(target).0, 3_000_000);
+    let decide = |pacer: &Pacer| pacer.clone().decide(3_000_000, target, direct, 20_000);
+    assert_eq!(pacer.stale_limits(target).0, 2_080_000);
     assert_eq!(decide(&pacer), PaceDecision::ResetStream);
     // At the measured rate it waits until the line could carry it.
     pacer.set_drain_rate(30_000_000);
-    assert_eq!(pacer.stale_limits(target).0, 1_000_000 + 5_333_333);
+    assert_eq!(pacer.stale_limits(target).0, 80_000 + 5_333_333);
     assert_ne!(decide(&pacer), PaceDecision::ResetStream);
     // A measured rate above the target drains at the target.
     pacer.set_drain_rate(200_000_000);
-    assert_eq!(pacer.stale_limits(target).0, 3_000_000);
+    assert_eq!(pacer.stale_limits(target).0, 2_080_000);
     // A stale stream halves the target once per stale time, and the rate
     // the pacer drains at stays the halved one when the application-
     // limited target grows back to its table.

@@ -49,6 +49,8 @@ pub mod queue;
 mod rate_windows;
 #[path = "rate_tiles.rs"]
 mod tiles_budget;
+#[path = "rate_unthrottled.rs"]
+mod unthrottled;
 pub use model::RateLimit;
 use model::{GrowthFacts, INTERVAL_GROWTH};
 use rate_windows::{DelayGradient, RateWindow, RATE_WINDOW_US};
@@ -118,8 +120,7 @@ pub struct AckSample {
 /// What the delay-based controller did with one acknowledgement.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DelaySignal {
-    /// Too few frames since the last reset; the target holds (it may grow
-    /// after the ramp).
+    /// Too few frames since the last reset; the target holds (may grow).
     Learning,
     /// No overuse; the target may grow.
     Increase,
@@ -146,8 +147,7 @@ pub struct RateController {
     interval_us: u64,
     encode_timing: EncodeTiming,
     probe: probe::Probe,
-    /// What the codec pairing carries (`codec_ceiling_bps`); `None` until the
-    /// pipeline names its codec.
+    /// What the codec pairing carries; `None` until the pipeline names it.
     codec_ceiling_bps: Option<u64>,
     /// „Höchste Datenrate“ of the viewer; `None` is „automatisch“.
     user_ceiling_bps: Option<u64>,
@@ -163,8 +163,11 @@ pub struct RateController {
     started: bool,
     /// The last halving by a stale stream and the stale time it had.
     stale_halved: Option<(u64, u64)>,
-    /// The last growth or decrease found the sender application-limited.
+    /// The last growth or decrease found the sender application-limited;
+    /// no estimate lowers the target (`rate_unthrottled.rs`).
     app_limited_now: bool,
+    unthrottled: bool,
+    measured_bps: Option<u64>,
     /// The honour of the session's encoder (`honour`, plan 2026-11-17).
     honour: honour::SessionHonour,
     /// Delivery rate, round-trip floor and refusals (`queue`, P9).
@@ -212,6 +215,8 @@ impl RateController {
             started: false,
             stale_halved: None,
             app_limited_now: false,
+            unthrottled: false,
+            measured_bps: None,
             honour: honour::SessionHonour::default(),
             queue: queue::QueueState::default(),
             tiles: Default::default(),
@@ -245,6 +250,9 @@ impl RateController {
 
     /// The link estimate L: the smaller of the delay and the loss target.
     fn current(&self) -> f64 {
+        if self.unthrottled {
+            return self.unthrottled_bps();
+        }
         self.delay_target.min(self.loss_target)
     }
 

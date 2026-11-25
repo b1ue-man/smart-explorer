@@ -71,6 +71,8 @@ pub mod chain_meter;
 // Measurement of 2026-11-18: the host's codec reasons in German.
 pub mod codec_reason_text;
 pub mod codec_registry;
+// User 2026-11-25: „Übertragung“ Echtzeit (UDP-like) / Zuverlässig (TCP-like).
+pub mod delivery;
 // Plan 2026-11-17 „Windows-Bild“ P3: run-time check of the codecs.
 pub mod codec_verdicts;
 pub mod codec_verify;

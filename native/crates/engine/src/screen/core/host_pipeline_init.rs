@@ -87,7 +87,38 @@ impl Pipeline {
         };
         pipeline.quality.size = pipeline.fitted_size();
         pipeline.resize();
+        // User 2026-11-25 („ich WILL NICHT DASS DU DROSSELST“): no estimate
+        // lowers the rate and no guard drops a picture; the „Übertragung“
+        // decides about late pictures (`delivery.rs`).
+        pipeline.rate.set_unthrottled(true);
+        pipeline.pacer.set_unthrottled(true);
         pipeline
+    }
+
+    /// The viewer's „Übertragung“ (`delivery.rs`).
+    pub fn set_delivery(&mut self, delivery: super::super::delivery::Delivery) {
+        if self.pacer.delivery() != delivery {
+            self.note_restart(&format!("delivery {}", delivery.key()));
+        }
+        self.pacer.set_delivery(delivery);
+    }
+
+    pub fn delivery(&self) -> super::super::delivery::Delivery {
+        self.pacer.delivery()
+    }
+
+    /// The line's available rate a measurement found (`bandwidth_probe`):
+    /// the encoder gets it from the next picture on.
+    pub fn set_measured_bps(&mut self, bps: u64) {
+        self.rate.set_measured(bps);
+        self.note_restart(&format!(
+            "the line was measured at {} kbit/s: the encoder gets it",
+            bps / 1000
+        ));
+    }
+
+    pub fn measured_bps(&self) -> Option<u64> {
+        self.rate.measured_bps()
     }
 
     pub fn hold_admission(

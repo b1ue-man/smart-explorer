@@ -64,17 +64,10 @@ pub fn guard_bytes(target_bps: u64, path: PathKind, rtt_us: u64) -> u64 {
 /// not from the moment it left, so a key frame larger than four round trips
 /// of the line (300 KB at 6 Mbit/s need 400 ms) would otherwise reset its
 /// own stream before its acknowledgement could arrive, every time.
-///
-/// Never below `STALE_STREAM_US` (2026-11-24): the picture stream is a
-/// reliable ordered stream, so a frame acknowledged late is a viewer that
-/// decoded slowly for a moment, not a lost one. The host log of a Windows
-/// viewer session showed resets at 249 ms after a decoding spike, each one
-/// a key frame and a lowered target; below a second a reset only cost.
 pub fn stale_after_us(srtt_us: u64, interval_us: u64, unacked_bytes: u64, target_bps: u64) -> u64 {
     let base = srtt_us
         .saturating_mul(STALE_RTT_FACTOR)
-        .max(interval_us.saturating_mul(STALE_FRAME_INTERVALS))
-        .max(STALE_STREAM_US);
+        .max(interval_us.saturating_mul(STALE_FRAME_INTERVALS));
     let drain = u128::from(unacked_bytes) * 8 * 1_000_000 / u128::from(target_bps.max(1));
     base.saturating_add(u64::try_from(drain).unwrap_or(u64::MAX))
 }
@@ -151,6 +144,10 @@ pub struct Pacer {
     /// waited for it (`viewer_behind`), and whether some still wait.
     presented_gap_us: u64,
     waiting_at_presented: bool,
+    /// No queue guard (user 2026-11-25, „ich WILL NICHT DASS DU DROSSELST“);
+    /// `delivery` alone decides about a picture the line delivers late.
+    unthrottled: bool,
+    delivery: super::delivery::Delivery,
 }
 
 impl Default for Pacer {
@@ -174,6 +171,8 @@ impl Default for Pacer {
             present_credit: false,
             presented_gap_us: 0,
             waiting_at_presented: false,
+            unthrottled: false,
+            delivery: super::delivery::Delivery::Realtime,
         }
     }
 }
@@ -199,17 +198,28 @@ impl Pacer {
         path: PathKind,
         rtt_us: u64,
     ) -> PaceDecision {
-        if let Some(oldest) = self.in_flight.front() {
+        // „Zuverlässig“ (user 2026-11-25): no picture is given up, the
+        // stream catches up on a slower line.
+        let reliable = self.unthrottled && self.delivery == super::delivery::Delivery::Reliable;
+        if let Some(oldest) = self.in_flight.front().filter(|_| !reliable) {
             let (stale_us, limit) = self.stale_limits(target_bps);
             if now_us.saturating_sub(oldest.sent_us) > stale_us || self.in_flight.len() >= limit {
                 return PaceDecision::ResetStream;
             }
-            let expected = if self.keyframe_due {
-                self.key_bytes
-            } else {
-                self.delta_bytes
+        }
+        // Unthrottled, only the relay's own queue bounds the bytes in flight
+        // (it drops above it per destination, NR N19).
+        let guard = match (self.unthrottled, path) {
+            (false, _) => Some(self.guard(target_bps, path, rtt_us)),
+            (true, PathKind::Relay) => Some(RELAY_GUARD_BYTES),
+            (true, PathKind::Direct) => None,
+        };
+        if let Some(guard) = guard.filter(|_| !self.in_flight.is_empty()) {
+            let expected = match self.keyframe_due {
+                true => self.key_bytes,
+                false => self.delta_bytes,
             };
-            if self.unacked_bytes + expected > self.guard(target_bps, path, rtt_us) {
+            if self.unacked_bytes + expected > guard {
                 self.dropped += 1;
                 return PaceDecision::DropBeforeEncode;
             }
@@ -217,6 +227,18 @@ impl Pacer {
         PaceDecision::Encode {
             keyframe: self.keyframe_due,
         }
+    }
+
+    pub fn set_unthrottled(&mut self, unthrottled: bool) {
+        self.unthrottled = unthrottled;
+    }
+
+    pub fn set_delivery(&mut self, delivery: super::delivery::Delivery) {
+        self.delivery = delivery;
+    }
+
+    pub fn delivery(&self) -> super::delivery::Delivery {
+        self.delivery
     }
 
     /// B-35: the smoothed round trip of the path and the frame interval of

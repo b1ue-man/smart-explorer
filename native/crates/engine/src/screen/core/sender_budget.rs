@@ -6,6 +6,10 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 const CONTROL_RESERVE: u64 = 256 * 1024;
+/// The rate `admit` sizes the bytes in flight with while the pipeline is
+/// unthrottled (user 2026-11-25): 1 Tbit/s, so only the siblings' turns
+/// and the relay's guard hold a picture back.
+pub const UNTHROTTLED_BPS: u64 = 1_000_000_000_000;
 /// A session that asked for credit within this time counts as sending.
 const ACTIVE_US: u64 = 1_000_000;
 static PEERS: OnceLock<Mutex<HashMap<String, Weak<Mutex<Budget>>>>> = OnceLock::new();

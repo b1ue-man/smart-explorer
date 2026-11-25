@@ -211,6 +211,9 @@ pub enum RateLimit {
     EncoderCeiling,
     /// The encoder does not keep the rate: se commands it less.
     EncoderIgnores,
+    /// The available rate the last measurement of the line found
+    /// (unthrottled, user 2026-11-25).
+    Measured,
 }
 
 impl RateLimit {
@@ -223,6 +226,7 @@ impl RateLimit {
             Self::CodecCeiling => "codec_ceiling",
             Self::EncoderCeiling => "encoder_ceiling",
             Self::EncoderIgnores => "encoder_ignores",
+            Self::Measured => "measured",
         }
     }
 }

@@ -172,9 +172,8 @@ impl Pipeline {
         if !self.rate.stream_admit(now, video) {
             return Ok(Produced::Idle);
         }
-        // Gemini 3/3: the viewer shows fewer pictures than it receives; the
-        // next one waits for it (no reset, the line's rate stays).
-        if self.pacer.viewer_behind(now) {
+        // Gemini 3/3: a viewer behind holds the next picture, unless unthrottled.
+        if !self.rate.unthrottled() && self.pacer.viewer_behind(now) {
             self.pacer.on_budget_drop();
             return Ok(Produced::Dropped);
         }
@@ -185,10 +184,7 @@ impl Pipeline {
         self.pacer.set_drain_rate(self.rate.sustained_bps());
         // P9: frames wait for at most what the line delivers over the
         // round-trip floor plus two frames (`rate_control::queue`).
-        // Frames the viewer still decodes are in flight too: the guard
-        // allows the rate over the smallest time to an acknowledgement, the
-        // viewer's decoding included (2026-11-24; over the path's round trip
-        // alone every picture larger than two average ones waited).
+        // The guard's window counts the viewer's decoding (2026-11-24).
         let base_rtt_us = self.rate.base_rtt_us(now).unwrap_or(rtt_us);
         let window_us = self
             .rate
@@ -231,7 +227,12 @@ impl Pipeline {
             self.chain_ready = true;
             return Ok(Produced::Idle);
         }
-        let Some(permit) = self.sender.admit(target, path, rtt_us, now, keyframe) else {
+        // Unthrottled, only the siblings' turns and the relay hold it back.
+        let admit_bps = match self.rate.unthrottled() {
+            true => super::sender_budget::UNTHROTTLED_BPS,
+            false => target,
+        };
+        let Some(permit) = self.sender.admit(admit_bps, path, rtt_us, now, keyframe) else {
             self.pacer.on_budget_drop();
             // Held back for a sibling session of the peer, not by the line.
             if !self.sender.refused_for_sibling() {
