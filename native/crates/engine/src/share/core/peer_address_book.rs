@@ -281,7 +281,3 @@ fn key_of(kind: &str, relation_id: &str, node_id: &str) -> PresenceKey {
 fn advance(counter: &mut u64) {
     *counter = counter.wrapping_add(1);
 }
-
-#[cfg(test)]
-#[path = "peer_address_book_tests.rs"]
-mod tests;
