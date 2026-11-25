@@ -44,6 +44,41 @@ pub struct RouteDiagnostics {
     pub status: RouteStatus,
     pub budget: RouteBudget,
     pub measurements: Vec<RouteMeasurement>,
+    /// Direct retries of a connection whose relay carries payload as the
+    /// marked fallback (`route_retry.rs`); absent otherwise and from older
+    /// writers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry: Option<DirectRetryFacts>,
+}
+
+/// What started the last direct retry (`route_retry.rs`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RetryCause {
+    /// The backoff timer (5 s, doubling up to 60 s).
+    Backoff,
+    /// This device's direct addresses changed.
+    LocalAddresses,
+    /// The peer published other direct addresses.
+    PeerAddresses,
+}
+
+/// Retry facts of one connection in relay fallback, taken when read.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct DirectRetryFacts {
+    /// Direct attempts started since the relay became the fallback.
+    pub attempts: u32,
+    /// Time until the next attempt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_attempt_in_ms: Option<u64>,
+    /// Wall-clock time of the next attempt (milliseconds since the Unix epoch).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_attempt_unix_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_cause: Option<RetryCause>,
+    /// Whether the last attempt started a NAT traversal round on the connection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_nat_round: Option<bool>,
 }
 
 // E30 (M15): the cost of the share encryption against the share throughput.

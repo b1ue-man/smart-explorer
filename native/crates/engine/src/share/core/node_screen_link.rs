@@ -19,7 +19,7 @@ use crate::share::keepalive::transport_purpose::{self, TransportPurpose};
 use crate::share::node::ShareIrohNode;
 use crate::share::profiles::{fingerprint_matches, ShareProfiles};
 use crate::share::service::ShareService;
-use crate::share::session::{endpoint_addr, relation_kind_id, PeerPrincipal};
+use crate::share::session::{relation_kind_id, PeerPrincipal};
 use crate::share::types::{PeerEndpoint, PeerOpenTarget, ShareAuthState, ShareScope};
 use crate::share::ShareIdentity;
 
@@ -76,8 +76,7 @@ impl ShareIrohNode {
                 return Err(eio("Iroh NodeId passt nicht zur gepinnten Identitaet").into());
             }
         }
-        let local_addr = self.routes.current(&self.endpoint);
-        let addr = endpoint_addr(&endpoint.presence, &local_addr, &self.transport_options)?;
+        let addr = self.dial_addr(endpoint).await?;
         let generation = self
             .policy
             .snapshot(PeerPrincipal::from_endpoint(endpoint))?;

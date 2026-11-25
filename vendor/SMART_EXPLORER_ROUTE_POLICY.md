@@ -610,3 +610,51 @@ order, `update_qnt_candidates`, `REACH_OUT` handling, 1-RTT processing and
 resumption defaults) and keep the gate at the earliest point that knows the
 remote key. Remove the patch when upstream offers a pre-registration key
 filter that also covers resumed handshakes.
+
+## Direct retry on one connection (2026-11-25)
+
+Finding (user 2026-11-25: „die verbindung geht andauernd über das relay … sie
+muss wenn möglich direkt gehen, das aktuallisieren der ip adresse muss
+automatisch laufen beim verbindungsaufbau“): one `smart-explorer/share-fs/3`
+connection stayed in relay fallback for hours ("Absolute Direktfrist
+abgelaufen"), while newer screen connections between the same two devices ran
+direct. Upstream starts NAT traversal rounds only on its own triggers (new
+candidates, a major network change, `check_connections` every 60 s,
+`trigger_holepunching` at most every 5 s) and only on the client connection
+with the lowest `ConnId` to a remote (`src/socket/remote_map/remote_state.rs`);
+other connections receive only the selected path, and addresses the remote
+published out of band are not used for them. Iroh offers no public call that
+opens a path or starts a round on one given connection; `Endpoint::network_change()`
+acts on every connection, and a throwaway probe connection would meet the
+peer's handshake limits and authentication penalties.
+
+Patch: `src/socket/remote_map/application_direct_retry.rs` adds
+`Endpoint::retry_direct_paths(connection, published)` → `DirectRetryOutcome
+{ started, server_side, path_opens, nat_round }`, dispatched as
+`RemoteStateMessage::RetryDirect` (`remote_state.rs`, exported through
+`remote_map.rs` and `endpoint.rs`). On a live client connection it (1) hands
+this device's current direct addresses to the connection as NAT traversal
+candidates, (2) adds the remote's published addresses as known paths
+(`Source::App`, as `connect` does), (3) opens the remote's selected IP path
+and each published address the remote did not announce in band, at most
+`MAX_RETRY_OPENS` = 8 per call, skipping loopback, unspecified and address
+families without an own candidate, an existing path getting a fresh proof
+under the application path policy instead of a second path, and (4) starts a
+NAT traversal round on that connection. A server connection reports
+`server_side` and changes nothing. Nothing here admits application data: the
+application's gate still needs a validated path, so the preservation
+guarantees of the sections above are unchanged.
+
+Caller: `native/crates/engine/src/share/core/route_retry.rs` (schedule 5, 10,
+20, 40 s, then every 60 s while the connection lives; at once, at most once per
+second, when this device's or the peer's published addresses change) through
+`route_retry_port.rs` and `share/os/shared/route_monitor_retry.rs`.
+
+Verification: one vendor test in `application_direct_retry.rs` and the remote
+task suite (`route_retry_task_tests.rs`, real QUIC over a private relay); no
+local build or test.
+
+Rebase contract: on a pin change, recheck that upstream still limits rounds to
+the lowest client `ConnId` and has no per-connection retry API; keep the four
+steps in this order. Remove the patch when upstream offers a per-connection
+path open plus NAT round that uses application-supplied addresses.

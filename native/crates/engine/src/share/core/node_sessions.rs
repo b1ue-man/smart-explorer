@@ -18,7 +18,7 @@ use super::io_deadline;
 use super::node::ShareIrohNode;
 use super::session::denial::client_rejection;
 use super::session::{
-    endpoint_addr, peer_denials, relation_kind_id, session_key, session_payload, transport_label,
+    peer_denials, relation_kind_id, session_key, session_payload, transport_label,
     AuthorizedDirectRepair,
 };
 use super::types::{PeerEndpoint, ShareEvent};
@@ -339,8 +339,6 @@ impl ShareIrohNode {
                 return Err(eio("Iroh NodeId passt nicht zur gepinnten Identitaet"));
             }
         }
-        let local_addr = self.routes.current(&self.endpoint);
-        let addr = endpoint_addr(&endpoint.presence, &local_addr, &self.transport_options)?;
         let (kind, relation_id) = relation_kind_id(endpoint);
         // Transfer v1: this client understands `Busy` replies, so a full host
         // answers at once instead of queueing its transfers.
@@ -384,6 +382,7 @@ impl ShareIrohNode {
             "peer session handshake",
             timeout,
             async {
+                let addr = self.dial_addr(endpoint).await?;
                 let connection =
                     super::keepalive::transport_purpose::connect_files(&self.endpoint, addr)
                         .await

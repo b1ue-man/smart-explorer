@@ -107,7 +107,14 @@ pub(super) fn dispatch_server_line(
             if is_discovery_error(line) {
                 discovery.handle_server_discovery_error(events);
             }
-            let outcome = handle_server_msg(line, auth, events, tracked_direct);
+            // Verified presences reach the dialing side at once, before the
+            // daemon stored them (`peer_address_book.rs`).
+            let (verified, relayed) = crossbeam_channel::unbounded();
+            let outcome = handle_server_msg(line, auth, &verified, tracked_direct);
+            for event in relayed.try_iter() {
+                configuration.iroh.peer_addresses.record_event(&event);
+                let _ = events.send(event);
+            }
             if outcome.verified_activity {
                 configuration
                     .iroh

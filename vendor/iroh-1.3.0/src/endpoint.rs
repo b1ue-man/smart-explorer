@@ -1,5 +1,5 @@
 // Smart Explorer P28b/V3 patch (2026-10-25), M6 remote key gate and resolver without public
-// fallback (2026-11-08); see vendor/SMART_EXPLORER_ROUTE_POLICY.md.
+// fallback (2026-11-08), direct retry (2026-11-25); see vendor/SMART_EXPLORER_ROUTE_POLICY.md.
 //! The [`Endpoint`] allows establishing connections to other iroh endpoints.
 //!
 //! The [`Endpoint`] is the main API interface to manage a local iroh endpoint.  It allows
@@ -53,8 +53,8 @@ use self::hooks::EndpointHooksList;
 pub use super::socket::{
     BindError, DirectAddr, DirectAddrType,
     remote_map::{
-        Path, PathEvent, PathEventStream, PathList, PathListIter, PathListStream, RemoteInfo,
-        TransportAddrInfo, TransportAddrUsage,
+        DirectRetryOutcome, Path, PathEvent, PathEventStream, PathList, PathListIter,
+        PathListStream, RemoteInfo, TransportAddrInfo, TransportAddrUsage,
     },
     transports::LocalTransportAddr,
 };
@@ -1677,6 +1677,24 @@ impl Endpoint {
             return None;
         }
         self.inner.remote_info(endpoint_id).await
+    }
+
+    /// Smart Explorer (2026-11-25): starts a fresh direct attempt on `connection`
+    /// with this device's current candidates, `remote_addrs` (the remote's
+    /// addresses as published out of band), the remote's selected IP path and a
+    /// NAT traversal round. Admits no application data; only a client
+    /// connection can open paths. Contract: `application_direct_retry.rs`.
+    pub async fn retry_direct_paths(
+        &self,
+        connection: &Connection,
+        remote_addrs: Vec<SocketAddr>,
+    ) -> DirectRetryOutcome {
+        if self.is_closed() {
+            return DirectRetryOutcome::default();
+        }
+        self.inner
+            .retry_direct(connection.remote_id(), connection.stable_id(), remote_addrs)
+            .await
     }
 
     // # Methods for less common state updates.

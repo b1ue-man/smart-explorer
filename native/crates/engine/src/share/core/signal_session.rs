@@ -216,6 +216,9 @@ impl Session {
                 return Some(end);
             }
         }
+        if let Some(end) = self.refresh_presence(connection, runtime, now) {
+            return Some(end);
+        }
         if self.schedule.tracked_due(now, mode) {
             if send_pending_tracked(
                 connection,
@@ -239,6 +242,26 @@ impl Session {
         {
             return Some(End::Reconnect);
         }
+        None
+    }
+
+    /// Sends a presence refresh round a connection setup asked for: the
+    /// peers' `watch_direct` again, then a heartbeat whose pong completes it
+    /// (`peer_address_book.rs`).
+    fn refresh_presence(
+        &mut self,
+        connection: &mut SignalConnection,
+        runtime: &mut WorkerRuntime<'_>,
+        now: Now,
+    ) -> Option<End> {
+        let nodes = runtime.iroh.peer_addresses.take_round()?;
+        let sent =
+            crate::share::signal_worker::publish::rewatch_direct(connection, runtime.auth, &nodes)
+                .and_then(|()| send_line(connection, &ClientMsg::Heartbeat));
+        if sent.is_err() {
+            return Some(End::Reconnect);
+        }
+        self.schedule.heartbeat_sent(now);
         None
     }
 

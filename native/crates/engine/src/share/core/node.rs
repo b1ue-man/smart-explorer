@@ -76,6 +76,8 @@ pub struct ShareIrohNode {
     pub(super) runtime_transition_slot: Arc<Semaphore>,
     pub(super) application_handshakes: HandshakeAdmission,
     pub(super) routes: EndpointRoutes,
+    /// Peers' freshly verified presences and refresh rounds (`peer_dial.rs`).
+    pub(super) peer_addresses: Arc<super::peer_address_book::PeerAddressBook>,
     relay_configured: bool,
     pub(super) transport_options: NodeTransportOptions,
     power: Arc<PowerHub>,
@@ -188,6 +190,8 @@ impl ShareIrohNode {
         let routes = EndpointRoutes::start(&rt, &endpoint, &transport_options.relay_urls, &ev);
         let wake = wake::NodeWake::new();
         wake.watch(&rt, &endpoint);
+        let peer_addresses =
+            super::peer_address_book::PeerAddressBook::start(&rt, &endpoint, wake.sender());
         let quic_stats = super::quic_stats_hub::QuicStatsHub::start(&rt);
         let exec_registry = Arc::new(ExecRegistry::new(ExecRegistryLimits::default()));
         let exec_host = super::exec_server::host_connections::ExecHostConnections::new();
@@ -225,6 +229,7 @@ impl ShareIrohNode {
             runtime_transition_slot: Arc::new(Semaphore::new(RUNTIME_TRANSITION_PERMITS as usize)),
             application_handshakes: HandshakeAdmission::new(MAX_PENDING_APPLICATION_HANDSHAKES),
             routes,
+            peer_addresses,
             relay_configured,
             transport_options,
             power,

@@ -1,4 +1,5 @@
-// Smart Explorer P28b/V3 patch (2026-10-25), A7 (2026-11-06); see vendor/SMART_EXPLORER_ROUTE_POLICY.md.
+// Smart Explorer P28b/V3 patch (2026-10-25), A7 (2026-11-06), direct retry (2026-11-25,
+// `application_direct_retry.rs`); see vendor/SMART_EXPLORER_ROUTE_POLICY.md.
 use std::{
     collections::{BTreeSet, VecDeque},
     net::SocketAddr,
@@ -25,6 +26,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, Level, Span, debug, error, event, info_span, instrument, trace, warn};
 
+pub use self::application_direct_retry::DirectRetryOutcome;
 use self::path_state::RemotePathState;
 pub(crate) use self::path_watcher::PathStateReceiver;
 pub use self::{
@@ -42,6 +44,8 @@ use crate::{
     },
 };
 
+#[path = "application_direct_retry.rs"]
+mod application_direct_retry;
 #[path = "application_path_pruning.rs"]
 mod application_path_pruning;
 #[path = "application_path_retirement.rs"]
@@ -388,6 +392,9 @@ impl RemoteStateActor {
             }
             RemoteStateMessage::NetworkChange { is_major } => {
                 self.handle_msg_network_change(is_major);
+            }
+            RemoteStateMessage::RetryDirect(connection, addrs, tx) => {
+                tx.send(self.retry_direct(connection, addrs)).ok();
             }
         }
     }
@@ -1272,6 +1279,11 @@ pub(crate) enum RemoteStateMessage {
     RemoteInfo(oneshot::Sender<RemoteInfo>),
     /// The network status has changed in some way
     NetworkChange { is_major: bool },
+    /// Smart Explorer: a fresh direct attempt on the connection with this
+    /// stable id, with the remote's published addresses
+    /// (`application_direct_retry.rs`).
+    #[debug("RetryDirect(..)")]
+    RetryDirect(usize, Vec<SocketAddr>, oneshot::Sender<DirectRetryOutcome>),
 }
 
 /// Information about a holepunch attempt.

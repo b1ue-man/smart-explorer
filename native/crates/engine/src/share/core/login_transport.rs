@@ -40,6 +40,8 @@ pub struct LoginClientContext {
     /// that asks for "default relays" is reached through these, never n0.
     pub relay_urls: Vec<RelayUrl>,
     pub _retainer: Arc<dyn Send + Sync>,
+    /// Keeps trying the direct path while the relay is the fallback.
+    direct_retry: Arc<dyn super::route_retry_port::DirectRetryPort>,
 }
 impl super::service::ShareService {
     pub fn login_client_context(&self) -> io::Result<LoginClientContext> {
@@ -56,6 +58,7 @@ impl super::service::ShareService {
             key: self.identity.iroh_secret.clone(),
             relay_urls: self.iroh.transport_options.relay_urls.clone(),
             _retainer: self.iroh.clone(),
+            direct_retry: self.iroh.direct_retry_port(),
         })
     }
 }
@@ -230,12 +233,10 @@ pub async fn connect(
         ));
     }
     cancel.bind(&connection)?;
-    monitor(
-        &connection,
-        context.endpoint.id().to_string(),
-        true,
-        target.direct_addresses.clone(),
-    )?;
+    let local = context.endpoint.id().to_string();
+    let hints = target.direct_addresses.clone();
+    let retry = Some(context.direct_retry.clone());
+    monitor_with(&connection, local, true, hints, retry)?;
     tokio::select! {
         biased;
         error = cancelled(cancel) => return Err(error),
@@ -249,12 +250,21 @@ pub fn monitor(
     pinned: bool,
     hints: Vec<std::net::SocketAddr>,
 ) -> io::Result<()> {
+    monitor_with(connection, local, pinned, hints, None)
+}
+fn monitor_with(
+    connection: &Connection,
+    local: String,
+    pinned: bool,
+    hints: Vec<std::net::SocketAddr>,
+    retry: Option<Arc<dyn super::route_retry_port::DirectRetryPort>>,
+) -> io::Result<()> {
     if !connection.application_path_policy().enabled {
         return Err(io::Error::other(
             "login connection has no serialized P28 payload policy",
         ));
     }
-    super::route_monitor::start(connection, local, pinned, false, hints)
+    super::route_monitor::start_with_retry(connection, local, pinned, false, hints, retry)
 }
 pub fn authenticated(connection: &Connection) {
     super::route_monitor::authenticated_remote_capability(connection, true);

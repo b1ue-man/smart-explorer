@@ -1,5 +1,7 @@
 //! Address-free, read-only route projection shared by IPC and every user surface.
-use super::route_diagnostics::{RouteBudget, RouteDiagnostics, RouteMeasurement};
+use super::route_diagnostics::{
+    DirectRetryFacts, RetryCause, RouteBudget, RouteDiagnostics, RouteMeasurement,
+};
 use super::route_state::{RemoteRouteGuarantee, RouteClass, RoutePhase};
 use super::service::ShareService;
 use serde::{Deserialize, Serialize};
@@ -58,6 +60,30 @@ pub struct ConnectionRouteDiagnostics {
     pub remote_limit: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub budget: Option<RouteBudgetView>,
+    /// Additive (2026-11-25): direct retries while the relay is the
+    /// fallback; absent otherwise and from older workers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub direct_retry: Option<DirectRetryView>,
+}
+
+/// Direct retries of one connection in relay fallback (`route_retry.rs`).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DirectRetryView {
+    /// Direct attempts since the relay became the fallback.
+    pub direct_attempts: u32,
+    /// Time until the next attempt when the status was read.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_direct_attempt_in_ms: Option<u64>,
+    /// Wall-clock time of the next attempt, milliseconds since the Unix epoch.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_direct_attempt_unix_ms: Option<u64>,
+    /// `backoff`, `local_addresses` or `peer_addresses`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_direct_attempt_cause: Option<String>,
+    /// Whether the last attempt started a NAT traversal round.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_direct_attempt_nat_round: Option<bool>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -256,6 +282,7 @@ impl ConnectionRouteDiagnostics {
             remote_limit: status.remote_limit().map(str::to_string),
             budget: (facts.budget.initial_pto_ms > 0)
                 .then(|| RouteBudgetView::from_facts(&facts.budget)),
+            direct_retry: facts.retry.as_ref().map(DirectRetryView::from_facts),
         }
     }
 
@@ -270,7 +297,54 @@ impl ConnectionRouteDiagnostics {
         if let Some(budget) = &self.budget {
             lines.extend(budget.detail_lines());
         }
+        if let Some(retry) = &self.direct_retry {
+            lines.push(retry.detail_line());
+        }
         lines
+    }
+}
+
+impl DirectRetryView {
+    fn from_facts(facts: &DirectRetryFacts) -> Self {
+        Self {
+            direct_attempts: facts.attempts,
+            next_direct_attempt_in_ms: facts.next_attempt_in_ms,
+            next_direct_attempt_unix_ms: facts.next_attempt_unix_ms,
+            last_direct_attempt_cause: facts.last_cause.map(|cause| {
+                match cause {
+                    RetryCause::Backoff => "backoff",
+                    RetryCause::LocalAddresses => "local_addresses",
+                    RetryCause::PeerAddresses => "peer_addresses",
+                }
+                .into()
+            }),
+            last_direct_attempt_nat_round: facts.last_nat_round,
+        }
+    }
+
+    pub fn detail_line(&self) -> String {
+        let mut line = format!(
+            "Direktversuche seit dem Relay-Rückfall: {}",
+            self.direct_attempts
+        );
+        if let Some(wait) = self.next_direct_attempt_in_ms {
+            line.push_str(&format!("; nächster in {} s", wait.div_ceil(1_000)));
+        }
+        let cause = match self.last_direct_attempt_cause.as_deref() {
+            Some("local_addresses") => Some("eigene Adressen geändert"),
+            Some("peer_addresses") => Some("Gegenstelle hat neue Adressen veröffentlicht"),
+            Some("backoff") => Some("Zeitplan"),
+            _ => None,
+        };
+        if let Some(cause) = cause {
+            line.push_str(&format!("; letzter Anlass: {cause}"));
+        }
+        match self.last_direct_attempt_nat_round {
+            Some(true) => line.push_str("; Lochungsrunde gestartet"),
+            Some(false) => line.push_str("; keine Lochungsrunde möglich"),
+            None => {}
+        }
+        line
     }
 }
 
@@ -348,3 +422,7 @@ impl RouteMeasurementView {
         line
     }
 }
+
+#[cfg(test)]
+#[path = "service_routes_retry_tests.rs"]
+mod retry_tests;

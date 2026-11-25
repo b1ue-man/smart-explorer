@@ -98,6 +98,7 @@ mod tests {
                 clock: Mutex::new((Duration::ZERO, Some(tokio::time::Instant::now()))),
                 changes: sender.application_path_policy_changes(),
                 wake: tokio::sync::Notify::new(),
+                retry: Default::default(),
             });
             assert!(registry()
                 .lock()

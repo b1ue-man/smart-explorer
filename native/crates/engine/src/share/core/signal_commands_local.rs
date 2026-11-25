@@ -127,6 +127,8 @@ pub(super) fn apply_relation_runtime(
         .map_err(|_| eio("Share-State gesperrt"))?
         .apply_runtime(update);
     if changed {
+        // New presences or LAN sightings: the direct retries look again.
+        iroh.peer_addresses.changed();
         schedule_current(auth, iroh)?;
     }
     Ok(())

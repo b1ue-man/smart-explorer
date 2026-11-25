@@ -1,3 +1,5 @@
+// Smart Explorer direct retry patch (2026-11-25): exports `DirectRetryOutcome`;
+// see vendor/SMART_EXPLORER_ROUTE_POLICY.md and `remote_state/application_direct_retry.rs`.
 use std::{
     collections::BTreeSet,
     future::poll_fn,
@@ -18,8 +20,8 @@ pub(crate) use self::remote_state::PathStateReceiver;
 use self::remote_state::RemoteStateActor;
 pub(super) use self::remote_state::RemoteStateMessage;
 pub use self::remote_state::{
-    Path, PathEvent, PathEventStream, PathList, PathListIter, PathListStream, RemoteInfo,
-    TransportAddrInfo, TransportAddrUsage,
+    DirectRetryOutcome, Path, PathEvent, PathEventStream, PathList, PathListIter, PathListStream,
+    RemoteInfo, TransportAddrInfo, TransportAddrUsage,
 };
 #[cfg(feature = "unstable-custom-transports")]
 pub use self::remote_state::{

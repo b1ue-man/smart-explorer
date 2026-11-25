@@ -3,7 +3,7 @@ use super::{
     apps_wire::{self, AppsClientHello, AppsCommand, AppsReply, AppsResult, AppsServerHello},
     core::{eio, hmac_proof, random_token},
     service::ShareService,
-    session::{endpoint_addr, relation_kind_id, PeerPrincipal},
+    session::{relation_kind_id, PeerPrincipal},
     types::{PeerEndpoint, PeerOpenTarget},
 };
 use iroh::endpoint::Connection;
@@ -40,8 +40,7 @@ impl ShareService {
                     if endpoint.expected_node_id.as_deref().is_some_and(|pin|pin.is_empty()||pin!=endpoint.presence.node_id) {
                         return Err(eio("device command NodeId pin mismatch"));
                     }
-                    let local=node.routes.current(&node.endpoint);
-                    let address=endpoint_addr(&endpoint.presence,&local,&node.transport_options)?;
+                    let address=node.dial_addr(&endpoint).await?;
                     let generation=node.policy.snapshot(PeerPrincipal::from_endpoint(&endpoint))?;
                     let connection=tokio::time::timeout(Duration::from_secs(30),super::keepalive::transport_purpose::connect(&node.endpoint,address,apps_wire::APPS_ALPN,super::keepalive::transport_purpose::TransportPurpose::Apps)).await
                         .map_err(|_|eio("device command connect timed out"))?.map_err(eio)?;

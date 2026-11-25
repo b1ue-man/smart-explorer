@@ -391,3 +391,7 @@ fn route_start_task_monitor_switches_to_direct_without_duplicate_or_lost_files()
         pair.close().await;
     });
 }
+
+// Direct retries in relay fallback over the same fixture (2026-11-25).
+#[path = "route_retry_task_tests.rs"]
+mod retry_task_tests;

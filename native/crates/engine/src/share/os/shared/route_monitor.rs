@@ -5,11 +5,13 @@
 //! application bytes move (route samples, RTT order between validated paths).
 //! Otherwise it sleeps until the transport reports changed path-policy facts
 //! (`Connection::application_path_policy_changes`), a session waits for a route
-//! (`wait_application_route`), the start is cancelled, or the connection closes,
-//! so an idle connection causes no periodic wake-ups.
-use super::route_adapter::RouteAdapter;
-use super::route_diagnostics::{milliseconds, RouteBudget, RouteDiagnostics};
+//! (`wait_application_route`), the start is cancelled, the connection closes, or
+//! (in relay fallback) a direct retry is due or addresses changed
+//! (`route_monitor_retry.rs`), so an idle connection causes no periodic wake-ups.
+//! The actor loop itself is `route_monitor_actor.rs`.
+use super::route_diagnostics::{RouteBudget, RouteDiagnostics};
 use super::route_policy::RoutePolicy;
+use super::route_retry_port::DirectRetryPort;
 use super::route_state::{RemoteRouteGuarantee, RoutePhase, RouteStatus};
 use iroh::endpoint::{ApplicationPathUpdate, Connection, WeakConnectionHandle};
 use std::collections::HashMap;
@@ -20,8 +22,12 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tokio::sync::{watch, Notify};
 
+#[path = "route_monitor_actor.rs"]
+mod actor;
 #[path = "route_monitor_network_wait.rs"]
 mod network_wait;
+#[path = "route_monitor_retry.rs"]
+mod retry;
 #[path = "route_monitor_samples.rs"]
 mod samples;
 // Test fixture: a route whose admission a test sets (pauses of consumers).
@@ -48,6 +54,8 @@ struct Entry {
     changes: Arc<Notify>,
     /// Wakes an idle actor: a session waits for its route, or the start was cancelled.
     wake: Notify,
+    /// Direct retries in relay fallback (`route_monitor_retry.rs`).
+    retry: retry::EntryRetry,
 }
 
 fn registry() -> &'static Mutex<HashMap<usize, Arc<Entry>>> {
@@ -72,6 +80,19 @@ pub(super) fn start(
     pinned: bool,
     remote_support: bool,
     hints: Vec<SocketAddr>,
+) -> io::Result<()> {
+    start_with_retry(connection, local, pinned, remote_support, hints, None)
+}
+
+/// [`start`] with the port through which the actor of a new entry keeps
+/// trying the direct path while the relay is the fallback.
+pub(super) fn start_with_retry(
+    connection: &Connection,
+    local: String,
+    pinned: bool,
+    remote_support: bool,
+    hints: Vec<SocketAddr>,
+    retry_port: Option<Arc<dyn DirectRetryPort>>,
 ) -> io::Result<()> {
     let mut entries = registry()
         .lock()
@@ -120,9 +141,10 @@ pub(super) fn start(
         clock: Mutex::new((Duration::ZERO, Some(tokio::time::Instant::now()))),
         changes: connection.application_path_policy_changes(),
         wake: Notify::new(),
+        retry: retry::EntryRetry::new(retry_port),
     });
     entries.insert(connection.stable_id(), entry.clone());
-    tokio::spawn(run(connection.stable_id(), entry, hints));
+    tokio::spawn(actor::run(connection.stable_id(), entry, hints));
     Ok(())
 }
 
@@ -227,6 +249,7 @@ pub fn diagnostics(local: &str, remote: Option<&str>) -> Vec<RouteDiagnostics> {
                 .as_deref()
                 .map(super::route_history::samples)
                 .unwrap_or_default(),
+            retry: entry.retry.facts(),
         })
         .collect()
 }
@@ -278,203 +301,5 @@ pub async fn wait_application_route(
             _ = connection.closed() => return Err(io::Error::new(io::ErrorKind::NotConnected, "Share-Verbindung geschlossen")),
             _ = expires => return Err(io::Error::new(io::ErrorKind::TimedOut, "Verbindungsaufbau/Pfadwechsel: Gesamtfrist abgelaufen")),
         }
-    }
-}
-
-async fn run(id: usize, entry: Arc<Entry>, hints: Vec<SocketAddr>) {
-    let mut origin = Instant::now();
-    let mut adapter = RouteAdapter::default();
-    let mut policy: Option<RoutePolicy> = None;
-    let mut previous_sample = None;
-    let mut previous_path = None;
-    let mut previous_bytes = None;
-    // Registered once: every call adds a close listener to the connection.
-    let closed = entry.handle.closed();
-    tokio::pin!(closed);
-    loop {
-        // Registered before the observation, so a change during it is not lost.
-        let changed = entry.changes.notified();
-        tokio::pin!(changed);
-        changed.as_mut().enable();
-        let woken = entry.wake.notified();
-        tokio::pin!(woken);
-        woken.as_mut().enable();
-        let Some(connection) = entry.handle.upgrade() else {
-            break;
-        };
-        if connection.close_reason().is_some() {
-            break;
-        }
-        let mut snapshot = connection.application_path_policy();
-        if snapshot.network_change_in_progress {
-            if !network_wait::pause(&entry) {
-                break;
-            }
-            previous_sample = None;
-            previous_path = None;
-            drop(connection);
-            // The transport signals the end of the network change.
-            tokio::select! {
-                _ = changed => {}
-                _ = woken => {}
-                _ = &mut closed => break,
-            }
-            continue;
-        }
-        let mut reset_policy = policy
-            .as_ref()
-            .is_some_and(|policy| policy.status().generation != snapshot.generation);
-        if snapshot.requires_new_generation {
-            let Ok(generation) = next_generation(snapshot.generation) else {
-                break;
-            };
-            if connection
-                .update_application_path_policy(ApplicationPathUpdate::BeginGeneration(generation))
-                .is_err()
-            {
-                break;
-            }
-            snapshot = connection.application_path_policy();
-            reset_policy = true;
-        }
-        if reset_policy {
-            origin = Instant::now();
-            policy = None;
-            adapter = RouteAdapter::default();
-        }
-        let policy = policy.get_or_insert_with(|| {
-            let mut policy = RoutePolicy::new(
-                snapshot.generation,
-                snapshot.initial_pto,
-                snapshot.best_validated_pto,
-            );
-            let old = entry.status.borrow();
-            if old.application_allowed || old.pause_epoch > 0 {
-                policy.resuming();
-            }
-            policy
-        });
-        policy.include_validation_pto(
-            snapshot
-                .paths
-                .iter()
-                .map(|path| path.pto)
-                .max()
-                .unwrap_or(snapshot.initial_pto),
-        );
-        let observed = adapter.observe(&connection, &snapshot, origin, &hints);
-        let chosen = policy.observe(
-            milliseconds(origin.elapsed()),
-            &observed.paths,
-            observed.round.as_ref(),
-        );
-        if let Some(token) = chosen
-            .as_ref()
-            .and_then(|key| observed.tokens.get(key))
-            .copied()
-        {
-            let already = snapshot
-                .paths
-                .iter()
-                .any(|path| path.token.path_id() == token.path_id() && path.data_allowed);
-            if !already
-                && connection
-                    .update_application_path_policy(ApplicationPathUpdate::Allow(token))
-                    .is_err()
-            {
-                policy.gate_rejected();
-            }
-        } else if connection.application_data_allowed() {
-            let _ = connection
-                .update_application_path_policy(ApplicationPathUpdate::Block(snapshot.generation));
-        }
-        let mut status = policy.status().clone();
-        let old = entry.status.borrow().clone();
-        if old.phase == RoutePhase::Cancelled {
-            break;
-        }
-        status.remote_guarantee = old.remote_guarantee;
-        let current_path = connection
-            .application_path_policy()
-            .paths
-            .iter()
-            .find(|path| path.data_allowed)
-            .map(|path| format!("{}/{}", path.token.path_id(), path.token.path_generation()));
-        let changed_path =
-            previous_path.is_some() && current_path.is_some() && previous_path != current_path;
-        status.pause_epoch = if status.generation != old.generation
-            || (old.application_allowed && !status.application_allowed)
-            || changed_path
-        {
-            old.pause_epoch.saturating_add(1)
-        } else {
-            old.pause_epoch
-        };
-        if status.phase == RoutePhase::Offline
-            && network_wait::offline_is_outdated(&status, &connection.application_path_policy())
-        {
-            drop(connection);
-            tokio::time::sleep(TICK).await;
-            continue;
-        }
-        previous_path = current_path;
-        entry.status.send_if_modified(|current| {
-            if current.phase == RoutePhase::Cancelled {
-                return false;
-            }
-            status.remote_guarantee = current.remote_guarantee;
-            if *current == status {
-                return false;
-            }
-            *current = status.clone();
-            true
-        });
-        if entry.status.borrow().phase == RoutePhase::Cancelled {
-            break;
-        }
-        if let Ok(mut clock) = entry.clock.lock() {
-            match (status.application_allowed, clock.1) {
-                (true, Some(since)) => {
-                    clock.0 = clock.0.saturating_add(since.elapsed());
-                    clock.1 = None;
-                }
-                (false, None) => clock.1 = Some(tokio::time::Instant::now()),
-                _ => {}
-            }
-        }
-        if let Ok(mut budget) = entry.budget.lock() {
-            *budget = policy.budget().clone();
-        }
-        samples::record_measurement(&entry, &connection, &status, &mut previous_sample);
-        let bytes = (snapshot.application_tx_bytes, snapshot.application_rx_bytes);
-        let moving = previous_bytes.is_some_and(|previous| previous != bytes);
-        previous_bytes = Some(bytes);
-        let timed = !policy.decided(milliseconds(origin.elapsed()));
-        // Do not retain a strong connection while idle; cancellation/drop still closes it.
-        drop(connection);
-        if timed || moving {
-            tokio::time::sleep(TICK).await;
-        } else {
-            tokio::select! {
-                _ = changed => {}
-                _ = woken => {}
-                _ = &mut closed => break,
-            }
-        }
-    }
-    entry.status.send_modify(|status| {
-        if status.application_allowed {
-            status.pause_epoch = status.pause_epoch.saturating_add(1);
-        }
-        status.application_allowed = false;
-        status.class = None;
-        if status.phase != RoutePhase::Cancelled {
-            status.phase = RoutePhase::Offline;
-            status.reason = "Share-Verbindung geschlossen".into();
-        }
-        status.revision = status.revision.saturating_add(1);
-    });
-    if let Ok(mut entries) = registry().lock() {
-        entries.remove(&id);
     }
 }

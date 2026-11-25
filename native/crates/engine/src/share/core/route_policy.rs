@@ -23,6 +23,10 @@ mod unbelegt_route_cap_task_tests;
 #[path = "route_start.rs"]
 pub(super) mod route_start;
 
+// Direct retries after the finite direct phase (2026-11-25).
+#[path = "route_retry.rs"]
+pub(super) mod route_retry;
+
 #[derive(Clone, Debug)]
 pub struct RouteCandidate {
     pub key: String,

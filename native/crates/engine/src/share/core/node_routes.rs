@@ -100,9 +100,7 @@ impl ShareIrohNode {
                 "Iroh NodeId passt nicht zur gepinnten Identitaet",
             ));
         }
-        let local = self.routes.current(&self.endpoint);
-        let addr =
-            super::session::endpoint_addr(&endpoint.presence, &local, &self.transport_options)?;
+        let addr = self.dial_addr(endpoint).await?;
         let generation = self
             .policy
             .snapshot(super::session::PeerPrincipal::from_endpoint(endpoint))?;
@@ -184,13 +182,11 @@ impl ShareIrohNode {
                     .collect()
             })
             .unwrap_or_default();
-        super::route_monitor::start(
-            connection,
-            auth.identity.node_id.clone(),
-            known,
-            support,
-            hints,
-        )
+        let local = auth.identity.node_id.clone();
+        drop(auth);
+        // Keeps trying the direct path while the relay is the fallback.
+        let retry = Some(self.direct_retry_port());
+        super::route_monitor::start_with_retry(connection, local, known, support, hints, retry)
     }
 
     pub(super) async fn await_route(

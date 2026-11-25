@@ -130,7 +130,9 @@ pub(super) fn run(
         reconnected: true,
     });
 
+    runtime.iroh.peer_addresses.session_started();
     let end = session.run(connection, runtime, tuning);
+    runtime.iroh.peer_addresses.session_ended();
 
     if matches!(end, End::ReadEnded) {
         let now = runtime.power.now();
@@ -315,6 +317,8 @@ impl Session {
             &mut configuration,
         ) {
             SignalDispatchOutcome::Pong => {
+                // Completes a presence refresh round (`peer_address_book.rs`).
+                runtime.iroh.peer_addresses.pong();
                 if self.schedule.pong_received() {
                     runtime.power.answer(ProbeOutcome {
                         ok: true,

@@ -1,7 +1,7 @@
 //! Test fixture of the route monitor: the route entry of one connection
 //! without a policy actor. The test admits, pauses and resumes the route
 //! itself, with the status and the pause clock the actor would write
-//! (`run` in `route_monitor.rs`, `network_wait::pause`), so consumers of
+//! (`run` in `route_monitor_actor.rs`, `network_wait::pause`), so consumers of
 //! `subscribe`, `wait_application_route` and `paused_duration` meet a route
 //! pause at a moment the test chooses. Only for `#[cfg(test)]`.
 use super::{registry, Entry, RouteBudget, RoutePhase, RouteStatus};
@@ -36,6 +36,7 @@ impl TestRoute {
             clock: Mutex::new((Duration::ZERO, None)),
             changes: connection.application_path_policy_changes(),
             wake: Notify::new(),
+            retry: Default::default(),
         });
         registry()
             .lock()

@@ -107,22 +107,7 @@ pub(in crate::share) fn publish_all(
         .iter()
         .filter(|contact| contact.auto_connect)
     {
-        let access_proof = proofs
-            .then(|| {
-                ShareProfiles::direct_secret_checked(contact)
-                    .ok()
-                    .flatten()
-                    .and_then(|secret| access_proof(&secret, "direct", &contact.lookup_id))
-            })
-            .flatten()
-            .map(|proof| hex(&proof));
-        send_line(
-            stream,
-            &AccessClientMsg::WatchDirect {
-                lookup_id: &contact.lookup_id,
-                access_proof,
-            },
-        )?;
+        watch_direct(stream, contact, proofs)?;
         if !tracked_direct
             && contact.access_state == DirectAccessState::Pending
             && !direct_requests_sent.contains(&contact.id)
@@ -147,6 +132,58 @@ pub(in crate::share) fn publish_all(
                 },
             )?;
         }
+    }
+    Ok(())
+}
+
+/// `watch_direct` for `contact`; the server answers with the presence it holds.
+fn watch_direct(
+    stream: &mut SignalConnection,
+    contact: &DirectContact,
+    proofs: bool,
+) -> io::Result<()> {
+    let access_proof = proofs
+        .then(|| {
+            ShareProfiles::direct_secret_checked(contact)
+                .ok()
+                .flatten()
+                .and_then(|secret| access_proof(&secret, "direct", &contact.lookup_id))
+        })
+        .flatten()
+        .map(|proof| hex(&proof));
+    send_line(
+        stream,
+        &AccessClientMsg::WatchDirect {
+            lookup_id: &contact.lookup_id,
+            access_proof,
+        },
+    )
+}
+
+/// A presence refresh round (`peer_address_book.rs`): `watch_direct` again
+/// for the watched Direct contacts of the Iroh nodes `nodes`.
+pub(in crate::share) fn rewatch_direct(
+    stream: &mut SignalConnection,
+    auth: &Arc<Mutex<ShareAuthState>>,
+    nodes: &[String],
+) -> io::Result<()> {
+    let state = auth
+        .lock()
+        .map_err(|_| eio("Share-State gesperrt"))?
+        .clone();
+    let proofs = stream.key_login();
+    for contact in state.direct_contacts.iter().filter(|contact| {
+        contact.auto_connect
+            && nodes.iter().any(|node| {
+                contact.expected_node_id == *node
+                    || contact.remote_public_key.as_deref() == Some(node.as_str())
+                    || contact
+                        .presence
+                        .as_ref()
+                        .is_some_and(|presence| presence.node_id == *node)
+            })
+    }) {
+        watch_direct(stream, contact, proofs)?;
     }
     Ok(())
 }

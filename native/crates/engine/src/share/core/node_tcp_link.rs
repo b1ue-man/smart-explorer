@@ -12,7 +12,7 @@ use super::node_tcp::{require_policy, CloseTcp};
 use super::profiles::fingerprint_matches;
 use super::route_cancellation::RouteCancellation;
 use super::service::ShareService;
-use super::session::{endpoint_addr, relation_kind_id, PeerPrincipal};
+use super::session::{relation_kind_id, PeerPrincipal};
 use super::tcp_forward::{
     tcp_version_for_alpn, ListenerAdmission, TcpStart, TunnelId, TunnelRole, TunnelView,
     MAX_TCP_STREAMS, TCP_ALPN, TCP_ALPN_V1, TCP_PROTOCOL_VERSION_V1, TCP_V1_MAX_LIFETIME_SECS,
@@ -77,8 +77,7 @@ impl ShareIrohNode {
                 "TCP peer NodeId pin mismatch",
             ));
         }
-        let local = self.routes.current(&self.endpoint);
-        let address = endpoint_addr(&endpoint.presence, &local, &self.transport_options)?;
+        let address = self.dial_addr(endpoint).await?;
         let generation = self
             .policy
             .snapshot(PeerPrincipal::from_endpoint(endpoint))?;
