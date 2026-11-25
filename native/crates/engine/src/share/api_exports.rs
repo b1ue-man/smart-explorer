@@ -1,6 +1,10 @@
 // Share API and test registrations, included at the feature root.
 pub use lan_permission::{lan_firewall_repair_available, request_lan_firewall_repair};
 pub use lan_permission_job::{poll_lan_firewall_repair, start_lan_firewall_repair};
+pub use system::{
+    ensure_firewall_rule as ensure_peer_firewall, ensure_peer_firewall_for_installation,
+    firewall_system_step,
+};
 
 pub use self::direct_actions::{
     decide_direct_request, decide_direct_request_with_rights, delete_direct_request_history,

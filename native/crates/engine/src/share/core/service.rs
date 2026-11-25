@@ -362,16 +362,17 @@ impl ShareService {
         let (cmd_tx, cmd_rx) = unbounded::<PendingShareCmd>();
         let (ev_tx, ev_rx) = super::connection_events::channel();
         let stopped = Arc::new(AtomicBool::new(false));
-        match super::system::ensure_firewall_rule() {
-            Ok(msg) => {
-                let _ = ev_tx.send(ShareEvent::Status(msg));
-            }
-            Err(e) => {
-                let _ = ev_tx.send(ShareEvent::Status(format!(
-                    "Firewall-Regel fuer Peer-Listener nicht gesetzt: {e}"
-                )));
-            }
-        }
+        // A missing or outdated firewall rule is set up before peers connect,
+        // with the system's confirmation when needed (user orders 2026-11-25);
+        // the listener does not wait for that answer.
+        let firewall_events = ev_tx.clone();
+        let _ = std::thread::Builder::new()
+            .name("share-firewall".into())
+            .spawn(move || {
+                let line = super::system::ensure_firewall_rule()
+                    .unwrap_or_else(|error| format!("Firewall nicht eingerichtet: {error}"));
+                let _ = firewall_events.send(ShareEvent::Status(line));
+            });
 
         let auth = Arc::new(Mutex::new(ShareAuthState {
             direct_secret: identity.direct_secret(),

@@ -5,6 +5,12 @@ Binary — kein Chromium, Browser oder Node. Sie ist weiterhin portabel startbar
 die reguläre per-user Installation ergänzt den verifizierten Update-Helfer und
 den `se`-Terminal-Companion. Updates werden geprüft gestagt und erst nach
 expliziter Bestätigung transaktional angewendet.
+Installation, Update und Nutzung richten die Firewall selbst ein: unter Windows
+programmgebundene eingehende TCP- und UDP-Regeln für `se.exe` und
+`Smart Explorer.exe` in allen Netzprofilen (UAC-Bestätigung, wenn Rechte fehlen;
+`share/os/windows/firewall.rs`), unter Linux die festen Ports von se in ufw,
+firewalld, nftables oder iptables (Polkit-Dialog; `share/os/linux_os/firewall.rs`).
+Einzelheiten: Abschnitt „Firewall“ unter „Installieren“ in [`../README.md`](../README.md).
 
 ## Größe & Geschwindigkeit (im Vergleich zur Electron-Variante)
 

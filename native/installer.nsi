@@ -14,6 +14,8 @@
 ;   * makes the bundled se.exe available from new terminals via the user PATH
 ;   * points auto-update at the GitHub release feed (update_source.txt) on first install
 ;   * registers the "In Smart Explorer öffnen" right-click verb (HKCU, reversible)
+;   * firewall rules for se.exe and Smart Explorer.exe (TCP and UDP, every network
+;     profile) through the verified helper, with the UAC confirmation
 ;   * Start-menu + desktop shortcuts, Add/Remove Programs entry
 
 !ifndef VERSION
@@ -113,8 +115,16 @@ Section "Smart Explorer (erforderlich)" SEC_MAIN
   File "/oname=${UPDATER_EXE_NAME}" "${UPDATER_SRC}"
   File "/oname=${CLI_EXE_NAME}" "${CLI_SRC}"
   File "/oname=${LAUNCHER_EXE_NAME}" "${LAUNCHER_SRC}"
+  ; Firewall (user orders 2026-11-25): the helper sets up the program-bound
+  ; inbound TCP and UDP rules of se.exe and Smart Explorer.exe in every network
+  ; profile, Public included, and replaces the rule of versions up to 0.5.204.
+  ; An interactive setup asks for the UAC confirmation now; a silent one never
+  ; waits on a prompt, there the first start of se asks.
+  StrCpy $2 ""
+  IfSilent +2
+    StrCpy $2 " --setup-firewall"
   ClearErrors
-  ExecWait '"$PLUGINSDIR\${UPDATER_EXE_NAME}" --install-bundle --root "$INSTDIR" --app-staged "${EXE_NAME}" --app-sha256 "${EXE_SHA256}" --cli-staged "${CLI_EXE_NAME}" --cli-sha256 "${CLI_SHA256}" --launcher-staged "${LAUNCHER_EXE_NAME}" --launcher-sha256 "${LAUNCHER_SHA256}" --helper-sha256 "${UPDATER_SHA256}" --version "${VERSION}" --no-gui-start' $1
+  ExecWait '"$PLUGINSDIR\${UPDATER_EXE_NAME}" --install-bundle --root "$INSTDIR" --app-staged "${EXE_NAME}" --app-sha256 "${EXE_SHA256}" --cli-staged "${CLI_EXE_NAME}" --cli-sha256 "${CLI_SHA256}" --launcher-staged "${LAUNCHER_EXE_NAME}" --launcher-sha256 "${LAUNCHER_SHA256}" --helper-sha256 "${UPDATER_SHA256}" --version "${VERSION}" --no-gui-start$2' $1
   IfErrors bundle_failed
   IntCmp $1 0 bundle_installed
   bundle_failed:
@@ -162,13 +172,6 @@ Section "Smart Explorer (erforderlich)" SEC_MAIN
   SetOutPath "$INSTDIR\licenses\Virtual-Display-Driver"
   File "/oname=LICENSE-MIT.txt" "${__FILEDIR__}\..\third-party\virtual-display-driver\LICENSE-MIT.txt"
   SetOutPath "$INSTDIR"
-
-  ; Best-effort Windows Defender Firewall rule for direct Share peer listeners.
-  ; Iroh binds dynamic UDP ports; only private/domain network profiles apply.
-  ; Managed machines may require admin/policy approval; the app also retries at
-  ; Share startup and reports failure in diagnostics.
-  nsExec::Exec 'netsh advfirewall firewall delete rule name="Smart Explorer Share Peer Listener"'
-  nsExec::Exec 'netsh advfirewall firewall add rule name="Smart Explorer Share Peer Listener" dir=in action=allow program="$INSTDIR\${EXE_NAME}" enable=yes protocol=UDP profile=private,domain'
 
   ; Default update feed (HTTPS) — keep an existing (possibly customized) one.
   ; update_source.txt ships the release feed URL (releases/latest/download), so
@@ -427,7 +430,17 @@ Section "Uninstall"
   DeleteRegKey HKCU "Software\Classes\Directory\shell\${VERB}"
   DeleteRegKey HKCU "Software\Classes\Drive\shell\${VERB}"
   DeleteRegKey HKCU "Software\Classes\Directory\Background\shell\${VERB}"
-  nsExec::Exec 'netsh advfirewall firewall delete rule name="Smart Explorer Share Peer Listener"'
+  ; The firewall rules se set up for this installation: TCP and UDP of se.exe
+  ; and Smart Explorer.exe, and the rule of versions up to 0.5.204, each only
+  ; for this folder's programs (another installation keeps its own). Removing
+  ; them needs administrator rights; Windows asks for the UAC confirmation only
+  ; while one exists, and the uninstall does not wait for the answer.
+  nsExec::ExecToStack `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -Command "if (Get-NetFirewallRule -DisplayName 'Smart Explorer*' -ErrorAction SilentlyContinue | Get-NetFirewallApplicationFilter | Where-Object { $$_.Program -like '$INSTDIR\*' }) { exit 0 } else { exit 1 }"`
+  Pop $0
+  Pop $2
+  StrCmp $0 "0" 0 firewall_rules_done
+    ExecShell "runas" "$SYSDIR\cmd.exe" `/c netsh advfirewall firewall delete rule name="Smart Explorer Peer TCP (se.exe)" program="$INSTDIR\${CLI_EXE_NAME}" & netsh advfirewall firewall delete rule name="Smart Explorer Peer UDP (se.exe)" program="$INSTDIR\${CLI_EXE_NAME}" & netsh advfirewall firewall delete rule name="Smart Explorer Peer TCP (Smart Explorer.exe)" program="$INSTDIR\${EXE_NAME}" & netsh advfirewall firewall delete rule name="Smart Explorer Peer UDP (Smart Explorer.exe)" program="$INSTDIR\${EXE_NAME}" & netsh advfirewall firewall delete rule name="Smart Explorer Share Peer Listener" program="$INSTDIR\${CLI_EXE_NAME}" & netsh advfirewall firewall delete rule name="Smart Explorer Share Peer Listener" program="$INSTDIR\${EXE_NAME}"` SW_HIDE
+  firewall_rules_done:
 
   ClearErrors
   Delete "$INSTDIR\${EXE_NAME}"

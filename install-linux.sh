@@ -495,6 +495,41 @@ check_fuse() {
   fi
 }
 
+# Firewall (user orders 2026-11-25): while ufw, firewalld or an nftables or
+# iptables service runs, se admits its own fixed ports there through its root
+# step `se rdp host-setup --system firewall-peer` (here sudo, doas or su asks in
+# this terminal). Without such a firewall nothing is asked. se checks again at
+# every start and asks through the polkit dialog when a port is still missing.
+firewall_step() {
+  firewall_active=""
+  if [ -r /etc/ufw/ufw.conf ] && grep -Eq '^[[:space:]]*ENABLED="?yes' /etc/ufw/ufw.conf; then
+    firewall_active=" ufw"
+  fi
+  if have_cmd systemctl; then
+    for firewall_unit in firewalld nftables iptables ip6tables netfilter-persistent; do
+      if systemctl is-active --quiet "$firewall_unit" 2>/dev/null; then
+        firewall_active="$firewall_active $firewall_unit"
+      fi
+    done
+  fi
+  if [ -z "$firewall_active" ]; then
+    log "Firewall: no ufw, firewalld, nftables or iptables service is active; nothing to admit."
+    return 0
+  fi
+  log "Firewall:$firewall_active active; se admits its ports (root rights for this step) ..."
+  if [ "$DRY_RUN" = 1 ]; then
+    log "dry-run: \"$CLI_BIN\" rdp host-setup --system firewall-peer (as root)"
+    return 0
+  fi
+  if [ "$(id -u 2>/dev/null || printf 1)" != 0 ] && ! have_cmd sudo && ! have_cmd doas && ! have_cmd su; then
+    log "WARNING: no sudo, doas or su; se asks through the polkit dialog at its next start."
+    return 0
+  fi
+  if ! as_root "$CLI_BIN" rdp host-setup --system firewall-peer; then
+    log "WARNING: the firewall step did not finish; se asks again at its next start."
+  fi
+}
+
 # se Desktop (only with the desktop app): --with-desktop enables it, and every
 # installation of the desktop app normally restarts it, so a running se Desktop runs
 # the freshly installed programs. A failure is reported; the install stays.
@@ -586,8 +621,9 @@ else
 fi
 
 # Order (H9): programs and smart-explorer.desktop above, then the FUSE runtime
-# check, then se Desktop.
+# check, the firewall step (before any se process starts again), then se Desktop.
 check_fuse
+firewall_step
 desktop_steps
 
 if [ "$DRY_RUN" = 1 ]; then

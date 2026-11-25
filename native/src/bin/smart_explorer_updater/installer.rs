@@ -17,21 +17,20 @@ pub(super) fn run(raw: &[String]) -> Result<(), String> {
     let mut values = std::collections::BTreeMap::new();
     let mut cli_only = false;
     let mut no_gui = false;
+    let mut setup_firewall = false;
     let mut index = 2;
     while index < raw.len() {
         let key = raw[index].as_str();
-        if matches!(key, "--cli-only" | "--no-gui-start") {
-            if key == "--cli-only" {
-                if cli_only {
-                    return Err("duplicate --cli-only".into());
-                }
-                cli_only = true;
-            } else {
-                if no_gui {
-                    return Err("duplicate --no-gui-start".into());
-                }
-                no_gui = true;
+        if matches!(key, "--cli-only" | "--no-gui-start" | "--setup-firewall") {
+            let flag = match key {
+                "--cli-only" => &mut cli_only,
+                "--no-gui-start" => &mut no_gui,
+                _ => &mut setup_firewall,
+            };
+            if *flag {
+                return Err(format!("duplicate {key}"));
             }
+            *flag = true;
             index += 1;
             continue;
         }
@@ -139,6 +138,12 @@ pub(super) fn run(raw: &[String]) -> Result<(), String> {
         && smart_explorer::daemon::worker_answers();
     let installed_cli = args.cli_target.clone();
     super::apply_update(args).map_err(|e| e.message)?;
+    // An installation the person watches (`--setup-firewall`, the
+    // interactive setup) asks for the administrator confirmation now, before
+    // the worker restarts; a silent one leaves it to the first start.
+    if setup_firewall {
+        firewall(&root, true);
+    }
     if restart {
         if let Err(error) = restart_worker(&installed_cli, &version) {
             super::logging::append_log(&format!("install-bundle: {error}"));
@@ -243,6 +248,16 @@ pub(super) fn verify_completion(args: &ApplyArgs) -> Result<(), String> {
     }
 }
 
+/// The firewall rules of the installation in `root` (user orders
+/// 2026-11-25): created or repaired; the result goes to the update log.
+fn firewall(root: &std::path::Path, ask: bool) {
+    let line = match smart_explorer::share::ensure_peer_firewall_for_installation(root, ask) {
+        Ok(status) => status,
+        Err(error) => format!("Firewall nicht eingerichtet: {error}"),
+    };
+    super::logging::append_log(&format!("firewall: {line}"));
+}
+
 /// A machine installer never writes another account's profiles from its admin
 /// token (`smart_explorer::mcp_launcher::profile_refresh_deferred`).
 pub(super) fn profile_refresh_deferred(root: &std::path::Path) -> bool {
@@ -252,6 +267,10 @@ pub(super) fn refresh_after_commit(args: &ApplyArgs) {
     let Some(root) = args.cli_target.parent() else {
         return;
     };
+    // Every committed update: an elevated helper repairs the firewall rules
+    // itself; otherwise the restarted programs set them up at their start
+    // (they ask, the helper never waits for a confirmation).
+    firewall(root, false);
     if profile_refresh_deferred(root) {
         super::logging::append_log("MCP profile refresh deferred to the next original-user MCP start: elevated installer context");
         return;

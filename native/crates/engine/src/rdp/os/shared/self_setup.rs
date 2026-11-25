@@ -477,6 +477,9 @@ pub fn run_system_step(step: &str, user_sid: Option<&str>) -> (String, i32) {
     if step.starts_with("virtual-display") {
         return crate::screen::os::virtual_display::run_system_step(step);
     }
+    if let Some(done) = crate::share::firewall_system_step(step) {
+        return done;
+    }
     platform::run_system_step(step, user_sid)
 }
 

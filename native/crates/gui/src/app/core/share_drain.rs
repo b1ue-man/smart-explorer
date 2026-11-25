@@ -191,15 +191,12 @@ impl App {
                             self.append_share_diag(s);
                         }
                     } else {
-                        if s.starts_with("Firewall-Regel fuer Peer-Listener nicht gesetzt") {
-                            ask_firewall_once();
-                        }
-                        // R8: a network Windows classifies as public keeps
-                        // other devices on the relay; shown, not only logged.
-                        if let Some(index) = s.find("Netzwerk ist als „Öffentlich“ eingestuft")
-                        {
-                            self.share_lan_notice = Some(s[index..].to_string());
-                            self.notice = Some((s[index..].to_string(), std::time::Instant::now()));
+                        // The engine sets the firewall rules up itself and
+                        // asks for elevation (2026-11-25); a refusal or failure
+                        // is shown, not only logged.
+                        if s.starts_with("Firewall nicht eingerichtet") {
+                            self.share_lan_notice = Some(s.clone());
+                            self.notice = Some((s.clone(), std::time::Instant::now()));
                         }
                         self.share_status = s.clone();
                         self.append_share_diag(s);
@@ -395,19 +392,4 @@ impl App {
             self.open_share_target(target);
         }
     }
-}
-
-/// The peer listener's firewall rule sets itself up: without it, the
-/// administrator approval (UAC) is asked once per version, not on every
-/// start (user rule 2026-10-27: everything that can set itself up does).
-fn ask_firewall_once() {
-    if !crate::share::lan_firewall_repair_available() {
-        return;
-    }
-    let marker = crate::support_dirs::sync_data_dir()
-        .join(format!("firewall-asked-{}", env!("CARGO_PKG_VERSION")));
-    if marker.exists() || std::fs::write(&marker, b"").is_err() {
-        return;
-    }
-    let _ = crate::share::start_lan_firewall_repair();
 }

@@ -1246,6 +1246,27 @@ Remote-Laufwerke kann eine Administratorbestätigung anfordern. Zwei Wege:
    fordert erst für `msiexec` UAC an. Eine erkannte inkompatible gemeinsam
    genutzte Dokany-Version wird nicht automatisch ersetzt.
 
+**Firewall (Quellstand 2026-11-25, nicht übersetzt, nicht auf Hardware gelaufen):** se
+richtet die Firewall des Geräts selbst ein, damit Direktverbindungen (Share, Laufwerke,
+Befehle, Bildschirm über UDP und TCP) ohne Relay ankommen; niemand trägt Regeln von Hand
+ein. **Windows:** je eine eingehende Regel für TCP und für UDP, gebunden an `se.exe` und an
+`Smart Explorer.exe` dieser Installation, in allen Netzprofilen (Domäne, Privat,
+Öffentlich). Sie ersetzt die frühere Regel „Smart Explorer Share Peer Listener“ (nur UDP,
+nur Privat und Domäne). Das interaktive Setup fragt dafür die UAC-Bestätigung an; ein
+stilles Setup und ein Update fragen nicht selbst, sondern der nächste Start von se: Vor
+Verbindungen prüft se die Regeln und richtet eine fehlende oder veraltete mit
+UAC-Bestätigung ein (ein Update mit Administratorrechten repariert sie ohne Abfrage).
+Eine abgelehnte Abfrage nennt die fehlenden Regeln und kommt beim nächsten Start wieder.
+Blockiert ein Profil per Einstellung „Alle eingehenden Verbindungen blockieren“ oder per
+Gruppenrichtlinie jede lokale Regel, nennt die Statuszeile das; diese Einstellung ändert se
+nicht. Der Deinstaller entfernt die Regeln dieser Installation (UAC). **Linux:** Läuft ufw,
+firewalld oder ein nftables- oder iptables-Dienst, gibt se dort seine festen Ports frei
+(heute mDNS 5353/udp); `install-linux.sh` tut das mit `sudo`/`doas`/`su` im Terminal, sonst
+fragt se beim Start über den Polkit-Dialog (`pkexec`). Die Direktwege auf Ports, die das
+System wählt, lässt die Zustandsverfolgung der Firewall zu, weil beide Geräte zuerst senden.
+Der Share-Server gibt seine Ports beim Start ebenfalls selbst frei
+([`docs/SHARE_SERVER.md`](docs/SHARE_SERVER.md#ports-and-firewall)).
+
 **Android (ab Android 11):** `smart-explorer-android.apk` aus den
 [Releases](https://github.com/b1ue-man/smart-explorer/releases/latest) auf dem
 Telefon installieren (Sideload). Details, Updates und Grenzen stehen unten unter

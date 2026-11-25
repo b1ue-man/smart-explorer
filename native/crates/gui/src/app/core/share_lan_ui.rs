@@ -8,9 +8,9 @@ pub(super) fn ui(app: &mut App, ui: &mut egui::Ui) {
         match outcome {
             Ok(()) => {
                 app.share_lan_notice =
-                    Some("LAN-Firewall fuer private und Domaenen-Netze eingerichtet".into())
+                    Some("Firewall: eingehend TCP und UDP in allen Netzprofilen freigegeben".into())
             }
-            Err(error) => app.error_msg = Some(format!("LAN-Firewall einrichten: {error}")),
+            Err(error) => app.error_msg = Some(format!("Firewall einrichten: {error}")),
         }
     }
     let status = app.share_lan_status.clone();
@@ -49,14 +49,14 @@ pub(super) fn ui(app: &mut App, ui: &mut egui::Ui) {
         app.set_lan_presence_enabled(presence_enabled);
     }
     if crate::share::lan_firewall_repair_available()
-        && ui.button("LAN-Firewall freigeben / reparieren").clicked()
+        && ui.button("Firewall freigeben / reparieren").clicked()
     {
         match crate::share::start_lan_firewall_repair() {
             Ok(()) => {
                 app.share_lan_notice =
-                    Some("LAN-Firewall: Administratorfreigabe bestaetigen".into())
+                    Some("Firewall: Freigabe des Administrators bestätigen".into())
             }
-            Err(error) => app.error_msg = Some(format!("LAN-Firewall einrichten: {error}")),
+            Err(error) => app.error_msg = Some(format!("Firewall einrichten: {error}")),
         }
     }
     if status.peers.is_empty() {

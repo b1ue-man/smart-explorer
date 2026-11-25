@@ -6,7 +6,6 @@ use super::feed::PayloadSpec;
 
 const INSTALLED_UPDATER_EXE: &str = "Smart Explorer Updater.exe";
 const INSTALLED_CLI_EXE: &str = "se.exe";
-const SHARE_FIREWALL_RULE: &str = "Smart Explorer Share Peer Listener";
 
 /// Free bytes for this user in `folder`, the bound of a download without
 /// announced length (`download_bound.rs`).
@@ -216,46 +215,6 @@ fn detach_standard_handles(command: &mut std::process::Command) {
         .stderr(Stdio::null());
 }
 
-fn ensure_share_firewall_rule_for(exe: &Path) -> std::io::Result<()> {
-    use std::os::windows::process::CommandExt;
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-
-    let exe = exe.to_string_lossy().to_string();
-    let _ = std::process::Command::new("netsh")
-        .args([
-            "advfirewall",
-            "firewall",
-            "delete",
-            "rule",
-            &format!("name={SHARE_FIREWALL_RULE}"),
-        ])
-        .creation_flags(CREATE_NO_WINDOW)
-        .output();
-    let output = std::process::Command::new("netsh")
-        .args([
-            "advfirewall",
-            "firewall",
-            "add",
-            "rule",
-            &format!("name={SHARE_FIREWALL_RULE}"),
-            "dir=in",
-            "action=allow",
-            &format!("program={exe}"),
-            "enable=yes",
-            "profile=any",
-        ])
-        .creation_flags(CREATE_NO_WINDOW)
-        .output()?;
-    if output.status.success() {
-        Ok(())
-    } else {
-        Err(std::io::Error::new(
-            std::io::ErrorKind::PermissionDenied,
-            String::from_utf8_lossy(&output.stderr).trim().to_string(),
-        ))
-    }
-}
-
 /// Revert to an archived binary.
 pub fn revert_to(archived: &Path, version: &str) -> Result<PathBuf, String> {
     if !archived.exists() {
@@ -276,7 +235,11 @@ pub fn revert_to(archived: &Path, version: &str) -> Result<PathBuf, String> {
             });
         }
     };
-    let _ = ensure_share_firewall_rule_for(&cur_exe);
+    // The peer firewall rules of this folder, without a prompt here; the
+    // restarted programs ask for elevation at their start when needed.
+    if let Some(dir) = cur_exe.parent() {
+        let _ = crate::share::ensure_peer_firewall_for_installation(dir, false);
+    }
     Ok(cur_exe)
 }
 
