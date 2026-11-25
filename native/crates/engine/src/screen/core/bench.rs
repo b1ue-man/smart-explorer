@@ -218,6 +218,13 @@ pub async fn run_source(
     let mut decoding: Decoding = None;
     let mut requester = KeyframeRequester::default();
     let mut encoder = "unknown".to_string();
+    // A decoded picture counts as shown and is receipted as a window does
+    // (2026-11-25: without it the host was never held and the bench measured
+    // a backlog no window has); only a host of this frame protocol knows it.
+    let receipts = session
+        .hello
+        .frame_contract
+        .is_some_and(|contract| contract.version == super::frame_budget::FRAME_PROTOCOL);
     let deadline = tokio::time::sleep(Duration::from_secs(u64::from(options.seconds)));
     tokio::pin!(deadline);
     loop {
@@ -258,6 +265,9 @@ pub async fn run_source(
                     return Err(closed_by_host(&session.connection, error));
                 };
                 let wanted = picture(&mut measure, &mut decoding, codecs, event);
+                if let Some((gop_id, frame_id)) = measure.presented.take().filter(|_| receipts) {
+                    let _ = session.control.send(ViewerFrame::Presented { gop_id, frame_id }).await;
+                }
                 if std::mem::take(&mut measure.fresh_keyframe) {
                     requester.on_keyframe();
                 }
@@ -344,6 +354,7 @@ fn picture(
             let frame = active
                 .decoded_frame()
                 .unwrap_or_else(|| DecodedFrame::from_record(&record));
+            measure.presented = Some((current.gop_id, frame.frame_id));
             measure.shown(active.picture(), frame, record.frame_id, shown_us, false);
             None
         }

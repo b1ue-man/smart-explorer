@@ -89,8 +89,8 @@ impl Pacer {
     /// waits past its next `PRESENTED`. A viewer that stops sending
     /// `PRESENTED` is no longer held after that time (a display path without
     /// it never becomes one picture a second). No stream is reset for it and
-    /// the line's rate stays; a viewer without `PRESENTED` (older ones,
-    /// `se screen bench`) is never held.
+    /// the line's rate stays; a viewer without `PRESENTED` (older ones) is
+    /// never held; `se screen bench` receipts each decoded picture (2026-11-25).
     pub fn viewer_behind(&self, now_us: u64) -> bool {
         let fresh = PRESENTED_FRESH_US.max(
             self.presented_gap_us

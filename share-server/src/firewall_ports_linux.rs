@@ -140,6 +140,18 @@ pub(super) fn iptables_filters(rules: &str) -> bool {
     })
 }
 
+/// `iptables -S INPUT` of one address family drops what no rule accepts and
+/// never jumps into ufw's chains: ufw's rules are not consulted for that
+/// family, so the server admits its ports there directly (seen 2026-11-25 on
+/// a server whose IPv4 INPUT comes from its own rule file while ufw manages
+/// IPv6: STUN and the TCP reflector stayed closed over IPv4).
+pub(super) fn bypasses_ufw(rules: &str) -> bool {
+    iptables_filters(rules)
+        && !rules.lines().any(|line| {
+            line.contains("-j ufw-before-input") || line.contains("-j ufw6-before-input")
+        })
+}
+
 /// `iptables -C|-I INPUT …` for `port` with the server's mark.
 pub(super) fn iptables_args(check: bool, port: &Listener) -> Vec<String> {
     let number = port.bind.port().to_string();
@@ -157,6 +169,18 @@ pub(super) fn iptables_args(check: bool, port: &Listener) -> Vec<String> {
         "-j",
         "ACCEPT",
     ])
+}
+
+/// The server's ports in one iptables program's INPUT, each rule once.
+fn admit_iptables(privilege: Privilege, binary: &str, ports: &[Listener]) -> Result<(), Refusal> {
+    for port in ports {
+        let present = run(&privilege.argv(binary, &iptables_args(true, port)))
+            .is_ok_and(|out| out.status.success());
+        if !present {
+            must(privilege, binary, &iptables_args(false, port))?;
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn root() -> bool {
@@ -236,7 +260,22 @@ pub(super) fn admit(ports: &[Listener]) -> Result<String, Refusal> {
                     &own(&["allow", &port.label(), "comment", &comment]),
                 )?;
             }
-            return Ok(format!("ufw: eingehend freigegeben {list}"));
+            let mut bypassed = Vec::new();
+            for binary in IPTABLES.iter().filter_map(|candidates| program(candidates)) {
+                let rules = read(privilege, binary, &["-S", "INPUT"]).map(|out| stdout(&out));
+                if rules.is_some_and(|rules| bypasses_ufw(&rules)) {
+                    admit_iptables(privilege, binary, ports)?;
+                    bypassed.push(binary.rsplit('/').next().unwrap_or(binary));
+                }
+            }
+            return Ok(if bypassed.is_empty() {
+                format!("ufw: eingehend freigegeben {list}")
+            } else {
+                format!(
+                    "ufw: eingehend freigegeben {list}; {} reicht INPUT nicht an ufw weiter: dort direkt freigegeben (bis zum Neustart; se-share-server prüft bei jedem Start)",
+                    bypassed.join(", ")
+                )
+            });
         }
     }
     if let Some(firewall_cmd) = program(&FIREWALL_CMD) {
@@ -302,13 +341,7 @@ pub(super) fn admit(ports: &[Listener]) -> Result<String, Refusal> {
             .is_some_and(|out| iptables_filters(&stdout(&out)));
         if is_legacy && filters {
             legacy = true;
-            for port in ports {
-                let present = run(&privilege.argv(binary, &iptables_args(true, port)))
-                    .is_ok_and(|out| out.status.success());
-                if !present {
-                    must(privilege, binary, &iptables_args(false, port))?;
-                }
-            }
+            admit_iptables(privilege, binary, ports)?;
         }
     }
     Ok(if legacy {

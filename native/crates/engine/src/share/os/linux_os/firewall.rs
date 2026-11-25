@@ -311,12 +311,19 @@ fn filters_iptables(binary: &str) -> bool {
 
 fn admit_as_root() -> Result<Option<Backend>, String> {
     let backend = detect_as_root();
+    let mut until_boot = false;
     match backend {
         None => {}
         Some(Backend::Ufw) => {
             let ufw = program(&UFW).ok_or("ufw fehlt")?;
             for port in DEVICE_PORTS {
                 must(ufw, &plan::ufw_args(*port))?;
+            }
+            // A family whose INPUT never reaches ufw gets se's rules itself;
+            // they end with the boot, so the record does too.
+            for binary in ufw_bypassed_iptables() {
+                until_boot = true;
+                admit_iptables(binary)?;
             }
         }
         Some(Backend::Firewalld) => {
@@ -355,23 +362,42 @@ fn admit_as_root() -> Result<Option<Backend>, String> {
                 .into_iter()
                 .filter(|binary| filters_iptables(binary))
             {
-                for port in DEVICE_PORTS {
-                    let present = run(binary, &plan::iptables_args(true, *port))
-                        .is_ok_and(|output| output.status.success());
-                    if !present {
-                        must(binary, &plan::iptables_args(false, *port))?;
-                    }
-                }
+                admit_iptables(binary)?;
             }
         }
     }
-    write_record(backend)?;
+    write_record(backend, until_boot)?;
     Ok(backend)
 }
 
+/// se's ports in one iptables program's INPUT, each rule once.
+fn admit_iptables(binary: &str) -> Result<(), String> {
+    for port in DEVICE_PORTS {
+        let present = run(binary, &plan::iptables_args(true, *port))
+            .is_ok_and(|output| output.status.success());
+        if !present {
+            must(binary, &plan::iptables_args(false, *port))?;
+        }
+    }
+    Ok(())
+}
+
+/// The iptables programs (either variant) whose INPUT filters and never
+/// reaches ufw's chains (`plan::bypasses_ufw`).
+fn ufw_bypassed_iptables() -> Vec<&'static str> {
+    IPTABLES
+        .iter()
+        .filter_map(|candidates| program(candidates))
+        .filter(|binary| {
+            run(binary, &args(&["-S", "INPUT"]))
+                .is_ok_and(|output| plan::bypasses_ufw(&stdout(&output)))
+        })
+        .collect()
+}
+
 /// The record next to the rules' own lifetime; the other one goes.
-fn write_record(backend: Option<Backend>) -> Result<(), String> {
-    let (path, other) = if backend.is_some_and(|backend| !backend.persistent()) {
+fn write_record(backend: Option<Backend>, until_boot: bool) -> Result<(), String> {
+    let (path, other) = if until_boot || backend.is_some_and(|backend| !backend.persistent()) {
         (RECORD_BOOT, RECORD_KEPT)
     } else {
         (RECORD_KEPT, RECORD_BOOT)
@@ -380,6 +406,13 @@ fn write_record(backend: Option<Backend>) -> Result<(), String> {
     let path = Path::new(path);
     let folder = path.parent().ok_or("Ordner des Firewall-Eintrags fehlt")?;
     std::fs::create_dir_all(folder).map_err(|error| format!("{}: {error}", folder.display()))?;
+    // Only root writes the folder (`root_written`): an inherited default ACL
+    // or umask that left it group-writable would make se distrust its own
+    // record (seen 2026-11-25: „sein Eintrag fehlt aber“ after every start).
+    if folder != Path::new("/run") {
+        std::fs::set_permissions(folder, std::fs::Permissions::from_mode(0o755))
+            .map_err(|error| format!("{}: {error}", folder.display()))?;
+    }
     let temporary = path.with_extension("new");
     std::fs::write(&temporary, text)
         .and_then(|()| std::fs::set_permissions(&temporary, std::fs::Permissions::from_mode(0o644)))

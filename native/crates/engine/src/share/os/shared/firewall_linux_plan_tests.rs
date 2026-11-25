@@ -99,6 +99,17 @@ fn firewall_rules_task_linux_detects_active_firewalls() {
     assert!(!iptables_filters(
         "-P INPUT ACCEPT\n-A INPUT -p tcp --dport 22 -j DROP\n"
     ));
+    // ufw active, but this family's INPUT never reaches ufw's chains.
+    let own_rules =
+        "-P INPUT DROP\n-A INPUT -i lo -j ACCEPT\n-A INPUT -p tcp -m tcp --dport 22 -j ACCEPT\n";
+    assert!(bypasses_ufw(own_rules));
+    assert!(!bypasses_ufw(
+        "-P INPUT DROP\n-A INPUT -j ufw-before-logging-input\n-A INPUT -j ufw-before-input\n"
+    ));
+    assert!(!bypasses_ufw(
+        "-P INPUT DROP\n-A INPUT -j ufw6-before-input\n"
+    ));
+    assert!(!bypasses_ufw("-P INPUT ACCEPT\n"));
     assert!(iptables_legacy("iptables v1.8.9 (legacy)"));
     assert!(iptables_legacy("iptables v1.6.1"));
     assert!(!iptables_legacy("iptables v1.8.9 (nf_tables)"));

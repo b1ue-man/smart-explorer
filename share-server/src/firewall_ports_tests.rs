@@ -202,6 +202,14 @@ fn firewall_ports_task_server_linux_detection() {
         ]
     );
     assert!(iptables_filters("-P INPUT DROP\n"));
+    // ufw active, but this family's INPUT never reaches ufw's chains.
+    assert!(bypasses_ufw(
+        "-P INPUT DROP\n-A INPUT -i lo -j ACCEPT\n-A INPUT -p tcp -m tcp --dport 51820 -j ACCEPT\n"
+    ));
+    assert!(!bypasses_ufw(
+        "-P INPUT DROP\n-A INPUT -j ufw6-before-logging-input\n-A INPUT -j ufw6-before-input\n"
+    ));
+    assert!(!bypasses_ufw("-P INPUT ACCEPT\n"));
     assert!(!iptables_filters(
         "-P INPUT ACCEPT\n-A INPUT -p tcp --dport 22 -j DROP\n"
     ));

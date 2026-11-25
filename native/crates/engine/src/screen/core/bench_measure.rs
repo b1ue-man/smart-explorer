@@ -35,6 +35,9 @@ pub(super) struct Measure {
     pub(super) keyframes: u64,
     /// A key frame was shown since the last look (answers the open request).
     pub(super) fresh_keyframe: bool,
+    /// The picture just decoded, for the `PRESENTED` receipt a window sends
+    /// when it shows one (`viewer_behind` holds the host as for a window).
+    pub(super) presented: Option<(u64, u64)>,
     pub(super) corrupt: u64,
     /// Pictures that came out of a later decoder call than their own.
     pub(super) late: u64,
@@ -61,6 +64,7 @@ impl Measure {
             highest_frame: 0,
             keyframes: 0,
             fresh_keyframe: false,
+            presented: None,
             corrupt: 0,
             late: 0,
             decode_errors: 0,

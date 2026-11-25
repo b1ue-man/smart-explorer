@@ -252,6 +252,17 @@ pub fn iptables_filters(rules: &str) -> bool {
     })
 }
 
+/// `iptables -S INPUT` of one address family drops what no rule accepts and
+/// never jumps into ufw's chains: ufw's rules are not consulted for that
+/// family, so se admits its ports there directly (seen 2026-11-25 on a server
+/// whose IPv4 INPUT comes from its own rule file while ufw manages IPv6).
+pub fn bypasses_ufw(rules: &str) -> bool {
+    iptables_filters(rules)
+        && !rules.lines().any(|line| {
+            line.contains("-j ufw-before-input") || line.contains("-j ufw6-before-input")
+        })
+}
+
 fn iptables_rule(port: Port) -> Vec<String> {
     let number = port.number.to_string();
     [
