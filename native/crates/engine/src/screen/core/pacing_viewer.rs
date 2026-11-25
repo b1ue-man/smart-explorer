@@ -83,10 +83,12 @@ impl Pacer {
     /// (its last `PRESENTED` came within `PRESENTED_FRESH_US`, or within
     /// `PRESENTED_GAPS` of its own time between two of them, at most
     /// `PRESENTED_HOLD_MAX_US`), the oldest picture it received and did not
-    /// show came more than `VIEWER_LAG_US` ago, and no picture went out
-    /// since its last `PRESENTED`. A viewer that keeps up is never held; one
-    /// that falls behind gets one picture per picture it shows, and never
-    /// waits past its next `PRESENTED`. A viewer that stops sending
+    /// show came more than `VIEWER_LAG_US` ago and no picture went out
+    /// since its last `PRESENTED`, or a picture sent still waits for its
+    /// `FRAME_ACK` more than `VIEWER_LAG_US` past the round trip. A viewer
+    /// that keeps up is never held; one that falls behind gets one picture
+    /// per picture it shows until its unread backlog drained, and never
+    /// waits past its next `PRESENTED` otherwise. A viewer that stops sending
     /// `PRESENTED` is no longer held after that time (a display path without
     /// it never becomes one picture a second). No stream is reset for it and
     /// the line's rate stays; a viewer without `PRESENTED` (older ones) is
@@ -104,6 +106,18 @@ impl Pacer {
             .received
             .front()
             .is_some_and(|(_, at)| now_us.saturating_sub(*at) > VIEWER_LAG_US);
-        showing && lagging && !self.present_credit
+        // A viewer that decodes slower than the host sends reads the line
+        // only as fast as it shows: its backlog waits unread in the socket
+        // buffers and never reaches `received` (2026-11-25, „TCP“: 2.3 s that
+        // stayed, one picture per `PRESENTED` kept the queue as long; „UDP“:
+        // 60–100 ms). While a picture sent waits longer than `VIEWER_LAG_US`
+        // past the round trip for its `FRAME_ACK`, none follows, not even
+        // after a `PRESENTED`, so the backlog drains. A lost datagram picture
+        // ends it with the viewer's `FRAME_LOSS` (the reset forgets it).
+        let round_trip = self.timing.map_or(0, |(rtt_us, _)| rtt_us);
+        let unread = self.in_flight.front().is_some_and(|frame| {
+            now_us.saturating_sub(frame.sent_us) > VIEWER_LAG_US.saturating_add(round_trip)
+        });
+        showing && (unread || (lagging && !self.present_credit))
     }
 }

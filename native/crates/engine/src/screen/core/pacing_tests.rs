@@ -276,4 +276,17 @@ fn review1119_task_pictures_follow_what_the_viewer_shows() {
         pacer.decide(late, 6_000_000, PathKind::Direct, 1_000),
         PaceDecision::Encode { keyframe: false }
     );
+    // 2026-11-25: a backlog the viewer has not read yet (socket buffers, a
+    // viewer decoding slower than the host sends) holds the next picture as
+    // well, also after a `PRESENTED`, until its `FRAME_ACK` drains it.
+    let mut unread = Pacer::default();
+    unread.on_presented(1, 1_000_000);
+    let mut waiting = frame(2);
+    waiting.sent_us = 1_000_000;
+    unread.on_frame_sent(waiting);
+    assert!(!unread.viewer_behind(1_000_000 + VIEWER_LAG_US));
+    unread.on_presented(1, 1_000_000 + VIEWER_LAG_US);
+    assert!(unread.viewer_behind(1_000_000 + VIEWER_LAG_US + 1));
+    unread.on_ack(1, 2);
+    assert!(!unread.viewer_behind(1_000_000 + VIEWER_LAG_US + 1));
 }

@@ -320,6 +320,15 @@ pub async fn run(video: ViewerVideo) {
                 return;
             }
         }
+        // Waiting for the decoder is no silence of the line: the packets of
+        // that time are still unread (`Assembler::postpone`).
+        let after = now_us();
+        let stalled = after.saturating_sub(now);
+        assembler.postpone(stalled);
+        if let Some(named) = tail.as_mut() {
+            named.named_us = named.named_us.saturating_add(stalled);
+        }
+        let now = after;
         let expired = assembler.expire(now);
         if !hand_on(expired, &mut delivery, now).await {
             return;

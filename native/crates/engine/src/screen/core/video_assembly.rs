@@ -281,6 +281,16 @@ impl Assembler {
         (out, present)
     }
 
+    /// The task waited `by_us` for the decoder and read no packet meanwhile:
+    /// that time is no silence of the line (2026-11-25: pictures whose
+    /// packets sat unread in the socket buffer were given up, 13 key frames
+    /// and 337 skipped pictures in ten seconds without one lost packet).
+    pub fn postpone(&mut self, by_us: u64) {
+        for picture in self.pictures.values_mut() {
+            picture.last_us = picture.last_us.saturating_add(by_us);
+        }
+    }
+
     /// Gives up the pictures silent at `now_us`, each with every older one.
     pub fn expire(&mut self, now_us: u64) -> Vec<Assembled> {
         let mut out = Vec::new();

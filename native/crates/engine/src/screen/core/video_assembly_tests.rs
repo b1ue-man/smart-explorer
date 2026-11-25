@@ -106,6 +106,13 @@ fn udp_task_assembly_gives_up_after_silence() {
     // ones along.
     assembler.push(&packets(3, 1, SHARD * 10)[0], 30 * MS);
     assert_eq!(given_up(&assembler.expire(90 * MS)), vec![2, 3]);
+    // 2026-11-25: time the task waited for the decoder is no silence: the
+    // packets of that time were still unread in the socket buffer.
+    let mut waiting = Assembler::new(1 << 20);
+    waiting.push(&packets(5, 1, SHARD * 10)[0], 0);
+    waiting.postpone(200 * MS);
+    assert!(waiting.expire(240 * MS).is_empty());
+    assert_eq!(given_up(&waiting.expire(250 * MS)), vec![5]);
     // Pictures 100 ms apart: the wait grows to two of their intervals.
     let mut assembler = Assembler::new(1 << 20);
     for frame in 1..40u64 {
