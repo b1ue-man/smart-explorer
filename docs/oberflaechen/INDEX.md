@@ -1,6 +1,6 @@
 # Oberflächen von Smart Explorer
 
-Stand: 2026-11-27; Suche in Dateien und Textansicht als Teildokumente ergänzt (davor 2026-10-31: rekursive Ansicht, Medien- und Fernzugriffsverträge). Die Einträge beschreiben die jeweilige Oberfläche; veröffentlichte Versionen werden in den verlinkten Dokumenten getrennt belegt.
+Stand: 2026-11-28; Maskenlisten als Teildokument ergänzt, Suche in Dateien um Ersetzen erweitert (davor 2026-11-27: Suche in Dateien und Textansicht als Teildokumente ergänzt; 2026-10-31: rekursive Ansicht, Medien- und Fernzugriffsverträge). Die Einträge beschreiben die jeweilige Oberfläche; veröffentlichte Versionen werden in den verlinkten Dokumenten getrennt belegt.
 
 Zweck: Dieses Verzeichnis hält fest, welche Oberflächen das Projekt hat und über welche Oberfläche jede Fähigkeit und jede Einstellung erreichbar ist. Eine Fähigkeit ist erst fertig, wenn jede Oberfläche, die ihren Gegenstand zeigt oder steuert, sie gleichwertig zeigt und steuert. Ausnahmen (zum Beispiel die Terminal-Verbindung selbst, eine Plattform ohne die nötige Betriebssystemfunktion) stehen mit Grund im Teildokument.
 
@@ -31,8 +31,9 @@ Zweck: Dieses Verzeichnis hält fest, welche Oberflächen das Projekt hat und ü
 | se Desktop und se Launcher | [desktop-launcher.md](desktop-launcher.md) |
 | Eigene Android-Medienvorschau (Bilder, Video, Audio) | [medien.md](medien.md) |
 | Rekursive Ansicht (Strg+R, Android-Schalter „Rekursiv“), `se ls --recursive` in Text und JSON, MCP über `se` | [explorer.md](explorer.md) |
-| Suche in Dateien (Notepad++-Filter, Ordnerpfad-Regex, Normal/Erweitert/Regex), `se grep`, MCP `grep`, Arbeitsziel `root` und `read` nach Zeilen, Ergebnisbereich der Desktop-GUI und der App | [dateisuche.md](dateisuche.md) |
+| Suche und Ersetzen in Dateien (Notepad++-Filter, Ordnerpfad-Regex, Normal/Erweitert/Regex, Ignorierdateien), `se grep`, `se replace`, MCP `grep`/`replace`/`apply_patch`, Arbeitsziel `root` und `read` nach Zeilen, Ergebnisbereich der Desktop-GUI und der App | [dateisuche.md](dateisuche.md) |
 | Textansicht (Hervorhebung getrennt von der Ansicht, Sprachpakete `.sublime-syntax`, Markdown-Darstellung), `se languages` | [textansicht.md](textansicht.md) |
+| Maskenlisten (wörtlich, Regex, unscharf; Platzhalter in beide Richtungen; Schutzpfade), Agenten-Sperre über `se hook` und die Plugins, `se masks`, Einstellungsseite „Maskenlisten“, MCP-Werkzeug `masks` | [masken.md](masken.md) |
 
 ## Kostenklassen
 

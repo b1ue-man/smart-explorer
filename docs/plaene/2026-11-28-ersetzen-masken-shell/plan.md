@@ -305,3 +305,12 @@ Schon angelegt (Commit des Plans): CLI-Befehle `Replace(replace::ReplaceArgs)`, 
 | P5 | Shell, Erhöhung, Share-Exec (M6) | `engine/src/elevate/**`, `cli/src/cli/elevated.rs`, neue `mcp/shell_tool*.rs`, `mcp/exec_tool.rs`, `mcp/exec_session_job.rs`, `mcp/exec_share_job.rs`, `mcp/exec_ssh_job.rs`, `mcp/shell_registry.rs`, `cli/src/cli/shell_session/**`, `cli/src/cli/exec*.rs`, Share-Exec-Dateien in `engine/src/share/` (Exec-Start, Host-Exec), `[target.'cfg(windows)'.dependencies]` in `engine/Cargo.toml` |
 | P6 | Vollsperre und Verwaltung (M7) | `cli/src/cli/hook*.rs`, `cli/src/cli/masks_cli*.rs`, `cli/src/cli/plugin/**` außer `assets/SKILL.md`, neue `gui/src/app/core/settings_masks*.rs`, `settings_navigation.rs`, `settings_ui.rs` (nur Seiteneintrag), `batches_settings_task_tests.rs`, neue `docs/oberflaechen/masken.md` |
 | Hauptagent | Verträge, Doku über mehrere Pakete, Register, Suite, Integration, Release | `docs/**` außer `masken.md`, `docs/tests/register.tsv`, `native/test-crates-task.py`, Workflows |
+
+### Fortschritt
+
+- 2026-11-28: Plan und Verträge committet (`90a400e5`). Sieben Umsetzungsagenten gestartet (P1, P2, P3, P4a, P4b,
+  P5, P6), jeweils Claude Code, Modell `claude-opus-5-5`, Effort `high` nach `modellwahl` (Profil coding,
+  Einstufung 8, Umfang large); gemeinsame Vorgaben in der Briefdatei des Hauptagenten.
+- Zweiter Weg mit Umgebungsbeleg (Arbeitsweise „Kein zweiter Weg ohne Tatsache der Umgebung“): Linux-Erhöhung
+  pkexec, ohne registrierten polkit-Agenten `sudo -n`; Beleg: pkexec endet ohne Agent mit Exit 127 „No
+  authentication agent found“ (Ref. sperre §4.2, beobachtet 2026-11-28).

@@ -1,6 +1,6 @@
 # Suche in Dateien (Volltextsuche)
 
-Stand 2026-11-27 (Plan `docs/plaene/2026-11-27-dateien-suche-ansicht/plan.md`, Teile B, C und E). Die Suche findet Text in Dateien unter einem Ordner wie Notepad++ „Find in Files“: drei Suchmodi (Normal, Erweitert, Regulärer Ausdruck), Groß-/Kleinschreibung, ganze Wörter, „. findet Zeilenumbruch“, das Filterfeld von Notepad++ und zusätzlich zwei reguläre Ausdrücke auf den Ordnerpfad (Nutzer: „ordnerpfad mit regex“). Sie läuft dort, wo die Dateien liegen: lokal auf den eigenen Kernen, auf SSH-Servern im `se-agent`, bei Share Direct und Gruppen auf dem Host, sonst durch Lesen über die Verbindung. Binär- und Office-Dateien sind ausgenommen (Nutzer: „bleibt erstmal aus“). Pfade unten sind relativ zu `native/crates/`.
+Stand 2026-11-28 (Plan `docs/plaene/2026-11-27-dateien-suche-ansicht/plan.md`, Teile B, C und E; Ersetzen, Ignorierdateien und MCP-Coding: Plan `docs/plaene/2026-11-28-ersetzen-masken-shell/plan.md`). Die Suche findet Text in Dateien unter einem Ordner wie Notepad++ „Find in Files“: drei Suchmodi (Normal, Erweitert, Regulärer Ausdruck), Groß-/Kleinschreibung, ganze Wörter, „. findet Zeilenumbruch“, das Filterfeld von Notepad++ und zusätzlich zwei reguläre Ausdrücke auf den Ordnerpfad (Nutzer: „ordnerpfad mit regex“). Sie läuft dort, wo die Dateien liegen: lokal auf den eigenen Kernen, auf SSH-Servern im `se-agent`, bei Share Direct und Gruppen auf dem Host, sonst durch Lesen über die Verbindung. Binär- und Office-Dateien sind ausgenommen (Nutzer: „bleibt erstmal aus“). Pfade unten sind relativ zu `native/crates/`.
 
 ## Kern
 
@@ -9,6 +9,8 @@ Stand 2026-11-27 (Plan `docs/plaene/2026-11-27-dateien-suche-ansicht/plan.md`, T
 | Abfrage | `ContentQuery`: Muster, `TextMode` Normal/Erweitert/Regex, Groß/Klein, ganzes Wort (bei Regex ohne Wirkung), „. findet Zeilenumbruch“, Notepad++-Filter, Ordnerpfad-Regex einschließen/ausschließen (relativer Pfad mit `/`, der Ordner selbst ist leer), Unterordner, versteckte Ordner, Kontextzeilen, Höchstzahl, nur Dateien, Zeilenlänge (Standard 1024 Bytes) | `storage/src/agent_proto/core/content_query.rs:12` (`TextMode`), `:48` (`ContentQuery`) |
 | Prüfung | ein ungültiges Muster, ein ungültiger Ordner-Regex oder ein ungültiger Filter wird vor der Suche mit deutschem Text abgelehnt | `storage/src/agent_proto/os/shared/content_match.rs:38` (`ContentMatcher::new`), `storage/src/agent_proto/core/content_filter.rs:86` (`PathFilter::new`) |
 | Ort der Suche | `vfs::content_search` fragt zuerst das Backend (lokal, SSH-Agent, Share-Host), sonst liest es die Dateien über das Backend | `storage/src/vfs/os/shared/content_read.rs:28` |
+| Ignorierdateien | `ContentQuery::respect_ignore_files`: `.ignore` in jedem Ordner, `.gitignore` innerhalb eines Git-Arbeitsbaums, `.git/info/exclude`, Vorrang wie ripgrep (tieferer Ordner, `.ignore` vor `.gitignore`, `!muster` holt zurück); SSH-Agent ab Protokoll 14, Share-Host mit Fähigkeit `content_search_ignore_v1`, ältere Gegenstellen: Lesen über das Backend mit eigener Filterung | `storage/src/agent_proto/os/shared/content_ignore.rs`, `content_walk.rs`; Share `engine/src/share/os/shared/host_content_search_ignore.rs`, Prüfung der Fähigkeit `engine/src/share/core/peer_content_search.rs` |
+| Ersetzen | `vfs::content_replace`: dieselben Treffer wie die Suche (auch über Zeilen), Ersetzungssyntax wie Notepad++ (Normal wörtlich, Erweitert mit Escapes auch im Ersatztext, Regex mit Boost-`format_all`: `$&` `$0` `${n}` `\n` `$+{name}` `` $` `` `$'` `$+` `$$`, `\U \L \E \u \l`, Bedingungen `?n…:…`); Auswahl alle Treffer, Dateien oder einzelne Treffer; Kodierung (BOM, UTF-8, UTF-16 mit BOM, ANSI) und Zeilenenden bleiben; übersprungen mit Grund: binär, schreibgeschützt, zu groß, nicht lesbar, seit der Suche geändert, Ersatz nicht ANSI-darstellbar, Sicherung gescheitert; je Datei Stufe neben dem Ziel, Prüfung auf Änderung, `promote_staged`; Original verschlüsselt im Journal (`<App-Daten>/replace-journal/`), Rückgängig nur für seitdem unveränderte Dateien | `storage/src/vfs/os/shared/content_replace.rs`, `content_replace_write.rs`, `replace_journal*.rs`; Ersetzung `storage/src/agent_proto/os/shared/content_replace*.rs` (Format `content_replace_format.rs`) |
 
 ## CLI `se grep`
 
@@ -19,6 +21,14 @@ Stand 2026-11-27 (Plan `docs/plaene/2026-11-27-dateien-suche-ansicht/plan.md`, T
 | Ordnerpfad-Regex | `--folders <REGEX>`, `--exclude-folders <REGEX>` | `cli/src/cli/grep.rs:54-65` |
 | Ausgabe | `rel:zeile:text` je Treffer, Kontext mit `-C N` (`rel-zeile-text`, Gruppen durch `--` getrennt), `--files-only`, `--count`, `--max-results N`, `--json` (eine Zeile je Treffer mit `rel`, `line`, `text`, `ranges`), `--color`; Summen auf der Standardfehlerausgabe; Rückgabewert 0 mit Treffern, 1 ohne, 2 bei Fehler, 130 nach Strg+C | `cli/src/cli/grep.rs:1-9`, `:71-95`; JSON-Zeilen `cli/src/cli/mcp/grep_records.rs:172` |
 
+## CLI `se replace`
+
+| Fähigkeit | Einstieg | Beleg |
+|---|---|---|
+| Ersetzen | `se replace <Ziel> <Muster> <Ersatz>` mit allen Optionen von `se grep` (gemeinsam `SearchOptions`), `--dry-run` (Vorschau), `--yes`, ohne `--yes` im Terminal Rückfrage mit Ordner, Filter, Zahl der Stellen und Dateien (Vorgabe Nein), ohne Terminal `--yes` oder `--dry-run` nötig; `--json`; Rückgabewert 0 mit Ersetzungen, 1 ohne, 2 bei Fehler, 130 nach Strg+C | `cli/src/cli/replace.rs`, Optionen `cli/src/cli/grep.rs` |
+| Verlauf, Rückgängig | `--history`, `--undo <ID>` (0: alle Dateien zurück, 1: Dateien blieben, 2: Fehler), `--discard <ID>` | `cli/src/cli/replace.rs` |
+| Ignorierdateien | `se grep --gitignore`, `se replace --gitignore` | `cli/src/cli/grep.rs` |
+
 ## MCP `se mcp`
 
 | Fähigkeit | Einstieg | Beleg |
@@ -26,6 +36,10 @@ Stand 2026-11-27 (Plan `docs/plaene/2026-11-27-dateien-suche-ansicht/plan.md`, T
 | Inhaltssuche | Werkzeug `grep` mit `target` (Standard: das Arbeitsziel), `pattern`, `mode`, `match_case`, `whole_word`, `dot_matches_newline`, `filters`, `folders`, `exclude_folders`, `subfolders`, `hidden`, `context_lines`, `output` (content, files, count), `format` json, Seiten über `hits_offset`, Summen am Ende des Auftrags | Beschreibung `cli/src/cli/mcp/grep_tool.rs:21`, Felder `:23`, Katalog `cli/src/cli/mcp/catalog.rs:156` |
 | Arbeitsziel | Werkzeug `root`: `set` (jede Zielart), `show`, `clear`; danach nehmen die Dateiwerkzeuge (`list`, `stat`, `read`, `write`, `edit`, `mkdir`, `remove`, `copy`, `move`, `search`, `grep`) relative Pfade darunter, `..` verlässt es nicht; die Verbindung bleibt für die Sitzung offen | `cli/src/cli/mcp/root_tool.rs:17`, Katalog `cli/src/cli/mcp/catalog.rs:86`, Auflösung `cli/src/cli/mcp/root_path.rs` |
 | Lesen nach Zeilen | `read` mit `line` (1-basiert) und `lines`: nummerierte Ausgabe wie `cat -n`, Fortsetzung über `next_line` | Felder `cli/src/cli/mcp/catalog.rs:101-102`, Ausführung `cli/src/cli/mcp/line_read.rs:17` |
+| Ersetzen | Werkzeug `replace` (Job): Felder von `grep` plus `replacement`, `files`, `hits`, `dry_run` (Strom `previews`), `undo`, `history`; Strom `changes` mit etag, Ergebnis mit Summen, `skipped_items` und `undo_id` | `cli/src/cli/mcp/replace_tool.rs`, `replace_tool_run.rs` |
+| Mehrdatei-Änderungen | Werkzeug `apply_patch` im Patchformat von Codex (Hinzufügen, Löschen, Aktualisieren, Verschieben, Kontextabgleich wie Codex); der ganze Patch wird zuerst berechnet, dann jede Datei ganz oder gar nicht veröffentlicht, gebunden an das gelesene etag | `cli/src/cli/mcp/patch_tool.rs`, `patch_tool_parse.rs`, `patch_tool_apply.rs`, `patch_tool_publish.rs` |
+| Ignorierdateien, Namenssuche | `grep` und `replace` mit `gitignore`; `search` mit Pfad-Globs (`/`, `**`, `{a,b}`, Klassen), `sort` (`name`, `mtime`), `gitignore`; `se search --sort --gitignore --json` | `cli/src/cli/mcp/grep_tool.rs`, `search_tool.rs`; `cli/src/cli/search.rs`, `search_glob.rs`, `search_ignore.rs` |
+| Maskenlisten | Treffer, Kontext, Vorschauen und Pfade sind mit aktiven Listen maskiert; Trefferzeilen entstehen aus der ganz maskierten Datei (Zeilennummern gleich, `ranges` umgerechnet) | `cli/src/cli/mcp/grep_mask.rs`; Einzelheiten [masken.md](masken.md) |
 
 ## Desktop-GUI
 
@@ -40,6 +54,9 @@ Stand 2026-11-27 (Plan `docs/plaene/2026-11-27-dateien-suche-ansicht/plan.md`, T
 | Kontextmenü | Alle aufklappen, Alle zuklappen, Kopieren, Ausgewählte Zeilen kopieren, Pfade kopieren, Pfade öffnen (Textansicht), Alles auswählen, Leeren, In diesen Ergebnissen suchen… (Normal/Regex, Groß/Klein; neues Ergebnis oben), Lange Zeilen umbrechen, Bei jeder Suche leeren; Tasten im Bereich: ↑/↓, Pos1/Ende, Enter, ←/→ (zu-/aufklappen), Strg+A, Strg+C, Esc | `gui/src/app/core/content_search_panel_menu.rs:213` (`menu`), `:12` (`apply_choice`), `:65` (Eingabe), `:124` (`keys`); Kopiertexte und Filter `gui/src/app/core/content_search_nav.rs:90`, `:124`, `:133`, `:143` |
 | Tastaturzuständigkeit | ein Klick auf Dialog, Ergebnisbereich oder Ansicht gibt dieser Fläche die Tastatur; solange sperrt die Dateiliste ihre eigenen Kürzel | `gui/src/app/core/text_tools.rs:86` (`track_pointer`), `gui/src/app/core/frame_keyboard.rs:469` |
 | Ansicht-Menü | „Ansicht“ → „Suchergebnisse“ blendet den Bereich ein und aus | `gui/src/app/core/shell_commands.rs:242` |
+| Ersetzen öffnen | Strg+Umschalt+H öffnet „In Dateien suchen“ mit dem Fokus auf „Ersetzen durch“ (leerer Suchtext: Fokus dort); Menü „»“ → „In Dateien ersetzen…“ | `gui/src/app/core/frame_keyboard.rs:147`, `text_tools.rs:361`, `content_replace_tools.rs:352`; Menü `shell_commands.rs` |
+| Ersetzen im Dialog | Feld „Ersetzen durch“ mit Verlauf, Knopf „In Dateien ersetzen“, Schalter „Ignorierdateien beachten (.gitignore)“; zuerst eine zählende Vorschau, dann Bestätigung mit Ordner, Ziel, Filter, Zahl der Stellen und Dateien und den übersprungenen Dateien, Fokus auf „Abbrechen“ (Enter bricht ab) | `gui/src/app/core/content_search_dialog.rs:330`, `:421`, `:451`, Verlauf `:162`, `:231`; Bestätigung `content_replace_confirm.rs:66`, `:136`, `:268`; Ablauf `content_replace_tools.rs:77` |
+| Ersetzen im Ergebnis | Kontextmenü „Ersetzen…“ (ausgewählte Treffer/Dateien), „Alle verbleibenden ersetzen…“, „Aus dem Ergebnis entfernen (Entf)“, „Ersetzen rückgängig machen“; Knopf „Rückgängig“; je Lauf ein Eintrag `Ersetzen „x“ durch „y“ (N Ersetzungen in M Dateien von K durchsuchten, S übersprungen)` mit Dateien und Gründen; Lauf und Rückgängig im Hintergrund | `gui/src/app/core/content_search_panel_menu.rs:262`, `:302`, `:329`; `content_search_results_ui.rs:274`; `content_replace_results.rs:102`, `:206`, `:248`, `:264`; `content_replace_run.rs:111`, `:195` |
 
 ## Android-App
 
@@ -50,20 +67,22 @@ Pfade relativ zu `android/app/src/main/java/app/smartexplorer/android/`.
 - Ergebnis (`ui/files/ContentResults.kt:105-127`): Kopfzeile `Suche „x“ (N Treffer in M Dateien von K durchsuchten) [Modus: Optionen]`, je Datei eine aufklappbare Zeile `pfad (n Treffer)`, darunter `Zeile 12: …` mit markiertem Treffer (`ContentResults.kt:151`), am Ende „Ausgelassen (n)“ mit Grund (Binärdatei, nicht lesbar, Ordner nicht lesbar). Menü: Alle aufklappen/zuklappen (`ContentSearchPage.kt:97`).
 - Tippen auf eine Trefferzeile öffnet die Textansicht an dieser Zeile mit markiertem Treffer; das Symbol an der Dateizeile öffnet die Datei am ersten Treffer.
 - „Zurück“ lässt eine laufende Suche weiterlaufen; die Ergebnisse bleiben bis zur nächsten Suche erhalten (`ui/files/ContentSearchState.kt:158`). Die Suche steht nicht in den Übertragungen (`ui/transfers/TransfersBar.kt:25`).
-- Brücke: `search.content.start|poll|cancel` (api.md §4.14; `native/crates/mobile/src/mobile/os/shared/content_search.rs:165-171`). Gesucht wird dort, wo die Dateien liegen (lokal auf allen Kernen, SSH-Agent, Share-Host, sonst Lesen über das Backend).
+- Ersetzen (`ui/files/ContentSearchPage.kt:275`, `:358`, Schalter .gitignore `:325`): Feld „Ersetzen durch“, Knopf „In Dateien ersetzen“, Bestätigungsdialog mit hervorgehobenem „Abbrechen“ (`ui/files/ContentSearchReplaceUi.kt:35`), Ergebniskarte mit Summen, Gründen, „Abbrechen“ und „Rückgängig“ (`:93`); langes Drücken wählt Trefferzeilen oder Dateien, Leiste „Ersetzen…“, „Entfernen“, „Aufheben“ (`ContentSearchReplaceUi.kt:122`, `ContentSearchPage.kt:192`, `:242`, `ContentResults.kt:137`, `:161`); Menü wie auf dem Desktop (`ContentSearchPage.kt:111`–`119`); Ablauf `ui/files/ContentSearchReplace.kt:158`; der Lauf übersteht „Zurück“.
+- Brücke: `search.content.start|poll|cancel` (mit `respectIgnoreFiles`), `search.content.replace.start|poll|cancel|undo|history` (api.md §4.14; `native/crates/mobile/src/mobile/os/shared/content_search.rs:165-171`, `content_search_replace.rs`, `content_search_undo.rs`). Gesucht wird dort, wo die Dateien liegen (lokal auf allen Kernen, SSH-Agent, Share-Host, sonst Lesen über das Backend).
 
 ## Verhalten, das alle Oberflächen gleich halten
 
-- Die Suche läuft über `vfs::content_search` dort, wo die Dateien liegen; keine Oberfläche lädt Dateien dafür selbst herunter.
+- Die Suche läuft über `vfs::content_search` dort, wo die Dateien liegen; keine Oberfläche lädt Dateien dafür selbst herunter. Ersetzen sucht ebenso und schreibt jede geänderte Datei über das Backend des Ziels (ein Share-Host prüft dabei seine Schreibrechte).
 - Fehlertexte zu Muster, Filter und Ordner-Regex kommen unverändert aus dem Kern (`ContentMatcher::new`, `PathFilter::new`).
 - Ganze Wörter wirken bei regulären Ausdrücken nicht (wie Notepad++), „. findet Zeilenumbruch“ nur bei ihnen.
 - Binärdateien werden ausgelassen und mit Grund gemeldet; Verknüpfungen werden nie betreten.
 
 ## Lücken und Ausnahmen
 
-- Ausnahme: Ersetzen in Dateien („Replace in Files“) ist nicht Teil des Auftrags (Plan, Abschnitt G).
 - Ausnahme: Volltextsuche in Binär- und Office-Dateien (Plan, Abschnitt G).
 - Ausnahme Desktop-GUI: Linux hat lokal kein Kontextmenü (ein Rechtsklick öffnet den Dateimanager); dort führt das Menü „»“ zum Dialog.
 - Desktop-GUI: Strg+Umschalt+F öffnete vorher die globale Ordnersuche; sie liegt jetzt auf Strg+Umschalt+O und bleibt über „/“ in der Suchleiste erreichbar (`gui/src/app/core/frame_keyboard.rs:144`).
 - Desktop-GUI: „In diesen Ergebnissen suchen“ prüft die Trefferzeilen mit Rusts `regex` zeilenweise (ohne die Boost-Erweiterungen des Suchkerns).
 - Nicht geprüft: das Verhalten auf echten entfernten Zielen wurde nicht mit laufender Verbindung erprobt.
+- Ersetzen: In ANSI-Dateien zählt `\x80`–`\x9F` im Ersatztext als Unicode-Zeichen, die Datei wird dann als nicht ANSI-darstellbar übersprungen (Notepad++ schreibt das Byte); `$^N` wird angenähert (die Regex-Engines merken nicht, welche Gruppe zuletzt schloss); das Journal wächst bis `--discard` bzw. „Verwerfen“.
+- Ignorierdateien: Bei Backends ohne eigene Server-Suche (zum Beispiel FTP) werden Ordner oberhalb des Suchordners nicht gelesen; die globale Ignorierdatei von Git (`core.excludesFile`) wird nicht gelesen; bei `.git` als Datei (verknüpfter Arbeitsbaum) fehlt `info/exclude`.

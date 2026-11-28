@@ -213,6 +213,14 @@ Die Tresor-Einstellungen gehören zu jedem Tresor. Vollständige Matrix und Bele
 
 Einzelheiten: [textansicht.md](textansicht.md).
 
+### Maskenlisten (Quellstand 2026-11-28)
+
+| Einstellung | CLI | Desktop | Android | Bridge / MCP |
+|---|---|---|---|---|
+| Listen anlegen, Einträge (wörtlich, Regex, unscharf mit Toleranz) hinzufügen und bearbeiten, Schutzpfade, sperren/entsperren, aktivieren/deaktivieren, löschen, erlaubte fremde MCP-Server, Härtung | `se masks list|show|create|add|update|remove-entry|scope|lock|unlock|enable|disable|delete|servers|status|harden [--json]` (`N/cli/src/cli/masks_cli.rs`); Werte nur über stdin, nie in einer Ausgabe; schwächende Änderungen nach Bestätigung im Systemdialog | Einstellungen → „Maskenlisten“ (`N/gui/src/app/core/settings_masks.rs`, Formular `settings_masks_form.rs`); Werte verdeckt, „Anzeigen“ auf Klick; Schutzpfade über die Ordnerauswahl der App (lokal und entfernt, `N/gui/src/app/core/picker_types.rs` `MaskScope`) oder als se-Ziel | Ausnahme: Android führt keinen MCP-Server aus; Maskenlisten wirken dort, wo ein Agent `se mcp` nutzt | MCP-Werkzeug `masks` (anzeigen ohne Werte, anlegen, erweitern, Schutzpfad hinzufügen; nie schwächen) (`N/cli/src/cli/mcp/masks_tool.rs`) |
+
+Einzelheiten: [masken.md](masken.md).
+
 ### Offene Punkte nach dem Stapel
 
 - Sync-Aktionen in der CLI (siehe Tabelle Sync-Setups, letzte Zeile).
