@@ -5,6 +5,7 @@
 //! Listing, adding and removing run on a background thread (the built-in
 //! set is large).
 use super::prelude::*;
+use crate::app::App;
 use crate::textview::{LanguagePack, LanguageStore, PackOrigin, PackSource};
 
 type ListResult = Result<(Vec<LanguagePack>, PathBuf), String>;

@@ -122,18 +122,16 @@ regex = "1"
 globset = "0.4"
 # Content search ("Suchen in Dateien", plan docs/plaene/2026-11-27-dateien-suche-ansicht):
 # ripgrep's search libraries (Unlicense OR MIT, pure Rust; literal prefilters,
-# SIMD, binary detection, BOM sniffing of UTF-16 through encoding_rs_io), shared
-# with the standalone se-agent through agent_proto. fancy-regex (MIT) matches the
+# SIMD, binary detection, BOM sniffing of UTF-16), shared with the standalone
+# se-agent through agent_proto (which lists them itself: it is no workspace member). fancy-regex (MIT) matches the
 # Boost/Perl features Notepad++ users write that `regex` lacks (lookaround, back
 # references, atomic groups); it is also syntect's pure-Rust engine.
 grep-searcher = "0.1.18"
 grep-regex = "0.1.15"
 grep-matcher = "0.1.10"
 encoding_rs = "0.8"
-encoding_rs_io = "0.1.8"
 fancy-regex = "0.16"
 memchr = "2"
-bstr = { version = "1", default-features = false, features = ["std"] }
 # Text view (plan section D): Sublime-syntax language packs through syntect with its
 # pure-Rust regex engine (no oniguruma C build on any target), bat's syntaxes and
 # themes as the bundled packs (two-face), Markdown through pulldown-cmark without

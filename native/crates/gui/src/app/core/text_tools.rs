@@ -13,6 +13,7 @@ use super::prelude::*;
 use super::settings_languages::LanguagesPage;
 use super::text_view_ui::{theme_kind, ViewAction};
 use super::text_view_window::TextViewWindow;
+use crate::app::App;
 
 /// Where files are read: this computer, or the backend of a remote tab.
 #[derive(Clone)]
