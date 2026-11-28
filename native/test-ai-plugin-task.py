@@ -62,15 +62,15 @@ NATIVE = ROOT / "native"
 WINDOWS = os.name == "nt"
 # The catalog of native/crates/cli/src/cli/mcp/catalog.rs `tools()`, in its order.
 EXPECTED_TOOLS = [
-    "status", "connections", "list", "stat", "read", "write", "edit", "mkdir", "remove",
-    "copy", "move", "search", "exec", "job_status", "job_input", "job_cancel", "se", "sessions",
+    "status", "connections", "root", "list", "stat", "read", "write", "edit", "mkdir", "remove",
+    "copy", "move", "search", "grep", "exec", "job_status", "job_input", "job_cancel", "se", "sessions",
     "screen", "screen_window", "screen_input", "tcp_forward", "apps", "rdp", "login",
 ]
 # Tools whose annotation says readOnlyHint (catalog.rs `read_only(..)`).
-READ_ONLY = {"status", "connections", "list", "stat", "read", "search", "job_status"}
+READ_ONLY = {"status", "connections", "root", "list", "stat", "read", "search", "grep", "job_status"}
 # Tools Claude Code loads upfront (`_meta["anthropic/alwaysLoad"]`, catalog.rs `UPFRONT`).
-UPFRONT = {"connections", "list", "stat", "read", "write", "edit", "mkdir", "remove", "copy", "move",
-           "search", "exec", "job_status", "job_input", "job_cancel", "sessions"}
+UPFRONT = {"connections", "root", "list", "stat", "read", "write", "edit", "mkdir", "remove", "copy",
+           "move", "search", "grep", "exec", "job_status", "job_input", "job_cancel", "sessions"}
 # Words of the instructions that tell which shell `exec` runs where (2026-11-25).
 SHELL_WORDS = ("PowerShell", "pwsh 7", "5.1", "&&", "if ($?)", "login shell", "`shell`", "`argv`")
 # Words of the priority paragraph an agent must receive: the order (before) and the host tools it

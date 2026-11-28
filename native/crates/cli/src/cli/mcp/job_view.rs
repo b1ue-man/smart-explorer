@@ -155,6 +155,9 @@ pub(super) fn job_value(job: &Job, offsets: &Offsets, budget: usize) -> Result<V
             .map_err(|error| format!("cannot read job output: {error}"))?;
         let page = if name == "hits" {
             hits_page(&bytes, offset)
+        } else if name == "matches" {
+            let at_end = ended && offset + bytes.len() as u64 >= spool.len();
+            lines_page(&bytes, offset, at_end, bytes.len() >= share)
         } else {
             let page = text_page(&bytes, offset, ended);
             json!({
@@ -197,9 +200,30 @@ fn hits_page(bytes: &[u8], offset: u64) -> Value {
     })
 }
 
+/// Text lines of `grep` (`rel:line:text`); a page ends at the last complete
+/// line, so a line never spans two pages.
+/// `window_full`: the page read as much as its budget allows.
+fn lines_page(bytes: &[u8], offset: u64, at_end: bool, window_full: bool) -> Value {
+    let complete = match bytes.iter().rposition(|byte| *byte == b'\n') {
+        Some(index) => index + 1,
+        // One line larger than the whole page: shown in parts.
+        None if at_end || window_full => bytes.len(),
+        None => 0,
+    };
+    let whole_lines = bytes[..complete].ends_with(b"\n");
+    let page = text_page(&bytes[..complete], offset, at_end || whole_lines);
+    json!({
+        "text": page.text,
+        "offset": offset,
+        "next_offset": page.next_offset,
+        "complete": at_end && complete == bytes.len(),
+        "lossy": page.lossy,
+    })
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{hits_page, job_value, Offsets};
+    use super::{hits_page, job_value, lines_page, Offsets};
     use crate::cli::mcp::jobs::{JobEnd, JobKind, JobRegistry, JobStatus};
     use serde_json::json;
 
@@ -239,5 +263,13 @@ mod tests {
         let page = hits_page(bytes, 10);
         assert_eq!(page["items"].as_array().unwrap().len(), 2);
         assert_eq!(page["next_offset"], 10 + 26);
+        // The text lines of grep end at complete lines, too.
+        let page = lines_page(b"a.rs:1:x\nb.rs:2:y\nc.r", 5, false, false);
+        assert_eq!(page["text"], "a.rs:1:x\nb.rs:2:y\n");
+        assert_eq!(page["next_offset"], 5 + 18);
+        assert_eq!(page["complete"], false);
+        let last = lines_page(b"c.rs:3:z", 23, true, false);
+        assert_eq!(last["text"], "c.rs:3:z");
+        assert_eq!(last["complete"], true);
     }
 }

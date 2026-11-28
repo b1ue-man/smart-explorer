@@ -1,7 +1,8 @@
 //! `se mcp`: the Model Context Protocol server through which AI coding agents
 //! (Claude Code, Codex, any MCP client) use Smart Explorer: files on every
-//! saved remote, Share peer, Google Drive and the local disk, transfers, name
-//! search, remote commands on saved SSH remotes and authorized Share peers
+//! saved remote, Share peer, Google Drive and the local disk (also below a
+//! working root kept open like a tab), transfers, name and content search,
+//! remote commands on saved SSH remotes and authorized Share peers
 //! (also in persistent shell sessions that terminals can join), and every
 //! other `se` command. Agent hosts start it over stdio; `se plugin`
 //! installs it. Design and host contracts: docs/AI_AGENT_PLUGIN.md.
@@ -25,10 +26,17 @@ mod exec_tool;
 mod file_tools;
 #[path = "mcp/file_write.rs"]
 mod file_write;
+/// Output records of content searches, shared with `se grep`.
+#[path = "mcp/grep_records.rs"]
+pub(super) mod grep_records;
+#[path = "mcp/grep_tool.rs"]
+mod grep_tool;
 #[path = "mcp/job_view.rs"]
 mod job_view;
 #[path = "mcp/jobs.rs"]
 mod jobs;
+#[path = "mcp/line_read.rs"]
+mod line_read;
 #[path = "mcp/login_shutdown.rs"]
 mod login_shutdown;
 #[path = "mcp/login_tool.rs"]
@@ -41,6 +49,10 @@ mod rdp_shutdown;
 mod rdp_tool;
 #[path = "mcp/response.rs"]
 mod response;
+#[path = "mcp/root_path.rs"]
+mod root_path;
+#[path = "mcp/root_tool.rs"]
+mod root_tool;
 #[path = "mcp/screen_tool.rs"]
 mod screen_tool;
 #[path = "mcp/screen_window_tool.rs"]
@@ -59,6 +71,8 @@ mod shell_registry;
 mod spool;
 #[path = "mcp/status_tools.rs"]
 mod status_tools;
+#[path = "mcp/tab_cache.rs"]
+mod tab_cache;
 #[path = "mcp/targets.rs"]
 mod targets;
 #[path = "mcp/tcp_tool.rs"]
@@ -77,8 +91,10 @@ into Claude Code or Codex with `se plugin install`, or print the
 configuration for another MCP client with `se plugin config`.
 
 The server offers file tools (list, stat, read, write, edit, mkdir, remove,
-copy, move, search) for local paths, saved remotes (@label:/path and saved
-endpoints), Share peers and Google Drive; remote commands (exec) on saved SFTP
+copy, move, name search, content search with grep) for local paths, saved
+remotes (@label:/path and saved endpoints), Share peers and Google Drive, with
+a working root (root) that keeps one target open like an explorer tab and
+takes paths relative to it; remote commands (exec) on saved SFTP
 remotes over SSH and on Share peers that granted this device Exec, also in
 persistent shell sessions (exec with session) that `se shell --attach` can
 join, and the `sessions` tool that joins a `se shell --attachable`; the

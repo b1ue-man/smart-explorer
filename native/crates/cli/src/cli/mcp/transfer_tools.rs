@@ -20,8 +20,9 @@ impl JobControl for TransferControl {
 }
 
 pub(super) fn start(session: &Session, kind: JobKind, args: &Args<'_>) -> Result<Arc<Job>, String> {
-    let source_spec = args.string("source")?;
-    let destination_spec = args.string("destination")?;
+    // Empty = the working root (an error without one).
+    let source_spec = args.opt_string("source")?.unwrap_or_default();
+    let destination_spec = args.opt_string("destination")?.unwrap_or_default();
     let recursive = args.flag("recursive")?;
     let overwrite = args.flag("overwrite")?;
     let folders = match args
@@ -50,6 +51,7 @@ pub(super) fn start(session: &Session, kind: JobKind, args: &Args<'_>) -> Result
     let job_origin = crate::share::OperationOrigin::Job;
     let source = session.targets.resolve_for(&source_spec, job_origin)?;
     let destination = session.targets.resolve_for(&destination_spec, job_origin)?;
+    let targets = session.targets.clone();
     let job = session.jobs.create(
         kind,
         format!("{} {source_spec} -> {destination_spec}", kind.label()),
@@ -100,6 +102,9 @@ pub(super) fn start(session: &Session, kind: JobKind, args: &Args<'_>) -> Result
                         .map(|omission| json!({
                             "path": omission.path,
                             "type": omission.kind.label(),
+                            // Why a file was not copied (a name or size the
+                            // destination cannot store, U7); null for links.
+                            "reason": omission.reason,
                         }))
                         .collect::<Vec<_>>(),
                     "kept_directories": outcome.kept,
@@ -113,15 +118,23 @@ pub(super) fn start(session: &Session, kind: JobKind, args: &Args<'_>) -> Result
                 }),
                 error: None,
             },
-            Err(error) => JobEnd {
-                status: if observer.is_cancelled() {
-                    JobStatus::Cancelled
-                } else {
-                    JobStatus::Failed
-                },
-                result: json!({ "progress": progress }),
-                error: Some(error),
-            },
+            Err(error) => {
+                let cancelled = observer.is_cancelled();
+                if !cancelled {
+                    // A broken kept connection is opened again by the next call.
+                    targets.after_failure(&source);
+                    targets.after_failure(&destination);
+                }
+                JobEnd {
+                    status: if cancelled {
+                        JobStatus::Cancelled
+                    } else {
+                        JobStatus::Failed
+                    },
+                    result: json!({ "progress": progress }),
+                    error: Some(error),
+                }
+            }
         }
     })?;
     Ok(job)

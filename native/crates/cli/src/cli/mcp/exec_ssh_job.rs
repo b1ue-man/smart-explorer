@@ -42,9 +42,11 @@ pub(super) fn start(
     let cwd = request.cwd.clone().or(target.cwd.clone());
     let line = remote_command_line(&request.command, cwd.as_deref(), &request.env)?;
     let backend = session.targets.ssh(&target.connection)?;
-    let mut command = backend
-        .start_command(&line)
-        .map_err(|error| format!("remote command start: {error}"))?;
+    let mut command = backend.start_command(&line).map_err(|error| {
+        // The next command logs in again instead of reusing a broken login.
+        session.targets.ssh_failed(&target.connection);
+        format!("remote command start: {error}")
+    })?;
     let control = command.control();
     let job = session
         .jobs

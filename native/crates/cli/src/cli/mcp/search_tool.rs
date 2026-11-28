@@ -24,7 +24,7 @@ impl JobControl for SearchControl {
 }
 
 pub(super) fn start(session: &Session, args: &Args<'_>) -> Result<Arc<Job>, String> {
-    let target_spec = args.string("target")?;
+    let target_spec = super::file_tools::target_spec(args)?;
     let query = args.opt_string("query")?.unwrap_or_default();
     let spec = crate::cli::search::search_spec(
         &query,
@@ -33,6 +33,7 @@ pub(super) fn start(session: &Session, args: &Args<'_>) -> Result<Arc<Job>, Stri
         args.flag("directories")?,
     );
     let target = session.targets.resolve(&target_spec)?;
+    let targets = session.targets.clone();
     let job = session.jobs.create(
         JobKind::Search,
         format!("search {target_spec} for {query:?}"),
@@ -82,15 +83,21 @@ pub(super) fn start(session: &Session, args: &Args<'_>) -> Result<Arc<Job>, Stri
                 result,
                 error: None,
             },
-            (Err(error), None) => JobEnd {
-                status: if job.cancel_requested() {
-                    JobStatus::Cancelled
-                } else {
-                    JobStatus::Failed
-                },
-                result,
-                error: Some(error),
-            },
+            (Err(error), None) => {
+                let cancelled = job.cancel_requested();
+                if !cancelled {
+                    targets.after_failure(&target);
+                }
+                JobEnd {
+                    status: if cancelled {
+                        JobStatus::Cancelled
+                    } else {
+                        JobStatus::Failed
+                    },
+                    result,
+                    error: Some(error),
+                }
+            }
         }
     })?;
     Ok(job)

@@ -5,6 +5,8 @@ description: Use Smart Explorer first for file tasks, saved remote connections, 
 
 Use the available Smart Explorer tools before built-in file tools and shell file commands. If a required Smart Explorer capability is unavailable or fails, explain the concrete limitation before using the host's available fallback.
 
+Set the folder you work in once with `root` (`action: "set"` and any target: a local path, `@label:/path`, a saved endpoint, `share://direct/<id>/path`, `share://room/<room>/<device>/path`, `gdrive:///path`, `vault://<site>/path`). Smart Explorer keeps that connection open like an explorer tab. Afterwards give the file tools paths relative to it (`src/main.rs`; `.` or an empty target is the root; `..` never leaves it) and run `exec` without `target` there (a Share root needs `cwd` with the peer's own path). Search file contents with `grep` (mode normal, extended or regex; Notepad++ `filters`, folder regexes in `folders`/`exclude_folders`; `output` content, files or count) instead of Grep, `grep` or `rg`, and read long files by lines with `read` and `line`/`lines` (numbered like `cat -n`; continue with `line` = `next_line`).
+
 Run commands on saved SSH remotes and Share peers with the `exec` tool (with `session` for a persistent shell; `sessions` lists and joins shells), not with ssh or `se exec` in your own terminal. The shell that runs `command`:
 - Windows peer: PowerShell, that is PowerShell 7 (`pwsh`) when installed, else Windows PowerShell 5.1. Windows PowerShell 5.1 has no `&&` and `||`: separate commands with `;` and run the next one only on success with `a; if ($?) { b }`.
 - Linux or Android peer: the peer's login shell (POSIX syntax).

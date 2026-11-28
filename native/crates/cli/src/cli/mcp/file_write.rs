@@ -5,7 +5,7 @@
 //! destination it planned with that etag and re-validates the planned state
 //! right before publishing.
 use super::args::Args;
-use super::file_tools::{etag, read_range};
+use super::file_tools::{etag, read_range, target_spec};
 use super::response;
 use super::session::Session;
 use crate::cli::link_paths::resolve_destination;
@@ -21,7 +21,7 @@ use std::cell::RefCell;
 use std::io::Write;
 
 pub(super) fn write(session: &Session, args: &Args<'_>) -> Result<CallToolResult, String> {
-    let target = session.targets.resolve(&args.string("target")?)?;
+    let target = session.targets.resolve(&target_spec(args)?)?;
     let content = args
         .opt_string("content")?
         .ok_or_else(|| "missing required argument `content`".to_string())?;
@@ -38,15 +38,16 @@ pub(super) fn write(session: &Session, args: &Args<'_>) -> Result<CallToolResult
         args.flag("overwrite")?,
         args.opt_string("if_match")?.as_deref(),
     )
+    .inspect_err(|_| session.targets.after_failure(&target))
 }
 
 pub(super) fn edit(session: &Session, args: &Args<'_>) -> Result<CallToolResult, String> {
-    let target = session.targets.resolve(&args.string("target")?)?;
+    let target = session.targets.resolve(&target_spec(args)?)?;
     let edits = parse_edits(args.value("edits"))?;
     let meta = target
         .backend
         .stat(&target.path)
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| session.targets.io_error(&target, error))?;
     if meta.is_symlink {
         return Err(format!(
             "{} is a link; `edit` changes files only at their real path (Smart Explorer does not write through links)",
@@ -67,7 +68,10 @@ pub(super) fn edit(session: &Session, args: &Args<'_>) -> Result<CallToolResult,
     bytes
         .try_reserve_exact(size)
         .map_err(|_| format!("{} is too large to edit in memory", target.path))?;
-    bytes.extend(read_range(&target, &meta, 0, size)?);
+    bytes.extend(
+        read_range(&target, &meta, 0, size)
+            .inspect_err(|_| session.targets.after_failure(&target))?,
+    );
     if bytes.len() != size {
         return Err(format!("{} changed while it was read", target.path));
     }
@@ -93,7 +97,8 @@ pub(super) fn edit(session: &Session, args: &Args<'_>) -> Result<CallToolResult,
         replacements += count;
     }
     // Bound to the state just read, so a concurrent change is never lost.
-    let result = publish(&target, text.as_bytes(), true, Some(&current))?;
+    let result = publish(&target, text.as_bytes(), true, Some(&current))
+        .inspect_err(|_| session.targets.after_failure(&target))?;
     if result.is_error == Some(true) {
         return Ok(result);
     }

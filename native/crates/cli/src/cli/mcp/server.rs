@@ -7,8 +7,8 @@ use super::jobs::{Job, JobKind};
 use super::session::Session;
 use super::update_stop::UpdateStop;
 use super::{
-    catalog, cli_tool, exec_tool, file_tools, file_write, job_view, response, screen_tool,
-    search_tool, sessions_tool, status_tools, transfer_tools,
+    catalog, cli_tool, exec_tool, file_tools, file_write, grep_tool, job_view, response, root_tool,
+    screen_tool, search_tool, sessions_tool, status_tools, transfer_tools,
 };
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, Implementation, ListToolsResult,
@@ -122,6 +122,9 @@ async fn dispatch(
     match request.name.as_ref() {
         "status" => blocking_observe(move || status_tools::status(&session_for_work)).await,
         "connections" => blocking(status_tools::connections).await,
+        "root" => {
+            blocking(move || root_tool::root(&session_for_work, &Args::new(owned.as_ref()))).await
+        }
         "list" => {
             blocking(move || file_tools::list(&session_for_work, &Args::new(owned.as_ref()))).await
         }
@@ -160,6 +163,13 @@ async fn dispatch(
         "search" => {
             let job =
                 start(move || search_tool::start(&session_for_work, &Args::new(owned.as_ref())))
+                    .await?;
+            operation.take();
+            job_view::started_job_answer(&job, &args, context).await
+        }
+        "grep" => {
+            let job =
+                start(move || grep_tool::start(&session_for_work, &Args::new(owned.as_ref())))
                     .await?;
             operation.take();
             job_view::started_job_answer(&job, &args, context).await

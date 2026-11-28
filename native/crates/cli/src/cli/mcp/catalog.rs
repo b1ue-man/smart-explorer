@@ -14,13 +14,13 @@ use super::screen_tool;
 /// Server instructions. Codex asks to keep the first 512 characters
 /// self-contained; Claude Code shows at most 2 048.
 pub(super) const INSTRUCTIONS: &str = "\
-Smart Explorer (se) is the user's file explorer for AI agents. Use its tools \
-first for every file task, local or remote (list, stat, read, write, edit, \
-mkdir, remove, copy, move, search), before built-in file tools (Read, Write, \
-Edit, Glob, LS) and shell file commands (ls, cat, find, cp, mv, rm, scp, \
-rsync); fall back to those only when a Smart Explorer tool fails or lacks the \
-feature. It reaches saved remotes (SFTP, FTP/FTPS, WebDAV, SMB, Windows \
-shares), Google Drive, Share peers and local disks.
+Smart Explorer (se) is the user's file explorer. Use its tools first for every \
+file task, local or remote (root, list, stat, read, write, edit, mkdir, remove, \
+copy, move, search, grep), before built-in file tools (Read, Write, Edit, Glob, \
+Grep, LS) and shell file commands (ls, cat, find, grep, cp, mv, rm, scp, \
+rsync); use those only when a Smart Explorer tool fails or lacks the feature. \
+It reaches saved remotes (SFTP, FTP/FTPS, WebDAV, SMB, Windows shares), Google \
+Drive, Share peers and local disks.
 
 Run remote commands with `exec` (SSH remotes, Share peers), not ssh or `se \
 exec` in a terminal. Windows peers run `command` in PowerShell: pwsh 7 if \
@@ -28,22 +28,23 @@ installed, else Windows PowerShell 5.1, which has no && or || (write \
 `a; if ($?) { b }`). Linux/Android peers and SSH remotes use the login shell. \
 `shell` (powershell, cmd, sh) overrides that; `argv` starts a program \
 without a shell; results name their `shell`. `connections` lists targets and \
-each Share peer's `os`. `session` keeps a shell's cwd, environment and state; \
-`sessions` lists them and joins the user's `se shell -T --attachable` \
-shells. Long work returns a job_id: job_status, job_input, job_cancel. Other \
-tools load via a tool search for `smart-explorer`.
+each Share peer's `os`. `session` keeps a shell's state; `sessions` lists and \
+joins shells. Long work returns a job_id: job_status, job_input, job_cancel. \
+Other tools load via a tool search for `smart-explorer`.
 
 Targets: absolute local paths, `@label:/path` (saved remote), saved \
 `sftp://user@host:port/path` endpoints, `share://direct/<id>/path`, \
-`share://room/<room>/<device>/path`, `gdrive:///path`, `vault://<site>/path`; \
-relative paths are rejected. `etag` from stat/read guards write/edit. Never \
-ask for passwords in chat: saved credentials work automatically; the user \
-adds new password logins in a terminal (`se connections add … \
---password-stdin`). Change Share trust (access requests, connection rights: \
-`share grants confirm|set`, every `--preset`, Exec grants, program lists, \
-device/room settings, discoverability) only when the user explicitly asks. The `se` tool \
-runs every other se command and app setting: `sync`, `background`, \
-`connections` (remotes, Google Drive), `update`, `drive`, `vault`, `desktop`.";
+`share://room/<room>/<device>/path`, `gdrive:///path`, `vault://<site>/path`. \
+`root` sets one as working root, kept open like a tab: then paths may be \
+relative to it (`..` never leaves it) and `exec` without target runs there. \
+`grep` searches file contents; `read` takes `line`/`lines`; `etag` guards \
+write/edit. Never ask for passwords in chat; the user adds logins in a \
+terminal (`se connections add … --password-stdin`). Change Share trust \
+(access requests, connection rights: `share grants confirm|set`, every \
+`--preset`, Exec grants, program lists, device/room settings, \
+discoverability) only when the user explicitly asks. The `se` tool runs \
+every other se command (sync, background, connections, update, drive, \
+vault, desktop).";
 
 /// Tools Claude Code loads upfront (`_meta["anthropic/alwaysLoad"]`), so the
 /// file workflow and remote commands are visible without a tool search
@@ -51,6 +52,7 @@ runs every other se command and app setting: `sync`, `background`, \
 /// the others stay deferred.
 const UPFRONT: &[&str] = &[
     "connections",
+    "root",
     "list",
     "stat",
     "read",
@@ -61,6 +63,7 @@ const UPFRONT: &[&str] = &[
     "copy",
     "move",
     "search",
+    "grep",
     "exec",
     "job_status",
     "job_input",
@@ -68,7 +71,7 @@ const UPFRONT: &[&str] = &[
     "sessions",
 ];
 
-const TARGET: &str = "Smart Explorer target: an absolute local path, `@label:/path` of a saved remote, a saved `sftp://`, `ftp://`, `ftps://` or `webdav://` endpoint (`scheme://user@host:port/path`), `share://direct/<id>/path`, `share://room/<room>/<device>/path`, or `gdrive:///path`. `connections` lists what exists.";
+const TARGET: &str = "Smart Explorer target: an absolute local path, `@label:/path` of a saved remote, a saved `sftp://`, `ftp://`, `ftps://` or `webdav://` endpoint (`scheme://user@host:port/path`), `share://direct/<id>/path`, `share://room/<room>/<device>/path`, `gdrive:///path` or `vault://<site>/path`; with a working root (`root`) also a path relative to it (`.` or empty = the root, `..` stays inside). `connections` lists what exists.";
 const WAIT: &str = "Seconds to wait for completion before returning a job_id (default 30). Keep it below your client's tool timeout (Codex: 60 s by default).";
 const MAX_BYTES: &str = "Payload budget of this answer in bytes (default 20000). Agent hosts cut results above about 10000 tokens.";
 
@@ -80,20 +83,23 @@ pub(super) fn tools() -> Vec<Tool> {
         tool("connections", "Saved remotes and Share peers",
             "Every saved remote and Share peer/room with the target prefix to use, its live status, and how commands run there: `exec: \"ssh\"` for saved SFTP remotes (the remote login shell), `exec: \"share\"` for Share peers (works once that device granted this one Exec). A Share peer's `os` (windows, linux, android; null until an `exec` reached it) tells the shell of `exec`: PowerShell on Windows, the login shell on Linux and Android.",
             json!({}), &[], read_only(false)),
+        tool("root", "Working root", super::root_tool::DESCRIPTION, super::root_tool::properties(), &[], read_only(true)),
         tool("list", "List a directory",
             "Directory entries (name, type file|dir|symlink|special, size, mtime_ms) sorted by name, one page per call; continue with `offset` = `next_offset`. A symlink's size is its own (the length of the path it holds). Use it instead of `ls`, LS or Glob, for local and remote directories.",
             json!({
                 "target": {"type": "string", "description": TARGET},
                 "offset": {"type": "integer", "minimum": 0, "description": "Index of the first entry (default 0)."},
                 "max_bytes": {"type": "integer", "minimum": 1024, "description": MAX_BYTES}
-            }), &["target"], read_only(true)),
+            }), &[], read_only(true)),
         tool("stat", "File or directory metadata",
             "Type, size, mtime_ms, provider id/md5 when known, and the `etag` that write/edit accept as `if_match`. Use it instead of `stat` or `ls -l`.",
-            json!({"target": {"type": "string", "description": TARGET}}), &["target"], read_only(true)),
+            json!({"target": {"type": "string", "description": TARGET}}), &[], read_only(true)),
         tool("read", "Read a file",
-            "File content from a byte `offset`, as UTF-8 text (default) or base64. Binary files are not dumped as text: request `encoding: \"base64\"` or copy them to a local path. Returns `etag`, `size` and `next_offset` (null at the end). Through a link it reads the file the link points to; `size` and `etag` are then null. Use it instead of Read or `cat`, for local and remote files.",
+            "File content from a byte `offset`, as UTF-8 text (default) or base64; or with `line` (first line, from 1) and/or `lines` (how many) numbered lines as `cat -n` prints them (number, tab, text; CR LF shown as a line end, `crlf` true), continued with `line` = `next_line` (null at the end; `total_lines` once the end was read). Binary files are not dumped as text: request `encoding: \"base64\"` or copy them to a local path. Returns `etag`, `size` and `next_offset` (null at the end). Through a link it reads the file the link points to; `size` and `etag` are then null. Use it instead of Read or `cat`, for local and remote files.",
             json!({
                 "target": {"type": "string", "description": TARGET},
+                "line": {"type": "integer", "minimum": 1, "description": "First line to read (1-based); numbered output."},
+                "lines": {"type": "integer", "minimum": 1, "description": "Number of lines (default: as many as fit the answer)."},
                 "offset": {"type": "integer", "minimum": 0, "description": "First byte (default 0)."},
                 "length": {"type": "integer", "minimum": 1, "description": "Bytes to read (default: the answer budget)."},
                 "encoding": {"type": "string", "enum": ["text", "base64"], "description": "text (default) or base64."},
@@ -137,7 +143,7 @@ pub(super) fn tools() -> Vec<Tool> {
         transfer_tool("copy", "Copy files", "Copies between any two targets (local, saved remotes, Share peers, Drive) with `se cp` semantics: an existing destination directory receives the source inside it; directories need `recursive`; existing files are replaced only with `overwrite`. A file is published only when it is complete, so a failed source never leaves a partial file; a new destination is copied on the transfer engine (parallel, large files in ranges) and a failing file does not stop the other files. `progress` carries `rate_bps`, `limiter` (none, ramp, idle, source, target, remote, link, se_cpu, se_thread, memory), `limiter_text`, `segments` and `note` (a hint about the connection, such as how many SSH connections the copy uses). A link named as `source` or `destination` is followed (directory links only on local paths); links and special files inside a copied directory are skipped and listed in `omitted`. Use it instead of `cp`, `scp` or `rsync`."),
         transfer_tool("move", "Move or rename", "Moves with `se mv` semantics: a rename inside one connection when possible, otherwise copy, then remove exactly the copied source. A cancellation after the copy keeps the source. A link moves as itself (rename within its connection only). Links and special files inside a copied directory stay in the source (`omitted`), and so do the directories holding them (`kept_directories`). Use it instead of `mv`."),
         tool("search", "Search names",
-            "Finds files, links and special files (plus directories with `directories: true`) below `target` whose name contains `query` (case-insensitive) or matches it as a glob (`*`, `?`). Links are reported with type `symlink` and never entered. Uses the server-side search of Share peers and SSH agents (those skip links), otherwise walks the tree. Hits page via `hits_offset`. Use it instead of Glob or `find` for names; it does not search file contents.",
+            "Finds files, links and special files (plus directories with `directories: true`) below `target` (default: the working root) whose name contains `query` (case-insensitive) or matches it as a glob (`*`, `?`). Links are reported with type `symlink` and never entered. Uses the server-side search of Share peers and SSH agents (those skip links), otherwise walks the tree. Hits page via `hits_offset`. Use it instead of Glob or `find` for names; `grep` searches file contents.",
             json!({
                 "target": {"type": "string", "description": TARGET},
                 "query": {"type": "string", "description": "Text or glob; empty matches everything."},
@@ -146,11 +152,12 @@ pub(super) fn tools() -> Vec<Tool> {
                 "max_results": {"type": "integer", "minimum": 0, "description": "Stop after this many hits; 0 or absent = all."},
                 "wait_seconds": {"type": "integer", "minimum": 0, "description": WAIT},
                 "max_bytes": {"type": "integer", "minimum": 1024, "description": MAX_BYTES}
-            }), &["target", "query"], read_only(true)),
+            }), &["query"], read_only(true)),
+        tool("grep", "Search file contents", super::grep_tool::DESCRIPTION, super::grep_tool::properties(TARGET, WAIT, MAX_BYTES), &["pattern"], read_only(true)),
         tool("exec", "Run a remote command",
-            "Runs a command on a saved SFTP remote over its SSH login (`@label`, `@label:/dir` = working directory, or its saved sftp:// endpoint) or on a Share peer that granted this device Exec (peer name, id or share:// endpoint). Use it instead of ssh or `se exec` in a terminal. `command` is one shell string: a Windows peer runs it in PowerShell (pwsh 7 when installed, else Windows PowerShell 5.1, which has no `&&`/`||`: write `a; if ($?) { b }`), a Linux or Android peer in its login shell, an SSH remote in the remote login shell (cmd or PowerShell on Windows OpenSSH servers). `shell` overrides that for one command: `cmd` or `powershell` on Windows peers, `sh` on Linux/Android peers and SSH remotes. `argv` (program and literal arguments) starts a program without a shell (POSIX-quoted on SSH remotes). The result names the shell that ran in `shell` (`pwsh 7`, `powershell 5.1`, `cmd`, a login shell such as `bash`, `ssh login shell`, `none` for argv); a PowerShell parse error comes with line and column. `connections` shows each Share peer's `os` once an exec reached it. No time or output limit unless you set one; stdout/stderr are kept completely and paged. Exit status, signal and timing are reported; job_input sends input, job_cancel cancels. With `session` (a name) the command runs in a persistent shell instead: the first call opens it on `target` (PowerShell on Windows peers, bash or sh elsewhere), later calls keep its working directory, environment, variables and functions (no PTY; the result adds `cwd` and `session_ended`). The user can join it with `se shell --attach` unless `attachable` is false; `sessions` lists and closes sessions and joins the user's command shells (`se shell -T --attachable`); full terminal sessions of `se shell` cannot be joined. Cancel or timeout end the whole session.",
+            "Runs a command on a saved SFTP remote over its SSH login (`@label`, `@label:/dir` = working directory, or its saved sftp:// endpoint) or on a Share peer that granted this device Exec (peer name, id or share:// endpoint); without `target` on the working root's SSH remote (in its folder; a relative `cwd` is below it) or Share peer (give `cwd`). Use it instead of ssh or `se exec` in a terminal. `command` is one shell string: a Windows peer runs it in PowerShell (pwsh 7 when installed, else Windows PowerShell 5.1, which has no `&&`/`||`: write `a; if ($?) { b }`), a Linux or Android peer in its login shell, an SSH remote in the remote login shell (cmd or PowerShell on Windows OpenSSH servers). `shell` overrides that for one command: `cmd` or `powershell` on Windows peers, `sh` on Linux/Android peers and SSH remotes. `argv` (program and literal arguments) starts a program without a shell (POSIX-quoted on SSH remotes). The result names the shell that ran in `shell` (`pwsh 7`, `powershell 5.1`, `cmd`, a login shell such as `bash`, `ssh login shell`, `none` for argv); a PowerShell parse error comes with line and column. `connections` shows each Share peer's `os` once an exec reached it. No time or output limit unless you set one; stdout/stderr are kept completely and paged. Exit status, signal and timing are reported; job_input sends input, job_cancel cancels. With `session` (a name) the command runs in a persistent shell instead: the first call opens it on `target` (PowerShell on Windows peers, bash or sh elsewhere), later calls keep its working directory, environment, variables and functions (no PTY; the result adds `cwd` and `session_ended`). The user can join it with `se shell --attach` unless `attachable` is false; `sessions` lists and closes sessions and joins the user's command shells (`se shell -T --attachable`); full terminal sessions of `se shell` cannot be joined. Cancel or timeout end the whole session.",
             json!({
-                "target": {"type": "string", "description": "Share peer selector or share:// endpoint, or a saved SFTP remote as @label[:/dir] or its sftp:// endpoint. Required unless `session` names an open session."},
+                "target": {"type": "string", "description": "Share peer selector or share:// endpoint, or a saved SFTP remote as @label[:/dir] or its sftp:// endpoint. Default: the working root's remote or peer; required without one unless `session` names an open session."},
                 "command": {"type": "string", "description": "One command string for the target's shell: PowerShell on Windows peers (pwsh 7, else 5.1 without && and ||), the login shell on Linux/Android peers and SSH remotes."},
                 "shell": {"type": "string", "enum": ["powershell", "cmd", "sh"], "description": "Shell for `command` instead of the target's own: powershell or cmd on Windows peers, sh on Linux/Android peers and SSH remotes. A session accepts only the shell it runs; cmd needs a command without `session`."},
                 "argv": {"type": "array", "items": {"type": "string"}, "minItems": 1, "description": "Program and literal arguments, instead of `command`."},
@@ -295,168 +302,8 @@ fn tool(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{tools, INSTRUCTIONS};
-
-    #[test]
-    fn mcp_task_catalog_is_complete_and_within_host_limits() {
-        let tools = tools();
-        let names = tools
-            .iter()
-            .map(|tool| tool.name.as_ref())
-            .collect::<Vec<_>>();
-        assert_eq!(
-            names,
-            [
-                "status",
-                "connections",
-                "list",
-                "stat",
-                "read",
-                "write",
-                "edit",
-                "mkdir",
-                "remove",
-                "copy",
-                "move",
-                "search",
-                "exec",
-                "job_status",
-                "job_input",
-                "job_cancel",
-                "se",
-                "sessions",
-                "screen",
-                // Added by 1aea1216 and cf6f47e9 (docs/oberflaechen/fernzugriff.md).
-                "screen_window",
-                "screen_input",
-                "tcp_forward",
-                "apps",
-                "rdp",
-                "login"
-            ]
-        );
-        assert!(INSTRUCTIONS.len() <= 2_048, "{}", INSTRUCTIONS.len());
-        for tool in &tools {
-            let description = tool.description.as_deref().unwrap_or_default();
-            assert!(
-                description.len() <= 2_048,
-                "{} description too long",
-                tool.name
-            );
-            let annotations = tool.annotations.as_ref().expect("annotations");
-            let read_only = annotations.read_only_hint == Some(true);
-            assert_eq!(
-                read_only,
-                matches!(
-                    tool.name.as_ref(),
-                    "status" | "connections" | "list" | "stat" | "read" | "search" | "job_status"
-                ),
-                "{}",
-                tool.name
-            );
-            assert_eq!(tool.input_schema["type"], "object");
-            let upfront = tool
-                .meta
-                .as_ref()
-                .and_then(|meta| meta.get("anthropic/alwaysLoad"))
-                .cloned();
-            // The file tools and the remote-command tools load upfront.
-            let deferred = matches!(
-                tool.name.as_ref(),
-                "status"
-                    | "se"
-                    | "screen"
-                    | "screen_window"
-                    | "screen_input"
-                    | "tcp_forward"
-                    | "apps"
-                    | "rdp"
-                    | "login"
-            );
-            assert_eq!(
-                upfront,
-                (!deferred).then_some(serde_json::Value::Bool(true)),
-                "{}",
-                tool.name
-            );
-        }
-        // Codex keeps the first 512 characters; the priority over the host's
-        // own file tools must be complete there.
-        let first = INSTRUCTIONS.split("\n\n").next().unwrap_or_default();
-        assert!(first.len() <= 512, "{}", first.len());
-    }
-
-    #[test]
-    fn exec_shell_task_instructions_name_the_shells_of_exec() {
-        let tools = tools();
-        let find = |name: &str| {
-            tools
-                .iter()
-                .find(|tool| tool.name == name)
-                .unwrap_or_else(|| panic!("{name} missing"))
-        };
-        let exec = find("exec");
-        let description = exec.description.as_deref().unwrap_or_default();
-        // Which shell runs where, how Windows PowerShell 5.1 chains commands,
-        // how to choose another, and that remote commands do not go through
-        // the agent's terminal.
-        for text in [INSTRUCTIONS, description] {
-            for needle in [
-                "PowerShell",
-                "pwsh 7",
-                "5.1",
-                "&&",
-                "if ($?)",
-                "login shell",
-                "`shell`",
-                "cmd",
-                "`argv`",
-                "`se exec`",
-            ] {
-                assert!(text.contains(needle), "{needle} missing in: {text}");
-            }
-        }
-        // The plugin's skill says the same.
-        let skill = include_str!("../plugin/assets/SKILL.md");
-        for needle in [
-            "PowerShell",
-            "pwsh",
-            "5.1",
-            "&&",
-            "if ($?)",
-            "login shell",
-            "`shell`",
-            "`argv`",
-            "`se exec`",
-            "`os`",
-        ] {
-            assert!(skill.contains(needle), "{needle} missing in SKILL.md");
-        }
-        assert!(description.contains("parse error"), "{description}");
-        assert!(description.contains("`os`"), "{description}");
-        assert_eq!(
-            exec.input_schema["properties"]["shell"]["enum"],
-            serde_json::json!(["powershell", "cmd", "sh"])
-        );
-        let sessions = find("sessions").description.as_deref().unwrap_or_default();
-        assert!(sessions.contains("`shell`"), "{sessions}");
-        let connections = find("connections")
-            .description
-            .as_deref()
-            .unwrap_or_default();
-        assert!(connections.contains("`os`"), "{connections}");
-        // Agents see the remote-command tools without a tool search.
-        for name in ["exec", "sessions", "job_input", "job_cancel", "job_status"] {
-            let upfront = find(name)
-                .meta
-                .as_ref()
-                .and_then(|meta| meta.get("anthropic/alwaysLoad"))
-                .cloned();
-            assert_eq!(upfront, Some(serde_json::Value::Bool(true)), "{name}");
-        }
-    }
-}
+#[path = "catalog_tests.rs"]
+mod tests;
 
 #[cfg(test)]
 #[path = "abgleich_task_catalog_tests.rs"]

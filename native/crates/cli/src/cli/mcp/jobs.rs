@@ -1,5 +1,5 @@
-//! Long-running work of one MCP session (copies, moves, searches, remote and
-//! `se` commands). A tool call waits up to its `wait_seconds` and otherwise
+//! Long-running work of one MCP session (copies, moves, name and content
+//! searches, remote and `se` commands). A tool call waits up to its `wait_seconds` and otherwise
 //! returns the job id; `job_status`, `job_input` and `job_cancel` continue
 //! from there. Jobs live as long as the `se mcp` process; its end cancels
 //! every running job.
@@ -16,6 +16,7 @@ pub(super) enum JobKind {
     Copy,
     Move,
     Search,
+    Grep,
     Exec,
     Command,
 }
@@ -26,6 +27,7 @@ impl JobKind {
             Self::Copy => "copy",
             Self::Move => "move",
             Self::Search => "search",
+            Self::Grep => "grep",
             Self::Exec => "exec",
             Self::Command => "se",
         }

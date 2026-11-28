@@ -46,12 +46,17 @@ pub(super) fn meta_value(path: &str, meta: &VfsMeta) -> Value {
     })
 }
 
+/// The `target` of a file tool; absent or empty = the working root.
+pub(super) fn target_spec(args: &Args<'_>) -> Result<String, String> {
+    Ok(args.opt_string("target")?.unwrap_or_default())
+}
+
 pub(super) fn list(session: &Session, args: &Args<'_>) -> Result<CallToolResult, String> {
-    let target = session.targets.resolve(&args.string("target")?)?;
+    let target = session.targets.resolve(&target_spec(args)?)?;
     let mut entries = target
         .backend
         .list_dir(&target.path)
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| session.targets.io_error(&target, error))?;
     entries.sort_by(|left, right| left.name.cmp(&right.name));
     let total = entries.len();
     let offset = usize::try_from(args.opt_u64("offset")?.unwrap_or(0))
@@ -85,29 +90,33 @@ pub(super) fn list(session: &Session, args: &Args<'_>) -> Result<CallToolResult,
 }
 
 pub(super) fn stat(session: &Session, args: &Args<'_>) -> Result<CallToolResult, String> {
-    let target = session.targets.resolve(&args.string("target")?)?;
+    let target = session.targets.resolve(&target_spec(args)?)?;
     let meta = target
         .backend
         .stat(&target.path)
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| session.targets.io_error(&target, error))?;
     Ok(response::ok(meta_value(&target.path, &meta)))
 }
 
-/// Reads a page of a file. Through a link the content is the file it points
-/// to; its size is unknown (`size` and `etag` are null) and one byte more
-/// than the page shows whether the file continues.
+/// Reads a page of a file: from a byte `offset`, or with `line`/`lines`
+/// numbered lines (`line_read.rs`). Through a link the content is the file it
+/// points to; its size is unknown (`size` and `etag` are null) and one byte
+/// more than the page shows whether the file continues.
 pub(super) fn read(session: &Session, args: &Args<'_>) -> Result<CallToolResult, String> {
-    let target = session.targets.resolve(&args.string("target")?)?;
+    let target = session.targets.resolve(&target_spec(args)?)?;
     let meta = target
         .backend
         .stat(&target.path)
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| session.targets.io_error(&target, error))?;
     let through_link = match EntryKind::of(&meta) {
         EntryKind::Dir => return Err(format!("{} is a directory; use `list`", target.path)),
         EntryKind::Special => return Err(format!("{} is not a regular file", target.path)),
         EntryKind::Link => true,
         EntryKind::File => false,
     };
+    if args.value("line").is_some() || args.value("lines").is_some() {
+        return super::line_read::read(session, &target, &meta, through_link, args);
+    }
     let base64 = match args.opt_string("encoding")?.as_deref() {
         None | Some("text") => false,
         Some("base64") => true,
@@ -128,13 +137,15 @@ pub(super) fn read(session: &Session, args: &Args<'_>) -> Result<CallToolResult,
         Vec::new()
     } else if through_link {
         read_range(&target, &meta, offset, length.saturating_add(1)).map_err(|error| {
+            session.targets.after_failure(&target);
             format!(
                 "{} is a link whose target does not exist, is a directory, or cannot be read: {error}",
                 target.path
             )
         })?
     } else {
-        read_range(&target, &meta, offset, length)?
+        read_range(&target, &meta, offset, length)
+            .inspect_err(|_| session.targets.after_failure(&target))?
     };
     let more = through_link && bytes.len() > length;
     bytes.truncate(length);
@@ -213,15 +224,15 @@ pub(super) fn read_range(
 }
 
 pub(super) fn mkdir(session: &Session, args: &Args<'_>) -> Result<CallToolResult, String> {
-    let target = session.targets.resolve(&args.string("target")?)?;
+    let target = session.targets.resolve(&target_spec(args)?)?;
     let existed = target
         .backend
         .try_exists(&target.path)
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| session.targets.io_error(&target, error))?;
     target
         .backend
         .mkdir_all(&target.path)
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| session.targets.io_error(&target, error))?;
     Ok(response::ok(json!({
         "path": target.path,
         "created": !existed,
@@ -229,14 +240,19 @@ pub(super) fn mkdir(session: &Session, args: &Args<'_>) -> Result<CallToolResult
 }
 
 pub(super) fn remove(session: &Session, args: &Args<'_>) -> Result<CallToolResult, String> {
-    let target = session.targets.resolve(&args.string("target")?)?;
+    let target = session.targets.resolve(&target_spec(args)?)?;
+    let allow_root = args.flag("allow_root")?;
+    // Paths below a kept connection carry no root mark of their own; the
+    // resolution marks filesystem and connection roots and the working root.
+    if target.protected() && !allow_root {
+        return Err(format!(
+            "refusing to remove {}: it is a filesystem root, a saved connection's configured root or the working root; pass allow_root: true to remove it",
+            target.spec
+        ));
+    }
     // The tool call is the explicit request `se rm` needs `--force` for.
-    crate::cli::ops::remove(
-        &target,
-        args.flag("recursive")?,
-        true,
-        args.flag("allow_root")?,
-    )?;
+    crate::cli::ops::remove(&target, args.flag("recursive")?, true, allow_root)
+        .inspect_err(|_| session.targets.after_failure(&target))?;
     Ok(response::ok(
         json!({ "path": target.path, "removed": true }),
     ))

@@ -82,19 +82,21 @@ Ab 0.5.178 empfiehlt sich das Plugin dem Agenten selbst als erste Wahl für jede
 lokal wie entfernt:
 
 - **Server-Anweisungen** (`instructions` der MCP-Initialisierung): Der erste Absatz verlangt, die
-  Smart-Explorer-Tools vor den eingebauten Datei-Werkzeugen (Read, Write, Edit, Glob, LS) und vor
-  Shell-Dateibefehlen (`ls`, `cat`, `find`, `cp`, `mv`, `rm`, `scp`, `rsync`) zu nutzen. Auf diese
-  weicht der Agent nur aus, wenn ein Smart-Explorer-Tool scheitert oder die Funktion fehlt. Der
-  Absatz ist mit 503 Zeichen in den ersten 512 Zeichen vollständig, die Codex auswertet.
+  Smart-Explorer-Tools (seit 2026-11-27 mit `root` und `grep`) vor den eingebauten
+  Datei-Werkzeugen (Read, Write, Edit, Glob, Grep, LS) und vor Shell-Dateibefehlen (`ls`, `cat`,
+  `find`, `grep`, `cp`, `mv`, `rm`, `scp`, `rsync`) zu nutzen. Auf diese weicht der Agent nur
+  aus, wenn ein Smart-Explorer-Tool scheitert oder die Funktion fehlt. Der Absatz ist mit 504
+  Zeichen in den ersten 512 Zeichen vollständig, die Codex auswertet.
 - **Befehle statt Terminal:** Der zweite Absatz der Anweisungen verlangt, Befehle auf
   SSH-Remotes und Share-Peers mit `exec` auszuführen statt mit `ssh` oder `se exec` im Terminal
   des Agenten, und nennt die Shell je Ziel (Abschnitt „Remote-Ausführung“, „Shell je Ziel“),
   dass Windows PowerShell 5.1 kein `&&`/`||` kennt (`a; if ($?) { b }`), die Wahl mit `shell`
   bzw. `argv`, dass Ergebnisse die Shell in `shell` nennen und `connections` je Share-Peer `os`.
-  Die Anweisungen haben 2 036 Byte (Grenze von Claude Code: 2 048).
-- **Vorab geladen in Claude Code:** `connections`, `list`, `stat`, `read`, `write`, `edit`,
-  `mkdir`, `remove`, `copy`, `move`, `search`, `exec`, `job_status`, `job_input`, `job_cancel`
-  und `sessions` tragen `_meta["anthropic/alwaysLoad"]: true`. Claude Code zeigt sie damit ohne
+  Der dritte Absatz nennt die Ziele, das Arbeitsziel (`root`), `grep` und `read` nach Zeilen.
+  Die Anweisungen haben 2 034 Byte (Grenze von Claude Code: 2 048).
+- **Vorab geladen in Claude Code:** `connections`, `root`, `list`, `stat`, `read`, `write`,
+  `edit`, `mkdir`, `remove`, `copy`, `move`, `search`, `grep`, `exec`, `job_status`,
+  `job_input`, `job_cancel` und `sessions` tragen `_meta["anthropic/alwaysLoad"]: true`. Claude Code zeigt sie damit ohne
   Tool-Suche, ohne den Sitzungsstart aufzuhalten. `exec`, `job_input`, `job_cancel` und
   `sessions` sind seit 2026-11-25 dabei (Nutzermeldung: Agenten fanden die verzögerten
   Befehls-Tools nicht und nutzten `se exec` und `ssh` in ihrem Terminal). `status`, `se`,
@@ -110,8 +112,8 @@ lokal wie entfernt:
   Linux-/Android-Peer und SSH-Remote: Login-Shell), die Wahl mit `shell` bzw. `argv`, das
   Ergebnisfeld `shell` und `os` in `connections`. Die Plugin-Beschreibung in
   `plugin.json`/`marketplace.json` nennt den Vorrang ebenfalls.
-- Inhaltssuche in Dateien (Grep) und lokale Builds bleiben beim Host, weil `search` nur Namen
-  sucht.
+- Inhaltssuche in Dateien übernimmt seit 2026-11-27 `grep` (vorher blieb sie beim Host, weil
+  `search` nur Namen sucht); lokale Builds bleiben beim Host.
 
 Nach der Migration zum Installationsstarter wählen neue Serverprozesse die neue
 Runtime ohne erneute Registrierung. Eine laufende kompatible Verbindung behält
@@ -124,11 +126,13 @@ einen bereits initialisierten Hostprozess.
 |---|---|---|
 | `status` | Version, Installation, Zugangsdatenspeicher, Hintergrunddienst, Share-Zustand, Plugin-Dateien | nur lesend |
 | `connections` | gespeicherte Remotes und Share-Peers mit `target`-Präfix und `exec`-Art (`ssh`/`share`); je Share-Peer `os` (`windows`, `linux`, `android`, `null` vor dem ersten Exec-Start dort) | nur lesend |
-| `list`, `stat`, `read` | Verzeichnis (seitenweise, `type` `file`/`dir`/`symlink`/`special`), Metadaten mit `etag`, Inhalt ab Byte-Offset (Text oder base64; über einen Link der Inhalt seines Ziels mit `size`/`etag` = null und `through_link: true`) | nur lesend |
+| `root` | Arbeitsziel der Sitzung setzen (`set`, jede Zielart; prüft per `stat`, dass es ein erreichbarer Ordner ist, und meldet `kind`, Gerät bzw. Server, `via` und bei Share-Peers die aktuelle `route`), zeigen (`show`), entfernen (`clear`) | nur lesend |
+| `list`, `stat`, `read` | Verzeichnis (seitenweise, `type` `file`/`dir`/`symlink`/`special`), Metadaten mit `etag`, Inhalt ab Byte-Offset (Text oder base64; über einen Link der Inhalt seines Ziels mit `size`/`etag` = null und `through_link: true`) oder mit `line`/`lines` nummerierte Zeilen wie `cat -n` (Zeilennummer, Tabulator, Text; weiter mit `line` = `next_line`, `total_lines` am Ende, `crlf`, `cut_lines` für Zeilen länger als die Seite) | nur lesend |
 | `write`, `edit` | Datei anlegen/ersetzen, exakte Textersetzungen; `if_match` = `etag` schützt vor verlorenen Änderungen; nie durch einen Link als Datei hindurch | zerstörend |
 | `mkdir`, `remove` | Ordner anlegen; löschen wie `se rm --force` (Wurzeln nur mit `allow_root`) | ändernd / zerstörend |
 | `copy`, `move` | wie `se cp`/`se mv` zwischen beliebigen Zielen, als Job; Ergebnis mit `omitted` (übersprungene Links/Sonderdateien) und `kept_directories` (beim Verschieben behaltene Quellordner) | zerstörend (Überschreiben) |
 | `search` | Namenssuche (Text oder Glob), Treffer seitenweise, als Job; Links und Sonderdateien als eigene Treffer (`symlink`, `special`), nie betreten | nur lesend |
+| `grep` | Inhaltssuche wie „Suchen in Dateien“ von Notepad++ (`mode` normal/extended/regex, `match_case`, `whole_word`, `dot_matches_newline`, `filters` = Filterfeld, `folders`/`exclude_folders` = Regex auf den relativen Ordnerpfad, `subfolders`, `hidden`, `context_lines`), als Job; `output` content (`rel:zeile:text`), files oder count (`rel:anzahl`), `format` json (JSON-Zeilen mit `rel`, `line`, `text`, `ranges`); seitenweise über `hits_offset`; Ergebnis mit `files_searched`, `files_matched`, `hits`, `skipped` (+ `skipped_items`), `limited`, `searched_at` (`local`, `agent`, `host`, `reading`); ein ungültiges Muster scheitert sofort | nur lesend |
 | `exec` | Befehl auf gespeichertem SFTP-Remote (SSH) oder Share-Peer, als Job; mit `session` in einer dauerhaften Shell; `shell` wählt die Shell, das Ergebnis nennt sie in `shell` | zerstörend |
 | `sessions` | dauerhafte Shell-Sitzungen auflisten (mit `kind` `commands` oder `terminal`, `dialect` und `shell`), einer mit `se shell -T --attachable` geöffneten Befehlssitzung beitreten (`attach`; Terminalsitzungen werden abgelehnt), Aktivität der anderen lesen (`activity`), schließen bzw. lösen (`close`) | ändernd |
 | `job_status`, `job_input`, `job_cancel` | Jobs verfolgen (Ausgabe ab Offset), stdin senden, abbrechen | lesend / ändernd |
@@ -148,9 +152,31 @@ Releasebeleg. Rechte, Besitz und Plattformausnahmen stehen in
 
 **Ziele** folgen der `se`-Grammatik: `@label:/pfad`, gespeicherte `sftp://`/`ftp://`/`ftps://`/
 `webdav://`-Endpunkte, `share://direct/<id>/pfad`, `share://room/<raum>/<gerät>/pfad`,
-`gdrive:///pfad`, lokale und UNC-Pfade. Lokale Pfade müssen absolut sein: das Arbeitsverzeichnis
-des Servers bestimmt der Agent-Host. Innerhalb einer Sitzung wird je gespeicherter SFTP-, FTP-,
-FTPS- und WebDAV-Verbindung eine Anmeldung wiederverwendet.
+`gdrive:///pfad`, `vault://<site>/pfad`, lokale und UNC-Pfade. Ohne Arbeitsziel müssen lokale
+Pfade absolut sein: das Arbeitsverzeichnis des Servers bestimmt der Agent-Host.
+
+**Arbeitsziel** (seit 2026-11-27, `native/crates/cli/src/cli/mcp/root_tool.rs`, `root_path.rs`,
+`targets.rs`): `root` mit `set` macht ein Ziel jeder Art zum Arbeitsziel der Sitzung, wie ein
+offener Tab im Explorer. Danach nehmen alle Datei-Tools (`list`, `stat`, `read`, `write`, `edit`,
+`mkdir`, `remove`, `copy`, `move`, `search`, `grep`) relative Pfade darunter (`src/main.rs`; `.`
+und ein leeres Ziel sind das Arbeitsziel selbst); `..` darf innerhalb klettern, aber nie darüber
+hinaus (Fehlermeldung). Ein absolutes Ziel, das das Arbeitsziel selbst oder einen Pfad darunter
+schreibt, wird genauso behandelt; jedes andere absolute Ziel bleibt gültig. Das Arbeitsziel selbst
+löscht `remove` nur mit `allow_root`. `exec` ohne `target` läuft auf dem SSH-Remote des
+Arbeitsziels in dessen Ordner (ein relatives `cwd` liegt darunter) bzw. auf dessen Share-Peer; ein
+Share-Arbeitsziel unterhalb der obersten Ebene braucht dort `cwd` mit dem Pfad des Peers, weil der
+Peer zu einem Share-Ordner keinen Plattenpfad nennt. Bei anderen Zielarten meldet `exec` das.
+
+**Verbindungen wie ein Tab** (`tab_cache.rs`): Die Sitzung hält je gespeicherter SFTP-, FTP-,
+FTPS- und WebDAV-Verbindung eine Anmeldung, je SSH-Remote eine SSH-Anmeldung für `exec`, je
+Share-Freigabe eines Peers (`/<freigabe>` bzw. `/Verbindungen/<name>`) eine Verbindung und für das
+Arbeitsziel bei SMB, Windows-Freigaben, UNC-Pfaden, Google Drive und Tresoren dessen Verbindung für
+alle Pfade darunter. Gleichzeitige erste Aufrufe öffnen eine Verbindung genau einmal. Scheitert ein
+Aufruf an der Verbindung (Fehlerart Verbindungsabbruch, Zeitüberschreitung, Host nicht erreichbar;
+bei unklarer Fehlerart prüft ein `stat` des Pfads, an dem die Verbindung geöffnet wurde), wird sie
+verworfen und der nächste Aufruf öffnet sie genau einmal neu. Absolute Ziele bei SMB,
+Windows-Freigaben, UNC-Pfaden, Google Drive und Tresoren außerhalb des Arbeitsziels werden wie
+bisher je Aufruf geöffnet.
 
 ## Lange Vorgänge, Ausgaben, Antwortgrößen
 
@@ -598,6 +624,12 @@ sperrt neue Starts aus der betroffenen MCP-Installation und wird nach einem
 Teilfehler gegen dieselben ursprünglichen Dateihashes fortgesetzt.
 
 ## Grenzen
+
+- `grep` meldet in `searched_at`, wo nach der Verbindungsart gesucht wurde (`local`, `host` bei
+  Share-Peers, `agent` bei SFTP mit se-agent, sonst `reading`); eine ältere Gegenstelle ohne
+  Inhaltssuche wird ebenfalls durch Lesen durchsucht, ohne dass `searched_at` das unterscheidet.
+- Volltextsuche und Vorschau für Binär- und Office-Dateien gibt es nicht (Nutzer 2026-11-27:
+  „bleibt erstmal aus“); `grep` überspringt Dateien mit NUL-Bytes und nennt sie in `skipped_items`.
 
 - **Android:** kein `se mcp`. Agenten in Termux könnten zwar lokale Programme starten, die Daten
   der Android-App sind aber app-privat; ein Anschluss bräuchte eine exportierte App-Schnittstelle

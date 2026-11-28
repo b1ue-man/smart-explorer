@@ -84,6 +84,14 @@ impl ShellRegistry {
         Ok(port)
     }
 
+    /// Whether a live session named `name` is open here (one still opening
+    /// is not counted).
+    pub(super) fn is_open(&self, name: &str) -> bool {
+        self.ports()
+            .iter()
+            .any(|(open, port)| open == name && port.client.ended().is_none())
+    }
+
     /// Joins an attachable command session of another process by name or id.
     pub(super) fn attach(&self, selector: &str) -> Result<Arc<Port>, String> {
         let entry = shell_session::find_attachable(selector)?;
