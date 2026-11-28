@@ -96,6 +96,9 @@ impl App {
         // Clipboard ops are driven by egui's semantic Copy/Cut/Paste events
         // (and key-combos as a fallback) — see the event scan below.
         let mut keys = super::clipboard_keys::ClipboardKeys::default();
+        // Ctrl+Shift+H: „In Dateien suchen“ with „Ersetzen durch“ (VS Code's
+        // „Replace in Files“).
+        let mut replace_in_files = false;
 
         ctx.input_mut(|i| {
             use egui::{Key, Modifiers};
@@ -140,6 +143,9 @@ impl App {
             // global folder search.
             if i.consume_key(Modifiers::COMMAND | Modifiers::SHIFT, Key::F) {
                 acts.push(KbdAct::FindInFiles);
+            }
+            if i.consume_key(Modifiers::COMMAND | Modifiers::SHIFT, Key::H) {
+                replace_in_files = true;
             }
             if i.consume_key(Modifiers::COMMAND | Modifiers::SHIFT, Key::O) {
                 acts.push(KbdAct::FocusSearch);
@@ -422,6 +428,9 @@ impl App {
                     }
                 }
             }
+        }
+        if replace_in_files {
+            self.open_replace_in_files(None);
         }
         if !jump_text.is_empty() {
             self.type_to_jump(&jump_text);

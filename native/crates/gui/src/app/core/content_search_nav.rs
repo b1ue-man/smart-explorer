@@ -178,6 +178,7 @@ impl SearchResults {
             derived.push_file(FileHits {
                 rel: file.rel.clone(),
                 size: file.size,
+                mtime_ms: file.mtime_ms,
                 hits: lines.len() as u64,
                 lines,
                 expanded: true,
@@ -215,5 +216,8 @@ fn derived_record(id: u64, source: &SearchRecord, query: &WithinQuery) -> Search
     }
     let mut record = SearchRecord::new(id, &content, source.root.clone(), source.place.clone());
     record.within = Some(source.pattern.clone());
+    // Its lines come from a second, line-wise pattern: a replacement cannot
+    // name them in the core's terms.
+    record.query = None;
     record
 }

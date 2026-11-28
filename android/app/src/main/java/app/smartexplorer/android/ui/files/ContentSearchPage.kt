@@ -1,7 +1,9 @@
 package app.smartexplorer.android.ui.files
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -60,6 +62,9 @@ private val MODES = listOf(
  * Page "In Dateien suchen" (plan docs/plaene/2026-11-27-dateien-suche-ansicht, E): the form, the
  * progress with [Abbrechen] and the results grouped by file. Tapping a hit line opens the text
  * view at that line ([onOpenLine]: location, name, zero-based line, UTF-16 range of the first match).
+ * "In Dateien ersetzen" (plan docs/plaene/2026-11-28-ersetzen-masken-shell, M3): the field
+ * "Ersetzen durch", a long press selects result rows for "Ersetzen…" and "Aus dem Ergebnis
+ * entfernen", the menu replaces all remaining hits; the outcome card offers "Rückgängig".
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -102,6 +107,19 @@ internal fun ContentSearchPage(
                                 menu = false
                                 state.collapseAll()
                             })
+                            HorizontalDivider()
+                            DropdownMenuItem(text = { Text("Ausgewählte ersetzen…") }, enabled = state.selected.isNotEmpty(), onClick = {
+                                menu = false
+                                state.replaceSelected()
+                            })
+                            DropdownMenuItem(text = { Text("Alle verbleibenden ersetzen…") }, enabled = results?.replaceable == true, onClick = {
+                                menu = false
+                                state.replaceRemaining()
+                            })
+                            DropdownMenuItem(text = { Text("Aus dem Ergebnis entfernen") }, enabled = state.selected.isNotEmpty(), onClick = {
+                                menu = false
+                                state.dismissSelected()
+                            })
                         }
                     }
                 },
@@ -113,8 +131,12 @@ internal fun ContentSearchPage(
             if (showForm) item(key = "form") { SearchForm(state) }
             item(key = "status") {
                 Column {
-                    LoadingBar(state.running)
+                    LoadingBar(state.running || state.replace.running)
                     state.error?.let { ErrorCard(it, modifier = Modifier.padding(16.dp), title = "Suche nicht möglich") }
+                    (state.replaceError ?: state.replace.message)?.let {
+                        ErrorCard(it, modifier = Modifier.padding(16.dp), title = "Ersetzen nicht möglich")
+                    }
+                    ReplaceOutcomeCard(state.replace)
                     if (results != null) {
                         // A state read here: this item follows every applied poll answer.
                         val header = remember(results, state.version) { results.header() }
@@ -137,12 +159,17 @@ internal fun ContentSearchPage(
                                 modifier = Modifier.padding(horizontal = 16.dp),
                             )
                         }
+                        SelectionBar(state)
                     }
                 }
             }
             items(rows, key = { it.key }) { row ->
+                val chosen = row.key in state.selected
+                val selecting = state.selected.isNotEmpty()
+                val pick = { state.toggleSelected(row.key) }
+                val highlight = if (chosen) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surface
                 when (row) {
-                    is ResultRow.File -> FileHead(row, onToggle = { state.toggle(row.file.rel) }, onOpen = {
+                    is ResultRow.File -> FileHead(row, highlight, onToggle = { if (selecting) pick() else state.toggle(row.file.rel) }, onSelect = pick, onOpen = {
                         val hit = row.file.firstHit
                         val range = hit?.ranges?.firstOrNull()
                         onOpenLine(
@@ -161,7 +188,12 @@ internal fun ContentSearchPage(
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable {
+                            .background(highlight)
+                            .combinedClickable(onLongClickLabel = "Auswählen", onLongClick = pick) {
+                                if (selecting) {
+                                    pick()
+                                    return@combinedClickable
+                                }
                                 val range = row.line.ranges.firstOrNull()
                                 onOpenLine(
                                     row.file.location,
@@ -190,14 +222,25 @@ internal fun ContentSearchPage(
             }
         }
     }
+    state.replace.confirm?.let { ReplaceConfirmDialog(it, state.replace) }
 }
 
 @Composable
-private fun FileHead(row: ResultRow.File, onToggle: () -> Unit, onOpen: () -> Unit) {
+private fun FileHead(
+    row: ResultRow.File,
+    highlight: androidx.compose.ui.graphics.Color,
+    onToggle: () -> Unit,
+    onSelect: () -> Unit,
+    onOpen: () -> Unit,
+) {
     Column {
         HorizontalDivider()
         Row(
-            Modifier.fillMaxWidth().clickable(onClick = onToggle).padding(start = 16.dp, top = 6.dp, bottom = 6.dp),
+            Modifier
+                .fillMaxWidth()
+                .background(highlight)
+                .combinedClickable(onLongClickLabel = "Auswählen", onLongClick = onSelect, onClick = onToggle)
+                .padding(start = 16.dp, top = 6.dp, bottom = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             SeIcon(if (row.expanded) R.drawable.ic_expand_less else R.drawable.ic_expand_more, contentDescription = null)
@@ -224,6 +267,22 @@ private fun SearchForm(state: ContentSearchState) {
             singleLine = true,
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
             keyboardActions = KeyboardActions(onSearch = { state.start() }),
+            modifier = Modifier.fillMaxWidth(),
+        )
+        OutlinedTextField(
+            value = state.replacement,
+            onValueChange = { state.replacement = it },
+            label = { Text("Ersetzen durch") },
+            supportingText = {
+                Text(
+                    when (state.mode) {
+                        "regex" -> "$0 oder $&, $1 oder \${1}, $+{name}, \\U…\\E, ?1ja:nein (wie Notepad++)"
+                        "extended" -> "\\n, \\r, \\t, \\0, \\x… wie im Suchtext"
+                        else -> "wörtlich; leer löscht die Treffer"
+                    },
+                )
+            },
+            singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
         OutlinedTextField(
@@ -263,6 +322,7 @@ private fun SearchForm(state: ContentSearchState) {
         CheckRow("Nur ganze Wörter", state.wholeWord && state.mode != "regex", enabled = state.mode != "regex") { state.wholeWord = it }
         CheckRow("Groß-/Kleinschreibung beachten", state.matchCase) { state.matchCase = it }
         CheckRow("Nur Dateinamen anzeigen", state.filesOnly) { state.filesOnly = it }
+        CheckRow("Ignorierdateien beachten (.gitignore)", state.respectIgnoreFiles) { state.respectIgnoreFiles = it }
         Text("Suchmodus", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(top = 4.dp))
         MODES.forEach { (value, label) ->
             Row(Modifier.fillMaxWidth().clickable { state.mode = value }, verticalAlignment = Alignment.CenterVertically) {
@@ -294,11 +354,15 @@ private fun SearchForm(state: ContentSearchState) {
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 4.dp)) {
             Button(onClick = { state.start() }, enabled = state.location != null) { Text("Alle suchen") }
+            OutlinedButton(onClick = { state.replaceAll() }, enabled = state.location != null && !state.replace.running) {
+                Text("In Dateien ersetzen")
+            }
             if (state.running) {
                 OutlinedButton(onClick = { state.cancel() }) { Text("Abbrechen") }
             }
             TextButton(onClick = {
                 state.pattern = ""
+                state.replacement = ""
                 state.filters = ""
                 state.folderInclude = ""
                 state.folderExclude = ""

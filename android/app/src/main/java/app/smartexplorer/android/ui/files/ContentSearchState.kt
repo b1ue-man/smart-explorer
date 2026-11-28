@@ -6,6 +6,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import app.smartexplorer.android.api.ContentSearchQuery
 import app.smartexplorer.android.api.FilesApi
+import app.smartexplorer.android.api.ReplaceHit
 import app.smartexplorer.android.api.TextApi
 import app.smartexplorer.android.core.CoreException
 import kotlinx.coroutines.CoroutineScope
@@ -19,14 +20,17 @@ import kotlinx.coroutines.withContext
 
 /**
  * "In Dateien suchen" (api.md §4.14): the fields of Notepad++'s "Find in Files" plus the two
- * folder-path regex fields, the running search and its results. Kept in the Files view model, so
- * the form and the last results survive tab switches and rotation.
+ * folder-path regex fields, the running search and its results, and "In Dateien ersetzen"
+ * ([replace], see ContentSearchReplace.kt). Kept in the Files view model, so the form, the last
+ * results and a running replacement survive tab switches, rotation and "Zurück".
  */
 internal class ContentSearchState(private val scope: CoroutineScope) {
     /** Folder searched (a location of §2, local or remote). */
     var location by mutableStateOf<String?>(null)
         private set
     var pattern by mutableStateOf("")
+    /** "Ersetzen durch"; the syntax follows [mode] (Notepad++). */
+    var replacement by mutableStateOf("")
     /** `normal|extended|regex` */
     var mode by mutableStateOf("normal")
     var matchCase by mutableStateOf(false)
@@ -38,6 +42,8 @@ internal class ContentSearchState(private val scope: CoroutineScope) {
     var subfolders by mutableStateOf(true)
     var hidden by mutableStateOf(false)
     var filesOnly by mutableStateOf(false)
+    /** "Ignorierdateien beachten (.gitignore)"; off as in Notepad++. */
+    var respectIgnoreFiles by mutableStateOf(false)
     var contextLines by mutableStateOf("0")
     var maxHits by mutableStateOf("")
 
@@ -53,6 +59,21 @@ internal class ContentSearchState(private val scope: CoroutineScope) {
         private set
     var collapsed by mutableStateOf<Set<String>>(emptySet())
         private set
+
+    /** Keys of the selected result rows (`f:<rel>`, `l:<rel>:<index>`, `s`, `s:<index>`). */
+    var selected by mutableStateOf<Set<String>>(emptySet())
+        private set
+
+    /** Why the last replacement command did not start. */
+    var replaceError by mutableStateOf<String?>(null)
+        private set
+
+    /** Files a finished replacement changed leave the result they came from. */
+    val replace = ContentReplaceFlow(scope) { changed ->
+        results?.dropFiles(changed)
+        selected = emptySet()
+        version++
+    }
 
     val running: Boolean
         get() = taskId != null
@@ -83,6 +104,7 @@ internal class ContentSearchState(private val scope: CoroutineScope) {
         contextLines = contextLines.trim().toIntOrNull()?.coerceAtLeast(0) ?: 0,
         maxHits = maxHits.trim().toLongOrNull()?.coerceAtLeast(0) ?: 0,
         filesOnly = filesOnly,
+        respectIgnoreFiles = respectIgnoreFiles,
     )
 
     /** [Alle suchen]: an invalid pattern is reported at once, before any task. */
@@ -105,7 +127,8 @@ internal class ContentSearchState(private val scope: CoroutineScope) {
             }
             error = null
             collapsed = emptySet()
-            val fresh = ContentResults(query)
+            selected = emptySet()
+            val fresh = ContentResults(query, folder)
             results = fresh
             taskId = id
             try {
@@ -157,6 +180,57 @@ internal class ContentSearchState(private val scope: CoroutineScope) {
      */
     fun closed() {
         cancel()
+        replace.closed()
+    }
+
+    /** [In Dateien ersetzen]: every match below the folder, after the dry run and the confirmation. */
+    fun replaceAll() {
+        val folder = location ?: return
+        if (pattern.isEmpty()) {
+            replaceError = "Bitte einen Suchtext eingeben."
+            return
+        }
+        replaceError = null
+        replace.request(ReplaceJob(folder, query(), replacement, hits = null))
+    }
+
+    /** "Ersetzen…" for the selected rows (the confirmation asks "Ersetzen durch" first). */
+    fun replaceSelected() = replaceHits { it.hitRefs(selected) }
+
+    /** "Alle verbleibenden ersetzen…": every hit line still in the result. */
+    fun replaceRemaining() = replaceHits { it.allHitRefs() }
+
+    private fun replaceHits(pick: (ContentResults) -> List<ReplaceHit>) {
+        val current = results
+        replaceError = when {
+            current == null -> "Es gibt kein Suchergebnis."
+            running -> "Die Suche läuft noch."
+            !current.replaceable -> "Diese Treffer lassen sich nicht ersetzen (Suche fehlgeschlagen oder nur Dateinamen)."
+            else -> null
+        }
+        if (current == null || replaceError != null) return
+        val hits = pick(current)
+        if (hits.isEmpty()) {
+            replaceError = "Die Auswahl enthält keine Trefferzeile."
+            return
+        }
+        replace.ask(ReplaceJob(current.location, current.query, replacement, hits))
+    }
+
+    /** Long press on a row: into or out of the selection. */
+    fun toggleSelected(key: String) {
+        selected = if (key in selected) selected - key else selected + key
+    }
+
+    fun clearSelection() {
+        selected = emptySet()
+    }
+
+    /** "Aus dem Ergebnis entfernen": the selected rows are never replaced. */
+    fun dismissSelected() {
+        val current = results ?: return
+        if (current.dismiss(selected)) version++
+        selected = emptySet()
     }
 
     fun toggle(key: String) {

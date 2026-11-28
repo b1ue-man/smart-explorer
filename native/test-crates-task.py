@@ -1416,6 +1416,8 @@ IGNORED_GROUPS = [
             "gui_design_task_start_page_and_chart_visuals",
             "gui_design_task_drive_failure_reaches_readable_report_and_complete_clipboard",
             "gui_design_task_find_in_files_results_and_text_view",
+            # Plan 2026-11-28: replace in files (preview, confirmation, run, undo, dismiss).
+            "replace_ui_task_dialog_preview_confirm_run_undo_and_dismiss",
         ],
     },
     {   # Real ACL, impersonation token and junction fixtures, and the authenticated read helper as a
@@ -1869,6 +1871,15 @@ KOTLIN_BATCH_TESTS = {
         "content_search_task_collapsed_files_show_only_their_head",
         "content_search_task_hit_text_marks_ranges_after_the_prefix",
         "content_search_task_skipped_files_and_poll_answer_decode",
+    ],
+    # Plan 2026-11-28 "Ersetzen, Masken, Shell": replace in files on the app's search page
+    "app.smartexplorer.android.ui.files.ContentReplaceTaskTest": [
+        "replace_ui_task_hit_refs_take_selected_lines_and_files_without_context",
+        "replace_ui_task_dismiss_removes_lines_files_and_skipped_entries",
+        "replace_ui_task_only_finished_full_searches_are_replaceable",
+        "replace_ui_task_confirmation_names_folder_filter_places_and_files",
+        "replace_ui_task_outcome_counts_skips_and_offers_undo_from_poll_answers",
+        "replace_ui_task_hit_json_carries_the_contract_fields",
     ],
     "app.smartexplorer.android.ui.viewer.TextViewTaskTest": [
         "textview_task_spans_become_annotated_string_styles",

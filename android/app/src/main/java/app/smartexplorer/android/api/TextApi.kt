@@ -27,6 +27,8 @@ data class ContentSearchQuery(
     val contextLines: Int = 0,
     val maxHits: Long = 0,
     val filesOnly: Boolean = false,
+    /** Skip what `.gitignore` (in a Git work tree), `.ignore` and `.git/info/exclude` exclude. */
+    val respectIgnoreFiles: Boolean = false,
 )
 
 /** One line of a hit event; [ranges] are `[start, end]` pairs in [text]. */

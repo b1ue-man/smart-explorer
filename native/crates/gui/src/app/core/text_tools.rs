@@ -4,7 +4,8 @@
 //! value on `App`; the frame calls `ui_text_tools_panel` before the central
 //! panel and `ui_text_tools_windows` after it. A pointer press decides which
 //! of these surfaces owns the keyboard; while one does, the explorer's own
-//! shortcuts stay off.
+//! shortcuts stay off. „In Dateien ersetzen“ lives in the `content_replace_*`
+//! modules below (plan docs/plaene/2026-11-28-ersetzen-masken-shell, M3).
 use super::content_search_dialog::{DialogAction, FindDialog};
 use super::content_search_results::{RowKind, SearchRecord, SearchResults};
 use super::content_search_results_ui::{PanelAction, ResultsPanel};
@@ -15,11 +16,25 @@ use super::text_view_ui::{theme_kind, ViewAction};
 use super::text_view_window::TextViewWindow;
 use crate::app::App;
 
+#[path = "content_replace_confirm.rs"]
+pub(in crate::app) mod content_replace_confirm;
+#[path = "content_replace_results.rs"]
+pub(in crate::app) mod content_replace_results;
+#[path = "content_replace_run.rs"]
+pub(in crate::app) mod content_replace_run;
+#[cfg(test)]
+#[path = "content_replace_task_tests.rs"]
+mod content_replace_task_tests;
+#[path = "content_replace_tools.rs"]
+pub(in crate::app) mod content_replace_tools;
+
 /// Where files are read: this computer, or the backend of a remote tab.
 #[derive(Clone)]
 pub(in crate::app) struct TextPlace {
     pub(in crate::app) backend: Option<crate::vfs::BackendHandle>,
     pub(in crate::app) label: String,
+    /// `proto://user@host:port` of the connection (`RemoteState::endpoint_prefix`).
+    pub(in crate::app) endpoint: Option<String>,
 }
 
 impl Default for TextPlace {
@@ -33,6 +48,7 @@ impl TextPlace {
         Self {
             backend: None,
             label: "Dieser Computer".to_string(),
+            endpoint: None,
         }
     }
 
@@ -40,6 +56,7 @@ impl TextPlace {
         Self {
             backend: Some(backend),
             label,
+            endpoint: None,
         }
     }
 
@@ -48,6 +65,18 @@ impl TextPlace {
             (None, None) => true,
             (Some(a), Some(b)) => Arc::ptr_eq(a, b),
             _ => false,
+        }
+    }
+
+    /// `root` in the se target grammar, as the replacement journal records
+    /// it: a local path, `proto://user@host:port/path` of an endpoint, else
+    /// `@label:/path`.
+    pub(in crate::app) fn location(&self, root: &str) -> String {
+        match (&self.backend, &self.endpoint) {
+            (None, _) => root.to_string(),
+            (Some(_), Some(endpoint)) if root.starts_with('/') => format!("{endpoint}{root}"),
+            (Some(_), Some(endpoint)) => format!("{endpoint}/{root}"),
+            (Some(_), None) => format!("@{}:{root}", self.label),
         }
     }
 
@@ -78,6 +107,7 @@ pub(in crate::app) struct TextTools {
     pub(in crate::app) views: Vec<TextViewWindow>,
     pub(in crate::app) languages: LanguagesPage,
     pub(in crate::app) owner: KeyOwner,
+    pub(in crate::app) replace: content_replace_tools::ReplaceTools,
     next_view: u64,
 }
 
@@ -120,11 +150,17 @@ impl TextTools {
     }
 
     pub(in crate::app) fn owns_keyboard(&self) -> bool {
-        self.owner != KeyOwner::Explorer
+        self.owner != KeyOwner::Explorer || self.replace.confirm.is_some()
     }
 
     pub(in crate::app) fn running(&self) -> bool {
-        !self.runs.is_empty()
+        !self.runs.is_empty() || self.replace.running()
+    }
+
+    /// „Abbrechen“ of the dialog and the panel: searches and replacements.
+    fn cancel_all(&mut self) {
+        self.cancel_searches();
+        self.replace.cancel_runs();
     }
 
     pub(in crate::app) fn cancel_searches(&mut self) {
@@ -242,6 +278,9 @@ impl TextTools {
 
     fn apply_panel(&mut self, ctx: &egui::Context, actions: Vec<PanelAction>) {
         for action in actions {
+            if self.apply_replace_action(&action) {
+                continue;
+            }
             match action {
                 PanelAction::Open(row) => self.open_row(ctx, row),
                 PanelAction::OpenPaths(paths) => {
@@ -251,14 +290,24 @@ impl TextTools {
                         }
                     }
                 }
-                PanelAction::CancelRuns => self.cancel_searches(),
+                PanelAction::CancelRuns => self.cancel_all(),
                 PanelAction::Clear => {
                     self.cancel_searches();
                     self.runs.clear();
-                    self.results.clear();
+                    // A replacement that still writes keeps its record (and
+                    // with it „Rückgängig“).
+                    let busy = self.replace.busy_records();
+                    self.results
+                        .records
+                        .retain(|record| busy.contains(&record.id));
+                    self.results.touch();
                     self.panel.selection.clear();
                     self.panel.cursor = None;
+                    self.panel.notice = None;
                 }
+                PanelAction::Replace(_)
+                | PanelAction::ReplaceRemaining(_)
+                | PanelAction::Undo(_) => {}
                 PanelAction::SearchWithin(source, query) => {
                     if let Err(error) =
                         self.results
@@ -278,6 +327,7 @@ impl TextTools {
     pub(in crate::app) fn ui_panel(&mut self, ctx: &egui::Context) {
         let results = &mut self.results;
         self.runs.retain_mut(|run| !run.drain(results));
+        self.pump_replace();
         if self.running() {
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
         }
@@ -297,19 +347,27 @@ impl TextTools {
         Some((record.progress.0, record.progress.1, record.hit_count()))
     }
 
-    /// Keys of the owning surface, F4 everywhere (outside text fields).
-    fn keys(&mut self, ctx: &egui::Context) -> bool {
+    /// Keys of the owning surface, F4 everywhere (outside text fields);
+    /// (Strg+Umschalt+F, Strg+Umschalt+H) pressed on a surface.
+    fn keys(&mut self, ctx: &egui::Context) -> (bool, bool) {
         use egui::{Key, Modifiers};
         let typing = ctx.wants_keyboard_input();
-        let (next, previous, find_dialog) = ctx.input_mut(|input| {
+        let owned = self.owner != KeyOwner::Explorer;
+        let (next, previous, find_dialog, replace_dialog) = ctx.input_mut(|input| {
             let next = !typing && input.consume_key(Modifiers::NONE, Key::F4);
             let previous = !typing && input.consume_key(Modifiers::SHIFT, Key::F4);
-            let dialog = self.owner != KeyOwner::Explorer
-                && input.consume_key(Modifiers::COMMAND | Modifiers::SHIFT, Key::F);
-            (next, previous, dialog)
+            let shortcut = Modifiers::COMMAND | Modifiers::SHIFT;
+            let dialog = owned && input.consume_key(shortcut, Key::F);
+            let replace = owned && input.consume_key(shortcut, Key::H);
+            (next, previous, dialog, replace)
         });
         if next || previous {
             self.step_hit(ctx, next);
+        }
+        // The open confirmation takes Escape and Enter itself; no surface
+        // acts on keys meanwhile (Entf in the panel, Escape in the dialog).
+        if self.replace.confirm.is_some() {
+            return (find_dialog, replace_dialog);
         }
         match self.owner {
             KeyOwner::View(id) => {
@@ -328,7 +386,7 @@ impl TextTools {
             }
             _ => {}
         }
-        find_dialog
+        (find_dialog, replace_dialog)
     }
 }
 
@@ -336,7 +394,10 @@ impl App {
     /// The place of the active tab (its backend when remote).
     pub(in crate::app) fn active_text_place(&self) -> TextPlace {
         match &self.remote {
-            Some(remote) => TextPlace::remote(remote.backend.clone(), remote.label.clone()),
+            Some(remote) => TextPlace {
+                endpoint: remote.endpoint_prefix.clone(),
+                ..TextPlace::remote(remote.backend.clone(), remote.label.clone())
+            },
             None => TextPlace::local(),
         }
     }
@@ -381,28 +442,38 @@ impl App {
     }
 
     pub(in crate::app) fn ui_text_tools_windows(&mut self, ctx: &egui::Context) {
-        if self.text_tools.keys(ctx) {
-            self.open_find_in_files(None);
+        match self.text_tools.keys(ctx) {
+            (true, _) => self.open_find_in_files(None),
+            (_, true) => self.open_replace_in_files(None),
+            _ => {}
         }
         if self.text_tools.dialog.open {
             let progress = self.text_tools.progress();
-            match self.text_tools.dialog.show(ctx, progress) {
+            let replacing = self.text_tools.replace_status();
+            match self.text_tools.dialog.show(ctx, progress, replacing) {
                 DialogAction::Search(query, folder, place) => {
                     if let Err(error) = self.text_tools.start_search(query, folder, place) {
                         self.text_tools.dialog.error = Some(error);
+                    }
+                }
+                DialogAction::Replace(query, root, place, replacement) => {
+                    let tools = &mut self.text_tools;
+                    if let Err(error) = tools.replace_all(query, root, place, replacement) {
+                        tools.dialog.error = Some(error);
                     }
                 }
                 DialogAction::TakeActiveFolder => {
                     self.text_tools.dialog.form.folder = self.root_path.clone();
                     self.text_tools.dialog.place = self.active_text_place();
                 }
-                DialogAction::Cancel => self.text_tools.cancel_searches(),
+                DialogAction::Cancel => self.text_tools.cancel_all(),
                 DialogAction::None => {}
             }
             if !self.text_tools.dialog.open && self.text_tools.owner == KeyOwner::Dialog {
                 self.text_tools.owner = KeyOwner::Explorer;
             }
         }
+        self.text_tools.ui_replace_confirm(ctx);
         let mut opens = Vec::new();
         for view in &mut self.text_tools.views {
             for action in view.show(ctx) {

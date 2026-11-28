@@ -22,6 +22,12 @@ pub(in crate::app) enum PanelAction {
     CancelRuns,
     Clear,
     SearchWithin(u64, WithinQuery),
+    /// „Ersetzen…“ for the hits of these rows.
+    Replace(Vec<Row>),
+    /// „Alle verbleibenden ersetzen…“ of this search.
+    ReplaceRemaining(u64),
+    /// „Rückgängig“ of this replacement record.
+    Undo(u64),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -37,6 +43,10 @@ pub(in crate::app) enum MenuChoice {
     SearchWithin,
     ToggleWrap,
     ToggleClearEach,
+    Replace,
+    ReplaceRemaining,
+    Dismiss,
+    Undo,
 }
 
 /// The prompt of „In diesen Ergebnissen suchen“.
@@ -64,9 +74,11 @@ pub(in crate::app) struct ResultsPanel {
     pub(in crate::app) clear_each: bool,
     pub(in crate::app) selection: HashSet<Row>,
     pub(in crate::app) cursor: Option<Row>,
-    anchor: Option<Row>,
+    pub(in crate::app) anchor: Option<Row>,
     pub(in crate::app) scroll_to_cursor: bool,
     pub(in crate::app) within: Option<WithinPrompt>,
+    /// Why the last replacement command of the panel did not start.
+    pub(in crate::app) notice: Option<String>,
     cache: Option<RowCache>,
     pub(in crate::app) rect: Option<egui::Rect>,
 }
@@ -197,8 +209,12 @@ impl ResultsPanel {
 
     /// Selected rows in display order, or the cursor row without a selection.
     pub(in crate::app) fn chosen(&self) -> Vec<Row> {
-        let selected: Vec<Row> = self
-            .rows()
+        self.chosen_in(self.rows())
+    }
+
+    /// `chosen` over `rows` (while the frame holds the row cache).
+    pub(in crate::app) fn chosen_in(&self, rows: &[Row]) -> Vec<Row> {
+        let selected: Vec<Row> = rows
             .iter()
             .copied()
             .filter(|row| self.selection.contains(row))
@@ -253,6 +269,14 @@ impl ResultsPanel {
                     }
                     if ui.button("Leeren").clicked() {
                         actions.push(PanelAction::Clear);
+                    }
+                    if let Some((search, label)) = self.undo_target(results) {
+                        if ui.button("Rückgängig").on_hover_text(label).clicked() {
+                            actions.push(PanelAction::Undo(search));
+                        }
+                    }
+                    if let Some(notice) = &self.notice {
+                        ui.colored_label(super::theme::danger(ui), notice.as_str());
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.button("×").on_hover_text("Ausblenden").clicked() {
@@ -330,8 +354,9 @@ impl ResultsPanel {
                         on_fold,
                     ));
                 }
-                let (wrap, clear_each) = (self.wrap, self.clear_each);
-                response.context_menu(|ui| menu(ui, wrap, clear_each, &mut choice));
+                response.context_menu(|ui| {
+                    menu(ui, self.menu_flags(results, &cache.rows), &mut choice)
+                });
             }
         });
         // The empty space below the rows has the same menu.
@@ -339,8 +364,7 @@ impl ResultsPanel {
             ui.available_size().max(egui::vec2(1.0, 1.0)),
             egui::Sense::click(),
         );
-        let (wrap, clear_each) = (self.wrap, self.clear_each);
-        rest.context_menu(|ui| menu(ui, wrap, clear_each, &mut choice));
+        rest.context_menu(|ui| menu(ui, self.menu_flags(results, &cache.rows), &mut choice));
         self.cache = Some(cache);
         if let Some((row, double, secondary, on_fold)) = clicked {
             let modifiers = ui.input(|input| input.modifiers);

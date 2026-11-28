@@ -124,6 +124,17 @@ impl App {
             self.open_find_in_files(None);
             ui.close_menu();
         }
+        if ui
+            .add_enabled(
+                !self.root_path.is_empty(),
+                egui::Button::new("In Dateien ersetzen…   Ctrl+Shift+H"),
+            )
+            .on_hover_text("Text in Dateien des aktuellen Ordners ersetzen (wie Notepad++)")
+            .clicked()
+        {
+            self.open_replace_in_files(None);
+            ui.close_menu();
+        }
         let file = self.single_selected_file();
         if ui
             .add_enabled(file.is_some(), egui::Button::new("Ansehen   F3"))

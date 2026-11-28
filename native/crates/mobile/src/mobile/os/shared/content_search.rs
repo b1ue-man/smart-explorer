@@ -7,6 +7,8 @@
 //! events wait in the session until `search.content.poll` fetches them. A
 //! search whose events are not fetched waits once `MAX_BACKLOG` are queued,
 //! so a search with very many hits never fills the memory.
+//! `search.content.replace.*` („In Dateien ersetzen“) lives in
+//! `content_search_replace.rs` and `content_search_undo.rs`.
 use super::args::{opt_str, str_arg, u64_or};
 use super::crumbs;
 use super::error::ApiError;
@@ -35,9 +37,19 @@ const MAX_POLL_EVENTS: usize = 2000;
 const CHANNEL_SLOTS: usize = 256;
 const WAIT_STEP: Duration = Duration::from_millis(200);
 
+#[path = "content_search_replace.rs"]
+mod content_search_replace;
+#[cfg(test)]
+#[path = "content_search_replace_tests.rs"]
+mod content_search_replace_tests;
+#[path = "content_search_undo.rs"]
+mod content_search_undo;
+
 #[derive(Default)]
 pub(crate) struct ContentSearches {
     sessions: Mutex<Vec<(String, Arc<SearchSession>)>>,
+    /// Running and recent replacements (`search.content.replace.*`).
+    replaces: content_search_replace::ReplaceSessions,
 }
 
 impl ContentSearches {
@@ -161,6 +173,9 @@ impl SearchSession {
 }
 
 pub(crate) fn handle(rt: &Runtime, method: &str, args: &Value) -> Option<Result<Value, ApiError>> {
+    if method.starts_with("search.content.replace.") {
+        return content_search_replace::handle(rt, method, args);
+    }
     Some(match method {
         "search.content.start" => start(rt, args),
         "search.content.poll" => str_arg(args, "taskId")
@@ -184,6 +199,8 @@ pub(crate) fn parse_query(args: &Value) -> Result<ContentQuery, ApiError> {
     query.context_lines =
         pick_u64(args, "contextLines", "context_lines").min(u32::MAX as u64) as u32;
     query.max_hits = pick_u64(args, "maxHits", "max_hits");
+    query.respect_ignore_files =
+        pick_bool(args, "respectIgnoreFiles", "respect_ignore_files", false);
     crate::agent_proto::prepare_content_search(&query)
         .map_err(|error| ApiError::invalid(error.to_string()))?;
     Ok(query)

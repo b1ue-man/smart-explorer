@@ -10,6 +10,7 @@ use crate::agent_proto::{
     ContentEvent, ContentQuery, ContentSummary, LineHit, SkipReason, TextMode,
 };
 
+use super::text_tools::content_replace_results::ReplaceInfo;
 use super::text_tools::TextPlace;
 
 /// How a search record stands.
@@ -27,9 +28,13 @@ pub(in crate::app) struct FileHits {
     /// Path relative to the search root, `/`-separated.
     pub(in crate::app) rel: String,
     pub(in crate::app) size: u64,
+    /// Modification time the search saw (ms since 1970); a replacement
+    /// skips the file when it changed since.
+    pub(in crate::app) mtime_ms: i64,
     /// Hit lines and context lines in file order.
     pub(in crate::app) lines: Vec<LineHit>,
-    /// Hit lines (context lines not counted).
+    /// Hit lines (context lines not counted); replacements in a record of
+    /// „In Dateien ersetzen“.
     pub(in crate::app) hits: u64,
     pub(in crate::app) expanded: bool,
 }
@@ -45,6 +50,11 @@ pub(in crate::app) struct SearchRecord {
     pub(in crate::app) place: TextPlace,
     /// Set for „In diesen Ergebnissen suchen“: the pattern of the source search.
     pub(in crate::app) within: Option<String>,
+    /// The query of the core search (None for „In diesen Ergebnissen
+    /// suchen“, whose lines a replacement cannot name).
+    pub(in crate::app) query: Option<ContentQuery>,
+    /// Set for the record of a run of „In Dateien ersetzen“.
+    pub(in crate::app) replace: Option<ReplaceInfo>,
     pub(in crate::app) files: Vec<FileHits>,
     index: HashMap<String, usize>,
     /// (relative path, reason) of files and folders that were not searched.
@@ -120,7 +130,7 @@ pub(in crate::app) fn group_thousands(value: u64) -> String {
     out
 }
 
-fn files_word(count: u64) -> &'static str {
+pub(in crate::app) fn files_word(count: u64) -> &'static str {
     if count == 1 {
         "Datei"
     } else {
@@ -166,6 +176,8 @@ impl SearchRecord {
             root,
             place,
             within: None,
+            query: Some(query.clone()),
+            replace: None,
             files: Vec::new(),
             index: HashMap::new(),
             skipped: Vec::new(),
@@ -191,7 +203,11 @@ impl SearchRecord {
     pub(in crate::app) fn apply(&mut self, event: ContentEvent) {
         match event {
             ContentEvent::Hits {
-                rel, size, lines, ..
+                rel,
+                size,
+                mtime_ms,
+                lines,
+                ..
             } => {
                 let slot = match self.index.get(&rel) {
                     Some(slot) => *slot,
@@ -199,6 +215,7 @@ impl SearchRecord {
                         self.files.push(FileHits {
                             rel: rel.clone(),
                             size,
+                            mtime_ms,
                             lines: Vec::new(),
                             hits: 0,
                             expanded: true,
@@ -222,8 +239,26 @@ impl SearchRecord {
         self.files.push(file);
     }
 
+    /// The slot of the file `rel`, if the record has it.
+    pub(in crate::app) fn file_slot(&self, rel: &str) -> Option<usize> {
+        self.index.get(rel).copied()
+    }
+
+    /// Rebuilds the path index after files were taken out.
+    pub(in crate::app) fn reindex(&mut self) {
+        self.index = self
+            .files
+            .iter()
+            .enumerate()
+            .map(|(slot, file)| (file.rel.clone(), slot))
+            .collect();
+    }
+
     /// The header: `Suche „foo“ (3 Treffer in 2 Dateien von 10 durchsuchten) [Normal]`.
     pub(in crate::app) fn header(&self) -> String {
+        if let Some(info) = &self.replace {
+            return info.header(self);
+        }
         let within = self
             .within
             .as_ref()
@@ -266,8 +301,13 @@ impl SearchRecord {
         let Some(hits) = self.files.get(file) else {
             return String::new();
         };
+        let unit = match (&self.replace, hits.hits) {
+            (None, _) => "Treffer",
+            (Some(_), 1) => "Ersetzung",
+            (Some(_), _) => "Ersetzungen",
+        };
         format!(
-            "{} ({} Treffer)",
+            "{} ({} {unit})",
             join_path(&self.root, &hits.rel),
             group_thousands(hits.hits)
         )

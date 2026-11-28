@@ -653,6 +653,50 @@ Quelle: `native/crates/mobile/src/mobile/os/shared/content_search.rs`; Kotlin `a
   - `Summary` `{filesSearched, filesMatched, hits, bytes, skipped, limited:Boolean}`.
 - `search.content.cancel {taskId}` → `{}` (wie `task.cancel`; die Suche endet als `canceled`).
 - Die letzten vier beendeten Suchen bleiben abfragbar; laufende bleiben immer. Unbekannte `taskId` → `not_found`.
+- `respectIgnoreFiles=false` (auch `respect_ignore_files`) in `search.content.start` und `search.content.replace.start`:
+  überspringt, was `.gitignore` (in einem Git-Arbeitsbaum), `.ignore` und `.git/info/exclude` ausschließen, wie ripgrep
+  (`ContentQuery::respect_ignore_files`); aus = wie Notepad++.
+
+**Ersetzen in Dateien** (`search.content.replace.*`; Quelle `native/crates/mobile/src/mobile/os/shared/content_search_replace.rs`,
+`content_search_undo.rs`; Kotlin `api/ReplaceApi.kt`; Kern `vfs::content_replace`, `vfs::ReplaceJournal`; Plan
+`docs/plaene/2026-11-28-ersetzen-masken-shell/plan.md`, Teil C). Gesucht wird wie bei `search.content.start` dort, wo die
+Dateien liegen; geschrieben wird jede Datei über das Backend des Ortes (Stufe neben dem Ziel, vorher geprüft, dass die
+Datei unverändert ist). Vor dem Überschreiben legt der Kern eine verschlüsselte Kopie des Originals im Ersetzungsjournal
+an; scheitert sie, bleibt die Datei unverändert und kommt als `skipped`.
+
+- `search.content.replace.start {location, <Felder von search.content.start>, replacement:String,
+  selection:"all|hits|files"="all", hits:[Hit], files:[String], dryRun=false}` → `{taskId}`. `replacement` ist Pflicht
+  (leer löscht die Treffer) und wird im Modus der Suche gelesen wie in Notepad++: Normal wörtlich, Erweitert mit den
+  Escapes des Suchtexts, Regex mit der Boost-Formatsyntax (`$0`/`$&`, `$1`/`${1}`, `$+{name}`, `\U…\E`, `\L`, `\u`, `\l`,
+  Bedingungen `?1ja:nein`). `all`: jeder Treffer unter dem Ordner (neuer Durchlauf); `hits`: nur diese Trefferzeilen einer
+  früheren Suche; `files`: jeder Treffer in diesen relativen Pfaden. `dryRun` zählt nur und schreibt nichts.
+  - `Hit` `{rel, line:Long (1-basiert), text, ranges:[[start,end]], truncated=false, size:Long, mtimeMs:Long}` – die
+    Trefferzeile genau so, wie `search.content.poll` sie lieferte; `ranges` in UTF-16-Einheiten von `text` (der Kern
+    rechnet sie in Bytes um); `truncated=true` ersetzt jeden Treffer dieser Zeile. Hat die Datei nicht mehr `size` und
+    `mtimeMs`, wird sie mit Grund „seit der Suche geändert“ übersprungen.
+  - Sofort `invalid`, ohne Task: fehlendes `replacement`, Ersatztext, den der Modus nicht lesen kann, leeres oder
+    ungültiges Muster, unbekannte Auswahl, `hits`/`files` leer, `rel` absolut, mit `\`, `.` oder `..`, Zeile 0,
+    `trash://`. Task-Art `contentReplace`, Titel „Ersetzen in Dateien: …“ (`dryRun`: „Vorschau Ersetzen: …“);
+    Fortschritt `doneItems` = durchsuchte Dateien, `totalItems` = Ersetzungen. Ein Tresorort macht die Aufgabe privat.
+- `search.content.replace.poll {taskId, since:Long=0}` → `{events:[Event], next:Long, files, replacements, done:Boolean,
+  canceled:Boolean, error:String?, summary:Summary?}`; Freigabe, Höchstzahl (2000) und Warten (4096) wie bei
+  `search.content.poll`.
+  - `Event` `{type:"file", rel, location, replacements:Long}` – eine geänderte (bei `dryRun`: zu ändernde) Datei.
+  - `Event` `{type:"skipped", rel, location, reason:String, reasonKey}` – unverändert gelassen; `reason` ist der deutsche
+    Grund des Kerns, `reasonKey` einer von `binary|read_only|too_large|unreadable|unlistable_folder|changed|not_ansi|
+    not_regular|backup_failed|write_failed`.
+  - `Summary` `{filesSearched, filesChanged, replacements, skipped, undoId:String?, canceled:Boolean}`; `undoId` fehlt bei
+    `dryRun` und wenn nichts geändert wurde.
+- `search.content.replace.cancel {taskId}` → `{}`: der Lauf endet nach der aktuellen Datei; die Antwort von `poll` trägt
+  `canceled=true` und die Summen samt `undoId` der bis dahin geschriebenen Dateien; die Aufgabe endet als `canceled`.
+- `search.content.replace.undo {undoId}` → `{restored:[rel], skipped:[{rel, reason}]}` (synchron): stellt die Originale
+  des Laufs über das Backend des aufgezeichneten Ortes wieder her; eine seitdem geänderte Datei bleibt, wie sie ist, und
+  steht mit Grund in `skipped`. Fehlende `undoId` → `invalid`.
+- `search.content.replace.history {}` → `{entries:[{undoId, createdMs, location, root, pattern, replacement,
+  mode:"normal|extended|regex", filesChanged, replacements, state:"running|applied|partly_undone|undone"}]}`, neueste
+  zuerst.
+- Die letzten vier beendeten Läufe bleiben über `poll` abfragbar; laufende bleiben immer. Unbekannte `taskId` →
+  `not_found`.
 
 ### 4.15 Textansicht (`text.*`)
 Quelle: `native/crates/mobile/src/mobile/os/shared/text_view.rs`, `core/text_find.rs`, `core/text_json.rs`; Kern

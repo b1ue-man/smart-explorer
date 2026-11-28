@@ -1,14 +1,80 @@
 //! The commands of the results panel of „In Dateien suchen“: its context
-//! menu (Notepad++'s commands of „Search results“), the prompt of „In diesen
-//! Ergebnissen suchen“ and the keys while the panel owns the keyboard.
+//! menu (Notepad++'s commands of „Search results“ plus VS Code's „Replace“,
+//! „Replace All“ and „Dismiss“), the prompt of „In diesen Ergebnissen
+//! suchen“ and the keys while the panel owns the keyboard.
 use super::content_search_nav::WithinQuery;
-use super::content_search_results::{RowKind, SearchResults};
+use super::content_search_results::{Row, RowKind, SearchResults};
 use super::content_search_results_ui::{
     foldable, MenuChoice, PanelAction, ResultsPanel, WithinPrompt,
 };
 use super::prelude::*;
+use super::text_tools::content_replace_results::UndoState;
+
+/// What the context menu offers for the current rows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(in crate::app) struct MenuFlags {
+    pub(in crate::app) wrap: bool,
+    pub(in crate::app) clear_each: bool,
+    /// The chosen rows are hits of one finished search.
+    pub(in crate::app) replace: bool,
+    /// The search of the chosen rows (or the newest) can be replaced.
+    pub(in crate::app) remaining: bool,
+    pub(in crate::app) dismiss: bool,
+    pub(in crate::app) undo: bool,
+}
 
 impl ResultsPanel {
+    /// The search the commands without own rows act on: that of the first
+    /// chosen row, else the newest.
+    fn target_search(&self, results: &SearchResults, chosen: &[Row]) -> Option<u64> {
+        chosen
+            .first()
+            .map(|row| row.search)
+            .or_else(|| results.records.first().map(|record| record.id))
+    }
+
+    pub(in crate::app) fn menu_flags(&self, results: &SearchResults, rows: &[Row]) -> MenuFlags {
+        let chosen = self.chosen_in(rows);
+        let replaceable = |search: Option<u64>| {
+            search
+                .and_then(|id| results.record(id))
+                .is_some_and(|record| record.replaceable().is_ok())
+        };
+        let same_search = chosen
+            .iter()
+            .all(|row| Some(row.search) == chosen.first().map(|r| r.search));
+        MenuFlags {
+            wrap: self.wrap,
+            clear_each: self.clear_each,
+            replace: !chosen.is_empty()
+                && same_search
+                && replaceable(chosen.first().map(|r| r.search)),
+            remaining: replaceable(self.target_search(results, &chosen)),
+            dismiss: !chosen.is_empty(),
+            undo: self.undo_target(results).is_some(),
+        }
+    }
+
+    /// The replacement record „Rückgängig“ acts on (that of the cursor, else
+    /// the newest) and the hover text naming it.
+    pub(in crate::app) fn undo_target(&self, results: &SearchResults) -> Option<(u64, String)> {
+        let search = self
+            .cursor
+            .map(|row| row.search)
+            .or_else(|| results.records.first().map(|record| record.id))?;
+        let record = results.record(search)?;
+        let info = record.replace.as_ref()?;
+        matches!(info.undo, UndoState::Available(_)).then(|| {
+            (
+                search,
+                format!(
+                    "Ersetzen „{}“ durch „{}“ rückgängig machen",
+                    record.pattern, info.replacement
+                ),
+            )
+        })
+    }
+
     pub(in crate::app) fn apply_choice(
         &mut self,
         ctx: &egui::Context,
@@ -59,6 +125,25 @@ impl ResultsPanel {
                 self.invalidate();
             }
             MenuChoice::ToggleClearEach => self.clear_each = !self.clear_each,
+            MenuChoice::Replace => actions.push(PanelAction::Replace(chosen)),
+            MenuChoice::ReplaceRemaining => {
+                if let Some(search) = self.target_search(results, &chosen) {
+                    actions.push(PanelAction::ReplaceRemaining(search));
+                }
+            }
+            MenuChoice::Dismiss => {
+                if results.dismiss(&chosen) {
+                    self.selection.clear();
+                    self.cursor = None;
+                    self.anchor = None;
+                    self.invalidate();
+                }
+            }
+            MenuChoice::Undo => {
+                if let Some((search, _)) = self.undo_target(results) {
+                    actions.push(PanelAction::Undo(search));
+                }
+            }
         }
     }
 
@@ -173,6 +258,10 @@ impl ResultsPanel {
             if input.consume_key(Modifiers::NONE, Key::Escape) {
                 self.selection.clear();
             }
+            // Entf: „Aus dem Ergebnis entfernen“ (VS Code „Dismiss“).
+            if input.consume_key(Modifiers::NONE, Key::Delete) {
+                choice = Some(MenuChoice::Dismiss);
+            }
         });
         if let Some(index) = moved {
             self.select(rows[index], false, shift);
@@ -210,12 +299,10 @@ impl ResultsPanel {
     }
 }
 
-pub(in crate::app) fn menu(
-    ui: &mut egui::Ui,
-    wrap: bool,
-    clear_each: bool,
-    choice: &mut Option<MenuChoice>,
-) {
+pub(in crate::app) fn menu(ui: &mut egui::Ui, flags: MenuFlags, choice: &mut Option<MenuChoice>) {
+    let MenuFlags {
+        wrap, clear_each, ..
+    } = flags;
     let mut pick = |ui: &mut egui::Ui, label: &str, value: MenuChoice| {
         if ui.button(label).clicked() {
             *choice = Some(value);
@@ -238,6 +325,27 @@ pub(in crate::app) fn menu(
         "In diesen Ergebnissen suchen…",
         MenuChoice::SearchWithin,
     );
+    ui.separator();
+    let replace_items = [
+        (flags.replace, "Ersetzen…", MenuChoice::Replace),
+        (
+            flags.remaining,
+            "Alle verbleibenden ersetzen…",
+            MenuChoice::ReplaceRemaining,
+        ),
+        (
+            flags.dismiss,
+            "Aus dem Ergebnis entfernen (Entf)",
+            MenuChoice::Dismiss,
+        ),
+        (flags.undo, "Ersetzen rückgängig machen", MenuChoice::Undo),
+    ];
+    for (enabled, label, value) in replace_items {
+        if ui.add_enabled(enabled, egui::Button::new(label)).clicked() {
+            *choice = Some(value);
+            ui.close_menu();
+        }
+    }
     ui.separator();
     let mut wrapped = wrap;
     if ui
