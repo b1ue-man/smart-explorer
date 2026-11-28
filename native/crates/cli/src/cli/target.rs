@@ -74,8 +74,14 @@ impl Target {
         self.rename_key == other.rename_key
     }
 
+    /// Filesystem and connection roots, and local mount points
+    /// (`/media/<user>/<STICK>`, U5): `se rm` protects them as
+    /// `rm --preserve-root=all` does, until `--no-preserve-root`.
     pub(crate) fn is_preserved_root(&self) -> bool {
         self.preserved_root
+            || (self.namespace_key == "local"
+                && self.backend.is_local()
+                && super::os::is_mount_point(&self.path))
     }
 
     /// The same connection at another path (a link resolved). Borrows the
@@ -365,6 +371,9 @@ fn is_local_namespace_root(path: &str) -> bool {
     if is_exact_drive_root(trimmed) {
         return true;
     }
+    if super::ops::is_verbatim_root(trimmed) {
+        return true;
+    }
     if let Some(rest) = trimmed.strip_prefix("//") {
         let components = rest.split('/').filter(|part| !part.is_empty()).count();
         return components <= 2;
@@ -414,3 +423,7 @@ fn non_empty(s: &str) -> Option<String> {
 #[cfg(test)]
 #[path = "target_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "target_root_tests.rs"]
+mod root_tests;

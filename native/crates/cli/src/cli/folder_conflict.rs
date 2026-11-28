@@ -10,6 +10,9 @@ use serde::{Deserialize, Serialize};
 
 #[path = "transfer_recovery.rs"]
 mod recovery;
+#[cfg(test)]
+#[path = "folder_conflict_tests.rs"]
+mod tests;
 pub(crate) use recovery::{RecoveredCommandTask, SavedCommandsCatalog};
 
 #[derive(Clone, Copy, Debug, Default, clap::ValueEnum)]
@@ -40,10 +43,27 @@ struct SourceStamp {
     time: i64,
     md5: Option<String>,
     object: Option<String>,
+    /// `location_identity` of a source folder without `object` (FAT, exFAT,
+    /// FUSE); absent in records written before 2026-11-27.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    location: Option<String>,
 }
 
 impl SourceStamp {
     fn capture(source: &Target, meta: &VfsMeta) -> Result<Self, String> {
+        let folder = meta.is_dir && !meta.is_symlink;
+        let object = if folder {
+            crate::vfs::directory_identity(&*source.backend, &source.path)
+                .ok()
+                .flatten()
+        } else {
+            None
+        };
+        let location = if folder && object.is_none() {
+            location_identity(&*source.backend, &source.path)
+        } else {
+            None
+        };
         Ok(Self {
             name: meta.name.clone(),
             id: meta.id.clone(),
@@ -52,13 +72,8 @@ impl SourceStamp {
             size: meta.size,
             time: meta.mtime_ms,
             md5: meta.content_md5.clone(),
-            object: if meta.is_dir && !meta.is_symlink {
-                crate::vfs::directory_identity(&*source.backend, &source.path)
-                    .ok()
-                    .flatten()
-            } else {
-                None
-            },
+            object,
+            location,
         })
     }
     fn validate(&self, source: &Target, meta: &VfsMeta) -> Result<(), String> {
@@ -76,13 +91,71 @@ impl SourceStamp {
         if self.directory && !self.link {
             let actual = crate::vfs::directory_identity(&*source.backend, &source.path)
                 .map_err(|error| error.to_string())?;
-            if self.object.is_none() && self.id.is_none()
-                || self.object.is_some() && self.object != actual
-            {
+            let confirmed = match (&self.object, &self.location) {
+                (Some(object), _) => actual.as_deref() == Some(object.as_str()),
+                (None, Some(location)) => {
+                    self.id.is_some()
+                        || location_identity(&*source.backend, &source.path).as_deref()
+                            == Some(location.as_str())
+                }
+                (None, None) => self.id.is_some(),
+            };
+            if !confirmed {
                 return Err("Gespeicherter Quellordner ist geändert oder unbestätigt".into());
             }
         }
         Ok(())
+    }
+}
+
+/// The weaker, named identity of a local folder on a filesystem without
+/// stable object ids (FAT, exFAT, FUSE; U4):
+/// `volume-location:v1:<volume id>:<creation ms or ->:<path in the volume>`.
+/// It confirms the same volume (filesystem UUID or volume serial) and the
+/// same place on it, independent of mount point and drive letter, and where
+/// the system reports a folder's creation time (Windows) also the same
+/// folder there. A folder created anew at that place without a creation
+/// time passes, so a resumed run still compares every existing destination
+/// file by content (`tree_apply`). `None` off local disks and where the
+/// volume has no identity.
+pub(super) fn location_identity(backend: &dyn crate::vfs::Backend, path: &str) -> Option<String> {
+    if !backend.is_local() {
+        return None;
+    }
+    let volume = crate::vfs::volume_identity(backend, path).ok().flatten()?;
+    let meta = backend.stat(path).ok()?;
+    if !meta.is_dir || meta.is_symlink {
+        return None;
+    }
+    let created = if meta.btime_ms != 0 {
+        meta.btime_ms.to_string()
+    } else {
+        "-".to_string()
+    };
+    Some(format!(
+        "volume-location:v1:{}:{created}:{}",
+        volume.volume_id, volume.relative_path
+    ))
+}
+
+/// The destination's parent is still the folder the job recorded: its
+/// stable identity, or for a record of a filesystem without one its
+/// `location_identity`.
+fn confirm_parent(record: &SavedCommand, target: &Target) -> Result<(), String> {
+    let parent_object = crate::vfs::directory_identity(&*target.backend, &record.parent)
+        .map_err(|error| error.to_string())?;
+    let confirmed = match (&record.parent_object, &record.parent_location) {
+        (Some(object), _) => parent_object.as_deref() == Some(object.as_str()),
+        (None, Some(location)) => {
+            location_identity(&*target.backend, &record.parent).as_deref()
+                == Some(location.as_str())
+        }
+        (None, None) => false,
+    };
+    if confirmed {
+        Ok(())
+    } else {
+        Err("Gespeicherter Zielroot ist geändert oder unbestätigt".into())
     }
 }
 
@@ -100,6 +173,10 @@ pub(crate) struct SavedCommand {
     pub destination: String,
     parent: String,
     parent_object: Option<String>,
+    /// `location_identity` of `parent` where it has no `parent_object`;
+    /// absent in records written before 2026-11-27.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    parent_location: Option<String>,
     pub recursive: bool,
     pub force: bool,
     pub moving: bool,
@@ -179,11 +256,7 @@ impl CommandContext {
         {
             return Err("Gespeicherter Movevertrag stimmt nicht überein".into());
         }
-        let parent_object = crate::vfs::directory_identity(&*target.backend, &record.parent)
-            .map_err(|error| error.to_string())?;
-        if record.parent_object.is_none() || record.parent_object != parent_object {
-            return Err("Gespeicherter Zielroot ist geändert oder unbestätigt".into());
-        }
+        confirm_parent(&record, target)?;
         let expected = record
             .stamp
             .object
@@ -271,11 +344,7 @@ impl CommandContext {
             if record.complete {
                 return Err(format!("Auftrag {id} ist bereits abgeschlossen"));
             }
-            let parent_object = crate::vfs::directory_identity(&*target.backend, &record.parent)
-                .map_err(|error| error.to_string())?;
-            if record.parent_object.is_none() || record.parent_object != parent_object {
-                return Err("Gespeicherter Zielroot ist geändert oder unbestätigt".into());
-            }
+            confirm_parent(&record, target)?;
             record.stamp.validate(source, meta)?;
             record
         } else {
@@ -297,6 +366,10 @@ impl CommandContext {
             let parent_object = crate::vfs::directory_identity(&*target.backend, &parent)
                 .ok()
                 .flatten();
+            let parent_location = parent_object
+                .is_none()
+                .then(|| location_identity(&*target.backend, &parent))
+                .flatten();
             let record = SavedCommand {
                 version: 1,
                 id: id.clone(),
@@ -316,6 +389,7 @@ impl CommandContext {
                 destination,
                 parent,
                 parent_object,
+                parent_location,
                 recursive,
                 force,
                 moving,

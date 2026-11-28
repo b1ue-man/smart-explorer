@@ -4,12 +4,12 @@ use super::tree_ops::{remove_existing, TreeOutcome};
 use std::io::{self, Write};
 use std::path::PathBuf;
 
+/// `se ls`: entries the listing cannot name (not valid Unicode, a name
+/// Win32 cannot address, U9) are named on stderr instead of failing it.
 pub(crate) fn list(target: &Target) -> Result<(), String> {
-    for entry in target
-        .backend
-        .list_dir(&target.path)
-        .map_err(|e| e.to_string())?
-    {
+    let listing =
+        super::tree_guard::listing(&*target.backend, &target.path).map_err(|e| e.to_string())?;
+    for entry in listing.entries {
         // Second column: `l` for links (kept for scripts that read it).
         let kind = match EntryKind::of(&entry) {
             EntryKind::Dir => 'd',
@@ -19,7 +19,21 @@ pub(crate) fn list(target: &Target) -> Result<(), String> {
         let symlink = if entry.is_symlink { "l" } else { "-" };
         println!("{kind}{symlink}\t{}\t{}", entry.size, entry.name);
     }
+    report_omitted(&target.path, &listing.omitted);
     Ok(())
+}
+
+/// One stderr line per entry of `directory` a tolerant listing left out.
+pub(super) fn report_omitted(directory: &str, omitted: &[crate::vfs::VfsOmission]) {
+    let mut err = io::stderr().lock();
+    for omission in omitted {
+        let _ = writeln!(
+            err,
+            "se: nicht aufgelistet: {}: {}",
+            join(directory, &omission.rel),
+            omission.detail
+        );
+    }
 }
 
 pub(crate) fn stat(target: &Target) -> Result<(), String> {
@@ -82,8 +96,69 @@ mod moving;
 pub(crate) use copying::copy;
 pub(super) use copying::{copy_observed, copy_observed_in_job, copy_observed_with_folders};
 pub(crate) use copying::{copy_with_folder_stats, copy_with_stats};
-pub(super) use moving::{move_observed, move_observed_in_job, move_observed_with_folders};
-pub(crate) use moving::{move_path, move_with_folders};
+pub(super) use moving::{move_observed, move_observed_in_job};
+
+/// `se mv`. A move to the same name in another case in the same folder
+/// (`STICK/foto.jpg` → `STICK/Foto.jpg`) is a rename in two steps (U10).
+pub(crate) fn move_path(
+    src: &Target,
+    dst: &Target,
+    recursive: bool,
+    force: bool,
+) -> Result<(), String> {
+    if super::transfer::try_case_rename(src, dst, recursive)? {
+        return Ok(());
+    }
+    moving::move_path(src, dst, recursive, force)
+}
+
+/// `se mv` with a folder policy or `--resume-job`; a pure change of case
+/// (new runs only) as in [`move_path`].
+pub(crate) fn move_with_folders(
+    src: &Target,
+    dst: &Target,
+    recursive: bool,
+    force: bool,
+    folders: Option<crate::transfer::FolderConflict>,
+    resume: Option<&str>,
+) -> Result<(), String> {
+    if resume.is_none() && super::transfer::try_case_rename(src, dst, recursive)? {
+        if folders.is_some() {
+            println!("{}", dst.path);
+        }
+        return Ok(());
+    }
+    moving::move_with_folders(src, dst, recursive, force, folders, resume)
+}
+
+/// The MCP `move`; a pure change of case as in [`move_path`].
+pub(super) fn move_observed_with_folders(
+    src: &Target,
+    dst: &Target,
+    recursive: bool,
+    force: bool,
+    observer: &super::tree_observer::TreeObserver,
+    folders: crate::transfer::FolderConflict,
+) -> Result<TreeOutcome, String> {
+    if let Some(outcome) = case_renamed(src, dst, recursive, observer)? {
+        return Ok(outcome);
+    }
+    moving::move_observed_with_folders(src, dst, recursive, force, observer, folders)
+}
+
+fn case_renamed(
+    src: &Target,
+    dst: &Target,
+    recursive: bool,
+    observer: &super::tree_observer::TreeObserver,
+) -> Result<Option<TreeOutcome>, String> {
+    observer.check()?;
+    if !super::transfer::try_case_rename(src, dst, recursive)? {
+        return Ok(None);
+    }
+    observer.set_phase(super::tree_observer::TreePhase::Done);
+    Ok(Some(TreeOutcome::complete(dst.path.clone())))
+}
 
 fn print_notices(outcome: &TreeOutcome) {
     let mut err = io::stderr().lock();
@@ -110,8 +185,53 @@ pub(crate) fn remove(
     remove_existing(&*target.backend, &target.path, recursive)
 }
 
+/// The root of a Windows verbatim or device path as a prefix of `path`:
+/// `//?/E:`, `//./E:`, `//?/Volume{…}`, `//./<device>`, `//?/UNC/server/share`
+/// and `//?/GLOBALROOT/Device/<name>`, with whether the folder at that root
+/// is written with a trailing `/` (a drive or volume: without it the path
+/// names the volume device itself; a UNC share stays like `//server/share`).
+pub(super) fn verbatim_root(path: &str) -> Option<(&str, bool)> {
+    let rest = path
+        .strip_prefix("//?/")
+        .or_else(|| path.strip_prefix("//./"))?;
+    let first = rest.split('/').next().filter(|part| !part.is_empty())?;
+    let (components, slash) = if first.eq_ignore_ascii_case("UNC") {
+        (3, false)
+    } else if first.eq_ignore_ascii_case("GLOBALROOT") {
+        (3, true)
+    } else {
+        (1, true)
+    };
+    let length = rest
+        .split('/')
+        .take(components)
+        .map(|part| part.len() + 1)
+        .sum::<usize>()
+        - 1;
+    Some((&path[..4 + length], slash))
+}
+
+/// Whether `path` (trailing `/` ignored) is exactly a verbatim or device root.
+pub(super) fn is_verbatim_root(path: &str) -> bool {
+    let path = path.trim_end_matches('/');
+    verbatim_root(path).is_some_and(|(root, _)| root.len() == path.len())
+}
+
 pub(super) fn parent_of(path: &str) -> Option<String> {
     let path = path.trim_end_matches('/');
+    if let Some((root, slash)) = verbatim_root(path) {
+        if path.len() <= root.len() {
+            return None;
+        }
+        let parent = path.rsplit_once('/').map_or(root, |(parent, _)| parent);
+        return Some(if parent.len() > root.len() {
+            parent.to_string()
+        } else if slash {
+            format!("{root}/")
+        } else {
+            root.to_string()
+        });
+    }
     if path
         .strip_prefix("//")
         .is_some_and(|rest| rest.split('/').filter(|part| !part.is_empty()).count() <= 2)
@@ -148,6 +268,10 @@ fn local_path(path: &str) -> PathBuf {
 }
 
 #[cfg(test)]
+#[path = "ops_removable_tests.rs"]
+mod removable_tests;
+
+#[cfg(test)]
 mod tests {
     use std::fs;
     use std::sync::Arc;
@@ -155,7 +279,7 @@ mod tests {
     use crate::cli::target::Target;
     use crate::vfs::{BackendHandle, LocalBackend};
 
-    use super::{parent_of, remove};
+    use super::{is_verbatim_root, parent_of, remove};
     use crate::cli::tree_ops::{copy_entry, remove_existing};
 
     #[test]
@@ -168,6 +292,45 @@ mod tests {
             Some("//server/share")
         );
         assert_eq!(parent_of("//server/share"), None);
+    }
+
+    #[test]
+    fn wechselmedium_task_verbatim_roots_keep_their_trailing_slash() {
+        assert_eq!(parent_of("//?/E:/a.txt").as_deref(), Some("//?/E:/"));
+        assert_eq!(parent_of("//./E:/dir/a").as_deref(), Some("//./E:/dir"));
+        assert_eq!(
+            parent_of("//?/Volume{0b3e8f27-1c2d-4e5f-8a9b-0c1d2e3f4a5b}/foto.jpg").as_deref(),
+            Some("//?/Volume{0b3e8f27-1c2d-4e5f-8a9b-0c1d2e3f4a5b}/")
+        );
+        assert_eq!(
+            parent_of("//?/UNC/server/share/f.txt").as_deref(),
+            Some("//?/UNC/server/share")
+        );
+        assert_eq!(
+            parent_of("//?/GLOBALROOT/Device/HarddiskVolume3/f").as_deref(),
+            Some("//?/GLOBALROOT/Device/HarddiskVolume3/")
+        );
+        for root in [
+            "//?/E:",
+            "//?/E:/",
+            "//./E:",
+            "//?/Volume{0b3e8f27-1c2d-4e5f-8a9b-0c1d2e3f4a5b}/",
+            "//?/UNC/server/share",
+            "//?/GLOBALROOT/Device/HarddiskVolume3",
+        ] {
+            assert_eq!(parent_of(root), None, "{root} is a root");
+            assert!(is_verbatim_root(root), "{root}");
+        }
+        assert!(!is_verbatim_root("//?/E:/dir"));
+        assert!(!is_verbatim_root("//server/share"));
+        // The parent of a child of a root is that root, never its device.
+        let mut current = "//?/E:/a/b".to_string();
+        let mut chain = Vec::new();
+        while let Some(parent) = parent_of(&current) {
+            chain.push(parent.clone());
+            current = parent;
+        }
+        assert_eq!(chain, ["//?/E:/a", "//?/E:/"]);
     }
 
     #[test]

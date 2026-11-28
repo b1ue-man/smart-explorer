@@ -6,8 +6,8 @@ use super::fs_profile::FlushModel;
 use super::local_platform;
 use super::local_stage::finish_local_stage;
 use super::{
-    BackendExtensions, LocalBackend, MountKind, StageFinish, StageFinished, TargetLimits,
-    VfsListing, VfsResult, VolumeIdentity,
+    BackendExtensions, LocalBackend, MountKind, NameRules, StageFinish, StageFinished,
+    TargetLimits, VfsListing, VfsResult, VolumeIdentity,
 };
 use crate::local_access::{self, FinalLink};
 
@@ -135,6 +135,39 @@ impl BackendExtensions for LocalBackend {
 /// "another volume").
 pub fn local_volume_identity(path: &str) -> io::Result<Option<VolumeIdentity>> {
     local_platform::volume_identity(&local_platform::to_os(path))
+}
+
+/// How names behave on the local filesystem holding `path` (or its nearest
+/// existing ancestor) and what it is called in messages; the defaults (no
+/// folding, no name) when it cannot be determined.
+pub fn local_name_rules(path: &str) -> NameRules {
+    local_platform::filesystem_profile(&local_platform::to_os(path))
+        .map(|profile| profile.names)
+        .unwrap_or_default()
+}
+
+/// A failed write of a file of `len` bytes below `path` as `FileTooLarge`
+/// with the German reason when the local filesystem there cannot store a
+/// file of that size (FAT: 4 GiB − 1; Linux reports `EFBIG`, Windows
+/// `ERROR_FILE_TOO_LARGE` or, writing through a handle, `ERROR_DISK_FULL`).
+/// Every other error is returned unchanged.
+pub fn explain_file_limit(path: &std::path::Path, len: u64, error: io::Error) -> io::Error {
+    if !matches!(
+        error.kind(),
+        io::ErrorKind::StorageFull | io::ErrorKind::FileTooLarge
+    ) {
+        return error;
+    }
+    let Ok(profile) = local_platform::filesystem_profile(path) else {
+        return error;
+    };
+    match profile.limits.max_file_size {
+        Some(limit) if len > limit => io::Error::new(
+            io::ErrorKind::FileTooLarge,
+            profile.names.size_reason(limit),
+        ),
+        _ => error,
+    }
 }
 
 /// The kind of filesystem mounted at the local directory `path` when it is

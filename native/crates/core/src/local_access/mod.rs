@@ -80,9 +80,9 @@ pub struct MetadataClass {
 }
 
 pub use platform::{
-    begin_scan, can_request_access, device_of, display_path, metadata_class, metadata_is_link_like,
-    normalize_scan_root, parallel_scan_allowed, read_directory, request_access,
-    run_helper_if_requested,
+    begin_scan, can_request_access, device_of, display_path, is_volume_mount_point, metadata_class,
+    metadata_is_link_like, normalize_scan_root, parallel_scan_allowed, read_directory,
+    request_access, run_helper_if_requested,
 };
 
 pub fn open_read(path: &Path) -> io::Result<File> {

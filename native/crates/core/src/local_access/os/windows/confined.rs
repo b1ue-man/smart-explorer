@@ -274,43 +274,12 @@ impl ConfinedDirectory {
             }
             return Ok(());
         }
-        use windows_sys::Win32::Storage::FileSystem::{
-            FileDispositionInfoEx, FILE_DISPOSITION_INFO_EX,
-        };
         // DELETE | POSIX_SEMANTICS | IGNORE_READONLY_ATTRIBUTE. The latter
         // prevents a retained hardlink inheriting the target's read-only bit
-        // from making its own quarantine undeletable after publication.
-        let mut disposition = FILE_DISPOSITION_INFO_EX {
-            Flags: 0x1 | 0x2 | 0x10,
-        };
-        if unsafe {
-            SetFileInformationByHandle(
-                guard.as_raw_handle(),
-                FileDispositionInfoEx,
-                (&mut disposition as *mut FILE_DISPOSITION_INFO_EX).cast(),
-                std::mem::size_of::<FILE_DISPOSITION_INFO_EX>() as u32,
-            )
-        } != 0
-        {
-            return Ok(());
-        }
-        let error = io::Error::last_os_error();
-        if !matches!(error.raw_os_error(), Some(1 | 50 | 87 | 124)) {
-            return Err(error);
-        }
-        let mut disposition = FILE_DISPOSITION_INFO { DeleteFile: 1 };
-        if unsafe {
-            SetFileInformationByHandle(
-                guard.as_raw_handle(),
-                FileDispositionInfo,
-                (&mut disposition as *mut FILE_DISPOSITION_INFO).cast(),
-                std::mem::size_of::<FILE_DISPOSITION_INFO>() as u32,
-            )
-        } == 0
-        {
-            return Err(io::Error::last_os_error());
-        }
-        Ok(())
+        // from making its own quarantine undeletable after publication. FAT
+        // and exFAT lack the extended disposition: there the read-only bit is
+        // lifted on this same handle first (`held_delete`, U17).
+        super::held_delete::delete_held(&guard, readonly)
     }
     pub fn rename(
         &self,

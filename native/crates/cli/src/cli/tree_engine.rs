@@ -8,7 +8,8 @@
 //!
 //! What stays: the whole tree is planned and checked first
 //! (`TransferPlan::build`: every destination conflict, name, link and special
-//! file) and checked again before the first folder is created; nothing is
+//! file; entries the destination cannot store are left out and reported,
+//! `tree_limits`) and checked again before the first folder is created; nothing is
 //! replaced without `--force`; a file that appears at the destination after
 //! the check is left alone and ends the command as an error; links and
 //! special files are omissions; folders that still hold omitted entries stay
@@ -32,19 +33,15 @@ use crate::transfer::{JobItems, PairItem};
 use crate::types::{Conflict, CopyMode};
 
 /// Whether this path takes the command: local to local, a new run (no
-/// `--resume`), engine path enabled, and a source whose read can never ask
-/// for access (the terminal and the MCP service must not prompt).
+/// `--resume`), engine path enabled and a known source root. A protected
+/// source does not keep the command off the engine (U14): only a file whose
+/// read is actually refused asks for access (`AccessGate`, the elevated
+/// backup-read helper on Windows), once per run.
 fn applicable(src: &Target, dst: &Target, request: &TreeRequest<'_>) -> bool {
     if request.resume || !engine_copy::enabled_now() {
         return false;
     }
-    if !src.backend.is_local() || !dst.backend.is_local() {
-        return false;
-    }
-    match request.expected_root {
-        Some(root) => !engine_copy::access_prompt_possible(src, root),
-        None => false,
-    }
+    src.backend.is_local() && dst.backend.is_local() && request.expected_root.is_some()
 }
 
 /// Copies (`CopyMode::Copy`) or moves (`CopyMode::Move`) `src` to `dst_path`
@@ -110,14 +107,7 @@ pub(super) fn transfer_tree(
     observer.set_phase(TreePhase::Done);
     Ok(Some(TreeOutcome {
         destination,
-        omitted: plan
-            .omitted
-            .iter()
-            .map(|omitted| Omission {
-                path: omitted.source_path.clone(),
-                kind: omitted.kind,
-            })
-            .collect(),
+        omitted: plan.omitted.iter().map(Omission::planned).collect(),
         kept,
         update: None,
     }))

@@ -19,10 +19,10 @@ use super::entry_kind::EntryKind;
 use super::ops::{join, parent_of};
 use super::target::Target;
 use super::tree_guard::{validate_listed_names, validate_same_source};
-use super::tree_observer::{TreeObserver, TreePhase, TRANSFER_CANCELLED};
-use super::tree_ops::{Omission, TreeOutcome};
-use crate::transfer::engine_names::{base_name, validate_pair_rels};
-use crate::transfer::walk::{omission_kind, OmissionKind};
+use super::tree_observer::{TreeObserver, TreePhase};
+use super::tree_ops::TreeOutcome;
+use super::tree_plan::limits::{needs_plan, TargetRules};
+use crate::transfer::engine_names::validate_pair_rels;
 use crate::transfer::{
     path_within, JobItems, JobView, Layout, PairItem, ResolvedRoot, Side, TransferIssue,
     TransferMsg, TransferProgress,
@@ -32,9 +32,9 @@ use crate::vfs::VfsMeta;
 use std::io;
 use std::sync::Mutex;
 
-use issues::all_issues;
 #[cfg(test)]
 pub(super) use issues::parse_log;
+pub(super) use issues::{settle, settle_merged};
 use stats::average_rate;
 pub(super) use stats::print_stats;
 #[cfg(test)]
@@ -72,9 +72,6 @@ pub(super) fn enabled_now() -> bool {
     CLI_ENGINE_PATH
 }
 
-/// Failing files listed in the error text before it points at the log.
-const SHOWN_FAILURES: usize = 5;
-
 /// What decides whether a copy may run on the engine.
 pub(super) struct Eligibility {
     pub(super) enabled: bool,
@@ -88,8 +85,10 @@ pub(super) struct Eligibility {
     pub(super) disjoint: bool,
     /// The destination name is one the engine creates as typed.
     pub(super) name_ok: bool,
-    /// The engine would ask the user for read access to a protected local
-    /// source (`AccessGate`); a terminal or the MCP service must not ask.
+    /// A caller that must never let the engine ask for read access sets it.
+    /// Since U14 (2026-11-27) no caller does: the engine asks only when the
+    /// read of a file is actually refused (`AccessGate`), so a protected
+    /// local source no longer keeps a copy off the engine.
     pub(super) access_prompt_possible: bool,
 }
 
@@ -164,6 +163,20 @@ pub(super) fn try_copy_with(
     // The source is the one that was planned (same check as the older path).
     let fresh = src.backend.stat(&src.path).map_err(|e| e.to_string())?;
     validate_same_source(source_snapshot, &fresh, &src.path)?;
+    // What the destination cannot store is refused before anything is
+    // written (U7, U11): the root itself ends the command with its reason; a
+    // tree holding such entries goes to the plan, which leaves out and
+    // reports each of them and copies the rest.
+    let rules = TargetRules::of(&*dst.backend, &parent);
+    if let Some(reason) = rules.refusal(last_name(dst_path), &fresh) {
+        return Err(format!("{dst_path}: {reason}"));
+    }
+    if fresh.is_dir
+        && rules.may_refuse_from(&TargetRules::of(&*src.backend, &src.path))
+        && needs_plan(&*src.backend, &src.path, &rules, observer)?
+    {
+        return Ok(None);
+    }
     let (items, target_dir) = if fresh.is_dir {
         let Some(children) = child_paths(src, dst_path)? else {
             return Ok(None);
@@ -240,25 +253,8 @@ fn probe(
         parent_is_plain_dir,
         disjoint,
         name_ok: validate_pair_rels([last_name(dst_path)], false).is_ok(),
-        access_prompt_possible: src.backend.is_local() && access_prompt_possible(src, src_meta),
+        access_prompt_possible: false,
     }
-}
-
-/// Whether the engine's read-access request could be asked for this source:
-/// the same folder and the same test as `AccessGate::request`. Where it is
-/// true (Windows, local drive, no grant, no backup privilege) the older path
-/// reports a refused read as an error instead.
-pub(super) fn access_prompt_possible(src: &Target, src_meta: &VfsMeta) -> bool {
-    let root = if src_meta.is_dir {
-        Some(src.path.clone())
-    } else {
-        parent_of(&src.path)
-    };
-    let Some(root) = root else {
-        return false;
-    };
-    let native = std::path::PathBuf::from(root.replace('/', std::path::MAIN_SEPARATOR_STR));
-    crate::local_access::can_request_access(&crate::local_access::display_path(&native))
 }
 
 pub(super) fn last_name(path: &str) -> &str {
@@ -267,19 +263,19 @@ pub(super) fn last_name(path: &str) -> &str {
 
 /// The entries of the source folder, each a root of the job. The folder that
 /// is about to be created is never one of them. `None` when a name in the
-/// listing is unsafe or listed twice: the older path checks the whole tree
-/// before it writes anything and reports that case with its own message (the
-/// engine refuses such entries too, but only after it started writing).
+/// listing is unsafe, listed twice or cannot be named at all (not valid
+/// Unicode, U9): the older path checks the whole tree before it writes
+/// anything and reports that case with its own message (the engine refuses
+/// such entries too, but only after it started writing).
 pub(super) fn child_paths(src: &Target, dst_path: &str) -> Result<Option<Vec<String>>, String> {
-    let listed = src
-        .backend
-        .list_dir(&src.path)
+    let listing = super::tree_guard::listing(&*src.backend, &src.path)
         .map_err(|error| format!("cannot list {}: {error}", src.path))?;
-    if validate_listed_names(&src.path, &listed).is_err() {
+    if !listing.omitted.is_empty() || validate_listed_names(&src.path, &listing.entries).is_err() {
         return Ok(None);
     }
     Ok(Some(
-        listed
+        listing
+            .entries
             .into_iter()
             .map(|child| join(&src.path, &child.name))
             .filter(|path| path != dst_path)
@@ -397,89 +393,4 @@ fn publish(observer: &TreeObserver, progress: &TransferProgress) {
         progress.segments,
     );
     observer.set_engine_note(progress.note.clone());
-}
-
-/// The result of a finished run in the terms of `se cp` (U49-4 point 5).
-pub(super) fn settle(finished: &Finished, dst_path: &str) -> Result<TreeOutcome, String> {
-    settle_with(finished, dst_path, true)
-}
-
-/// `settle` for a run under `--conflict update`: files left alone and
-/// numbered names are what the rule decided, not a destination that changed.
-pub(super) fn settle_merged(finished: &Finished, dst_path: &str) -> Result<TreeOutcome, String> {
-    settle_with(finished, dst_path, false)
-}
-
-fn settle_with(finished: &Finished, dst_path: &str, strict: bool) -> Result<TreeOutcome, String> {
-    if finished.canceled {
-        return Err(TRANSFER_CANCELLED.to_string());
-    }
-    let skipped = finished.progress.skipped;
-    if strict && skipped > 0 {
-        return Err(format!(
-            "destination changed during copy: {skipped} existing files were left alone"
-        ));
-    }
-    let issues = all_issues(finished);
-    let mut omitted = Vec::new();
-    let mut failures: Vec<&TransferIssue> = Vec::new();
-    for issue in &issues.items {
-        let kind = match omission_kind(&issue.message) {
-            Some(OmissionKind::Link) => Some(EntryKind::Link),
-            Some(OmissionKind::Special) => Some(EntryKind::Special),
-            Some(OmissionKind::Other) | None => None,
-        };
-        match kind {
-            Some(kind) if !issue.path.is_empty() => omitted.push(Omission {
-                path: issue.path.clone(),
-                kind,
-            }),
-            _ => failures.push(issue),
-        }
-    }
-    let failed = failures.len() as u64 + issues.unseen;
-    if failed > 0 {
-        return Err(failure_text(
-            failed,
-            &failures,
-            finished.progress.log_path.as_deref(),
-        ));
-    }
-    if let Some(root) = finished
-        .roots
-        .iter()
-        .find(|root| strict && root.rel != base_name(&root.source))
-    {
-        // The engine numbers a name that appeared at a remote destination
-        // after the check; nothing was replaced, but the name is not the typed one.
-        return Err(format!(
-            "destination changed during copy: {} appeared at the destination, the data was stored as {} instead",
-            base_name(&root.source),
-            root.rel
-        ));
-    }
-    Ok(TreeOutcome {
-        destination: dst_path.to_string(),
-        omitted,
-        kept: Vec::new(),
-        update: None,
-    })
-}
-
-fn failure_text(failed: u64, shown: &[&TransferIssue], log: Option<&str>) -> String {
-    let mut text = format!("{failed} files failed");
-    for issue in shown.iter().take(SHOWN_FAILURES) {
-        text.push('\n');
-        if issue.path.is_empty() {
-            text.push_str(&issue.message);
-        } else {
-            text.push_str(&format!("{}: {}", issue.path, issue.message));
-        }
-    }
-    if failed > SHOWN_FAILURES as u64 {
-        if let Some(log) = log {
-            text.push_str(&format!("\nall issues: {log}"));
-        }
-    }
-    text
 }

@@ -1798,6 +1798,60 @@ wait for the remote suite).
   (`file_recovery_doubt.rs::quarantined_source_unchanged`); the raw file
   index is not compared after the rename, because FAT derives it from the
   directory entry.
+- **The move guard compared that file index too** (source state 2026-11-27, plan
+  `docs/plaene/2026-11-27-dateien-suche-ansicht` U13): `move_guard.rs` took its
+  snapshot before renaming into the longer `.….move` name, which moves the
+  directory entry, so every `se mv` off a FAT stick failed with "source changed
+  during transfer". The snapshot is now taken from the held handle after the
+  rename, compared with the one before by volume, length and time on FAT/exFAT
+  (`windows_entry_identity.rs`: file system FAT*/exFAT or no
+  `FILE_SUPPORTS_OPEN_BY_FILE_ID`), and still checked by two live handles.
+- **The classic delete keeps the read-only bit**: FAT refuses
+  `FileDispositionInfoEx` (`IGNORE_READONLY`); the fallback `FileDispositionInfo`
+  then fails with access denied unless the attribute is lifted on the same handle
+  first (`local_access/os/windows/held_delete.rs`).
+- **A folder another volume is mounted in** (`IO_REPARSE_TAG_MOUNT_POINT` with a
+  `\??\Volume{GUID}\` target) is a name-surrogate reparse point: std reports it as a
+  link and opening it with `FILE_FLAG_OPEN_REPARSE_POINT` lists the empty folder on
+  the outer volume. Named as a root it is the mounted volume
+  (`volume_mount.rs`); as a child in a walk it stays a boundary. A bare verbatim
+  volume (`\\?\E:`, `\\?\Volume{GUID}`) without the trailing `\` names the device,
+  not its root folder.
+- **No critical-error dialog**: without `SEM_FAILCRITICALERRORS` an empty card
+  reader shows "There is no disk in the drive" and blocks; `se` and the app set the
+  process error mode at start.
+
+## Linux removable media (vfat, exFAT, NTFS through ntfs3/ntfs-3g)
+
+Source state 2026-11-27, plan `docs/plaene/2026-11-27-dateien-suche-ansicht` section A.
+
+- **No storable modes**: vfat, exFAT, ntfs3, ntfs-3g and exfat-fuse show
+  `0777 & ~dmask` (udisks2 mounts with the user's umask), whatever `mkdirat(0700)`
+  asked. A check "created entry is owner-private" therefore fails on every new
+  folder; se's own stage and quarantine cleanup removes its own file after a dev/ino
+  check of the held handle (`unlinkat`) instead (`linux_recovery.rs`,
+  `linux_fs_kind.rs` statfs magics 0x4d44, 0x2011bab0, 0x7366746e, 0x5346544e,
+  0x65735546). The privacy check itself stays strict for trash and recovery exports.
+- **Case-insensitive lookup**: on vfat and exFAT the kernel finds `Fotos` for
+  `fotos`; `stat` must report the stored spelling (from the parent listing,
+  `stored_name.rs`) or a plan that compares with the listing loses the entry. vfat
+  folds ASCII only, exFAT Unicode (`fs_profile.rs` `CaseFolding`).
+- **`renameat2(RENAME_NOREPLACE)`**: FUSE without RENAME2 (ntfs-3g's fuse-lite)
+  answers EINVAL; restoring a quarantined source uses the `publish_no_replace`
+  ladder (lstat, link + unlink).
+- **Growing a file fills it with zeros**: vfat (and exFAT below valid_size) has no
+  holes; `set_len(size)` before writing ranges writes the whole file twice, so copies
+  onto these targets stream from front to back.
+- **Limits before writing**: FAT32 stores at most 4 GiB − 1 byte per file (EFBIG,
+  Windows `ERROR_FILE_TOO_LARGE` 223 or `ERROR_DISK_FULL` 112 after writing up to
+  4 GiB); names with `: * ? " < > | \`, control characters or a trailing dot/space
+  are refused (EINVAL) or silently changed. The plan checks every entry against
+  `TargetLimits` and reports it with its reason, the other files are copied.
+- **Mount points are roots**: `rm -r --force /media/<user>/<STICK>` emptied the
+  stick and then failed with EBUSY; mount points (mountinfo or a device change
+  against the parent) are preserved roots like `rm --preserve-root=all`.
+- **No stable identity** (FAT, exFAT, FUSE): a resumable job binds a folder to
+  `volume-location:v1:<volume id>:<birth time>:<path in volume>` instead.
 
 ## Windows virtual display driver (source state 2026-11-18, not compiled, not run on hardware)
 

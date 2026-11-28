@@ -15,6 +15,32 @@ pub(super) fn same_file(left: &str, right: &str) -> io::Result<bool> {
     Ok((left.dev(), left.ino()) == (right.dev(), right.ino()))
 }
 
+/// Whether the directory `path` is a mount point: `/proc/self/mountinfo`
+/// lists it (bind mounts and autofs triggers included), or it lies on
+/// another device than its parent (what `rm --preserve-root=all` compares;
+/// also the answer where the table cannot be read). A link is no mount
+/// point: removing it never touches what it points to.
+pub(super) fn is_mount_point(path: &str) -> bool {
+    let native = local_path(path);
+    let Ok(entry) = std::fs::symlink_metadata(&native) else {
+        return false;
+    };
+    if entry.file_type().is_symlink() || !entry.is_dir() {
+        return false;
+    }
+    let Ok(canonical) = std::fs::canonicalize(&native) else {
+        return false;
+    };
+    let Some(parent) = canonical.parent() else {
+        return false;
+    };
+    let listed = canonical
+        .to_str()
+        .is_some_and(|text| matches!(crate::vfs::local_mount_boundary(text), Ok(Some(_))));
+    let other_device = std::fs::metadata(parent).is_ok_and(|parent| parent.dev() != entry.dev());
+    listed || other_device
+}
+
 pub(super) fn context_menu_enabled() -> Option<bool> {
     None
 }

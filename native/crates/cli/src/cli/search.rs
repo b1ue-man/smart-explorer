@@ -166,7 +166,11 @@ impl Walk<'_, '_> {
         }
         self.budget.record(dir, depth)?;
         let mut names = std::collections::HashSet::new();
-        for child in self.backend.list_dir(dir).map_err(|e| e.to_string())? {
+        // Tolerant: an entry whose name the listing cannot represent (U9)
+        // is named on stderr; the rest of the folder is still searched.
+        let listing = super::tree_guard::listing(self.backend, dir).map_err(|e| e.to_string())?;
+        super::ops::report_omitted(dir, &listing.omitted);
+        for child in listing.entries {
             if self.spec.max_results != 0 && self.count >= self.spec.max_results {
                 break;
             }

@@ -8,6 +8,11 @@ use windows_sys::Win32::System::Console::{
 };
 
 pub(super) fn local_path(path: &str) -> std::path::PathBuf {
+    // A bare verbatim volume (`//?/E:`, `//?/Volume{GUID}`) is its root
+    // folder; without the final `\` Win32 opens the volume device (U15).
+    if let Some(root) = verbatim_volume_root(path) {
+        return std::path::PathBuf::from(root);
+    }
     let rooted;
     let bytes = path.as_bytes();
     let path = if bytes.len() == 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
@@ -17,6 +22,13 @@ pub(super) fn local_path(path: &str) -> std::path::PathBuf {
         path
     };
     std::path::PathBuf::from(path.replace('/', std::path::MAIN_SEPARATOR_STR))
+}
+
+/// `\\?\E:\` or `\\?\Volume{GUID}\` when `path` (either separator) is
+/// exactly a verbatim volume root, with or without its final separator;
+/// `None` otherwise. Such a path is a filesystem root: it has no parent.
+pub(super) fn verbatim_volume_root(path: &str) -> Option<String> {
+    crate::local_access::platform::verbatim_volume_root(path)
 }
 
 #[repr(C)]

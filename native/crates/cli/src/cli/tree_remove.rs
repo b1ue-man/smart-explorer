@@ -3,8 +3,9 @@ use super::tree_plan::TransferPlan;
 use crate::vfs::Backend;
 use std::collections::HashSet;
 
-/// Removes the moved source tree after the copy was published. Links and
-/// special files the copy omitted stay where they are, and so do the
+/// Removes the moved source tree after the copy was published. Entries the
+/// copy omitted (links, special files, entries the destination refused or
+/// the listing could not name) stay where they are, and so do the
 /// directories that still hold them; their paths are returned, root first.
 pub(super) fn remove_transferred_source(
     backend: &dyn Backend,
@@ -35,12 +36,15 @@ pub(super) fn remove_transferred_source_checked(
         validate_same_source(&entry.source, &current, &entry.source_path)?;
         confirm(index)?;
         if entry.source.is_dir {
-            let remaining = backend.list_dir(&entry.source_path).map_err(|error| {
-                format!(
-                    "cannot verify moved source directory is empty: {}: {error}",
-                    entry.source_path
-                )
-            })?;
+            // Tolerant: a kept entry whose name the listing cannot represent
+            // (U9) is named among the omissions instead of failing it.
+            let remaining =
+                super::tree_guard::listing(backend, &entry.source_path).map_err(|error| {
+                    format!(
+                        "cannot verify moved source directory is empty: {}: {error}",
+                        entry.source_path
+                    )
+                })?;
             // Only the omitted entries and kept subdirectories may remain.
             let allowed: HashSet<&str> = if keep[index] {
                 entry
@@ -59,8 +63,16 @@ pub(super) fn remove_transferred_source_checked(
                 HashSet::new()
             };
             if remaining
+                .entries
                 .iter()
-                .any(|child| !allowed.contains(child.name.as_str()))
+                .map(|child| child.name.as_str())
+                .chain(
+                    remaining
+                        .omitted
+                        .iter()
+                        .map(|omission| omission.rel.as_str()),
+                )
+                .any(|name| !allowed.contains(name))
             {
                 return Err(format!(
                     "moved source directory gained an unplanned child: {}",

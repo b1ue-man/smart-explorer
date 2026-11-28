@@ -2,6 +2,8 @@
 mod se_path_windows;
 
 fn main() {
+    #[cfg(windows)]
+    quiet_critical_errors();
     let arguments: Vec<_> = std::env::args_os().skip(1).collect();
     if let Some(result) = smart_explorer::run_login_service_if_requested(&arguments) {
         match result {
@@ -73,6 +75,22 @@ fn main() {
     std::process::exit(smart_explorer::cli::run());
 }
 
+/// No system dialog for a missing medium (an empty card reader, a removed
+/// stick): the process gets the error instead and reports it (U18). Set once
+/// for the whole process before any thread starts; the bits already set
+/// stay. Child processes inherit the mode, as Windows documents for
+/// `SetErrorMode`.
+#[cfg(windows)]
+fn quiet_critical_errors() {
+    use windows_sys::Win32::System::Diagnostics::Debug::{
+        GetErrorMode, SetErrorMode, SEM_FAILCRITICALERRORS, SEM_NOOPENFILEERRORBOX,
+    };
+    // SAFETY: process-wide flags only; no pointers are involved.
+    unsafe {
+        SetErrorMode(GetErrorMode() | SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX);
+    }
+}
+
 fn exit_mount_host(result: Result<(), String>) -> ! {
     match result {
         Ok(()) => std::process::exit(0),
@@ -121,6 +139,20 @@ fn is_internal_invocation(arguments: &[std::ffi::OsString], command: &str) -> bo
 #[cfg(test)]
 mod tests {
     use super::is_internal_invocation;
+
+    #[cfg(windows)]
+    #[test]
+    fn removable_task_missing_medium_raises_no_dialog() {
+        use windows_sys::Win32::System::Diagnostics::Debug::{
+            GetErrorMode, SEM_FAILCRITICALERRORS, SEM_NOOPENFILEERRORBOX,
+        };
+        let before = unsafe { GetErrorMode() };
+        super::quiet_critical_errors();
+        let after = unsafe { GetErrorMode() };
+        let quiet = SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX;
+        assert_eq!(after & quiet, quiet);
+        assert_eq!(after & before, before, "bits set before stay set");
+    }
 
     #[test]
     fn daemon_mode_requires_the_only_exact_argument() {

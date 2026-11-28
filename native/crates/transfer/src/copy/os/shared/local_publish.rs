@@ -110,6 +110,9 @@ pub(super) fn publish(
             error,
         )));
     }
+    // The stage was read from the quarantine, whose snapshot was taken after
+    // the quarantine rename (`move_guard`): on FAT/exFAT the rename renumbers
+    // the file, so only that snapshot can equal the stage's (U13).
     if let Some(source) = quarantine.as_ref() {
         if staged.snapshot != source.snapshot {
             staged.discard().map_err(LocalFailure::Publish)?;
@@ -231,10 +234,7 @@ pub(super) fn publish(
 /// as the single file's own conflict check costs. Only new copies under
 /// "skip" or "keep both" travel in packets: a move secures its source with
 /// an intent of its own and a replacement records what it replaces.
-pub fn packet_start(
-    requested: &Path,
-    conflict: Conflict,
-) -> Result<Option<PathBuf>, LocalFailure> {
+pub fn packet_start(requested: &Path, conflict: Conflict) -> Result<Option<PathBuf>, LocalFailure> {
     match conflict {
         Conflict::Skip => match metadata_if_exists(requested).map_err(LocalFailure::Target)? {
             Some(_) => Ok(None),

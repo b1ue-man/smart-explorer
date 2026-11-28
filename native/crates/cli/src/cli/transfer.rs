@@ -153,10 +153,7 @@ pub(super) fn try_rename_fast(
         // The backend (FTP, Google Drive, ZIP) or the filesystem cannot
         // rename without replacing: nothing was renamed, copy+delete moves it.
         Err(e) if e.kind() == io::ErrorKind::Unsupported => Ok(false),
-        Err(e)
-            if src.backend.is_local()
-                && (e.kind() == io::ErrorKind::CrossesDevices || e.raw_os_error() == Some(17)) =>
-        {
+        Err(e) if src.backend.is_local() && os::crosses_devices(&e) => {
             // A local cross-volume move retains the established copy+delete
             // fallback. Other rename failures are surfaced because their remote
             // completion state may be ambiguous.
@@ -164,6 +161,96 @@ pub(super) fn try_rename_fast(
         }
         Err(e) => Err(format!("rename {} -> {}: {}", src.path, dst_path, e)),
     }
+}
+
+/// Attempts for the unique intermediate name of a case rename.
+const CASE_RENAME_ATTEMPTS: usize = 8;
+
+/// `se mv` to the same name in another case in the same folder
+/// (`STICK/foto.jpg` → `STICK/Foto.jpg`, U10). Where the filesystem folds
+/// names (FAT, exFAT, NTFS) the destination is the source itself, and a
+/// rename onto itself changes nothing (Linux vfat), so the entry is renamed
+/// in two steps through a unique name beside it; neither step replaces
+/// anything, and a failed second step renames it back. A folder needs
+/// `recursive` as for every move. `Ok(false)`: not this case, nothing was
+/// touched.
+pub(super) fn try_case_rename(src: &Target, dst: &Target, recursive: bool) -> Result<bool, String> {
+    if !src.backend.is_local()
+        || !dst.backend.is_local()
+        || !src.same_namespace(dst)
+        || !src.can_rename_with(dst)
+    {
+        return Ok(false);
+    }
+    let (Some(folder), Some(other)) = (parent_of(&src.path), parent_of(&dst.path)) else {
+        return Ok(false);
+    };
+    let (from, to) = (leaf(&src.path), leaf(&dst.path));
+    if folder != other || from.is_empty() || from == to || from.to_lowercase() != to.to_lowercase()
+    {
+        return Ok(false);
+    }
+    let Ok(source) = src.backend.stat(&src.path) else {
+        return Ok(false);
+    };
+    if source.is_symlink || (source.is_dir && !recursive) || !same_entry(src, dst, &source)? {
+        return Ok(false);
+    }
+    for _ in 0..CASE_RENAME_ATTEMPTS {
+        let id = crate::transfer::new_job_id();
+        let intermediate = join(&folder, &format!(".se-case-{}", &id[..16]));
+        match src.backend.rename_no_replace(&src.path, &intermediate) {
+            Ok(()) => return finish_case_rename(src, &intermediate, &dst.path).map(|()| true),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            // Nothing was renamed: the ordinary path decides.
+            Err(error) if error.kind() == io::ErrorKind::Unsupported => return Ok(false),
+            Err(error) => return Err(format!("rename {} -> {intermediate}: {error}", src.path)),
+        }
+    }
+    Err(format!(
+        "rename {}: no unique intermediate name for the change of case",
+        src.path
+    ))
+}
+
+/// Whether `dst` names the very entry `src` names (same object through a
+/// name that differs in case only), never a link or another entry.
+fn same_entry(src: &Target, dst: &Target, source: &VfsMeta) -> Result<bool, String> {
+    let Ok(found) = dst.backend.stat(&dst.path) else {
+        return Ok(false);
+    };
+    if found.is_symlink || found.is_dir != source.is_dir {
+        return Ok(false);
+    }
+    match os::same_file(&src.path, &dst.path) {
+        Ok(same) => Ok(same),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        // Windows opens no folder as a file: the stored name the listing
+        // reports and the folder's times decide.
+        Err(_) if source.is_dir => Ok(found.name == source.name
+            && found.mtime_ms == source.mtime_ms
+            && found.btime_ms == source.btime_ms),
+        Err(error) => Err(format!(
+            "cannot verify that local source and destination differ: {error}"
+        )),
+    }
+}
+
+fn finish_case_rename(src: &Target, intermediate: &str, destination: &str) -> Result<(), String> {
+    let Err(error) = src.backend.rename_no_replace(intermediate, destination) else {
+        return Ok(());
+    };
+    match src.backend.rename_no_replace(intermediate, &src.path) {
+        Ok(()) => Err(format!("rename {} -> {destination}: {error}", src.path)),
+        Err(back) => Err(format!(
+            "rename {} -> {destination}: {error}; the entry is now named {intermediate} ({back})",
+            src.path
+        )),
+    }
+}
+
+fn leaf(path: &str) -> &str {
+    path.trim_end_matches('/').rsplit('/').next().unwrap_or("")
 }
 
 /// A link is renamed as itself; everything else must be the planned entry.
@@ -271,6 +358,10 @@ fn normalize_path(path: &str, case_insensitive: bool) -> ComparablePath {
     }
     ComparablePath { root, parts }
 }
+
+#[cfg(test)]
+#[path = "transfer_case_tests.rs"]
+mod case_tests;
 
 #[cfg(test)]
 mod tests {

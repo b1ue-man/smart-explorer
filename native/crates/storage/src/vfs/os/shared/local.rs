@@ -26,8 +26,12 @@ fn ms_since_unix(t: std::time::SystemTime) -> i64 {
 fn meta_to_vfs(name: String, path: &Path, meta: &std::fs::Metadata) -> VfsMeta {
     let (hidden, system) = local_platform::local_attrs(meta);
     let class = crate::local_access::metadata_class(path, meta);
-    let is_symlink = class.link_like;
-    let is_dir = meta.is_dir() && !is_symlink;
+    // A folder another volume is mounted in is that volume's root, not a link
+    // (U16): `stat` names it as a folder, listings keep it a walk boundary.
+    // (std reports a name-surrogate reparse point as a link, never `is_dir`.)
+    let mounted = class.link_like && crate::local_access::is_volume_mount_point(path);
+    let is_symlink = class.link_like && !mounted;
+    let is_dir = (meta.is_dir() || mounted) && !is_symlink;
     let special = class.special && !is_dir;
     VfsMeta {
         name,
@@ -76,6 +80,12 @@ fn entry_meta(entry: LocalEntry) -> Result<VfsMeta, (OsString, &'static str)> {
         id: None,
         content_md5: None,
     })
+}
+
+/// The error of one listed entry that no longer exists (it names the entry;
+/// an unnamed `NotFound` is the directory's own).
+fn vanished_entry(error: &io::Error) -> bool {
+    error.kind() == io::ErrorKind::NotFound && EntryError::name_of(error).is_some()
 }
 
 /// `std::fs`-backed local disk using the host path adapter at the boundary.
@@ -179,6 +189,11 @@ impl Backend for LocalBackend {
         Some(self)
     }
 
+    /// Strict listing: a name that is no path here fails it (callers that
+    /// report such entries use `list_dir_tolerant`). An entry that vanished
+    /// between being listed and being read is no child any more and is left
+    /// out; a failure of the enumeration itself, which names no entry (a
+    /// removed medium), fails the listing instead of shortening it.
     fn list_dir(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
         let dir = local_platform::to_os(path);
         let _guard = optical::guard(&dir)?;
@@ -187,7 +202,7 @@ impl Backend for LocalBackend {
                 entry_meta(entry?)
                     .map_err(|(_, detail)| io::Error::new(io::ErrorKind::InvalidData, detail))
             })
-            .filter(|entry| !matches!(entry, Err(error) if error.kind() == io::ErrorKind::NotFound))
+            .filter(|entry| !matches!(entry, Err(error) if vanished_entry(error)))
             .collect()
     }
 
@@ -392,7 +407,24 @@ impl Backend for LocalBackend {
     fn flow_key(&self, path: &str) -> String {
         local_platform::volume_key(path)
     }
+    fn supports_content_search(&self) -> bool {
+        true
+    }
+    /// The parallel search on this device's own cores (plan 2026-11-27, B2).
+    fn content_search(
+        &self,
+        root: &str,
+        query: &crate::agent_proto::ContentQuery,
+        tx: crossbeam_channel::Sender<crate::agent_proto::ContentEvent>,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> VfsResult<Option<crate::agent_proto::ContentSummary>> {
+        crate::vfs::local_content_search(&local_platform::to_os(root), query, tx, cancel)
+    }
 }
+
+#[cfg(test)]
+#[path = "local_listing_tests.rs"]
+mod listing_tests;
 
 #[cfg(test)]
 mod range_tests {

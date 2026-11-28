@@ -17,6 +17,8 @@ mod windows_optical;
 pub(super) use fast::{commit_staged_held, copy_from_reader, handle_has_path, open_copy_source};
 use kernel_copy::kernel_copy_file;
 
+#[path = "windows_entry_identity.rs"]
+mod entry_identity;
 #[path = "windows_identity.rs"]
 mod windows_identity;
 pub(super) use windows_identity::{same_file_object, stable_handle_identity, stable_path_identity};
@@ -131,9 +133,12 @@ pub(super) fn different_rename_boundary(source: &File, target_parent: &File) -> 
     Ok(source_volume != 0 && target_volume != 0 && source_volume != target_volume)
 }
 
-/// An open file's identity together with its metadata.
+/// An open file's identity together with its metadata: the identity a
+/// snapshot keeps, without the file number on a volume whose numbers follow
+/// the directory entry (FAT, exFAT: `windows_entry_identity.rs`, U13).
 pub(super) fn file_state(file: &File) -> io::Result<(FileIdentity, std::fs::Metadata)> {
-    Ok((file_identity(file)?, file.metadata()?))
+    let identity = entry_identity::snapshot_identity(file, file_identity(file)?);
+    Ok((identity, file.metadata()?))
 }
 
 /// Identity, length and modification time of the regular file `path` names

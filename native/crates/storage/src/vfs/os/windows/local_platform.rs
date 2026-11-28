@@ -5,6 +5,9 @@ use std::path::{Path, PathBuf};
 #[path = "local_writes.rs"]
 mod local_writes;
 #[cfg(test)]
+#[path = "removable_task_tests.rs"]
+mod removable_task_tests;
+#[cfg(test)]
 #[path = "review_task_stage_tests.rs"]
 mod review_task_stage_tests;
 #[path = "volume_info.rs"]
@@ -40,8 +43,13 @@ pub fn is_reparse_point(meta: &std::fs::Metadata) -> bool {
 /// literally (a reserved device name such as `NUL`, a trailing dot or space,
 /// a rejected character), the result is the verbatim `\\?\` form so every
 /// `std::fs` call reaches the stored entry instead of the device or a
-/// stripped name; ordinary paths keep their plain spelling.
+/// stripped name; ordinary paths keep their plain spelling. A bare verbatim
+/// volume (`//?/E:`, `//?/Volume{GUID}`) means its root folder, which Win32
+/// reaches only with the final `\` (without it the volume device, U15).
 pub fn to_os(path: &str) -> PathBuf {
+    if let Some(root) = crate::local_access::platform::verbatim_volume_root(path) {
+        return PathBuf::from(root);
+    }
     let b = path.as_bytes();
     let rooted;
     let path = if b.len() == 2 && b[1] == b':' && b[0].is_ascii_alphabetic() {
@@ -227,8 +235,41 @@ pub fn remove_file_like(path: &Path) -> std::io::Result<()> {
     if is_reparse_point(&metadata) && file_attributes(&metadata) & FILE_ATTRIBUTE_DIRECTORY != 0 {
         std::fs::remove_dir(path)
     } else {
-        std::fs::remove_file(path)
+        match std::fs::remove_file(path) {
+            Err(error)
+                if error.kind() == std::io::ErrorKind::PermissionDenied
+                    && metadata.permissions().readonly() =>
+            {
+                remove_read_only(path).map_err(|_| error)
+            }
+            result => result,
+        }
     }
+}
+
+/// A read-only file the plain delete refused (FAT, exFAT: U17), deleted
+/// through one handle on the entry itself (never a link's target): the
+/// attribute is lifted on that handle only where the extended disposition
+/// is missing, and set again should the deletion fail.
+fn remove_read_only(path: &Path) -> std::io::Result<()> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        DELETE, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES,
+        FILE_SHARE_READ, FILE_WRITE_ATTRIBUTES,
+    };
+    let guard = std::fs::OpenOptions::new()
+        .access_mode(DELETE | FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES)
+        .share_mode(FILE_SHARE_READ)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(crate::local_access::normalize_scan_root(path))?;
+    let metadata = guard.metadata()?;
+    if metadata.is_dir() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::IsADirectory,
+            "entry became a directory before its deletion",
+        ));
+    }
+    crate::local_access::platform::delete_held(&guard, metadata.permissions().readonly())
 }
 
 pub fn rename_no_replace(source: &Path, destination: &Path) -> std::io::Result<()> {

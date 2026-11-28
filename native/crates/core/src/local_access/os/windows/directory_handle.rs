@@ -84,7 +84,7 @@ impl DirectoryHandle {
             .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
             .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
             .open(&path)?;
-        let resolved = std::fs::canonicalize(&path)?;
+        let resolved = resolve_root(&path)?;
         let mut current = PathBuf::new();
         let mut ancestors = Vec::new();
         for component in resolved.components() {
@@ -97,7 +97,13 @@ impl DirectoryHandle {
                 ReadKind::Metadata,
                 FILE_SHARE_READ | FILE_SHARE_WRITE,
             )?;
-            validate_directory(&file)?;
+            // A volume without a drive letter keeps the folder it is
+            // mounted in in its resolved path (U16): that folder stays
+            // pinned, and the path below it continues on the mounted
+            // volume. Every other link on the way is refused.
+            if super::volume_mount::mounted_volume(&file).is_none() {
+                validate_directory(&file)?;
+            }
             ancestors.push(file);
         }
         let file = super::read::open_direct(
@@ -105,6 +111,14 @@ impl DirectoryHandle {
             ReadKind::Directory,
             FILE_SHARE_READ | FILE_SHARE_WRITE,
         )?;
+        // The chosen root may be such a mount folder itself: the root of the
+        // mounted volume is the directory pinned, the folder an ancestor.
+        let (file, mount_folder) = super::volume_mount::enter_mounted(
+            file,
+            ReadKind::Directory,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+        )?;
+        ancestors.extend(mount_folder);
         validate_directory(&file)?;
         if !identity::same_object(&selected, &file)? {
             return Err(io::Error::other(
@@ -319,6 +333,28 @@ impl DirectoryHandle {
         files.extend(&current._ancestors);
         files.extend(lineage.into_iter().rev().map(|directory| &directory.file));
         files
+    }
+}
+
+/// The physical path of the chosen root, links resolved. A volume with
+/// neither a drive letter nor a mount folder has no such path
+/// (`GetFinalPathNameByHandleW` with VOLUME_NAME_DOS fails): a root named
+/// through its `\\?\Volume{GUID}\` path keeps that path, and the pinning
+/// above refuses every link on it.
+fn resolve_root(path: &Path) -> io::Result<PathBuf> {
+    match std::fs::canonicalize(path) {
+        Ok(resolved) => Ok(resolved),
+        Err(error) => {
+            let text = path.to_string_lossy();
+            let volume = text
+                .get(..11)
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case(r"\\?\Volume{"));
+            if volume {
+                Ok(path.to_path_buf())
+            } else {
+                Err(error)
+            }
+        }
     }
 }
 

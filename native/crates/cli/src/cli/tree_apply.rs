@@ -166,6 +166,12 @@ fn publish_file(
             .flush()
             .map_err(|error| format!("cannot flush staged destination {staged}: {error}"))?;
         drop(writer);
+        crate::vfs::finish_stage(
+            destination,
+            &staged,
+            stage_finish(source, destination, entry),
+        )
+        .map_err(|error| format!("cannot finish staged destination {staged}: {error}"))?;
         let staged_metadata = destination
             .stat(&staged)
             .map_err(|error| format!("cannot verify staged destination {staged}: {error}"))?;
@@ -209,6 +215,36 @@ fn publish_file(
     result
 }
 
+/// The source's modification time and permission bits for the closed stage
+/// of `entry` (no more open than a destination file it replaces), as the
+/// engine and `CopyFile2` keep them (U14): this path is still taken by
+/// resumed runs and by copies the engine does not run. A target that cannot
+/// store them skips them (`finish_stage`). Windows file attributes have no
+/// backend operation yet and are not carried over.
+fn stage_finish(
+    source: &dyn Backend,
+    destination: &dyn Backend,
+    entry: &super::tree_plan::PlanEntry,
+) -> crate::vfs::StageFinish {
+    let mode = crate::vfs::unix_mode(source, &entry.source_path)
+        .ok()
+        .flatten()
+        .map(|mode| match &entry.destination {
+            DestinationState::File(_) => {
+                crate::vfs::unix_mode(destination, &entry.destination_path)
+                    .ok()
+                    .flatten()
+                    .map_or(mode, |existing| mode & existing)
+            }
+            _ => mode,
+        });
+    crate::vfs::StageFinish {
+        mtime_ms: (entry.source.mtime_ms != 0).then_some(entry.source.mtime_ms),
+        mode,
+        durability: crate::vfs::StageDurability::NotRequired,
+    }
+}
+
 fn require_plain_directory(
     backend: &dyn Backend,
     path: &str,
@@ -223,3 +259,7 @@ fn require_plain_directory(
     }
     Ok(metadata)
 }
+
+#[cfg(test)]
+#[path = "tree_apply_tests.rs"]
+mod tests;

@@ -164,7 +164,8 @@ pub(super) fn stage_copy(
             return Ok(None);
         }
         Err(error) => {
-            return Err(discard_after_error(temp, writer, side_of(error)));
+            let failure = target_side(side_of(error), target, before.len);
+            return Err(discard_after_error(temp, writer, failure));
         }
     };
     let finished = optical
@@ -301,13 +302,8 @@ fn stage_by_path(
                 })));
             }
             Some(Err(error)) if error.kind() == io::ErrorKind::AlreadyExists => continue,
-            Some(Err(error))
-                if matches!(
-                    error.kind(),
-                    io::ErrorKind::StorageFull | io::ErrorKind::QuotaExceeded
-                ) =>
-            {
-                return Err(LocalFailure::Target(error));
+            Some(Err(error)) if final_stage_error(&error) => {
+                return Err(target_side(LocalFailure::Target(error), target, before.len));
             }
             Some(Err(error)) if optical => return Err(side_of(error)),
             // Protected sources (readable only through `local_access`) and
@@ -323,13 +319,19 @@ fn stage_by_path(
     Ok(None)
 }
 
-/// Errors of a stage copy that end its attempt as they are: the stage name
-/// was taken (the next name follows) or the target is full.
+/// Ends a stage attempt as it is: taken name, full target, file too large.
 fn final_stage_error(error: &io::Error) -> bool {
-    matches!(
-        error.kind(),
-        io::ErrorKind::AlreadyExists | io::ErrorKind::StorageFull | io::ErrorKind::QuotaExceeded
-    )
+    use io::ErrorKind::{AlreadyExists, FileTooLarge, QuotaExceeded, StorageFull};
+    let kind = error.kind();
+    kind == AlreadyExists || kind == StorageFull || kind == QuotaExceeded || kind == FileTooLarge
+}
+
+/// A file too large for the target (FAT: 4 GiB − 1) fails alone (U7).
+fn target_side(failure: LocalFailure, target: &Path, len: u64) -> LocalFailure {
+    let LocalFailure::Target(error) = failure else {
+        return failure;
+    };
+    LocalFailure::Target(crate::vfs::explain_file_limit(target, len, error))
 }
 
 pub(super) fn unchanged(

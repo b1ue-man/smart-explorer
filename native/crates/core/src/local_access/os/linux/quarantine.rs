@@ -42,7 +42,10 @@ impl DirectoryHandle {
         // The fresh folder's permissions precede any content. Its handle is
         // kept even when the selected root or a parent is moved meanwhile.
         let directory = self.private_quarantine_directory()?;
-        rename_no_replace(self, name, &directory, OsStr::new(HELD_NAME))?;
+        if let Err(cause) = rename_no_replace(self, name, &directory, OsStr::new(HELD_NAME)) {
+            // Nothing was captured: the fresh folder goes again.
+            return Err(self.discard_empty_capture(directory, cause));
+        }
         let captured = directory
             .open_regular_child(OsStr::new(HELD_NAME))
             .and_then(|file| {
@@ -61,7 +64,7 @@ impl DirectoryHandle {
                 active: true,
             }),
             Err(cause) => match rename_no_replace(&directory, OsStr::new(HELD_NAME), self, name) {
-                Ok(()) => Err(cause),
+                Ok(()) => Err(self.discard_empty_capture(directory, cause)),
                 Err(restore) => Err(io::Error::new(
                     cause.kind(),
                     format!(
@@ -70,6 +73,26 @@ impl DirectoryHandle {
                     ),
                 )),
             },
+        }
+    }
+
+    /// Removes a capture folder that holds nothing (again): exactly the
+    /// opened object, and `rmdir` refuses it once anything was put inside.
+    /// The cause stays the reported error; a failed removal is appended.
+    fn discard_empty_capture(&self, directory: Self, cause: io::Error) -> io::Error {
+        let Some(name) = directory.path.file_name().map(OsStr::to_os_string) else {
+            return cause;
+        };
+        let kept = retained_path(&directory);
+        match self.remove_empty_child(&name, directory) {
+            Ok(()) => cause,
+            Err(error) => io::Error::new(
+                cause.kind(),
+                format!(
+                    "{cause}; empty capture folder kept at {}: {error}",
+                    kept.parent().unwrap_or(&kept).display()
+                ),
+            ),
         }
     }
 
@@ -200,11 +223,89 @@ fn rename_no_replace(
         error.raw_os_error(),
         Some(libc::EINVAL | libc::ENOSYS | libc::EOPNOTSUPP)
     ) {
-        Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "filesystem cannot capture/restore without replacement",
-        ))
+        link_then_unlink(source, &old, target, &new, &error)
     } else {
         Err(error)
     }
 }
+
+/// The second step of the no-replace ladder (`android_fs::rename_no_replace`,
+/// used by `publish_no_replace`) for a filesystem without the flag (FUSE
+/// without rename2 such as ntfs-3g, NFS): the look at the destination, then a
+/// create-only `linkat`, which still refuses a taken name atomically, then
+/// removal of the old name. Both stay relative to the held descriptors. The
+/// ladder's last step, a checked plain rename, is not taken here: a name
+/// created between its check and the rename would be replaced, and capture
+/// and restore never replace. A filesystem without hard links (exfat-fuse)
+/// therefore stays unsupported, as before.
+fn link_then_unlink(
+    source: &DirectoryHandle,
+    old: &CString,
+    target: &DirectoryHandle,
+    new: &CString,
+    flag_error: &io::Error,
+) -> io::Result<()> {
+    let new_name = OsStr::from_bytes(new.as_bytes());
+    match target.metadata_at(new_name) {
+        Ok(_) => return Err(io::Error::from_raw_os_error(libc::EEXIST)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    // SAFETY: live descriptors and C strings; flags 0 never follows the old
+    // name's final link, and linkat never replaces an existing new name.
+    let linked = unsafe {
+        libc::linkat(
+            source.file.as_raw_fd(),
+            old.as_ptr(),
+            target.file.as_raw_fd(),
+            new.as_ptr(),
+            0,
+        )
+    };
+    if linked != 0 {
+        let link_error = io::Error::last_os_error();
+        return Err(if link_error.raw_os_error() == Some(libc::EEXIST) {
+            link_error
+        } else {
+            io::Error::new(
+                io::ErrorKind::Unsupported,
+                format!(
+                    "filesystem cannot capture/restore without replacement \
+                     (rename: {flag_error}; link: {link_error})"
+                ),
+            )
+        });
+    }
+    // SAFETY: as above; unlinkat removes only the old final entry.
+    if unsafe { libc::unlinkat(source.file.as_raw_fd(), old.as_ptr(), 0) } == 0 {
+        return Ok(());
+    }
+    let unlink_error = io::Error::last_os_error();
+    // Undo: the new name goes again only while both names are one object.
+    let old_name = OsStr::from_bytes(old.as_bytes());
+    let undo = match (source.metadata_at(old_name), target.metadata_at(new_name)) {
+        (Ok(linked), Ok(created)) if same_object(&linked, &created) => {
+            // SAFETY: as above.
+            if unsafe { libc::unlinkat(target.file.as_raw_fd(), new.as_ptr(), 0) } == 0 {
+                Ok(())
+            } else {
+                Err(io::Error::last_os_error())
+            }
+        }
+        _ => Err(io::Error::other(
+            "the new name no longer is the linked entry",
+        )),
+    };
+    match undo {
+        Ok(()) => Err(unlink_error),
+        // Two names of one object remain: never a refusal that callers may
+        // read as "nothing changed".
+        Err(undo) => Err(io::Error::other(format!(
+            "{unlink_error}; both names were kept: {undo}"
+        ))),
+    }
+}
+
+#[cfg(test)]
+#[path = "removable_task_tests.rs"]
+mod removable_task_tests;

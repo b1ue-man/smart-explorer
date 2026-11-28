@@ -24,6 +24,36 @@ pub(super) fn local_path(path: &str) -> std::path::PathBuf {
     platform::local_path(path)
 }
 
+/// The OS code of a rename that cannot cross volumes: Windows
+/// `ERROR_NOT_SAME_DEVICE` (17), Unix `EXDEV` (18 on Linux; 17 there is
+/// `EEXIST`, U12).
+#[cfg(windows)]
+const NOT_SAME_DEVICE: i32 = 17;
+#[cfg(not(windows))]
+const NOT_SAME_DEVICE: i32 = libc::EXDEV;
+
+/// Whether a failed rename says source and destination are on different
+/// volumes (a local move then copies and deletes).
+pub(super) fn crosses_devices(error: &std::io::Error) -> bool {
+    error.kind() == std::io::ErrorKind::CrossesDevices
+        || error.raw_os_error() == Some(NOT_SAME_DEVICE)
+}
+
+/// Whether the local directory `path` is a mount point (`/media/u/STICK`):
+/// `se rm` protects it like `rm --preserve-root=all` (U5). Windows drive,
+/// volume and share roots are recognized by their spelling (`target`).
+pub(super) fn is_mount_point(path: &str) -> bool {
+    #[cfg(not(windows))]
+    {
+        platform::is_mount_point(path)
+    }
+    #[cfg(windows)]
+    {
+        let _ = path;
+        false
+    }
+}
+
 pub(super) fn validate_connection_protocol(protocol: crate::creds::Protocol) -> Result<(), String> {
     platform::validate_connection_protocol(protocol)
 }

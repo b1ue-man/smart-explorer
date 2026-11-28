@@ -80,7 +80,7 @@ pub(super) fn quarantine_source_observed(
         .unwrap_or_else(|| Path::new("."));
     let held_parent = crate::local_access::ConfinedDirectory::open_root(parent_path)?;
     let file = crate::local_access::open_regular(source, crate::local_access::FinalLink::Refuse)?;
-    let snapshot = source_snapshot_file(&file)?;
+    let before = source_snapshot_file(&file)?;
     let source_name = source
         .file_name()
         .ok_or_else(|| source_changed_error(source))?;
@@ -111,6 +111,18 @@ pub(super) fn quarantine_source_observed(
         }
         match platform::move_file(source, &candidate, false) {
             Ok(()) => {
+                // What the quarantined file is now, asked of the held handle:
+                // the snapshot every later look at the quarantine compares
+                // with. FAT and exFAT number a file by its directory entry,
+                // which the longer quarantine name moves (U13); that the held
+                // file is the one at the new name is proven by live handles
+                // below, never by a number taken before the rename.
+                let snapshot = match source_snapshot_file(&file) {
+                    Ok(snapshot) => snapshot,
+                    Err(error) => {
+                        return Err(rollback_quarantine(source, &candidate, error));
+                    }
+                };
                 let actual = match source_snapshot_path(&candidate) {
                     Ok(snapshot) => snapshot,
                     Err(error) => {
@@ -131,7 +143,14 @@ pub(super) fn quarantine_source_observed(
                     Some(Err(error)) => return Err(rollback_quarantine(source, &candidate, error)),
                     None => false,
                 };
-                if actual != snapshot || !full_identity_matches || !held_matches {
+                // Unchanged by the rename: on every volume the same length
+                // and time, and wherever numbers are lasting the same number
+                // (a FAT snapshot carries none: `platform::file_state`).
+                if actual != snapshot
+                    || snapshot != before
+                    || !full_identity_matches
+                    || !held_matches
+                {
                     return Err(rollback_quarantine(
                         source,
                         &candidate,
@@ -181,6 +200,9 @@ pub(super) fn restore_quarantine_if_any(source: Option<&QuarantinedSource>) -> i
     Ok(())
 }
 
+/// The quarantine is compared with its snapshot from after the quarantine
+/// rename (FAT/exFAT renumber a renamed file); the restoring rename itself is
+/// bound to the held handle (`recover_transfer_quarantine_live`).
 pub(super) fn restore_quarantine(source: &QuarantinedSource) -> io::Result<()> {
     if source_snapshot_path(&source.path)? != source.snapshot {
         return Err(io::Error::new(
@@ -279,3 +301,7 @@ fn random_suffix(source: &Path, attempt: u32) -> u64 {
         .hash(&mut hasher);
     hasher.finish()
 }
+
+#[cfg(all(test, windows))]
+#[path = "removable_move_task_tests.rs"]
+mod removable_move_task_tests;

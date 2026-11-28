@@ -92,8 +92,8 @@ pub(super) fn parallel_helps(sequential: (u64, Duration), parallel: (u64, Durati
 /// buffered stream; the short unaligned end through the normal handles.
 /// `report(helps)` is called once, from the calling thread, as soon as both
 /// sections are measured. A file too short for the probe, a single permitted
-/// thread, and a file that cannot be copied directly are copied plainly
-/// (`copy_handles`, one thread, no verdict).
+/// thread, a stage on FAT or exFAT and a file that cannot be copied directly
+/// are copied plainly (`copy_handles`, one thread, no verdict).
 pub(in crate::copy) fn copy_probed(
     reader: &File,
     writer: &mut File,
@@ -111,7 +111,11 @@ pub(in crate::copy) fn copy_probed(
         Sparse::Canceled => return Ok(None),
         Sparse::Dense => {}
     }
-    let Some(section) = section_len(size).filter(|_| threads >= PROBE_THREADS) else {
+    // FAT and exFAT zero-fill a pre-sized stage and every gap before a
+    // section (`linux_fs_kind`): one stream from the front, no verdict.
+    let Some(section) = section_len(size)
+        .filter(|_| threads >= PROBE_THREADS && !super::linux_fs_kind::zero_fill_target(writer))
+    else {
         return super::copy_handles(reader, writer, cancel, progress, 1);
     };
     let Some(direct) = Direct::open(reader, writer, size) else {

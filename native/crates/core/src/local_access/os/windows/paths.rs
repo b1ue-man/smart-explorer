@@ -22,7 +22,9 @@ const DEVICE: &str = r"\\.\";
 pub fn normalize_scan_root(root: &Path) -> PathBuf {
     let text = root.to_string_lossy().replace('/', "\\");
     if text.starts_with(VERBATIM) {
-        return PathBuf::from(text);
+        // A bare `\\?\E:` or `\\?\Volume{GUID}` opens the volume device;
+        // the folder meant is its root directory (U15).
+        return PathBuf::from(verbatim_volume_root(&text).unwrap_or(text));
     }
     let current = || {
         std::env::current_dir()
@@ -33,6 +35,37 @@ pub fn normalize_scan_root(root: &Path) -> PathBuf {
         Some(verbatim) => PathBuf::from(verbatim),
         None => PathBuf::from(text),
     }
+}
+
+/// `\\?\X:\` or `\\?\Volume{GUID}\` when `text` (either separator) is
+/// exactly a verbatim volume root, with or without its final separator:
+/// the root directory, which Win32 reaches only with that separator
+/// (without it, the same name opens the volume device). `None` for every
+/// other path, the device namespace (`\\.\`) included.
+pub fn verbatim_volume_root(text: &str) -> Option<String> {
+    let text = text.replace('/', "\\");
+    let rest = text.strip_prefix(VERBATIM)?;
+    let rest = rest.strip_suffix('\\').unwrap_or(rest);
+    let bytes = rest.as_bytes();
+    let drive = bytes.len() == 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':';
+    (drive || is_volume_guid_name(rest)).then(|| format!("{VERBATIM}{rest}\\"))
+}
+
+/// `Volume{xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx}`, the name the mount
+/// manager gives every volume (case as the caller wrote it).
+pub(super) fn is_volume_guid_name(name: &str) -> bool {
+    let Some(inner) = name
+        .get(..7)
+        .filter(|prefix| prefix.eq_ignore_ascii_case("Volume{"))
+        .and_then(|_| name[7..].strip_suffix('}'))
+    else {
+        return false;
+    };
+    inner.len() == 36
+        && inner.char_indices().all(|(index, unit)| match index {
+            8 | 13 | 18 | 23 => unit == '-',
+            _ => unit.is_ascii_hexdigit(),
+        })
 }
 
 /// Resolve `text` (already backslash-separated, not verbatim) against the
@@ -192,5 +225,60 @@ mod tests {
         );
         let already = normalize_scan_root(Path::new(r"\\?\D:\kept\as is."));
         assert_eq!(already.to_string_lossy(), r"\\?\D:\kept\as is.");
+    }
+
+    #[test]
+    fn removable_task_bare_verbatim_volume_is_its_root_folder() {
+        let guid = "Volume{0b1c2d3e-4f50-6172-8394-a5b6c7d8e9f0}";
+        for (input, root) in [
+            (r"\\?\E:", r"\\?\E:\"),
+            (r"\\?\e:\", r"\\?\e:\"),
+            ("//?/E:", r"\\?\E:\"),
+            ("//?/E:/", r"\\?\E:\"),
+        ] {
+            assert_eq!(
+                verbatim_volume_root(input).as_deref(),
+                Some(root),
+                "{input}"
+            );
+        }
+        let expected = format!(r"\\?\{guid}\");
+        for input in [
+            format!(r"\\?\{guid}"),
+            format!(r"\\?\{guid}\"),
+            format!("//?/{guid}"),
+        ] {
+            assert_eq!(
+                verbatim_volume_root(&input),
+                Some(expected.clone()),
+                "{input}"
+            );
+            assert_eq!(
+                normalize_scan_root(Path::new(&input)).to_string_lossy(),
+                expected
+            );
+        }
+        // Paths below a root, the device namespace, other verbatim forms and
+        // malformed volume names stay as they are.
+        for input in [
+            r"\\?\E:\dir".to_string(),
+            format!(r"\\?\{guid}\dir"),
+            r"\\.\E:".to_string(),
+            r"\\?\UNC\server\share".to_string(),
+            r"\\?\GLOBALROOT\Device\HarddiskVolume3".to_string(),
+            r"\\?\Volume{0b1c2d3e}".to_string(),
+            r"\\?\Volume{0b1c2d3e-4f50-6172-8394-a5b6c7d8e9fz}".to_string(),
+            r"E:".to_string(),
+        ] {
+            assert_eq!(verbatim_volume_root(&input), None, "{input}");
+        }
+        assert_eq!(
+            normalize_scan_root(Path::new(r"\\?\E:")).to_string_lossy(),
+            r"\\?\E:\"
+        );
+        assert_eq!(
+            normalize_scan_root(Path::new(r"\\?\E:\dir")).to_string_lossy(),
+            r"\\?\E:\dir"
+        );
     }
 }

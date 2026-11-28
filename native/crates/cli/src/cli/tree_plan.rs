@@ -5,18 +5,25 @@ use super::tree_guard::{
     validate_listed_names, validate_listing, validate_same_source, DestinationState,
 };
 use super::tree_observer::TreeObserver;
-use crate::vfs::{Backend, VfsMeta};
+use crate::vfs::{Backend, OmissionReason, VfsMeta, VfsOmission};
 use std::collections::HashMap;
 
-const MAX_TREE_ENTRIES: u64 = 1_000_000;
-const MAX_TREE_TEXT_BYTES: u64 = 128 * 1024 * 1024;
+#[path = "tree_plan_budget.rs"]
+mod budget;
+#[path = "tree_limits.rs"]
+pub(super) mod limits;
+use budget::PlanBudget;
+use limits::TargetRules;
+
 const MAX_TREE_DEPTH: usize = 512;
 
 pub(super) struct TransferPlan {
     pub(super) entries: Vec<PlanEntry>,
     pub(super) destination_ancestors: Vec<DestinationAncestor>,
-    /// Links and special files inside the tree: never followed, recreated or
-    /// read. A move keeps them, and the directories holding them, in place.
+    /// Links and special files inside the tree (never followed, recreated or
+    /// read), entries the destination cannot store and names the listing
+    /// cannot represent. A move keeps them, and the directories holding
+    /// them, in place.
     pub(super) omitted: Vec<OmittedEntry>,
 }
 
@@ -34,8 +41,33 @@ pub(super) struct PlanEntry {
 
 pub(super) struct OmittedEntry {
     pub(super) source_path: String,
+    /// The listed entry; for `OmitCause::Unlisted` only its (lossy) name.
     pub(super) listed: VfsMeta,
     pub(super) kind: EntryKind,
+    pub(super) cause: OmitCause,
+}
+
+/// Why a plan leaves an existing source entry out.
+pub(super) enum OmitCause {
+    /// A link or special file (`EntryKind::is_omitted_in_trees`).
+    Kind,
+    /// The destination cannot store it (name, size, or a name it treats as
+    /// another planned one): the German reason.
+    Refused(String),
+    /// The source listing cannot name it (not valid Unicode, a name Win32
+    /// cannot address): its kind is unknown (`kind` says `File`).
+    Unlisted(String),
+}
+
+impl OmittedEntry {
+    /// The German reason a refused or unlisted entry is reported with.
+    pub(super) fn reason(&self) -> Option<String> {
+        match &self.cause {
+            OmitCause::Kind => None,
+            OmitCause::Refused(reason) => Some(reason.clone()),
+            OmitCause::Unlisted(detail) => Some(format!("Name nicht übertragbar ({detail})")),
+        }
+    }
 }
 
 pub(super) struct DestinationAncestor {
@@ -50,87 +82,6 @@ struct PendingEntry {
     depth: usize,
     listed: Option<VfsMeta>,
     accounted_metadata_text: u64,
-}
-
-#[derive(Default)]
-struct PlanBudget {
-    entries: u64,
-    text_bytes: u64,
-}
-
-impl PlanBudget {
-    fn reserve_entry(
-        &mut self,
-        source_path: &str,
-        destination_path: &str,
-        listed: Option<&VfsMeta>,
-        depth: usize,
-    ) -> Result<u64, String> {
-        if depth > MAX_TREE_DEPTH {
-            return Err(format!("transfer tree exceeds {MAX_TREE_DEPTH} levels"));
-        }
-        self.entries = self
-            .entries
-            .checked_add(1)
-            .ok_or_else(|| "transfer entry count overflow".to_string())?;
-        let metadata_text = listed.map(metadata_text_bytes).unwrap_or(0);
-        self.add_text(
-            (source_path.len() as u64)
-                .checked_add(destination_path.len() as u64)
-                .and_then(|value| value.checked_add(metadata_text))
-                .ok_or_else(|| "transfer path text budget overflow".to_string())?,
-        )?;
-        self.check()?;
-        Ok(metadata_text)
-    }
-
-    fn account_fresh_metadata(&mut self, fresh: &VfsMeta, accounted: u64) -> Result<(), String> {
-        let fresh_text = metadata_text_bytes(fresh);
-        if fresh_text > accounted {
-            self.add_text(fresh_text - accounted)?;
-        }
-        self.check()
-    }
-
-    fn reserve_auxiliary_path(&mut self, path: &str) -> Result<(), String> {
-        self.add_text(path.len() as u64)?;
-        self.check()
-    }
-
-    fn reserve_auxiliary_text(&mut self, bytes: u64) -> Result<(), String> {
-        self.add_text(bytes)?;
-        self.check()
-    }
-
-    fn ensure_entry_capacity(&self, additional: usize) -> Result<(), String> {
-        let additional = u64::try_from(additional)
-            .map_err(|_| "transfer child count does not fit its budget".to_string())?;
-        if self
-            .entries
-            .checked_add(additional)
-            .is_none_or(|entries| entries > MAX_TREE_ENTRIES)
-        {
-            Err("transfer tree exceeds its bounded collection budget".to_string())
-        } else {
-            Ok(())
-        }
-    }
-
-    fn add_text(&mut self, bytes: u64) -> Result<(), String> {
-        self.text_bytes = self
-            .text_bytes
-            .checked_add(bytes)
-            .ok_or_else(|| "transfer path text budget overflow".to_string())?;
-        Ok(())
-    }
-
-    fn check(&self) -> Result<(), String> {
-        if self.entries > MAX_TREE_ENTRIES || self.text_bytes > MAX_TREE_TEXT_BYTES {
-            Err("transfer tree exceeds its bounded collection budget".to_string())
-        } else {
-            Ok(())
-        }
-    }
 }
 
 impl TransferPlan {
@@ -159,6 +110,7 @@ impl TransferPlan {
         }];
         let mut entries: Vec<PlanEntry> = Vec::new();
         let mut omitted: Vec<OmittedEntry> = Vec::new();
+        let rules = TargetRules::of(destination, destination_path);
 
         while let Some(work) = pending.pop() {
             observer.check()?;
@@ -176,6 +128,10 @@ impl TransferPlan {
             if work.parent.is_none() {
                 if let Some(expected) = expected_root {
                     validate_same_source(expected, &fresh, &work.source_path)?;
+                }
+                let name = leaf(&work.destination_path);
+                if let Some(reason) = rules.refusal(name, &fresh) {
+                    return Err(format!("{}: {reason}", work.destination_path));
                 }
             }
             if let Some(listed) = work.listed.as_ref() {
@@ -224,23 +180,45 @@ impl TransferPlan {
                 })?,
                 &entries[index].source_path,
             )?;
-            let listed = source
-                .list_dir(&entries[index].source_path)
-                .map_err(|error| {
-                    format!("preflight list {}: {error}", entries[index].source_path)
-                })?;
-            budget.ensure_entry_capacity(listed.len())?;
-            validate_listed_names(&entries[index].source_path, &listed)?;
-            for child in listed.into_iter().rev() {
+            let listing = super::tree_guard::listing(source, &entries[index].source_path).map_err(
+                |error| format!("preflight list {}: {error}", entries[index].source_path),
+            )?;
+            budget.ensure_entry_capacity(listing.entries.len() + listing.omitted.len())?;
+            validate_listed_names(&entries[index].source_path, &listing.entries)?;
+            for omission in listing.omitted {
+                let Some(detail) = unlisted_detail(&entries[index].source_path, &omission)? else {
+                    continue;
+                };
+                let child_source = join(&entries[index].source_path, &omission.rel);
+                budget.reserve_auxiliary_path(&child_source)?;
+                entries[index].omitted.push(omitted.len());
+                omitted.push(OmittedEntry {
+                    source_path: child_source,
+                    listed: VfsMeta {
+                        name: omission.rel,
+                        ..VfsMeta::default()
+                    },
+                    kind: EntryKind::File,
+                    cause: OmitCause::Unlisted(detail),
+                });
+            }
+            let mut refused = rules.refusals(&listing.entries);
+            for (position, child) in listing.entries.into_iter().enumerate().rev() {
                 let child_source = join(&entries[index].source_path, &child.name);
                 let kind = EntryKind::of(&child);
-                if kind.is_omitted_in_trees() {
+                let cause = match refused.remove(&position) {
+                    Some(reason) => Some(OmitCause::Refused(reason)),
+                    None if kind.is_omitted_in_trees() => Some(OmitCause::Kind),
+                    None => None,
+                };
+                if let Some(cause) = cause {
                     budget.reserve_auxiliary_path(&child_source)?;
                     entries[index].omitted.push(omitted.len());
                     omitted.push(OmittedEntry {
                         source_path: child_source,
                         listed: child,
                         kind,
+                        cause,
                     });
                     continue;
                 }
@@ -301,19 +279,22 @@ impl TransferPlan {
             if !entry.source.is_dir {
                 continue;
             }
-            let listed = backend.list_dir(&entry.source_path).map_err(|error| {
-                format!(
-                    "source tree changed before transfer: {}: {error}",
-                    entry.source_path
-                )
-            })?;
-            if listed.len() != entry.children.len() + entry.omitted.len() {
+            let listing =
+                super::tree_guard::listing(backend, &entry.source_path).map_err(|error| {
+                    format!(
+                        "source tree changed before transfer: {}: {error}",
+                        entry.source_path
+                    )
+                })?;
+            if listing.entries.len() + listing.omitted.len()
+                != entry.children.len() + entry.omitted.len()
+            {
                 return Err(format!(
                     "source tree child count changed before transfer: {}",
                     entry.source_path
                 ));
             }
-            validate_listed_names(&entry.source_path, &listed)?;
+            validate_listed_names(&entry.source_path, &listing.entries)?;
             let mut expected: HashMap<&str, usize> = entry
                 .children
                 .iter()
@@ -327,9 +308,22 @@ impl TransferPlan {
                     (omission.listed.name.as_str(), omission)
                 })
                 .collect();
-            for child in listed {
+            for omission in &listing.omitted {
+                if !skipped
+                    .remove(omission.rel.as_str())
+                    .is_some_and(|planned| matches!(planned.cause, OmitCause::Unlisted(_)))
+                {
+                    return Err(format!(
+                        "source tree changed before transfer: {}/{}: {}",
+                        entry.source_path, omission.rel, omission.detail
+                    ));
+                }
+            }
+            for child in listing.entries {
                 if let Some(omission) = skipped.remove(child.name.as_str()) {
-                    if EntryKind::of(&child) != omission.kind {
+                    if EntryKind::of(&child) != omission.kind
+                        || matches!(omission.cause, OmitCause::Unlisted(_))
+                    {
                         return Err(format!(
                             "source changed type before transfer: {}",
                             omission.source_path
@@ -441,6 +435,24 @@ impl TransferPlan {
     ) -> Result<(), String> {
         super::tree_destination::validate_parent_collision(self, backend, index)
     }
+}
+
+/// The detail of an entry a tolerant listing could not name, which the plan
+/// leaves out and reports; `None` for an entry that vanished meanwhile (it
+/// is no child any more). An unreadable entry fails the plan as before.
+fn unlisted_detail(directory: &str, omission: &VfsOmission) -> Result<Option<String>, String> {
+    match omission.reason {
+        OmissionReason::Vanished => Ok(None),
+        OmissionReason::Unrepresentable => Ok(Some(omission.detail.clone())),
+        _ => Err(format!(
+            "preflight list {directory}: {}: {}",
+            omission.rel, omission.detail
+        )),
+    }
+}
+
+fn leaf(path: &str) -> &str {
+    path.trim_end_matches('/').rsplit('/').next().unwrap_or("")
 }
 
 fn collect_destination_ancestors(

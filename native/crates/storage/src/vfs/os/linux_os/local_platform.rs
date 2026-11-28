@@ -15,6 +15,8 @@ mod review_task_local_guard_tests;
 mod review_task_mountinfo_tests;
 #[path = "stage.rs"]
 mod stage;
+#[path = "stored_name.rs"]
+mod stored_name;
 #[path = "volume_id.rs"]
 mod volume_id;
 
@@ -51,8 +53,11 @@ pub fn volume_key(path: &str) -> String {
     }
 }
 
+/// The name the filesystem stores rather than the spelling used to address
+/// it: on FAT and exFAT (`stored_name`) the listed spelling of an entry
+/// looked up in another case, elsewhere the addressed name itself.
 pub fn reported_name(path: &Path) -> Option<OsString> {
-    path.file_name().map(OsString::from)
+    stored_name::reported_name(path)
 }
 
 pub fn remove_file_like(path: &std::path::Path) -> std::io::Result<()> {
@@ -126,10 +131,15 @@ pub fn filesystem_profile(path: &Path) -> std::io::Result<super::fs_profile::FsP
     let mut profile = super::fs_profile::linux_profile(fs_type);
     if cfg!(target_os = "android") {
         if let Some(lower) = android_lower_type(&mounts, &resolved) {
-            profile.limits = super::fs_profile::linux_profile(lower).limits;
+            let below = super::fs_profile::linux_profile(lower);
+            profile.limits = below.limits;
+            profile.names = below.names;
         }
     } else if let Some(lower) = mount.and_then(volume_id::fuse_block_type) {
-        profile.limits = super::fs_profile::linux_profile(&lower).limits;
+        // The name rules (case folding, U11) are the filesystem's below FUSE too.
+        let below = super::fs_profile::linux_profile(&lower);
+        profile.limits = below.limits;
+        profile.names = below.names;
         // exfat-fuse stores time_t and drops tv_nsec in exfat_utimes.
         // The on-disk 10 ms format does not describe this driver API.
         if lower == "exfat" {

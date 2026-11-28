@@ -105,6 +105,12 @@ pub fn display_path(path: &Path) -> String {
 pub fn can_request_access(_root: &str) -> bool {
     false
 }
+
+/// A Windows folder another volume is mounted in (plan 2026-11-27, U16); a
+/// Linux mount point is an ordinary directory to the link checks.
+pub fn is_volume_mount_point(_path: &Path) -> bool {
+    false
+}
 #[cfg(not(target_os = "android"))]
 pub fn request_access(_root: &str) -> Result<bool, String> {
     Err("Zusätzliche Leserechte müssen unter Linux am Dateisystem gewährt werden".into())

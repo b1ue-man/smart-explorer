@@ -1,6 +1,24 @@
 //! Descriptor-relative recovery with verified private capture before deletion.
+//!
+//! Removable media (2026-11-27):
+//! - U1: FAT, exFAT, NTFS and FUSE drivers may take owner and mode from the
+//!   mount (`uid=`, `dmask=`), and then refuse the owner-private capture
+//!   folder. There the app's own stage or quarantine is removed directly:
+//!   `unlinkat` relative to the held parent, right after its entry was
+//!   confirmed to be the held object (device and inode). The private folder
+//!   adds nothing on such a volume: the mount, not the entry, decides who may
+//!   write each name on it. Other filesystems keep the refusal.
+//! - U3: a restore without replacement where the filesystem lacks
+//!   `RENAME_NOREPLACE` (FUSE without rename2, such as ntfs-3g: `EINVAL`)
+//!   takes the way `publish_no_replace` takes, through the held parent.
 use crate::local_access::{ConfinedDirectory, DirectoryHandle};
-use std::{ffi::OsStr, fs::File, io, os::unix::io::AsRawFd, path::Path};
+use std::{
+    ffi::OsStr,
+    fs::File,
+    io,
+    os::unix::{fs::MetadataExt, io::AsRawFd},
+    path::{Path, PathBuf},
+};
 
 pub fn recover_transfer_child(
     parent: &ConfinedDirectory,
@@ -16,10 +34,10 @@ pub fn recover_transfer_child(
         // No byte is destroyed by restore. A child exchanged in the narrow
         // check/rename interval is detected afterwards and put back without
         // replacing a subsequently created entry.
-        parent.rename(name, parent, destination, false)?;
+        rename_back(parent, name, destination)?;
         let reached = parent.entry(destination)?;
         if crate::copy::local_file_identity_handle(&reached)? != expected_identity {
-            return Err(match parent.rename(destination, parent, name, false) {
+            return Err(match rename_back(parent, destination, name) {
                 Ok(()) => changed(),
                 Err(error) => io::Error::new(io::ErrorKind::InvalidData,
                     format!("transfer recovery source changed; retained at {destination:?}; rollback failed: {error}")),
@@ -32,7 +50,10 @@ pub fn recover_transfer_child(
     // directory and validates it there before any deletion can occur.
     let anchor = format!("/proc/self/fd/{}/.", parent.file().as_raw_fd());
     let directory = DirectoryHandle::open_root(Path::new(&anchor))?;
-    let mut captured = directory.quarantine_regular_child(name, &expected)?;
+    let mut captured = match directory.quarantine_regular_child(name, &expected) {
+        Ok(captured) => captured,
+        Err(refusal) => return remove_uncapturable(parent, name, &expected, refusal),
+    };
     let verified = crate::copy::local_file_identity_handle(captured.file()).and_then(|identity| {
         if identity == expected_identity {
             Ok(())
@@ -89,9 +110,9 @@ pub fn recover_transfer_child_live(
         return Err(changed());
     }
     if let Some(destination) = destination {
-        parent.rename(name, parent, destination, false)?;
+        rename_back(parent, name, destination)?;
         if super::file_identity(&parent.entry(destination)?)? != identity {
-            return Err(match parent.rename(destination, parent, name, false) {
+            return Err(match rename_back(parent, destination, name) {
                 Ok(()) => changed(),
                 Err(error) => io::Error::new(io::ErrorKind::InvalidData, format!(
                     "live transfer source changed; retained at {destination:?}; rollback failed: {error}")),
@@ -103,7 +124,10 @@ pub fn recover_transfer_child_live(
     let directory = DirectoryHandle::open_root(Path::new(&anchor))?;
     // The original File stays alive through capture and disposal. The private
     // capture verifies this same live inode before permitting any deletion.
-    let mut captured = directory.quarantine_regular_child(name, expected)?;
+    let mut captured = match directory.quarantine_regular_child(name, expected) {
+        Ok(captured) => captured,
+        Err(refusal) => return remove_uncapturable(parent, name, expected, refusal),
+    };
     captured.dispose().map_err(|error| {
         io::Error::new(
             error.kind(),
@@ -115,3 +139,76 @@ pub fn recover_transfer_child_live(
     })?;
     parent.file().sync_all()
 }
+
+/// U1: the capture was refused before anything moved (a folder that cannot
+/// be owner-private, a rename the filesystem cannot make without replacing)
+/// on a filesystem whose modes may come from the mount: the held entry is
+/// removed directly. Any other refusal, or the same one on another
+/// filesystem, is returned unchanged. A failed direct removal keeps the
+/// refusal's kind, so no caller reads it as an already vanished entry.
+fn remove_uncapturable(
+    parent: &ConfinedDirectory,
+    name: &OsStr,
+    expected: &File,
+    refusal: io::Error,
+) -> io::Result<()> {
+    let mount_modes = matches!(
+        refusal.kind(),
+        io::ErrorKind::PermissionDenied | io::ErrorKind::Unsupported
+    ) && super::linux_fs_kind::magic(parent.file())
+        .is_ok_and(super::linux_fs_kind::owner_modes_unstorable);
+    if !mount_modes {
+        return Err(refusal);
+    }
+    remove_own_file(parent, name, expected).map_err(|error| {
+        io::Error::new(
+            refusal.kind(),
+            format!("{refusal}; direct removal of the own entry failed: {error}"),
+        )
+    })
+}
+
+/// Unlinks `name` in the held parent only while it names the held regular
+/// file `expected` (same device and inode; the held handle keeps the inode
+/// from being reused), then flushes the parent.
+fn remove_own_file(parent: &ConfinedDirectory, name: &OsStr, expected: &File) -> io::Result<()> {
+    let held = expected.metadata()?;
+    let current = parent.entry(name)?.metadata()?;
+    if !current.is_file() || current.dev() != held.dev() || current.ino() != held.ino() {
+        return Err(changed());
+    }
+    parent.remove(name, false)?;
+    parent.file().sync_all()
+}
+
+/// U3: `renameat2(RENAME_NOREPLACE)` relative to the held parent; where the
+/// filesystem lacks the flag, `publish_no_replace` through the held
+/// descriptor: the look at the destination, then the ladder of
+/// `android_fs::rename_no_replace` (a create-only hard link, else a checked
+/// rename only for the app's own randomly named stage as the source, the
+/// residual risk documented there).
+fn rename_back(parent: &ConfinedDirectory, from: &OsStr, to: &OsStr) -> io::Result<()> {
+    match parent.rename(from, parent, to, false) {
+        Err(error)
+            if matches!(
+                error.raw_os_error(),
+                Some(libc::EINVAL | libc::ENOSYS | libc::EOPNOTSUPP)
+            ) =>
+        {
+            rename_through_anchor(parent, from, to)
+        }
+        result => result,
+    }
+}
+
+/// The fallback of `rename_back`: both names spelled below the held
+/// parent's descriptor, so a renamed or replaced ancestor path is never
+/// followed.
+fn rename_through_anchor(parent: &ConfinedDirectory, from: &OsStr, to: &OsStr) -> io::Result<()> {
+    let anchor = PathBuf::from(format!("/proc/self/fd/{}", parent.file().as_raw_fd()));
+    super::linux_publish::publish_no_replace(&anchor.join(from), &anchor.join(to))
+}
+
+#[cfg(test)]
+#[path = "linux_removable_tests.rs"]
+mod removable_tests;

@@ -13,11 +13,26 @@ pub(super) struct TransferReceipt {
     resume: bool,
 }
 
-/// A link or special file inside a copied tree that was not transferred.
+/// An entry inside a copied tree that was not transferred: a link or
+/// special file, or (with `reason`) an entry the destination cannot store or
+/// the source listing cannot name.
 #[derive(Debug)]
 pub(super) struct Omission {
     pub(super) path: String,
     pub(super) kind: EntryKind,
+    /// Why it was left out (German), where it is no link or special file.
+    pub(super) reason: Option<String>,
+}
+
+impl Omission {
+    /// The omission of a planned entry, with its reason.
+    pub(super) fn planned(omitted: &super::tree_plan::OmittedEntry) -> Self {
+        Self {
+            path: omitted.source_path.clone(),
+            kind: omitted.kind,
+            reason: omitted.reason(),
+        }
+    }
 }
 
 /// Result of `se cp`/`se mv` and the MCP `copy`/`move` jobs.
@@ -49,12 +64,13 @@ impl TreeOutcome {
         let mut lines: Vec<String> = self
             .omitted
             .iter()
-            .map(|omission| match omission.kind {
-                EntryKind::Special => format!(
+            .map(|omission| match (&omission.reason, omission.kind) {
+                (Some(reason), _) => format!("nicht übertragen: {}: {reason}", omission.path),
+                (None, EntryKind::Special) => format!(
                     "skipped special file (FIFO, socket or device): {}",
                     omission.path
                 ),
-                _ => format!(
+                (None, _) => format!(
                     "skipped link (links inside a tree are not followed or recreated): {}",
                     omission.path
                 ),
@@ -156,16 +172,9 @@ pub(super) fn copy_entry_with(
 }
 
 impl TransferReceipt {
-    /// Links and special files the copy left out.
+    /// Entries the copy left out (links, special files, refused entries).
     pub(super) fn omissions(&self) -> Vec<Omission> {
-        self.plan
-            .omitted
-            .iter()
-            .map(|omitted| Omission {
-                path: omitted.source_path.clone(),
-                kind: omitted.kind,
-            })
-            .collect()
+        self.plan.omitted.iter().map(Omission::planned).collect()
     }
 
     /// Destination path of the transferred root.

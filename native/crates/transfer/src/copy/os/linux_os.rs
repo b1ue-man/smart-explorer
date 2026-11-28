@@ -69,6 +69,8 @@ pub(super) fn hard_link(source: &Path, target: &Path) -> io::Result<()> {
 mod linux_direct;
 #[path = "linux_direct_plan.rs"]
 mod linux_direct_plan;
+#[path = "linux_fs_kind.rs"]
+mod linux_fs_kind;
 #[path = "linux_plain.rs"]
 mod linux_plain;
 #[path = "linux_probe.rs"]
@@ -176,6 +178,7 @@ pub(super) fn require_local_publication_observation(parent: &File) -> io::Result
             | 0x2011_bab0
             | 0xf2f5_2010
             | 0x5346_544e
+            | 0x7366_746e
     ) {
         Ok(())
     } else {
@@ -385,8 +388,11 @@ pub(super) fn copy_by_path(
 /// direct I/O falls back to the ranges below before a byte has moved. Callers
 /// with `parallel == 1` (server copies, small files) never copy directly;
 /// durable copies (moves across volumes, replacements) may use ranges since
-/// M15 and sync the stage afterwards (`staging::stage_copy`). `None` when
-/// canceled.
+/// M15 and sync the stage afterwards (`staging::stage_copy`). A stage on FAT
+/// or exFAT is filled by one stream from front to back whatever `parallel`
+/// says: there a pre-sized stage or a range written beyond the current end
+/// is zero-filled first (`linux_fs_kind::extends_by_zero_fill`), which would
+/// write the file twice. `None` when canceled.
 pub(super) fn copy_handles(
     reader: &File,
     writer: &mut File,
@@ -394,7 +400,7 @@ pub(super) fn copy_handles(
     progress: &mut dyn FnMut(u64),
     parallel: usize,
 ) -> io::Result<Option<u64>> {
-    if parallel > 1 {
+    if parallel > 1 && !linux_fs_kind::zero_fill_target(writer) {
         // Every thread needs at least one transfer part of its own.
         let facts = reader.metadata()?;
         let size = facts.len();

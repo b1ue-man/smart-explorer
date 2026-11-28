@@ -116,7 +116,9 @@ pub(super) fn ensure_plain_component(path: &Path) -> io::Result<()> {
 }
 
 fn validate_plain_component(path: &Path, metadata: &std::fs::Metadata) -> io::Result<()> {
-    if crate::local_access::metadata_is_link_like(path, metadata) {
+    if crate::local_access::metadata_is_link_like(path, metadata)
+        && !crate::local_access::is_volume_mount_point(path)
+    {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             format!(
@@ -138,5 +140,4 @@ fn validate_plain_component(path: &Path, metadata: &std::fs::Metadata) -> io::Re
 mod mkdir_tests {
     use super::*;
     use std::os::unix::fs::symlink;
-
 }

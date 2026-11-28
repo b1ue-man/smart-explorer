@@ -1,4 +1,4 @@
-use crate::vfs::{Backend, VfsMeta};
+use crate::vfs::{Backend, Scheme, VfsListing, VfsMeta};
 use std::collections::HashSet;
 use std::io;
 
@@ -111,6 +111,19 @@ pub(super) fn validate_listing(
         ))
     } else {
         Ok(())
+    }
+}
+
+/// A folder listing for the terminal commands. On a local disk the tolerant
+/// one: an entry whose name is no path here (not valid Unicode, a name Win32
+/// cannot address, U9) is named among the omissions instead of failing the
+/// folder. Elsewhere the backend's own listing, unchanged: remote listings
+/// keep the names their commands address (Google Drive's projected names).
+pub(super) fn listing(backend: &dyn Backend, path: &str) -> io::Result<VfsListing> {
+    if backend.scheme() == Scheme::Local && backend.is_local() {
+        crate::vfs::list_dir_tolerant(backend, path)
+    } else {
+        backend.list_dir(path).map(VfsListing::complete)
     }
 }
 

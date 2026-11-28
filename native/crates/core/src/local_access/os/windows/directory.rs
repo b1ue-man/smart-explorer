@@ -132,6 +132,13 @@ fn read_directory_with_query<'a>(
     query: impl FnMut(&File, FILE_INFO_BY_HANDLE_CLASS, &mut [u64]) -> io::Result<()> + Send + 'a,
 ) -> io::Result<Directory<'a>> {
     let file = open(path, FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES)?;
+    // The folder a volume is mounted in lists that volume's root (U16); the
+    // folder's own (empty) directory is never what a location names.
+    let (file, _mount_folder) = super::volume_mount::enter_mounted(
+        file,
+        crate::local_access::protocol::ReadKind::Directory,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+    )?;
     read_directory_from_file(path, file, layout, true, query)
 }
 
@@ -163,8 +170,10 @@ fn read_directory_from_file<'a>(
         }
     }
     // Link-like children are classified (and skipped) by the parent's
-    // listing; the directory the caller asked for is always entered, so a
-    // junction chosen as the scan root still works.
+    // listing. The handle is the entry itself: a junction or symbolic link
+    // named as the root lists its own (empty) directory, never its target;
+    // a folder a volume is mounted in was replaced by that volume's root
+    // before this (`volume_mount::enter_mounted`).
     let mut directory = Directory {
         path: path.to_path_buf(),
         file,

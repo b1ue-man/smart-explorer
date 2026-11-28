@@ -103,10 +103,21 @@ fn validate_directory_entries<'a>(
             ));
         }
     }
-    let listed = backend
-        .list_dir(directory)
+    // Tolerant: an entry the listing cannot name (U9) is no planned child,
+    // unless it carries a planned name (then the destination is unknown).
+    let listing = super::tree_guard::listing(backend, directory)
         .map_err(|error| format!("cannot inspect destination directory {directory}: {error}"))?;
-    for child in &listed {
+    if let Some(omission) = listing
+        .omitted
+        .iter()
+        .find(|omission| expected_names.contains_key(omission.rel.as_str()))
+    {
+        return Err(format!(
+            "cannot inspect destination directory {directory}: {}: {}",
+            omission.rel, omission.detail
+        ));
+    }
+    for child in &listing.entries {
         crate::vfs::validate_child_name(&child.name).map_err(|error| error.to_string())?;
         let Some((_, state, seen)) = expected_names.get_mut(child.name.as_str()) else {
             continue;
@@ -170,6 +181,7 @@ fn inspectable_parent(backend: &dyn Backend, path: &str) -> Option<String> {
     if trimmed.is_empty()
         || trimmed == "."
         || (trimmed.len() == 2 && trimmed.as_bytes()[1] == b':')
+        || super::ops::is_verbatim_root(trimmed)
         || trimmed
             .strip_prefix("//")
             .is_some_and(|rest| rest.split('/').filter(|part| !part.is_empty()).count() <= 2)

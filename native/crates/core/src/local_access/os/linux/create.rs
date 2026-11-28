@@ -10,6 +10,12 @@ use super::{validate_name, DirectoryHandle};
 
 impl DirectoryHandle {
     /// Exclusively create a 0700 directory; never adopt an existing child.
+    ///
+    /// A directory this call created but cannot confirm as owner-private is
+    /// removed again (`rmdir` of exactly the opened, still empty object): FAT,
+    /// exFAT, NTFS and FUSE drivers take owner and mode from the mount
+    /// (`uid=`, `dmask=`), and an empty `.held.se-recycle-<hex>` folder left
+    /// behind on every attempt would be the only trace of the refusal.
     pub fn create_private_child(&self, name: &OsStr) -> io::Result<Self> {
         validate_name(name)?;
         let c_name = child_name(name)?;
@@ -18,7 +24,21 @@ impl DirectoryHandle {
             return Err(io::Error::last_os_error());
         }
         let child = self.open_child(name)?;
-        verify_private(&child.metadata()?)?;
+        if let Err(refusal) = child
+            .metadata()
+            .and_then(|metadata| verify_private(&metadata))
+        {
+            return Err(match self.remove_empty_child(name, child) {
+                Ok(()) => refusal,
+                Err(cleanup) => io::Error::new(
+                    refusal.kind(),
+                    format!(
+                        "{refusal}; the created directory {} was kept: {cleanup}",
+                        self.path.join(name).display()
+                    ),
+                ),
+            });
+        }
         Ok(child)
     }
 

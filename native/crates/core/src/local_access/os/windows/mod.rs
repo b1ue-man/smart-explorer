@@ -10,6 +10,7 @@ mod directory_rename;
 #[doc(hidden)]
 pub mod directory_watch;
 mod elevation;
+mod held_delete;
 mod image_lock;
 /// MFT direct reader for local, elevated size analyses (`LocalElevatedScan`).
 pub mod mft;
@@ -18,14 +19,17 @@ mod pipe;
 mod privilege;
 mod read;
 mod regular;
+mod volume_mount;
 
 pub use directory::classify_open_file;
 pub use directory_handle::{secure_private_handle, DirectoryHandle, QuarantinedChild};
 
 pub use directory::{metadata_class, metadata_is_link_like, read_directory};
 pub use elevation::{can_request_access, request_access, run_helper_if_requested};
-pub use paths::{display_path, normalize_scan_root};
+pub use held_delete::delete_held;
+pub use paths::{display_path, normalize_scan_root, verbatim_volume_root};
 pub use privilege::{begin_scan, parallel_scan_allowed};
+pub use volume_mount::is_volume_mount_point;
 
 /// Windows walks stay on one volume through their link boundaries.
 pub fn device_of(_path: &std::path::Path) -> Option<u64> {
