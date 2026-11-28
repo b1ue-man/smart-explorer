@@ -4,6 +4,8 @@
 //! over folders and file groups of a busy one). Links and special files are
 //! never entered or read. The tree is a trait, so the same walk searches a
 //! local folder (the app, the SSH agent) and any backend (`vfs::content_search`).
+//! With `ContentQuery::respect_ignore_files` every folder's ignore files
+//! (`content_ignore.rs`) leave out what they exclude, read through the tree.
 use std::io::{self, Read};
 use std::sync::atomic::AtomicBool;
 
@@ -12,6 +14,13 @@ use super::content_match::ContentMatcher;
 use super::content_query::{ContentQuery, ContentSummary, SkipReason};
 use super::content_run::{ContentEmit, ContentRun};
 use super::ordered_walk::{self, Local, Output};
+
+#[path = "content_ignore.rs"]
+mod ignore_rules;
+pub use ignore_rules::{
+    local_folder_files, local_parents, read_ignore_file, IgnoreChain, IgnoreFiles, ParentIgnore,
+    EXCLUDE_PARTS, GITIGNORE_FILE, GIT_ENTRY, IGNORE_FILE, IGNORE_FILE_MAX,
+};
 
 /// Files one job searches; a folder with more becomes several jobs, so idle
 /// threads share a large folder.
@@ -51,12 +60,19 @@ pub trait ContentTree: Sync {
     fn list(&self, rel: &str) -> io::Result<Vec<TreeEntry>>;
     /// The content of the file `rel` (listed as `entry`), without following a link.
     fn open(&self, rel: &str, entry: &TreeEntry) -> io::Result<Box<dyn Read + '_>>;
+    /// The ignore files of the folders above the root, nearest first, where
+    /// the tree can read them (`respect_ignore_files`). None by default: a
+    /// backend's root is the edge of what the search reads.
+    fn parent_ignores(&self) -> Vec<ParentIgnore> {
+        Vec::new()
+    }
 }
 
 enum Job {
     Folder {
         rel: String,
         level: usize,
+        ignores: IgnoreChain,
     },
     Files {
         folder: String,
@@ -107,9 +123,15 @@ pub fn search_tree(
         let searched = run.search_reader(&file.name, file.size, file.mtime_ms, &mut open);
         return run.finish(searched.map(drop));
     }
+    let ignores = if query.respect_ignore_files {
+        IgnoreChain::above_root(&tree.parent_ignores())
+    } else {
+        IgnoreChain::default()
+    };
     let roots = vec![Job::Folder {
         rel: String::new(),
         level: 0,
+        ignores,
     }];
     let walked = ordered_walk::run(
         roots,
@@ -117,7 +139,11 @@ pub fn search_tree(
         cancel,
         || Direct,
         |job, local: &mut Local<Job>, _: &mut Direct| match job {
-            Job::Folder { rel, level } => visit_folder(tree, &run, &filter, (&rel, level), local),
+            Job::Folder {
+                rel,
+                level,
+                ignores,
+            } => visit_folder(tree, &run, &filter, (&rel, level, &ignores), local),
             Job::Files { folder, files } => search_files(tree, &run, &folder, &files),
         },
     );
@@ -128,7 +154,7 @@ fn visit_folder(
     tree: &dyn ContentTree,
     run: &ContentRun<'_>,
     filter: &PathFilter,
-    (rel, level): (&str, usize),
+    (rel, level, ignores): (&str, usize, &IgnoreChain),
     local: &mut Local<Job>,
 ) -> io::Result<()> {
     halt_walk(run)?;
@@ -141,21 +167,32 @@ fn visit_folder(
             return Ok(());
         }
     };
+    let ignores = if run.query.respect_ignore_files {
+        ignores.child(rel, &tree_folder_files(tree, rel, &entries))
+    } else {
+        ignores.clone()
+    };
     let search_here = filter.search_in_folder(rel);
     let mut files = Vec::new();
     for entry in entries {
         match entry.kind {
             TreeKind::Folder => {
                 let child = join_rel(rel, &entry.name);
-                if filter.admit_folder(&child, level + 1, &entry.name, entry.hidden) {
+                if filter.admit_folder(&child, level + 1, &entry.name, entry.hidden)
+                    && !ignores.ignored(&child, true)
+                {
                     local.push(Job::Folder {
                         rel: child,
                         level: level + 1,
+                        ignores: ignores.clone(),
                     });
                 }
             }
             TreeKind::File => {
-                if search_here && filter.admit_file(&entry.name) {
+                if search_here
+                    && filter.admit_file(&entry.name)
+                    && !ignores.ignored(&join_rel(rel, &entry.name), false)
+                {
                     files.push(entry);
                 }
             }
@@ -173,6 +210,50 @@ fn visit_folder(
         });
     }
     Ok(())
+}
+
+/// The ignore files the folder `rel` holds (listed as `entries`), read
+/// through the tree; `.git/info/exclude` only below a `.git` folder.
+fn tree_folder_files(tree: &dyn ContentTree, rel: &str, entries: &[TreeEntry]) -> IgnoreFiles {
+    let find = |entries: &[TreeEntry], name: &str, kind: TreeKind| {
+        entries
+            .iter()
+            .find(|entry| entry.name == name && entry.kind == kind)
+            .cloned()
+    };
+    let read = |rel: &str, entry: &TreeEntry| {
+        let mut reader = tree.open(rel, entry).ok()?;
+        read_ignore_file(&mut reader)
+    };
+    let file = |name: &str| {
+        let entry = find(entries, name, TreeKind::File)?;
+        read(&join_rel(rel, name), &entry)
+    };
+    let git = entries.iter().find(|entry| entry.name == GIT_ENTRY);
+    let exclude = match git {
+        Some(entry) if entry.kind == TreeKind::Folder => (|| {
+            let git_rel = join_rel(rel, GIT_ENTRY);
+            let info_rel = join_rel(&git_rel, EXCLUDE_PARTS[0]);
+            find(
+                &tree.list(&git_rel).ok()?,
+                EXCLUDE_PARTS[0],
+                TreeKind::Folder,
+            )?;
+            let entry = find(
+                &tree.list(&info_rel).ok()?,
+                EXCLUDE_PARTS[1],
+                TreeKind::File,
+            )?;
+            read(&join_rel(&info_rel, EXCLUDE_PARTS[1]), &entry)
+        })(),
+        _ => None,
+    };
+    IgnoreFiles {
+        ignore: file(IGNORE_FILE),
+        gitignore: file(GITIGNORE_FILE),
+        exclude,
+        has_git: git.is_some(),
+    }
 }
 
 fn search_files(

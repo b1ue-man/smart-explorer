@@ -3,11 +3,24 @@
 //! The walk reports links and special files whose names match, as such, and
 //! never enters a link (loops such as `sub/loop -> ..` and targets outside
 //! the searched tree stay out of the result).
+//!
+//! Beyond names (plan docs/plaene/2026-11-28-ersetzen-masken-shell, part C):
+//! a glob with `/` or `**` matches the relative path (`search_glob.rs`),
+//! `gitignore` leaves out what the ignore files exclude (`search_ignore.rs`),
+//! and `sort` orders the hits by path or by modification time (newest first).
+//! A search next to the data then still filters names there (the last path
+//! component where it is a plain glob) and the rest is checked here.
 use super::entry_kind::EntryKind;
 use super::target::Target;
 use crate::agent_proto::SearchSpec;
 use crate::vfs::{Backend, SearchHit, VfsMeta};
+use serde_json::{json, Value};
 use std::sync::atomic::{AtomicBool, Ordering};
+
+#[path = "search_glob.rs"]
+mod glob;
+#[path = "search_ignore.rs"]
+mod ignore_files;
 
 const MAX_SEARCH_NODES: u64 = 1_000_000;
 const MAX_SEARCH_TEXT_BYTES: u64 = 128 * 1024 * 1024;
@@ -60,6 +73,48 @@ impl SearchBudget {
     }
 }
 
+/// The order of the hits.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum SearchSort {
+    /// As the search finds them (streamed).
+    #[default]
+    Found,
+    /// By relative path.
+    Name,
+    /// By modification time, newest first (then by path).
+    Mtime,
+}
+
+impl SearchSort {
+    pub(super) fn parse(text: &str) -> Option<Self> {
+        match text.trim().to_ascii_lowercase().as_str() {
+            "" | "none" | "found" => Some(Self::Found),
+            "name" | "path" => Some(Self::Name),
+            "mtime" | "modified" | "time" => Some(Self::Mtime),
+            _ => None,
+        }
+    }
+
+    pub(super) fn key(self) -> &'static str {
+        match self {
+            Self::Found => "none",
+            Self::Name => "name",
+            Self::Mtime => "mtime",
+        }
+    }
+}
+
+/// One name search: `se search` and the MCP `search` tool.
+#[derive(Clone, Debug, Default)]
+pub(super) struct SearchOptions {
+    pub(super) query: String,
+    pub(super) glob: bool,
+    pub(super) max_results: u64,
+    pub(super) want_dirs: bool,
+    pub(super) sort: SearchSort,
+    pub(super) gitignore: bool,
+}
+
 pub(crate) fn search(
     target: &Target,
     query: &str,
@@ -72,6 +127,134 @@ pub(crate) fn search(
     search_with(target, &spec, &cancel, &mut |found| {
         println!("{}\t{}\t{}", found.kind.marker(), found.size, found.rel)
     })
+}
+
+/// `se search` with every option: the former lines (`marker`, size, path)
+/// or, with `json`, one JSON object per hit as the MCP tool streams it.
+pub(super) fn search_cli(
+    target: &Target,
+    options: &SearchOptions,
+    json: bool,
+) -> Result<(), String> {
+    let cancel = AtomicBool::new(false);
+    search_found(target, options, &cancel, &mut |found| {
+        if json {
+            println!("{}", hit_json(&target.path, &found));
+        } else {
+            println!("{}\t{}\t{}", found.kind.marker(), found.size, found.rel)
+        }
+    })
+}
+
+/// One hit as JSON: `path`, `relative`, `type`, `size`, `mtime_ms`.
+pub(super) fn hit_json(root: &str, found: &Found) -> Value {
+    json!({
+        "path": super::ops::join(root, &found.rel),
+        "relative": found.rel,
+        "type": found.kind.label(),
+        "size": found.size,
+        "mtime_ms": found.mtime_ms,
+    })
+}
+
+/// Checks `options` before a search starts: an invalid path glob fails here.
+pub(super) fn check_options(options: &SearchOptions) -> Result<(), String> {
+    if options.glob && glob::is_path_glob(&options.query) {
+        glob::PathGlob::parse(&options.query)
+            .map_err(|error| format!("invalid glob `{}`: {error}", options.query))?;
+    }
+    Ok(())
+}
+
+/// The search of `options` below `target`, every hit to `sink`. Without a
+/// path glob, `gitignore` and `sort` it is exactly `search_with` (hits as
+/// they are found); otherwise hits are checked here, and with `sort` they
+/// are collected, ordered and cut to `max_results` at the end. Reaching
+/// `max_results` early sets `cancel` and ends with `Ok`.
+pub(super) fn search_found(
+    target: &Target,
+    options: &SearchOptions,
+    cancel: &AtomicBool,
+    sink: &mut dyn FnMut(Found),
+) -> Result<(), String> {
+    let path_glob = if options.glob && glob::is_path_glob(&options.query) {
+        Some(
+            glob::PathGlob::parse(&options.query)
+                .map_err(|error| format!("invalid glob `{}`: {error}", options.query))?,
+        )
+    } else {
+        None
+    };
+    let checked = path_glob.is_some() || options.gitignore;
+    if !checked && options.sort == SearchSort::Found {
+        let spec = search_spec(
+            &options.query,
+            options.glob,
+            options.max_results,
+            options.want_dirs,
+        );
+        return search_with(target, &spec, cancel, sink);
+    }
+    let spec = match &path_glob {
+        Some(path_glob) => match path_glob.name_hint() {
+            Some(hint) => search_spec(&hint, true, 0, options.want_dirs),
+            None => search_spec("", false, 0, options.want_dirs),
+        },
+        None => search_spec(&options.query, options.glob, 0, options.want_dirs),
+    };
+    let ignores = options
+        .gitignore
+        .then(|| ignore_files::BackendIgnores::new(&*target.backend, &target.path));
+    let limit = options.max_results;
+    let mut count = 0u64;
+    let mut reached = false;
+    let mut collected = Vec::new();
+    let outcome = search_inner(
+        target,
+        &spec,
+        cancel,
+        ignores.as_ref(),
+        &mut |found: Found| {
+            if reached
+                || path_glob
+                    .as_ref()
+                    .is_some_and(|path_glob| !path_glob.matches(&found.rel))
+                || ignores.as_ref().is_some_and(|ignores| {
+                    ignores.ignored(&found.rel, found.kind == EntryKind::Dir)
+                })
+            {
+                return;
+            }
+            if options.sort != SearchSort::Found {
+                collected.push(found);
+                return;
+            }
+            count += 1;
+            sink(found);
+            if limit != 0 && count >= limit {
+                reached = true;
+                cancel.store(true, Ordering::Relaxed);
+            }
+        },
+    );
+    match outcome {
+        Err(error) if !(reached && error == SEARCH_CANCELLED) => return Err(error),
+        _ => {}
+    }
+    match options.sort {
+        SearchSort::Found => {}
+        SearchSort::Name => collected.sort_by(|a, b| a.rel.cmp(&b.rel)),
+        SearchSort::Mtime => {
+            collected.sort_by(|a, b| b.mtime_ms.cmp(&a.mtime_ms).then_with(|| a.rel.cmp(&b.rel)))
+        }
+    }
+    if limit != 0 {
+        collected.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
+    }
+    for found in collected {
+        sink(found);
+    }
+    Ok(())
 }
 
 /// `want_dirs` adds matching directories to the matching files.
@@ -98,6 +281,17 @@ pub(super) fn search_with(
     target: &Target,
     spec: &SearchSpec,
     cancel: &AtomicBool,
+    sink: &mut dyn FnMut(Found),
+) -> Result<(), String> {
+    search_inner(target, spec, cancel, None, sink)
+}
+
+/// `search_with`; with `ignores` the walk does not enter ignored folders.
+fn search_inner(
+    target: &Target,
+    spec: &SearchSpec,
+    cancel: &AtomicBool,
+    ignores: Option<&ignore_files::BackendIgnores<'_>>,
     sink: &mut dyn FnMut(Found),
 ) -> Result<(), String> {
     if target.backend.supports_search() {
@@ -146,6 +340,7 @@ pub(super) fn search_with(
         budget: SearchBudget::default(),
         sink,
         cancel,
+        ignores,
     }
     .directory(&target.path, "", 0)
 }
@@ -157,6 +352,7 @@ struct Walk<'a, 's> {
     budget: SearchBudget,
     sink: &'a mut (dyn FnMut(Found) + 's),
     cancel: &'a AtomicBool,
+    ignores: Option<&'a ignore_files::BackendIgnores<'a>>,
 }
 
 impl Walk<'_, '_> {
@@ -198,8 +394,13 @@ impl Walk<'_, '_> {
                     mtime_ms: child.mtime_ms,
                 });
             }
-            // Only real directories are entered; a link is reported, not followed.
-            if kind == EntryKind::Dir {
+            // Only real directories are entered; a link is reported, not
+            // followed; an ignored folder is not entered.
+            if kind == EntryKind::Dir
+                && !self
+                    .ignores
+                    .is_some_and(|ignores| ignores.ignored(&rel, true))
+            {
                 self.directory(&path, &rel, depth + 1)?;
             }
         }

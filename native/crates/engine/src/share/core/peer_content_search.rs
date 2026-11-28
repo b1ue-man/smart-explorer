@@ -31,7 +31,12 @@ pub(in crate::share) fn search(
     if cancel.load(Ordering::Relaxed) {
         return Err(io::ErrorKind::Interrupted.into());
     }
-    if !peer_stream::features(backend, root)?.content_search_v1 {
+    let features = peer_stream::features(backend, root)?;
+    // A host without `content_search_ignore_v1` would drop the field and
+    // search ignored files: the search then reads through the backend.
+    if !features.content_search_v1
+        || (query.respect_ignore_files && !features.content_search_ignore_v1)
+    {
         return Ok(None);
     }
     let endpoint = backend.current_endpoint()?;

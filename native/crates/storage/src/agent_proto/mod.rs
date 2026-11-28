@@ -44,6 +44,21 @@ mod content_local;
 mod content_match;
 #[path = "core/content_query.rs"]
 mod content_query;
+#[path = "os/shared/content_replace.rs"]
+mod content_replace;
+#[path = "os/shared/content_replace_captures.rs"]
+mod content_replace_captures;
+#[path = "os/shared/content_replace_format.rs"]
+mod content_replace_format;
+#[path = "os/shared/content_replace_out.rs"]
+mod content_replace_out;
+#[path = "os/shared/content_replace_select.rs"]
+mod content_replace_select;
+#[cfg(test)]
+#[path = "os/shared/content_replace_tests.rs"]
+mod content_replace_tests;
+#[path = "os/shared/content_replace_text.rs"]
+mod content_replace_text;
 #[path = "os/shared/content_run.rs"]
 mod content_run;
 #[cfg(test)]
@@ -177,9 +192,15 @@ pub use content_match::ContentMatcher;
 pub use content_query::{
     ContentEvent, ContentQuery, ContentSummary, LineHit, SkipReason, TextMode, DEFAULT_LINE_BYTES,
 };
+pub use content_replace::{
+    HitRef, Pick, ReplaceEmit, ReplaceEvent, ReplacePreview, ReplaceProgram, ReplaceRequest,
+    ReplaceSelection, ReplaceSkip, ReplaceSummary, Replaced,
+};
 pub use content_run::{ContentEmit, ContentRun, FileOutcome};
 pub use content_walk::{
-    join_rel, prepare as prepare_content_search, search_tree, ContentTree, TreeEntry, TreeKind,
+    join_rel, local_folder_files, local_parents, prepare as prepare_content_search,
+    read_ignore_file, search_tree, ContentTree, IgnoreChain, IgnoreFiles, ParentIgnore, TreeEntry,
+    TreeKind, EXCLUDE_PARTS, GITIGNORE_FILE, GIT_ENTRY, IGNORE_FILE, IGNORE_FILE_MAX,
 };
 pub use credit::{
     busy_message, charged, credit_cost, parse_busy, window_target, RecvWindow, SendCredit,
@@ -190,7 +211,8 @@ pub use extension_parts::{
 };
 pub use features::{
     lz4_switched_off, server_version, server_version_with, service_slots, ServerFeatures,
-    LABEL_BATCH, LABEL_CONTENT_SEARCH, LABEL_CREDIT, LABEL_LZ4, LABEL_RANGE, LABEL_STAGE,
+    LABEL_BATCH, LABEL_CONTENT_SEARCH, LABEL_CONTENT_SEARCH_IGNORE, LABEL_CREDIT, LABEL_LZ4,
+    LABEL_RANGE, LABEL_STAGE,
 };
 pub use file_digest::{md5_cached, LocalReads};
 pub use folder_key::{

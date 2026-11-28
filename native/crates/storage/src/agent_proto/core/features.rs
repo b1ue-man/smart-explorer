@@ -55,6 +55,11 @@ pub const LABEL_TREE_ALLOCATED: &str = "tree-allocated-v1";
 /// through its backend (`vfs::content_search`, which reads the files where the
 /// peer does not search itself).
 pub const LABEL_CONTENT_SEARCH: &str = "content_search_v1";
+/// `ContentSearch` with `respect_ignore_files` (protocol 14): the server
+/// leaves out what `.gitignore`, `.ignore` and `.git/info/exclude` exclude,
+/// as ripgrep does. A client sends the flag only to a server that announced
+/// the label; otherwise it reads the files and filters itself.
+pub const LABEL_CONTENT_SEARCH_IGNORE: &str = "content_search_ignore_v1";
 /// Prefix of the label announcing the admitted concurrent requests.
 const LABEL_SLOTS: &str = "slots-";
 
@@ -74,7 +79,8 @@ pub fn lz4_switched_off() -> bool {
 
 /// The version text the SSH agent of this build announces: the labels of the
 /// service (`server_version_with`) plus `folder-reservation-v1`,
-/// `file-identity-v1`, `stage-mtime-v1`, `content_search_v1`, with batches
+/// `file-identity-v1`, `stage-mtime-v1`, `content_search_v1`,
+/// `content_search_ignore_v1`, with batches
 /// `batch-mtime-v1`, `range-v1` and, unless switched off for a test, `lz4-v1`. Each host advertises only
 /// the handlers it actually connects.
 pub fn server_version(batch: bool) -> String {
@@ -95,6 +101,8 @@ pub fn server_version(batch: bool) -> String {
     version.push_str(LABEL_TREE_ALLOCATED);
     version.push('.');
     version.push_str(LABEL_CONTENT_SEARCH);
+    version.push('.');
+    version.push_str(LABEL_CONTENT_SEARCH_IGNORE);
     if batch {
         version.push('.');
         version.push_str(LABEL_BATCH_MTIME);
@@ -168,6 +176,8 @@ pub struct ServerFeatures {
     pub tree_allocated: bool,
     /// `ContentSearch` (`content_search_v1`).
     pub content_search: bool,
+    /// `ContentSearch` with ignore files (`content_search_ignore_v1`).
+    pub content_search_ignore: bool,
     /// Requests the server admits at once, when it announced them.
     pub slots: Option<usize>,
     /// The background service (announces itself with a trailing `worker`).
@@ -206,6 +216,7 @@ impl ServerFeatures {
                 LABEL_LZ4 => features.lz4 = true,
                 LABEL_TREE_ALLOCATED => features.tree_allocated = true,
                 LABEL_CONTENT_SEARCH => features.content_search = true,
+                LABEL_CONTENT_SEARCH_IGNORE => features.content_search_ignore = true,
                 super::request_origin::LABEL_ORIGIN => features.origin = true,
                 other => {
                     if let Some(slots) = other.strip_prefix(LABEL_SLOTS) {

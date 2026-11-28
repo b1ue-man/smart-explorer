@@ -4,6 +4,9 @@
 //! records stream into the job's `matches` (text lines `rel:line:text`) or
 //! `hits` (JSON lines with `rel`, `line`, `text`, `ranges`) output and page
 //! with `hits_offset` like `search`; the job result carries the totals.
+//! `gitignore` applies the ignore files (`ContentQuery::respect_ignore_files`).
+//! With an active mask list the records come from the masked files
+//! (`grep_mask.rs`) into a `PreMasked` stream (plan 2026-11-28, contract 4).
 use super::args::Args;
 use super::grep_records::{run_search, GrepOutput, Records};
 use super::jobs::{spawn_worker, Job, JobControl, JobEnd, JobKind, JobStatus};
@@ -15,10 +18,14 @@ use serde_json::{json, Value};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
+#[path = "grep_mask.rs"]
+pub(super) mod mask;
+use mask::HitMasker;
+
 /// Skipped files and folders the result names one by one.
 const SKIPPED_LISTED: usize = 50;
 
-pub(super) const DESCRIPTION: &str = "Searches file contents below the folder `target` (default: the working root), as Notepad++'s Find in Files: `mode` normal (the text), extended (Notepad++ escapes \\n, \\t, \\xHH) or regex (Rust regex plus lookaround, back references, \\R, \\< \\>); `match_case`, `whole_word`, `dot_matches_newline`; `filters` is Notepad++'s filter field (`*.rs *.toml`, `!*.min.js` leaves files out, `!\\target` a first-level folder, `!+\\node_modules` folders on every level); `folders`/`exclude_folders` are regexes on the folder path relative to `target`; `subfolders` (default true), `hidden` folders. Binary files are skipped, links never entered. It runs where the files are: locally, in the SSH agent, on the Share peer, otherwise by reading through the connection (`searched_at`). `output` content (default: `rel:line:text`, context lines `rel-line-text` with `context_lines`), files (names only) or count (`rel:count`); `format` json gives JSON lines with `rel`, `line`, `text`, byte `ranges`. Results page via `hits_offset`; the totals (`files_searched`, `files_matched`, `hits`, `skipped`, `limited`) come with the end of the job. An invalid pattern or folder regex fails at once. Use it instead of Grep, `grep` or `rg`.";
+pub(super) const DESCRIPTION: &str = "Searches file contents below the folder `target` (default: the working root), as Notepad++'s Find in Files: `mode` normal (the text), extended (Notepad++ escapes \\n, \\t, \\xHH) or regex (Rust regex plus lookaround, back references, \\R, \\< \\>); `match_case`, `whole_word`, `dot_matches_newline`; `filters` is Notepad++'s filter field (`*.rs *.toml`, `!*.min.js` leaves files out, `!\\target` a first-level folder, `!+\\node_modules` folders on every level); `folders`/`exclude_folders` are regexes on the folder path relative to `target`; `subfolders` (default true), `hidden` folders; `gitignore: true` leaves out what `.gitignore` (inside a Git work tree), `.ignore` and `.git/info/exclude` exclude, as ripgrep does. Binary files are skipped, links never entered. It runs where the files are: locally, in the SSH agent, on the Share peer, otherwise by reading through the connection (`searched_at`). `output` content (default: `rel:line:text`, context lines `rel-line-text` with `context_lines`), files (names only) or count (`rel:count`); `format` json gives JSON lines with `rel`, `line`, `text`, byte `ranges`. Results page via `hits_offset`; the totals (`files_searched`, `files_matched`, `hits`, `skipped`, `limited`) come with the end of the job. An invalid pattern or folder regex fails at once. Use it instead of Grep, `grep` or `rg`.";
 
 pub(super) fn properties(target: &str, wait: &str, max_bytes: &str) -> Value {
     json!({
@@ -33,6 +40,7 @@ pub(super) fn properties(target: &str, wait: &str, max_bytes: &str) -> Value {
         "exclude_folders": {"type": "string", "description": "Regex: leave out matching folders with everything below."},
         "subfolders": {"type": "boolean", "description": "Also search below the folder (default true)."},
         "hidden": {"type": "boolean", "description": "Also enter hidden folders (default false)."},
+        "gitignore": {"type": "boolean", "description": "Leave out what .gitignore, .ignore and .git/info/exclude exclude (default false)."},
         "context_lines": {"type": "integer", "minimum": 0, "description": "Lines before and after each hit (output content)."},
         "output": {"type": "string", "enum": ["content", "files", "count"], "description": "content (default), files or count."},
         "format": {"type": "string", "enum": ["text", "json"], "description": "text (default, compact lines) or json (JSON lines with ranges)."},
@@ -70,22 +78,15 @@ pub(super) struct GrepRequest {
     pub(super) json: bool,
 }
 
-pub(super) fn request(args: &Args<'_>) -> Result<GrepRequest, String> {
+/// The search fields `grep` and `replace` share: pattern, mode, case, whole
+/// words, `.` over line ends, filters, folder regexes, subfolders, hidden
+/// folders and ignore files.
+pub(super) fn query(args: &Args<'_>) -> Result<ContentQuery, String> {
     let mut query = ContentQuery::text(args.string("pattern")?);
     query.mode = match args.opt_string("mode")? {
         None => TextMode::Normal,
         Some(mode) => TextMode::parse(&mode)
             .ok_or_else(|| format!("unknown mode `{mode}`; use normal, extended or regex"))?,
-    };
-    let output = match args.opt_string("output")? {
-        None => GrepOutput::Content,
-        Some(output) => GrepOutput::parse(&output)
-            .ok_or_else(|| format!("unknown output `{output}`; use content, files or count"))?,
-    };
-    let json = match args.opt_string("format")?.as_deref() {
-        None | Some("text") => false,
-        Some("json") => true,
-        Some(other) => return Err(format!("unknown format `{other}`; use text or json")),
     };
     query.match_case = args.flag("match_case")?;
     query.whole_word = args.flag("whole_word")?;
@@ -100,6 +101,22 @@ pub(super) fn request(args: &Args<'_>) -> Result<GrepRequest, String> {
         Some(_) => args.flag("subfolders")?,
     };
     query.hidden = args.flag("hidden")?;
+    query.respect_ignore_files = args.flag("gitignore")?;
+    Ok(query)
+}
+
+pub(super) fn request(args: &Args<'_>) -> Result<GrepRequest, String> {
+    let mut query = query(args)?;
+    let output = match args.opt_string("output")? {
+        None => GrepOutput::Content,
+        Some(output) => GrepOutput::parse(&output)
+            .ok_or_else(|| format!("unknown output `{output}`; use content, files or count"))?,
+    };
+    let json = match args.opt_string("format")?.as_deref() {
+        None | Some("text") => false,
+        Some("json") => true,
+        Some(other) => return Err(format!("unknown format `{other}`; use text or json")),
+    };
     let context = args.opt_u64("context_lines")?.unwrap_or(0);
     query.context_lines = if output == GrepOutput::Content {
         u32::try_from(context).map_err(|_| "`context_lines` is too large".to_string())?
@@ -123,6 +140,9 @@ pub(super) fn start(session: &Session, args: &Args<'_>) -> Result<Arc<Job>, Stri
     let spec = super::file_tools::target_spec(args)?;
     let request = request(args)?;
     let target = session.targets.resolve(&spec)?;
+    let masks = session.masks.set()?;
+    super::mask_layer_guard::guard(&masks, &target, super::mask_layer_guard::Reach::Tree)?;
+    let masker = HitMasker::new(masks, target.backend.clone(), &target.path);
     let stream = if request.json { "hits" } else { "matches" };
     let job = session.jobs.create(
         JobKind::Grep,
@@ -142,7 +162,7 @@ pub(super) fn start(session: &Session, args: &Args<'_>) -> Result<Arc<Job>, Stri
     job.set_control(control.clone());
     let targets = session.targets.clone();
     spawn_worker(job.clone(), move |job| {
-        work(job, &target, &request, stream, &control, &targets)
+        work(job, (&target, masker), &request, stream, &control, &targets)
     })?;
     Ok(job)
 }
@@ -150,7 +170,7 @@ pub(super) fn start(session: &Session, args: &Args<'_>) -> Result<Arc<Job>, Stri
 /// The search of one job, its records appended to `stream`.
 fn work(
     job: &Arc<Job>,
-    target: &Resolved,
+    (target, mut masker): (&Resolved, Option<HitMasker>),
     request: &GrepRequest,
     stream: &'static str,
     control: &GrepControl,
@@ -173,13 +193,23 @@ fn work(
         control.cancel.clone(),
         &mut |event| match event {
             ContentEvent::Hits {
-                rel, lines, last, ..
+                rel,
+                size,
+                lines,
+                last,
+                ..
             } => {
                 if write_error.is_some() {
                     return;
                 }
                 buffer.clear();
-                records.hits(&rel, &lines, last, &mut buffer);
+                match masker.as_mut() {
+                    Some(masker) => {
+                        let (rel, lines) = masker.hits(&rel, size, &lines, last);
+                        records.hits(&rel, &lines, last, &mut buffer);
+                    }
+                    None => records.hits(&rel, &lines, last, &mut buffer),
+                }
                 if let Err(error) = job.append(stream, &buffer) {
                     write_error = Some(error);
                     control.cancel.store(true, Ordering::SeqCst);
@@ -207,6 +237,11 @@ fn work(
         "searched_at": searched_at,
         "skipped_items": skipped,
     });
+    if request.query.respect_ignore_files {
+        if let Value::Object(fields) = &mut result {
+            fields.insert("gitignore".into(), json!(true));
+        }
+    }
     match (outcome, write_error) {
         (_, Some(error)) => JobEnd {
             status: JobStatus::Failed,

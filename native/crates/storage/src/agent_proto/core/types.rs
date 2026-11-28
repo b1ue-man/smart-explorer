@@ -1,6 +1,6 @@
 /// Bumped whenever the wire format OR the agent's behaviour changes; the client
 /// re-uploads the agent on a mismatch.
-pub const PROTO_VERSION: u32 = 13;
+pub const PROTO_VERSION: u32 = 14;
 
 /// Existing error frames can request a metadata walk without changing wire
 /// layouts. A hash-only stream cannot represent protected link boundaries.

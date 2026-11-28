@@ -25,7 +25,7 @@ fn every_frame() -> Vec<Frame> {
         max_hits: 0x0102_0304_0506,
         files_only: true,
         max_line_bytes: 77,
-        respect_ignore_files: false,
+        respect_ignore_files: true,
     };
     vec![
         Frame::ContentSearch {
@@ -119,7 +119,22 @@ fn content_search_task_frames_round_trip_and_charge_credit() {
 
     let agent = ServerFeatures::parse(&server_version(true));
     assert!(agent.content_search);
+    assert!(
+        agent.content_search_ignore,
+        "protocol 14 announces ignore files"
+    );
     assert!(!ServerFeatures::parse("0.5.0+credit-v1").content_search);
+    assert!(!ServerFeatures::parse("0.5.0+content_search_v1").content_search_ignore);
+    // The flag of `respect_ignore_files` survives the wire on its own.
+    let mut only = ContentQuery::text("x");
+    only.subfolders = false;
+    only.respect_ignore_files = true;
+    let frame = Frame::ContentSearch {
+        root: "/r".into(),
+        query: only,
+    };
+    let (_, decoded) = Frame::decode(&frame.encode(3).unwrap()).unwrap();
+    assert_eq!(decoded, frame);
 }
 
 #[test]
@@ -170,6 +185,28 @@ fn content_search_task_agent_answers_a_content_search() {
     let (id, frame) = read_frame(&mut client).unwrap().expect("a reply");
     assert_eq!(id, 6);
     assert!(matches!(frame, Frame::Err(text) if text.contains("Ungültiger")));
+
+    // With `respect_ignore_files` the agent leaves out what `.ignore` names.
+    std::fs::write(dir.path().join(".ignore"), "c.txt\n").unwrap();
+    std::fs::write(dir.path().join("c.txt"), "needle\n").unwrap();
+    let mut ignoring = ContentQuery::text("needle");
+    ignoring.respect_ignore_files = true;
+    let request = Frame::ContentSearch {
+        root: dir.path().to_string_lossy().into_owned(),
+        query: ignoring,
+    };
+    write_frame(&mut client, 7, &request).unwrap();
+    let mut files = Vec::new();
+    loop {
+        let (_, frame) = read_frame(&mut client).unwrap().expect("a reply");
+        match frame {
+            Frame::ContentEvent(ContentEvent::Hits { rel, .. }) => files.push(rel),
+            Frame::ContentEvent(_) => {}
+            Frame::ContentDone(_) => break,
+            other => panic!("unexpected reply {other:?}"),
+        }
+    }
+    assert_eq!(files, ["a.txt"], "the agent applies ignore files");
     drop(client);
     server.join().unwrap();
 }

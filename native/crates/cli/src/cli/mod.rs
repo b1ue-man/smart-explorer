@@ -209,7 +209,7 @@ enum Command {
     Mkdir(PathArg),
     #[command(
         about = "Search names below a target",
-        long_about = "Search names below a target. Prints `kind<TAB>size<TAB>relative path` per hit; kind is - (file), d (directory), l (link) or s (FIFO, socket, device). Links are found by name but never entered."
+        long_about = "Search names below a target. Prints `kind<TAB>size<TAB>relative path` per hit (with --json one JSON object per hit with path, relative, type, size, mtime_ms); kind is - (file), d (directory), l (link) or s (FIFO, socket, device). Links are found by name but never entered. A --glob with `/` or `**` matches the relative path (`src/**/*.rs`, `{a,b}`, `[a-z]`); --gitignore leaves out what .gitignore (in a Git work tree), .ignore and .git/info/exclude exclude, as ripgrep does; --sort name or mtime (newest first) orders the hits, --max-results then counts after sorting."
     )]
     Search(SearchArgs),
     #[command(
@@ -373,6 +373,22 @@ struct SearchArgs {
         help = "Also return matching directories (files, links and special files always)"
     )]
     dirs: bool,
+    #[arg(
+        long,
+        value_name = "ORDER",
+        help = "Order the hits: name (relative path) or mtime (newest first); default: as found"
+    )]
+    sort: Option<String>,
+    #[arg(
+        long,
+        help = "Leave out what .gitignore (in a Git work tree), .ignore and .git/info/exclude exclude"
+    )]
+    gitignore: bool,
+    #[arg(
+        long,
+        help = "Print one JSON object per hit (path, relative, type, size, mtime_ms)"
+    )]
+    json: bool,
 }
 
 #[derive(Args)]
@@ -498,8 +514,22 @@ fn run_inner(cli: Cli) -> Result<i32, String> {
             Ok(0)
         }
         Command::Search(args) => {
+            let sort = match args.sort.as_deref() {
+                None => search::SearchSort::Found,
+                Some(text) => search::SearchSort::parse(text)
+                    .ok_or_else(|| format!("unknown --sort `{text}`; use name or mtime"))?,
+            };
+            let options = search::SearchOptions {
+                query: args.query,
+                glob: args.glob,
+                max_results: args.max_results,
+                want_dirs: args.dirs,
+                sort,
+                gitignore: args.gitignore,
+            };
+            search::check_options(&options)?;
             let t = target::resolve(&args.target, OperationOrigin::User)?;
-            search::search(&t, &args.query, args.glob, args.max_results, args.dirs)?;
+            search::search_cli(&t, &options, args.json)?;
             Ok(0)
         }
         Command::Grep(args) => grep::run(args),

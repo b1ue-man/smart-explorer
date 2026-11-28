@@ -4,13 +4,17 @@
 //! files and folders), hidden as the host shows it (Windows: the attribute;
 //! elsewhere a leading dot), files opened without following a link, and the
 //! kernel's pseudo file systems (`/proc`, `/sys`, `/dev`, `/run`) left out.
+//! With `respect_ignore_files` the ignore files of the folders above the
+//! root apply as well, as ripgrep reads them (`content_ignore.rs`).
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 
 use super::content_query::{ContentQuery, ContentSummary};
 use super::content_run::ContentEmit;
-use super::content_walk::{search_tree, ContentTree, TreeEntry, TreeKind};
+use super::content_walk::{
+    local_parents, search_tree, ContentTree, ParentIgnore, TreeEntry, TreeKind,
+};
 use super::fs::{is_pseudo_dir, systemtime_ms};
 use super::session::{emit, Sink};
 use super::Frame;
@@ -82,6 +86,10 @@ impl ContentTree for LocalTree {
     fn open(&self, rel: &str, _entry: &TreeEntry) -> io::Result<Box<dyn Read + '_>> {
         let file = super::local_platform::open_regular_no_follow(&self.path(rel), false)?;
         Ok(Box::new(file))
+    }
+
+    fn parent_ignores(&self) -> Vec<ParentIgnore> {
+        local_parents(&self.root)
     }
 }
 

@@ -1,6 +1,6 @@
 //! The capability text the background service announces for the backend it
 //! serves (moved out of `backend_server.rs`; the labels are unchanged plus
-//! `content_search_v1`).
+//! `content_search_v1` and `content_search_ignore_v1`).
 use crate::agent_proto;
 use crate::vfs::BackendHandle;
 
@@ -28,11 +28,14 @@ pub(super) fn service_version(backend: &BackendHandle) -> String {
     // `range-v1` only for a backend that reads ranges (`backend_ranges`);
     // `ListMeta` … `StatMeta`: `backend_hash.rs`; `origin-v1`: below (E4d);
     // `content_search_v1`: `backend_content.rs` (every backend: where the peer
-    // does not search itself, the worker reads the files through it).
+    // does not search itself, the worker reads the files through it);
+    // `content_search_ignore_v1` alike: a backend whose peer cannot apply the
+    // ignore files is read through, and the walk applies them.
     format!(
-        "{}{}.capacity-v1.folder-reservation-v1.file-identity-v1.list-meta-v1.walk-keys-v1.meta-list-v1.origin-v1.{content}{single}{times} worker",
+        "{}{}.capacity-v1.folder-reservation-v1.file-identity-v1.list-meta-v1.walk-keys-v1.meta-list-v1.origin-v1.{content}.{ignore}{single}{times} worker",
         agent_proto::server_version_with(batch, slots),
         super::backend_ranges::labels(backend),
         content = agent_proto::LABEL_CONTENT_SEARCH,
+        ignore = agent_proto::LABEL_CONTENT_SEARCH_IGNORE,
     )
 }

@@ -82,6 +82,11 @@ pub struct FsContentQuery {
     pub files_only: bool,
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub max_line_bytes: u32,
+    /// `ContentQuery::respect_ignore_files`; sent only to a host that offers
+    /// `content_search_ignore_v1` (an older host would drop the field and
+    /// search every file).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub respect_ignore_files: bool,
 }
 
 impl From<&ContentQuery> for FsContentQuery {
@@ -105,6 +110,7 @@ impl From<&ContentQuery> for FsContentQuery {
             max_hits: query.max_hits,
             files_only: query.files_only,
             max_line_bytes: query.max_line_bytes,
+            respect_ignore_files: query.respect_ignore_files,
         }
     }
 }
@@ -147,6 +153,7 @@ impl FsContentQuery {
             0 => 0,
             bytes => bytes.min(CONTENT_LINE_BYTES_MAX),
         };
+        query.respect_ignore_files = self.respect_ignore_files;
         Ok(query)
     }
 }

@@ -5,10 +5,12 @@
 //! host's handle check (`ensure_local_share_handle_allowed`) admits it
 //! before anything below it is read; a file is opened relative to its held
 //! folder as a regular file only. Every thread builds its own matcher and
-//! path filter from the query.
+//! path filter from the query. With `respect_ignore_files` every folder's
+//! ignore files are read the same way (`ignore_files::held_ignore_files`) and leave out
+//! what they exclude (`agent_proto::IgnoreChain`).
 use super::{child_rel, compiled, Shared, Sink, MAX_DEPTH};
 use crate::{
-    agent_proto::{ContentMatcher, PathFilter},
+    agent_proto::{ContentMatcher, IgnoreChain, PathFilter},
     local_access::{DirectoryHandle, EntryKind},
     share::{fs_response::FsSkipKind, host_list},
 };
@@ -25,8 +27,9 @@ const PORTION_BYTES: u64 = 8 * 1024 * 1024;
 
 pub(super) enum Job {
     /// A folder to read: its handle, its host path (for the excluded host
-    /// storage), its path below the search root and its level.
-    Folder(DirectoryHandle, PathBuf, String, usize),
+    /// storage), its path below the search root, its level and the ignore
+    /// rules of the folders above it.
+    Folder(DirectoryHandle, PathBuf, String, usize, IgnoreChain),
     /// Files of one held folder to search.
     Files(DirectoryHandle, Vec<Item>),
 }
@@ -57,10 +60,11 @@ pub(super) fn search(
     physical: PathBuf,
     rel: &str,
     level: usize,
+    ignores: IgnoreChain,
 ) -> io::Result<()> {
     let excluded = crate::share::storage_roots::excluded();
     let result = crate::agent_proto::ordered_walk(
-        vec![Job::Folder(root, physical, rel.to_string(), level)],
+        vec![Job::Folder(root, physical, rel.to_string(), level, ignores)],
         crate::agent_proto::walk_threads(),
         &shared.halt,
         || Reader {
@@ -68,9 +72,13 @@ pub(super) fn search(
             tools: compiled(shared.query),
         },
         |job: Job, local, reader| match job {
-            Job::Folder(directory, physical, rel, level) => {
-                folder(directory, physical, rel, level, &excluded, local, reader)
-            }
+            Job::Folder(directory, physical, rel, level, ignores) => folder(
+                directory,
+                (physical, rel, level, ignores),
+                &excluded,
+                local,
+                reader,
+            ),
             Job::Files(directory, items) => {
                 for item in items {
                     file(&directory, item, reader)?;
@@ -95,9 +103,7 @@ fn tools<'r>(
 
 fn folder(
     directory: DirectoryHandle,
-    physical: PathBuf,
-    rel: String,
-    level: usize,
+    (physical, rel, level, ignores): (PathBuf, String, usize, IgnoreChain),
     excluded: &[PathBuf],
     local: &mut crate::agent_proto::WalkLocal<Job>,
     reader: &mut Reader<'_, '_>,
@@ -123,6 +129,14 @@ fn folder(
             sink.skip(&rel, FsSkipKind::UnlistableFolder, error);
             return Ok(());
         }
+    };
+    let ignores = if shared.query.respect_ignore_files {
+        ignores.child(
+            &rel,
+            &super::ignore_files::held_ignore_files(shared, &directory),
+        )
+    } else {
+        ignores
     };
     let here = filter.search_in_folder(&rel);
     let mut portion = Vec::new();
@@ -153,7 +167,7 @@ fn folder(
         } else {
             here && filter.admit_file(&name)
         };
-        if !wanted {
+        if !wanted || ignores.ignored(&child, folder) {
             continue;
         }
         if entry.unreachable
@@ -175,7 +189,7 @@ fn folder(
                 Ok(handle) => {
                     if crate::share::fs::ensure_local_share_handle_allowed(&handle).is_ok() {
                         let path = physical.join(&entry.name);
-                        local.push(Job::Folder(handle, path, child, level + 1));
+                        local.push(Job::Folder(handle, path, child, level + 1, ignores.clone()));
                     }
                 }
                 Err(error) => sink.skip(&child, FsSkipKind::UnlistableFolder, error),

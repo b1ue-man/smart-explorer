@@ -18,9 +18,9 @@
 //! and closes with totals whose `hits` and `skipped` are exactly what the
 //! portions carried. `max_hits` holds over the whole search: the event that
 //! reaches it is cut there and ends its file (`last`), and every walker
-//! stops.
+//! stops. Ignore files (`respect_ignore_files`): `host_content_search_ignore.rs`.
 use crate::{
-    agent_proto::{ContentEvent, ContentMatcher, ContentQuery, PathFilter},
+    agent_proto::{ContentEvent, ContentMatcher, ContentQuery, IgnoreChain, PathFilter},
     share::{
         fs_access::FsAccess,
         fs_response::{
@@ -42,6 +42,8 @@ use std::{
 };
 use tokio::sync::mpsc;
 
+#[path = "host_content_search_ignore.rs"]
+mod ignore_files;
 #[path = "host_content_search_local.rs"]
 mod local;
 #[path = "host_content_search_remote.rs"]
@@ -393,7 +395,8 @@ pub(in crate::share) fn run(
         skipped: AtomicU64::new(0),
     };
     let mut sink = Sink::new(&shared);
-    match visit(&mut sink, &filter, &request.path, "", 0) {
+    let ignores = ignore_files::parent_ignores(&shared, &request.path);
+    match visit(&mut sink, &filter, (&request.path, &ignores), "", 0) {
         Err(error) if !shared.ended_at_limit() => return Err(error),
         _ => {}
     }
@@ -422,7 +425,7 @@ pub(in crate::share) fn run(
 fn visit(
     sink: &mut Sink<'_, '_>,
     filter: &PathFilter,
-    path: &str,
+    (path, ignores): (&str, &IgnoreChain),
     rel: &str,
     level: usize,
 ) -> io::Result<()> {
@@ -446,8 +449,9 @@ fn visit(
                 children.push((full, child));
             }
         }
+        let none = IgnoreChain::default(); // An export is an edge: no rules above it.
         for (full, child) in children {
-            visit(sink, filter, &full, &child, level + 1)?;
+            visit(sink, filter, (&full, &none), &child, level + 1)?;
         }
         return Ok(());
     }
@@ -475,7 +479,7 @@ fn visit(
     match storage_roots::open_local(&target) {
         Ok(handle) => {
             sink.send()?;
-            local::search(shared, handle, physical, rel, level)
+            local::search(shared, handle, physical, rel, level, ignores.clone())
         }
         Err(error) => unlisted(sink, rel, error),
     }

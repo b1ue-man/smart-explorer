@@ -1,4 +1,5 @@
-//! Wire layout of the content search (`content_search_v1`, tags 93..=97):
+//! Wire layout of the content search (`content_search_v1`, tags 93..=97;
+//! from protocol 14 the flag `FLAG_IGNORE_FILES`, `content_search_ignore_v1`):
 //! the request `ContentSearch`, the events (`Hits` 94 and `Skipped` 95 are
 //! charged stream frames, `Progress` 96 is free) and the final `ContentDone`.
 //! Little-endian, length-prefixed like every other frame.
@@ -26,6 +27,10 @@ const FLAG_DOT_NEWLINE: u8 = 4;
 const FLAG_SUBFOLDERS: u8 = 8;
 const FLAG_HIDDEN: u8 = 16;
 const FLAG_FILES_ONLY: u8 = 32;
+/// `ContentQuery::respect_ignore_files` (protocol 14, `content_search_ignore_v1`).
+const FLAG_IGNORE_FILES: u8 = 64;
+/// Every flag this build knows; another bit is refused.
+const KNOWN_FLAGS: u8 = 0x7F;
 const LINE_TRUNCATED: u8 = 1;
 const LINE_CONTEXT: u8 = 2;
 /// Smallest encoded line: number, offset, flags, text length, range count.
@@ -192,6 +197,7 @@ fn query_flags(query: &ContentQuery) -> u8 {
         (query.subfolders, FLAG_SUBFOLDERS),
         (query.hidden, FLAG_HIDDEN),
         (query.files_only, FLAG_FILES_ONLY),
+        (query.respect_ignore_files, FLAG_IGNORE_FILES),
     ]
     .into_iter()
     .filter(|(set, _)| *set)
@@ -211,7 +217,7 @@ pub(in super::super) fn decode(tag: u8, r: &mut Reader) -> io::Result<Option<Fra
                 _ => return Err(bad("unknown content search mode")),
             };
             let flags = r.u8()?;
-            if flags & !0x3F != 0 {
+            if flags & !KNOWN_FLAGS != 0 {
                 return Err(bad("unknown content search flags"));
             }
             Frame::ContentSearch {
@@ -231,7 +237,7 @@ pub(in super::super) fn decode(tag: u8, r: &mut Reader) -> io::Result<Option<Fra
                     context_lines: r.u32()?,
                     max_hits: r.u64()?,
                     max_line_bytes: r.u32()?,
-                    respect_ignore_files: false,
+                    respect_ignore_files: flags & FLAG_IGNORE_FILES != 0,
                 },
             }
         }

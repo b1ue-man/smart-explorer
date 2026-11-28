@@ -176,3 +176,72 @@ fn content_search_task_host_search_ends_with_its_stream() {
     .unwrap_err();
     assert_eq!(error.kind(), io::ErrorKind::Interrupted);
 }
+
+#[test]
+fn mcp_coding_task_host_search_applies_ignore_files() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap().join("Repo");
+    let write = |rel: &str, bytes: &[u8]| {
+        let path = root.join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, bytes).unwrap();
+    };
+    write(".git/info/exclude", b"local.txt\n");
+    write(".gitignore", b"target/\n*.log\n");
+    write(".ignore", b"secret.txt\n");
+    write("sub/.gitignore", b"x.txt\n");
+    for rel in [
+        "a.txt",
+        "target/b.txt",
+        "c.log",
+        "secret.txt",
+        "local.txt",
+        "sub/x.txt",
+        "sub/y.txt",
+    ] {
+        write(rel, NEEDLE);
+    }
+    let access = FsAccess::dynamic(ShareExportConfig {
+        roots: vec![SharedRoot::new("Repo", text(&root)).with_access(ExportAccess::ReadOnly)],
+        ..Default::default()
+    });
+    let mut query = ContentQuery::text("needle");
+    query.respect_ignore_files = true;
+    let files = |path: &str, query: &ContentQuery| {
+        hits(&search(&access, path, query).0)
+            .into_keys()
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(files("/Repo", &query), ["a.txt", "sub/y.txt"]);
+    assert_eq!(files("/", &query), ["Repo/a.txt", "Repo/sub/y.txt"]);
+    // Below the work tree root the root's files apply as well.
+    assert_eq!(files("/Repo/sub", &query), ["y.txt"]);
+    write("sub/target/z.txt", NEEDLE);
+    assert_eq!(
+        files("/Repo/sub", &query),
+        ["y.txt"],
+        "`target/` of the root"
+    );
+    query.respect_ignore_files = false;
+    assert_eq!(
+        files("/Repo", &query).len(),
+        8,
+        "without the flag every file"
+    );
+    // The flag travels on the wire and back.
+    let mut flagged = ContentQuery::text("x");
+    flagged.respect_ignore_files = true;
+    let wire = FsContentQuery::from(&flagged);
+    assert!(wire.to_query().unwrap().respect_ignore_files);
+    assert!(serde_json::to_string(&wire)
+        .unwrap()
+        .contains("\"respect_ignore_files\":true"));
+    assert!(
+        !serde_json::to_string(&FsContentQuery::from(&ContentQuery::text("x")))
+            .unwrap()
+            .contains("respect_ignore_files")
+    );
+    let host = crate::share::wire::FsHostFeatures::host();
+    assert!(host.content_search_ignore_v1);
+    assert!(host.names().contains(&"content_search_ignore_v1"));
+}
