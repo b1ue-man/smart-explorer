@@ -186,7 +186,8 @@ fn ansi_table() -> &'static [char; 256] {
     TABLE.get_or_init(|| {
         let mut table = ['\0'; 256];
         for (byte, slot) in table.iter_mut().enumerate() {
-            let (text, _) = encoding_rs::WINDOWS_1252.decode_without_bom_handling(&[byte as u8]);
+            let bytes = [byte as u8];
+            let (text, _) = encoding_rs::WINDOWS_1252.decode_without_bom_handling(&bytes);
             *slot = text.chars().next().unwrap_or(char::REPLACEMENT_CHARACTER);
         }
         table

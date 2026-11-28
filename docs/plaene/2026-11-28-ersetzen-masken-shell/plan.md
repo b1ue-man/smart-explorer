@@ -314,3 +314,9 @@ Schon angelegt (Commit des Plans): CLI-Befehle `Replace(replace::ReplaceArgs)`, 
 - Zweiter Weg mit Umgebungsbeleg (Arbeitsweise „Kein zweiter Weg ohne Tatsache der Umgebung“): Linux-Erhöhung
   pkexec, ohne registrierten polkit-Agenten `sudo -n`; Beleg: pkexec endet ohne Agent mit Exit 127 „No
   authentication agent found“ (Ref. sperre §4.2, beobachtet 2026-11-28).
+- 2026-11-28: Alle sieben Pakete fertig und zusammengeführt (Commits `2a01a99a` bis `ccccf34c`): Moduleinträge
+  in `mcp.rs`, Schema von `search` aus `search_tool.rs`, Share-Suche nur mit `content_search_ignore_v1`,
+  Härtung nach `masks` `add_path`, Ordnerauswahl `MaskScope`, Menüeintrag „In Dateien ersetzen…“, Sperre der
+  ganzen MCP-Sitzung nach einer Manipulation des Maskenspeichers, `elevated` im Schema von `exec`,
+  Suite-Listen, 147 Register-Zeilen, Dokumente. Lock-Dateien auf CI aufgelöst (lock-refresh 46140564566,
+  46140567172). Agent-Bundles für Protokoll 14: crates-task part agent-bundles 46140739416.
