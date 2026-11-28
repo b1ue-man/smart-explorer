@@ -47,6 +47,8 @@ pub(in crate::app) struct RemoteContextCapabilities {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::app) enum RemoteContextAction {
     Open,
+    /// „Ansehen“: the file in the text view.
+    View,
     OpenWith,
     DownloadTo,
     CopyToClipboard,
@@ -62,6 +64,10 @@ pub(in crate::app) enum RemoteContextAction {
     SelectAll,
     InvertSelection,
     AnalyzeCurrentFolder,
+    /// „In Dateien suchen“ in the clicked folder.
+    FindInFolder,
+    /// „In Dateien suchen“ in the current folder.
+    FindInCurrentFolder,
     Refresh,
 }
 
@@ -79,7 +85,9 @@ impl RemoteContextAction {
     pub(in crate::app) fn target(self) -> RemoteContextActionTarget {
         match self {
             Self::Open
+            | Self::View
             | Self::OpenWith
+            | Self::FindInFolder
             | Self::DownloadTo
             | Self::ToggleFavorite
             | Self::CopyPath
@@ -91,6 +99,7 @@ impl RemoteContextAction {
             | Self::NewFolder
             | Self::NewFile(_)
             | Self::AnalyzeCurrentFolder
+            | Self::FindInCurrentFolder
             | Self::Refresh => RemoteContextActionTarget::CurrentFolder,
             Self::SelectAll | Self::InvertSelection => RemoteContextActionTarget::CurrentView,
         }
@@ -140,6 +149,9 @@ pub(in crate::app) fn plan_remote_context_menu(
         } => {
             let row_is_dir = entry_kind == RemoteContextEntryKind::Directory;
             let mut actions = vec![RemoteContextAction::Open];
+            if !row_is_dir {
+                actions.push(RemoteContextAction::View);
+            }
             if !row_is_dir && capabilities.open_with_chooser {
                 actions.push(RemoteContextAction::OpenWith);
             }
@@ -165,6 +177,9 @@ pub(in crate::app) fn plan_remote_context_menu(
             } else {
                 RemoteContextAction::AnalyzeCurrentFolder
             });
+            if row_is_dir {
+                actions.push(RemoteContextAction::FindInFolder);
+            }
             actions.push(RemoteContextAction::Refresh);
             actions
         }
@@ -175,6 +190,7 @@ pub(in crate::app) fn plan_remote_context_menu(
                 RemoteContextAction::SelectAll,
                 RemoteContextAction::InvertSelection,
                 RemoteContextAction::AnalyzeCurrentFolder,
+                RemoteContextAction::FindInCurrentFolder,
                 RemoteContextAction::Refresh,
             ]);
             actions

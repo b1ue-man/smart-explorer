@@ -66,6 +66,18 @@ mod windows_analysis_ui_task;
 pub use connection_cleanup::{cleanup_removed_endpoint_state, CleanupReport, RemovedEndpointScope};
 #[path = "core/connection_state.rs"]
 mod connection_state;
+#[path = "core/content_search_dialog.rs"]
+mod content_search_dialog;
+#[path = "core/content_search_nav.rs"]
+mod content_search_nav;
+#[path = "core/content_search_panel_menu.rs"]
+mod content_search_panel_menu;
+#[path = "core/content_search_results.rs"]
+mod content_search_results;
+#[path = "core/content_search_results_ui.rs"]
+mod content_search_results_ui;
+#[path = "core/content_search_run.rs"]
+mod content_search_run;
 #[path = "core/copy_dialog.rs"]
 mod copy_dialog;
 #[path = "core/delete_actions.rs"]
@@ -145,6 +157,12 @@ mod landing_tiles;
 mod licenses_ui;
 #[path = "core/location_labels.rs"]
 mod location_labels;
+#[path = "core/md_images.rs"]
+mod md_images;
+#[path = "core/md_links.rs"]
+mod md_links;
+#[path = "core/md_render.rs"]
+mod md_render;
 #[cfg(any(windows, test))]
 #[path = "core/media_launch_plan.rs"]
 mod media_launch_plan;
@@ -205,6 +223,8 @@ mod settings_ai_plugin;
 mod settings_background;
 #[path = "core/settings_cloud.rs"]
 mod settings_cloud;
+#[path = "core/settings_languages.rs"]
+mod settings_languages;
 #[path = "core/settings_ui.rs"]
 mod settings_ui;
 #[path = "core/settings_updates.rs"]
@@ -365,6 +385,28 @@ mod temp_recovery_ui;
 #[cfg(test)]
 #[path = "core/tests.rs"]
 mod tests;
+#[path = "core/text_tools.rs"]
+mod text_tools;
+#[cfg(test)]
+#[path = "core/text_tools_tests.rs"]
+mod text_tools_tests;
+#[path = "core/text_view_body.rs"]
+mod text_view_body;
+#[path = "core/text_view_find.rs"]
+mod text_view_find;
+#[path = "core/text_view_search.rs"]
+mod text_view_search;
+#[path = "core/text_view_style.rs"]
+mod text_view_style;
+#[cfg(test)]
+#[path = "core/text_view_tests.rs"]
+mod text_view_tests;
+#[path = "core/text_view_ui.rs"]
+mod text_view_ui;
+#[path = "core/text_view_window.rs"]
+mod text_view_window;
+#[path = "core/text_view_worker.rs"]
+mod text_view_worker;
 #[path = "core/theme.rs"]
 mod theme;
 #[path = "core/transfer_center.rs"]

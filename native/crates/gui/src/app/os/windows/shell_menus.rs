@@ -54,6 +54,18 @@ impl App {
             .iter()
             .any(|e| e.is_dir && e.path.as_ref() == clicked_fwd);
         let mut own = own;
+        // The text view and the content search sit in the shell menu too.
+        if clicked_is_dir {
+            own.push(OwnMenuItem {
+                id: menu_ids::FIND_IN_FOLDER,
+                label: "In Dateien suchen... (Ctrl+Shift+F)".to_string(),
+            });
+        } else {
+            own.push(OwnMenuItem {
+                id: menu_ids::VIEW_TEXT,
+                label: "Ansehen (F3)".to_string(),
+            });
+        }
         if clicked_is_dir {
             own.push(OwnMenuItem {
                 id: menu_ids::TOGGLE_FAV,
@@ -86,6 +98,16 @@ impl App {
                 menu_ids::RENAME => self.open_rename(),
                 menu_ids::TOGGLE_FAV => self.toggle_favorite(&clicked_fwd),
                 menu_ids::EXTRACT_ZIP => self.start_zip_extract(clicked_fwd.clone()),
+                menu_ids::FIND_IN_FOLDER => self.open_find_in_files(Some(clicked_fwd.clone())),
+                menu_ids::VIEW_TEXT => {
+                    if let Some(index) = self
+                        .entries
+                        .iter()
+                        .position(|entry| entry.path.as_ref() == clicked_fwd)
+                    {
+                        self.open_text_view_entry(ctx, index);
+                    }
+                }
                 _ => {}
             },
             Ok(MenuResult::Shell) => {
@@ -117,6 +139,10 @@ impl App {
                 id: menu_ids::REFRESH,
                 label: "Aktualisieren (F5)".to_string(),
             },
+            OwnMenuItem {
+                id: menu_ids::FIND_IN_FILES,
+                label: "In Dateien suchen... (Ctrl+Shift+F)".to_string(),
+            },
         ];
         let folder = self.root_path.replace('/', "\\");
         match crate::shell_menu::show_background_menu(&folder, &own) {
@@ -125,6 +151,7 @@ impl App {
                 menu_ids::NEW_FOLDER => self.create_new_folder(),
                 menu_ids::SELECT_ALL => self.select_all(),
                 menu_ids::REFRESH => self.rescan(),
+                menu_ids::FIND_IN_FILES => self.open_find_in_files(None),
                 _ => {}
             },
             Ok(MenuResult::Shell) => self.rescan(),

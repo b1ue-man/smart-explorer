@@ -399,5 +399,90 @@ fn gui_design_task_settings_persistence_shortcut_guard_and_dialogs() {
     }
 }
 
+/// „In Dateien suchen“ (dialog by Ctrl+Shift+F), the results panel and a
+/// text view window with rendered Markdown, in both colour schemes.
+#[test]
+#[ignore = "run only through the isolated remote GUI task entrypoint; Suite crates-task"]
+fn gui_design_task_find_in_files_results_and_text_view() {
+    use super::content_search_results::{RecordState, SearchRecord};
+    use crate::agent_proto::{ContentEvent, ContentQuery, ContentSummary, LineHit};
+    for dark in [false, true] {
+        let mode = if dark { "dark" } else { "light" };
+        let mut h = Harness::new(dark, [1000.0, 700.0]);
+        h.workspace();
+        h.settle();
+        h.key_with_modifiers(
+            egui::Key::F,
+            egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+        );
+        assert!(h.app.text_tools.dialog.open);
+        assert_eq!(h.app.text_tools.dialog.form.folder, h.app.root_path);
+        h.save(&format!("find-in-files-{mode}"));
+        h.assert_visible("Alle suchen");
+        h.app.text_tools.dialog.open = false;
+        let tools = &mut h.app.text_tools;
+        let id = tools.results.next_id();
+        let query = ContentQuery::text("Bericht");
+        let root = h.app.root_path.clone();
+        tools.results.begin(
+            SearchRecord::new(id, &query, root, Default::default()),
+            false,
+        );
+        tools.results.apply(
+            id,
+            ContentEvent::Hits {
+                rel: "Bericht.md".into(),
+                size: 24_576,
+                mtime_ms: 0,
+                lines: vec![LineHit {
+                    line: 1,
+                    offset: 0,
+                    text: "# Bericht".into(),
+                    ranges: vec![(2, 9)],
+                    truncated: false,
+                    context: false,
+                }],
+                last: true,
+            },
+        );
+        tools.results.finish(
+            id,
+            RecordState::Done(ContentSummary {
+                files_searched: 3,
+                ..Default::default()
+            }),
+        );
+        tools.panel.visible = true;
+        h.save(&format!("find-results-{mode}"));
+        h.assert_visible("Suchergebnisse");
+        let doc = crate::textview::TextDocument::from_bytes(
+            b"# Bericht\n\nText mit [Link](Daten.csv) und `Code`.\n\n- [x] erledigt\n".to_vec(),
+        )
+        .unwrap();
+        let path = format!("{}/Bericht.md", h.app.root_path);
+        h.app
+            .text_tools
+            .views
+            .push(super::text_view_window::TextViewWindow::from_document(
+                1, &path, doc,
+            ));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        while !h.app.text_tools.views[0]
+            .markdown
+            .as_ref()
+            .is_some_and(|md| md.doc.is_some())
+        {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the view did not open"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            h.frame(Vec::new());
+        }
+        h.save(&format!("text-view-{mode}"));
+        h.assert_visible("Darstellung");
+    }
+}
+
 #[path = "gui_design_task_ui_visuals.rs"]
 mod visuals;

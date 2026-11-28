@@ -25,6 +25,7 @@ getrandom.workspace = true
 mdns-sd.workspace = true
 zip.workspace = true
 sha2-011.workspace = true
+regex.workspace = true
 
 [target.'cfg(not(windows))'.dependencies]
 libc.workspace = true

@@ -62,6 +62,8 @@ impl App {
                 });
         }
 
+        // „In Dateien suchen“: the results dock below the file list.
+        self.ui_text_tools_panel(ctx);
         self.ui_central(ctx);
 
         if self.settings.open {
@@ -116,6 +118,7 @@ impl App {
             self.ui_share(ctx);
         }
         self.ui_mount_windows(ctx);
+        self.ui_text_tools_windows(ctx);
         if self.remote_ctx.is_some() {
             self.ui_remote_ctx(ctx);
         }

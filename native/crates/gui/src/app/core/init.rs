@@ -492,6 +492,7 @@ impl App {
             quickshare: None,
             qs_devices: Vec::new(),
             quickshare_error: None,
+            text_tools: Default::default(),
         }
     }
 }

@@ -111,6 +111,32 @@ impl App {
 
     fn ui_file_menu(&mut self, ui: &mut egui::Ui) {
         let selected = !self.selection.is_empty();
+        // Also the way to the search and the view where the local Windows
+        // shell menu and Linux (no local context menu) have no own entry.
+        if ui
+            .add_enabled(
+                !self.root_path.is_empty(),
+                egui::Button::new("In Dateien suchen…   Ctrl+Shift+F"),
+            )
+            .on_hover_text("Volltextsuche im aktuellen Ordner (wie Notepad++)")
+            .clicked()
+        {
+            self.open_find_in_files(None);
+            ui.close_menu();
+        }
+        let file = self.single_selected_file();
+        if ui
+            .add_enabled(file.is_some(), egui::Button::new("Ansehen   F3"))
+            .on_hover_text("Ausgewählte Datei in der Textansicht öffnen")
+            .clicked()
+        {
+            if let Some(index) = file {
+                let ctx = ui.ctx().clone();
+                self.open_text_view_entry(&ctx, index);
+            }
+            ui.close_menu();
+        }
+        ui.separator();
         for (label, cut) in [
             ("Kopieren   Ctrl+C", false),
             ("Ausschneiden   Ctrl+X", true),
@@ -210,6 +236,11 @@ impl App {
             }
             ui.close_menu();
         }
+        let has_results = !self.text_tools.results.records.is_empty();
+        ui.add_enabled(
+            has_results,
+            egui::Checkbox::new(&mut self.text_tools.panel.visible, "Suchergebnisse"),
+        );
         if ui.button("Tastenkürzel   F1").clicked() {
             self.show_help = true;
             ui.close_menu();

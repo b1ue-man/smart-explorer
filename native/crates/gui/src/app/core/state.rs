@@ -494,4 +494,6 @@ pub struct App {
     pub(in crate::app) quickshare: Option<crate::quickshare::QuickShare>,
     pub(in crate::app) qs_devices: Vec<crate::quickshare::QsDevice>,
     pub(in crate::app) quickshare_error: Option<String>,
+    /// „In Dateien suchen“, its results panel and the text view windows.
+    pub(in crate::app) text_tools: super::text_tools::TextTools,
 }

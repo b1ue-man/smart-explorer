@@ -18,6 +18,8 @@ pub(super) enum SettingsPage {
     Drives,
     Background,
     Diagnostics,
+    /// „Sprachpakete“ of the text view.
+    Languages,
 }
 
 #[derive(Default)]
@@ -126,6 +128,7 @@ impl App {
                             if ui.button("Laufwerke verwalten …").clicked() { self.open_mount_manager(); }
                         }
                         SettingsPage::Background => self.ui_settings_background(ui),
+                        SettingsPage::Languages => self.ui_settings_languages(ui),
                         SettingsPage::Diagnostics => {
                             self.ui_share_settings_content(ui);
                             if ui.button("Hintergrundprotokoll öffnen").clicked() { self.show_daemon_log = true; }

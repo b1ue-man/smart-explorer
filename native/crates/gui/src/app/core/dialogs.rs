@@ -214,7 +214,8 @@ impl App {
                                 ("F5", "Aktualisieren"),
                                 ("Ctrl+L", "Pfad bearbeiten"),
                                 ("Ctrl+R", "Rekursiv umschalten"),
-                                ("Ctrl+F  ·  F3", "Suchleiste (Filter / Pfad / Befehl)"),
+                                ("Ctrl+F  ·  F3", "Suchleiste (Filter / Pfad / Befehl); F3 bei einer gewählten Datei: Ansehen"),
+                                ("Ctrl+Shift+O", "Ordnersuche (alle indizierten Ordner)"),
                                 (
                                     "Suchleiste",
                                     "Tippen filtert · Pfad oder C:\\… öffnen · .. (…) hoch · ›  für Befehle",
@@ -229,6 +230,18 @@ impl App {
                                     "Öffnen; bei Ordner aus der Suche zurück zur Leiste",
                                 ),
                                 ("·  ›Analyse", "Speicher-Analyse: Treemap, größte Ordner/Dateien"),
+                            ],
+                        ),
+                        (
+                            "Suche in Dateien und Ansicht",
+                            &[
+                                ("Ctrl+Shift+F", "In Dateien suchen (Notepad++-Felder, Regex, Ordnerpfad-Regex)"),
+                                ("F4 / Shift+F4", "Nächster / voriger Treffer der Suchergebnisse"),
+                                ("Doppelklick / Enter im Ergebnis", "Textansicht an der Trefferzeile"),
+                                ("F3 (Datei gewählt)", "Datei in der Textansicht"),
+                                ("In der Ansicht: Ctrl+F", "In der Datei suchen; F3 / Shift+F3 nächster / voriger"),
+                                ("In der Ansicht: Ctrl+G", "Gehe zu Zeile"),
+                                ("In der Ansicht: Ctrl+C", "Ausgewählte Zeilen kopieren (Zeilennummern anklicken)"),
                             ],
                         ),
                         (

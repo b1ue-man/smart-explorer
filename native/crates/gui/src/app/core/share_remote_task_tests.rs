@@ -25,6 +25,7 @@ fn share_remote_task_remote_context_menu_plans_actions_and_open_with_boundary() 
         file,
         vec![
             RemoteContextAction::Open,
+            RemoteContextAction::View,
             RemoteContextAction::OpenWith,
             RemoteContextAction::DownloadTo,
             RemoteContextAction::CopyToClipboard,
@@ -92,6 +93,17 @@ fn share_remote_task_remote_context_menu_plans_actions_and_open_with_boundary() 
     assert!(!directory.contains(&RemoteContextAction::ToggleFavorite));
     assert!(directory.contains(&RemoteContextAction::Delete));
     assert!(directory.contains(&RemoteContextAction::AnalyzeDirectory));
+    // „In Dateien suchen“ on a folder row, „Ansehen“ only on files.
+    assert!(directory.contains(&RemoteContextAction::FindInFolder));
+    assert!(!directory.contains(&RemoteContextAction::View));
+    assert_eq!(
+        RemoteContextAction::FindInFolder.target(),
+        RemoteContextActionTarget::ClickedRow
+    );
+    assert_eq!(
+        RemoteContextAction::View.target(),
+        RemoteContextActionTarget::ClickedRow
+    );
 
     let outside = plan_remote_context_menu(
         RemoteContextSubject::Row {
@@ -107,6 +119,11 @@ fn share_remote_task_remote_context_menu_plans_actions_and_open_with_boundary() 
     let background = plan_remote_context_menu(RemoteContextSubject::Background, supported);
     assert_eq!(background.first(), Some(&RemoteContextAction::Paste));
     assert!(background.contains(&RemoteContextAction::NewFolder));
+    assert!(background.contains(&RemoteContextAction::FindInCurrentFolder));
+    assert_eq!(
+        RemoteContextAction::FindInCurrentFolder.target(),
+        RemoteContextActionTarget::CurrentFolder
+    );
     for kind in [
         RemoteEditableFile::Text,
         RemoteEditableFile::Markdown,

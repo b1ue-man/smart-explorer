@@ -23,7 +23,7 @@ fn batches_task_settings_preserve_each_legacy_share_tab_destination() {
 }
 
 #[test]
-fn batches_task_settings_twelve_areas_roundtrip_without_reassigning_tabs() {
+fn batches_task_settings_thirteen_areas_roundtrip_without_reassigning_tabs() {
     let expected = [
         SettingsPage::ThisDevice,
         SettingsPage::Devices,
@@ -34,6 +34,7 @@ fn batches_task_settings_twelve_areas_roundtrip_without_reassigning_tabs() {
         SettingsPage::Drives,
         SettingsPage::Integration,
         SettingsPage::Appearance,
+        SettingsPage::Languages,
         SettingsPage::Updates,
         SettingsPage::Background,
         SettingsPage::Diagnostics,
@@ -51,6 +52,7 @@ fn batches_task_settings_twelve_areas_roundtrip_without_reassigning_tabs() {
                     | SettingsPage::Drives
                     | SettingsPage::Integration
                     | SettingsPage::Appearance
+                    | SettingsPage::Languages
                     | SettingsPage::Updates
                     | SettingsPage::Background
             ));

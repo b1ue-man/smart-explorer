@@ -193,6 +193,10 @@ impl App {
     ) -> &'static str {
         match action {
             RemoteContextAction::Open => "Öffnen",
+            RemoteContextAction::View => "Ansehen (F3)",
+            RemoteContextAction::FindInFolder | RemoteContextAction::FindInCurrentFolder => {
+                "In Dateien suchen…"
+            }
             RemoteContextAction::OpenWith => "Öffnen mit…",
             RemoteContextAction::DownloadTo => "Diesen Eintrag herunterladen nach…",
             RemoteContextAction::CopyToClipboard => {
@@ -255,11 +259,18 @@ impl App {
                     self.activate_entry(idx);
                 }
             }
+            RemoteContextAction::View => {
+                if let Some(idx) = row {
+                    self.open_text_view_entry(ctx, idx);
+                }
+            }
             RemoteContextAction::OpenWith => {
                 if let Some(idx) = row {
                     self.open_with_entry(idx);
                 }
             }
+            RemoteContextAction::FindInFolder => self.open_find_in_files(row_path),
+            RemoteContextAction::FindInCurrentFolder => self.open_find_in_files(None),
             RemoteContextAction::DownloadTo => {
                 if let Some(src) = row_path {
                     let source = self.current_place();

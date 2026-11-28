@@ -8,6 +8,9 @@ impl App {
         // and dialogs. Drain before every early return so those commands cannot
         // be replayed against the file selection after the dialog/focus changes.
         let (clipboard_keys, disconnected) = take_clipboard_keys(self.clip_key_rx.as_ref());
+        // A press on the search dialog, its results or a text view gives
+        // that surface the keyboard (see `text_tools.rs`).
+        self.text_tools.track_pointer(ctx);
         if disconnected {
             self.clip_key_rx = None;
             self.clip_key_cancel = None;
@@ -85,6 +88,9 @@ impl App {
         // and type-to-jump must not fire then.
         let typing = ctx.wants_keyboard_input();
         let renaming = self.rename_open.is_some();
+        // F3 on one selected file opens the text view; otherwise it focuses
+        // the search bar as before.
+        let view_file = !typing && !renaming && self.single_selected_file().is_some();
         let mut acts: Vec<KbdAct> = Vec::new();
         let mut jump_text = String::new();
         // Clipboard ops are driven by egui's semantic Copy/Cut/Paste events
@@ -129,16 +135,24 @@ impl App {
             if i.consume_key(Modifiers::NONE, Key::F6) {
                 acts.push(KbdAct::ToggleSplit);
             }
-            // Ctrl+F focuses the active tab's name filter; Ctrl+Shift+F the
-            // sidebar's global folder search.
+            // Ctrl+F focuses the active tab's name filter; Ctrl+Shift+F
+            // opens „In Dateien suchen“ (Notepad++), Ctrl+Shift+O the
+            // global folder search.
             if i.consume_key(Modifiers::COMMAND | Modifiers::SHIFT, Key::F) {
+                acts.push(KbdAct::FindInFiles);
+            }
+            if i.consume_key(Modifiers::COMMAND | Modifiers::SHIFT, Key::O) {
                 acts.push(KbdAct::FocusSearch);
             }
             if i.consume_key(Modifiers::COMMAND, Key::F) {
                 acts.push(KbdAct::FocusFilter);
             }
             if i.consume_key(Modifiers::NONE, Key::F3) {
-                acts.push(KbdAct::FocusFilter);
+                acts.push(if view_file {
+                    KbdAct::ViewFile
+                } else {
+                    KbdAct::FocusFilter
+                });
             }
             // Alt+1..9 → jump to that tab (Alt+9 = last). Works while typing,
             // like the other tab shortcuts above.
@@ -387,6 +401,12 @@ impl App {
                     // Fresh filter session: we're in the filter, not the list.
                     self.search_nav_from_filter = false;
                 }
+                KbdAct::FindInFiles => self.open_find_in_files(None),
+                KbdAct::ViewFile => {
+                    if let Some(index) = self.single_selected_file() {
+                        self.open_text_view_entry(ctx, index);
+                    }
+                }
                 KbdAct::ToggleHelp => self.show_help = !self.show_help,
                 KbdAct::ToggleSplit => self.toggle_split(),
                 KbdAct::StarCurrent => self.star_current_folder(),
@@ -446,5 +466,6 @@ impl App {
             || self.rename_open.is_some()
             || (self.show_update_dialog && self.update_ready.is_some())
             || self.unsigned_update_prompt.is_some()
+            || self.text_tools.owns_keyboard()
     }
 }

@@ -14,11 +14,14 @@ pub(in crate::app) mod menu_ids {
     pub const RENAME: u32 = 0x8005;
     pub const TOGGLE_FAV: u32 = 0x8006;
     pub const EXTRACT_ZIP: u32 = 0x8007;
+    pub const VIEW_TEXT: u32 = 0x8008;
+    pub const FIND_IN_FOLDER: u32 = 0x8009;
     // Background (empty space) menu
     pub const PASTE: u32 = 0x8010;
     pub const NEW_FOLDER: u32 = 0x8011;
     pub const REFRESH: u32 = 0x8012;
     pub const SELECT_ALL: u32 = 0x8013;
+    pub const FIND_IN_FILES: u32 = 0x8014;
 }
 
 /// Everything that belongs to one tab. The ACTIVE tab's state lives directly
@@ -340,6 +343,10 @@ pub(in crate::app) enum KbdAct {
     StarCurrent,
     /// Alt+1..9: jump to tab N (Alt+9 = last tab).
     SelectTab(usize),
+    /// Ctrl+Shift+F: „In Dateien suchen“.
+    FindInFiles,
+    /// F3 with one file selected: the text view („Ansehen“).
+    ViewFile,
 }
 
 #[cfg(test)]
