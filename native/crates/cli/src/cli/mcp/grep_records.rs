@@ -62,10 +62,16 @@ pub(in crate::cli) fn run_search(
         .map_err(|_| io::Error::other("the content search panicked"))?
 }
 
-/// `Suche „x“ (N Treffer in M Dateien von K durchsucht)`, Notepad++'s totals.
+/// `Suche „x“ (N Treffer in M Dateien von K durchsuchten)`, Notepad++'s totals
+/// ("1 hit in 1 file of 1 searched"), worded as the desktop and the app word it.
 pub(in crate::cli) fn totals_line(pattern: &str, summary: &ContentSummary) -> String {
+    let files = if summary.files_matched == 1 {
+        "Datei"
+    } else {
+        "Dateien"
+    };
     let mut line = format!(
-        "Suche „{pattern}“ ({} Treffer in {} Dateien von {} durchsucht",
+        "Suche „{pattern}“ ({} Treffer in {} {files} von {} durchsuchten",
         summary.hits, summary.files_matched, summary.files_searched
     );
     if summary.skipped > 0 {
@@ -338,7 +344,7 @@ mod tests {
         };
         assert_eq!(
             totals_line("foo", &summary),
-            "Suche „foo“ (5 Treffer in 2 Dateien von 12 durchsucht; 1 übersprungen)"
+            "Suche „foo“ (5 Treffer in 2 Dateien von 12 durchsuchten; 1 übersprungen)"
         );
     }
 }

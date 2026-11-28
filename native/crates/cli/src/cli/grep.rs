@@ -359,7 +359,7 @@ mod tests {
         let (code, out, err) = run(&["welt"]);
         assert_eq!((code, out.as_str()), (0, "a.txt:1:Hallo Welt\n"), "{err}");
         assert!(
-            err.contains("Suche „welt“ (1 Treffer in 1 Dateien von 2 durchsucht"),
+            err.contains("Suche „welt“ (1 Treffer in 1 Datei von 2 durchsuchten"),
             "{err}"
         );
         assert_eq!(run(&["main", "--files-only"]).1, "sub/b.rs\n");
