@@ -1,5 +1,7 @@
 # Dateioperationen: Wechseldatenträger, Volltextsuche, Arbeitsziel für Agenten, Textansicht (2026-11-27)
 
+Stand: ausgeliefert mit v0.5.208 (2026-11-28; Suite `crates-task` Lauf 46095407151 grün, Release 46101256778). Offene Reste: `docs/TODO.md` SUCHE-EXEC-SHARE-CWD, SUCHE-ERSETZEN, WECHSELMEDIUM-REST.
+
 Auftrag des Nutzers (2026-11-27, nach v0.5.207):
 
 1. „reviewe die cli befehele für file operations in verbindung mit usb sticks und co, da ist wohl als n fehler.“
