@@ -441,7 +441,10 @@ and one `ContentDone` (tag 97) with the totals; `Cancel` ends it. The agent sear
 with ripgrep's libraries (grep-searcher, grep-regex, fancy-regex for lookaround and
 back references) over a work-stealing walk that never enters links; only hit lines
 cross the connection. Without the label `vfs::content_search` reads the files over
-SFTP and searches locally.
+SFTP and searches locally. The payloads grow from about 1.0/0.9 MB to 3.0/2.5 MB
+(x86_64/aarch64: regex, fancy-regex, the encoding tables); after a
+`PROTO_VERSION` change they come from the suite's part `agent-bundles` (artifact
+`crates-task-agent-bin`), since no cargo runs on the workstation.
 
 ## Phase 5 — Server-side search / filter — ✅ done (0.5.72)
 - **Capability:** `Search{root, spec}` (case-insensitive substring or `*?`-glob,
