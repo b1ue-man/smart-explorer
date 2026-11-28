@@ -7228,7 +7228,7 @@ checksum = "67b1b7a3b5fe4f1376887184045fcf45c69e92af734b7aaddc05fb777b6fbd03"
 
 [[package]]
 name = "smart_explorer"
-version = "0.5.207"
+version = "0.5.208"
 dependencies = [
  "crossbeam-channel",
  "eframe",
@@ -7264,7 +7264,7 @@ dependencies = [
 
 [[package]]
 name = "smart_explorer_cli"
-version = "0.5.207"
+version = "0.5.208"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -7294,7 +7294,7 @@ dependencies = [
 
 [[package]]
 name = "smart_explorer_core"
-version = "0.5.207"
+version = "0.5.208"
 dependencies = [
  "aes 0.9.1",
  "aes-gcm 0.11.1",
@@ -7327,7 +7327,7 @@ dependencies = [
 
 [[package]]
 name = "smart_explorer_engine"
-version = "0.5.207"
+version = "0.5.208"
 dependencies = [
  "aes-kw",
  "argon2 0.5.3",
@@ -7408,7 +7408,7 @@ dependencies = [
 
 [[package]]
 name = "smart_explorer_gui"
-version = "0.5.207"
+version = "0.5.208"
 dependencies = [
  "base64 0.22.1",
  "calloop 0.13.0",
@@ -7457,7 +7457,7 @@ dependencies = [
 
 [[package]]
 name = "smart_explorer_mobile"
-version = "0.5.207"
+version = "0.5.208"
 dependencies = [
  "base64 0.22.1",
  "crossbeam-channel",
@@ -7478,7 +7478,7 @@ dependencies = [
 
 [[package]]
 name = "smart_explorer_storage"
-version = "0.5.207"
+version = "0.5.208"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -7516,7 +7516,7 @@ dependencies = [
 
 [[package]]
 name = "smart_explorer_transfer"
-version = "0.5.207"
+version = "0.5.208"
 dependencies = [
  "base64 0.22.1",
  "chrono",
