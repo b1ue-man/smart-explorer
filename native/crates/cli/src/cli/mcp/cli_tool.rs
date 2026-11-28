@@ -40,6 +40,10 @@ pub(super) fn start(session: &Session, args: &Args<'_>) -> Result<Arc<Job>, Stri
     if let Some(refusal) = crate::cli::share::exec_approvals::mcp_refusal(&arguments) {
         return Err(refusal);
     }
+    // The mask lists and se's own data (plan 2026-11-28, S1).
+    if let Some(refusal) = super::mask_layer_guard::cli_refusal(&session.masks.set()?, &arguments) {
+        return Err(refusal);
+    }
     let stdin = args.opt_string("stdin")?;
     let pairing = arguments.get(0).is_some_and(|v| v == "share")
         && arguments.get(1).is_some_and(|v| v == "discover")

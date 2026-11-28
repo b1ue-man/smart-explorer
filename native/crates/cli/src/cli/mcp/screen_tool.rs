@@ -300,6 +300,12 @@ pub(super) fn screen_input(args: &Args) -> Result<CallToolResult, String> {
     Ok(response::ok(answer))
 }
 
+/// Whether the call answers with a picture (`snapshot`), which the mask
+/// layer refuses while a mask list is active (plan 2026-11-28, M4).
+pub(super) fn yields_image(args: &Args) -> bool {
+    matches!(args.opt_string("action"), Ok(Some(action)) if action == "snapshot")
+}
+
 pub(super) fn screen(args: &Args) -> Result<CallToolResult, String> {
     match args.string("action")?.as_str() {
         "devices" => Ok(response::ok(crate::cli::screen::devices_value(

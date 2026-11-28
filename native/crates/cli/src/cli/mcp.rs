@@ -41,12 +41,26 @@ mod line_read;
 mod login_shutdown;
 #[path = "mcp/login_tool.rs"]
 mod login_tool;
+#[path = "mcp/mask_layer.rs"]
+mod mask_layer;
+#[path = "mcp/mask_layer_guard.rs"]
+mod mask_layer_guard;
+#[path = "mcp/mask_layer_read.rs"]
+mod mask_layer_read;
+#[path = "mcp/mask_layer_stream.rs"]
+mod mask_layer_stream;
+#[path = "mcp/masks_tool.rs"]
+mod masks_tool;
 #[path = "mcp/os/mod.rs"]
 mod os;
+#[path = "mcp/patch_tool.rs"]
+mod patch_tool;
 #[path = "mcp/rdp_shutdown.rs"]
 mod rdp_shutdown;
 #[path = "mcp/rdp_tool.rs"]
 mod rdp_tool;
+#[path = "mcp/replace_tool.rs"]
+mod replace_tool;
 #[path = "mcp/response.rs"]
 mod response;
 #[path = "mcp/root_path.rs"]
@@ -67,6 +81,17 @@ mod session;
 mod sessions_tool;
 #[path = "mcp/shell_registry.rs"]
 mod shell_registry;
+#[path = "mcp/shell_tool.rs"]
+mod shell_tool;
+#[path = "mcp/shell_tool_guard.rs"]
+mod shell_tool_guard;
+#[path = "mcp/shell_tool_local.rs"]
+mod shell_tool_local;
+#[path = "mcp/shell_tool_shells.rs"]
+mod shell_tool_shells;
+#[cfg(test)]
+#[path = "mcp/shell_tool_tests.rs"]
+mod shell_tool_tests;
 #[path = "mcp/spool.rs"]
 mod spool;
 #[path = "mcp/status_tools.rs"]

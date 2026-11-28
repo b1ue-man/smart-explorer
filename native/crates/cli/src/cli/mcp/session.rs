@@ -1,9 +1,11 @@
 //! State of one `se mcp` process: its private session directory (job output
 //! spools, guarded by a held lock file), the job registry, reused logins, its
-//! persistent shell sessions and the path of the running `se` executable.
+//! persistent shell sessions, the mask lists (`mask_layer.rs`) and the path of
+//! the running `se` executable.
 //! Directories of sessions whose process is gone (no lock holder) are removed
 //! at the next start.
 use super::jobs::JobRegistry;
+use super::mask_layer::MaskLayer;
 use super::shell_registry::ShellRegistry;
 use super::targets::Targets;
 use std::fs::File;
@@ -18,6 +20,9 @@ pub(super) struct Session {
     pub(super) targets: Arc<Targets>,
     /// Shell sessions this server opened or joined (`exec` with `session`).
     pub(super) shells: Arc<ShellRegistry>,
+    /// The active mask lists: every output is masked with them and every
+    /// argument restored from their placeholders (plan 2026-11-28, S2).
+    pub(super) masks: Arc<MaskLayer>,
     /// The installed `se` that serves this session; the `se` tool runs it.
     pub(super) executable: PathBuf,
     pub(super) hello: std::sync::Mutex<Option<crate::mcp_launcher::RuntimeHelloReply>>,
@@ -59,8 +64,10 @@ impl Session {
         };
         std::fs::write(directory.join("runtime.v1.json"), record.to_string())
             .map_err(|e| format!("cannot record the MCP runtime identity: {e}"))?;
+        let masks = Arc::new(MaskLayer::open());
         Ok(Self {
-            jobs: JobRegistry::new(&directory),
+            jobs: JobRegistry::with_masks(&directory, masks.clone()),
+            masks,
             targets: Arc::default(),
             shells: Arc::default(),
             directory,

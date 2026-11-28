@@ -14,13 +14,14 @@ use rmcp::model::CallToolResult;
 use serde_json::json;
 use std::io::{self, BufRead, BufReader};
 
-pub(super) fn read(
-    session: &Session,
-    target: &Resolved,
-    meta: &VfsMeta,
-    through_link: bool,
-    args: &Args<'_>,
-) -> Result<CallToolResult, String> {
+/// The page a `line`/`lines` call asks for.
+pub(super) struct LineRequest {
+    pub(super) first: u64,
+    pub(super) wanted: Option<u64>,
+    pub(super) budget: usize,
+}
+
+pub(super) fn request(args: &Args<'_>) -> Result<LineRequest, String> {
     for key in ["offset", "length"] {
         if args.value(key).is_some() {
             return Err(format!(
@@ -44,7 +45,56 @@ pub(super) fn read(
     if wanted == Some(0) {
         return Err("`lines` must be at least 1".into());
     }
-    let budget = response::page_budget(args.opt_u64("max_bytes")?);
+    Ok(LineRequest {
+        first,
+        wanted,
+        budget: response::page_budget(args.opt_u64("max_bytes")?),
+    })
+}
+
+/// The refusal of a page that holds a NUL byte.
+pub(super) fn binary_text(path: &str) -> String {
+    format!("{path} looks binary; read it with encoding \"base64\" or copy it to a local path")
+}
+
+/// The answer of one page of lines.
+pub(super) fn page_value(
+    path: &str,
+    known_size: Option<u64>,
+    tag: Option<String>,
+    through_link: bool,
+    first: u64,
+    page: LinePage,
+) -> serde_json::Value {
+    json!({
+        "path": path,
+        "size": known_size,
+        "etag": tag,
+        "through_link": through_link,
+        "line": first,
+        "lines": page.count,
+        "encoding": "text",
+        "content": page.content,
+        "next_line": page.next_line,
+        "total_lines": page.total_lines,
+        "crlf": page.crlf,
+        "lossy": page.lossy,
+        "cut_lines": page.cut,
+    })
+}
+
+pub(super) fn read(
+    session: &Session,
+    target: &Resolved,
+    meta: &VfsMeta,
+    through_link: bool,
+    args: &Args<'_>,
+) -> Result<CallToolResult, String> {
+    let LineRequest {
+        first,
+        wanted,
+        budget,
+    } = request(args)?;
     let known_size = (!through_link).then_some(meta.size);
     let tag = (!through_link).then(|| etag(meta));
     let reader = target
@@ -70,28 +120,18 @@ pub(super) fn read(
     .map_err(|error| session.targets.io_error(target, error))?;
     if page.binary {
         return Ok(response::error_with(
-            format!(
-                "{} looks binary; read it with encoding \"base64\" or copy it to a local path",
-                target.path
-            ),
+            binary_text(&target.path),
             json!({ "size": known_size, "etag": tag }),
         ));
     }
-    Ok(response::ok(json!({
-        "path": target.path,
-        "size": known_size,
-        "etag": tag,
-        "through_link": through_link,
-        "line": first,
-        "lines": page.count,
-        "encoding": "text",
-        "content": page.content,
-        "next_line": page.next_line,
-        "total_lines": page.total_lines,
-        "crlf": page.crlf,
-        "lossy": page.lossy,
-        "cut_lines": page.cut,
-    })))
+    Ok(response::ok(page_value(
+        &target.path,
+        known_size,
+        tag,
+        through_link,
+        first,
+        page,
+    )))
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]

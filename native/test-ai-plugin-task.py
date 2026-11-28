@@ -11,9 +11,10 @@ milestone once:
   build    `se` plus the lib tests (rustfmt and clippy: build.yml, docs/TODO.md H1)
   unit     `mcp_task_` tests and the directly affected `cli::` and handoff tests
   mcp      `se mcp` over both lifecycles (Codex `initialize` 2025-06-18,
-           Claude Code `server/discover` 2026-07-28): catalog (25 tools, read-only
-           hints, `alwaysLoad` on exactly the 12 file tools and the 4 remote-command
-           tools exec, job_input, job_cancel and sessions, the priority
+           Claude Code `server/discover` 2026-07-28): catalog (31 tools, read-only
+           hints, `alwaysLoad` on exactly the 15 file tools (with apply_patch and
+           replace), the command tools shell, exec, job_input, job_cancel and
+           sessions, and the mask list tool masks, the priority
            paragraph within the first 512 characters of the instructions, the
            shells of `exec` named in the instructions, the `session`,
            `attachable` and `shell` arguments of `exec`), stray-print
@@ -62,15 +63,17 @@ NATIVE = ROOT / "native"
 WINDOWS = os.name == "nt"
 # The catalog of native/crates/cli/src/cli/mcp/catalog.rs `tools()`, in its order.
 EXPECTED_TOOLS = [
-    "status", "connections", "root", "list", "stat", "read", "write", "edit", "mkdir", "remove",
-    "copy", "move", "search", "grep", "exec", "job_status", "job_input", "job_cancel", "se", "sessions",
-    "screen", "screen_window", "screen_input", "tcp_forward", "apps", "rdp", "login",
+    "status", "connections", "root", "list", "stat", "read", "write", "edit", "apply_patch", "mkdir",
+    "remove", "copy", "move", "search", "grep", "replace", "shell", "exec", "job_status", "job_input",
+    "job_cancel", "se", "sessions", "masks", "screen", "screen_window", "screen_input", "tcp_forward",
+    "apps", "rdp", "login",
 ]
 # Tools whose annotation says readOnlyHint (catalog.rs `read_only(..)`).
 READ_ONLY = {"status", "connections", "root", "list", "stat", "read", "search", "grep", "job_status"}
 # Tools Claude Code loads upfront (`_meta["anthropic/alwaysLoad"]`, catalog.rs `UPFRONT`).
-UPFRONT = {"connections", "root", "list", "stat", "read", "write", "edit", "mkdir", "remove", "copy",
-           "move", "search", "grep", "exec", "job_status", "job_input", "job_cancel", "sessions"}
+UPFRONT = {"connections", "root", "list", "stat", "read", "write", "edit", "apply_patch", "mkdir", "remove",
+           "copy", "move", "search", "grep", "replace", "shell", "exec", "job_status", "job_input",
+           "job_cancel", "sessions", "masks"}
 # Words of the instructions that tell which shell `exec` runs where (2026-11-25).
 SHELL_WORDS = ("PowerShell", "pwsh 7", "5.1", "&&", "if ($?)", "login shell", "`shell`", "`argv`")
 # Words of the priority paragraph an agent must receive: the order (before) and the host tools it

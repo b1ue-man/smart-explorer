@@ -1,6 +1,7 @@
 //! Reading tools (`list`, `stat`, `read`) and the simple changes `mkdir` and
 //! `remove`, over the same backends and guards as the terminal commands.
 use super::args::Args;
+use super::mask_layer_guard::{check, Reach};
 use super::response;
 use super::session::Session;
 use super::spool::{looks_textual, text_page};
@@ -53,6 +54,7 @@ pub(super) fn target_spec(args: &Args<'_>) -> Result<String, String> {
 
 pub(super) fn list(session: &Session, args: &Args<'_>) -> Result<CallToolResult, String> {
     let target = session.targets.resolve(&target_spec(args)?)?;
+    check(session, &target, Reach::Entry)?;
     let mut entries = target
         .backend
         .list_dir(&target.path)
@@ -91,6 +93,7 @@ pub(super) fn list(session: &Session, args: &Args<'_>) -> Result<CallToolResult,
 
 pub(super) fn stat(session: &Session, args: &Args<'_>) -> Result<CallToolResult, String> {
     let target = session.targets.resolve(&target_spec(args)?)?;
+    check(session, &target, Reach::Entry)?;
     let meta = target
         .backend
         .stat(&target.path)
@@ -104,6 +107,7 @@ pub(super) fn stat(session: &Session, args: &Args<'_>) -> Result<CallToolResult,
 /// more than the page shows whether the file continues.
 pub(super) fn read(session: &Session, args: &Args<'_>) -> Result<CallToolResult, String> {
     let target = session.targets.resolve(&target_spec(args)?)?;
+    check(session, &target, Reach::Entry)?;
     let meta = target
         .backend
         .stat(&target.path)
@@ -114,6 +118,11 @@ pub(super) fn read(session: &Session, args: &Args<'_>) -> Result<CallToolResult,
         EntryKind::Link => true,
         EntryKind::File => false,
     };
+    let masks = session.masks.set()?;
+    if !masks.is_empty() {
+        // The whole file masked, then paged (`mask_layer_read.rs`).
+        return super::mask_layer_read::read(session, &masks, &target, &meta, through_link, args);
+    }
     if args.value("line").is_some() || args.value("lines").is_some() {
         return super::line_read::read(session, &target, &meta, through_link, args);
     }
@@ -225,6 +234,7 @@ pub(super) fn read_range(
 
 pub(super) fn mkdir(session: &Session, args: &Args<'_>) -> Result<CallToolResult, String> {
     let target = session.targets.resolve(&target_spec(args)?)?;
+    check(session, &target, Reach::Entry)?;
     let existed = target
         .backend
         .try_exists(&target.path)
@@ -241,6 +251,7 @@ pub(super) fn mkdir(session: &Session, args: &Args<'_>) -> Result<CallToolResult
 
 pub(super) fn remove(session: &Session, args: &Args<'_>) -> Result<CallToolResult, String> {
     let target = session.targets.resolve(&target_spec(args)?)?;
+    check(session, &target, Reach::Tree)?;
     let allow_root = args.flag("allow_root")?;
     // Paths below a kept connection carry no root mark of their own; the
     // resolution marks filesystem and connection roots and the working root.

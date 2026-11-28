@@ -20,18 +20,24 @@ fn mcp_task_catalog_is_complete_and_within_host_limits() {
             "read",
             "write",
             "edit",
+            // Plan 2026-11-28 (M4, M5, M6): multi-file patches, replacing in
+            // files, local commands and the mask lists.
+            "apply_patch",
             "mkdir",
             "remove",
             "copy",
             "move",
             "search",
             "grep",
+            "replace",
+            "shell",
             "exec",
             "job_status",
             "job_input",
             "job_cancel",
             "se",
             "sessions",
+            "masks",
             "screen",
             // Added by 1aea1216 and cf6f47e9 (docs/oberflaechen/fernzugriff.md).
             "screen_window",
@@ -75,7 +81,7 @@ fn mcp_task_catalog_is_complete_and_within_host_limits() {
             .as_ref()
             .and_then(|meta| meta.get("anthropic/alwaysLoad"))
             .cloned();
-        // The file tools and the remote-command tools load upfront.
+        // The file tools, the command tools and `masks` load upfront.
         let deferred = matches!(
             tool.name.as_ref(),
             "status"
@@ -281,6 +287,71 @@ fn mcp_root_task_catalog_offers_root_grep_and_reading_by_lines() {
     }
     let skill = include_str!("../plugin/assets/SKILL.md");
     for needle in ["`root`", "`grep`", "`line`"] {
+        assert!(skill.contains(needle), "{needle} missing in SKILL.md");
+    }
+}
+
+/// Plan 2026-11-28 (M4): the instructions name the command tool `shell`
+/// instead of the agent's own terminal, the placeholders of the mask lists
+/// with their `⟦⟦` escape, and the new file tools; the four new tools load
+/// upfront, and `masks` changes only this device.
+#[test]
+fn mcp_masks_task_catalog_registers_shell_replace_patch_and_masks() {
+    let tools = tools();
+    let find = |name: &str| {
+        tools
+            .iter()
+            .find(|tool| tool.name == name)
+            .unwrap_or_else(|| panic!("{name} missing"))
+    };
+    for needle in [
+        "`shell`, not your own terminal",
+        "⟦Name-1⟧",
+        "⟦⟦",
+        "se restores the real values",
+        "`masks`",
+        "never shows values",
+        "use only se tools",
+        "`replace`",
+        "`dry_run`",
+        "`apply_patch`",
+    ] {
+        assert!(INSTRUCTIONS.contains(needle), "{needle} missing");
+    }
+    assert!(INSTRUCTIONS.len() < 2_048, "{}", INSTRUCTIONS.len());
+    let first = INSTRUCTIONS.split("\n\n").next().unwrap_or_default();
+    for needle in ["apply_patch", "replace", "sed"] {
+        assert!(first.contains(needle), "{needle} missing in: {first}");
+    }
+    for name in ["shell", "replace", "apply_patch", "masks"] {
+        let tool = find(name);
+        let upfront = tool
+            .meta
+            .as_ref()
+            .and_then(|meta| meta.get("anthropic/alwaysLoad"))
+            .cloned();
+        assert_eq!(upfront, Some(serde_json::Value::Bool(true)), "{name}");
+        let annotations = tool.annotations.as_ref().expect("annotations");
+        assert_eq!(annotations.read_only_hint, Some(false), "{name}");
+        assert!(
+            !tool.description.as_deref().unwrap_or_default().is_empty(),
+            "{name}"
+        );
+    }
+    let masks = find("masks");
+    let annotations = masks.annotations.as_ref().expect("annotations");
+    assert_eq!(annotations.destructive_hint, Some(false));
+    assert_eq!(annotations.open_world_hint, Some(false));
+    assert_eq!(
+        masks.input_schema["required"],
+        serde_json::json!(["action"])
+    );
+    // `read` tells that its offsets count the masked text.
+    let read = find("read").description.as_deref().unwrap_or_default();
+    assert!(read.contains("masked text"), "{read}");
+    // The plugin's skill names the same.
+    let skill = include_str!("../plugin/assets/SKILL.md");
+    for needle in ["`shell`", "⟦⟦", "`masks`", "`replace`", "`apply_patch`"] {
         assert!(skill.contains(needle), "{needle} missing in SKILL.md");
     }
 }

@@ -6,6 +6,7 @@
 //! right before publishing.
 use super::args::Args;
 use super::file_tools::{etag, read_range, target_spec};
+use super::mask_layer_guard::{check, Reach};
 use super::response;
 use super::session::Session;
 use crate::cli::link_paths::resolve_destination;
@@ -22,14 +23,22 @@ use std::io::Write;
 
 pub(super) fn write(session: &Session, args: &Args<'_>) -> Result<CallToolResult, String> {
     let target = session.targets.resolve(&target_spec(args)?)?;
+    check(session, &target, Reach::Entry)?;
     let content = args
         .opt_string("content")?
         .ok_or_else(|| "missing required argument `content`".to_string())?;
     let bytes = match args.opt_string("encoding")?.as_deref() {
+        // Text arrives with its placeholders restored (`mask_layer.rs`).
         None | Some("text") => content.into_bytes(),
-        Some("base64") => base64::engine::general_purpose::STANDARD
-            .decode(content.trim())
-            .map_err(|error| format!("`content` is not valid base64: {error}"))?,
+        Some("base64") => {
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(content.trim())
+                .map_err(|error| format!("`content` is not valid base64: {error}"))?;
+            // `read` masks base64 content in its bytes; its placeholders
+            // are restored here the same way.
+            super::mask_layer_read::restore_bytes(&session.masks.set()?, bytes)
+                .map_err(|error| format!("argument `content`: {error}"))?
+        }
         Some(other) => return Err(format!("unknown encoding `{other}`; use text or base64")),
     };
     publish(
@@ -43,6 +52,7 @@ pub(super) fn write(session: &Session, args: &Args<'_>) -> Result<CallToolResult
 
 pub(super) fn edit(session: &Session, args: &Args<'_>) -> Result<CallToolResult, String> {
     let target = session.targets.resolve(&target_spec(args)?)?;
+    check(session, &target, Reach::Entry)?;
     let edits = parse_edits(args.value("edits"))?;
     let meta = target
         .backend

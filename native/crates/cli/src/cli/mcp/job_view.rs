@@ -1,6 +1,10 @@
 //! What a job-starting call or `job_status` returns: state, progress and one
 //! page of every output stream within the answer budget, plus the offsets to
 //! continue. Also the `job_input` and `job_cancel` tools.
+//!
+//! Output pages come from the masked streams (`jobs.rs`); the job's own
+//! fields (summary, result, error) are masked here with the active mask
+//! lists, so the answer leaves masked exactly once (`response::masked`).
 use super::args::Args;
 use super::jobs::{Job, JobStatus};
 use super::response;
@@ -32,12 +36,21 @@ pub(super) async fn started_job_answer(
     // A job that already failed is the failure of this call (a command that
     // ran and exited non-zero completed; that is not a failure).
     Ok(match job.end() {
-        Some(end) if end.status == JobStatus::Failed => response::error_with(
-            end.error
-                .unwrap_or_else(|| format!("job {} failed", job.id)),
-            value,
-        ),
-        _ => response::ok(value),
+        Some(end) if end.status == JobStatus::Failed => {
+            let message = end
+                .error
+                .unwrap_or_else(|| format!("job {} failed", job.id));
+            response::masked_error_with(mask_text(job, &message)?, value)
+        }
+        _ => response::masked(value),
+    })
+}
+
+/// `text` masked with the lists active now (unchanged without lists).
+fn mask_text(job: &Job, text: &str) -> Result<String, String> {
+    Ok(match job.masks() {
+        Some(layer) => super::mask_layer::mask_text(&layer.set()?, text),
+        None => text.to_string(),
     })
 }
 
@@ -72,7 +85,7 @@ pub(super) async fn status_tool(
         hits: args.opt_u64("hits_offset")?.unwrap_or(0),
     };
     let budget = response::page_budget(args.opt_u64("max_bytes")?);
-    Ok(response::ok(job_value(&job, &offsets, budget)?))
+    Ok(response::masked(job_value(&job, &offsets, budget)?))
 }
 
 pub(super) fn input_tool(session: &Session, args: &Args<'_>) -> Result<CallToolResult, String> {
@@ -137,8 +150,16 @@ impl Offsets {
     }
 }
 
+/// State, progress and output pages of `job`; every string is masked (the
+/// job's fields here, the pages in their streams).
 pub(super) fn job_value(job: &Job, offsets: &Offsets, budget: usize) -> Result<Value, String> {
+    // Output a masker held back for a possible value is shown once its
+    // stream has been silent (a prompt that waits for input).
+    job.release_idle()?;
     let mut value = job.summary_value();
+    if let Some(layer) = job.masks() {
+        super::mask_layer::mask_value(&layer.set()?, &mut value);
+    }
     let ended = job.end().is_some();
     let names = job.stream_names().collect::<Vec<_>>();
     let share = budget / names.len().max(1);
@@ -171,13 +192,11 @@ pub(super) fn job_value(job: &Job, offsets: &Offsets, budget: usize) -> Result<V
         object.insert(name.to_string(), page);
     }
     if !ended {
-        object.insert(
-            "next".into(),
-            json!(format!(
-                "call job_status with job_id \"{}\" (and wait_seconds) to follow it, job_cancel to stop it",
-                job.id
-            )),
+        let next = format!(
+            "call job_status with job_id \"{}\" (and wait_seconds) to follow it, job_cancel to stop it",
+            job.id
         );
+        object.insert("next".into(), json!(mask_text(job, &next)?));
     }
     Ok(value)
 }

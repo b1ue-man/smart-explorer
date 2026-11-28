@@ -2,13 +2,18 @@
 //! rmcp negotiates either lifecycle (Codex `initialize`, Claude Code
 //! `server/discover`) and runs every request on its own task; blocking file,
 //! network and IPC work runs on tokio's blocking pool or on job threads.
+//!
+//! Every call passes the mask layer (plan 2026-11-28, contract 4): its
+//! arguments are restored from placeholders before the tool runs, and its
+//! result is masked with every active mask list before it leaves.
 use super::args::Args;
 use super::jobs::{Job, JobKind};
 use super::session::Session;
 use super::update_stop::UpdateStop;
 use super::{
-    catalog, cli_tool, exec_tool, file_tools, file_write, grep_tool, job_view, response, root_tool,
-    screen_tool, search_tool, sessions_tool, status_tools, transfer_tools,
+    catalog, cli_tool, exec_tool, file_tools, file_write, grep_tool, job_view, mask_layer,
+    masks_tool, patch_tool, replace_tool, response, root_tool, screen_tool, search_tool,
+    sessions_tool, shell_tool, status_tools, transfer_tools,
 };
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, Implementation, ListToolsResult,
@@ -74,7 +79,7 @@ impl ServerHandler for SeServer {
 
     async fn call_tool(
         &self,
-        request: CallToolRequestParams,
+        mut request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, McpError> {
         if !self.tools.iter().any(|tool| tool.name == request.name) {
@@ -83,11 +88,40 @@ impl ServerHandler for SeServer {
                 None,
             ));
         }
+        // After a local command changed the mask store from outside (P5,
+        // `shell_tool_guard`), this session serves nothing but the end of its
+        // jobs: the agent may have weakened its own masking.
+        if let Some(reason) = super::shell_tool_guard::session_lock() {
+            if !matches!(request.name.as_ref(), "job_status" | "job_cancel") {
+                return Ok(mask_layer::refusal(reason).into());
+            }
+        }
+        // The active lists of this call and its arguments with the real
+        // values of their placeholders, off the async threads (secret store,
+        // file). Unreadable lists fail the call: without them no output can
+        // be masked.
+        let layer = self.session.masks.clone();
+        let name = request.name.to_string();
+        let arguments = request.arguments.take();
+        let prepared = tokio::task::spawn_blocking(move || layer.prepare(&name, arguments)).await;
+        let masks = match prepared {
+            Ok(Ok((masks, arguments))) => {
+                request.arguments = arguments;
+                masks
+            }
+            Ok(Err(message)) => return Ok(mask_layer::refusal(message).into()),
+            Err(error) => {
+                return Ok(mask_layer::refusal(format!("mask list worker failed: {error}")).into())
+            }
+        };
+        if let Some(refusal) = mask_layer::image_refusal(&masks, &request) {
+            return Ok(mask_layer::finish(&masks, response::error(refusal)).into());
+        }
         let result = match dispatch(&self.session, &request, &context).await {
             Ok(result) => result,
             Err(message) => response::error(message),
         };
-        Ok(result.into())
+        Ok(mask_layer::finish(&masks, result).into())
     }
 }
 
@@ -173,6 +207,27 @@ async fn dispatch(
                     .await?;
             operation.take();
             job_view::started_job_answer(&job, &args, context).await
+        }
+        "replace" => {
+            let job =
+                start(move || replace_tool::start(&session_for_work, &Args::new(owned.as_ref())))
+                    .await?;
+            operation.take();
+            job_view::started_job_answer(&job, &args, context).await
+        }
+        "apply_patch" => {
+            blocking(move || patch_tool::apply_patch(&session_for_work, &Args::new(owned.as_ref())))
+                .await
+        }
+        "shell" => {
+            let job =
+                start(move || shell_tool::start(&session_for_work, &Args::new(owned.as_ref())))
+                    .await?;
+            operation.take();
+            job_view::started_job_answer(&job, &args, context).await
+        }
+        "masks" => {
+            blocking(move || masks_tool::masks(&session_for_work, &Args::new(owned.as_ref()))).await
         }
         "exec" => {
             let job =

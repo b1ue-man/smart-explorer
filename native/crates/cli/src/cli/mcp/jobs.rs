@@ -3,6 +3,16 @@
 //! returns the job id; `job_status`, `job_input` and `job_cancel` continue
 //! from there. Jobs live as long as the `se mcp` process; its end cancels
 //! every running job.
+//!
+//! Output streams are masked before they reach the spool (plan 2026-11-28,
+//! contract 4): a [`StreamMode::Raw`] stream (command output) runs through a
+//! stream masker of the active mask lists, so a value split across two
+//! appends is still found and every page of `job_status` comes from the
+//! masked stream; a [`StreamMode::PreMasked`] stream (search hits) is masked
+//! by the tool that writes it.
+use super::mask_layer::MaskLayer;
+use super::mask_layer_stream::Stream;
+pub(super) use super::mask_layer_stream::StreamMode;
 use super::spool::Spool;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -19,6 +29,10 @@ pub(super) enum JobKind {
     Grep,
     Exec,
     Command,
+    /// A command of the `shell` tool (plan 2026-11-28, M6).
+    Shell,
+    /// A `replace` run over the hits of a content search (M5).
+    Replace,
 }
 
 impl JobKind {
@@ -30,6 +44,8 @@ impl JobKind {
             Self::Grep => "grep",
             Self::Exec => "exec",
             Self::Command => "se",
+            Self::Shell => "shell",
+            Self::Replace => "replace",
         }
     }
 }
@@ -90,7 +106,9 @@ pub(super) struct Job {
     cancel_requested: AtomicBool,
     /// Bumped on every new output, progress step and on the end.
     version: watch::Sender<u64>,
-    streams: Vec<(&'static str, Spool)>,
+    streams: Vec<Stream>,
+    /// The mask lists of this session; `None` in tests without them.
+    masks: Option<Arc<MaskLayer>>,
 }
 
 impl Job {
@@ -122,25 +140,50 @@ impl Job {
     pub(super) fn stream(&self, name: &str) -> Option<&Spool> {
         self.streams
             .iter()
-            .find(|(stream, _)| *stream == name)
-            .map(|(_, spool)| spool)
+            .find(|stream| stream.name == name)
+            .map(|stream| &stream.spool)
     }
 
     pub(super) fn stream_names(&self) -> impl Iterator<Item = &'static str> + '_ {
-        self.streams.iter().map(|(name, _)| *name)
+        self.streams.iter().map(|stream| stream.name)
+    }
+
+    /// The mask layer of the session that started this job.
+    pub(super) fn masks(&self) -> Option<&Arc<MaskLayer>> {
+        self.masks.as_ref()
     }
 
     /// Appends output; a failing spool write ends the job as failed, because
-    /// output that cannot be kept must not look complete.
+    /// output that cannot be kept must not look complete. Raw output is
+    /// masked first; bytes a masker holds back (a value may continue in the
+    /// next append) follow with a later append or at the end of the job.
     pub(super) fn append(&self, name: &str, bytes: &[u8]) -> Result<(), String> {
-        let spool = self
-            .stream(name)
-            .ok_or_else(|| format!("job has no `{name}` output"))?;
-        spool
-            .append(bytes)
-            .map_err(|error| format!("cannot keep job output: {error}"))?;
+        self.streams
+            .iter()
+            .find(|stream| stream.name == name)
+            .ok_or_else(|| format!("job has no `{name}` output"))?
+            .append(self.masks.as_ref(), bytes)?;
         self.changed();
         Ok(())
+    }
+
+    /// Writes what the stream maskers held back once their stream was
+    /// silent (a prompt waiting for input), before a page is shown.
+    pub(super) fn release_idle(&self) -> Result<(), String> {
+        let mut released = false;
+        for stream in &self.streams {
+            released |= stream.release_idle()?;
+        }
+        if released {
+            self.changed();
+        }
+        Ok(())
+    }
+
+    /// Writes what the stream maskers still hold; an error keeps the job's
+    /// end but is reported in it, because the output is then incomplete.
+    fn flush_masks(&self) -> Result<(), String> {
+        self.streams.iter().try_for_each(Stream::flush)
     }
 
     pub(super) fn changed(&self) {
@@ -156,6 +199,15 @@ impl Job {
 
     pub(super) fn finish(&self, end: JobEnd) {
         self.release_operation_after_handoff();
+        let end = match self.flush_masks() {
+            Ok(()) => end,
+            Err(error) if end.error.is_none() => JobEnd {
+                status: JobStatus::Failed,
+                error: Some(error),
+                ..end
+            },
+            Err(_) => end,
+        };
         if let Ok(mut slot) = self.end.lock() {
             if slot.is_none() {
                 *slot = Some(end);
@@ -200,8 +252,8 @@ impl Job {
                 }
             }
         }
-        for (name, spool) in &self.streams {
-            object.insert(format!("{name}_bytes"), json!(spool.len()));
+        for stream in &self.streams {
+            object.insert(format!("{}_bytes", stream.name), json!(stream.spool.len()));
         }
         value
     }
@@ -211,32 +263,57 @@ pub(super) struct JobRegistry {
     directory: std::path::PathBuf,
     next: AtomicU64,
     jobs: Mutex<BTreeMap<u64, Arc<Job>>>,
+    masks: Option<Arc<MaskLayer>>,
 }
 
 impl JobRegistry {
+    /// A registry without mask lists (tests of the job machinery).
     pub(super) fn new(directory: &Path) -> Self {
         Self {
             directory: directory.to_path_buf(),
             next: AtomicU64::new(1),
             jobs: Mutex::new(BTreeMap::new()),
+            masks: None,
+        }
+    }
+
+    /// The registry of a session: raw output is masked with `masks`.
+    pub(super) fn with_masks(directory: &Path, masks: Arc<MaskLayer>) -> Self {
+        Self {
+            masks: Some(masks),
+            ..Self::new(directory)
         }
     }
 
     /// Registers a job with the named output streams (spool files in the
-    /// session directory).
+    /// session directory), each in the mode [`StreamMode::of`] its name.
     pub(super) fn create(
         &self,
         kind: JobKind,
         summary: String,
         streams: &[&'static str],
     ) -> Result<Arc<Job>, String> {
+        let streams = streams
+            .iter()
+            .map(|name| (*name, StreamMode::of(name)))
+            .collect::<Vec<_>>();
+        self.create_with(kind, summary, &streams)
+    }
+
+    /// Registers a job whose streams name their mode.
+    pub(super) fn create_with(
+        &self,
+        kind: JobKind,
+        summary: String,
+        streams: &[(&'static str, StreamMode)],
+    ) -> Result<Arc<Job>, String> {
         let number = self.next.fetch_add(1, Ordering::SeqCst);
         let id = format!("j{number}");
         let streams = streams
             .iter()
-            .map(|name| {
+            .map(|(name, mode)| {
                 Spool::create(self.directory.join(format!("{id}.{name}")))
-                    .map(|spool| (*name, spool))
+                    .map(|spool| Stream::new(*name, spool, *mode, self.masks.is_some()))
                     .map_err(|error| format!("cannot create job output file: {error}"))
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -252,6 +329,7 @@ impl JobRegistry {
             cancel_requested: AtomicBool::new(false),
             version,
             streams,
+            masks: self.masks.clone(),
         });
         self.jobs
             .lock()

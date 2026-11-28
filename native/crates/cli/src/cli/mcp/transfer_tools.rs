@@ -2,6 +2,7 @@
 //! destination rules and guards, plus cancellation and progress.
 use super::args::Args;
 use super::jobs::{spawn_worker, Job, JobControl, JobEnd, JobKind, JobStatus};
+use super::mask_layer_guard::{check, Reach};
 use super::session::Session;
 use crate::cli::tree_observer::TreeObserver;
 use serde_json::{json, Value};
@@ -51,6 +52,9 @@ pub(super) fn start(session: &Session, kind: JobKind, args: &Args<'_>) -> Result
     let job_origin = crate::share::OperationOrigin::Job;
     let source = session.targets.resolve_for(&source_spec, job_origin)?;
     let destination = session.targets.resolve_for(&destination_spec, job_origin)?;
+    // Neither end may hold or contain se's own data while lists are active.
+    check(session, &source, Reach::Tree)?;
+    check(session, &destination, Reach::Tree)?;
     let targets = session.targets.clone();
     let job = session.jobs.create(
         kind,

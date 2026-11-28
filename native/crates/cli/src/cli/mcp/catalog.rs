@@ -2,10 +2,11 @@
 //! (Claude Code: `mcp__plugin_smart-explorer_se__list`, Codex:
 //! `smart-explorer.list`). Annotations follow what each tool can change:
 //! Codex asks for approval unless a tool is read-only
-//! (docs/refs/codex-mcp-spec-rmcp-2026-10-12.md §1). The file tools and the
-//! remote-command tools (exec, sessions, job_input, job_cancel) load upfront
-//! in Claude Code, and the instructions put them before the host's own file
-//! tools and terminal (docs/refs/claude-code-plugins-mcp-2026-10-12.md §7).
+//! (docs/refs/codex-mcp-spec-rmcp-2026-10-12.md §1). The file tools, the
+//! command tools (shell, exec, sessions, job_input, job_cancel) and `masks`
+//! load upfront in Claude Code, and the instructions put them before the
+//! host's own file tools and terminal
+//! (docs/refs/claude-code-plugins-mcp-2026-10-12.md §7).
 use rmcp::model::{JsonObject, MetaObject, Tool, ToolAnnotations};
 use serde_json::{json, Value};
 
@@ -15,41 +16,42 @@ use super::screen_tool;
 /// self-contained; Claude Code shows at most 2 048.
 pub(super) const INSTRUCTIONS: &str = "\
 Smart Explorer (se) is the user's file explorer. Use its tools first for every \
-file task, local or remote (root, list, stat, read, write, edit, mkdir, remove, \
-copy, move, search, grep), before built-in file tools (Read, Write, Edit, Glob, \
-Grep, LS) and shell file commands (ls, cat, find, grep, cp, mv, rm, scp, \
-rsync); use those only when a Smart Explorer tool fails or lacks the feature. \
-It reaches saved remotes (SFTP, FTP/FTPS, WebDAV, SMB, Windows shares), Google \
-Drive, Share peers and local disks.
+file task, local or remote (root, list, stat, read, write, edit, apply_patch, \
+replace, mkdir, remove, copy, move, search, grep), before built-in file tools \
+(Read, Write, Edit, Glob, Grep, LS) and shell file commands (ls, cat, find, \
+grep, cp, mv, rm, sed); use those only when a Smart Explorer tool fails or \
+lacks the feature.
 
-Run remote commands with `exec` (SSH remotes, Share peers), not ssh or `se \
-exec` in a terminal. Windows peers run `command` in PowerShell: pwsh 7 if \
-installed, else Windows PowerShell 5.1, which has no && or || (write \
-`a; if ($?) { b }`). Linux/Android peers and SSH remotes use the login shell. \
-`shell` (powershell, cmd, sh) overrides that; `argv` starts a program \
-without a shell; results name their `shell`. `connections` lists targets and \
-each Share peer's `os`. `session` keeps a shell's state; `sessions` lists and \
-joins shells. Long work returns a job_id: job_status, job_input, job_cancel. \
-Other tools load via a tool search for `smart-explorer`.
+Run commands with `shell`, not your own terminal: locally, or on the working \
+root's device or server in its folder; elevation asks the user. `exec` runs on \
+a named SSH remote or Share peer, not ssh or `se exec`. Windows peers run \
+`command` in PowerShell: pwsh 7 if installed, else Windows PowerShell 5.1, \
+which has no && or || (write `a; if ($?) { b }`). Linux/Android peers and SSH \
+remotes use the login shell; exec's `shell` (powershell, cmd, sh) overrides \
+it, `argv` runs a program without a shell, results name their `shell`. \
+`sessions` lists and joins persistent shells. Long work returns a job_id: \
+job_status, job_input, job_cancel.
 
-Targets: absolute local paths, `@label:/path` (saved remote), saved \
-`sftp://user@host:port/path` endpoints, `share://direct/<id>/path`, \
-`share://room/<room>/<device>/path`, `gdrive:///path`, `vault://<site>/path`. \
-`root` sets one as working root, kept open like a tab: then paths may be \
-relative to it (`..` never leaves it) and `exec` without target runs there. \
-`grep` searches file contents; `read` takes `line`/`lines`; `etag` guards \
-write/edit. Never ask for passwords in chat; the user adds logins in a \
-terminal (`se connections add … --password-stdin`). Change Share trust \
-(access requests, connection rights: `share grants confirm|set`, every \
-`--preset`, Exec grants, program lists, device/room settings, \
-discoverability) only when the user explicitly asks. The `se` tool runs \
-every other se command (sync, background, connections, update, drive, \
-vault, desktop).";
+Mask lists: outputs show protected values as placeholders like ⟦Name-1⟧, a \
+literal ⟦ as ⟦⟦. Use them unchanged in inputs (paths, content, patterns, \
+commands); se restores the real values. `masks` adds lists and entries, never \
+shows values. While a list guards a folder, use only se tools.
+
+Targets: absolute local paths, `@label:/path`, saved endpoints, `share://…`, \
+`gdrive:///…`, `vault://…`. `root` sets a working root, kept open like a tab: \
+paths may then be relative (`..` never leaves it); `shell` and `exec` without \
+target run there. `grep` searches contents, `replace` changes hits (`dry_run` \
+previews), `apply_patch` edits files; `read` takes `line`/`lines`; `etag` \
+guards write/edit. Never ask for passwords in chat. Change Share trust (access \
+requests, connection rights: `share grants confirm|set`, every `--preset`, Exec \
+grants, program lists, device/room settings, discoverability) only when the \
+user explicitly asks. The `se` tool runs every other se command.";
 
 /// Tools Claude Code loads upfront (`_meta["anthropic/alwaysLoad"]`), so the
-/// file workflow and remote commands are visible without a tool search
-/// (agents that never found `exec` ran `se exec` and ssh in their terminal);
-/// the others stay deferred.
+/// file workflow, local and remote commands and the mask lists are visible
+/// without a tool search (agents that never found `exec` ran `se exec` and ssh
+/// in their terminal; while a mask list guards a folder the host's own tools
+/// are blocked, plan 2026-11-28 S1); the others stay deferred.
 const UPFRONT: &[&str] = &[
     "connections",
     "root",
@@ -58,17 +60,21 @@ const UPFRONT: &[&str] = &[
     "read",
     "write",
     "edit",
+    "apply_patch",
     "mkdir",
     "remove",
     "copy",
     "move",
     "search",
     "grep",
+    "replace",
+    "shell",
     "exec",
     "job_status",
     "job_input",
     "job_cancel",
     "sessions",
+    "masks",
 ];
 
 const TARGET: &str = "Smart Explorer target: an absolute local path, `@label:/path` of a saved remote, a saved `sftp://`, `ftp://`, `ftps://` or `webdav://` endpoint (`scheme://user@host:port/path`), `share://direct/<id>/path`, `share://room/<room>/<device>/path`, `gdrive:///path` or `vault://<site>/path`; with a working root (`root`) also a path relative to it (`.` or empty = the root, `..` stays inside). `connections` lists what exists.";
@@ -95,7 +101,7 @@ pub(super) fn tools() -> Vec<Tool> {
             "Type, size, mtime_ms, provider id/md5 when known, and the `etag` that write/edit accept as `if_match`. Use it instead of `stat` or `ls -l`.",
             json!({"target": {"type": "string", "description": TARGET}}), &[], read_only(true)),
         tool("read", "Read a file",
-            "File content from a byte `offset`, as UTF-8 text (default) or base64; or with `line` (first line, from 1) and/or `lines` (how many) numbered lines as `cat -n` prints them (number, tab, text; CR LF shown as a line end, `crlf` true), continued with `line` = `next_line` (null at the end; `total_lines` once the end was read). Binary files are not dumped as text: request `encoding: \"base64\"` or copy them to a local path. Returns `etag`, `size` and `next_offset` (null at the end). Through a link it reads the file the link points to; `size` and `etag` are then null. Use it instead of Read or `cat`, for local and remote files.",
+            "File content from a byte `offset`, as UTF-8 text (default) or base64; or with `line` (first line, from 1) and/or `lines` (how many) numbered lines as `cat -n` prints them (number, tab, text; CR LF shown as a line end, `crlf` true), continued with `line` = `next_line` (null at the end; `total_lines` once the end was read). Binary files are not dumped as text: request `encoding: \"base64\"` or copy them to a local path. Returns `etag`, `size` and `next_offset` (null at the end). Through a link it reads the file the link points to; `size` and `etag` are then null. With an active mask list the whole file is masked before it is paged (`masked` true): `size`, `offset` and `next_offset` count bytes of the masked text, line numbers stay those of the file. Use it instead of Read or `cat`, for local and remote files.",
             json!({
                 "target": {"type": "string", "description": TARGET},
                 "line": {"type": "integer", "minimum": 1, "description": "First line to read (1-based); numbered output."},
@@ -130,6 +136,7 @@ pub(super) fn tools() -> Vec<Tool> {
                 }},
                 "if_match": {"type": "string", "description": "Only save when the file still has this etag."}
             }), &["target", "edits"], changes(true, false)),
+        tool("apply_patch", "Apply a patch to files", super::patch_tool::DESCRIPTION, super::patch_tool::properties(), &[], changes(true, false)),
         tool("mkdir", "Create a directory",
             "Creates the directory and missing parents; an existing directory is fine. Use it instead of `mkdir -p`.",
             json!({"target": {"type": "string", "description": TARGET}}), &["target"], changes(false, true)),
@@ -142,26 +149,19 @@ pub(super) fn tools() -> Vec<Tool> {
             }), &["target"], changes(true, true)),
         transfer_tool("copy", "Copy files", "Copies between any two targets (local, saved remotes, Share peers, Drive) with `se cp` semantics: an existing destination directory receives the source inside it; directories need `recursive`; existing files are replaced only with `overwrite`. A file is published only when it is complete, so a failed source never leaves a partial file; a new destination is copied on the transfer engine (parallel, large files in ranges) and a failing file does not stop the other files. `progress` carries `rate_bps`, `limiter` (none, ramp, idle, source, target, remote, link, se_cpu, se_thread, memory), `limiter_text`, `segments` and `note` (a hint about the connection, such as how many SSH connections the copy uses). A link named as `source` or `destination` is followed (directory links only on local paths); links and special files inside a copied directory are skipped and listed in `omitted`. Use it instead of `cp`, `scp` or `rsync`."),
         transfer_tool("move", "Move or rename", "Moves with `se mv` semantics: a rename inside one connection when possible, otherwise copy, then remove exactly the copied source. A cancellation after the copy keeps the source. A link moves as itself (rename within its connection only). Links and special files inside a copied directory stay in the source (`omitted`), and so do the directories holding them (`kept_directories`). Use it instead of `mv`."),
-        tool("search", "Search names",
-            "Finds files, links and special files (plus directories with `directories: true`) below `target` (default: the working root) whose name contains `query` (case-insensitive) or matches it as a glob (`*`, `?`). Links are reported with type `symlink` and never entered. Uses the server-side search of Share peers and SSH agents (those skip links), otherwise walks the tree. Hits page via `hits_offset`. Use it instead of Glob or `find` for names; `grep` searches file contents.",
-            json!({
-                "target": {"type": "string", "description": TARGET},
-                "query": {"type": "string", "description": "Text or glob; empty matches everything."},
-                "glob": {"type": "boolean"},
-                "directories": {"type": "boolean", "description": "Also return matching directories."},
-                "max_results": {"type": "integer", "minimum": 0, "description": "Stop after this many hits; 0 or absent = all."},
-                "wait_seconds": {"type": "integer", "minimum": 0, "description": WAIT},
-                "max_bytes": {"type": "integer", "minimum": 1024, "description": MAX_BYTES}
-            }), &["query"], read_only(true)),
+        tool("search", "Search names", super::search_tool::DESCRIPTION, super::search_tool::properties(TARGET, WAIT, MAX_BYTES), &["query"], read_only(true)),
         tool("grep", "Search file contents", super::grep_tool::DESCRIPTION, super::grep_tool::properties(TARGET, WAIT, MAX_BYTES), &["pattern"], read_only(true)),
+        tool("replace", "Replace in files", super::replace_tool::DESCRIPTION, super::replace_tool::properties(), &[], changes(true, false)),
+        tool("shell", "Run a command here or at the working root", super::shell_tool::DESCRIPTION, super::shell_tool::properties(), &[], changes(true, false)),
         tool("exec", "Run a remote command",
-            "Runs a command on a saved SFTP remote over its SSH login (`@label`, `@label:/dir` = working directory, or its saved sftp:// endpoint) or on a Share peer that granted this device Exec (peer name, id or share:// endpoint); without `target` on the working root's SSH remote (in its folder; a relative `cwd` is below it) or Share peer (give `cwd`). Use it instead of ssh or `se exec` in a terminal. `command` is one shell string: a Windows peer runs it in PowerShell (pwsh 7 when installed, else Windows PowerShell 5.1, which has no `&&`/`||`: write `a; if ($?) { b }`), a Linux or Android peer in its login shell, an SSH remote in the remote login shell (cmd or PowerShell on Windows OpenSSH servers). `shell` overrides that for one command: `cmd` or `powershell` on Windows peers, `sh` on Linux/Android peers and SSH remotes. `argv` (program and literal arguments) starts a program without a shell (POSIX-quoted on SSH remotes). The result names the shell that ran in `shell` (`pwsh 7`, `powershell 5.1`, `cmd`, a login shell such as `bash`, `ssh login shell`, `none` for argv); a PowerShell parse error comes with line and column. `connections` shows each Share peer's `os` once an exec reached it. No time or output limit unless you set one; stdout/stderr are kept completely and paged. Exit status, signal and timing are reported; job_input sends input, job_cancel cancels. With `session` (a name) the command runs in a persistent shell instead: the first call opens it on `target` (PowerShell on Windows peers, bash or sh elsewhere), later calls keep its working directory, environment, variables and functions (no PTY; the result adds `cwd` and `session_ended`). The user can join it with `se shell --attach` unless `attachable` is false; `sessions` lists and closes sessions and joins the user's command shells (`se shell -T --attachable`); full terminal sessions of `se shell` cannot be joined. Cancel or timeout end the whole session.",
+            "Runs a command on a saved SFTP remote over its SSH login (`@label`, `@label:/dir` = working directory, or its saved sftp:// endpoint) or on a Share peer that granted this device Exec (peer name, id or share:// endpoint); without `target` on the working root's SSH remote or Share peer, in the root's folder (a relative `cwd` is below it; on a Share peer an absolute `cwd` is the peer's own disk path). `elevated`: as admin/root (peer: its user confirms; SSH: sudo, password asked locally). The tool `shell` runs commands locally or at the working root. Use it instead of ssh or `se exec` in a terminal. `command` is one shell string: a Windows peer runs it in PowerShell (pwsh 7 when installed, else Windows PowerShell 5.1, which has no `&&`/`||`: write `a; if ($?) { b }`), a Linux or Android peer in its login shell, an SSH remote in the remote login shell (cmd or PowerShell on Windows OpenSSH). `shell` overrides that for one command: `cmd` or `powershell` on Windows peers, `sh` on Linux/Android peers and SSH remotes. `argv` (program and literal arguments) starts a program without a shell. The result's `shell` names the shell that ran (`pwsh 7`, `powershell 5.1`, `cmd`, a login shell such as `bash`, `ssh login shell`, `none` for argv); a PowerShell parse error has line and column. `connections` shows each peer's `os`. No time or output limit unless set; output is kept completely and paged. Exit status, signal and timing are reported; job_input sends input, job_cancel cancels. With `session` (a name) the command runs in a persistent shell instead: the first call opens it on `target` (PowerShell on Windows peers, bash or sh elsewhere), later calls keep its working directory, environment, variables and functions (no PTY; the result adds `cwd`, `session_ended`). The user can join it with `se shell --attach` unless `attachable` is false; `sessions` lists and closes sessions and joins the user's command shells (`se shell -T --attachable`); `se shell` terminal sessions cannot be joined. Cancel or timeout end the whole session.",
             json!({
                 "target": {"type": "string", "description": "Share peer selector or share:// endpoint, or a saved SFTP remote as @label[:/dir] or its sftp:// endpoint. Default: the working root's remote or peer; required without one unless `session` names an open session."},
                 "command": {"type": "string", "description": "One command string for the target's shell: PowerShell on Windows peers (pwsh 7, else 5.1 without && and ||), the login shell on Linux/Android peers and SSH remotes."},
                 "shell": {"type": "string", "enum": ["powershell", "cmd", "sh"], "description": "Shell for `command` instead of the target's own: powershell or cmd on Windows peers, sh on Linux/Android peers and SSH remotes. A session accepts only the shell it runs; cmd needs a command without `session`."},
                 "argv": {"type": "array", "items": {"type": "string"}, "minItems": 1, "description": "Program and literal arguments, instead of `command`."},
-                "cwd": {"type": "string", "description": "Working directory (default: the remote user's home)."},
+                "cwd": {"type": "string", "description": "Working directory (default: the working root's folder, else the remote user's home)."},
+                "elevated": {"type": "boolean", "description": "Run as administrator/root: the peer's user confirms (UAC or polkit); SSH remotes use sudo, a password is asked locally."},
                 "env": {"type": "object", "additionalProperties": {"type": "string"}, "description": "Extra environment variables."},
                 "stdin": {"type": "string", "description": "Text written to the command's standard input, followed by end-of-input unless `keep_stdin_open`."},
                 "keep_stdin_open": {"type": "boolean", "description": "Leave standard input open for job_input."},
@@ -208,6 +208,7 @@ pub(super) fn tools() -> Vec<Tool> {
                 "action": {"type": "string", "enum": ["list", "attach", "activity", "close"], "description": "list (default), attach, activity or close."},
                 "session": {"type": "string", "description": "Session name or id; needed for attach, activity and close."}
             }), &[], changes(false, true)),
+        tool("masks", "Mask lists", super::masks_tool::DESCRIPTION, super::masks_tool::properties(), &["action"], local_change()),
         // Not read-only: `audio` with `on` stores the viewer's „Ton“ (`screen_tool::audio`).
         tool("screen", "Screen of paired devices", screen_tool::DESCRIPTION, screen_tool::properties(), &["action"], changes(false, true)),
         tool("screen_window", "Open a native remote window viewer", super::screen_window_tool::DESCRIPTION, super::screen_window_tool::properties(), &["device", "source"], changes(true, false)),
@@ -263,6 +264,17 @@ const fn read_only(open_world: bool) -> Effects {
         destructive: false,
         idempotent: true,
         open_world,
+    }
+}
+
+/// Changes only this device's own settings (the mask lists); repeating an
+/// addition adds it again.
+const fn local_change() -> Effects {
+    Effects {
+        read_only: false,
+        destructive: false,
+        idempotent: false,
+        open_world: false,
     }
 }
 

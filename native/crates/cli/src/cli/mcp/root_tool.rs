@@ -27,6 +27,14 @@ pub(super) fn root(session: &Session, args: &Args<'_>) -> Result<CallToolResult,
     match args.opt_string("action")?.as_deref().unwrap_or("show") {
         "set" => {
             let spec = args.string("target")?;
+            // Se's own data is no working root while mask lists are active.
+            let resolved = session.targets.resolve(&spec)?;
+            super::mask_layer_guard::check(
+                session,
+                &resolved,
+                super::mask_layer_guard::Reach::Entry,
+            )?;
+            drop(resolved);
             let (root, resolved) = session.targets.set_root(&spec)?;
             let mut value = describe(&root);
             if let Value::Object(fields) = &mut value {
