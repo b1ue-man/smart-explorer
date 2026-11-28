@@ -142,7 +142,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential pkg-config cmake nasm libxcb1-dev xvfb libegl1 libgl1 libx11-6 \
-            libx11-xcb1 libxcursor1 libxi6 libxkbcommon0 libxkbcommon-x11-0 libxrandr2 libdav1d7
+            libx11-xcb1 libxcursor1 libxi6 libxkbcommon0 libxkbcommon-x11-0 libxrandr2 libdav1d7 \
+            dosfstools exfatprogs
           git clone --quiet --depth 1 --branch v3.1.0 https://gitlab.com/AOMediaCodec/SVT-AV1.git "$RUNNER_TEMP/svt-av1"
           cmake -S "$RUNNER_TEMP/svt-av1" -B "$RUNNER_TEMP/svt-av1/build" -DCMAKE_BUILD_TYPE=Release \
             -DBUILD_APPS=OFF -DBUILD_DEC=OFF -DBUILD_TESTING=OFF -DBUILD_SHARED_LIBS=ON

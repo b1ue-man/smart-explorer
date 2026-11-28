@@ -784,6 +784,22 @@ Terminal: `se analyze ZIEL [--sort allocated|size] [--top N] [--depth N] [--file
 großen Ordnern zu einem Eintrag „… N weitere Eintraege“ zusammenfasst, zählen in keinen Dateityp und
 keine Liste; die Ansicht nennt ihre Zahl. Beschreibung: `docs/ANALYTICS_ACCESS.md`, Abschnitt
 „Größe und Belegt“.
+**Suche in Dateien und Textansicht (Quellstand 2026-11-27, noch nicht veröffentlicht):**
+`se grep ZIEL MUSTER` sucht im Inhalt aller Textdateien unter einem Ordner wie „Suchen in
+Dateien“ von Notepad++: Normal, `--extended` (`\n`, `\t`, `\xHH` …) oder `--regex`, `--case`,
+`--word`, `--filter "*.cs *.html !*.min.js !\bin !+\obj"` (Notepad++-Filterfeld), zusätzlich
+`--folders REGEX`/`--exclude-folders REGEX` auf den relativen Ordnerpfad, `--hidden`,
+`--no-subfolders`, `-C N`, `--files-only`, `--count`, `--json`; Ausgabe `pfad:zeile:text`, Summe auf
+stderr, Exit 0 mit Treffern, 1 ohne. Gesucht wird dort, wo die Dateien liegen: lokal parallel auf
+allen Kernen, auf SSH-Servern im se-Agent, bei Share-Geräten (Direct und Räume) auf dem Gerät
+innerhalb seiner Freigaben; FTP, WebDAV, SMB, Google Drive und ältere Gegenstellen werden über die
+Verbindung gelesen. Binär- und Office-Dateien werden nicht durchsucht. Desktop und Android haben
+denselben Dialog mit Ergebnisbereich und eine Textansicht mit Hervorhebung (Sprachpakete im
+Sublime-Syntax-Format, `se languages list|add|remove|folder`) und Markdown-Darstellung. Agenten
+setzen im MCP mit `root` einmal ein Arbeitsziel (lokal, gespeicherte Server, Share-Geräte, Räume,
+Google Drive) und arbeiten danach mit relativen Pfaden direkt dort (`list`, `read` auch nach
+Zeilen, `edit`, `write`, `grep` …), ohne `exec`. Beschreibung: `docs/oberflaechen/dateisuche.md`,
+`docs/oberflaechen/textansicht.md`.
 **Links (ab 0.5.177):** `se search` meldet Links (`l`) und FIFOs/Sockets/Geräte
 (`s`) über ihren Namen und betritt Links nie; `--dirs` nimmt Ordner zusätzlich
 auf. `se cp -r`/`se mv -r` überspringen Links und Sonderdateien innerhalb eines

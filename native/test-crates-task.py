@@ -1321,6 +1321,40 @@ NETEM_MODULE = ["sudo", "-n", "sh", "-c",
                 "&& modprobe sch_netem; }"]
 # Seconds one host command of an ignored group may take (the package installation of NETEM_MODULE).
 HOST_COMMAND_TIMEOUT = 900
+# Two VHDX files with FAT32 (V:) and exFAT (W:) for the removable-media group (plan 2026-11-27): diskpart
+# creates, attaches, partitions, formats and assigns them; detach releases them again.
+_VHD = r"""
+$ErrorActionPreference = 'Stop'
+$dir = Join-Path $env:RUNNER_TEMP 'se-removable'
+"""
+VHD_ATTACH = _VHD + r"""
+New-Item -ItemType Directory -Force -Path $dir | Out-Null
+foreach ($disk in @(@{File='fat32.vhdx'; Fs='fat32'; Label='SEFAT32'; Letter='V'},
+                    @{File='exfat.vhdx'; Fs='exfat'; Label='SEEXFAT'; Letter='W'})) {
+  $file = Join-Path $dir $disk.File
+  if (Test-Path $file) { Remove-Item -Force $file }
+  $script = Join-Path $dir ($disk.File + '.txt')
+  $quoted = '"' + $file + '"'
+  @("create vdisk file=$quoted maximum=512 type=expandable", "select vdisk file=$quoted", 'attach vdisk',
+    'create partition primary', "format fs=$($disk.Fs) quick label=$($disk.Label)",
+    "assign letter=$($disk.Letter)") | Set-Content -Encoding ascii $script
+  diskpart /s $script | Out-Host
+  if ($LASTEXITCODE -ne 0) { throw "diskpart $($disk.File) exited $LASTEXITCODE" }
+}
+Get-Volume -DriveLetter V, W | Format-Table DriveLetter, FileSystem, Size, SizeRemaining | Out-Host
+"""
+VHD_DETACH = _VHD + r"""
+foreach ($name in 'fat32.vhdx', 'exfat.vhdx') {
+  $file = Join-Path $dir $name
+  if (Test-Path $file) {
+    $script = Join-Path $dir ($name + '.detach.txt')
+    $quoted = '"' + $file + '"'
+    @("select vdisk file=$quoted", 'detach vdisk') | Set-Content -Encoding ascii $script
+    diskpart /s $script | Out-Host
+  }
+}
+Remove-Item -Recurse -Force $dir -ErrorAction SilentlyContinue
+"""
 
 # Crate tests that are #[ignore] because they need an environment a plain run does not
 # provide. They belonged to suites of their own (direct-open, sync-paths, gui-design,
@@ -1381,6 +1415,7 @@ IGNORED_GROUPS = [
             "gui_design_task_settings_persistence_shortcut_guard_and_dialogs",
             "gui_design_task_start_page_and_chart_visuals",
             "gui_design_task_drive_failure_reaches_readable_report_and_complete_clipboard",
+            "gui_design_task_find_in_files_results_and_text_view",
         ],
     },
     {   # Real ACL, impersonation token and junction fixtures, and the authenticated read helper as a
@@ -1516,6 +1551,55 @@ IGNORED_GROUPS = [
         "profile": True,
         "tests": [
             "bildkette_task_chain_host_process_crash_ends_only_its_session",
+        ],
+    },
+    {   # Removable media (plan 2026-11-27, section A, U1-U18): `se` copies, moves, resumes and removes on
+        # real vfat (FAT32) and exFAT (kernel driver) volumes, loop images mounted as udisks2 mounts a USB
+        # stick (owned by the test user, dmask 0022, fmask 0133). Linux only (the Windows group below).
+        "title": "Removable media vfat and exFAT (ignored tests, loop images)",
+        "os": ("Linux",),
+        "set": {"SE_TEST_VFAT_DIR": "/mnt/se-vfat", "SE_TEST_EXFAT_DIR": "/mnt/se-exfat"},
+        "before": [["sh", "-c", "rm -f /tmp/se-vfat.img /tmp/se-exfat.img"
+                                " && truncate -s 256M /tmp/se-vfat.img /tmp/se-exfat.img"
+                                " && mkfs.vfat -F 32 -n SEVFAT /tmp/se-vfat.img"
+                                " && mkfs.exfat -L SEEXFAT /tmp/se-exfat.img"],
+                   ["sudo", "-n", "mkdir", "-p", "/mnt/se-vfat", "/mnt/se-exfat"],
+                   ["sh", "-c", "sudo -n mount -t vfat -o loop,uid=$(id -u),gid=$(id -g),dmask=0022,fmask=0133,"
+                                "shortname=mixed,utf8=1 /tmp/se-vfat.img /mnt/se-vfat"],
+                   ["sh", "-c", "sudo -n mount -t exfat -o loop,uid=$(id -u),gid=$(id -g),dmask=0022,fmask=0133"
+                                " /tmp/se-exfat.img /mnt/se-exfat"],
+                   ["sh", "-c", "sudo -n udevadm settle; findmnt /mnt/se-vfat /mnt/se-exfat; ls -l /dev/disk/by-uuid"]],
+        "after": [["sh", "-c", "sudo -n umount /mnt/se-vfat; sudo -n umount /mnt/se-exfat;"
+                               " rm -f /tmp/se-vfat.img /tmp/se-exfat.img; true"]],
+        "profile": True,
+        "tests": [
+            "removable_task_refused_capture_leaves_no_capture_folder",
+            "removable_task_moves_to_and_from_fat_and_exfat_leave_nothing",
+            "removable_task_canceled_transfers_on_fat_and_exfat_clean_up",
+            "removable_task_copy_into_existing_folder_of_other_spelling",
+            "wechselmedium_task_interrupted_copy_resumes_on_fat_and_exfat",
+            "wechselmedium_task_file_over_4_gib_is_reported_and_the_rest_copied",
+            "wechselmedium_task_move_changes_only_the_case_on_fat_and_exfat",
+        ],
+    },
+    {   # The same on Windows: FAT32 and exFAT on two attached VHDX files (diskpart, administrator token
+        # of the runner) with drive letters V: and W:; the mount point test mounts V: into an NTFS folder.
+        "title": "Removable media FAT32 and exFAT (ignored tests, attached VHDX)",
+        "os": ("Windows",),
+        "set": {"SE_TEST_FAT32_DIR": "V:\\", "SE_TEST_EXFAT_DIR": "W:\\"},
+        "before": [["pwsh", "-NoProfile", "-NonInteractive", "-Command", VHD_ATTACH]],
+        "after": [["pwsh", "-NoProfile", "-NonInteractive", "-Command", VHD_DETACH]],
+        "profile": True,
+        "tests": [
+            "removable_task_move_file_within_and_across_fat_volumes",
+            "removable_task_move_folder_within_a_fat_volume",
+            "removable_task_read_only_file_moves_off_a_fat_volume",
+            "removable_task_read_only_file_is_deleted_on_fat_volumes",
+            "removable_task_folder_a_volume_is_mounted_in_lists_that_volume",
+            "removable_task_read_only_file_is_removed_from_fat_volumes",
+            "wechselmedium_task_interrupted_copy_resumes_on_fat_and_exfat",
+            "wechselmedium_task_file_over_4_gib_is_reported_and_the_rest_copied",
+            "wechselmedium_task_move_changes_only_the_case_on_fat_and_exfat",
         ],
     },
 ]
@@ -1777,6 +1861,21 @@ KOTLIN_BATCH_TESTS = {
         "aShapeWithTheWrongSizeOrNoPixelsIsSkipped",
         "theHostsNothingToDrawDecodesAsAHiddenPosition",
         "theHotSpotLiesOnTheHostPositionScaledToThePicture",
+    ],
+    # Plan 2026-11-27 "Dateien, Suche, Ansicht": the result list of the content search and the text view
+    "app.smartexplorer.android.ui.files.ContentSearchTaskTest": [
+        "content_search_task_header_counts_hits_files_and_searched",
+        "content_search_task_events_group_by_file_in_arrival_order",
+        "content_search_task_collapsed_files_show_only_their_head",
+        "content_search_task_hit_text_marks_ranges_after_the_prefix",
+        "content_search_task_skipped_files_and_poll_answer_decode",
+    ],
+    "app.smartexplorer.android.ui.viewer.TextViewTaskTest": [
+        "textview_task_spans_become_annotated_string_styles",
+        "textview_task_spans_outside_the_text_are_clamped",
+        "textview_task_go_to_line_bounds",
+        "textview_task_markdown_links_resolve_against_the_document",
+        "textview_task_bridge_answers_decode",
     ],
 }
 
