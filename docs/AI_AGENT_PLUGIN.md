@@ -129,12 +129,16 @@ einen bereits initialisierten Hostprozess.
 | `root` | Arbeitsziel der Sitzung setzen (`set`, jede Zielart; prüft per `stat`, dass es ein erreichbarer Ordner ist, und meldet `kind`, Gerät bzw. Server, `via` und bei Share-Peers die aktuelle `route`), zeigen (`show`), entfernen (`clear`) | nur lesend |
 | `list`, `stat`, `read` | Verzeichnis (seitenweise, `type` `file`/`dir`/`symlink`/`special`), Metadaten mit `etag`, Inhalt ab Byte-Offset (Text oder base64; über einen Link der Inhalt seines Ziels mit `size`/`etag` = null und `through_link: true`) oder mit `line`/`lines` nummerierte Zeilen wie `cat -n` (Zeilennummer, Tabulator, Text; weiter mit `line` = `next_line`, `total_lines` am Ende, `crlf`, `cut_lines` für Zeilen länger als die Seite) | nur lesend |
 | `write`, `edit` | Datei anlegen/ersetzen, exakte Textersetzungen; `if_match` = `etag` schützt vor verlorenen Änderungen; nie durch einen Link als Datei hindurch | zerstörend |
+| `apply_patch` | Mehrdatei-Änderung im Patchformat von Codex (Hinzufügen, Löschen, Aktualisieren, Verschieben); der ganze Patch wird zuerst berechnet, jede Datei ganz oder gar nicht veröffentlicht, gebunden an das gelesene `etag` (`mcp/patch_tool.rs`) | zerstörend |
 | `mkdir`, `remove` | Ordner anlegen; löschen wie `se rm --force` (Wurzeln nur mit `allow_root`) | ändernd / zerstörend |
 | `copy`, `move` | wie `se cp`/`se mv` zwischen beliebigen Zielen, als Job; Ergebnis mit `omitted` (übersprungene Links/Sonderdateien) und `kept_directories` (beim Verschieben behaltene Quellordner) | zerstörend (Überschreiben) |
 | `search` | Namenssuche (Text oder Glob), Treffer seitenweise, als Job; Links und Sonderdateien als eigene Treffer (`symlink`, `special`), nie betreten | nur lesend |
 | `grep` | Inhaltssuche wie „Suchen in Dateien“ von Notepad++ (`mode` normal/extended/regex, `match_case`, `whole_word`, `dot_matches_newline`, `filters` = Filterfeld, `folders`/`exclude_folders` = Regex auf den relativen Ordnerpfad, `subfolders`, `hidden`, `context_lines`), als Job; `output` content (`rel:zeile:text`), files oder count (`rel:anzahl`), `format` json (JSON-Zeilen mit `rel`, `line`, `text`, `ranges`); seitenweise über `hits_offset`; Ergebnis mit `files_searched`, `files_matched`, `hits`, `skipped` (+ `skipped_items`), `limited`, `searched_at` (`local`, `agent`, `host`, `reading`); ein ungültiges Muster scheitert sofort | nur lesend |
-| `exec` | Befehl auf gespeichertem SFTP-Remote (SSH) oder Share-Peer, als Job; mit `session` in einer dauerhaften Shell; `shell` wählt die Shell, das Ergebnis nennt sie in `shell` | zerstörend |
+| `replace` | Ersetzen in Dateien wie Notepad++ „Replace in Files“ (Felder von `grep` plus `replacement`, `files`/`hits`, `dry_run`, `undo`, `history`), als Job; Original jeder geänderten Datei verschlüsselt im Journal (`mcp/replace_tool.rs`) | zerstörend |
+| `shell` | Befehl durch Smart Explorer statt der eigenen Shell des Agenten: ohne Arbeitsziel lokal, sonst auf dem Gerät oder Server des Arbeitsziels in dessen Ordner; `session` für eine dauerhafte Shell (lokal auch); `elevated` erhöht (Windows UAC, Linux polkit, ohne polkit-Agenten `sudo -n`; SSH `sudo`, Passwort lokal abgefragt; Share-Peer fragt dort) (`mcp/shell_tool.rs`, `engine/src/elevate/`) | zerstörend |
+| `exec` | Befehl auf gespeichertem SFTP-Remote (SSH) oder Share-Peer, als Job; mit `session` in einer dauerhaften Shell; `shell` wählt die Shell, das Ergebnis nennt sie in `shell`; `elevated` wie bei `shell`; unter einem Share-Arbeitsziel startet es im Share-Ordner (Feld `share_cwd`, Fähigkeit `exec_share_cwd_v1`) | zerstörend |
 | `sessions` | dauerhafte Shell-Sitzungen auflisten (mit `kind` `commands` oder `terminal`, `dialect` und `shell`), einer mit `se shell -T --attachable` geöffneten Befehlssitzung beitreten (`attach`; Terminalsitzungen werden abgelehnt), Aktivität der anderen lesen (`activity`), schließen bzw. lösen (`close`) | ändernd |
+| `masks` | Maskenlisten des Geräts: anzeigen (nie Werte), anlegen, Einträge und Schutzpfade hinzufügen; Sperren und Schwächen nur für den Nutzer (`mcp/masks_tool.rs`, [`oberflaechen/masken.md`](oberflaechen/masken.md)) | ändernd |
 | `job_status`, `job_input`, `job_cancel` | Jobs verfolgen (Ausgabe ab Offset), stdin senden, abbrechen | lesend / ändernd |
 | `screen` | Geräte, Bildschirmfähigkeit, Quellen und begrenzte Standbilder; `audio` mit `on` speichert die Toneinstellung des Betrachters | ändernd (nur `audio` mit `on`), sonst lesend |
 | `screen_input` | Eingabe über den autorisierten Bildschirmvertrag | ändernd |
@@ -158,14 +162,24 @@ Pfade absolut sein: das Arbeitsverzeichnis des Servers bestimmt der Agent-Host.
 **Arbeitsziel** (seit 2026-11-27, `native/crates/cli/src/cli/mcp/root_tool.rs`, `root_path.rs`,
 `targets.rs`): `root` mit `set` macht ein Ziel jeder Art zum Arbeitsziel der Sitzung, wie ein
 offener Tab im Explorer. Danach nehmen alle Datei-Tools (`list`, `stat`, `read`, `write`, `edit`,
-`mkdir`, `remove`, `copy`, `move`, `search`, `grep`) relative Pfade darunter (`src/main.rs`; `.`
+`apply_patch`, `mkdir`, `remove`, `copy`, `move`, `search`, `grep`, `replace`) relative Pfade darunter (`src/main.rs`; `.`
 und ein leeres Ziel sind das Arbeitsziel selbst); `..` darf innerhalb klettern, aber nie darüber
 hinaus (Fehlermeldung). Ein absolutes Ziel, das das Arbeitsziel selbst oder einen Pfad darunter
 schreibt, wird genauso behandelt; jedes andere absolute Ziel bleibt gültig. Das Arbeitsziel selbst
 löscht `remove` nur mit `allow_root`. `exec` ohne `target` läuft auf dem SSH-Remote des
-Arbeitsziels in dessen Ordner (ein relatives `cwd` liegt darunter) bzw. auf dessen Share-Peer; ein
-Share-Arbeitsziel unterhalb der obersten Ebene braucht dort `cwd` mit dem Pfad des Peers, weil der
-Peer zu einem Share-Ordner keinen Plattenpfad nennt. Bei anderen Zielarten meldet `exec` das.
+Arbeitsziels in dessen Ordner (ein relatives `cwd` liegt darunter) bzw. auf dessen Share-Peer im
+Share-Ordner des Arbeitsziels: der Peer übersetzt den Share-Pfad innerhalb der Freigabe in seinen
+Plattenpfad (seit 2026-11-28, `share_cwd`); ein absolutes `cwd` ist der Plattenpfad des Peers.
+`shell` läuft ohne Arbeitsziel lokal, mit einem lokalen Arbeitsziel in dessen Ordner und sonst wie
+`exec`. Bei Zielarten ohne Shell (FTP, WebDAV, SMB-Anmeldung, Google Drive, Tresor) melden beide das.
+
+**Maskenlisten** (seit 2026-11-28, [`oberflaechen/masken.md`](oberflaechen/masken.md)): Jede aktive
+Liste maskiert jede Ausgabe des MCP an den Agenten (Inhalte, Namen, Pfade, Treffer, Befehlsausgaben,
+Fehlertexte) mit Platzhaltern `⟦Bezeichnung-N⟧` (Abwandlung `⟦Bezeichnung-N.V⟧`, ein `⟦` des Originals
+als `⟦⟦`); Platzhalter in jeder Eingabe werden auf die echten Werte zurückgeführt, lokal wie entfernt.
+Schützt eine aktive Liste einen Pfad, lehnen die Hooks des Plugins (`se hook`, auch in den verwalteten
+Einstellungen von Claude Code und Codex) jedes eigene Datei-, Shell-, LSP- und fremde MCP-Werkzeug des
+Agenten-Programms ab: der Agent arbeitet nur über die Smart-Explorer-Werkzeuge.
 
 **Verbindungen wie ein Tab** (`tab_cache.rs`): Die Sitzung hält je gespeicherter SFTP-, FTP-,
 FTPS- und WebDAV-Verbindung eine Anmeldung, je SSH-Remote eine SSH-Anmeldung für `exec`, je

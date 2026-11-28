@@ -387,3 +387,16 @@ dieses Geräts nach der Warteschlangenverzögerung zurück (`docs/TRANSFER_ENGIN
 Die Exec-Verbindung hat das Profil `Exec` (Cubic, Sendebündel 10/20). Ein Auftrag ohne Terminal zählt nicht.
 Es gibt keine Einstellung; das Verhalten ist auf allen Oberflächen gleich, die einen Terminalauftrag
 starten.
+
+## Stand 2026-11-28: Arbeitsordner im Share-Ordner und erhöhte Ausführung (Quellstand, nicht veröffentlicht)
+
+Plan `docs/plaene/2026-11-28-ersetzen-masken-shell/plan.md` (Teil C, Zeilen „Erhöhung entfernt“ und
+„`exec`/`shell` unter Share-Arbeitsziel“). Pfade relativ zu `native/crates/`.
+
+| Fähigkeit | Verhalten | Beleg |
+|---|---|---|
+| Share-Pfad als Arbeitsordner | `ExecStart` trägt `share_cwd`; der Host übersetzt ihn vor der Freigabe innerhalb der Exporte der Beziehung in seinen Plattenpfad; angekündigt als `exec_share_cwd_v1`; ohne Ankündigung verweigert der Client mit `exec_option_unsupported` | `engine/src/share/core/exec_host_options.rs`, `exec_types.rs`, `exec_client.rs` |
+| Erhöht auf dem Gerät | `ExecStart.elevated`: der Host schreibt den Start nach der Shell-Wahl zu `se elevated run …` um, das dort UAC (Windows) bzw. polkit (Linux) fragt; angekündigt als `exec_elevated_v1` (Linux, Windows); mit `run_as`-Konto verweigert | `engine/src/share/core/exec_host_options.rs`, `engine/src/elevate/` |
+| Weggelassene neue Felder | dieselben Bytes und Digests wie bisher (ältere Gegenstellen unverändert) | `engine/src/share/core/exec_host_options_tests.rs` |
+| CLI | `se exec --elevated` für Share-Peers und SSH-Remotes (SSH: `sudo -n`, sonst Passwort lokal über Windows CredUI bzw. ein Fenster `se elevated ask-password`, geprüft mit `sudo -S -p '' true`, nie gespeichert) | `cli/src/cli/exec.rs`, `exec_ssh_sudo.rs`, `exec_password.rs` |
+| MCP | `exec` und `shell` mit `elevated`; unter einem Share-Arbeitsziel ohne `cwd` im Share-Ordner des Arbeitsziels | `cli/src/cli/mcp/exec_tool.rs`, `shell_tool.rs` |

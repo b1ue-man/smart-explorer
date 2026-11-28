@@ -3553,6 +3553,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "ignore"
+version = "0.4.32"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0b17771570a2b94107741a7b033f19132c2eee21d59d21b24d2ced26500bd66e"
+dependencies = [
+ "crossbeam-deque",
+ "globset",
+ "log",
+ "memchr",
+ "regex-automata",
+ "same-file",
+ "walkdir",
+ "winapi-util",
+]
+
+[[package]]
 name = "image"
 version = "0.25.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7330,6 +7346,7 @@ name = "smart_explorer_engine"
 version = "0.5.208"
 dependencies = [
  "aes-kw",
+ "aho-corasick",
  "argon2 0.5.3",
  "ashpd 0.13.13",
  "base64 0.22.1",
@@ -7373,6 +7390,7 @@ dependencies = [
  "rand 0.10.1",
  "rayon",
  "rcgen",
+ "regex",
  "resvg",
  "ring",
  "roxmltree 0.20.0",
@@ -7492,6 +7510,7 @@ dependencies = [
  "grep-matcher",
  "grep-regex",
  "grep-searcher",
+ "ignore",
  "libc",
  "lz4_flex",
  "md5 0.7.0",

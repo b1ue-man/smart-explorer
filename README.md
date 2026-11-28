@@ -784,7 +784,7 @@ Terminal: `se analyze ZIEL [--sort allocated|size] [--top N] [--depth N] [--file
 großen Ordnern zu einem Eintrag „… N weitere Eintraege“ zusammenfasst, zählen in keinen Dateityp und
 keine Liste; die Ansicht nennt ihre Zahl. Beschreibung: `docs/ANALYTICS_ACCESS.md`, Abschnitt
 „Größe und Belegt“.
-**Suche in Dateien und Textansicht (Quellstand 2026-11-27, noch nicht veröffentlicht):**
+**Suche in Dateien und Textansicht (ab 0.5.208):**
 `se grep ZIEL MUSTER` sucht im Inhalt aller Textdateien unter einem Ordner wie „Suchen in
 Dateien“ von Notepad++: Normal, `--extended` (`\n`, `\t`, `\xHH` …) oder `--regex`, `--case`,
 `--word`, `--filter "*.cs *.html !*.min.js !\bin !+\obj"` (Notepad++-Filterfeld), zusätzlich
@@ -800,6 +800,21 @@ setzen im MCP mit `root` einmal ein Arbeitsziel (lokal, gespeicherte Server, Sha
 Google Drive) und arbeiten danach mit relativen Pfaden direkt dort (`list`, `read` auch nach
 Zeilen, `edit`, `write`, `grep` …), ohne `exec`. Beschreibung: `docs/oberflaechen/dateisuche.md`,
 `docs/oberflaechen/textansicht.md`.
+**Ersetzen in Dateien, Maskenlisten, Shell für Agenten (Quellstand 2026-11-28, noch nicht
+veröffentlicht):** `se replace ZIEL MUSTER ERSATZ` ersetzt wie „Replace in Files“ von Notepad++
+(dieselben Optionen wie `se grep`, Regex-Ersetzung mit `$1`, `${name}`, `\U…\E`, Bedingungen),
+fragt vorher mit Zahl der Stellen und Dateien, schreibt jede Datei nur ganz und nur, wenn sie
+seit dem Lesen unverändert ist, und behält das Original verschlüsselt für `--undo`; Desktop und App
+ersetzen aus dem Dialog oder aus ausgewählten Treffern. `--gitignore` beachtet Ignorierdateien wie
+ripgrep (auch `se search --gitignore`, `--sort mtime`, Pfad-Globs mit `**`). **Maskenlisten**
+(`se masks`, Einstellungen → „Maskenlisten“) ersetzen Werte – wörtlich, per Regex oder unscharf mit
+einstellbarer Toleranz für Tipp-, OCR- und Leerzeichenfehler – in jeder Ausgabe an KI-Agenten durch
+Platzhalter `⟦Bezeichnung-N⟧` und führen Platzhalter in deren Eingaben zurück; die Werte sind für
+Agenten nie lesbar. Schützt eine aktive Liste einen Ordner, sperren die Hooks des Plugins in Claude
+Code und Codex die eigenen Datei- und Shell-Werkzeuge der Agenten; sie arbeiten dann nur über die
+Smart-Explorer-Werkzeuge, darunter das neue MCP-Werkzeug `shell` (lokal oder im Arbeitsziel, auf
+Wunsch erhöht über UAC bzw. polkit), `replace` und `apply_patch`. Beschreibung:
+`docs/oberflaechen/masken.md`, `docs/AI_AGENT_PLUGIN.md`.
 **Links (ab 0.5.177):** `se search` meldet Links (`l`) und FIFOs/Sockets/Geräte
 (`s`) über ihren Namen und betritt Links nie; `--dirs` nimmt Ordner zusätzlich
 auf. `se cp -r`/`se mv -r` überspringen Links und Sonderdateien innerhalb eines

@@ -596,6 +596,15 @@ Required management surfaces:
 Running as root/Administrator is always visible in the grant row and before
 confirmation. Once a grant exists, no per-command prompt is added.
 
+## 8b. Working folder by Share path and elevated starts (source state 2026-11-28, not released)
+
+Plan `docs/plaene/2026-11-28-ersetzen-masken-shell` part C. `ExecStart` gains two optional fields that an
+older host never receives: `share_cwd` (a Share path the host resolves inside the relation's exports into
+its disk path before admission; capability `exec_share_cwd_v1`) and `elevated` (the host rewrites the
+start after choosing the shell into `se elevated run …`, which asks the device's user through UAC or
+polkit; capability `exec_elevated_v1`, refused together with a `run_as` account). Omitted, both keep
+the encoded bytes and digests of earlier starts (`engine/src/share/core/exec_host_options.rs`).
+
 ## 9. Protection against outside attackers
 
 The Exec work includes hardening the entry path, not only process spawning:

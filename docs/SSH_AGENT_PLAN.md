@@ -431,7 +431,7 @@ phase. Bundled musl binaries get rebuilt whenever `agent_proto` changes.
   agent error — and this also makes plain-SFTP **folder** download work, which
   the old per-file path didn't. The "größere Transfers" win.
 
-## Content search next to the data (source state 2026-11-27, not built, not released)
+## Content search next to the data (released with 0.5.208)
 
 Plan `docs/plaene/2026-11-27-dateien-suche-ansicht` section B. `PROTO_VERSION` 12 → 13,
 capability label `content_search_v1`: `ContentSearch{root, query}` (tag 93; the
@@ -445,6 +445,17 @@ SFTP and searches locally. The payloads grow from about 1.0/0.9 MB to 3.0/2.5 MB
 (x86_64/aarch64: regex, fancy-regex, the encoding tables); after a
 `PROTO_VERSION` change they come from the suite's part `agent-bundles` (artifact
 `crates-task-agent-bin`), since no cargo runs on the workstation.
+
+## Ignore files in the content search (source state 2026-11-28, not released)
+
+Plan `docs/plaene/2026-11-28-ersetzen-masken-shell` part C. `PROTO_VERSION` 13 → 14,
+capability label `content_search_ignore_v1`: flag bit 64 of the `ContentSearch` frame
+(`agent_proto/core/content_frames.rs`) carries `ContentQuery::respect_ignore_files`; the
+agent then skips what `.ignore`, `.gitignore` (inside a Git work tree) and
+`.git/info/exclude` exclude, with ripgrep's precedence (`agent_proto/os/shared/content_ignore.rs`,
+crate `ignore`, also in `se-agent/Cargo.toml`), reading folders above the root too. A client
+never sends the flag to an agent without the label; the search then reads the files through
+SFTP and filters itself. New payloads come from the suite's part `agent-bundles`.
 
 ## Phase 5 — Server-side search / filter — ✅ done (0.5.72)
 - **Capability:** `Search{root, spec}` (case-insensitive substring or `*?`-glob,
