@@ -245,7 +245,7 @@ pub(super) async fn admit_and_serve_start(
 ) -> io::Result<()> {
     // A Share folder becomes this device's disk folder before anyone sees
     // or approves the start (`exec_host_options.rs`).
-    let (start, denial) = match super::exec_types::host_options::resolve_on_host(
+    let (start, denial) = match crate::share::exec_types::host_options::resolve_on_host(
         start.clone(),
         &ctx.node.auth,
         &authorized.principal,
