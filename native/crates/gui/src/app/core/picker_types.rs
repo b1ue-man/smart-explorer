@@ -24,6 +24,12 @@ pub(in crate::app) enum PickerPurpose {
         src: String,
         source: super::transfer_route::TransferPlace,
     },
+    /// A protected path of the mask list `list` (named `name` in messages),
+    /// local or on any saved connection (plan 2026-11-28, P6).
+    MaskScope {
+        list: crate::masks::ListId,
+        name: String,
+    },
 }
 
 impl PickerPurpose {
@@ -38,6 +44,7 @@ impl PickerPurpose {
             PickerPurpose::BisyncDest => "Ziel für 2-Wege-Sync",
             PickerPurpose::CopyDest => "Zielordner wählen",
             PickerPurpose::DownloadTo { .. } => "Speichern unter…",
+            PickerPurpose::MaskScope { .. } => "Ordner schützen",
         }
     }
     /// Stable geometry keys are independent of labels, paths and endpoints.
@@ -52,6 +59,7 @@ impl PickerPurpose {
             Self::BisyncDest => "picker.bisync",
             Self::CopyDest => "picker.copy",
             Self::DownloadTo { .. } => "picker.save",
+            Self::MaskScope { .. } => "picker.mask_scope",
         }
     }
 
@@ -67,6 +75,7 @@ impl PickerPurpose {
                 | PickerPurpose::AnalyticsFolder
                 | PickerPurpose::ReclaimFolder
                 | PickerPurpose::DownloadTo { .. }
+                | PickerPurpose::MaskScope { .. }
         )
     }
 }

@@ -89,10 +89,7 @@ impl App {
                                             open_local = Some(home.clone());
                                         }
                                         for (d, _f, _t) in &drives {
-                                            if ui
-                                                .selectable_label(false, d.to_string())
-                                                .clicked()
-                                            {
+                                            if ui.selectable_label(false, d.to_string()).clicked() {
                                                 open_local = Some(d.clone());
                                             }
                                         }
@@ -438,6 +435,9 @@ impl App {
                             p.cwd,
                             p.conn_label,
                         );
+                    }
+                    PickerPurpose::MaskScope { list, name } => {
+                        self.settings.masks.add_scope(list, &name, value);
                     }
                 }
             }

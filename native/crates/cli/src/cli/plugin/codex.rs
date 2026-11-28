@@ -4,6 +4,8 @@
 mod batches_codex_task_tests;
 #[path = "codex_comments.rs"]
 mod comments;
+#[path = "codex_hooks.rs"]
+mod hooks;
 use super::{files, host_cli, managed};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
@@ -214,7 +216,10 @@ fn configure(executable: &Path, refresh: bool) -> Result<Value, String> {
                 legacy_env.unwrap_or_else(|| json!({}))
             }
         });
-    let ownership = json!({"schema":1,"installation_id":installation_id,"config":path,"managed_env":managed_env,"entry_sha256":managed::hash(&serde_json::to_vec(&entry).map_err(|e|e.to_string())?)});
+    // Mask list lockdown hook; its failure is reported, the server entry stays.
+    let hook = hooks::apply(&mut doc, &path, executable, owner.as_ref())
+        .unwrap_or_else(|error| json!({ "error": error }));
+    let ownership = json!({"schema":1,"installation_id":installation_id,"config":path,"managed_env":managed_env,"hook":hook,"entry_sha256":managed::hash(&serde_json::to_vec(&entry).map_err(|e|e.to_string())?)});
     let after = doc.to_string().into_bytes();
     // Parse staged bytes before exposing any file.
     let verified = document(Some(&after))?;
@@ -258,10 +263,14 @@ fn configure(executable: &Path, refresh: bool) -> Result<Value, String> {
         .as_ref()
         .map(|cli| host_cli::run(cli, &["mcp", "get", SERVER, "--json"]).is_ok_and(|o| o.success));
     Ok(
-        json!({"host":"codex","installed":true,"verified":host_verified,"cli":cli,"config":path,"skill":skill,"next":"Restart the Codex MCP server in the app, restart the IDE extension, or start a new CLI process to initialize the new server."}),
+        json!({"host":"codex","installed":true,"verified":host_verified,"cli":cli,"config":path,"skill":skill,"hook":hook,"managed_hooks":if refresh {Value::Null} else {crate::cli::hook::hook_harden::refresh_if_needed()},"next":"Restart the Codex MCP server in the app, restart the IDE extension, or start a new CLI process to initialize the new server."}),
     )
 }
 pub(super) fn uninstall() -> Result<Value, String> {
+    crate::cli::hook::hook_harden::confirm_if_locked(
+        "Smart Explorer: Eintrag aus Codex entfernen, obwohl eine Maskenliste Ordner schützt",
+    )?;
+    let managed_hooks = crate::cli::hook::hook_harden::remove(false, true);
     let (path, owner_path) = paths()?;
     if let Some(skill) = files::codex_skill_dir() {
         if !files::generated_files_absent(&skill)? {
@@ -286,11 +295,16 @@ pub(super) fn uninstall() -> Result<Value, String> {
             path.display()
         ));
     }
+    let mut changed = false;
     if let Some(table) = doc.get("mcp_servers").and_then(|t| t.get(SERVER)) {
         let legacy = owner.is_none() && legacy_matches(table);
         verify_removable_entry(table, owner.as_ref(), legacy)
             .map_err(|error| format!("{error} ({})", path.display()))?;
         comments::remove_server(&mut doc)?;
+        changed = true;
+    }
+    changed |= hooks::remove(&mut doc, owner.as_ref());
+    if changed {
         managed::replace(&path, before.as_deref(), doc.to_string().as_bytes())?;
     }
     if owner_bytes.is_some() {
@@ -301,7 +315,9 @@ pub(super) fn uninstall() -> Result<Value, String> {
         .map(|d| files::remove_generated(&d))
         .transpose()?
         .unwrap_or(false);
-    Ok(json!({"host":"codex","removed_skill":removed,"installed":false}))
+    Ok(
+        json!({"host":"codex","removed_skill":removed,"installed":false,"managed_hooks":managed_hooks}),
+    )
 }
 fn verify_removable_entry(table: &Item, owner: Option<&Value>, legacy: bool) -> Result<(), String> {
     if !owner.is_some_and(|owner| owner_matches(table, owner)) && !legacy {
@@ -384,7 +400,7 @@ pub(super) fn status(executable: &Path) -> Value {
         });
         Ok(
             json!({"present":table.is_some(), "current":current,"mode":if installation.is_some() {"managed"}else{"legacy_cli"},
-            "integration_conflict":conflict, "path":path}),
+            "integration_conflict":conflict, "path":path, "hook":hooks::status(&doc,&path,executable)}),
         )
     })();
     json!({"host":"codex", "cli":host_cli::find("codex"),

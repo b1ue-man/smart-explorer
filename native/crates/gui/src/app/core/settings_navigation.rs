@@ -2,7 +2,7 @@
 //! their own meaning; only their containing settings area is mapped here.
 use super::settings_ui::SettingsPage;
 
-pub(super) const AREAS: [(SettingsPage, &str); 13] = [
+pub(super) const AREAS: [(SettingsPage, &str); 14] = [
     (SettingsPage::ThisDevice, "Dieses Gerät"),
     (SettingsPage::Devices, "Geräte"),
     (SettingsPage::Rooms, "Räume"),
@@ -11,6 +11,7 @@ pub(super) const AREAS: [(SettingsPage, &str); 13] = [
     (SettingsPage::Vaults, "Tresore"),
     (SettingsPage::Drives, "Laufwerke"),
     (SettingsPage::Integration, "Integration"),
+    (SettingsPage::Masks, "Maskenlisten"),
     (SettingsPage::Appearance, "Darstellung"),
     (SettingsPage::Languages, "Sprachpakete"),
     (SettingsPage::Updates, "Updates"),

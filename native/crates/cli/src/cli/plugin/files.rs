@@ -12,6 +12,8 @@ pub(super) const PLUGIN: &str = "smart-explorer";
 pub(super) const MARKETPLACE: &str = "smart-explorer";
 pub(super) const CLAUDE_SERVER: &str = "se";
 const MARKER: &str = ".se-generated.json";
+const HOOKS: &str = "hooks/hooks.json";
+const HOOKS_DESCRIPTION: &str = "Smart Explorer: while a mask list protects folders, only the Smart Explorer tools reach files and commands.";
 const DESCRIPTION:&str="Smart Explorer for AI agents: use its tools first, respect permissions, and follow the running server's instructions.";
 const LEGACY_SKILL_SHA256: &str =
     "6d23270eb3dff8c2a3845e06106c75db3808bee4bd72bdc43638eb9f3bf92193";
@@ -95,6 +97,13 @@ pub(super) fn write_claude(executable: &Path) -> Result<PathBuf, String> {
             format!("{plugin}/skills/{PLUGIN}/SKILL.md"),
             SKILL.as_bytes().to_vec(),
         ),
+        // Agent lockdown of the mask lists (`se hook claude`), loaded with the plugin.
+        (
+            format!("{plugin}/{HOOKS}"),
+            json_bytes(
+                json!({"description":HOOKS_DESCRIPTION,"hooks":crate::cli::hook::hook_install::claude_hooks(&crate::cli::hook::hook_install::hook_program(executable),cfg!(windows))}),
+            )?,
+        ),
     ];
     managed::write_set(&root, &files, marker(executable)?)?;
     Ok(root)
@@ -121,6 +130,7 @@ pub(super) fn generated_files_absent(root: &Path) -> Result<bool, String> {
         "smart-explorer/.claude-plugin/plugin.json",
         "smart-explorer/.mcp.json",
         "smart-explorer/skills/smart-explorer/SKILL.md",
+        "smart-explorer/hooks/hooks.json",
     ] {
         match std::fs::symlink_metadata(root.join(name)) {
             Ok(_) => return Ok(false),
@@ -383,6 +393,7 @@ fn managed_relative(name: &str) -> bool {
             | "smart-explorer/.claude-plugin/plugin.json"
             | "smart-explorer/.mcp.json"
             | "smart-explorer/skills/smart-explorer/SKILL.md"
+            | "smart-explorer/hooks/hooks.json"
     )
 }
 

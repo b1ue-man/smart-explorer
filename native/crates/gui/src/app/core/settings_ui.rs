@@ -2,6 +2,10 @@ use super::prelude::*;
 use super::ui_preferences::ColorMode;
 use super::*;
 
+/// Page „Maskenlisten“ (mask lists for AI agents).
+#[path = "settings_masks.rs"]
+pub(in crate::app) mod settings_masks;
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum SettingsPage {
     Appearance,
@@ -20,6 +24,8 @@ pub(super) enum SettingsPage {
     Diagnostics,
     /// „Sprachpakete“ of the text view.
     Languages,
+    /// „Maskenlisten“ for AI agents.
+    Masks,
 }
 
 #[derive(Default)]
@@ -27,6 +33,7 @@ pub(super) struct SettingsState {
     pub(super) open: bool,
     pub(super) page: SettingsPage,
     pub(super) ai_plugin: super::settings_ai_plugin::AiPluginPanel,
+    pub(super) masks: settings_masks::MasksPage,
 }
 
 impl App {
@@ -129,6 +136,7 @@ impl App {
                         }
                         SettingsPage::Background => self.ui_settings_background(ui),
                         SettingsPage::Languages => self.ui_settings_languages(ui),
+                        SettingsPage::Masks => self.ui_settings_masks(ui),
                         SettingsPage::Diagnostics => {
                             self.ui_share_settings_content(ui);
                             if ui.button("Hintergrundprotokoll öffnen").clicked() { self.show_daemon_log = true; }

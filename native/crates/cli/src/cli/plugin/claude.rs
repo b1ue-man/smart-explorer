@@ -2,6 +2,7 @@
 //! installed through `claude plugin …` (docs/refs/claude-code-plugins-mcp-2026-10-12.md §2).
 use super::files::{self, MARKETPLACE};
 use super::host_cli;
+use crate::cli::hook::hook_harden;
 use serde_json::{json, Value};
 use std::path::Path;
 
@@ -57,14 +58,22 @@ pub(super) fn install(executable: &Path) -> Result<Value, String> {
         "cli": claude,
         "files": root,
         "tools": format!("mcp__plugin_smart-explorer_{}__<tool>", files::CLAUDE_SERVER),
+        "managed_hooks": hook_harden::refresh_if_needed(),
         "next": "Start a new Claude Code session (or run /reload-plugins) to load the Smart Explorer tools.",
     }))
 }
 
 pub(super) fn uninstall() -> Result<Value, String> {
+    // Removing the plugin takes its lockdown hook along: the user confirms it.
+    hook_harden::confirm_if_locked(
+        "Smart Explorer: Plugin aus Claude Code entfernen, obwohl eine Maskenliste Ordner schützt",
+    )?;
+    let managed_hooks = hook_harden::remove(true, false);
     let root = files::claude_marketplace_dir();
     if files::generated_files_absent(&root)? {
-        return Ok(json!({"host":"claude","removed_files":false,"steps":[]}));
+        return Ok(
+            json!({"host":"claude","removed_files":false,"steps":[],"managed_hooks":managed_hooks}),
+        );
     }
     files::verify_owned(&root)?;
     let mut host = Vec::new();
@@ -93,7 +102,9 @@ pub(super) fn uninstall() -> Result<Value, String> {
         }
     }
     let removed = files::remove_generated(&files::claude_marketplace_dir())?;
-    Ok(json!({ "host": "claude", "removed_files": removed, "steps": host }))
+    Ok(
+        json!({ "host": "claude", "removed_files": removed, "steps": host, "managed_hooks": managed_hooks }),
+    )
 }
 
 pub(super) fn status(executable: &Path) -> Value {
