@@ -5,8 +5,8 @@
 use serde::{Deserialize, Serialize};
 
 use super::{
-    is_false, FsBatchGet, FsBatchPut, FsCreateDirs, FsSegmentedFinish, FsSegmentedOpen,
-    FsStageWrite,
+    is_false, FsBatchGet, FsBatchPut, FsContentSearch, FsCreateDirs, FsSegmentedFinish,
+    FsSegmentedOpen, FsStageWrite,
 };
 
 /// What a request does to the host's files. Every request is named in
@@ -229,6 +229,9 @@ pub enum FsRequest {
     HashWalk(FsHashWalk),
     /// RV1, `list_batches_v1`.
     ListDirBatch(FsListBatch),
+    /// `content_search_v1`: file contents below a folder searched on the
+    /// host, within the export's rights; only the hits travel.
+    ContentSearch(FsContentSearch),
     /// RV1, `remote_trash_v1`.
     Recycle(FsRecycle),
     /// RV1, `stage_finish_v1`.
@@ -260,6 +263,7 @@ impl FsRequest {
             | Self::StorageAnalysis(_)
             | Self::DuplicateSearch(_)
             | Self::HashWalk(_)
+            | Self::ContentSearch(_)
             | Self::WatchExport(_)
             | Self::Read { .. }
             | Self::ReadAt { .. }

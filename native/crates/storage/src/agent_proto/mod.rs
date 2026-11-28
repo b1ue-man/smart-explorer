@@ -25,6 +25,34 @@ mod codec_tests;
 #[cfg(test)]
 #[path = "core/content_digest_task_tests.rs"]
 mod content_digest_task_tests;
+#[path = "core/content_extended.rs"]
+mod content_extended;
+#[path = "os/shared/content_fancy.rs"]
+mod content_fancy;
+#[path = "os/shared/content_file.rs"]
+mod content_file;
+#[path = "core/content_filter.rs"]
+mod content_filter;
+#[path = "core/content_lines.rs"]
+mod content_lines;
+#[cfg(all(test, unix))]
+#[path = "os/linux_os/content_link_tests.rs"]
+mod content_link_tests;
+#[path = "os/shared/content_local.rs"]
+mod content_local;
+#[path = "os/shared/content_match.rs"]
+mod content_match;
+#[path = "core/content_query.rs"]
+mod content_query;
+#[path = "os/shared/content_run.rs"]
+mod content_run;
+#[cfg(test)]
+#[path = "os/shared/content_search_tests.rs"]
+mod content_search_tests;
+#[path = "os/shared/content_source.rs"]
+mod content_source;
+#[path = "os/shared/content_walk.rs"]
+mod content_walk;
 #[path = "core/credit.rs"]
 mod credit;
 #[cfg(test)]
@@ -142,6 +170,17 @@ pub use batch_limits::{
 };
 pub use codec::{free_cores, pack_lz4, pack_raw, raw_len, unpack, BlockSender, MAX_RAW};
 pub use codec::{read_frame, read_frame_with_tree_budget, write_frame};
+pub use content_file::search_reader;
+pub use content_filter::PathFilter;
+pub use content_local::search_local_tree;
+pub use content_match::ContentMatcher;
+pub use content_query::{
+    ContentEvent, ContentQuery, ContentSummary, LineHit, SkipReason, TextMode, DEFAULT_LINE_BYTES,
+};
+pub use content_run::{ContentEmit, ContentRun, FileOutcome};
+pub use content_walk::{
+    join_rel, prepare as prepare_content_search, search_tree, ContentTree, TreeEntry, TreeKind,
+};
 pub use credit::{
     busy_message, charged, credit_cost, parse_busy, window_target, RecvWindow, SendCredit,
     StreamCount, CREDIT_CONNECTION_BUDGET, CREDIT_INITIAL, CREDIT_REQUEST_LIMIT, CREDIT_WINDOW_MAX,
@@ -151,7 +190,7 @@ pub use extension_parts::{
 };
 pub use features::{
     lz4_switched_off, server_version, server_version_with, service_slots, ServerFeatures,
-    LABEL_BATCH, LABEL_CREDIT, LABEL_LZ4, LABEL_RANGE, LABEL_STAGE,
+    LABEL_BATCH, LABEL_CONTENT_SEARCH, LABEL_CREDIT, LABEL_LZ4, LABEL_RANGE, LABEL_STAGE,
 };
 pub use file_digest::{md5_cached, LocalReads};
 pub use folder_key::{

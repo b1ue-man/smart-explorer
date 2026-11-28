@@ -71,6 +71,7 @@ fn ends_request(frame: &Frame) -> bool {
             | Frame::CapacityData(_)
             | Frame::DirectoryIdentityValue(_)
             | Frame::FileIdentityValue(_)
+            | Frame::ContentDone(_)
     )
 }
 

@@ -1,6 +1,6 @@
 /// Bumped whenever the wire format OR the agent's behaviour changes; the client
 /// re-uploads the agent on a mismatch.
-pub const PROTO_VERSION: u32 = 12;
+pub const PROTO_VERSION: u32 = 13;
 
 /// Existing error frames can request a metadata walk without changing wire
 /// layouts. A hash-only stream cannot represent protected link boundaries.
@@ -454,4 +454,15 @@ pub enum Frame {
         offset: u64,
         len: u64,
     },
+    /// Content search below `root` next to the data (`content_search_v1`,
+    /// tag 93): `ContentEvent`* then one `ContentDone`; `Cancel` ends it.
+    ContentSearch {
+        root: String,
+        query: super::content_query::ContentQuery,
+    },
+    /// One event of a content search: hits (tag 94) and skips (95) are
+    /// charged stream frames, progress (96) is free.
+    ContentEvent(super::content_query::ContentEvent),
+    /// The totals of a finished content search, its final reply (tag 97).
+    ContentDone(super::content_query::ContentSummary),
 }

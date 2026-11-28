@@ -455,42 +455,9 @@ pub trait Backend: Send + Sync {
         super::backend_defaults::get_batch(items, sink)
     }
 
-    /// Recursive search on the server (the agent's `Search`), streaming matches?
-    fn supports_search(&self) -> bool {
-        false
-    }
-
-    /// Search below `root` on the server, streaming matches (paths relative to
-    /// `root`) into `tx`. `Ok(false)` only for "unsupported" before any hit;
-    /// every failure (transport, remote, cancel) is an error, never a fallback.
-    fn search(
-        &self,
-        root: &str,
-        spec: &crate::agent_proto::SearchSpec,
-        tx: crossbeam_channel::Sender<SearchHit>,
-        cancel: &std::sync::atomic::AtomicBool,
-    ) -> VfsResult<bool> {
-        super::backend_defaults::search(root, spec, tx, cancel)
-    }
-
-    /// Sync signatures (size, mtime, MD5 on demand) in one server-side walk
-    /// (the agent's `WalkHashed`), without downloading files?
-    fn supports_walk_hashed(&self) -> bool {
-        false
-    }
-
-    /// Walk `root` on the server, streaming a `HashHit` per entry into `tx`
-    /// (MD5 when `want_hash`). `Ok(false)` only for "unsupported" before any
-    /// entry; later failures are errors, so partial walks never merge.
-    fn walk_hashed(
-        &self,
-        root: &str,
-        want_hash: bool,
-        tx: crossbeam_channel::Sender<HashHit>,
-        cancel: &std::sync::atomic::AtomicBool,
-    ) -> VfsResult<bool> {
-        super::backend_defaults::walk_hashed(root, want_hash, tx, cancel)
-    }
+    // The searches next to the data (name search, signature walk, content
+    // search): ordinary trait methods, kept in `backend_search.rs`.
+    super::backend_search::server_search_methods!();
 }
 
 pub type BackendHandle = Arc<dyn Backend>;

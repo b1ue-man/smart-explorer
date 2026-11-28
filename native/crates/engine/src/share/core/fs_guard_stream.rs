@@ -55,15 +55,19 @@ pub(super) fn cancellable<T: Send>(
     })
 }
 
-pub(super) fn forward<T: Send>(
+/// Forwards what `produce` streams, leaving out every item whose path the
+/// policy hides (each one shown to `hidden` first).
+#[allow(clippy::too_many_arguments)]
+pub(super) fn forward<T: Send, R: Send>(
     authority: Option<&Arc<AccessAuthority>>,
     policy: &TargetPolicy,
     root: &str,
     tx: Sender<T>,
     external_cancel: &AtomicBool,
     relative: impl Fn(&T) -> &str,
-    produce: impl FnOnce(Sender<T>, &AtomicBool) -> io::Result<bool> + Send,
-) -> io::Result<bool> {
+    hidden: impl FnMut(&T),
+    produce: impl FnOnce(Sender<T>, &AtomicBool) -> io::Result<R> + Send,
+) -> io::Result<R> {
     let cancel = Arc::new(AtomicBool::new(false));
     if let Some(authority) = authority {
         authority.register_cancel(&cancel)?;
@@ -81,6 +85,7 @@ pub(super) fn forward<T: Send>(
             external_cancel,
             &cancel,
             relative,
+            hidden,
         );
         cancel.store(true, Ordering::Release);
         let produced = worker
@@ -91,6 +96,7 @@ pub(super) fn forward<T: Send>(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn drain<T>(
     authority: Option<&Arc<AccessAuthority>>,
     policy: &TargetPolicy,
@@ -100,6 +106,7 @@ fn drain<T>(
     external_cancel: &AtomicBool,
     cancel: &AtomicBool,
     relative: impl Fn(&T) -> &str,
+    mut hidden: impl FnMut(&T),
 ) -> io::Result<()> {
     loop {
         check(authority, external_cancel, cancel)?;
@@ -112,6 +119,7 @@ fn drain<T>(
         validate_relative(rel)?;
         let path = format!("{}/{}", root.trim_end_matches('/'), rel);
         if !policy.visible(&path, false) {
+            hidden(&item);
             continue;
         }
         let mut item = item;

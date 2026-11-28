@@ -50,6 +50,11 @@ pub const LABEL_LZ4: &str = "lz4-v1";
 /// occupied bytes. The SSH agent only; the service walks a VFS backend,
 /// which knows no occupancy.
 pub const LABEL_TREE_ALLOCATED: &str = "tree-allocated-v1";
+/// `ContentSearch` (`content_query.rs`): the content search runs next to the
+/// data. The SSH agent searches its files; the background service answers
+/// through its backend (`vfs::content_search`, which reads the files where the
+/// peer does not search itself).
+pub const LABEL_CONTENT_SEARCH: &str = "content_search_v1";
 /// Prefix of the label announcing the admitted concurrent requests.
 const LABEL_SLOTS: &str = "slots-";
 
@@ -69,8 +74,8 @@ pub fn lz4_switched_off() -> bool {
 
 /// The version text the SSH agent of this build announces: the labels of the
 /// service (`server_version_with`) plus `folder-reservation-v1`,
-/// `file-identity-v1`, `stage-mtime-v1`, with batches `batch-mtime-v1`, `range-v1`
-/// and, unless switched off for a test, `lz4-v1`. Each host advertises only
+/// `file-identity-v1`, `stage-mtime-v1`, `content_search_v1`, with batches
+/// `batch-mtime-v1`, `range-v1` and, unless switched off for a test, `lz4-v1`. Each host advertises only
 /// the handlers it actually connects.
 pub fn server_version(batch: bool) -> String {
     let mut version = server_version_with(batch, CREDIT_REQUEST_LIMIT);
@@ -88,6 +93,8 @@ pub fn server_version(batch: bool) -> String {
     version.push_str(LABEL_META_LIST);
     version.push('.');
     version.push_str(LABEL_TREE_ALLOCATED);
+    version.push('.');
+    version.push_str(LABEL_CONTENT_SEARCH);
     if batch {
         version.push('.');
         version.push_str(LABEL_BATCH_MTIME);
@@ -159,6 +166,8 @@ pub struct ServerFeatures {
     pub origin: bool,
     /// `WalkTreeAllocated` (`tree-allocated-v1`).
     pub tree_allocated: bool,
+    /// `ContentSearch` (`content_search_v1`).
+    pub content_search: bool,
     /// Requests the server admits at once, when it announced them.
     pub slots: Option<usize>,
     /// The background service (announces itself with a trailing `worker`).
@@ -196,6 +205,7 @@ impl ServerFeatures {
                 LABEL_RANGE => features.ranges = true,
                 LABEL_LZ4 => features.lz4 = true,
                 LABEL_TREE_ALLOCATED => features.tree_allocated = true,
+                LABEL_CONTENT_SEARCH => features.content_search = true,
                 super::request_origin::LABEL_ORIGIN => features.origin = true,
                 other => {
                     if let Some(slots) = other.strip_prefix(LABEL_SLOTS) {

@@ -37,6 +37,15 @@ socket2.workspace = true
 sha2-011.workspace = true
 flate2.workspace = true
 lz4_flex.workspace = true
+# Content search (agent_proto content_*.rs, shared with the se-agent): ripgrep's
+# search libraries, Windows-1252 decoding of ANSI lines, the backtracking
+# fallback for Boost/Perl regular expressions and the line splitting of hits.
+grep-searcher.workspace = true
+grep-regex.workspace = true
+grep-matcher.workspace = true
+encoding_rs.workspace = true
+fancy-regex.workspace = true
+memchr.workspace = true
 
 [target.'cfg(not(windows))'.dependencies]
 libc.workspace = true

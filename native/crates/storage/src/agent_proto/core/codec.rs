@@ -291,11 +291,16 @@ impl Frame {
                                                 t, &mut r,
                                             )? {
                                                 Some(frame) => frame,
-                                                None => {
-                                                    return Err(bad(&format!(
-                                                        "unknown frame tag {t}"
-                                                    )))
-                                                }
+                                                None => match frame_encode::content_frames::decode(
+                                                    t, &mut r,
+                                                )? {
+                                                    Some(frame) => frame,
+                                                    None => {
+                                                        return Err(bad(&format!(
+                                                            "unknown frame tag {t}"
+                                                        )))
+                                                    }
+                                                },
                                             },
                                         }
                                     }

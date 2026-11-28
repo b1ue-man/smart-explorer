@@ -254,6 +254,9 @@ mod abgleich_task_hash_walk_tests;
 mod analysis_request_id_task_tests;
 #[path = "content_digest_task_tests.rs"]
 mod content_digest_task_tests;
+#[cfg(test)]
+#[path = "content_search_task_tests.rs"]
+mod content_search_task_tests;
 #[path = "direct_open_task_tests.rs"]
 mod direct_open_task_tests;
 #[path = "evidence_task_tests.rs"]

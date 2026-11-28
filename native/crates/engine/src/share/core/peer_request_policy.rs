@@ -95,6 +95,7 @@ pub(super) fn response_matches(request: &FsRequest, response: &FsResponse) -> bo
         | FsRequest::StorageAnalysis(_)
         | FsRequest::DuplicateSearch(_)
         | FsRequest::HashWalk(_)
+        | FsRequest::ContentSearch(_)
         | FsRequest::ListDirBatch(_)
         | FsRequest::WatchExport(_)
         | FsRequest::RemoveTree { .. }

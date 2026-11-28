@@ -22,6 +22,11 @@ use backend_pool::RequestPool;
 #[path = "backend_ranges.rs"]
 mod backend_ranges;
 use backend_ranges::BackendStages;
+#[path = "backend_content.rs"]
+mod backend_content;
+#[path = "backend_version.rs"]
+mod backend_version;
+use backend_version::service_version;
 
 pub(super) type Sink = Arc<Mutex<Box<dyn Write + Send>>>;
 
@@ -60,36 +65,6 @@ fn canceled_request_lost_client(
                 | io::ErrorKind::NotConnected
                 | io::ErrorKind::UnexpectedEof
         )
-}
-
-/// The version this service announces for `backend`: batches only when the
-/// peer moves them itself (never emulated file by file), and no more
-/// transfer slots than the peer admits. A Share peer's root is its export
-/// list, which holds no files, so its batches are asked for host-wide
-/// (Z-P1); each batch request is still checked against its own folder.
-fn service_version(backend: &BackendHandle) -> String {
-    let root = backend.root_display();
-    let batch = crate::vfs::host_batch_limits(&**backend).is_some();
-    let slots = agent_proto::service_slots(backend.transfer_ceiling(&root));
-    // A single file as a packet of one (Z-P4), where the peer offers it.
-    let single = if batch && crate::vfs::single_put(&**backend) {
-        ".single-put-v1"
-    } else {
-        ""
-    };
-    // Packet entries keep their time where the peer sets it.
-    let times = if batch && crate::vfs::batch_put_times(&**backend) {
-        ".batch-mtime-v1"
-    } else {
-        ""
-    };
-    // `range-v1` only for a backend that reads ranges (`backend_ranges`);
-    // `ListMeta` … `StatMeta`: `backend_hash.rs`; `origin-v1`: below (E4d).
-    format!(
-        "{}{}.capacity-v1.folder-reservation-v1.file-identity-v1.list-meta-v1.walk-keys-v1.meta-list-v1.origin-v1{single}{times} worker",
-        agent_proto::server_version_with(batch, slots),
-        backend_ranges::labels(backend)
-    )
 }
 
 /// Upload frames with `DataLz4` unpacked for a backend announced with `lz4-v1`.
@@ -357,6 +332,9 @@ fn dispatch_backend(
         },
         Frame::Search { root, spec } => {
             handle_search_backend(sink, id, &backend, &root, &spec, cancel)
+        }
+        Frame::ContentSearch { root, query } => {
+            backend_content::content_search(sink, id, &backend, (&root, &query), cancel)
         }
         Frame::WalkHashed { root, want_hash } => {
             handle_walk_hashed_backend(sink, id, &backend, &root, want_hash, cancel)

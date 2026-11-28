@@ -431,6 +431,18 @@ phase. Bundled musl binaries get rebuilt whenever `agent_proto` changes.
   agent error — and this also makes plain-SFTP **folder** download work, which
   the old per-file path didn't. The "größere Transfers" win.
 
+## Content search next to the data (source state 2026-11-27, not built, not released)
+
+Plan `docs/plaene/2026-11-27-dateien-suche-ansicht` section B. `PROTO_VERSION` 12 → 13,
+capability label `content_search_v1`: `ContentSearch{root, query}` (tag 93; the
+Notepad++ query of `agent_proto/core/content_query.rs`) is answered by
+`ContentEvent` frames (Hits 94 and Skipped 95 charge credit, Progress 96 is free)
+and one `ContentDone` (tag 97) with the totals; `Cancel` ends it. The agent searches
+with ripgrep's libraries (grep-searcher, grep-regex, fancy-regex for lookaround and
+back references) over a work-stealing walk that never enters links; only hit lines
+cross the connection. Without the label `vfs::content_search` reads the files over
+SFTP and searches locally.
+
 ## Phase 5 — Server-side search / filter — ✅ done (0.5.72)
 - **Capability:** `Search{root, spec}` (case-insensitive substring or `*?`-glob,
   + size bounds, dirs-optional, result cap) → streamed `Match` (rel path), then

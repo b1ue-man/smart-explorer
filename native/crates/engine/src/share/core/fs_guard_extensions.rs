@@ -190,6 +190,7 @@ impl BackendExtensions for GuardedBackend {
                 vfs::HashWalkItem::Entry(entry) => &entry.rel,
                 vfs::HashWalkItem::Omitted(omission) => &omission.rel,
             },
+            |_| {},
             |output, cancelled| vfs::hash_walk(&*self.inner, root, request, output, cancelled),
         )
     }

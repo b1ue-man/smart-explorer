@@ -354,7 +354,7 @@ pub enum FsErrorKind {
     Unknown,
 }
 
-pub use super::fs_response::FsResponse;
+pub use super::fs_response::{FsContentSearch, FsResponse};
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(tag = "c", rename_all = "snake_case")]

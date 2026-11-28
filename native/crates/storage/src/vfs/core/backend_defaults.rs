@@ -211,6 +211,17 @@ pub(super) fn walk_hashed(
     Ok(false)
 }
 
+/// `Backend::content_search`: not offered next to the data (before any event).
+pub(super) fn content_search(
+    root: &str,
+    query: &crate::agent_proto::ContentQuery,
+    tx: crossbeam_channel::Sender<crate::agent_proto::ContentEvent>,
+    cancel: &std::sync::atomic::AtomicBool,
+) -> VfsResult<Option<crate::agent_proto::ContentSummary>> {
+    let _ = (root, query, tx, cancel);
+    Ok(None)
+}
+
 /// `Backend::open_write_copy_stage_sized`: the size is not needed, the stage
 /// of unknown length is used.
 pub(super) fn open_write_copy_stage_sized<B: Backend + ?Sized>(

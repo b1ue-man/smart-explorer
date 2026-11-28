@@ -449,6 +449,18 @@ impl Backend for CachingBackend {
     ) -> VfsResult<bool> {
         self.inner.search(root, spec, tx, cancel)
     }
+    fn supports_content_search(&self) -> bool {
+        self.inner.supports_content_search()
+    }
+    fn content_search(
+        &self,
+        root: &str,
+        query: &crate::agent_proto::ContentQuery,
+        tx: crossbeam_channel::Sender<crate::agent_proto::ContentEvent>,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> VfsResult<Option<crate::agent_proto::ContentSummary>> {
+        self.inner.content_search(root, query, tx, cancel)
+    }
     fn supports_walk_hashed(&self) -> bool {
         self.inner.supports_walk_hashed()
     }

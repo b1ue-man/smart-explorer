@@ -43,6 +43,7 @@ pub(super) fn request_label(request: &FsRequest) -> &'static str {
         FsRequest::DuplicateSearch(_) => "duplicate_search",
         FsRequest::HashWalk(_) => "hash_walk",
         FsRequest::ListDirBatch(_) => "list_dir_batch",
+        FsRequest::ContentSearch(_) => "content_search",
         FsRequest::Recycle(_) => "recycle",
         FsRequest::FinishStage(_) => "finish_stage",
         FsRequest::SyncFilesystem(_) => "sync_filesystem",
@@ -164,6 +165,7 @@ pub(super) fn response_summary(response: &FsResponse) -> String {
         }
         FsResponse::Duplicates { .. } => "duplikatsuche".into(),
         FsResponse::HashWalk { .. } => "pruefsummen".into(),
+        FsResponse::ContentSearch { .. } => "inhaltssuche".into(),
         FsResponse::Watch { .. } => "beobachtung".into(),
         FsResponse::RemoveTree { message } => format!("ordnerloeschen {message:?}"),
         // Only the kind: the log names no target or account.

@@ -12,6 +12,9 @@ pub use verbinden_modules::*;
 #[path = "direktweg_modules.rs"]
 mod direktweg_modules;
 use direktweg_modules::*;
+#[path = "inhaltssuche_modules.rs"]
+mod inhaltssuche_modules;
+use inhaltssuche_modules::*;
 #[path = "core/address_services.rs"]
 pub mod address_services;
 #[path = "core/auth_penalty.rs"]

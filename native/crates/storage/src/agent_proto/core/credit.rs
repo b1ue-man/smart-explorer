@@ -37,9 +37,10 @@ pub const CREDIT_REQUEST_LIMIT: usize = (CREDIT_CONNECTION_BUDGET / CREDIT_INITI
 const FRAME_COST_MAX: u64 = CREDIT_INITIAL / 2;
 
 /// Wire tags of the charged frames: `Data`, `TreeEntry`, `Match`, `HashEntry`,
-/// `DataLz4` and the streamed parts of the extension frames (`DirPart`,
-/// `HashOmitted`, `DupGroup`, `DupSummary`, `Change`, `HashPart`).
-const CHARGED_TAGS: [u8; 11] = [11, 18, 20, 22, 46, 48, 51, 52, 61, DATA_LZ4_TAG, 80];
+/// `DataLz4`, the streamed parts of the extension frames (`DirPart`,
+/// `HashOmitted`, `DupGroup`, `DupSummary`, `Change`, `HashPart`) and the
+/// hits and skips of a content search (94, 95).
+const CHARGED_TAGS: [u8; 13] = [11, 18, 20, 22, 46, 48, 51, 52, 61, DATA_LZ4_TAG, 80, 94, 95];
 
 /// Wire tag of `Frame::DataLz4` (`lz4-v1`): charged by its raw length.
 const DATA_LZ4_TAG: u8 = 67;
@@ -62,6 +63,10 @@ pub fn charged(frame: &Frame) -> bool {
             | Frame::DupGroup(_)
             | Frame::DupSummary(_)
             | Frame::Change(_)
+            | Frame::ContentEvent(
+                super::content_query::ContentEvent::Hits { .. }
+                    | super::content_query::ContentEvent::Skipped { .. }
+            )
     )
 }
 

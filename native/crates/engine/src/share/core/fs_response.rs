@@ -4,6 +4,8 @@ use super::wire::{
 };
 use serde::{Deserialize, Serialize};
 
+#[path = "content_search_wire.rs"]
+mod content_search_wire;
 #[path = "duplicate_wire.rs"]
 mod duplicate_wire;
 #[path = "hash_walk_wire.rs"]
@@ -15,6 +17,10 @@ mod remove_tree_wire;
 #[path = "watch_wire.rs"]
 mod watch_wire;
 
+pub use self::content_search_wire::{
+    FsContentEvent, FsContentMessage, FsContentQuery, FsContentSearch, FsContentSummary, FsLineHit,
+    FsSkipKind,
+};
 pub use self::duplicate_wire::{
     FsDuplicateFile, FsDuplicateGroup, FsDuplicateMessage, FsDuplicateProgress, FsDuplicateSummary,
     GROUP_PORTION_BYTES,
@@ -183,6 +189,10 @@ pub enum FsResponse {
     /// RV1 `HashWalk`.
     HashWalk {
         message: FsHashWalkMessage,
+    },
+    /// `content_search_v1` `ContentSearch`.
+    ContentSearch {
+        message: FsContentMessage,
     },
     /// RV1 `WatchExport`.
     Watch {

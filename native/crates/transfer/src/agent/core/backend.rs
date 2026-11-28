@@ -1,8 +1,5 @@
 use super::agent_error::agent_error;
 use super::pool::AgentPool;
-#[cfg(any(test, feature = "test-support"))]
-use super::transport::HeartbeatPolicy;
-use super::transport::{AgentConnection, AgentReconnect};
 use crate::agent_proto::{Frame, ServerFeatures, BATCH_MAX_BYTES, BATCH_MAX_FILES};
 use crate::vfs::{
     Backend, BackendHandle, BatchGet, BatchLimits, BatchPut, BatchPutOutcome, BatchSink, Scheme,
@@ -16,6 +13,11 @@ use std::time::Duration;
 
 const METADATA_REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 
+#[path = "backend_open.rs"]
+mod backend_open;
+#[path = "content_search.rs"]
+mod content_search;
+
 pub struct AgentBackend {
     pub(super) inner: BackendHandle,
     pub(super) pool: Arc<AgentPool>,
@@ -24,93 +26,6 @@ pub struct AgentBackend {
 }
 
 impl AgentBackend {
-    /// Hand-shake over an already-open framed stream pair.
-    pub fn from_streams(
-        r: Box<dyn Read + Send>,
-        w: Box<dyn Write + Send>,
-        inner: BackendHandle,
-    ) -> io::Result<Self> {
-        Self::from_streams_inner((r, w), inner, None, None)
-    }
-
-    pub(super) fn from_streams_with_reconnect(
-        r: Box<dyn Read + Send>,
-        w: Box<dyn Write + Send>,
-        inner: BackendHandle,
-        reconnect: AgentReconnect,
-    ) -> io::Result<Self> {
-        Self::from_streams_inner((r, w), inner, Some(reconnect), None)
-    }
-
-    /// The SSH-deployed agent: its reconnect also opens further exec
-    /// channels, so this backend may spread requests over a channel pool.
-    pub(super) fn from_root_confined_streams_with_reconnect(
-        r: Box<dyn Read + Send>,
-        w: Box<dyn Write + Send>,
-        inner: BackendHandle,
-        reconnect: AgentReconnect,
-        root: String,
-    ) -> io::Result<Self> {
-        Self::from_streams_inner((r, w), inner, Some(reconnect), Some(root))
-    }
-
-    #[cfg(any(test, feature = "test-support"))]
-    pub(super) fn from_streams_with_reconnect_and_heartbeat(
-        r: Box<dyn Read + Send>,
-        w: Box<dyn Write + Send>,
-        inner: BackendHandle,
-        reconnect: AgentReconnect,
-        heartbeat: HeartbeatPolicy,
-    ) -> io::Result<Self> {
-        let (connection, version) =
-            AgentConnection::new_with_heartbeat((r, w), Some(reconnect), heartbeat)?;
-        let pool = AgentPool::single(connection, ServerFeatures::parse(&version));
-        Ok(Self {
-            inner,
-            pool,
-            version,
-            root_confined: None,
-        })
-    }
-
-    /// A pool over test streams: `opener` provides further channels.
-    #[cfg(any(test, feature = "test-support"))]
-    pub(super) fn pooled_for_test(
-        r: Box<dyn Read + Send>,
-        w: Box<dyn Write + Send>,
-        inner: BackendHandle,
-        opener: AgentReconnect,
-    ) -> io::Result<Self> {
-        let (connection, version) = AgentConnection::new((r, w), Some(opener.clone()))?;
-        let pool = AgentPool::growable(connection, ServerFeatures::parse(&version), opener);
-        Ok(Self {
-            inner,
-            pool,
-            version,
-            root_confined: None,
-        })
-    }
-
-    fn from_streams_inner(
-        streams: super::transport::AgentStreams,
-        inner: BackendHandle,
-        reconnect: Option<AgentReconnect>,
-        root_confined: Option<String>,
-    ) -> io::Result<Self> {
-        let (connection, version) = AgentConnection::new(streams, reconnect.clone())?;
-        let features = ServerFeatures::parse(&version);
-        let pool = match (reconnect, root_confined.is_some()) {
-            (Some(opener), true) => AgentPool::growable(connection, features, opener),
-            _ => AgentPool::single(connection, features),
-        };
-        Ok(AgentBackend {
-            inner,
-            pool,
-            version,
-            root_confined,
-        })
-    }
-
     pub fn version(&self) -> &str {
         &self.version
     }
@@ -243,6 +158,20 @@ impl Backend for AgentBackend {
         cancel: &std::sync::atomic::AtomicBool,
     ) -> VfsResult<bool> {
         self.agent_search(root, spec, tx, cancel)
+    }
+
+    fn supports_content_search(&self) -> bool {
+        self.features().content_search
+    }
+
+    fn content_search(
+        &self,
+        root: &str,
+        query: &crate::agent_proto::ContentQuery,
+        tx: Sender<crate::agent_proto::ContentEvent>,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> VfsResult<Option<crate::agent_proto::ContentSummary>> {
+        self.agent_content_search(root, query, tx, cancel)
     }
 
     fn supports_walk_hashed(&self) -> bool {

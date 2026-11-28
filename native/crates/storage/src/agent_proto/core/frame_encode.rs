@@ -10,6 +10,8 @@ use super::{bad, validate_frame_len, META_LINK, META_SPECIAL, MIN_WIRE_META_BYTE
 
 #[path = "capacity_frames.rs"]
 pub(super) mod capacity_frames;
+#[path = "content_frames.rs"]
+pub(super) mod content_frames;
 #[path = "folder_frames.rs"]
 pub(super) mod folder_frames;
 #[path = "frame_ext.rs"]
@@ -228,6 +230,7 @@ pub(super) fn encode(frame: &Frame, req_id: u64, with_length: bool) -> io::Resul
                 && !walk_meta_frames::encode(other, &mut b)
                 && !walk_key_frames::encode(other, &mut b)
                 && !tree_allocated_frames::encode(other, &mut b)
+                && !content_frames::encode(other, &mut b)
             {
                 return Err(bad("frame has no wire encoding"));
             }
@@ -390,6 +393,7 @@ fn encoded_len(frame: &Frame) -> io::Result<usize> {
             .or_else(|| walk_meta_frames::payload_len(other))
             .or_else(|| walk_key_frames::payload_len(other))
             .or_else(|| tree_allocated_frames::payload_len(other))
+            .or_else(|| content_frames::payload_len(other))
         {
             Some(extra) => add_len(&mut length, extra?)?,
             None => return Err(bad("frame has no wire encoding")),

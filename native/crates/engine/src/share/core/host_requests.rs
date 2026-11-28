@@ -5,8 +5,8 @@ use super::{
     fs_access::FsAccess,
     session::PeerPrincipal,
     wire::{
-        FsDuplicateSearch, FsHashWalk, FsListBatch, FsRecycle, FsResponse, FsStageFinish,
-        FsSyncFilesystem, FsWatch,
+        FsContentSearch, FsDuplicateSearch, FsHashWalk, FsListBatch, FsRecycle, FsRequest,
+        FsResponse, FsStageFinish, FsSyncFilesystem, FsWatch,
     },
 };
 use iroh::endpoint::SendStream;
@@ -15,6 +15,29 @@ use std::{
     sync::{atomic::AtomicBool, Arc},
 };
 
+/// The long RV1 host streams (`DuplicateSearch`, `HashWalk`, `ListDirBatch`,
+/// `WatchExport`, `ContentSearch`): each on its fair workers.
+pub(in crate::share) async fn serve_stream(
+    send: SendStream,
+    request: FsRequest,
+    access: FsAccess,
+    principal: PeerPrincipal,
+) -> io::Result<()> {
+    match request {
+        FsRequest::DuplicateSearch(request) => {
+            serve_duplicate_search(send, request, access, principal).await
+        }
+        FsRequest::HashWalk(request) => serve_hash_walk(send, request, access, principal).await,
+        FsRequest::ListDirBatch(request) => {
+            serve_list_batch(send, request, access, principal).await
+        }
+        FsRequest::WatchExport(request) => serve_watch(send, request, access, principal).await,
+        FsRequest::ContentSearch(request) => {
+            serve_content_search(send, request, access, principal).await
+        }
+        _ => Err(super::core::eio("Host-Strom falsch zugeordnet")),
+    }
+}
 pub(in crate::share) async fn serve_duplicate_search(
     send: SendStream,
     request: FsDuplicateSearch,
@@ -44,6 +67,27 @@ pub(in crate::share) async fn serve_hash_walk(
             },
         },
         move |tx, cancel| super::host_hash_walk::run(request, access, tx, cancel, worker),
+    )
+    .await
+}
+/// `content_search_v1`: the host searches below the request path within the
+/// export's rights; heartbeats carry its running totals.
+pub(in crate::share) async fn serve_content_search(
+    send: SendStream,
+    request: FsContentSearch,
+    access: FsAccess,
+    principal: PeerPrincipal,
+) -> io::Result<()> {
+    let totals = Arc::new(super::host_content_search::Totals::default());
+    let worker = totals.clone();
+    super::host_stream::serve(
+        send,
+        principal,
+        access.clone(),
+        Arc::new(AtomicBool::new(false)),
+        false,
+        move || totals.progress(),
+        move |tx, cancel| super::host_content_search::run(request, access, tx, cancel, worker),
     )
     .await
 }

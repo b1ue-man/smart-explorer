@@ -1,6 +1,6 @@
 use std::io::{self, Read, Write};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use crate::vfs::{
     Backend, BatchGet, BatchLimits, BatchPut, BatchPutOutcome, BatchSink, Scheme, VfsMeta,
@@ -8,15 +8,12 @@ use crate::vfs::{
 };
 
 use super::core::eio;
-use super::framing::recv_ctrl;
 use super::identity::ShareIdentity;
 use super::io_deadline;
 use super::peer_endpoint_source::PeerEndpointSource;
 use super::session::relation_kind_id;
-use super::types::{
-    ExecRequest, ExecResult, PeerEndpoint, PeerOpenTarget, ShareAuthState, ShareStatus,
-};
-use super::wire::{Ctrl, FsMeta, FsRequest, FsResponse};
+use super::types::{PeerEndpoint, PeerOpenTarget, ShareAuthState, ShareStatus};
+use super::wire::{FsMeta, FsRequest, FsResponse};
 
 pub(super) use super::framing::{reply, send_ctrl};
 pub use super::node::ShareIrohNode;
@@ -27,6 +24,8 @@ mod peer_batch_get;
 mod peer_batch_put;
 #[path = "peer_evidence.rs"]
 pub(super) mod peer_evidence;
+#[path = "peer_exec.rs"]
+mod peer_exec;
 #[path = "peer_stage_ranges.rs"]
 mod peer_stage_ranges;
 #[path = "peer_stages.rs"]
@@ -107,52 +106,6 @@ impl PeerBackend {
     pub(super) fn mount_lease_token(&self) -> io::Result<Option<String>> {
         self.mount_lease.current()
     }
-
-    pub fn exec(&self, req: ExecRequest) -> io::Result<ExecResult> {
-        let started = Instant::now();
-        let timeout = Duration::from_millis(req.timeout_ms.min(15 * 60 * 1_000))
-            .saturating_add(Duration::from_secs(30))
-            .min(Duration::from_secs(15 * 60 + 30));
-        let endpoint = self.current_endpoint()?;
-        let mut opened = self.node.open_stream_until(
-            &endpoint,
-            &self.identity,
-            Instant::now() + super::peer_request::CONTROL_ATTEMPT_TIMEOUT,
-        )?;
-        let result =
-            self.node
-                .block_on(io_deadline::run_for("peer exec request", timeout, async {
-                    send_ctrl(&mut opened.send, &Ctrl::Exec { req }).await?;
-                    recv_ctrl(&mut opened.recv).await
-                }));
-        let response = match result {
-            Ok(Ctrl::ExecResp { result }) => result,
-            Ok(Ctrl::ExecErr { msg }) => return Err(eio(msg)),
-            Ok(_) => {
-                let _ = self
-                    .node
-                    .invalidate_outgoing_session(&opened.session_key, opened.generation);
-                return Err(eio("Peer sendet falsche Exec-Antwort"));
-            }
-            Err(error) => {
-                io_deadline::abort(&mut opened.send, &mut opened.recv);
-                let _ = self
-                    .node
-                    .invalidate_outgoing_session(&opened.session_key, opened.generation);
-                return Err(error);
-            }
-        };
-        super::peer_telemetry::report_exec_success(
-            &self.node.ev,
-            format!(
-                "Share-Exec: {} ms, code={:?}, timeout={}",
-                started.elapsed().as_millis(),
-                response.exit_code,
-                response.timed_out
-            ),
-        );
-        Ok(response)
-    }
 }
 
 impl Backend for PeerBackend {
@@ -202,6 +155,23 @@ impl Backend for PeerBackend {
         progress: &crate::analytics::Progress,
     ) -> VfsResult<Option<crate::analytics::ScanOutcome>> {
         super::peer_storage_analysis::scan(self, root, progress)
+    }
+
+    /// The host searches its own files (`content_search_v1`).
+    fn supports_content_search(&self) -> bool {
+        super::peer_content_search::supported(self)
+    }
+
+    /// `Ok(None)` for a host without `content_search_v1`: the caller reads
+    /// the files through this backend (older peers).
+    fn content_search(
+        &self,
+        root: &str,
+        query: &crate::agent_proto::ContentQuery,
+        tx: crossbeam_channel::Sender<crate::agent_proto::ContentEvent>,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> VfsResult<Option<crate::agent_proto::ContentSummary>> {
+        super::peer_content_search::search(self, root, query, tx, cancel)
     }
 
     fn supports_walk_tree(&self) -> bool {

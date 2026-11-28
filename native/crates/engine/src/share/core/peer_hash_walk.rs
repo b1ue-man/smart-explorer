@@ -293,7 +293,7 @@ fn folder_key(hex: &str) -> Option<[u8; 32]> {
     Some(key)
 }
 
-async fn publish<T>(
+pub(super) async fn publish<T>(
     tx: &crossbeam_channel::Sender<T>,
     cancel: &AtomicBool,
     mut item: T,

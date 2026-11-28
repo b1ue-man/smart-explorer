@@ -8,8 +8,13 @@ use std::{
 
 #[path = "fs_guard_bulk.rs"]
 mod bulk;
+#[path = "fs_guard_content.rs"]
+mod content;
 #[path = "fs_guard_extensions.rs"]
 mod extensions;
+#[path = "fs_guard_io.rs"]
+mod guarded_io;
+use guarded_io::{GuardedReader, GuardedWriter};
 #[path = "fs_guard_names.rs"]
 mod names;
 #[path = "fs_guard_reports.rs"]
@@ -421,8 +426,21 @@ impl Backend for GuardedBackend {
             tx,
             cancel,
             |hit| &hit.rel,
+            |_| {},
             |output, cancelled| self.inner.search(root, spec, output, cancelled),
         )
+    }
+    fn supports_content_search(&self) -> bool {
+        self.inner.supports_content_search()
+    }
+    fn content_search(
+        &self,
+        root: &str,
+        query: &crate::agent_proto::ContentQuery,
+        tx: crossbeam_channel::Sender<crate::agent_proto::ContentEvent>,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> VfsResult<Option<crate::agent_proto::ContentSummary>> {
+        content::search(self, root, query, tx, cancel)
     }
     fn supports_walk_hashed(&self) -> bool {
         self.inner.supports_walk_hashed()
@@ -442,43 +460,9 @@ impl Backend for GuardedBackend {
             tx,
             cancel,
             |hit| &hit.rel,
+            |_| {},
             |output, cancelled| self.inner.walk_hashed(root, want_hash, output, cancelled),
         )
-    }
-}
-
-struct GuardedReader {
-    inner: Box<dyn Read + Send>,
-    authority: Option<Arc<AccessAuthority>>,
-}
-impl Read for GuardedReader {
-    fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
-        if let Some(authority) = &self.authority {
-            authority.check()?;
-        }
-        let read = self.inner.read(bytes)?;
-        if let Some(authority) = &self.authority {
-            authority.check()?;
-        }
-        Ok(read)
-    }
-}
-struct GuardedWriter {
-    inner: Box<dyn Write + Send>,
-    authority: Option<Arc<AccessAuthority>>,
-}
-impl Write for GuardedWriter {
-    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        if let Some(authority) = &self.authority {
-            authority.check_write()?;
-        }
-        self.inner.write(bytes)
-    }
-    fn flush(&mut self) -> io::Result<()> {
-        if let Some(authority) = &self.authority {
-            authority.check_write()?;
-        }
-        self.inner.flush()
     }
 }
 

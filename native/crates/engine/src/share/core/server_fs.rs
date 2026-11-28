@@ -434,18 +434,12 @@ pub(super) async fn serve(stream: FsStream, req: FsRequest) -> io::Result<()> {
                 _ => Err(eio("Paketanfrage falsch zugeordnet")),
             }
         }
-        FsRequest::DuplicateSearch(request) => {
-            crate::share::host_requests::serve_duplicate_search(send, request, access, principal)
-                .await
-        }
-        FsRequest::HashWalk(request) => {
-            crate::share::host_requests::serve_hash_walk(send, request, access, principal).await
-        }
-        FsRequest::ListDirBatch(request) => {
-            crate::share::host_requests::serve_list_batch(send, request, access, principal).await
-        }
-        FsRequest::WatchExport(request) => {
-            crate::share::host_requests::serve_watch(send, request, access, principal).await
+        request @ (FsRequest::DuplicateSearch(_)
+        | FsRequest::HashWalk(_)
+        | FsRequest::ListDirBatch(_)
+        | FsRequest::WatchExport(_)
+        | FsRequest::ContentSearch(_)) => {
+            crate::share::host_requests::serve_stream(send, request, access, principal).await
         }
         FsRequest::Recycle(request) => {
             let path = request.path.clone();

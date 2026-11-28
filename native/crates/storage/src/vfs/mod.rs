@@ -18,6 +18,8 @@
 
 #[path = "core/backend_defaults.rs"]
 mod backend_defaults;
+#[path = "core/backend_search.rs"]
+mod backend_search;
 // Work a program started by itself (E4c): never interactive presence.
 #[path = "core/background.rs"]
 mod background;
@@ -38,6 +40,10 @@ mod capabilities;
 mod congestion;
 #[path = "core/content_digest.rs"]
 mod content_digest;
+// Content search through the storage interface (`content_search`).
+#[path = "os/shared/content_read.rs"]
+mod content_read;
+pub use self::content_read::{content_search, local_content_search};
 #[path = "core/peer_namespace.rs"]
 mod peer_namespace;
 pub use peer_namespace::{
@@ -169,9 +175,11 @@ pub use self::extension_types::{
     StageFinished, TargetLimits, VfsListing, VfsOmission,
 };
 pub use self::extensions::{BackendExtensions, VersionArchivePolicy};
+pub use self::fs_profile::{CaseFolding, NameRules};
 pub use self::key_tally::{name_is_unusual, KeyTally};
 pub use self::local_extensions::{
-    local_mount_boundary, local_volume_identity, LocalMountBoundaries,
+    explain_file_limit, local_mount_boundary, local_name_rules, local_volume_identity,
+    LocalMountBoundaries,
 };
 pub use self::staging_names::is_staging_name;
 pub use self::staging_names::{fit_stage_name, is_unique_stage, split_stage_name};

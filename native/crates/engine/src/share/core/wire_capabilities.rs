@@ -95,6 +95,10 @@ pub struct FsHostFeatures {
     /// (`login_transport::host_login_target`); others get a withdrawal.
     #[serde(default, skip_serializing_if = "is_false")]
     pub login_target_v1: bool,
+    /// `ContentSearch`: file contents searched on the host within the
+    /// export's rights (plan 2026-11-27 section B); only hits travel.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub content_search_v1: bool,
 }
 
 impl FsHostFeatures {
@@ -124,6 +128,7 @@ impl FsHostFeatures {
             remove_tree_v1: true,
             code_renewal_v1: true,
             login_target_v1: true,
+            content_search_v1: true,
         }
     }
 
@@ -157,6 +162,7 @@ impl FsHostFeatures {
             (self.remove_tree_v1, "remove_tree_v1"),
             (self.code_renewal_v1, "code_renewal_v1"),
             (self.login_target_v1, "login_target_v1"),
+            (self.content_search_v1, "content_search_v1"),
         ]
         .into_iter()
         .filter_map(|(offered, name)| offered.then_some(name))

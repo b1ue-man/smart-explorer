@@ -342,6 +342,9 @@ fn dispatch(context: &RequestContext, id: u64, req: Frame) -> io::Result<()> {
             None => emit(sink, id, &Frame::Err("put-tree: no inbound channel".into())),
         },
         Frame::Search { root, spec } => handle_search(sink, id, &root, &spec, cancel),
+        Frame::ContentSearch { root, query } => {
+            super::content_local::handle_content_search(sink, id, &root, &query, cancel)
+        }
         Frame::WalkHashed { root, want_hash } => {
             handle_walk_hashed(sink, id, &root, want_hash, cancel)
         }

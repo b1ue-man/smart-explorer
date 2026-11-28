@@ -33,6 +33,19 @@ getrandom = "0.2"
 # File content travels as LZ4 blocks (agent_proto lz4_frames.rs, E13): the block
 # codec only, without the frame format and its checksum crate.
 lz4_flex = { version = "0.14", default-features = false, features = ["std", "safe-encode", "safe-decode"] }
+# Content search next to the data (agent_proto content_*.rs, `content_search_v1`):
+# ripgrep's search libraries (pure Rust, binary detection, UTF-16 BOM sniffing
+# through encoding_rs_io), Windows-1252 decoding of ANSI lines, the backtracking
+# fallback for Boost/Perl regular expressions; the versions of native/Cargo.toml
+# [workspace.dependencies]. encoding_rs_io and bstr come with grep-searcher.
+grep-searcher = "0.1.18"
+grep-regex = "0.1.15"
+grep-matcher = "0.1.10"
+encoding_rs = "0.8"
+encoding_rs_io = "0.1.8"
+fancy-regex = "0.16"
+memchr = "2"
+bstr = { version = "1", default-features = false, features = ["std"] }
 
 # The integration test (tests/remote_drive_task.rs) compiles the shared agent_proto
 # with cfg(test), and with it the protocol's own test modules, which use tempfile and
