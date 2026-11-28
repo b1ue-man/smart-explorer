@@ -21,7 +21,10 @@ name: Crate split and shared task setup
 #                with GNU ld (MinGW-w64 on Linux)
 #   android      compile and link the Android JNI library (arm64-v8a, x86_64);
 #                arm64-v8a also compiles the Kotlin app and runs its JVM unit tests
-#   agent        build the SSH-agent bundles the release embeds
+#   agent        build the SSH-agent bundles the release embeds; uploads them as the artifact
+#                crates-task-agent-bin (part agent-bundles runs only this job: after a
+#                PROTO_VERSION change the committed native/agent-bin/ payloads come from there,
+#                since no cargo runs on the workstation, AGENTS.md)
 #   servers      the tests of the two packages outside the workspace (Linux):
 #                share-server (with tests/relay_startup.rs) and se-agent
 #   s4           the S4 measurement of the ignored tests s4_messung_task_* (plan 2026-11-08, E30):
@@ -62,13 +65,14 @@ on:
         required: true
         type: string
       part:
-        description: suite (every job) or compile-timings (the workspace compile stage only)
+        description: suite (every job), compile-timings (the workspace compile stage only) or agent-bundles (the SSH-agent bundles only, as an artifact)
         required: false
         default: suite
         type: choice
         options:
           - suite
           - compile-timings
+          - agent-bundles
 
 permissions:
   contents: read
@@ -85,6 +89,7 @@ env:
 
 jobs:
   workspace:
+    if: inputs.part != 'agent-bundles'
     strategy:
       fail-fast: false
       matrix:
@@ -261,7 +266,7 @@ jobs:
         run: python3 native/test-crates-task.py --part android --abi "$ABI"
 
   agent:
-    if: inputs.part == 'suite'
+    if: inputs.part == 'suite' || inputs.part == 'agent-bundles'
     runs-on: ubuntu-24.04
     # Measured: 2 min (run 41433803073).
     timeout-minutes: 40
@@ -282,6 +287,15 @@ jobs:
       - name: SSH-agent bundles
         timeout-minutes: 30
         run: python3 native/test-crates-task.py --part agent
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: crates-task-agent-bin
+          path: |
+            native/agent-bin/se-agent-x86_64-linux-musl
+            native/agent-bin/se-agent-aarch64-linux-musl
+          if-no-files-found: error
+          retention-days: 3
 
   servers:
     if: inputs.part == 'suite'
