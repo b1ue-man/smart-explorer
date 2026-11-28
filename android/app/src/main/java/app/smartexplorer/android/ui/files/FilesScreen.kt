@@ -63,6 +63,8 @@ import app.smartexplorer.android.ui.more.MoreRequests
 import app.smartexplorer.android.ui.transfers.TransfersBar
 import app.smartexplorer.android.ui.trash.TrashScreen
 import app.smartexplorer.android.ui.viewer.MediaViewer
+import app.smartexplorer.android.ui.viewer.TextViewRequest
+import app.smartexplorer.android.ui.viewer.TextViewerHost
 import kotlinx.coroutines.launch
 
 /** Backends that exist only inside the app and never become favorites (api.md §2). */
@@ -129,6 +131,14 @@ fun FilesScreen() {
                 onOpen = { vm.openLocation(it) },
                 onBack = { vm.page = FilesPage.Browser },
             )
+            // Back keeps a running search and its results; [Abbrechen] stops it.
+            FilesPage.ContentSearch -> ContentSearchPage(
+                vm.contentSearch,
+                onOpenLine = { location, name, line, start, end ->
+                    vm.openText(TextViewRequest(location, name, line, start, end))
+                },
+                onBack = { vm.page = FilesPage.Browser },
+            )
             FilesPage.Browser -> FilesBrowser(vm, wide, tasks)
         }
     }
@@ -146,6 +156,9 @@ fun FilesScreen() {
                 }
             },
         )
+    }
+    if (vm.textViews.isNotEmpty()) {
+        TextViewerHost(vm.textViews, onPush = { vm.openText(it) }, onPop = { vm.closeText() })
     }
 }
 
@@ -400,6 +413,7 @@ private fun titleOf(tab: BrowserTab): String {
 
 private fun FilesViewModel.onEntryAction(tab: BrowserTab, action: EntryAction, entries: List<Entry>, local: Boolean) {
     when (action) {
+        EntryAction.View -> entries.singleOrNull()?.let { openText(TextViewRequest(it.location, it.name)) }
         EntryAction.OpenWith -> entries.singleOrNull()?.let { openFile(it, local, chooser = true) }
         EntryAction.Share -> share(entries)
         EntryAction.Copy -> copyToClip(tab, entries, move = false)
@@ -420,6 +434,10 @@ private fun FilesViewModel.onFolderAction(tab: BrowserTab, action: FolderAction)
     when (action) {
         FolderAction.ViewOptions -> sheet = FilesSheet.ViewOptions
         FolderAction.FolderSearch -> page = FilesPage.FolderSearch
+        FolderAction.ContentSearch -> location?.let {
+            contentSearch.openAt(it)
+            page = FilesPage.ContentSearch
+        }
         FolderAction.NewTab -> newTab(null)
         FolderAction.Forward -> tab.goForward()
         FolderAction.Mirror -> location?.let { sheet = FilesSheet.Mirror(it) }

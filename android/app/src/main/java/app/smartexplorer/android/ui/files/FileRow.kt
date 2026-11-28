@@ -184,6 +184,7 @@ private fun RowMenu(entry: Entry, permissions: RowPermissions, onAction: (EntryA
                 onAction(action)
             }
             if (!entry.isDir) {
+                if (isViewable(entry)) MenuEntry("Ansehen", enabled = true, onClick = pick(EntryAction.View))
                 MenuEntry("Öffnen mit", enabled = true, onClick = pick(EntryAction.OpenWith))
                 MenuEntry("Teilen", enabled = true, onClick = pick(EntryAction.Share))
                 HorizontalDivider()
@@ -200,6 +201,13 @@ private fun RowMenu(entry: Entry, permissions: RowPermissions, onAction: (EntryA
         }
     }
 }
+
+/**
+ * "Ansehen" in the text view: text files and files of unknown kind (source code of every language);
+ * the core refuses binary content itself ("keine Textdatei"). Pictures, media, archives, Office
+ * documents and APKs have their own ways.
+ */
+internal fun isViewable(entry: Entry): Boolean = !entry.isDir && (entry.kind == "text" || entry.kind == "other")
 
 internal fun isZip(entry: Entry): Boolean = !entry.isDir && entry.ext.removePrefix(".").equals("zip", ignoreCase = true)
 

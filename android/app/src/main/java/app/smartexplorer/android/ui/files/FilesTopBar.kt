@@ -45,10 +45,10 @@ import app.smartexplorer.android.core.Crumb
 import app.smartexplorer.android.ui.common.SeIcon
 
 /** Actions on entries, shared by the row menu and the selection bar (spec C). */
-internal enum class EntryAction { OpenWith, Share, Copy, Cut, CopyTo, MoveTo, Rename, Delete, Properties, Extract, CopyPath, Favorite }
+internal enum class EntryAction { View, OpenWith, Share, Copy, Cut, CopyTo, MoveTo, Rename, Delete, Properties, Extract, CopyPath, Favorite }
 
 /** Menu "⋮" of the title bar (spec C: 9 entries in groups). */
-internal enum class FolderAction { ViewOptions, FolderSearch, NewTab, Forward, Mirror, Analyze, Favorite, CopyPath, Properties }
+internal enum class FolderAction { ViewOptions, FolderSearch, ContentSearch, NewTab, Forward, Mirror, Analyze, Favorite, CopyPath, Properties }
 
 /** Title bar: ☰ · place · 🔍 · [tabs] · ⋮. */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -100,6 +100,7 @@ internal fun FilesTopBar(
                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                     MenuEntry("Ansicht…", enabled = true) { menu = false; onAction(FolderAction.ViewOptions) }
                     MenuEntry("Ordner suchen", enabled = true) { menu = false; onAction(FolderAction.FolderSearch) }
+                    MenuEntry("In Dateien suchen", enabled = location != null) { menu = false; onAction(FolderAction.ContentSearch) }
                     HorizontalDivider()
                     MenuEntry("Neuer Tab", enabled = true) { menu = false; onAction(FolderAction.NewTab) }
                     MenuEntry("Vor", enabled = canForward) { menu = false; onAction(FolderAction.Forward) }

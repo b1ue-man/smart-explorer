@@ -58,7 +58,7 @@ import app.smartexplorer.android.update.UpdateState
 enum class SettingsFocus { Background, Launcher, Updates }
 
 /** Sections in display order (spec F21); the index is the lazy-list item index. */
-private enum class SettingsItem { Appearance, FileList, Background, ShareServer, Drive, Documents, Storage, Launcher, Updates, ErrorLog, About }
+private enum class SettingsItem { Appearance, FileList, Languages, Background, ShareServer, Drive, Documents, Storage, Launcher, Updates, ErrorLog, About }
 
 private val THEMES = listOf("system" to "System", "light" to "Hell", "dark" to "Dunkel")
 
@@ -99,12 +99,17 @@ fun SettingsScreen(
         ShareScreen(settingsArea = area, onSettingsAreaChange = { area = it }, onBack = onBack)
         return
     }
+    var languagesOpen by rememberSaveable { mutableStateOf(false) }
+    if (languagesOpen) {
+        LanguagePacksScreen(onBack = { languagesOpen = false })
+        return
+    }
     if (area == SettingsArea.Vaults) {
         VaultsHost(onBack = { area = SettingsArea.ThisDevice }, compareJob = null, onCompareOpened = {})
         return
     }
     val sections = when (area) {
-        SettingsArea.Appearance -> listOf(SettingsItem.Appearance, SettingsItem.FileList)
+        SettingsArea.Appearance -> listOf(SettingsItem.Appearance, SettingsItem.FileList, SettingsItem.Languages)
         SettingsArea.Connections -> listOf(SettingsItem.Drive)
         SettingsArea.Drives -> listOf(SettingsItem.Documents)
         SettingsArea.Integration -> listOf(SettingsItem.Launcher)
@@ -149,6 +154,11 @@ fun SettingsScreen(
                         when (section) {
                             SettingsItem.Appearance -> AppearanceSettings()
                             SettingsItem.FileList -> FileListSettings()
+                            SettingsItem.Languages -> LinkRow(
+                                "Sprachpakete",
+                                "Farbige Hervorhebung der Textansicht (.sublime-syntax)",
+                                R.drawable.ic_text,
+                            ) { languagesOpen = true }
                             SettingsItem.Background -> {
                                 SectionHeader("Hintergrund")
                                 BackgroundSettingsSection(Modifier.padding(horizontal = 16.dp))

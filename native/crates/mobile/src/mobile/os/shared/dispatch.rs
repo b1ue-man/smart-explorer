@@ -12,6 +12,9 @@ pub(crate) fn dispatch(rt: &Runtime, method: &str, args: &Value) -> Result<Value
         "scan" => super::scan::handle(rt, method, args),
         "index" => super::index::handle(rt, method, args),
         "trash" => super::trash::handle(rt, method, args),
+        "search" => super::content_search::handle(rt, method, args),
+        "text" => super::text_view::handle(rt, method, args),
+        "languages" => super::languages::handle(method, args),
         _ => None,
     };
     own.or_else(|| super::domains::dispatch(rt, method, args))

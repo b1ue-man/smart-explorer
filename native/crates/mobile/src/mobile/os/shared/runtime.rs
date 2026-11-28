@@ -92,6 +92,10 @@ pub(crate) struct RuntimeInner {
     pub(super) pool: BackendPool,
     pub(super) scans: super::scan::ScanRegistry,
     pub(super) index: super::index::IndexSlot,
+    /// Running and recent content searches (`search.content.*`).
+    pub(super) content: super::content_search::ContentSearches,
+    /// Open documents of the text view (`text.*`).
+    pub(super) texts: super::text_view::TextDocs,
     /// Serializes read-modify-write of `recent.json`.
     pub(super) recent_lock: Mutex<()>,
     /// Serializes read-modify-write of `edits.json`.
@@ -127,6 +131,8 @@ impl Runtime {
                 pool: BackendPool::new(),
                 scans: Default::default(),
                 index: Default::default(),
+                content: Default::default(),
+                texts: Default::default(),
                 recent_lock: Mutex::new(()),
                 edits_lock: Mutex::new(()),
                 favorites_lock: Mutex::new(()),

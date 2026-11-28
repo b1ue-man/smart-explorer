@@ -5,13 +5,17 @@
 //!
 //! Compiled for Android and for the Linux unit tests only. This module owns
 //! the protocol, the task register, the event queue, the backend pool and the
-//! file methods (`sys.* task.* loc.* fs.* scan.* index.* trash.*`); every
-//! other method goes to `domains::dispatch`.
+//! file methods (`sys.* task.* loc.* fs.* scan.* index.* trash.*`), the
+//! content search (`search.content.*`), the text view (`text.*`) and its
+//! language packs (`languages.*`); every other method goes to
+//! `domains::dispatch`.
 
 #[path = "core/args.rs"]
 mod args;
 #[path = "core/config.rs"]
 mod config;
+#[path = "os/shared/content_search.rs"]
+mod content_search;
 #[path = "core/crumbs.rs"]
 mod crumbs;
 #[path = "os/shared/delete.rs"]
@@ -42,6 +46,8 @@ mod import;
 mod index;
 #[path = "os/shared/init.rs"]
 mod init;
+#[path = "os/shared/languages.rs"]
+mod languages;
 #[path = "core/location.rs"]
 mod location;
 #[path = "os/shared/places.rs"]
@@ -60,6 +66,12 @@ mod store;
 mod sys;
 #[path = "core/tasks.rs"]
 mod tasks;
+#[path = "core/text_find.rs"]
+mod text_find;
+#[path = "core/text_json.rs"]
+mod text_json;
+#[path = "os/shared/text_view.rs"]
+mod text_view;
 #[path = "os/shared/transfer.rs"]
 mod transfer;
 #[path = "os/shared/trash.rs"]

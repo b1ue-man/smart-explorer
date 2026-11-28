@@ -20,6 +20,7 @@ import app.smartexplorer.android.prefs.AppPrefs
 import app.smartexplorer.android.ui.common.Snackbars
 import app.smartexplorer.android.ui.trash.TRASH_RETENTION_DAYS
 import app.smartexplorer.android.ui.viewer.MediaSet
+import app.smartexplorer.android.ui.viewer.TextViewRequest
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
@@ -58,6 +59,12 @@ internal class FilesViewModel : ViewModel() {
     /** Media shown in the viewer (`null` = closed). */
     var viewer by mutableStateOf<MediaSet?>(null)
     val search = FolderSearchState(viewModelScope)
+
+    /** "In Dateien suchen" (api.md §4.14): form and last results. */
+    val contentSearch = ContentSearchState(viewModelScope)
+
+    /** Text views shown (the last one on top; a Markdown link pushes the linked file). */
+    val textViews = mutableStateListOf<TextViewRequest>()
 
     private val effectChannel = Channel<FilesEffect>(Channel.BUFFERED)
     val effects: Flow<FilesEffect> = effectChannel.receiveAsFlow()
@@ -246,6 +253,15 @@ internal class FilesViewModel : ViewModel() {
         tabs.filter { it !in shown }.forEach { it.stale = true }
     }
 
+    /** Shows [request] in the text view ("Ansehen", a hit of "In Dateien suchen"). */
+    fun openText(request: TextViewRequest) {
+        textViews.add(request)
+    }
+
+    fun closeText() {
+        if (textViews.isNotEmpty()) textViews.removeAt(textViews.lastIndex)
+    }
+
     internal fun emit(effect: FilesEffect) {
         effectChannel.trySend(effect)
     }
@@ -253,6 +269,7 @@ internal class FilesViewModel : ViewModel() {
     override fun onCleared() {
         // viewModelScope is already cancelled here; ScanWindow sends its task.cancel on its own scope.
         tabs.forEach { it.dispose() }
+        contentSearch.closed()
         super.onCleared()
     }
 

@@ -103,7 +103,7 @@ Task      {id, kind, title, state:"queued|running|done|failed|canceled", doneByt
            limiter:String, limiterText:String?}
 ```
 `Task.kind` ∈ `transfer, delete, scan, properties, open, upload, materialize, extract, index,
-sync, mirror, analyze, reclaim, trash, oauth, share, exec, update`.
+sync, mirror, analyze, reclaim, trash, oauth, share, exec, update, contentSearch`.
 
 `limiter` nennt den Engpass einer Übertragung (Quelle `native/src/transfer/core/limiter.rs`, Feld in
 `native/src/mobile/core/tasks.rs`, geschrieben aus `native/src/mobile/os/shared/drive.rs`): `none` (noch kein
@@ -626,6 +626,75 @@ Ereignis `{"type":"vault","site":"…","state":"unlocked|locked|locking","reason
 (`vault://<SITE>/…`) bei Übertragung, Scan und Löschen sind privat: Meldungen werden unterdrückt, Fehlerpfade und
 Fehlertexte ersetzt; der Titel nennt nur die Bezeichnung („Tresor <Bezeichnung>“). `syncProblem` mit `jobId` `vault:<job>`
 meldet Konflikte eines Tresor-Syncs (§3).
+
+### 4.14 Suche in Dateien (`search.content.*`)
+Quelle: `native/crates/mobile/src/mobile/os/shared/content_search.rs`; Kotlin `api/TextApi.kt`. Plan
+`docs/plaene/2026-11-27-dateien-suche-ansicht/plan.md` (B, E). Die Suche läuft dort, wo die Dateien liegen
+(`vfs::content_search`: lokal auf allen Kernen, SSH-Agent, Share-Host, sonst Lesen über das Backend des Pools).
+
+- `search.content.start {location, pattern, mode:"normal|extended|regex"="normal", matchCase=false,
+  wholeWord=false, dotMatchesNewline=false, filters:String="", folderInclude:String?, folderExclude:String?,
+  subfolders=true, hidden=false, contextLines:Int=0, maxHits:Long=0, filesOnly=false}` → `{taskId}`.
+  Die Felder entsprechen `ContentQuery` (`native/crates/storage/src/agent_proto/core/content_query.rs`); dieselben
+  Felder in snake_case werden ebenfalls gelesen. `filters` ist das Notepad++-Feld „Filter“; `folderInclude` und
+  `folderExclude` sind reguläre Ausdrücke auf den relativen Ordnerpfad mit `/`; ein leeres Feld zählt als nicht
+  gesetzt. Ein ungültiges Muster, ein ungültiger Ordnerausdruck, ein leeres Muster oder ein unbekannter Modus →
+  sofort `invalid`, ohne Task. `trash://` → `invalid`. Task-Art `contentSearch`, Titel „Suche in Dateien: …“;
+  Fortschritt `doneBytes` = gelesene Bytes, `doneItems` = durchsuchte Dateien, `totalItems` = Trefferzeilen.
+  Ein Tresorort macht die Aufgabe privat (§4.13).
+- `search.content.poll {taskId, since:Long=0}` → `{events:[Event], next:Long, files, bytes, hits, done:Boolean,
+  canceled:Boolean, error:String?, summary:Summary?}`. Ereignisse vor `since` gibt der Kern frei; Kotlin übergibt
+  beim nächsten Aufruf `next`. Höchstens 2000 Ereignisse je Antwort. `done=true` heißt: die Suche ist beendet und
+  diese Antwort enthält ihre letzten Ereignisse. Sind 4096 Ereignisse nicht abgeholt, wartet die Suche.
+  - `Event` `{type:"hits", rel, location, size, mtimeMs, last:Boolean, lines:[{line:Long (1-basiert), text,
+    ranges:[[start,end]], truncated:Boolean, context:Boolean}]}` – `ranges` in UTF-16-Einheiten von `text`;
+    eine Datei mit vielen Treffern kommt in mehreren Ereignissen, `last` markiert das letzte.
+  - `Event` `{type:"skipped", rel, location, reason:"binary|unreadable|unlistable", detail:String?}`.
+  - `Summary` `{filesSearched, filesMatched, hits, bytes, skipped, limited:Boolean}`.
+- `search.content.cancel {taskId}` → `{}` (wie `task.cancel`; die Suche endet als `canceled`).
+- Die letzten vier beendeten Suchen bleiben abfragbar; laufende bleiben immer. Unbekannte `taskId` → `not_found`.
+
+### 4.15 Textansicht (`text.*`)
+Quelle: `native/crates/mobile/src/mobile/os/shared/text_view.rs`, `core/text_find.rs`, `core/text_json.rs`; Kern
+`native/crates/engine/src/textview/`. Alle Spalten und Bereiche sind UTF-16-Einheiten (Kotlin-`String`-Indizes),
+alle Farben 32-Bit-ARGB (`Color(Int)`). Zeilennummern sind 0-basiert.
+
+```text
+StyledLine {number:Long?, text, spans:[{start, end, fg:Long, bg:Long?, bold, italic, underline}]}
+           (die Spans decken den Text lückenlos und geordnet ab; leere Zeile: keine Spans)
+Colors     {theme, background, foreground, selection, lineHighlight, gutter}
+```
+- `text.open {location}` → `{docId, name, location, prefix, path, size, encoding (Anzeigename), encodingKey
+  (utf8|utf8_bom|utf16_le|utf16_be|windows1252), language, markdown:Boolean, lines, complete}`. `prefix` + `path`
+  = `location` (§2; `prefix` leer für lokale Pfade). Binärdaten (NUL in den ersten 8 KiB) → `unsupported` mit
+  „keine Textdatei: …“; Ordner → `invalid`; Papierkorb → `invalid`. Zeilenindex und Hervorhebungsstützpunkte
+  entstehen im Hintergrund; höchstens acht Dokumente bleiben offen, das am längsten unbenutzte wird geschlossen
+  (danach `not_found` „Dieses Dokument ist nicht mehr geöffnet“).
+- `text.status {docId}` → `{lines, complete, bytesDone, totalBytes, encoding, encodingKey, endings:{crlf, lf, cr},
+  lineEnding:"CRLF|LF|CR"|null, mixedEndings:Boolean, error:String?}`.
+- `text.lines {docId, first:Long=0, count:Int=100 (1–1000), theme:"light|dark"="light", language:String?}` →
+  `{first, language, lines:[StyledLine], known:Long, complete:Boolean, colors:Colors}`. `language` leer oder
+  fehlend = erkannte Sprache; ein unbekannter Name = `Plain Text`. Ein hinzugefügtes oder entferntes Sprachpaket
+  gilt ab dem nächsten Aufruf.
+- `text.find {docId, pattern, mode="normal", matchCase=false, wholeWord=false, fromLine=0, fromColumn=0,
+  backward=false, wrap=true}` → `{found:false}` oder `{found:true, line, start, end, wrapped}`. Vorwärts: der erste
+  Treffer ab der Position; rückwärts: der letzte Treffer vor ihr. Derselbe Abgleich wie §4.14; ungültiges Muster →
+  `invalid`.
+- `text.markdown {docId | text, theme}` → `{blocks:[MdBlock]}` – das Darstellungsmodell des Kerns
+  (`markdown_model.rs`, Tag `type` in snake_case: `heading, paragraph, list, quote, code, table, rule, image, html,
+  footnote_definition`; Läufe `{text, kind:{type:"text|code|line_break|image|footnote_ref|html", url?, title?},
+  strong, emphasis, strikethrough, link}`); ein Codeblock trägt `{language, highlightedAs, lines:[StyledLine]}`.
+  Über 16 MiB → `unsupported` (die Quelltextansicht bleibt).
+- `text.close {docId}` → `{closed:Boolean}` · `text.languages {}` → `[{name, extensions:[String]}]`.
+
+### 4.16 Sprachpakete (`languages.*`)
+Quelle: `native/crates/mobile/src/mobile/os/shared/languages.rs`; Kern `LanguageStore` im App-Datenordner
+(`<App-Datenordner>/languages`).
+- `languages.list {}` → `[{name, origin:"builtin|added", languages:[{name, extensions}], license, path:String?,
+  shadowedBy:String?, problems:[String]}]` (hinzugefügte zuerst).
+- `languages.add {fileName, bytesBase64, name:String?}` → Paket wie oben (eine `.sublime-syntax`-Datei aus der
+  Android-Dateiauswahl, höchstens 16 MiB). Schon vorhanden → `exists`; ungültig → `invalid`.
+- `languages.remove {name}` → `{}`; eingebaute Sprache → `invalid`; unbekannt → `not_found`.
 
 ## 5 Share (`share.*`)
 Grundlage: `docs/lesungen/2026-09-25-android-share-facade-map.md` (Rezepte 1–9). Der Share-Dienst läuft

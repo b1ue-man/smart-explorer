@@ -22,7 +22,7 @@ import app.smartexplorer.android.ui.common.SeIcon
 /** Which tasks count as transfers (sheet, bar) and how their progress reads (spec F8). */
 object TransferTasks {
     // Tasks that belong to a page of their own (scan, analysis, index, sign-in, …).
-    private val OWN_PAGE_KINDS = setOf("scan", "properties", "index", "analyze", "reclaim", "catchup", "oauth", "exec", "update")
+    private val OWN_PAGE_KINDS = setOf("scan", "properties", "index", "analyze", "reclaim", "catchup", "oauth", "exec", "update", "contentSearch")
 
     fun isTransfer(task: TaskInfo): Boolean = task.kind !in OWN_PAGE_KINDS
 

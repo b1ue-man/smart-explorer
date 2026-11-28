@@ -22,7 +22,7 @@ object FilesLocation {
 }
 
 /** Pages that replace the file browser inside the Files tab. */
-internal enum class FilesPage { Browser, Trash, FolderSearch }
+internal enum class FilesPage { Browser, Trash, FolderSearch, ContentSearch }
 
 /** List options shared by all tabs. */
 internal data class ViewOptions(val showHidden: Boolean, val sort: SortSpec)
