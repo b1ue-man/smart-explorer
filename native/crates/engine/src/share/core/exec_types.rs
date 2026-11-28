@@ -7,6 +7,10 @@ use std::io;
 use super::exec_shell::ExecShell;
 use super::exec_terminal::ExecTerminalRequest;
 
+/// `share_cwd` and `elevated`: checks, features, host resolution.
+#[path = "exec_host_options.rs"]
+pub(in crate::share) mod host_options;
+
 pub const EXEC_PROTOCOL_VERSION: u16 = 2;
 pub const EXEC_PROTOCOL_VERSION_V3: u16 = 3;
 pub const EXEC_CAPABILITY: &str = "exec_stream_v2";
@@ -77,6 +81,18 @@ pub struct ExecStart {
     /// those of earlier clients.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shell: Option<ExecShell>,
+    /// The working directory as a Share path (`/Docs/proj`) of a folder the
+    /// host shares with the caller; the host turns it into its own disk path
+    /// inside that share (`exec_host_options.rs`). Sent only to hosts that
+    /// list `EXEC_SHARE_CWD_FEATURE`; without it the bytes and digest stay
+    /// those of earlier clients.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub share_cwd: Option<String>,
+    /// Run with administrator or root rights: the host's se asks its user
+    /// through UAC or polkit. Sent only to hosts that list
+    /// `EXEC_ELEVATED_FEATURE`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub elevated: bool,
 }
 
 impl ExecStart {
@@ -110,6 +126,7 @@ impl ExecStart {
                 return Err(invalid("remote working directory is empty"));
             }
         }
+        host_options::validate(self)?;
         for (name, value) in &self.env {
             validate_os_string(name, "environment name")?;
             validate_os_string(value, "environment value")?;
@@ -279,6 +296,8 @@ mod tests {
             max_output_bytes: None,
             terminal: None,
             shell: None,
+            share_cwd: None,
+            elevated: false,
         }
     }
 
@@ -336,6 +355,8 @@ mod tests {
             max_output_bytes: None,
             terminal,
             shell: None,
+            share_cwd: None,
+            elevated: false,
         }
     }
 
@@ -353,6 +374,8 @@ mod tests {
             max_output_bytes: Some(1024),
             terminal: None,
             shell: None,
+            share_cwd: None,
+            elevated: false,
         };
         // The encoding and digest below are those of the start type before
         // terminals existed: the struct had exactly these keys in this order.

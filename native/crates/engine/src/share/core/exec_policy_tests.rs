@@ -29,6 +29,8 @@ fn argv(program: &str, env: &[(&str, &str)]) -> ExecStart {
         max_output_bytes: None,
         terminal: None,
         shell: None,
+        share_cwd: None,
+        elevated: false,
     }
 }
 

@@ -99,6 +99,13 @@ pub struct FsHostFeatures {
     /// export's rights (plan 2026-11-27 section B); only hits travel.
     #[serde(default, skip_serializing_if = "is_false")]
     pub content_search_v1: bool,
+    /// `ContentSearch { respect_ignore_files }`: the host leaves out what
+    /// `.gitignore` (in a Git work tree), `.ignore` and `.git/info/exclude`
+    /// exclude, as ripgrep does (plan 2026-11-28 part C). A client sends the
+    /// flag only to a host that offers this; otherwise it reads the files
+    /// through the backend and applies the ignore files itself.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub content_search_ignore_v1: bool,
 }
 
 impl FsHostFeatures {
@@ -129,6 +136,7 @@ impl FsHostFeatures {
             code_renewal_v1: true,
             login_target_v1: true,
             content_search_v1: true,
+            content_search_ignore_v1: true,
         }
     }
 
@@ -163,6 +171,7 @@ impl FsHostFeatures {
             (self.code_renewal_v1, "code_renewal_v1"),
             (self.login_target_v1, "login_target_v1"),
             (self.content_search_v1, "content_search_v1"),
+            (self.content_search_ignore_v1, "content_search_ignore_v1"),
         ]
         .into_iter()
         .filter_map(|(offered, name)| offered.then_some(name))

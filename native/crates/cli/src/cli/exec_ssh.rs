@@ -3,6 +3,9 @@
 //! (`sftp/core/command.rs`). `--cwd`, `--env` and the argv form assume a
 //! POSIX-compatible login shell; Windows OpenSSH targets use `--shell` with
 //! their own shell syntax.
+#[path = "exec_ssh_sudo.rs"]
+pub(super) mod sudo;
+
 use crate::creds::{Protocol, SavedConnection};
 use crate::share::ExecCommand;
 use std::collections::BTreeMap;
@@ -158,16 +161,34 @@ pub(super) struct SshRun {
     pub(super) env: BTreeMap<String, String>,
     pub(super) timeout_seconds: u64,
     pub(super) max_output: u64,
+    /// Through `sudo` (`exec_ssh_sudo.rs`).
+    pub(super) elevated: bool,
 }
 
 pub(super) fn run(run: SshRun) -> Result<i32, String> {
     let cwd = run.cwd.clone().or_else(|| run.target.cwd.clone());
-    let line = remote_command_line(&run.command, cwd.as_deref(), &run.env)?;
+    let mut line = remote_command_line(&run.command, cwd.as_deref(), &run.env)?;
     let backend = super::host_key_prompt::open_saved_ssh(&run.target.connection)?;
+    let sudo = if run.elevated {
+        let sudo = sudo::prepare(
+            &backend,
+            &run.target.connection.display(),
+            &super::elevated::password::ask,
+        )?;
+        line = sudo.wrap(&line);
+        Some(sudo)
+    } else {
+        None
+    };
     let mut command = backend
         .start_command(&line)
         .map_err(|error| format!("remote command start: {error}"))?;
     let control = command.control();
+    if let Some(prefix) = sudo.as_ref().and_then(sudo::Sudo::input_prefix) {
+        control
+            .stdin(&prefix)
+            .map_err(|error| format!("remote command input: {error}"))?;
+    }
     let cancel = control.clone();
     ctrlc::set_handler(move || cancel.cancel())
         .map_err(|error| format!("Ctrl+C handler: {error}"))?;

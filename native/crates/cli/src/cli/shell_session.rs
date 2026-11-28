@@ -7,7 +7,8 @@
 //! the session behind a loopback attach service: its own front-end and every
 //! attached client use the same framed protocol, authenticated by a
 //! per-session token. Attachable sessions are listed in the owner-only
-//! directory `<app data>/shell-sessions/`.
+//! directory `<app data>/shell-sessions/`. A session can also run on this
+//! device (`local_transport.rs`, the MCP `shell` tool), and elevated.
 //!
 //! Next to this command session there is the terminal session
 //! (docs/plaene/2026-10-14-echtes-terminal/plan.md, M6): the login shell of
@@ -24,7 +25,6 @@ mod engine;
 mod engine_state;
 #[path = "shell_session/host.rs"]
 mod host;
-#[cfg(test)]
 #[path = "shell_session/local_transport.rs"]
 mod local_transport;
 #[path = "shell_session/marker.rs"]
@@ -36,6 +36,8 @@ mod pty_test_transport;
 mod registry;
 #[path = "shell_session/server.rs"]
 mod server;
+#[path = "shell_session/target_spec.rs"]
+mod target_spec;
 #[path = "shell_session/terminal_client.rs"]
 mod terminal_client;
 #[path = "shell_session/terminal_engine.rs"]
@@ -62,9 +64,9 @@ pub(in crate::cli) use dialect::argv_command;
 #[allow(unused_imports)] // The terminal front-end and the MCP tools use these.
 pub(in crate::cli) use host::{open, open_terminal, OpenOptions, TerminalOpen};
 pub(in crate::cli) use registry::{find as find_attachable, list as list_attachable};
+pub(in crate::cli) use target_spec::{resolve_target, TargetSpec};
 #[allow(unused_imports)] // The terminal front-end uses it.
 pub(in crate::cli) use terminal_client::TerminalClient;
-pub(in crate::cli) use transports::resolve_target;
 pub(in crate::cli) use types::{
     validate_name, Activity, CommandOutcome, CommandRequest, CommandSink, Dialect, OutcomeStatus,
     Role, StdinMode, Stream,

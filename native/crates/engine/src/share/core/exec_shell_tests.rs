@@ -15,6 +15,8 @@ fn start(command: ExecCommand, shell: Option<ExecShell>) -> ExecStart {
         max_output_bytes: None,
         terminal: None,
         shell,
+        share_cwd: None,
+        elevated: false,
     }
 }
 

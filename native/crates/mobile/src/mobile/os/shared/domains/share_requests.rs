@@ -239,6 +239,8 @@ pub(super) fn exec_start(args: &Value) -> Result<(PeerOpenTarget, ExecStart, Str
         // (PowerShell on Windows, the login shell elsewhere), as `se exec`
         // and the MCP tool start it; an older host gets the start without it.
         shell: shell.then_some(ExecShell::Standard),
+        share_cwd: None,
+        elevated: false,
     };
     start
         .validate()

@@ -23,6 +23,7 @@ use crate::share::exec_client_messages::{
 use crate::share::exec_heartbeat::EXEC_HEARTBEAT_POLICY;
 use crate::share::exec_protocol::{recv_hello_result, ClientFrame};
 use crate::share::exec_terminal::require_host_terminal;
+use crate::share::exec_types::host_options::require_host_options;
 use crate::share::exec_types::{ExecStart, ExecTerminal};
 use crate::share::node_routes::pool::PoolLeaseGuard;
 use crate::share::route_cancellation::RouteCancellation;
@@ -42,6 +43,7 @@ pub(super) async fn send_start(
     route_cancel: Option<&RouteCancellation>,
 ) -> Result<SentV3Start, (ExecClientFailure, bool)> {
     require_host_terminal(start, &attempt.lease.info().features).map_err(|err| (err, false))?;
+    require_host_options(start, &attempt.lease.info().features).map_err(|err| (err, false))?;
     if attempt.lease.connection().close_reason().is_some() {
         attempt.lease.evict();
         return Err((
@@ -241,6 +243,7 @@ async fn run_v3_stream_active<W: AsyncWrite + Unpin>(
         ));
     }
     require_host_terminal(start, &hello.features)?;
+    require_host_options(start, &hello.features)?;
     let close_watch = conn.clone();
     crate::share::exec_client_active::run_with_notice(
         writer,

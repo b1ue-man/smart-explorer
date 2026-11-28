@@ -120,6 +120,11 @@ pub(super) fn start(session: &Session, request: ExecRequest) -> Result<Arc<Job>,
         // PowerShell on Windows peers unless `shell` names another; an
         // older peer gets the start without it (`exec_shell::for_host`).
         shell: shell_command.then(|| request.shell.unwrap_or(ExecShell::Standard)),
+        // The peer's se turns a Share folder into its disk folder and asks
+        // its own user for an elevation; an older peer refuses both clearly
+        // (`exec_host_options.rs`).
+        share_cwd: request.share_cwd,
+        elevated: request.elevated,
     };
     start.validate().map_err(|error| error.to_string())?;
     let remote = crate::daemon::connect_exec(peer, start)?;

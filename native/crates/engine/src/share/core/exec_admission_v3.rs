@@ -69,6 +69,7 @@ pub(super) fn build_hello_ok(
     let mut features = host_features(terminal_supported);
     features.push("route_policy_v1".into());
     features.push(crate::share::exec_shell::EXEC_SHELL_FEATURE.into());
+    features.extend(crate::share::exec_types::host_options::host_features());
     features.extend(host_access_features().map(String::from));
     let hello_ok = ExecHelloOk {
         authorization: authorized.authorization.clone(),

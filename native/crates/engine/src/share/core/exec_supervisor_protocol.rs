@@ -45,8 +45,7 @@ pub struct RunAsAccount {
 
 /// Search path of a job that runs as another account, the default of
 /// OpenSSH (`_PATH_STDPATH`) with the local prefixes.
-pub const ACCOUNT_PATH: &str =
-    "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+pub const ACCOUNT_PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 /// Worker values a job of another account keeps: locale (`LANG`, `LC_ALL`,
 /// `LC_CTYPE`) and time zone (`TZ`).
 const ACCOUNT_INHERITED: [&str; 4] = ["LANG", "LC_ALL", "LC_CTYPE", "TZ"];
@@ -264,6 +263,8 @@ mod tests {
             max_output_bytes: None,
             terminal: None,
             shell: None,
+            share_cwd: None,
+            elevated: false,
         };
         let environment = environment_for(&request);
         assert_eq!(
@@ -287,6 +288,8 @@ mod tests {
             max_output_bytes: None,
             terminal: None,
             shell: None,
+            share_cwd: None,
+            elevated: false,
         };
         let account = RunAsAccount {
             name: "alice".into(),

@@ -66,64 +66,7 @@ pub(super) trait Transport: Send {
     fn input(&self) -> Arc<dyn TransportInput>;
 }
 
-/// Where a session runs.
-pub(in crate::cli) enum TargetSpec {
-    Ssh {
-        connection: SavedConnection,
-        label: String,
-        cwd: Option<String>,
-    },
-    Share {
-        peer: PeerOpenTarget,
-        label: String,
-    },
-}
-
-impl TargetSpec {
-    /// The selector as given (`@label`, endpoint).
-    pub(in crate::cli) fn label(&self) -> &str {
-        match self {
-            Self::Ssh { label, .. } | Self::Share { label, .. } => label,
-        }
-    }
-
-    /// Identity of the remote: equal for every selector of the same saved
-    /// connection or peer.
-    pub(in crate::cli) fn key(&self) -> String {
-        match self {
-            Self::Ssh { connection, .. } => format!("ssh {}", connection.account()),
-            Self::Share { peer, .. } => format!("share {}", peer.endpoint_prefix()),
-        }
-    }
-
-    /// Working directory named by the selector (`@label:/dir`).
-    pub(super) fn cwd(&self) -> Option<&str> {
-        match self {
-            Self::Ssh { cwd, .. } => cwd.as_deref(),
-            Self::Share { .. } => None,
-        }
-    }
-}
-
-/// A saved SFTP remote (`@label[:/dir]`, its `sftp://` endpoint) or a Share
-/// peer (name, id, `share://` endpoint; omitted when exactly one is ready).
-pub(in crate::cli) fn resolve_target(selector: Option<&str>) -> Result<TargetSpec, String> {
-    let selector = selector.map(str::trim).filter(|value| !value.is_empty());
-    if let Some(given) = selector {
-        if let Some(target) = crate::cli::exec_ssh::ssh_target(given)? {
-            return Ok(TargetSpec::Ssh {
-                connection: target.connection,
-                label: given.to_string(),
-                cwd: target.cwd,
-            });
-        }
-    }
-    let peer = crate::cli::exec::select_target(selector)?;
-    let label = selector
-        .map(str::to_string)
-        .unwrap_or_else(|| peer.endpoint_prefix());
-    Ok(TargetSpec::Share { peer, label })
-}
+pub(in crate::cli) use super::target_spec::TargetSpec;
 
 /// Recognizes the login shell, then starts the session's shell on `target`.
 pub(super) fn connect(
@@ -131,19 +74,66 @@ pub(super) fn connect(
     ssh: &dyn Fn(&SavedConnection) -> Result<Arc<SftpBackend>, String>,
 ) -> Result<(Dialect, Box<dyn Transport>), String> {
     match target {
-        TargetSpec::Ssh { connection, .. } => {
+        TargetSpec::Ssh {
+            connection,
+            label,
+            elevated,
+            ..
+        } => {
             let backend = ssh(connection)?;
             let probe = run_probe(Box::new(ssh_start(&backend, dialect::PROBE)?))?;
             let dialect = dialect::classify(&probe);
-            let shell = ssh_start(&backend, dialect::start_line(dialect))?;
+            if !elevated {
+                let shell = ssh_start(&backend, dialect::start_line(dialect))?;
+                return Ok((dialect, Box::new(shell)));
+            }
+            if dialect == Dialect::PowerShell {
+                return Err(format!(
+                    "{label} runs PowerShell; elevated sessions on SSH remotes run through sudo, which this remote does not have"
+                ));
+            }
+            let sudo = crate::cli::exec_ssh::sudo::prepare(
+                &backend,
+                label,
+                &crate::cli::elevated::password::ask,
+            )?;
+            let shell = ssh_start(&backend, &sudo.wrap(dialect::start_line(dialect)))?;
+            if let Some(prefix) = sudo.input_prefix() {
+                shell.input().stdin(&prefix)?;
+            }
             Ok((dialect, Box::new(shell)))
         }
-        TargetSpec::Share { peer, label } => {
-            let mut shell = share_start(peer, &share_start_line(), None, label, true)?;
+        TargetSpec::Share {
+            peer,
+            label,
+            share_cwd,
+            elevated,
+        } => {
+            let options = ShareStartOptions {
+                share_cwd: share_cwd.clone(),
+                elevated: *elevated,
+            };
+            let mut shell = share_start(peer, &share_start_line(), None, label, true, options)?;
             let dialect = super::terminal_transports::probe_in_session(&mut shell)?;
             Ok((dialect, Box::new(shell)))
         }
+        TargetSpec::Local {
+            start,
+            dialect,
+            elevated,
+            ..
+        } => {
+            let shell = super::local_transport::LocalTransport::start(start.clone(), *elevated)?;
+            Ok((*dialect, Box::new(shell)))
+        }
     }
+}
+
+/// What a Share session start asks for beyond its command line.
+#[derive(Default)]
+pub(super) struct ShareStartOptions {
+    pub(super) share_cwd: Option<String>,
+    pub(super) elevated: bool,
 }
 
 /// The command line of a Share session's one start; the start names no
@@ -334,6 +324,7 @@ fn share_start(
     timeout: Option<Duration>,
     label: &str,
     header: bool,
+    options: ShareStartOptions,
 ) -> Result<ShareTransport, String> {
     let start = crate::share::ExecStart {
         exec_id: crate::share::ExecId::generate().map_err(|error| error.to_string())?,
@@ -346,6 +337,8 @@ fn share_start(
         max_output_bytes: None,
         terminal: None,
         shell: None,
+        share_cwd: options.share_cwd,
+        elevated: options.elevated,
     };
     start.validate().map_err(|error| error.to_string())?;
     let session = crate::daemon::connect_exec(peer.clone(), start)?;

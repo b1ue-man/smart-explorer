@@ -244,6 +244,8 @@ fn helper_request(arguments: Vec<String>) -> io::Result<ExecStart> {
         max_output_bytes: None,
         terminal: None,
         shell: None,
+        share_cwd: None,
+        elevated: false,
     })
 }
 

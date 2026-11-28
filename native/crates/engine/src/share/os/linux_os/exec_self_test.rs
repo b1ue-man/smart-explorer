@@ -82,6 +82,8 @@ fn fork_probe_request() -> io::Result<ExecStart> {
         max_output_bytes: None,
         terminal: None,
         shell: None,
+        share_cwd: None,
+        elevated: false,
     };
     request.validate()?;
     Ok(request)

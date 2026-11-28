@@ -55,10 +55,7 @@ impl ContainedExec {
     /// account). On Linux another account runs in its own unit, which has to
     /// exist before the start is committed (PRM-M5, PRM-M6); `commit`
     /// refuses any other account than this one.
-    pub fn prepare_as(
-        request: &ExecStart,
-        account: Option<&RunAsAccount>,
-    ) -> io::Result<Self> {
+    pub fn prepare_as(request: &ExecStart, account: Option<&RunAsAccount>) -> io::Result<Self> {
         if account.is_some() && !run_as_supported() {
             return Err(io::Error::new(
                 io::ErrorKind::Unsupported,
@@ -120,6 +117,14 @@ impl ContainedExec {
         // PowerShell on Windows becomes an argv start of the host's
         // PowerShell; a shell this host does not have refuses the start.
         let shell = super::platform_exec::resolve_shell(&mut request, &environment)?;
+        // An elevated start runs through `se elevated run`, which asks this
+        // device's user (`exec_host_options.rs`).
+        super::exec_types::host_options::wrap_elevated(
+            &mut request,
+            &environment,
+            account.as_ref(),
+            std::env::consts::OS,
+        )?;
         self.inner.configure(&request)?;
         self.inner.send(&SupervisorCommand::Start(SupervisorStart {
             request,
@@ -211,9 +216,7 @@ pub fn run_as_supported() -> bool {
 
 /// Resolves a grant's run-as account on this host; `Ok(None)` for the
 /// Standardnutzer (the worker's own account).
-pub fn resolve_run_as(
-    run_as: &super::exec_policy::ExecRunAs,
-) -> io::Result<Option<RunAsAccount>> {
+pub fn resolve_run_as(run_as: &super::exec_policy::ExecRunAs) -> io::Result<Option<RunAsAccount>> {
     match run_as.account_name() {
         None => Ok(None),
         Some(name) => super::platform_exec::resolve_account(name).map(Some),
@@ -286,6 +289,8 @@ pub(super) fn run_platform_self_test() -> io::Result<()> {
         max_output_bytes: None,
         terminal: None,
         shell: None,
+        share_cwd: None,
+        elevated: false,
     };
     let mut process = ContainedExec::prepare(&request)?;
     process.commit(request, None, None)?;
@@ -343,6 +348,8 @@ fn run_root_exits_first_test() -> io::Result<()> {
         max_output_bytes: None,
         terminal: None,
         shell: None,
+        share_cwd: None,
+        elevated: false,
     };
     let mut process = ContainedExec::prepare(&request)?;
     process.commit(request, None, None)?;
@@ -420,6 +427,8 @@ mod tests {
             max_output_bytes: None,
             terminal: None,
             shell: None,
+            share_cwd: None,
+            elevated: false,
         }
     }
 

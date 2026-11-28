@@ -51,7 +51,11 @@ pub(super) fn connect_terminal(
 ) -> Result<TerminalConnect, String> {
     match target {
         TargetSpec::Ssh { connection, .. } => ssh_terminal(&ssh(connection)?, options),
-        TargetSpec::Share { peer, label } => share_terminal(peer, label, options),
+        TargetSpec::Share { peer, label, .. } => share_terminal(peer, label, options),
+        // The MCP `shell` tool opens command sessions only.
+        TargetSpec::Local { .. } => Ok(TerminalConnect::Unsupported(
+            "terminal sessions run on SSH remotes and Share peers".into(),
+        )),
     }
 }
 
@@ -146,6 +150,8 @@ fn share_terminal(
             size: options.size.into(),
         }),
         shell: None,
+        share_cwd: None,
+        elevated: false,
     };
     start.validate().map_err(|error| error.to_string())?;
     let mut session = crate::daemon::connect_exec(peer.clone(), start)?;

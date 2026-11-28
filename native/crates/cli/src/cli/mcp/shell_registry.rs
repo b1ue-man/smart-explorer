@@ -5,7 +5,9 @@
 //! sessions of `se shell` are listed with their kind but never joined: what
 //! an agent typed there would reach the program the user is running.
 use super::targets::Targets;
-use crate::cli::shell_session::{self, Activity, OpenOptions, SessionClient, SessionKind};
+use crate::cli::shell_session::{
+    self, Activity, OpenOptions, SessionClient, SessionKind, TargetSpec,
+};
 use crate::creds::SavedConnection;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
@@ -42,32 +44,41 @@ pub(super) struct ShellRegistry {
 }
 
 impl ShellRegistry {
-    /// The live session `name`, opened on `target` when it does not exist
-    /// or has ended. A given `target` must name the session's remote.
-    pub(super) fn get_or_open(
+    /// The live session `name`, opened when it does not exist or has ended:
+    /// on a selector or a resolved target (the `shell` tool: this device, an
+    /// elevated or Share-folder session), starting in `cwd`. What is given
+    /// must name the remote of an open session.
+    pub(super) fn get_or_open_with(
         &self,
         name: &str,
-        target: Option<&str>,
+        opening: Option<Opening<'_>>,
         attachable: bool,
+        cwd: Option<String>,
         targets: &Targets,
     ) -> Result<Arc<Port>, String> {
         shell_session::validate_name(name)?;
-        let target = target.map(str::trim).filter(|value| !value.is_empty());
         let slot = self.slot(name)?;
         let mut current = slot.lock().map_err(|_| poisoned())?;
         if let Some(port) = current
             .as_ref()
             .filter(|port| port.client.ended().is_none())
         {
-            if let Some(target) = target {
-                check_target(name, port, target)?;
+            match &opening {
+                Some(Opening::Selector(target)) => check_target(name, port, target)?,
+                Some(Opening::Spec(spec)) => check_key(name, port, &spec.key())?,
+                None => {}
             }
             return Ok(port.clone());
         }
-        let target = target.ok_or_else(|| {
-            format!("no session named `{name}` is open; give `target` to open it")
-        })?;
-        let spec = shell_session::resolve_target(Some(target))?;
+        let spec = match opening {
+            Some(Opening::Selector(target)) => shell_session::resolve_target(Some(target))?,
+            Some(Opening::Spec(spec)) => spec,
+            None => {
+                return Err(format!(
+                    "no session named `{name}` is open; give `target` to open it"
+                ))
+            }
+        };
         let client = shell_session::open(
             &spec,
             &|connection: &SavedConnection| targets.ssh(connection),
@@ -75,7 +86,7 @@ impl ShellRegistry {
                 name: name.to_string(),
                 owner: owner_label(),
                 attachable,
-                cwd: None,
+                cwd,
                 env: BTreeMap::new(),
             },
         )?;
@@ -237,6 +248,13 @@ impl ShellRegistry {
 }
 
 impl Port {
+    /// This server opened the session elevated.
+    pub(super) fn elevated(&self) -> bool {
+        self.target_key
+            .as_deref()
+            .is_some_and(|key| key.ends_with(" elevated"))
+    }
+
     fn new(client: SessionClient, owned: bool, target_key: Option<String>) -> Result<Self, String> {
         let operation = Arc::new(Mutex::new(crate::mcp_launcher::continuation_operation()?));
         let active = operation.clone();
@@ -325,6 +343,26 @@ fn attachable_row(mut row: Value, kind: SessionKind) -> Value {
         fields.insert("next".into(), json!(next));
     }
     row
+}
+
+/// What opens a session that does not run yet.
+pub(super) enum Opening<'a> {
+    /// A selector as `exec` takes it (`@label`, a peer, `share://…`).
+    Selector(&'a str),
+    Spec(TargetSpec),
+}
+
+/// A resolved target must be the one the open session runs on (the same
+/// remote, elevated or not).
+fn check_key(name: &str, port: &Port, key: &str) -> Result<(), String> {
+    match &port.target_key {
+        Some(own) if own == key => Ok(()),
+        None => Ok(()),
+        Some(_) => Err(format!(
+            "session `{name}` runs on {} (another device or another elevation); use another session name",
+            port.client.info().target
+        )),
+    }
 }
 
 /// A given `target` must name the session's remote: a command must never

@@ -56,6 +56,8 @@ mod tests {
                 size: ExecTerminalSize { cols: 80, rows: 24 },
             }),
             shell: None,
+            share_cwd: None,
+            elevated: false,
         }
     }
 

@@ -133,6 +133,8 @@ pub(super) fn request(command: ExecCommand, terminal: bool) -> ExecStart {
         max_output_bytes: None,
         terminal,
         shell: None,
+        share_cwd: None,
+        elevated: false,
     }
 }
 

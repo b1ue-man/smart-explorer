@@ -317,6 +317,7 @@ where
     }
 
     require_host_terminal(&start, &hello.features)?;
+    super::exec_types::host_options::require_host_options(&start, &hello.features)?;
     let start = super::exec_shell::for_host(start, &hello.features);
     let exec_id = start.exec_id.clone();
     let terminal = start.terminal.is_some();

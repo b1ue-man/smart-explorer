@@ -36,6 +36,8 @@ fn start(command: ExecCommand) -> ExecStart {
         max_output_bytes: None,
         terminal: None,
         shell: None,
+        share_cwd: None,
+        elevated: false,
     }
 }
 

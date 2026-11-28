@@ -243,7 +243,17 @@ pub(super) async fn admit_and_serve_start(
     mut recv: iroh::endpoint::RecvStream,
     end_mode: StreamEnd,
 ) -> io::Result<()> {
-    if let Some(denial) = host_denial(&start, ctx.terminal_supported) {
+    // A Share folder becomes this device's disk folder before anyone sees
+    // or approves the start (`exec_host_options.rs`).
+    let (start, denial) = match super::exec_types::host_options::resolve_on_host(
+        start.clone(),
+        &ctx.node.auth,
+        &authorized.principal,
+    ) {
+        Ok(resolved) => (resolved, None),
+        Err(error) => (start, Some(error)),
+    };
+    if let Some(denial) = denial.or_else(|| host_denial(&start, ctx.terminal_supported)) {
         exec_audit::record(AuditEvent::StartRefused {
             principal: &authorized.principal,
             start: &start,

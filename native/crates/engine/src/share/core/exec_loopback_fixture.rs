@@ -136,6 +136,8 @@ pub(in crate::share) fn argv_start(program: &str) -> io::Result<ExecStart> {
         max_output_bytes: None,
         terminal: None,
         shell: None,
+        share_cwd: None,
+        elevated: false,
     })
 }
 

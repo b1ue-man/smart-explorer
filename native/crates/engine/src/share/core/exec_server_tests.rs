@@ -29,6 +29,8 @@ fn terminal_ack_drains_in_flight_frames_and_rejects_other_exec_ids() {
         max_output_bytes: None,
         terminal: None,
         shell: None,
+        share_cwd: None,
+        elevated: false,
     };
     let mut protocol = ServerProtocolState::default();
     protocol
@@ -85,6 +87,8 @@ fn terminal_start(exec_id: ExecId) -> ExecStart {
             size: ExecTerminalSize { cols: 80, rows: 24 },
         }),
         shell: None,
+        share_cwd: None,
+        elevated: false,
     }
 }
 

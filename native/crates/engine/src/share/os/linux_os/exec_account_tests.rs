@@ -56,6 +56,8 @@ pub fn request(command: ExecCommand, terminal: bool) -> ExecStart {
             },
         }),
         shell: None,
+        share_cwd: None,
+        elevated: false,
     }
 }
 

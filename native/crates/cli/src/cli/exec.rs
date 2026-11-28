@@ -108,6 +108,11 @@ pub(super) struct ExecArgs {
         help = "Print status events such as approval_pending as JSON lines on stderr; stdout stays the command's output"
     )]
     pub(super) json: bool,
+    #[arg(
+        long,
+        help = "Run with administrator or root rights: a Share peer's user confirms in UAC or polkit there; an SSH remote runs it through sudo (a needed password is asked here in a dialog and never stored)"
+    )]
+    pub(super) elevated: bool,
 }
 
 pub(super) fn run(args: ExecArgs) -> Result<i32, String> {
@@ -148,6 +153,7 @@ pub(super) fn run(args: ExecArgs) -> Result<i32, String> {
             env: parse_environment(args.env)?,
             timeout_seconds: args.timeout,
             max_output: args.max_output,
+            elevated: args.elevated,
         });
     }
     let target = peer.ok_or_else(|| "no Exec peer was selected".to_string())?;
@@ -160,6 +166,8 @@ pub(super) fn run(args: ExecArgs) -> Result<i32, String> {
         max_output_bytes: (args.max_output > 0).then_some(args.max_output),
         terminal: None,
         shell,
+        share_cwd: None,
+        elevated: args.elevated,
     };
     start.validate().map_err(|error| error.to_string())?;
     let report = StatusReport {

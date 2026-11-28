@@ -8,7 +8,9 @@
 use super::exec_tool::ExecRequest;
 use super::jobs::{spawn_worker, Job, JobControl, JobEnd, JobKind, JobStatus};
 use super::session::Session;
-use super::shell_registry::Port;
+use super::shell_registry::{Opening, Port, ShellRegistry};
+use super::targets::Targets;
+use crate::cli::shell_session::TargetSpec;
 use crate::cli::shell_session::{
     argv_command, CommandOutcome, CommandRequest, CommandSink, Dialect, OutcomeStatus, StdinMode,
     Stream,
@@ -24,6 +26,25 @@ pub(super) fn start(
     request: ExecRequest,
     name: String,
     attachable: bool,
+) -> Result<Arc<Job>, String> {
+    start_with(session, request, name, attachable, None)
+}
+
+/// A session on this device (the `shell` tool): its target and the folder
+/// it starts in.
+pub(super) struct LocalOpening {
+    pub(super) spec: TargetSpec,
+    pub(super) cwd: Option<String>,
+}
+
+/// `start`; `local` opens the session on this device instead of the
+/// request's selector.
+pub(super) fn start_with(
+    session: &Session,
+    request: ExecRequest,
+    name: String,
+    attachable: bool,
+    local: Option<LocalOpening>,
 ) -> Result<Arc<Job>, String> {
     if request.keep_stdin_open {
         return Err(
@@ -47,14 +68,48 @@ pub(super) fn start(
     let shells = session.shells.clone();
     let targets = session.targets.clone();
     spawn_worker(job.clone(), move |job| {
-        let selector = Some(request.selector.as_str()).filter(|value| !value.trim().is_empty());
-        let port = match shells.get_or_open(&name, selector, attachable, &targets) {
+        let port = match open_port(&shells, &targets, &request, &name, attachable, local) {
             Ok(port) => port,
             Err(error) => return failed(error),
         };
+        if request.elevated && !port.elevated() {
+            return failed(format!(
+                "session `{name}` runs without elevation; open an elevated session under another name"
+            ));
+        }
         run(job, &port, request, &name)
     })?;
     Ok(job)
+}
+
+/// The session `name`, opened when it does not run yet: on this device
+/// (`local`), on the selector as it is, or elevated / in a Share folder.
+fn open_port(
+    shells: &ShellRegistry,
+    targets: &Targets,
+    request: &ExecRequest,
+    name: &str,
+    attachable: bool,
+    local: Option<LocalOpening>,
+) -> Result<Arc<Port>, String> {
+    if let Some(local) = local {
+        let opening = Some(Opening::Spec(local.spec));
+        return shells.get_or_open_with(name, opening, attachable, local.cwd, targets);
+    }
+    let selector = Some(request.selector.trim()).filter(|value| !value.is_empty());
+    let opening = match selector {
+        Some(selector) if request.elevated || request.share_cwd.is_some() => {
+            let mut spec = crate::cli::shell_session::resolve_target(Some(selector))?
+                .in_share_folder(request.share_cwd.clone());
+            if request.elevated {
+                spec = spec.elevated();
+            }
+            Some(Opening::Spec(spec))
+        }
+        Some(selector) => Some(Opening::Selector(selector)),
+        None => None,
+    };
+    shells.get_or_open_with(name, opening, attachable, None, targets)
 }
 
 fn run(job: &Arc<Job>, port: &Arc<Port>, request: ExecRequest, name: &str) -> JobEnd {
