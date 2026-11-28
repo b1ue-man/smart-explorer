@@ -16,16 +16,10 @@ use std::io::{self, IsTerminal, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+/// The search options `se grep` and `se replace` share (Notepad++'s "Find
+/// in Files" fields).
 #[derive(clap::Args)]
-pub(super) struct GrepArgs {
-    #[arg(
-        help = "Folder to search below: local path, @label:/path, endpoint, share://…, gdrive:///…"
-    )]
-    target: String,
-    #[arg(
-        help = "Text to find; with --regex a regular expression, with --extended Notepad++ escapes (\\n, \\t, \\x41, …)"
-    )]
-    pattern: String,
+pub(super) struct SearchOptions {
     #[arg(
         long,
         conflicts_with = "extended",
@@ -67,6 +61,72 @@ pub(super) struct GrepArgs {
     no_subfolders: bool,
     #[arg(long, help = "Also enter hidden folders")]
     hidden: bool,
+    #[arg(
+        long,
+        help = "Skip what .gitignore (in a Git work tree), .ignore and .git/info/exclude leave out, as ripgrep does"
+    )]
+    gitignore: bool,
+}
+
+impl SearchOptions {
+    /// The query of `pattern` with these options.
+    pub(super) fn query(&self, pattern: &str) -> ContentQuery {
+        let mut query = ContentQuery::text(pattern.to_string());
+        query.mode = if self.regex {
+            TextMode::Regex
+        } else if self.extended {
+            TextMode::Extended
+        } else {
+            TextMode::Normal
+        };
+        query.match_case = self.case;
+        query.whole_word = self.word;
+        query.dot_matches_newline = self.dotall;
+        query.filters = self.filter.clone();
+        query.folder_include = self.folders.clone().filter(|text| !text.is_empty());
+        query.folder_exclude = self.exclude_folders.clone().filter(|text| !text.is_empty());
+        query.subfolders = !self.no_subfolders;
+        query.hidden = self.hidden;
+        query.respect_ignore_files = self.gitignore;
+        query
+    }
+
+    /// Notepad++'s "For file type:" of the confirmation (empty = `*.*`).
+    pub(super) fn filter_text(&self) -> &str {
+        if self.filter.trim().is_empty() {
+            "*.*"
+        } else {
+            self.filter.trim()
+        }
+    }
+}
+
+/// One record per line (`se replace`): line ends become `\n`/`\r`, other control
+/// characters U+FFFD (no escape sequence of a file reaches the terminal).
+pub(super) fn clean(text: &str) -> String {
+    text.chars()
+        .map(|character| match character {
+            '\n' => "\\n".to_string(),
+            '\r' => "\\r".to_string(),
+            '\t' => "\t".to_string(),
+            control if control.is_control() => char::REPLACEMENT_CHARACTER.to_string(),
+            other => other.to_string(),
+        })
+        .collect()
+}
+
+#[derive(clap::Args)]
+pub(super) struct GrepArgs {
+    #[arg(
+        help = "Folder to search below: local path, @label:/path, endpoint, share://…, gdrive:///…"
+    )]
+    target: String,
+    #[arg(
+        help = "Text to find; with --regex a regular expression, with --extended Notepad++ escapes (\\n, \\t, \\x41, …)"
+    )]
+    pattern: String,
+    #[command(flatten)]
+    search: SearchOptions,
     #[arg(
         short = 'C',
         long = "context",
@@ -116,22 +176,7 @@ impl GrepArgs {
 
     fn query(&self) -> ContentQuery {
         let output = self.output();
-        let mut query = ContentQuery::text(self.pattern.clone());
-        query.mode = if self.regex {
-            TextMode::Regex
-        } else if self.extended {
-            TextMode::Extended
-        } else {
-            TextMode::Normal
-        };
-        query.match_case = self.case;
-        query.whole_word = self.word;
-        query.dot_matches_newline = self.dotall;
-        query.filters = self.filter.clone();
-        query.folder_include = self.folders.clone().filter(|text| !text.is_empty());
-        query.folder_exclude = self.exclude_folders.clone().filter(|text| !text.is_empty());
-        query.subfolders = !self.no_subfolders;
-        query.hidden = self.hidden;
+        let mut query = self.search.query(&self.pattern);
         query.context_lines = if output == GrepOutput::Content {
             self.context
         } else {
@@ -299,9 +344,11 @@ mod tests {
             "--hidden",
             "--max-results",
             "5",
+            "--gitignore",
         ])
         .unwrap();
         let query = args.query();
+        assert!(query.respect_ignore_files);
         assert_eq!(query.pattern, "fo+");
         assert_eq!(query.mode, TextMode::Regex);
         assert!(query.match_case && query.dot_matches_newline && query.hidden);
@@ -315,6 +362,7 @@ mod tests {
         let query = plain.query();
         assert_eq!(query.mode, TextMode::Normal);
         assert!(query.files_only && query.whole_word && query.subfolders);
+        assert!(!query.respect_ignore_files);
         // Context lines belong to the hit lines only.
         assert_eq!(query.context_lines, 0);
         assert_eq!(

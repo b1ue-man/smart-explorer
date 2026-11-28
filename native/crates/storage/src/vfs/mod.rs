@@ -44,6 +44,26 @@ mod content_digest;
 #[path = "os/shared/content_read.rs"]
 mod content_read;
 pub use self::content_read::{content_search, local_content_search};
+// "Replace in Files" through the storage interface, with its journal of
+// encrypted originals (`content_replace`, `ReplaceJournal`).
+#[path = "os/shared/content_replace.rs"]
+mod content_replace;
+pub use self::content_replace::{content_replace, content_replace_with};
+#[path = "os/shared/content_replace_write.rs"]
+mod content_replace_write;
+#[path = "os/shared/replace_journal.rs"]
+mod replace_journal;
+pub use self::replace_journal::{
+    ReplaceJournal, ReplaceRun, RunState as ReplaceRunState, UndoSummary,
+};
+#[path = "os/shared/replace_journal_seal.rs"]
+mod replace_journal_seal;
+#[path = "os/shared/replace_journal_undo.rs"]
+mod replace_journal_undo;
+pub use crate::agent_proto::{
+    HitRef, ReplaceEmit, ReplaceEvent, ReplacePreview, ReplaceRequest, ReplaceSelection,
+    ReplaceSkip, ReplaceSummary,
+};
 #[path = "core/peer_namespace.rs"]
 mod peer_namespace;
 pub use peer_namespace::{
@@ -232,6 +252,9 @@ pub use self::unpublished::{unpublished_error, unpublished_of};
 #[path = "core/content_digest_task_tests.rs"]
 mod content_digest_task_tests;
 #[cfg(test)]
+#[path = "os/shared/content_replace_tests.rs"]
+mod content_replace_tests;
+#[cfg(test)]
 #[path = "os/shared/copy_paste_task_tests.rs"]
 mod copy_paste_task_tests;
 #[cfg(test)]
@@ -246,6 +269,9 @@ mod promotion_tests;
 #[cfg(test)]
 #[path = "core/remote_drive_task_cache_tests.rs"]
 mod remote_drive_task_cache_tests;
+#[cfg(test)]
+#[path = "os/shared/replace_journal_tests.rs"]
+mod replace_journal_tests;
 #[cfg(test)]
 #[path = "core/review_task_contract_tests.rs"]
 mod review_task_contract_tests;
