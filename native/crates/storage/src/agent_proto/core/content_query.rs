@@ -87,6 +87,13 @@ pub struct ContentQuery {
     /// Longest line text a hit carries, in bytes; a longer line is cut around the
     /// match and marked `truncated`. 0 = `DEFAULT_LINE_BYTES`.
     pub max_line_bytes: u32,
+    /// Skip what the folder's ignore files exclude, as ripgrep does: `.gitignore`
+    /// (inside a Git work tree), `.ignore`, `.git/info/exclude` (plan
+    /// docs/plaene/2026-11-28-ersetzen-masken-shell, part C). false = Notepad++'s
+    /// behaviour (every file the filters admit). An SSH agent before protocol 14 and
+    /// a Share host without `content_search_ignore_v1` never receive it; the
+    /// search then reads through the backend and filters itself.
+    pub respect_ignore_files: bool,
 }
 
 /// Line text a hit carries when `ContentQuery::max_line_bytes` is 0.
@@ -110,6 +117,7 @@ impl ContentQuery {
             max_hits: 0,
             files_only: false,
             max_line_bytes: 0,
+            respect_ignore_files: false,
         }
     }
 

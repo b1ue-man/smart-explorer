@@ -25,6 +25,7 @@ fn every_frame() -> Vec<Frame> {
         max_hits: 0x0102_0304_0506,
         files_only: true,
         max_line_bytes: 77,
+        respect_ignore_files: false,
     };
     vec![
         Frame::ContentSearch {

@@ -231,6 +231,7 @@ pub(in super::super) fn decode(tag: u8, r: &mut Reader) -> io::Result<Option<Fra
                     context_lines: r.u32()?,
                     max_hits: r.u64()?,
                     max_line_bytes: r.u32()?,
+                    respect_ignore_files: false,
                 },
             }
         }

@@ -132,6 +132,12 @@ grep-matcher = "0.1.10"
 encoding_rs = "0.8"
 fancy-regex = "0.16"
 memchr = "2"
+# Mask lists (plan docs/plaene/2026-11-28-ersetzen-masken-shell): candidate pieces of fuzzy entries in one
+# automaton (BurntSushi, Unlicense OR MIT).
+aho-corasick = "1"
+# Ignore files (.gitignore, .ignore, .git/info/exclude) of content and name searches, as ripgrep reads them
+# (BurntSushi, Unlicense OR MIT).
+ignore = "0.4"
 # Text view (plan section D): Sublime-syntax language packs through syntect with its
 # pure-Rust regex engine (no oniguruma C build on any target), bat's syntaxes and
 # themes as the bundled packs (two-face), Markdown through pulldown-cmark without

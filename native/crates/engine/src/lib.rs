@@ -24,11 +24,14 @@ pub mod apps;
 pub mod autostart;
 pub mod connect;
 pub mod daemon;
+#[cfg(not(target_os = "android"))]
+pub mod elevate;
 pub mod folder_index;
 pub mod gdrive;
 mod http_resume;
 pub mod keep_awake;
 pub mod login;
+pub mod masks;
 #[cfg(not(target_os = "android"))]
 pub mod login_entry;
 #[cfg(not(target_os = "android"))]

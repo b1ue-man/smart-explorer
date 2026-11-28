@@ -8,9 +8,11 @@ mod connections;
 mod desktop;
 mod doctor;
 mod drive;
+mod elevated;
 mod engine_copy;
 mod folder_conflict;
 mod grep;
+mod hook;
 pub(crate) use folder_conflict::{RecoveredCommandTask, SavedCommandsCatalog};
 mod apps;
 #[cfg(test)]
@@ -31,6 +33,7 @@ mod links_task_backends;
 mod links_task_tests;
 mod login;
 mod ls_recursive;
+mod masks_cli;
 mod mcp;
 mod ops;
 #[cfg(test)]
@@ -43,6 +46,7 @@ mod os;
 mod plugin;
 mod private_file;
 mod rdp;
+mod replace;
 mod screen;
 mod search;
 mod setup;
@@ -215,6 +219,25 @@ enum Command {
     Grep(grep::GrepArgs),
     #[command(about = "Language packs of the text view: list, add, remove, folder")]
     Languages(languages::LanguagesArgs),
+    #[command(
+        about = "Replace text in files below a target (Notepad++ Replace in Files)",
+        long_about = "Replace text in files below a folder, as Notepad++'s Replace in Files: the options of `se grep` plus the replacement (normal text, --extended escapes, or --regex with Notepad++'s substitution syntax). The search runs where the files are; each changed file is published only when complete and only if it did not change since it was read. The original of every changed file is kept encrypted for --undo. Asks before replacing unless --yes; --dry-run shows what would change."
+    )]
+    Replace(replace::ReplaceArgs),
+    #[command(
+        about = "Mask lists for AI agents: create, add entries, protect folders, lock (values are never printed)"
+    )]
+    Masks(masks_cli::MasksArgs),
+    #[command(
+        hide = true,
+        about = "Agent host hook (Claude Code, Codex): decides a tool call while mask lists are active"
+    )]
+    Hook(hook::HookArgs),
+    #[command(
+        hide = true,
+        about = "Elevated helper of the MCP shell tool (started by se itself)"
+    )]
+    Elevated(elevated::ElevatedArgs),
     #[command(
         about = "Storage analysis: size and occupied space (allocated) of a folder's entries",
         long_about = "Storage analysis of a folder, as in the explorer: every entry with its size (sum of file lengths) and the space it occupies on the volume (allocated: less for cloud placeholders, compressed and sparse files, a hard-linked file counted once). A remote folder is analysed by the device that holds it. `--sort allocated` (default where the source reports occupied space) or `--sort size`; where the source does not report it, the order is by size and allocated is shown as unknown. `--files N` adds the N largest files of the whole tree, `--types` the totals per file extension; files the analysis folded into one entry of a large folder count in neither and are named as aggregated."
@@ -481,6 +504,10 @@ fn run_inner(cli: Cli) -> Result<i32, String> {
         }
         Command::Grep(args) => grep::run(args),
         Command::Languages(args) => languages::run(args),
+        Command::Replace(args) => replace::run(args),
+        Command::Masks(args) => masks_cli::run(args),
+        Command::Hook(args) => hook::run(args),
+        Command::Elevated(args) => elevated::run(args),
         Command::Analyze(args) => analyze::run(args),
         Command::Exec(args) => exec::run(args),
         Command::Shell(args) => shell::run(args),

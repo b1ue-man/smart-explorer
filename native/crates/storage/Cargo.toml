@@ -46,6 +46,7 @@ grep-matcher.workspace = true
 encoding_rs.workspace = true
 fancy-regex.workspace = true
 memchr.workspace = true
+ignore.workspace = true
 
 [target.'cfg(not(windows))'.dependencies]
 libc.workspace = true
