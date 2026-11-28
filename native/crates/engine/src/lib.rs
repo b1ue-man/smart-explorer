@@ -41,6 +41,7 @@ pub mod remote_window;
 pub mod screen;
 pub use screen::os::host_worker_main::run_screen_host_worker_if_requested;
 pub mod share;
+pub mod textview;
 pub mod updater;
 pub mod vault;
 pub mod webdav;

@@ -10,6 +10,7 @@ mod doctor;
 mod drive;
 mod engine_copy;
 mod folder_conflict;
+mod grep;
 pub(crate) use folder_conflict::{RecoveredCommandTask, SavedCommandsCatalog};
 mod apps;
 #[cfg(test)]
@@ -21,6 +22,7 @@ mod exec_ssh;
 mod file_rule;
 mod host_key_prompt;
 mod integration;
+mod languages;
 mod licenses;
 mod link_paths;
 #[cfg(test)]
@@ -206,6 +208,13 @@ enum Command {
         long_about = "Search names below a target. Prints `kind<TAB>size<TAB>relative path` per hit; kind is - (file), d (directory), l (link) or s (FIFO, socket, device). Links are found by name but never entered."
     )]
     Search(SearchArgs),
+    #[command(
+        about = "Search file contents below a target (Notepad++ Find in Files, grep output)",
+        long_about = "Search file contents below a folder, as Notepad++'s Find in Files: normal text, --extended escapes or --regex, filters, folder regexes. The search runs where the files are (locally, in the SSH agent, on the Share peer, otherwise by reading through the connection). Prints `rel:line:text` per hit, the totals on stderr; exit status 0 with hits, 1 without, 2 on an error."
+    )]
+    Grep(grep::GrepArgs),
+    #[command(about = "Language packs of the text view: list, add, remove, folder")]
+    Languages(languages::LanguagesArgs),
     #[command(
         about = "Storage analysis: size and occupied space (allocated) of a folder's entries",
         long_about = "Storage analysis of a folder, as in the explorer: every entry with its size (sum of file lengths) and the space it occupies on the volume (allocated: less for cloud placeholders, compressed and sparse files, a hard-linked file counted once). A remote folder is analysed by the device that holds it. `--sort allocated` (default where the source reports occupied space) or `--sort size`; where the source does not report it, the order is by size and allocated is shown as unknown. `--files N` adds the N largest files of the whole tree, `--types` the totals per file extension; files the analysis folded into one entry of a large folder count in neither and are named as aggregated."
@@ -470,6 +479,8 @@ fn run_inner(cli: Cli) -> Result<i32, String> {
             search::search(&t, &args.query, args.glob, args.max_results, args.dirs)?;
             Ok(0)
         }
+        Command::Grep(args) => grep::run(args),
+        Command::Languages(args) => languages::run(args),
         Command::Analyze(args) => analyze::run(args),
         Command::Exec(args) => exec::run(args),
         Command::Shell(args) => shell::run(args),

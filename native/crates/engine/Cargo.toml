@@ -65,6 +65,12 @@ sha1-011.workspace = true
 data-encoding.workspace = true
 flate2.workspace = true
 lz4_flex.workspace = true
+# Text view (textview/): Sublime syntaxes and themes, Markdown, encodings.
+syntect.workspace = true
+two-face.workspace = true
+pulldown-cmark.workspace = true
+encoding_rs.workspace = true
+memchr.workspace = true
 
 [target.'cfg(any(windows, target_os = "linux"))'.dependencies]
 openh264.workspace = true
